@@ -12,7 +12,7 @@ Colima (lightweight Docker runtime for macOS)
   └── Qdrant (vector DB, localhost:6333, persistent volume)
         └── Musubi MCP Server (Python, port 8100)
               ├── Memories — shared knowledge (musubi_memories collection)
-              └── Thoughts — telepathy between presences (musubi_thoughts collection)
+              └── Thoughts — directed messages between presences (musubi_thoughts collection)
 ```
 
 - **Embeddings:** Gemini `gemini-embedding-001` (3072 dimensions)
@@ -23,143 +23,37 @@ Colima (lightweight Docker runtime for macOS)
 
 - macOS with Homebrew
 - Python 3.12+
-- Google Gemini API key
+- Google Gemini API key ([get one here](https://aistudio.google.com/apikey))
 
-## Install From Scratch
-
-If rebuilding from nothing (new machine, disaster recovery):
-
-### 1. Install Colima + Docker
-
-We use [Colima](https://github.com/abiosoft/colima) instead of Docker Desktop —
-lightweight, CLI-based, better for a server that just runs containers.
+## Quick Start
 
 ```bash
-brew install colima docker docker-compose
-
-# Configure Docker to find the compose plugin
-mkdir -p ~/.docker
-cat > ~/.docker/config.json << 'EOF'
-{
-  "cliPluginsExtraDirs": [
-    "/opt/homebrew/lib/docker/cli-plugins"
-  ]
-}
-EOF
-
-# Start Colima (2 CPU, 4GB RAM, 20GB disk — sufficient for Qdrant)
-colima start --cpu 2 --memory 4 --disk 20
-
-# Enable Colima to start on boot
-brew services start colima
+git clone https://github.com/ericmey/musubi.git ~/.openclaw/musubi
+cd ~/.openclaw/musubi
+./scripts/install.sh
 ```
 
-### 2. Start Qdrant
+The install script handles everything: Colima, Docker, Qdrant, Python venv,
+dependencies, environment config, and LaunchAgent registration.
+
+## Lifecycle Scripts
+
+| Script | What it does |
+|--------|-------------|
+| `./scripts/install.sh` | Full setup from scratch — Colima, Qdrant, venv, LaunchAgent |
+| `./scripts/update.sh` | Pull latest code, upgrade deps, restart service, health check |
+| `./scripts/uninstall.sh` | Clean removal of all components |
+| `./scripts/uninstall.sh --keep-data` | Uninstall but preserve your memories in Qdrant |
+
+## Seed Memories
+
+After install, optionally import existing memory files:
 
 ```bash
-cd ~/.openclaw/house-brain
-docker compose up -d
-
-# Verify
-curl -s http://127.0.0.1:6333/healthz
-# Expected: "healthz check passed"
+./venv/bin/python seed_memories.py /path/to/memory/directory
 ```
 
-Qdrant runs with `restart: unless-stopped` — it auto-restarts with Colima.
-
-### 3. Install Python Dependencies
-
-```bash
-cd ~/.openclaw/house-brain
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### 4. Configure Environment
-
-```bash
-cp .env.example .env
-# Edit .env — set GEMINI_API_KEY
-```
-
-### 5. Install as Persistent Service (LaunchAgent)
-
-The MCP server runs as a macOS LaunchAgent so it starts on boot and auto-restarts.
-
-```bash
-cat > ~/Library/LaunchAgents/com.openclaw.musubi.plist << 'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.openclaw.musubi</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>VENV_PYTHON_PATH</string>
-        <string>MCP_SERVER_PATH</string>
-        <string>streamable-http</string>
-    </array>
-    <key>WorkingDirectory</key>
-    <string>MUSUBI_DIR</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>GEMINI_API_KEY</key>
-        <string>YOUR_KEY_HERE</string>
-        <key>QDRANT_HOST</key>
-        <string>localhost</string>
-        <key>QDRANT_PORT</key>
-        <string>6333</string>
-        <key>BRAIN_PORT</key>
-        <string>8100</string>
-    </dict>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-    <key>StandardOutPath</key>
-    <string>MUSUBI_DIR/logs/stdout.log</string>
-    <key>StandardErrorPath</key>
-    <string>MUSUBI_DIR/logs/stderr.log</string>
-</dict>
-</plist>
-EOF
-
-# Replace placeholders with actual paths:
-#   VENV_PYTHON_PATH  → ~/.openclaw/house-brain/venv/bin/python
-#   MCP_SERVER_PATH   → ~/.openclaw/house-brain/mcp_server.py
-#   MUSUBI_DIR        → ~/.openclaw/house-brain
-#   YOUR_KEY_HERE     → your Gemini API key
-
-mkdir -p ~/.openclaw/house-brain/logs
-launchctl load ~/Library/LaunchAgents/com.openclaw.musubi.plist
-```
-
-### 6. Seed Memories
-
-First-time setup: import identity and knowledge files into Qdrant.
-
-```bash
-source venv/bin/activate
-python seed_memories.py [/path/to/memory/directory]
-# Default: ~/.musubi/memories
-```
-
-### 7. Verify Everything
-
-```bash
-# Health check
-bash ~/.openclaw/scripts/brain_healthcheck.sh
-
-# Expected output:
-# ✓ Colima: running
-# ✓ Qdrant: healthy
-# ✓ Musubi MCP: alive
-# ✓ Memories: 43 points (healthy)
-# ✓ Thoughts: N points
-# STATUS: ok
-```
+Memory files are `.md` with YAML frontmatter (`name`, `type`, `description`).
 
 ## Run (Development)
 
@@ -183,14 +77,14 @@ python -m pytest tests/ -v
 
 ## MCP Client Configuration
 
-For any Claude Code instance to connect to Musubi:
+Connect any Claude Code instance to Musubi:
 
 ```json
 {
   "mcpServers": {
     "musubi": {
       "type": "http",
-      "url": "http://HOUSE_SERVER_IP:8100/mcp"
+      "url": "http://YOUR_SERVER_IP:8100/mcp"
     }
   }
 }
@@ -200,7 +94,7 @@ Save as `~/.claude/.mcp.json` (global) or `.mcp.json` (project-level).
 
 ## Tools
 
-**Memory** (shared knowledge — the bookshelf):
+**Memory** (shared knowledge):
 | Tool | Purpose |
 |------|---------|
 | `memory_store` | Store with auto-deduplication (>92% similarity merges) |
@@ -209,7 +103,7 @@ Save as `~/.claude/.mcp.json` (global) or `.mcp.json` (project-level).
 | `memory_forget` | Delete by ID |
 | `memory_reflect` | Introspection — summary, stale, or most-accessed memories |
 
-**Thoughts** (telepathy between presences):
+**Thoughts** (directed messages between presences):
 | Tool | Purpose |
 |------|---------|
 | `thought_send` | Send a thought to another presence |
@@ -224,22 +118,24 @@ Save as `~/.claude/.mcp.json` (global) or `.mcp.json` (project-level).
 launchctl kickstart -k gui/$(id -u)/com.openclaw.musubi
 
 # Restart Qdrant
-cd ~/.openclaw/house-brain && docker compose restart
-
-# Restart Colima
-colima stop && colima start --cpu 2 --memory 4 --disk 20
+docker compose restart
 
 # View logs
-tail -f ~/.openclaw/house-brain/logs/stderr.log
+tail -f logs/stderr.log
 ```
+
+Or just run `./scripts/update.sh` — it restarts everything and verifies health.
 
 ## Disaster Recovery
 
 If rebuilding from complete loss:
-1. Clone this repo to `~/.openclaw/house-brain/`
-2. Follow "Install From Scratch" above (steps 1-7)
-3. Memories are re-seeded from the memory `.md` files
-4. Thoughts are lost (they lived only in Qdrant) — but the brain is alive again
+
+```bash
+git clone https://github.com/ericmey/musubi.git ~/.openclaw/musubi
+cd ~/.openclaw/musubi
+./scripts/install.sh
+./venv/bin/python seed_memories.py /path/to/backup/memories
+```
 
 What survives in git: all code, config templates, tests, docs, seed script.
 What lives only in Qdrant: memory vectors, thought vectors, access counts.
