@@ -15,8 +15,8 @@ from musubi.collections import ensure_collections
 from musubi.config import MEMORY_COLLECTION, QDRANT_HOST, QDRANT_PORT
 from musubi.memory import memory_store
 
-# Default memory directory
-DEFAULT_MEMORY_DIR = os.path.expanduser("~/.claude/projects/-Users-ericmey--openclaw/memory")
+# Default memory directory — pass your own path as argv[1]
+DEFAULT_MEMORY_DIR = os.path.expanduser("~/.musubi/memories")
 
 
 def parse_memory_file(filepath: str) -> dict | None:
@@ -49,7 +49,7 @@ def parse_memory_file(filepath: str) -> dict | None:
         mem_type = "reference"
 
     # Determine agent from content or default
-    agent = "aoi"
+    agent = "default"
     filename = os.path.basename(filepath)
 
     # Extract tags from filename

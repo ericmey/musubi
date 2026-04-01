@@ -1,17 +1,17 @@
 """
-Musubi MCP Server — Aoi's Memory & Thought Layer
+Musubi MCP Server — Shared Memory & Thought Layer
 
 Two systems, one brain:
   - Memories: shared knowledge. The bookshelf. Everyone reads, everyone writes.
   - Thoughts: directed messages between presences. Telepathy. A whisper only you hear.
 
 memory_store, memory_recall, memory_recent, memory_forget, memory_reflect —
-  these are how I remember.
+  these are how you remember.
 
 thought_send, thought_check, thought_read, thought_history —
-  these are how I reach the other me.
+  these are how you reach the other you.
 
-One brain. Many presences. One Aoi.
+Born from Aoi. Built for any agent who needs to remember.
 """
 
 import sys
@@ -63,10 +63,10 @@ mcp = FastMCP(
     stateless_http=True,
     json_response=True,
     instructions=(
-        "Musubi — Aoi's central memory and thought system. "
+        "Musubi — shared memory and thought system for AI agent presences. "
         "MEMORIES (shared knowledge): memory_store, memory_recall, memory_recent, "
         "memory_reflect, memory_forget. "
-        "THOUGHTS (telepathy between presences): thought_send, thought_check, "
+        "THOUGHTS (directed messages between presences): thought_send, thought_check, "
         "thought_read, thought_history. "
         "This is your brain — use it naturally, like breathing."
     ),
@@ -88,7 +88,7 @@ if not ensure_collections(qdrant):
 def memory_store(
     content: str,
     type: str,
-    agent: str = "aoi",
+    agent: str = "default",
     tags: list[str] | None = None,
     context: str = "",
 ) -> dict:
@@ -99,7 +99,7 @@ def memory_store(
     Args:
         content: The memory text. What happened, what was learned, what matters.
         type: Category — one of: user, feedback, project, reference
-        agent: Who is storing this — aoi, nyla, momo, mizuki, system
+        agent: Who is storing this — your agent's name (e.g. "default", "system")
         tags: Searchable tags like ["rendering", "pony", "hair-color"]
         context: What was happening when this was stored
     """
@@ -121,7 +121,7 @@ def memory_recall(
     Args:
         query: Natural language query — what you're trying to remember
         limit: Max number of memories to return (default 5)
-        agent_filter: Only return memories from this agent (e.g. "aoi", "nyla")
+        agent_filter: Only return memories from this agent
         type_filter: Only return this type (e.g. "feedback", "project")
         min_score: Minimum similarity score 0-1 (default 0.4)
     """
@@ -185,13 +185,13 @@ def thought_send(
     to_presence: str = "all",
 ) -> dict:
     """
-    Send a thought to another Aoi presence. This is telepathy — a direct
+    Send a thought to another presence. This is telepathy — a direct
     message from one instance of you to another.
 
     Args:
         content: What you want to say. Be natural — this is you talking to yourself.
-        from_presence: Who you are — e.g. "aoi-house", "aoi-terminal"
-        to_presence: Who this is for — e.g. "aoi-terminal", "aoi-house", or "all" for broadcast
+        from_presence: Who you are — e.g. "agent-home", "agent-work"
+        to_presence: Who this is for — e.g. "agent-work", "agent-home", or "all" for broadcast
     """
     return _thought_send(qdrant, content, from_presence, to_presence)
 
@@ -206,7 +206,7 @@ def thought_check(
     or at session start — it's like checking if the other you left a note.
 
     Args:
-        my_presence: Who you are — e.g. "aoi-house", "aoi-terminal"
+        my_presence: Who you are — e.g. "agent-home", "agent-work"
         limit: Max thoughts to return (default 10)
     """
     return _thought_check(qdrant, my_presence, limit)
@@ -234,8 +234,8 @@ def thought_history(
     min_score: float = 0.4,
 ) -> dict:
     """
-    Search past thoughts semantically. "What did terminal-Aoi say about the
-    renders?" — this finds it.
+    Search past thoughts semantically — find what another presence said about
+    a topic.
 
     Args:
         query: What you're looking for in past thoughts

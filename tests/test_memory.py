@@ -14,7 +14,7 @@ class TestMemoryStore:
     def test_store_new_memory(self, mock_qdrant, mock_embed):
         result = memory_store(
             mock_qdrant,
-            content="Eric prefers concise responses",
+            content="User prefers concise responses",
             type="feedback",
             agent="aoi",
             tags=["communication"],
@@ -143,7 +143,7 @@ class TestMemoryRecent:
     def test_recent_with_filters(self, mock_qdrant, mock_embed):
         mock_qdrant.scroll.return_value = ([], None)
 
-        result = memory_recent(mock_qdrant, hours=48, agent_filter="nyla", type_filter="project")
+        result = memory_recent(mock_qdrant, hours=48, agent_filter="agent-b", type_filter="project")
         assert result["memories"] == []
         call_kwargs = mock_qdrant.scroll.call_args
         scroll_filter = call_kwargs.kwargs.get("scroll_filter")
@@ -170,7 +170,7 @@ class TestMemoryReflect:
             [
                 FakePoint(payload={"agent": "aoi", "type": "feedback", "tags": ["rendering"]}),
                 FakePoint(
-                    payload={"agent": "nyla", "type": "project", "tags": ["rendering", "lora"]}
+                    payload={"agent": "agent-b", "type": "project", "tags": ["rendering", "lora"]}
                 ),
             ],
             None,
@@ -179,7 +179,7 @@ class TestMemoryReflect:
         result = memory_reflect(mock_qdrant, mode="summary")
         assert result["total_memories"] == 10
         assert result["by_agent"]["aoi"] == 1
-        assert result["by_agent"]["nyla"] == 1
+        assert result["by_agent"]["agent-b"] == 1
         assert result["top_tags"]["rendering"] == 2
 
     def test_reflect_stale(self, mock_qdrant, mock_embed):

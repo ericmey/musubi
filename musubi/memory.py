@@ -40,7 +40,7 @@ def memory_store(
     qdrant: QdrantClient,
     content: str,
     type: str,
-    agent: str = "aoi",
+    agent: str = "default",
     tags: list[str] | None = None,
     context: str = "",
 ) -> dict:

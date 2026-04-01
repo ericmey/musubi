@@ -1,7 +1,7 @@
 [project]
 name = "musubi"
 version = "1.0.0"
-description = "Musubi (結び) — Aoi's shared memory and thought layer"
+description = "Musubi (結び) — Shared memory and thought layer for AI agent presences. Born from Aoi."
 requires-python = ">=3.12"
 
 [tool.ruff]
