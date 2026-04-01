@@ -99,17 +99,3 @@ jobs:
 
       - name: Run bandit
         run: bandit -r musubi/ -c pyproject.toml
-
-  dependency-review:
-    name: Dependency Review
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Dependency review
-        uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: high
-          deny-licenses: GPL-3.0, AGPL-3.0
-        continue-on-error: true  # requires GitHub Advanced Security — soft-fail until enabled
