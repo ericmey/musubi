@@ -96,7 +96,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install bandit
-        run: pip install bandit
+        run: pip install bandit==1.9.4
 
       - name: Run bandit
         run: bandit -r musubi/ -c pyproject.toml
@@ -113,3 +113,4 @@ jobs:
         with:
           fail-on-severity: high
           deny-licenses: GPL-3.0, AGPL-3.0
+        continue-on-error: true  # requires GitHub Advanced Security — soft-fail until enabled

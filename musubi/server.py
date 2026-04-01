@@ -15,6 +15,7 @@ One brain. Many presences. One Aoi.
 """
 
 import sys
+from typing import Literal
 
 from mcp.server.fastmcp import FastMCP
 from qdrant_client import QdrantClient
@@ -57,7 +58,7 @@ qdrant = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 mcp = FastMCP(
     "musubi",
-    host="0.0.0.0",
+    host="0.0.0.0",  # nosec B104 — intentional: MCP needs LAN access for remote presences
     port=BRAIN_PORT,
     stateless_http=True,
     json_response=True,
@@ -257,7 +258,9 @@ def create_app() -> FastMCP:
 
 def main() -> None:
     """Run the server with transport from command line arg."""
-    transport = sys.argv[1] if len(sys.argv) > 1 else "stdio"
+    transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
+    if len(sys.argv) > 1 and sys.argv[1] in ("stdio", "sse", "streamable-http"):
+        transport = sys.argv[1]  # type: ignore[assignment]
     mcp.run(transport=transport)
 
 

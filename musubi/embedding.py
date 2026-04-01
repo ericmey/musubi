@@ -44,7 +44,12 @@ def embed_text(text: str) -> list[float]:
                 model=EMBEDDING_MODEL,
                 contents=text,
             )
-            return result.embeddings[0].values
+            if not result.embeddings:
+                raise RuntimeError("Gemini returned no embeddings")
+            values = result.embeddings[0].values
+            if values is None:
+                raise RuntimeError("Gemini embedding values are None")
+            return list(values)
         except Exception as e:
             last_error = e
             if attempt < MAX_RETRIES - 1:

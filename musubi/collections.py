@@ -48,6 +48,7 @@ def ensure_collections(qdrant: QdrantClient) -> bool:
                     e,
                 )
                 return False
+    return False  # unreachable, but satisfies mypy
 
 
 def _create_if_missing(qdrant: QdrantClient) -> None:
