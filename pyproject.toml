@@ -1,0 +1,29 @@
+[project]
+name = "musubi"
+version = "1.0.0"
+description = "Musubi (結び) — Aoi's shared memory and thought layer"
+requires-python = ">=3.12"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",   # line too long — handled by formatter
+    "B008",   # function call in default arg — we use [] defaults intentionally
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["musubi"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

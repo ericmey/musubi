@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from musubi.collections import ensure_collections
 from tests.conftest import FakeCollectionList
 
@@ -29,9 +27,7 @@ class TestEnsureCollections:
 
     def test_creates_only_missing(self):
         client = MagicMock()
-        client.get_collections.return_value = FakeCollectionList(
-            names=["musubi_memories"]
-        )
+        client.get_collections.return_value = FakeCollectionList(names=["musubi_memories"])
 
         result = ensure_collections(client)
         assert result is True

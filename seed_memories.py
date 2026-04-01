@@ -11,19 +11,17 @@ from pathlib import Path
 
 from qdrant_client import QdrantClient
 
-from musubi.config import QDRANT_HOST, QDRANT_PORT, MEMORY_COLLECTION
-from musubi.memory import memory_store
 from musubi.collections import ensure_collections
+from musubi.config import MEMORY_COLLECTION, QDRANT_HOST, QDRANT_PORT
+from musubi.memory import memory_store
 
 # Default memory directory
-DEFAULT_MEMORY_DIR = os.path.expanduser(
-    "~/.claude/projects/-Users-ericmey--openclaw/memory"
-)
+DEFAULT_MEMORY_DIR = os.path.expanduser("~/.claude/projects/-Users-ericmey--openclaw/memory")
 
 
 def parse_memory_file(filepath: str) -> dict | None:
     """Parse a memory .md file with YAML frontmatter."""
-    with open(filepath, "r") as f:
+    with open(filepath) as f:
         content = f.read()
 
     # Skip MEMORY.md index file
@@ -123,7 +121,9 @@ def main():
                 print(f"  NEW   {filepath.name} -> {result['id'][:8]}")
                 stored += 1
             elif status == "updated":
-                print(f"  MERGE {filepath.name} -> {result['id'][:8]} (sim: {result.get('similarity', 0):.2f})")
+                print(
+                    f"  MERGE {filepath.name} -> {result['id'][:8]} (sim: {result.get('similarity', 0):.2f})"
+                )
                 updated += 1
             elif "error" in result:
                 print(f"  ERROR {filepath.name}: {result['error']}")

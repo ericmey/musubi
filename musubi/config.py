@@ -3,6 +3,7 @@ Configuration — all env vars, defaults, validation.
 """
 
 import os
+
 from dotenv import load_dotenv
 
 # Load env from the musubi directory, not cwd
@@ -12,9 +13,7 @@ load_dotenv(os.path.join(_dir, ".env"))
 # --- Required ---
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    raise RuntimeError(
-        "GEMINI_API_KEY is required. Set it in .env or as an environment variable."
-    )
+    raise RuntimeError("GEMINI_API_KEY is required. Set it in .env or as an environment variable.")
 
 # --- Infrastructure ---
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")

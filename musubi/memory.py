@@ -7,20 +7,19 @@ Each function takes a qdrant client and uses embed_text for embeddings.
 
 import logging
 import uuid
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    PointStruct,
-    Filter,
     FieldCondition,
+    Filter,
     MatchValue,
+    PointStruct,
     Range,
     models,
 )
 
-from .config import MEMORY_COLLECTION, THOUGHT_COLLECTION, DUPLICATE_THRESHOLD
+from .config import DUPLICATE_THRESHOLD, MEMORY_COLLECTION, THOUGHT_COLLECTION
 from .embedding import embed_text
 
 logger = logging.getLogger(__name__)
@@ -62,8 +61,8 @@ def memory_store(
     except Exception as e:
         return {"error": f"Qdrant search failed: {e}"}
 
-    now = datetime.now(timezone.utc).isoformat()
-    now_epoch = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).isoformat()
+    now_epoch = datetime.now(UTC).timestamp()
 
     try:
         if search_results.points:
@@ -71,9 +70,7 @@ def memory_store(
             existing_payload = existing.payload
             existing_payload["content"] = content
             existing_payload["updated_at"] = now
-            existing_payload["tags"] = list(
-                set(existing_payload.get("tags", []) + tags)
-            )
+            existing_payload["tags"] = list(set(existing_payload.get("tags", []) + tags))
             if context:
                 existing_payload["context"] = context
 
@@ -128,8 +125,8 @@ def memory_recall(
     qdrant: QdrantClient,
     query: str,
     limit: int = 5,
-    agent_filter: Optional[str] = None,
-    type_filter: Optional[str] = None,
+    agent_filter: str | None = None,
+    type_filter: str | None = None,
     min_score: float = 0.4,
 ) -> dict:
     """
@@ -142,13 +139,9 @@ def memory_recall(
 
     conditions = []
     if agent_filter:
-        conditions.append(
-            FieldCondition(key="agent", match=MatchValue(value=agent_filter))
-        )
+        conditions.append(FieldCondition(key="agent", match=MatchValue(value=agent_filter)))
     if type_filter:
-        conditions.append(
-            FieldCondition(key="type", match=MatchValue(value=type_filter))
-        )
+        conditions.append(FieldCondition(key="type", match=MatchValue(value=type_filter)))
 
     query_filter = Filter(must=conditions) if conditions else None
 
@@ -167,7 +160,7 @@ def memory_recall(
     # Update access counts
     for point in results.points:
         try:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             qdrant.set_payload(
                 collection_name=MEMORY_COLLECTION,
                 payload={
@@ -199,24 +192,20 @@ def memory_recall(
 def memory_recent(
     qdrant: QdrantClient,
     hours: int = 24,
-    agent_filter: Optional[str] = None,
-    type_filter: Optional[str] = None,
+    agent_filter: str | None = None,
+    type_filter: str | None = None,
     limit: int = 20,
 ) -> dict:
     """
     Chronological fetch — most recent memories, newest first.
     """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp()
+    cutoff = (datetime.now(UTC) - timedelta(hours=hours)).timestamp()
 
     conditions = [FieldCondition(key="created_epoch", range=Range(gte=cutoff))]
     if agent_filter:
-        conditions.append(
-            FieldCondition(key="agent", match=MatchValue(value=agent_filter))
-        )
+        conditions.append(FieldCondition(key="agent", match=MatchValue(value=agent_filter)))
     if type_filter:
-        conditions.append(
-            FieldCondition(key="type", match=MatchValue(value=type_filter))
-        )
+        conditions.append(FieldCondition(key="type", match=MatchValue(value=type_filter)))
 
     try:
         results = qdrant.scroll(
@@ -225,9 +214,7 @@ def memory_recent(
             limit=limit,
             with_payload=True,
             with_vectors=False,
-            order_by=models.OrderBy(
-                key="created_epoch", direction=models.Direction.DESC
-            ),
+            order_by=models.OrderBy(key="created_epoch", direction=models.Direction.DESC),
         )
     except Exception as e:
         return {"error": f"Qdrant scroll failed: {e}"}
@@ -304,9 +291,7 @@ def _reflect_summary(qdrant: QdrantClient) -> dict:
             "total_thoughts": thought_info.points_count,
             "by_agent": agents,
             "by_type": types,
-            "top_tags": dict(
-                sorted(tags.items(), key=lambda x: x[1], reverse=True)[:20]
-            ),
+            "top_tags": dict(sorted(tags.items(), key=lambda x: x[1], reverse=True)[:20]),
         }
     except Exception as e:
         return {"error": f"Reflect summary failed: {e}"}
@@ -349,9 +334,7 @@ def _reflect_frequent(qdrant: QdrantClient) -> dict:
             limit=20,
             with_payload=True,
             with_vectors=False,
-            order_by=models.OrderBy(
-                key="access_count", direction=models.Direction.DESC
-            ),
+            order_by=models.OrderBy(key="access_count", direction=models.Direction.DESC),
         )
 
         return {

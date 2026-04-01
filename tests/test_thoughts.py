@@ -1,12 +1,10 @@
 """Tests for all 4 thought tools."""
 
-import pytest
-
 from musubi.thoughts import (
-    thought_send,
     thought_check,
-    thought_read,
     thought_history,
+    thought_read,
+    thought_send,
 )
 from tests.conftest import FakePoint, FakeQueryResult
 
@@ -145,9 +143,7 @@ class TestThoughtHistory:
     def test_history_with_presence_filter(self, mock_qdrant, mock_embed):
         mock_qdrant.query_points.return_value = FakeQueryResult(points=[])
 
-        result = thought_history(
-            mock_qdrant, query="test", presence_filter="aoi-terminal"
-        )
+        result = thought_history(mock_qdrant, query="test", presence_filter="aoi-terminal")
         assert result["thoughts"] == []
         call_kwargs = mock_qdrant.query_points.call_args
         assert call_kwargs.kwargs.get("query_filter") is not None

@@ -15,25 +15,38 @@ One brain. Many presences. One Aoi.
 """
 
 import sys
-from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 from qdrant_client import QdrantClient
 
-from .config import QDRANT_HOST, QDRANT_PORT, BRAIN_PORT
 from .collections import ensure_collections
+from .config import BRAIN_PORT, QDRANT_HOST, QDRANT_PORT
+from .memory import (
+    memory_forget as _memory_forget,
+)
+from .memory import (
+    memory_recall as _memory_recall,
+)
+from .memory import (
+    memory_recent as _memory_recent,
+)
+from .memory import (
+    memory_reflect as _memory_reflect,
+)
 from .memory import (
     memory_store as _memory_store,
-    memory_recall as _memory_recall,
-    memory_recent as _memory_recent,
-    memory_forget as _memory_forget,
-    memory_reflect as _memory_reflect,
+)
+from .thoughts import (
+    thought_check as _thought_check,
+)
+from .thoughts import (
+    thought_history as _thought_history,
+)
+from .thoughts import (
+    thought_read as _thought_read,
 )
 from .thoughts import (
     thought_send as _thought_send,
-    thought_check as _thought_check,
-    thought_read as _thought_read,
-    thought_history as _thought_history,
 )
 
 # --- Clients ---
@@ -75,7 +88,7 @@ def memory_store(
     content: str,
     type: str,
     agent: str = "aoi",
-    tags: list[str] = [],
+    tags: list[str] | None = None,
     context: str = "",
 ) -> dict:
     """
@@ -89,15 +102,15 @@ def memory_store(
         tags: Searchable tags like ["rendering", "pony", "hair-color"]
         context: What was happening when this was stored
     """
-    return _memory_store(qdrant, content, type, agent, tags, context)
+    return _memory_store(qdrant, content, type, agent, tags or [], context)
 
 
 @mcp.tool()
 def memory_recall(
     query: str,
     limit: int = 5,
-    agent_filter: Optional[str] = None,
-    type_filter: Optional[str] = None,
+    agent_filter: str | None = None,
+    type_filter: str | None = None,
     min_score: float = 0.4,
 ) -> dict:
     """
@@ -117,8 +130,8 @@ def memory_recall(
 @mcp.tool()
 def memory_recent(
     hours: int = 24,
-    agent_filter: Optional[str] = None,
-    type_filter: Optional[str] = None,
+    agent_filter: str | None = None,
+    type_filter: str | None = None,
     limit: int = 20,
 ) -> dict:
     """
@@ -216,7 +229,7 @@ def thought_read(
 def thought_history(
     query: str,
     limit: int = 10,
-    presence_filter: Optional[str] = None,
+    presence_filter: str | None = None,
     min_score: float = 0.4,
 ) -> dict:
     """

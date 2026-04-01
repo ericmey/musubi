@@ -7,15 +7,14 @@ Each function takes a qdrant client and uses embed_text for embeddings.
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    PointStruct,
-    Filter,
     FieldCondition,
+    Filter,
     MatchValue,
+    PointStruct,
     models,
 )
 
@@ -39,8 +38,8 @@ def thought_send(
     except RuntimeError as e:
         return {"error": f"Embedding failed: {e}"}
 
-    now = datetime.now(timezone.utc).isoformat()
-    now_epoch = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).isoformat()
+    now_epoch = datetime.now(UTC).timestamp()
 
     thought_id = str(uuid.uuid4())
     payload = {
@@ -90,20 +89,14 @@ def thought_check(
                     FieldCondition(key="read", match=MatchValue(value=False)),
                 ],
                 should=[
-                    FieldCondition(
-                        key="to_presence", match=MatchValue(value=my_presence)
-                    ),
-                    FieldCondition(
-                        key="to_presence", match=MatchValue(value="all")
-                    ),
+                    FieldCondition(key="to_presence", match=MatchValue(value=my_presence)),
+                    FieldCondition(key="to_presence", match=MatchValue(value="all")),
                 ],
             ),
             limit=limit,
             with_payload=True,
             with_vectors=False,
-            order_by=models.OrderBy(
-                key="created_epoch", direction=models.Direction.DESC
-            ),
+            order_by=models.OrderBy(key="created_epoch", direction=models.Direction.DESC),
         )
     except Exception as e:
         return {"error": f"Qdrant scroll failed: {e}"}
@@ -111,9 +104,7 @@ def thought_check(
     points = results[0] if results else []
 
     # Don't show thoughts I sent to myself as unread
-    thoughts = [
-        p for p in points if p.payload.get("from_presence") != my_presence
-    ]
+    thoughts = [p for p in points if p.payload.get("from_presence") != my_presence]
 
     return {
         "unread_count": len(thoughts),
@@ -156,7 +147,7 @@ def thought_history(
     qdrant: QdrantClient,
     query: str,
     limit: int = 10,
-    presence_filter: Optional[str] = None,
+    presence_filter: str | None = None,
     min_score: float = 0.4,
 ) -> dict:
     """

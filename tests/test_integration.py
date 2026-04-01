@@ -4,13 +4,8 @@ Integration tests — end-to-end flows with mocks.
 Verifies the full store->recall and send->check->read cycles work together.
 """
 
-import uuid
-from unittest.mock import MagicMock
-
-import pytest
-
-from musubi.memory import memory_store, memory_recall
-from musubi.thoughts import thought_send, thought_check, thought_read
+from musubi.memory import memory_recall, memory_store
+from musubi.thoughts import thought_check, thought_read, thought_send
 from tests.conftest import FakePoint, FakeQueryResult
 
 
@@ -46,9 +41,7 @@ class TestStoreRecallCycle:
             ]
         )
 
-        recall_result = memory_recall(
-            mock_qdrant, query="pony hair color issues"
-        )
+        recall_result = memory_recall(mock_qdrant, query="pony hair color issues")
         assert len(recall_result["memories"]) == 1
         assert recall_result["memories"][0]["id"] == stored_id
         assert "pony" in recall_result["memories"][0]["tags"]
