@@ -11,7 +11,19 @@ from .config import EMBEDDING_MODEL, GEMINI_API_KEY
 
 logger = logging.getLogger(__name__)
 
-_client = genai.Client(api_key=GEMINI_API_KEY)
+_client: genai.Client | None = None
+
+
+def _get_client() -> genai.Client:
+    global _client
+    if _client is None:
+        if not GEMINI_API_KEY:
+            raise RuntimeError(
+                "GEMINI_API_KEY is required. Set it in .env or as an environment variable."
+            )
+        _client = genai.Client(api_key=GEMINI_API_KEY)
+    return _client
+
 
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0  # seconds, doubles each retry
@@ -28,7 +40,7 @@ def embed_text(text: str) -> list[float]:
 
     for attempt in range(MAX_RETRIES):
         try:
-            result = _client.models.embed_content(
+            result = _get_client().models.embed_content(
                 model=EMBEDDING_MODEL,
                 contents=text,
             )

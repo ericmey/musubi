@@ -10,10 +10,8 @@ from dotenv import load_dotenv
 _dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 load_dotenv(os.path.join(_dir, ".env"))
 
-# --- Required ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise RuntimeError("GEMINI_API_KEY is required. Set it in .env or as an environment variable.")
+# --- Required (validated at call time, not import time, so tests can run without it) ---
+GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
 
 # --- Infrastructure ---
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
