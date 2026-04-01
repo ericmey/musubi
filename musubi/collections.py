@@ -35,15 +35,20 @@ def ensure_collections(qdrant: QdrantClient) -> bool:
             if attempt < MAX_RETRIES - 1:
                 logger.warning(
                     "Qdrant connection attempt %d/%d failed: %s. Retrying in %ds...",
-                    attempt + 1, MAX_RETRIES, e, RETRY_DELAY,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    e,
+                    RETRY_DELAY,
                 )
                 time.sleep(RETRY_DELAY)
             else:
                 logger.error(
                     "Cannot connect to Qdrant after %d attempts: %s",
-                    MAX_RETRIES, e,
+                    MAX_RETRIES,
+                    e,
                 )
                 return False
+    return False  # unreachable, but satisfies mypy
 
 
 def _create_if_missing(qdrant: QdrantClient) -> None:
@@ -59,12 +64,8 @@ def _create_if_missing(qdrant: QdrantClient) -> None:
                 distance=Distance.COSINE,
             ),
         )
-        qdrant.create_payload_index(
-            MEMORY_COLLECTION, "agent", models.PayloadSchemaType.KEYWORD
-        )
-        qdrant.create_payload_index(
-            MEMORY_COLLECTION, "type", models.PayloadSchemaType.KEYWORD
-        )
+        qdrant.create_payload_index(MEMORY_COLLECTION, "agent", models.PayloadSchemaType.KEYWORD)
+        qdrant.create_payload_index(MEMORY_COLLECTION, "type", models.PayloadSchemaType.KEYWORD)
         qdrant.create_payload_index(
             MEMORY_COLLECTION, "created_at", models.PayloadSchemaType.KEYWORD
         )
@@ -90,9 +91,7 @@ def _create_if_missing(qdrant: QdrantClient) -> None:
         qdrant.create_payload_index(
             THOUGHT_COLLECTION, "to_presence", models.PayloadSchemaType.KEYWORD
         )
-        qdrant.create_payload_index(
-            THOUGHT_COLLECTION, "read", models.PayloadSchemaType.BOOL
-        )
+        qdrant.create_payload_index(THOUGHT_COLLECTION, "read", models.PayloadSchemaType.BOOL)
         qdrant.create_payload_index(
             THOUGHT_COLLECTION, "created_epoch", models.PayloadSchemaType.FLOAT
         )

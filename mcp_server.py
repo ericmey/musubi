@@ -4,6 +4,7 @@ All logic lives in the musubi package.
 """
 
 import sys
+
 from musubi.server import mcp
 
 if __name__ == "__main__":
