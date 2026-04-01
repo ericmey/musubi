@@ -250,12 +250,12 @@ def thought_history(
 # ============================================================
 
 
-def create_app():
+def create_app() -> FastMCP:
     """Return the MCP app for testing."""
     return mcp
 
 
-def main():
+def main() -> None:
     """Run the server with transport from command line arg."""
     transport = sys.argv[1] if len(sys.argv) > 1 else "stdio"
     mcp.run(transport=transport)

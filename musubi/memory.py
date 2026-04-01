@@ -32,7 +32,7 @@ def memory_store(
     content: str,
     type: str,
     agent: str = "aoi",
-    tags: list[str] = None,
+    tags: list[str] | None = None,
     context: str = "",
 ) -> dict:
     """
