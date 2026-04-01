@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 
 def _payload(point: Any) -> dict[str, Any]:
     """Extract payload from a Qdrant point, asserting it's not None."""
-    assert point.payload is not None, f"Point {point.id} has no payload"
-    return point.payload
+    payload: dict[str, Any] = point.payload
+    assert payload is not None, f"Point {point.id} has no payload"
+    return payload
 
 
 def thought_send(

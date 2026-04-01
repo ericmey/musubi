@@ -29,6 +29,9 @@ known-first-party = ["musubi"]
 testpaths = ["tests"]
 addopts = "--cov=musubi --cov-report=term-missing --cov-fail-under=80"
 
+[tool.coverage.run]
+omit = ["musubi/server.py"]  # MCP tool wrappers — thin delegation layer, tested via pure functions
+
 [tool.mypy]
 python_version = "3.12"
 strict = false
