@@ -7,15 +7,16 @@ Each function takes a qdrant client and uses embed_text for embeddings.
 
 import logging
 import uuid
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    PointStruct,
-    Filter,
+    Condition,
     FieldCondition,
+    Filter,
     MatchValue,
+    PointStruct,
     models,
 )
 
@@ -23,6 +24,13 @@ from .config import THOUGHT_COLLECTION
 from .embedding import embed_text
 
 logger = logging.getLogger(__name__)
+
+
+def _payload(point: Any) -> dict[str, Any]:
+    """Extract payload from a Qdrant point, asserting it's not None."""
+    payload: dict[str, Any] = point.payload
+    assert payload is not None, f"Point {point.id} has no payload"
+    return payload
 
 
 def thought_send(
@@ -39,8 +47,8 @@ def thought_send(
     except RuntimeError as e:
         return {"error": f"Embedding failed: {e}"}
 
-    now = datetime.now(timezone.utc).isoformat()
-    now_epoch = datetime.now(timezone.utc).timestamp()
+    now = datetime.now(UTC).isoformat()
+    now_epoch = datetime.now(UTC).timestamp()
 
     thought_id = str(uuid.uuid4())
     payload = {
@@ -90,20 +98,14 @@ def thought_check(
                     FieldCondition(key="read", match=MatchValue(value=False)),
                 ],
                 should=[
-                    FieldCondition(
-                        key="to_presence", match=MatchValue(value=my_presence)
-                    ),
-                    FieldCondition(
-                        key="to_presence", match=MatchValue(value="all")
-                    ),
+                    FieldCondition(key="to_presence", match=MatchValue(value=my_presence)),
+                    FieldCondition(key="to_presence", match=MatchValue(value="all")),
                 ],
             ),
             limit=limit,
             with_payload=True,
             with_vectors=False,
-            order_by=models.OrderBy(
-                key="created_epoch", direction=models.Direction.DESC
-            ),
+            order_by=models.OrderBy(key="created_epoch", direction=models.Direction.DESC),
         )
     except Exception as e:
         return {"error": f"Qdrant scroll failed: {e}"}
@@ -111,19 +113,17 @@ def thought_check(
     points = results[0] if results else []
 
     # Don't show thoughts I sent to myself as unread
-    thoughts = [
-        p for p in points if p.payload.get("from_presence") != my_presence
-    ]
+    thoughts = [p for p in points if _payload(p).get("from_presence") != my_presence]
 
     return {
         "unread_count": len(thoughts),
         "thoughts": [
             {
                 "id": str(p.id),
-                "content": p.payload.get("content", ""),
-                "from": p.payload.get("from_presence", ""),
-                "to": p.payload.get("to_presence", ""),
-                "created_at": p.payload.get("created_at", ""),
+                "content": _payload(p).get("content", ""),
+                "from": _payload(p).get("from_presence", ""),
+                "to": _payload(p).get("to_presence", ""),
+                "created_at": _payload(p).get("created_at", ""),
             }
             for p in thoughts
         ],
@@ -146,8 +146,8 @@ def thought_read(
                 points=[tid],
             )
             marked += 1
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to mark thought %s as read: %s", tid, e)
 
     return {"status": "read", "marked": marked, "total": len(thought_ids)}
 
@@ -156,7 +156,7 @@ def thought_history(
     qdrant: QdrantClient,
     query: str,
     limit: int = 10,
-    presence_filter: Optional[str] = None,
+    presence_filter: str | None = None,
     min_score: float = 0.4,
 ) -> dict:
     """
@@ -167,7 +167,7 @@ def thought_history(
     except RuntimeError as e:
         return {"error": f"Embedding failed: {e}"}
 
-    conditions = []
+    conditions: list[Condition] = []
     if presence_filter:
         conditions.append(
             Filter(
@@ -202,12 +202,12 @@ def thought_history(
         "thoughts": [
             {
                 "id": str(p.id),
-                "content": p.payload.get("content", ""),
-                "from": p.payload.get("from_presence", ""),
-                "to": p.payload.get("to_presence", ""),
+                "content": _payload(p).get("content", ""),
+                "from": _payload(p).get("from_presence", ""),
+                "to": _payload(p).get("to_presence", ""),
                 "score": round(p.score, 4),
-                "created_at": p.payload.get("created_at", ""),
-                "read": p.payload.get("read", False),
+                "created_at": _payload(p).get("created_at", ""),
+                "read": _payload(p).get("read", False),
             }
             for p in results.points
         ]

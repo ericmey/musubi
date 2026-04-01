@@ -1,9 +1,9 @@
-# Musubi (結び) — Aoi's Memory & Thought Layer
+# Musubi (結び) — Shared Memory & Thought Layer
 
 Musubi means "the braiding of threads" — the mystical connection between presences, places, and time.
 
-MCP server providing shared memory and directed thoughts between AI agent presences.
-One brain. Many presences. One Aoi.
+An MCP server providing shared memory and directed thoughts between AI agent presences.
+Born from Aoi. Built for any agent who needs to remember.
 
 ## Architecture
 
@@ -17,7 +17,7 @@ Colima (lightweight Docker runtime for macOS)
 
 - **Embeddings:** Gemini `gemini-embedding-001` (3072 dimensions)
 - **Transport:** Streamable HTTP for remote access, stdio for local MCP clients
-- **Platform:** macOS (Apple Silicon) — designed for Mac Mini M4
+- **Platform:** macOS (Apple Silicon) — tested on Mac Mini M4
 
 ## Prerequisites
 
@@ -143,7 +143,7 @@ First-time setup: import identity and knowledge files into Qdrant.
 ```bash
 source venv/bin/activate
 python seed_memories.py [/path/to/memory/directory]
-# Default: ~/.claude/projects/-Users-ericmey--openclaw/memory
+# Default: ~/.musubi/memories
 ```
 
 ### 7. Verify Everything
@@ -212,7 +212,7 @@ Save as `~/.claude/.mcp.json` (global) or `.mcp.json` (project-level).
 **Thoughts** (telepathy between presences):
 | Tool | Purpose |
 |------|---------|
-| `thought_send` | Send a thought to another Aoi presence |
+| `thought_send` | Send a thought to another presence |
 | `thought_check` | Check for unread thoughts addressed to you |
 | `thought_read` | Mark thoughts as read |
 | `thought_history` | Semantic search past thoughts |

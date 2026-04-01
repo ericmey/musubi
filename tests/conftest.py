@@ -42,9 +42,7 @@ class FakeCollectionList:
     """Mimics qdrant get_collections result."""
 
     def __init__(self, names=None):
-        self.collections = [
-            type("Col", (), {"name": n})() for n in (names or [])
-        ]
+        self.collections = [type("Col", (), {"name": n})() for n in (names or [])]
 
 
 @pytest.fixture
