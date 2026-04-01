@@ -22,7 +22,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install ruff
-        run: pip install ruff
+        run: pip install ruff==0.15.8
 
       - name: Ruff format check
         run: ruff format --check .

@@ -19,7 +19,7 @@ select = [
 ]
 ignore = [
     "E501",   # line too long — handled by formatter
-    "B008",   # function call in default arg — we use [] defaults intentionally
+    "B006",   # mutable default arguments — handled with None + guard at call site
 ]
 
 [tool.ruff.lint.isort]
