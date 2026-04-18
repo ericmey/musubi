@@ -1,47 +1,69 @@
 [project]
 name = "musubi"
-version = "1.0.0"
-description = "Musubi (結び) — Shared memory and thought layer for AI agent presences. Born from Aoi."
+version = "0.2.0"
+description = "Shared memory + knowledge plane for a small-team AI agent fleet. See the Obsidian architecture vault for design."
 requires-python = ">=3.12"
+authors = [{ name = "Eric Mey", email = "eric.mey@salesai.com" }]
+license = { text = "Private" }
+readme = "README.md"
+
+dependencies = [
+    "pydantic>=2.9",
+    "ksuid>=1.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "pytest-asyncio>=0.23",
+    "hypothesis>=6",
+    "mypy>=1.11",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/musubi"]
 
 [tool.ruff]
-target-version = "py312"
 line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes
-    "I",    # isort
-    "B",    # flake8-bugbear
-    "UP",   # pyupgrade
-]
-ignore = [
-    "E501",   # line too long — handled by formatter
-    "B006",   # mutable default arguments — handled with None + guard at call site
-]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM", "RUF"]
+ignore = ["E501"]   # line length — handled elsewhere
 
-[tool.ruff.lint.isort]
-known-first-party = ["musubi"]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B"]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "--cov=musubi --cov-report=term-missing --cov-fail-under=80"
-
-[tool.coverage.run]
-omit = ["musubi/server.py"]  # MCP tool wrappers — thin delegation layer, tested via pure functions
+[tool.ruff.format]
+quote-style = "double"
 
 [tool.mypy]
 python_version = "3.12"
-strict = false
-warn_return_any = true
-warn_unused_configs = true
-warn_unreachable = true
-disallow_untyped_defs = true
-check_untyped_defs = true
+strict = true
+pretty = true
+show_error_codes = true
+warn_unused_ignores = true
+namespace_packages = true
+explicit_package_bases = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["ksuid.*"]
 ignore_missing_imports = true
 
-[tool.bandit]
-exclude_dirs = ["tests"]
-skips = ["B101"]  # assert is fine in non-production code
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+    "integration: requires Qdrant / TEI / Ollama; skipped by default",
+    "property: Hypothesis-based property test",
+]

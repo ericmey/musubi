@@ -1,142 +1,56 @@
-# Musubi (結び) — Shared Memory & Thought Layer
+# Musubi (結び) — v2
 
-Musubi means "the braiding of threads" — the mystical connection between presences, places, and time.
+Shared memory + knowledge plane for a small-team AI agent fleet. Three planes:
+**episodic**, **curated**, **source-artifact**; a bridge layer of **synthesised
+concepts**; a lifecycle engine; a canonical HTTP/gRPC API.
 
-An MCP server providing shared memory and directed thoughts between AI agent presences.
-Born from Aoi. Built for any agent who needs to remember.
+The authoritative design lives in the Obsidian vault at
+`~/Vaults/musubi/`. Start at `00-index/reading-tour.md` or the
+`_slices/` registry.
 
-## Architecture
+This repo is being rebuilt slice-by-slice per that design. The `main` branch
+still holds v1 (the FastMCP + Gemini POC); v2 development happens on this `v2`
+branch and will merge to `main` when it reaches feature parity.
 
-```
-Colima (lightweight Docker runtime for macOS)
-  └── Qdrant (vector DB, localhost:6333, persistent volume)
-        └── Musubi MCP Server (Python, port 8100)
-              ├── Memories — shared knowledge (musubi_memories collection)
-              └── Thoughts — directed messages between presences (musubi_thoughts collection)
-```
+## Status
 
-- **Embeddings:** Gemini `gemini-embedding-001` (3072 dimensions)
-- **Transport:** Streamable HTTP for remote access, stdio for local MCP clients
-- **Platform:** macOS (Apple Silicon) — tested on Mac Mini M4
+| Slice | Status |
+|---|---|
+| `slice-types` (pydantic foundation) | not started |
+| everything downstream | blocked on slice-types |
 
-## Prerequisites
+## Dev setup
 
-- macOS with Homebrew
-- Python 3.12+
-- Google Gemini API key ([get one here](https://aistudio.google.com/apikey))
-
-## Quick Start
+Requires **Python 3.12** and [**uv**](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/ericmey/musubi.git ~/.openclaw/musubi
-cd ~/.openclaw/musubi
-./scripts/install.sh
+make install        # uv sync --extra dev
+make check          # fmt + lint + typecheck + test
 ```
 
-The install script handles everything: Colima, Docker, Qdrant, Python venv,
-dependencies, environment config, and LaunchAgent registration.
+## Layout
 
-## Lifecycle Scripts
+```
+src/musubi/               importable package
+  types/                  shared pydantic types (slice-types)
+  planes/                 episodic, curated, artifact, concept (later slices)
+  retrieve/               scoring, hybrid, fast/deep path (later slices)
+  lifecycle/              maturation, synthesis, promotion (later slices)
+  api/                    FastAPI + OpenAPI/proto (later slice)
 
-| Script | What it does |
-|--------|-------------|
-| `./scripts/install.sh` | Full setup from scratch — Colima, Qdrant, venv, LaunchAgent |
-| `./scripts/update.sh` | Pull latest code, upgrade deps, restart service, health check |
-| `./scripts/uninstall.sh` | Clean removal of all components |
-| `./scripts/uninstall.sh --keep-data` | Uninstall but preserve your memories in Qdrant |
-
-## Seed Memories
-
-After install, optionally import existing memory files:
-
-```bash
-./venv/bin/python seed_memories.py /path/to/memory/directory
+tests/                    tests mirror src/musubi/ layout exactly
 ```
 
-Memory files are `.md` with YAML frontmatter (`name`, `type`, `description`).
+## Slice discipline
 
-## Run (Development)
+Every PR realises one slice (or a clean part of one). Each slice has a **Test
+Contract** in its spec. Write tests first; code follows. See
+`00-index/agent-guardrails.md` in the vault.
 
-```bash
-source venv/bin/activate
+## Why v2
 
-# stdio transport (local MCP client)
-python mcp_server.py
-
-# HTTP transport (remote access)
-python mcp_server.py streamable-http
-```
-
-## Test
-
-```bash
-source venv/bin/activate
-pip install -r requirements-dev.txt
-python -m pytest tests/ -v
-```
-
-## MCP Client Configuration
-
-Connect any Claude Code instance to Musubi:
-
-```json
-{
-  "mcpServers": {
-    "musubi": {
-      "type": "http",
-      "url": "http://YOUR_SERVER_IP:8100/mcp"
-    }
-  }
-}
-```
-
-Save as `~/.claude/.mcp.json` (global) or `.mcp.json` (project-level).
-
-## Tools
-
-**Memory** (shared knowledge):
-| Tool | Purpose |
-|------|---------|
-| `memory_store` | Store with auto-deduplication (>92% similarity merges) |
-| `memory_recall` | Semantic search — "what do I know about this?" |
-| `memory_recent` | Chronological fetch — "what happened while I was away?" |
-| `memory_forget` | Delete by ID |
-| `memory_reflect` | Introspection — summary, stale, or most-accessed memories |
-
-**Thoughts** (directed messages between presences):
-| Tool | Purpose |
-|------|---------|
-| `thought_send` | Send a thought to another presence |
-| `thought_check` | Check for unread thoughts addressed to you |
-| `thought_read` | Mark thoughts as read |
-| `thought_history` | Semantic search past thoughts |
-
-## Service Management
-
-```bash
-# Restart MCP server
-launchctl kickstart -k gui/$(id -u)/com.openclaw.musubi
-
-# Restart Qdrant
-docker compose restart
-
-# View logs
-tail -f logs/stderr.log
-```
-
-Or just run `./scripts/update.sh` — it restarts everything and verifies health.
-
-## Disaster Recovery
-
-If rebuilding from complete loss:
-
-```bash
-git clone https://github.com/ericmey/musubi.git ~/.openclaw/musubi
-cd ~/.openclaw/musubi
-./scripts/install.sh
-./venv/bin/python seed_memories.py /path/to/backup/memories
-```
-
-What survives in git: all code, config templates, tests, docs, seed script.
-What lives only in Qdrant: memory vectors, thought vectors, access counts.
-What lives only on the machine: `.env` (API key), LaunchAgent plist, Colima state.
+v1 was a single-plane FastMCP server backed by Gemini and a single Qdrant
+collection. v2 is the full three-plane architecture with local inference,
+named-vector hybrid retrieval, a proper lifecycle engine, and the Obsidian
+vault as the curated-plane store of record. See
+`13-decisions/` ADRs in the vault for the load-bearing choices.
