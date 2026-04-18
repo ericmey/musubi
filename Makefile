@@ -2,7 +2,8 @@
 # All targets assume `uv` is installed.
 
 .PHONY: install fmt lint typecheck test test-cov check clean \
-        agent-check spec-check slice-check vault-check issue-check wikilink-check
+        agent-check spec-check slice-check vault-check issue-check wikilink-check \
+        tc-coverage
 
 # --------------------------------------------------------------------------
 # Code gates — scoped to src/ + tests/ so vault tooling under
@@ -59,6 +60,18 @@ issue-check:
 
 wikilink-check:
 	@python3 docs/architecture/_tools/check.py wikilinks
+
+# Mechanical audit of the Test Contract Closure Rule for one slice.
+# Reads the slice file, finds the specs it implements, parses each spec's
+# ## Test Contract section, classifies every bullet (passing / skipped /
+# out-of-scope / missing), and emits a markdown table suitable for pasting
+# into the PR template's Test Contract coverage matrix. Exits non-zero if
+# any bullet is ✗ missing. Usage: `make tc-coverage SLICE=slice-plane-episodic`.
+tc-coverage:
+	@if [ -z "$(SLICE)" ]; then \
+	  echo "usage: make tc-coverage SLICE=<slice-id>"; exit 2; \
+	fi
+	@python3 docs/architecture/_tools/tc_coverage.py $(SLICE)
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache build dist *.egg-info

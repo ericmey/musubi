@@ -12,6 +12,7 @@ Run every vault-hygiene check Musubi ships and produce a one-screen report. Desi
 - Before opening a PR that touches `docs/architecture/`.
 - When the user says: "check the vault", "anything stale?", `/spec-check`.
 - After pulling an upstream change that touched specs, to sanity-check your working copy.
+- **Before handoff, to generate the Test Contract coverage matrix** that the PR template requires. Run `make tc-coverage SLICE=<slice-id>` and paste the output into the PR description. Anything marked `✗ missing` blocks merge — either write the test, add `@pytest.mark.skip(reason=...)`, or declare out-of-scope in the slice's work log, then re-run.
 
 ## Do not invoke when
 
