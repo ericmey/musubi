@@ -28,7 +28,6 @@ from pydantic import ValidationError
 from musubi import config as config_module
 from musubi.config import Settings, get_settings
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -290,9 +289,7 @@ def test_env_overrides_dotenv(
 # ---------------------------------------------------------------------------
 
 
-def test_default_values_present_where_spec_allows(
-    minimal_env: Path, _reset_cache: None
-) -> None:
+def test_default_values_present_where_spec_allows(minimal_env: Path, _reset_cache: None) -> None:
     settings = get_settings()
     # BRAIN_PORT defaults to 8100 per compose-stack.
     assert settings.brain_port == 8100
@@ -320,7 +317,7 @@ def test_settings_frozen_after_load(minimal_env: Path, _reset_cache: None) -> No
     """Settings are effectively read-only; mutation raises."""
     settings = get_settings()
     with pytest.raises((ValidationError, TypeError, AttributeError)):
-        settings.qdrant_host = "mutated"  # type: ignore[misc]
+        settings.qdrant_host = "mutated"
 
 
 def test_no_module_imports_os_environ_for_config() -> None:
