@@ -1,5 +1,0 @@
-mcp==1.26.0
-qdrant-client==1.17.1
-google-genai==1.70.0
-pydantic==2.12.5
-python-dotenv==1.2.2
