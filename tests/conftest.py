@@ -3,6 +3,7 @@
 Fixtures are added as slices land. Reference: vault's ``_slices/test-fixtures.md``.
 This file starts empty so ``pytest`` runs clean against the scaffold.
 """
+
 from __future__ import annotations
 
 import pytest

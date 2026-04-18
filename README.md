@@ -12,12 +12,16 @@ This repo is being rebuilt slice-by-slice per that design. The `main` branch
 still holds v1 (the FastMCP + Gemini POC); v2 development happens on this `v2`
 branch and will merge to `main` when it reaches feature parity.
 
+**Monorepo.** Core, SDK, adapters (MCP, Obsidian plugin, CLI), and lifecycle
+worker all live in this one repo under `src/musubi/`. No per-component repo
+split. See ADR 0015 in the vault.
+
 ## Status
 
 | Slice | Status |
 |---|---|
-| `slice-types` (pydantic foundation) | not started |
-| everything downstream | blocked on slice-types |
+| `slice-types` (pydantic foundation) | in progress — first cut landed 2026-04-17 (MusubiObject/MemoryObject, the 5 concrete object types + ArtifactRef, LifecycleEvent + transition table, Result[T, E]; 110 tests passing) |
+| everything downstream | waiting for slice-types to mark `done` |
 
 ## Dev setup
 
@@ -31,12 +35,14 @@ make check          # fmt + lint + typecheck + test
 ## Layout
 
 ```
-src/musubi/               importable package
+src/musubi/               importable package — all slices land here
   types/                  shared pydantic types (slice-types)
   planes/                 episodic, curated, artifact, concept (later slices)
   retrieve/               scoring, hybrid, fast/deep path (later slices)
   lifecycle/              maturation, synthesis, promotion (later slices)
   api/                    FastAPI + OpenAPI/proto (later slice)
+  sdk/                    Python client (later slice)
+  adapters/               mcp/, obsidian/, cli/ (later slices)
 
 tests/                    tests mirror src/musubi/ layout exactly
 ```

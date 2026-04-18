@@ -9,7 +9,7 @@ readme = "README.md"
 
 dependencies = [
     "pydantic>=2.9",
-    "ksuid>=1.2",
+    "svix-ksuid>=0.6",
 ]
 
 [project.optional-dependencies]
@@ -55,7 +55,7 @@ explicit_package_bases = true
 mypy_path = "src"
 
 [[tool.mypy.overrides]]
-module = ["ksuid.*"]
+module = ["ksuid.*", "svix_ksuid.*", "ksuid"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

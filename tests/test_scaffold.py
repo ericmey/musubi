@@ -1,4 +1,5 @@
 """Smoke test: the scaffold imports and the package version is sane."""
+
 import musubi
 
 
