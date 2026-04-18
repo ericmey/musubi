@@ -1,37 +1,84 @@
 ---
-description: Musubi project rules — see CLAUDE.md at the repo root for the full working agreement. This file is a short shim so Cursor picks up the rules that every agent on the project follows.
+description: Musubi project rules — apply to every edit in this repo. Covers the non-negotiables, Test Contract Closure Rule, Method-ownership rule, and Dual-update rule. Authoritative expansion lives in docs/architecture/00-index/agent-guardrails.md.
 globs: ["**/*"]
 alwaysApply: true
 ---
 
 # Musubi project rules (Cursor)
 
-The canonical working agreement for coding agents on this project lives at [CLAUDE.md](mdc:../../CLAUDE.md) in the repo root. Read it before any meaningful edit.
+This file is Cursor's always-apply rule pack. The full contract for every coding agent on this repo lives at [AGENTS.md](mdc:../../AGENTS.md) (non-Claude tools) and [CLAUDE.md](mdc:../../CLAUDE.md) (Claude Code). Cursor with Claude as its backing model should treat both as authoritative. Read:
 
-Also read:
+- [AGENTS.md](mdc:../../AGENTS.md)
+- [docs/AGENT-PROCESS.md](mdc:../../docs/AGENT-PROCESS.md) — multi-agent concurrency model
+- [docs/architecture/00-index/agent-guardrails.md](mdc:../../docs/architecture/00-index/agent-guardrails.md) — authoritative rule expansion
 
-- [AGENTS.md](mdc:../../AGENTS.md) — condensed version for all agent tools.
-- [docs/AGENT-PROCESS.md](mdc:../../docs/AGENT-PROCESS.md) — multi-agent concurrency model.
-- [docs/architecture/00-index/agent-guardrails.md](mdc:../../docs/architecture/00-index/agent-guardrails.md) — the four non-negotiables.
+## The four non-negotiables
 
-## Top rules (don't forget)
+1. **Stay inside `owns_paths`.** Your slice's `docs/architecture/_slices/<slice-id>.md` names what you may write. Read anywhere, write only there.
+2. **Canonical API is frozen per version.** Don't edit `src/musubi/api/`, `openapi.yaml`, `proto/` unless your slice is `slice-api-v*`.
+3. **Tests first.** The spec's `## Test Contract` section is authoritative; first commit on your branch is the test file realising it.
+4. **Don't silently rebase the spec.** Spec edits that accompany code go in the same PR, with `spec-update: <doc-path>` on the commit.
 
-1. **Stay inside the slice's `owns_paths`.** Read anywhere; write only there. Every slice is described at `docs/architecture/_slices/slice-<id>.md`.
-2. **Tests first.** The first commit on your branch is the test file derived from the spec's Test Contract.
-3. **API surface is frozen per version.** Don't touch `src/musubi/api/`, `openapi.yaml`, or `proto/` unless your slice is `slice-api-*`.
-4. **Types are owned by `slice-types`.** Don't touch `src/musubi/types/` unless your slice is that one.
-5. **Conventional Commits.** `feat(scope): ...`, `test(scope): ...`, `docs(scope): ...`. Same-PR spec changes get a `spec-update: <doc-path>` trailer.
-6. **`make check` must pass** before you open a PR.
+## Test Contract Closure Rule
 
-## File patterns to remember
+Every bullet in the spec's `## Test Contract` at handoff is in one of three states:
 
-- `src/musubi/<module>/` → implementation.
-- `tests/<module>/` mirrors it.
-- `docs/architecture/<NN-section>/<topic>.md` → specs.
-- `docs/architecture/_slices/slice-<id>.md` → your work order.
-- `docs/architecture/13-decisions/NNNN-<slug>.md` → ADRs.
+1. **Passing test** with a function name matching the bullet text verbatim (`_` for spaces).
+2. **Skipped** with `@pytest.mark.skip(reason="deferred to slice-<id>: <why>")`.
+3. **Declared out-of-scope** in the slice's `## Work log`, with a named follow-up home.
 
-## Tool-use gotchas specific to Cursor
+Silent omission is a request-changes. Cursor's "fix all" / "apply to all files" tendencies should not quietly drop bullets — pass each through review.
 
-- Cursor's auto-apply can easily drift outside `owns_paths` when following suggestions across files. Keep a mental map of your slice's allowed paths and reject cross-slice edits into `forbidden_paths`.
-- When Cursor offers to "fix all" across the repo, confirm the scope is inside your slice — don't rubber-stamp a sweeping refactor in a slice PR.
+## Method-ownership rule
+
+If the method's code lives in your `owns_paths`, you own it. Don't defer methods to slices that merely expose them.
+
+## Dual-update rule (vault ↔ GitHub Issue)
+
+Claim / handoff / block each touch both sides **in the same PR**:
+
+| Transition | Issue command | Frontmatter change |
+|---|---|---|
+| Claim | `gh issue edit <n> --add-assignee @me --add-label status:in-progress --remove-label status:ready` | `status: ready → in-progress`, `owner: <your-agent-id>` |
+| Handoff | `gh issue edit <n> --add-label status:in-review --remove-label status:in-progress` | `status: in-progress → in-review` |
+| Block | `gh issue edit <n> --add-label status:blocked` + comment | `status: <prev> → blocked`, work-log entry |
+| Done | PR body `Closes #<n>` (auto-close) | `status: in-review → done` |
+
+`make issue-check` detects drift. Merge-blocker at review.
+
+## Hard prohibitions (automatic revert)
+
+- `except Exception: pass`
+- `os.environ` reads outside `src/musubi/config.py`
+- `time.sleep()` in production code paths
+- Hardcoded hosts / ports / collection names / thresholds — use placeholders for topology (see `.agent-context.local.md`)
+- New top-level dependencies without an ADR
+- `git push --force` on shared branches
+- `--no-verify` on commits
+- Committing `.agent-context.local.md`, `.env.local`, `.secrets/`, `*.pem`, `*.key`, `id_*`
+
+## Style
+
+- Python 3.12 + strict mypy + ruff format + ruff check + pydantic v2
+- `Result[T, E]` at module boundaries
+- Async public surface
+- Structured JSON logs, correlation IDs propagate, no f-strings in log messages
+- **No `print()`**
+
+## File patterns
+
+- `src/musubi/<module>/` → implementation
+- `tests/<module>/` mirrors it
+- `docs/architecture/<NN-section>/<doc>.md` → specs
+- `docs/architecture/_slices/slice-<id>.md` → your work order
+- `docs/architecture/13-decisions/NNNN-<slug>.md` → ADRs
+
+## Cursor-specific guidance
+
+- **Be skeptical of "apply all suggested edits" across files.** That feature loves to sweep into `forbidden_paths`. Hold the slice's allowed paths in mind; reject cross-slice edits.
+- **Cursor auto-apply can edit `src/musubi/types/` when it "helps" unify types.** Don't let it. Only `slice-types` agents modify that directory.
+- **Before committing, run `make check && make agent-check` locally** — catches drift before GitHub CI does.
+
+## Agent identification
+
+Cursor working with a Claude backing model: identify as `cursor-claude` in slice work logs. With Gemini: `cursor-gemini`. With GPT: `cursor-gpt`.

@@ -24,6 +24,8 @@ dev = [
     "hypothesis>=6",
     "mypy>=1.11",
     "ruff>=0.6",
+    # Vault tooling (docs/architecture/_tools/*.py) reads YAML frontmatter.
+    "pyyaml>=6",
 ]
 
 [build-system]

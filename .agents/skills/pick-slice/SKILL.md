@@ -7,6 +7,11 @@ description: Find the next unclaimed ready-to-work slice in the Musubi vault, cl
 
 Select the next slice from `docs/architecture/_slices/` that is `status: ready`, has all `depends-on` slices at `status: done` (or `in-progress` with their blocking surface landed), and has no active GitHub Issue assignee.
 
+## Rules this skill enforces
+
+- **Dual-update rule** (see `docs/architecture/00-index/agent-guardrails.md#Dual-update-rule` and [AGENTS.md](../../../AGENTS.md)) — claiming a slice flips BOTH the GitHub Issue (assignee + `status:in-progress` label) AND the vault slice file's frontmatter (`status`, `owner`) in the same PR. This skill walks both updates; don't skip either half.
+- **Atomic-claim rule** — GitHub Issue `--add-assignee` is the authoritative lock; re-read the Issue immediately after to detect races. Vault-file + lock-file edits are the *secondary* record.
+
 ## When to invoke
 
 - User says: "pick a slice", "what's next", "grab one off the board", or `/pick-slice`.
