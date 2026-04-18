@@ -1,0 +1,41 @@
+filters:
+  and:
+    - file.ext == "md"
+    - '!file.folder.startsWith("_templates")'
+    - '!file.folder.startsWith("_attachments")'
+    - '!file.folder.startsWith(".obsidian")'
+formulas:
+  section_label: 'file.folder.split("/").first()'
+properties:
+  note.status:
+    displayName: Status
+  note.type:
+    displayName: Type
+  note.updated:
+    displayName: Updated
+  note.section:
+    displayName: Section
+views:
+  - type: table
+    name: All notes by status
+    order:
+      - file.name
+      - note.section
+      - note.status
+      - note.type
+      - note.updated
+    sort:
+      - property: note.status
+        direction: ASC
+      - property: file.path
+        direction: ASC
+  - type: cards
+    name: Research stubs & drafts
+    filters:
+      and:
+        - 'note.status == "research-needed" || note.status == "stub" || note.status == "draft"'
+    order:
+      - file.name
+      - note.status
+      - note.section
+      - note.updated

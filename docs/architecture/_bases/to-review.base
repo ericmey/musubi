@@ -1,0 +1,28 @@
+filters:
+  and:
+    - file.ext == "md"
+    - 'note.reviewed != true'
+    - '!file.folder.startsWith("_templates")'
+    - '!file.folder.startsWith("_bases")'
+    - '!file.folder.startsWith("_inbox")'
+    - '!file.folder.startsWith("_attachments")'
+views:
+  - type: table
+    name: Unread notes
+    order:
+      - file.name
+      - note.section
+      - note.status
+      - note.type
+      - note.updated
+    sort:
+      - property: note.section
+        direction: ASC
+      - property: file.name
+        direction: ASC
+  - type: cards
+    name: Unread by section
+    order:
+      - file.name
+      - note.section
+      - note.status

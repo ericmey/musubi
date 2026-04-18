@@ -1,0 +1,31 @@
+# CODEOWNERS — Musubi monorepo
+#
+# GitHub uses this to auto-request reviews when a PR touches a path. At Musubi
+# v1 there's one human owner; this file still matters because GitHub enforces
+# it as a branch-protection rule once v2 becomes main.
+#
+# Pattern: <path>  <owner-or-team>  [<owner-or-team> ...]
+
+# Default owner for anything not matched below.
+*                                   @ericmey
+
+# Canonical API surface — frozen per version. Extra scrutiny on any change.
+/src/musubi/api/                    @ericmey
+/openapi.yaml                       @ericmey
+/proto/                             @ericmey
+
+# Shared types — only slice-types writes here.
+/src/musubi/types/                  @ericmey
+
+# Architecture vault (in-repo). Edits should come with explicit reasoning.
+/docs/architecture/                 @ericmey
+
+# Agent configuration — changes affect every coding agent on the project.
+/.claude/                           @ericmey
+/AGENTS.md                          @ericmey
+/GEMINI.md                          @ericmey
+/CLAUDE.md                          @ericmey
+/.cursor/                           @ericmey
+
+# CI + branch protection — self-referential.
+/.github/                           @ericmey

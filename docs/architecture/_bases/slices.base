@@ -1,0 +1,55 @@
+filters:
+  and:
+    - file.ext == "md"
+    - file.folder == "_slices"
+    - 'note.type == "slice"'
+views:
+  - type: table
+    name: All slices
+    order:
+      - file.name
+      - note.phase
+      - note.status
+      - note.owner
+      - note.depends-on
+      - note.blocks
+      - note.updated
+    sort:
+      - property: note.phase
+        direction: ASC
+      - property: file.name
+        direction: ASC
+  - type: table
+    name: Ready to start
+    filters:
+      and:
+        - 'note.status == "ready"'
+    order:
+      - file.name
+      - note.phase
+      - note.depends-on
+    sort:
+      - property: note.phase
+        direction: ASC
+  - type: cards
+    name: In flight
+    filters:
+      and:
+        - 'note.status == "in-progress" || note.status == "in-review" || note.status == "blocked"'
+    order:
+      - file.name
+      - note.status
+      - note.owner
+  - type: table
+    name: Done
+    filters:
+      and:
+        - 'note.status == "done"'
+    order:
+      - file.name
+      - note.phase
+      - note.owner
+      - note.updated
+    sort:
+      - property: note.updated
+        direction: DESC

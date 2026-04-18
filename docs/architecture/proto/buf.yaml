@@ -1,0 +1,13 @@
+# buf.yaml — linting + breaking-change detection for the Musubi proto surface.
+# Run `buf lint` and `buf breaking` in CI.
+version: v2
+modules:
+  - path: musubi
+lint:
+  use:
+    - STANDARD
+  except:
+    - PACKAGE_VERSION_SUFFIX  # we use `musubi.v1` rather than `musubiv1`
+breaking:
+  use:
+    - FILE

@@ -1,0 +1,155 @@
+name: Vault check
+
+on:
+  push:
+    branches: [main, v2]
+    paths:
+      - "docs/architecture/**"
+  pull_request:
+    branches: [main, v2]
+    paths:
+      - "docs/architecture/**"
+
+jobs:
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Frontmatter schema + slice DAG
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys, yaml
+
+          root = pathlib.Path("docs/architecture")
+          errors: list[str] = []
+
+          REQUIRED_KEYS = {"title", "section", "type", "status", "tags", "updated"}
+          ALLOWED_STATUSES = {
+              "complete", "draft", "stub", "research-needed", "living-document",
+              "proposed", "accepted", "superseded", "rejected",
+              "ready", "in-progress", "in-review", "blocked", "done",
+              "partially-superseded",
+          }
+
+          for md in root.rglob("*.md"):
+              rel = md.relative_to(root)
+              text = md.read_text(errors="ignore")
+              if not text.startswith("---"):
+                  errors.append(f"{rel}: missing frontmatter")
+                  continue
+              try:
+                  end = text.index("---", 3)
+              except ValueError:
+                  errors.append(f"{rel}: unterminated frontmatter")
+                  continue
+              try:
+                  meta = yaml.safe_load(text[3:end])
+              except yaml.YAMLError as e:
+                  errors.append(f"{rel}: YAML error — {e}")
+                  continue
+              if not isinstance(meta, dict):
+                  errors.append(f"{rel}: frontmatter is not a mapping")
+                  continue
+              missing = REQUIRED_KEYS - meta.keys()
+              if missing:
+                  errors.append(f"{rel}: missing required keys {sorted(missing)}")
+              status = meta.get("status")
+              if status not in ALLOWED_STATUSES:
+                  errors.append(f"{rel}: unknown status {status!r}")
+
+          # Slice DAG: every depends-on resolves, no cycles, owns_paths non-conflict.
+          slices: dict[str, dict] = {}
+          for md in (root / "_slices").glob("slice-*.md"):
+              text = md.read_text(errors="ignore")
+              end = text.index("---", 3)
+              meta = yaml.safe_load(text[3:end])
+              sid = meta.get("slice_id") or md.stem
+              slices[sid] = {"meta": meta, "path": md}
+
+          def extract_ids(value):
+              if not value:
+                  return []
+              if isinstance(value, str):
+                  value = [value]
+              ids = []
+              for v in value:
+                  m = re.search(r"slice-[\w-]+", str(v))
+                  if m:
+                      ids.append(m.group())
+              return ids
+
+          for sid, info in slices.items():
+              meta = info["meta"]
+              for dep in extract_ids(meta.get("depends-on")):
+                  if dep not in slices:
+                      errors.append(f"{sid}: depends-on {dep} has no slice file")
+
+          # Cycle detection (DFS)
+          graph = {sid: extract_ids(info["meta"].get("depends-on")) for sid, info in slices.items()}
+          WHITE, GREY, BLACK = 0, 1, 2
+          color = dict.fromkeys(graph, WHITE)
+          def dfs(node):
+              if color[node] == GREY:
+                  return [node]
+              if color[node] == BLACK:
+                  return None
+              color[node] = GREY
+              for n in graph.get(node, []):
+                  if n in color:
+                      cyc = dfs(n)
+                      if cyc is not None:
+                          return [node] + cyc
+              color[node] = BLACK
+              return None
+          for sid in graph:
+              if color[sid] == WHITE:
+                  cyc = dfs(sid)
+                  if cyc and cyc[0] == cyc[-1] and len(cyc) > 1:
+                      errors.append(f"slice DAG has cycle through {cyc}")
+                      break
+
+          if errors:
+              print("VAULT CHECK FAILED:\n")
+              for e in errors:
+                  print(f"  - {e}")
+              sys.exit(1)
+          print(f"VAULT CHECK PASSED ({len(slices)} slices, {sum(1 for _ in root.rglob('*.md'))} notes)")
+          PY
+
+      - name: Wikilink resolution
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          root = pathlib.Path("docs/architecture")
+          md_stems = {p.relative_to(root).with_suffix("") for p in root.rglob("*.md")}
+          md_stems |= {p for p in md_stems}  # with-suffix paths
+          pattern = re.compile(r"\[\[([^\]|#]+)")
+
+          broken: list[tuple[pathlib.Path, str]] = []
+          for md in root.rglob("*.md"):
+              for m in pattern.finditer(md.read_text(errors="ignore")):
+                  target = pathlib.PurePosixPath(m.group(1).strip())
+                  if target in md_stems or target.with_suffix("") in md_stems:
+                      continue
+                  # Allow CLAUDE, README-style root links.
+                  if str(target) in {"CLAUDE", "README"}:
+                      continue
+                  broken.append((md.relative_to(root), str(target)))
+
+          if broken:
+              print("BROKEN WIKILINKS:\n")
+              for src, tgt in broken[:60]:
+                  print(f"  {src}: [[{tgt}]]")
+              print(f"\ntotal: {len(broken)}")
+              sys.exit(1)
+          print("No broken wikilinks.")
+          PY

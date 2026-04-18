@@ -1,0 +1,218 @@
+// Musubi Canonical API — gRPC surface, v1.
+//
+// Per ADR-0013 (13-decisions/0013-api-spec-authoring.md), pydantic models in
+// `musubi/types/` are the source of truth. This file is a HAND-MAINTAINED
+// MIRROR. A compatibility test (`tests/contract/test_proto_parity.py`)
+// asserts every pydantic public model has a matching message and every field
+// has a matching proto field.
+//
+// Editing rules:
+//   - Additive fields use a new, never-reused field number.
+//   - Removed fields are marked `reserved` with their old number.
+//   - New message types require an ADR.
+//   - `buf lint` and `buf breaking` must pass.
+//
+syntax = "proto3";
+
+package musubi.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/ericmey/musubi/proto/musubi/v1;musubiv1";
+
+// --------------------------------------------------------------------------
+// Service
+// --------------------------------------------------------------------------
+
+service MusubiService {
+  // Episodic capture.
+  rpc StoreEpisodic   (StoreEpisodicRequest)   returns (EpisodicMemory);
+  rpc RecallEpisodic  (RecallRequest)          returns (HitList);
+
+  // Curated fetch.
+  rpc GetCurated      (GetCuratedRequest)      returns (CuratedKnowledge);
+
+  // Artifact ingestion (note: gRPC version uses byte stream; see streaming below).
+  rpc IngestArtifact  (stream IngestArtifactChunk) returns (IngestArtifactResponse);
+
+  // Retrieval — cross-plane blended.
+  rpc RetrieveBlended (BlendedRequest)         returns (HitList);
+
+  // Thoughts (durable inter-presence messages).
+  rpc SendThought     (SendThoughtRequest)     returns (SendThoughtResponse);
+
+  // Ops.
+  rpc GetHealth       (HealthRequest)          returns (Health);
+}
+
+// --------------------------------------------------------------------------
+// Common
+// --------------------------------------------------------------------------
+
+enum Plane {
+  PLANE_UNSPECIFIED = 0;
+  PLANE_EPISODIC    = 1;
+  PLANE_CURATED     = 2;
+  PLANE_ARTIFACT    = 3;
+  PLANE_CONCEPT     = 4;
+}
+
+enum LifecycleState {
+  LIFECYCLE_STATE_UNSPECIFIED = 0;
+  LIFECYCLE_STATE_PROVISIONAL = 1;
+  LIFECYCLE_STATE_MATURED     = 2;
+  LIFECYCLE_STATE_PROMOTED    = 3;
+  LIFECYCLE_STATE_DEMOTED     = 4;
+  LIFECYCLE_STATE_ARCHIVED    = 5;
+}
+
+message Error {
+  enum Code {
+    CODE_UNSPECIFIED = 0;
+    CODE_VALIDATION  = 1;
+    CODE_AUTH        = 2;
+    CODE_NOT_FOUND   = 3;
+    CODE_CONFLICT    = 4;
+    CODE_INTERNAL    = 5;
+  }
+  Code   code           = 1;
+  string detail         = 2;
+  string correlation_id = 3;
+}
+
+// --------------------------------------------------------------------------
+// Memory objects
+// --------------------------------------------------------------------------
+
+message EpisodicMemory {
+  string   object_id      = 1;
+  string   namespace      = 2;
+  string   content        = 3;
+  string   modality       = 4;
+  repeated string tags    = 5;
+  uint32   importance     = 6;                 // 1-10
+  LifecycleState state    = 7;
+  google.protobuf.Timestamp event_at    = 8;
+  google.protobuf.Timestamp ingested_at = 9;
+  google.protobuf.Timestamp valid_from  = 10;
+  google.protobuf.Timestamp valid_until = 11;
+  string   supersedes     = 12;
+  string   superseded_by  = 13;
+  uint32   reinforcement_count = 14;
+  uint32   schema_version = 15;
+}
+
+message CuratedKnowledge {
+  string object_id       = 1;
+  string topic           = 2;
+  string body            = 3;
+  map<string, string> frontmatter = 4;
+  bool   musubi_managed  = 5;
+  string promoted_from   = 6;
+  uint32 schema_version  = 7;
+}
+
+message ArtifactMetadata {
+  string          mime   = 1;
+  string          title  = 2;
+  string          source = 3;
+  repeated string tags   = 4;
+}
+
+// --------------------------------------------------------------------------
+// Requests / responses
+// --------------------------------------------------------------------------
+
+message StoreEpisodicRequest {
+  string   namespace = 1;
+  string   content   = 2;
+  repeated string tags = 3;
+  string   modality  = 4;
+  google.protobuf.Timestamp event_at = 5;
+}
+
+message RecallRequest {
+  string namespace = 1;
+  string query     = 2;
+  uint32 k         = 3;      // default 10
+  google.protobuf.Timestamp since = 4;
+}
+
+message GetCuratedRequest {
+  string namespace = 1;
+  string object_id = 2;
+}
+
+message IngestArtifactChunk {
+  // First message carries metadata; subsequent carry bytes.
+  oneof payload {
+    ArtifactMetadata metadata = 1;
+    bytes data                = 2;
+  }
+  string namespace = 10;  // repeated on every chunk (stream-friendly)
+}
+
+message IngestArtifactResponse {
+  string artifact_id = 1;
+  uint32 chunks      = 2;
+}
+
+message BlendedRequest {
+  string namespace       = 1;
+  string query           = 2;
+  uint32 k               = 3;  // default 20
+  repeated Plane planes  = 4;
+  bool   rerank          = 5;  // default true
+}
+
+message SendThoughtRequest {
+  string namespace    = 1;
+  string to_presence  = 2;
+  string content      = 3;
+  uint32 ttl_seconds  = 4;
+}
+
+message SendThoughtResponse {
+  string thought_id = 1;
+}
+
+message Hit {
+  Plane  plane     = 1;
+  string object_id = 2;
+  string namespace = 3;
+  float  score     = 4;
+  ScoreComponents score_components = 5;
+  string snippet   = 6;
+}
+
+message ScoreComponents {
+  float relevance             = 1;
+  float recency               = 2;
+  float importance            = 3;
+  float maturity              = 4;
+  float reinforcement         = 5;
+  float provenance            = 6;
+  float duplication_penalty   = 7;
+  float contradiction_penalty = 8;
+}
+
+message HitList {
+  repeated Hit hits = 1;
+  uint32 budget_ms  = 2;
+  uint32 elapsed_ms = 3;
+}
+
+message HealthRequest {}
+
+message Health {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_OK          = 1;
+    STATUS_DEGRADED    = 2;
+  }
+  Status status        = 1;
+  bool   qdrant        = 2;
+  bool   vault_writer  = 3;
+  bool   lifecycle     = 4;
+  string version       = 5;
+}

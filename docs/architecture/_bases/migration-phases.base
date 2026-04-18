@@ -1,0 +1,18 @@
+filters:
+  and:
+    - file.ext == "md"
+    - file.folder.startsWith("11-migration")
+    - 'note.type == "migration-phase" || file.name.startsWith("phase-")'
+views:
+  - type: table
+    name: Migration phases
+    order:
+      - file.name
+      - note.title
+      - note.status
+      - note.updated
+      - note.depends-on
+      - note.blocks
+    sort:
+      - property: file.name
+        direction: ASC

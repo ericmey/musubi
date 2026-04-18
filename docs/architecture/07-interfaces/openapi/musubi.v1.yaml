@@ -1,0 +1,325 @@
+# Musubi Canonical API — v1 snapshot (skeleton)
+#
+# This file is a placeholder. Per ADR-0013 it is REGENERATED from pydantic
+# models on each API major bump. Hand-edits are meant to be overwritten.
+#
+# Agents implementing slice-api-v0:
+#   - Source of truth is musubi/types/*.py
+#   - Run `python -m musubi.scripts.dump_openapi > 07-interfaces/openapi/musubi.v1.yaml`
+#   - Commit the result as an artifact, not as authored content.
+#
+# The skeleton below reflects the endpoints described in
+# 07-interfaces/canonical-api.md.
+
+openapi: 3.1.0
+info:
+  title: Musubi Canonical API
+  version: 0.1.0
+  summary: Shared-memory plane for a small-team AI agent fleet.
+  description: |
+    HTTP surface of the Musubi Core Server. All adapters consume this API.
+    Source of truth: pydantic models in `musubi/types/`. See ADR-0013.
+  contact:
+    name: Eric Mey
+    email: ericmey@gmail.com
+
+servers:
+  - url: https://{host}/v1
+    description: Self-hosted deployment
+    variables:
+      host:
+        default: musubi.local
+        description: Host running musubi-core (behind Caddy).
+
+tags:
+  - name: episodic
+    description: Fast, source-first memories. Most writes happen here.
+  - name: curated
+    description: Durable, topic-first facts. Obsidian vault is the store of record.
+  - name: artifact
+    description: Raw documents and transcripts with chunk-level RAG index.
+  - name: concept
+    description: Bridge-layer synthesized concepts from episodic reinforcement.
+  - name: retrieve
+    description: Fast / deep / blended retrieval.
+  - name: thoughts
+    description: Durable inter-presence messages (POC-preserved).
+  - name: ops
+    description: Health, snapshots, lifecycle triggers.
+
+paths:
+
+  /episodic-memories:
+    post:
+      tags: [episodic]
+      operationId: storeEpisodic
+      summary: Capture an episodic memory.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StoreEpisodicRequest" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EpisodicMemory" }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { $ref: "#/components/responses/AuthError" }
+
+  /episodic-memories/recall:
+    post:
+      tags: [episodic, retrieve]
+      operationId: recallEpisodic
+      summary: Recent episodic retrieval (fast path).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecallRequest" }
+      responses:
+        "200":
+          description: Ranked hits.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HitList" }
+
+  /curated-knowledge/{id}:
+    get:
+      tags: [curated]
+      operationId: getCurated
+      summary: Fetch a curated knowledge entry.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, description: "KSUID" }
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CuratedKnowledge" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /artifacts:
+    post:
+      tags: [artifact]
+      operationId: ingestArtifact
+      summary: Upload an artifact for chunking and embedding.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:   { type: string, format: binary }
+                metadata: { $ref: "#/components/schemas/ArtifactMetadata" }
+      responses:
+        "202": { description: Accepted for ingestion. }
+
+  /retrieve/blended:
+    post:
+      tags: [retrieve]
+      operationId: retrieveBlended
+      summary: Deep path — hybrid + rerank across planes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BlendedRequest" }
+      responses:
+        "200":
+          description: Ranked cross-plane hits.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/HitList" }
+
+  /thoughts:
+    post:
+      tags: [thoughts]
+      operationId: sendThought
+      summary: Send a durable inter-presence message.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendThoughtRequest" }
+      responses:
+        "201": { description: Stored. }
+
+  /ops/health:
+    get:
+      tags: [ops]
+      operationId: getHealth
+      summary: Liveness + readiness probe.
+      responses:
+        "200":
+          description: OK.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+components:
+
+  parameters:
+    Namespace:
+      in: header
+      name: X-Musubi-Namespace
+      required: true
+      schema: { type: string, example: "eric/claude-code/episodic" }
+      description: "`{tenant}/{presence}/{plane}` scope. Never defaulted."
+
+  responses:
+    ValidationError:
+      description: Malformed payload.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    AuthError:
+      description: Missing or invalid token.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource does not exist in this namespace.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+
+  schemas:
+
+    Error:
+      type: object
+      required: [code, detail]
+      properties:
+        code:   { type: string, enum: [validation, auth, not_found, conflict, internal] }
+        detail: { type: string }
+        correlation_id: { type: string }
+
+    Health:
+      type: object
+      properties:
+        status:       { type: string, enum: [ok, degraded] }
+        qdrant:       { type: boolean }
+        vault_writer: { type: boolean }
+        lifecycle:    { type: boolean }
+        version:      { type: string }
+
+    # -- Core memory objects --------------------------------------------
+
+    EpisodicMemory:
+      type: object
+      required: [object_id, namespace, content, state, event_at, ingested_at, schema_version]
+      properties:
+        object_id:    { type: string, description: KSUID }
+        namespace:    { type: string }
+        content:      { type: string }
+        modality:     { type: string, enum: [chat, voice, tool, file, other] }
+        tags:         { type: array, items: { type: string } }
+        importance:   { type: integer, minimum: 1, maximum: 10 }
+        state:        { type: string, enum: [provisional, matured, demoted, archived] }
+        event_at:     { type: string, format: date-time }
+        ingested_at:  { type: string, format: date-time }
+        valid_from:   { type: string, format: date-time, nullable: true }
+        valid_until:  { type: string, format: date-time, nullable: true }
+        supersedes:   { type: string, nullable: true }
+        superseded_by:{ type: string, nullable: true }
+        reinforcement_count: { type: integer }
+        schema_version: { type: integer }
+
+    CuratedKnowledge:
+      type: object
+      required: [object_id, topic, body, schema_version]
+      properties:
+        object_id:       { type: string }
+        topic:           { type: string }
+        body:            { type: string, description: "Markdown body of the vault file." }
+        frontmatter:     { type: object, additionalProperties: true }
+        musubi_managed:  { type: boolean }
+        promoted_from:   { type: string, nullable: true }
+        schema_version:  { type: integer }
+
+    ArtifactMetadata:
+      type: object
+      properties:
+        mime:      { type: string }
+        title:     { type: string }
+        source:    { type: string, description: "URL or filename" }
+        tags:      { type: array, items: { type: string } }
+
+    # -- Request/response shapes ---------------------------------------
+
+    StoreEpisodicRequest:
+      type: object
+      required: [content]
+      properties:
+        content:    { type: string }
+        tags:       { type: array, items: { type: string } }
+        modality:   { type: string }
+        event_at:   { type: string, format: date-time, nullable: true }
+
+    RecallRequest:
+      type: object
+      required: [query]
+      properties:
+        query:    { type: string }
+        k:        { type: integer, default: 10, maximum: 50 }
+        since:    { type: string, format: date-time, nullable: true }
+
+    BlendedRequest:
+      type: object
+      required: [query]
+      properties:
+        query:      { type: string }
+        k:          { type: integer, default: 20 }
+        planes:     { type: array, items: { type: string, enum: [episodic, curated, artifact, concept] } }
+        rerank:     { type: boolean, default: true }
+
+    SendThoughtRequest:
+      type: object
+      required: [to_presence, content]
+      properties:
+        to_presence: { type: string }
+        content:     { type: string }
+        ttl_seconds: { type: integer, nullable: true }
+
+    Hit:
+      type: object
+      required: [plane, object_id, score, score_components]
+      properties:
+        plane:      { type: string, enum: [episodic, curated, artifact, concept] }
+        object_id:  { type: string }
+        namespace:  { type: string }
+        score:      { type: number }
+        score_components:
+          type: object
+          properties:
+            relevance:      { type: number }
+            recency:        { type: number }
+            importance:     { type: number }
+            maturity:       { type: number }
+            reinforcement:  { type: number }
+            provenance:     { type: number }
+            duplication_penalty:    { type: number }
+            contradiction_penalty:  { type: number }
+        snippet: { type: string, description: "First N chars of body; caller may fetch full." }
+
+    HitList:
+      type: object
+      required: [hits]
+      properties:
+        hits:       { type: array, items: { $ref: "#/components/schemas/Hit" } }
+        budget_ms:  { type: integer }
+        elapsed_ms: { type: integer }
+
+security:
+  - BearerAuth: []
