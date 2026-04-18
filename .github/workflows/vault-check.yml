@@ -16,7 +16,7 @@ on:
 
 jobs:
   hygiene:
-    name: Vault hygiene (frontmatter + slice DAG + spec Test Contracts)
+    name: Vault hygiene (frontmatter + slice DAG + spec contracts + wikilinks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,58 +27,16 @@ jobs:
           python-version: "3.12"
 
       - name: Install PyYAML
-        # Required by both docs/architecture/_tools/check.py and the
-        # wikilink advisory step below. Without this, the workflow used
-        # to fail at `import yaml` before doing any useful work.
+        # Required by docs/architecture/_tools/check.py for frontmatter parsing.
         run: pip install --no-cache-dir pyyaml
 
       - name: check.py all (authoritative gate)
-        # Single source of truth — same script `make agent-check` runs
-        # locally, so CI and agent-side checks stay aligned.
+        # Single source of truth — same script `make agent-check` runs locally,
+        # so CI and agent-side gates stay aligned. Covers:
+        #   - frontmatter schema on every note
+        #   - slice DAG (no cycles, owns_paths non-conflict, status valid)
+        #   - spec Test Contract hygiene (presence, implements: field)
+        #   - wikilink resolution (.md + .canvas + .base; skips code spans + _templates/)
+        #   - vault ↔ GitHub Issue drift (skipped here since gh CLI isn't authed
+        #     in PR builds; runs locally via `make issue-check`)
         run: python3 docs/architecture/_tools/check.py all
-
-  wikilinks:
-    name: Wikilink resolution (advisory)
-    runs-on: ubuntu-latest
-    # Advisory for now: the vault has ~60 known-broken wikilinks (templates,
-    # stubs, legacy paths). Triage + promotion-to-blocking is tracked as a
-    # follow-up coordination task. Fails OPEN so the run is green but still
-    # surfaces the list in job output.
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Scan
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import pathlib, re, sys
-
-          root = pathlib.Path("docs/architecture")
-          md_stems = {p.relative_to(root).with_suffix("") for p in root.rglob("*.md")}
-          pattern = re.compile(r"\[\[([^\]|#]+)")
-
-          broken: list[tuple[pathlib.Path, str]] = []
-          for md in root.rglob("*.md"):
-              for m in pattern.finditer(md.read_text(errors="ignore")):
-                  target = pathlib.PurePosixPath(m.group(1).strip())
-                  if target in md_stems or target.with_suffix("") in md_stems:
-                      continue
-                  if str(target) in {"CLAUDE", "README"}:
-                      continue
-                  broken.append((md.relative_to(root), str(target)))
-
-          if broken:
-              print("BROKEN WIKILINKS (advisory — not PR-blocking yet):\n")
-              for src, tgt in broken[:100]:
-                  print(f"  {src}: [[{tgt}]]")
-              print(f"\ntotal: {len(broken)}")
-              # continue-on-error: true above means this still surfaces but doesn't block.
-              sys.exit(1)
-          print("No broken wikilinks.")
-          PY

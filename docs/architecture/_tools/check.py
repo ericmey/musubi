@@ -406,6 +406,96 @@ def check_issues(rep: Report) -> None:
             )
 
 
+# ---------- Check: wikilinks --------------------------------------------------
+
+# Wikilink targets may be .md (notes), .canvas (Obsidian Canvas), or .base
+# (Obsidian Bases). We build a resolver that accepts any of the three.
+_LINKABLE_EXTENSIONS = {".md", ".canvas", ".base"}
+
+# Wikilink-scan uses these to strip content that looks like a wikilink but
+# isn't meant to resolve.
+_FENCED_CODE_RE = re.compile(r"```.*?```", re.S)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#]+?)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]")
+
+# Paths (relative to VAULT) whose contents intentionally contain placeholder
+# wikilinks (Templater variables, example syntax). Wikilink scanning skips
+# anything under these prefixes.
+_WIKILINK_SKIP_PREFIXES = ("_templates/",)
+
+# Root-level external targets that are valid wikilinks even though the file
+# they point at lives outside docs/architecture/.
+_EXTERNAL_TARGETS = {
+    "CLAUDE",
+    "README",
+}
+
+
+def _build_linkable_index(root: Path) -> set[str]:
+    """Return every vault-internal path an Obsidian wikilink can resolve to.
+
+    Each entry is the path relative to the vault root, WITHOUT extension.
+    Obsidian matches wikilinks against file stems, so `[[_bases/adrs]]` and
+    `[[_bases/adrs.base]]` are both valid references to ``_bases/adrs.base``.
+    """
+    index: set[str] = set()
+    for ext in _LINKABLE_EXTENSIONS:
+        for p in root.rglob(f"*{ext}"):
+            rel = p.relative_to(root).with_suffix("")
+            index.add(str(rel))
+            # Also register with the extension, for explicit `[[x.canvas]]` style.
+            index.add(str(rel) + ext)
+    return index
+
+
+def _strip_code(text: str) -> str:
+    """Remove fenced blocks and inline code spans before wikilink scanning.
+
+    This is how we skip "documentation example" wikilinks — docs like
+    ``conventions.md`` use `` `[[path/file]]` `` to show wikilink syntax;
+    stripping the backticks before scanning prevents false-positive reports.
+    """
+    # Order matters: fenced first (greedy multiline), then inline.
+    text = _FENCED_CODE_RE.sub("", text)
+    text = _INLINE_CODE_RE.sub("", text)
+    return text
+
+
+def check_wikilinks(rep: Report) -> None:
+    """Every ``[[wikilink]]`` target resolves to a real file in the vault.
+
+    Skips:
+    - Matches inside fenced code blocks and inline code spans.
+    - Files under ``_templates/`` (Templater placeholders are intentional).
+    - External link-outs like ``[[CLAUDE]]`` and ``[[README]]`` that target
+      root-level files outside the vault.
+
+    Reports are errors, not warnings — the author of a note linking to a
+    nonexistent target is making a real mistake most of the time, and the
+    filters above strip the known-safe exceptions.
+    """
+    index = _build_linkable_index(VAULT)
+
+    for md in VAULT.rglob("*.md"):
+        rel = str(md.relative_to(VAULT))
+        if any(rel.startswith(pfx) for pfx in _WIKILINK_SKIP_PREFIXES):
+            continue
+
+        text = _strip_code(md.read_text(errors="ignore"))
+        for m in _WIKILINK_RE.finditer(text):
+            target = m.group(1).strip()
+            if target in _EXTERNAL_TARGETS:
+                continue
+            # Strip trailing slashes or spaces (rare, but safe).
+            target = target.rstrip("/ ")
+            if target in index:
+                continue
+            # Accept explicit extensions too (e.g. `[[_bases/foo.base]]`).
+            if target.endswith(tuple(_LINKABLE_EXTENSIONS)) and target in index:
+                continue
+            rep.err(rel, f"broken wikilink: [[{target}]]")
+
+
 # ---------- Check: specs -------------------------------------------------------
 
 SPEC_SECTIONS = (
@@ -467,7 +557,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "command",
-        choices=["vault", "slices", "specs", "issues", "all"],
+        choices=["vault", "slices", "specs", "issues", "wikilinks", "all"],
         default="all", nargs="?",
     )
     ap.add_argument("--json", action="store_true")
@@ -482,6 +572,8 @@ def main() -> int:
         check_specs(rep)
     if args.command in ("issues", "all"):
         check_issues(rep)
+    if args.command in ("wikilinks", "all"):
+        check_wikilinks(rep)
 
     if args.json:
         print(
