@@ -48,7 +48,6 @@ from musubi.store import bootstrap
 from musubi.types.episodic import EpisodicMemory
 from musubi.types.lifecycle_event import LifecycleEvent
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -111,14 +110,27 @@ async def test_create_auto_embeds_dense_and_sparse_vectors(
     plane: EpisodicPlane, ns: str, qdrant: QdrantClient
 ) -> None:
     # After create, the point should exist in Qdrant with *both* named vectors.
+    # Qdrant point IDs are UUIDs; KSUIDs live in the payload, so we scroll by
+    # the payload field to locate the point without reaching into the plane's
+    # internal ksuid -> UUID mapping.
+    from qdrant_client import models as qmodels
+
     saved = await plane.create(_make("embed me", ns))
-    pts = qdrant.retrieve(
+    records, _ = qdrant.scroll(
         collection_name="musubi_episodic",
-        ids=[saved.object_id],
+        scroll_filter=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id",
+                    match=qmodels.MatchValue(value=saved.object_id),
+                )
+            ]
+        ),
+        limit=1,
         with_vectors=True,
     )
-    assert pts, "point was not written to Qdrant"
-    vectors = pts[0].vector
+    assert records, "point was not written to Qdrant"
+    vectors = records[0].vector
     assert isinstance(vectors, dict)
     assert "dense_bge_m3_v1" in vectors
     assert "sparse_splade_v1" in vectors
@@ -165,8 +177,8 @@ async def test_create_dedup_hit_updates_content_with_new_text(
     # gives random-ish vectors per unique text, force dedup by using a very
     # low threshold so *any* point counts as "same".
     low_plane = EpisodicPlane(
-        client=plane._client,  # type: ignore[attr-defined]  # tests reach in
-        embedder=plane._embedder,  # type: ignore[attr-defined]
+        client=plane._client,
+        embedder=plane._embedder,
         dedup_threshold=-1.0,
     )
     first = await low_plane.create(_make("first version", "eric/claude-code/episodic"))
@@ -201,9 +213,7 @@ async def test_create_dedup_threshold_is_per_plane_configurable(
 # ---------------------------------------------------------------------------
 
 
-async def test_transition_to_matured_emits_lifecycle_event(
-    plane: EpisodicPlane, ns: str
-) -> None:
+async def test_transition_to_matured_emits_lifecycle_event(plane: EpisodicPlane, ns: str) -> None:
     saved = await plane.create(_make("mature me", ns))
     updated, event = await plane.transition(
         namespace=ns,
@@ -220,9 +230,7 @@ async def test_transition_to_matured_emits_lifecycle_event(
     assert event.actor == "test-suite"
 
 
-async def test_transition_bumps_version_and_updated_at(
-    plane: EpisodicPlane, ns: str
-) -> None:
+async def test_transition_bumps_version_and_updated_at(plane: EpisodicPlane, ns: str) -> None:
     saved = await plane.create(_make("bump on transition", ns))
     updated, _ = await plane.transition(
         namespace=ns,
@@ -334,9 +342,7 @@ async def test_isolation_write_enforcement(plane: EpisodicPlane) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_query_excludes_provisional_by_default(
-    plane: EpisodicPlane, ns: str
-) -> None:
+async def test_query_excludes_provisional_by_default(plane: EpisodicPlane, ns: str) -> None:
     prov = await plane.create(_make("visible-later", ns))
     results = await plane.query(namespace=ns, query="visible", limit=10)
     # provisional excluded by default.
@@ -356,9 +362,7 @@ async def test_query_includes_matured(plane: EpisodicPlane, ns: str) -> None:
     assert any(r.object_id == saved.object_id for r in results)
 
 
-async def test_query_respects_include_demoted_flag(
-    plane: EpisodicPlane, ns: str
-) -> None:
+async def test_query_respects_include_demoted_flag(plane: EpisodicPlane, ns: str) -> None:
     saved = await plane.create(_make("demoted-flag", ns))
     await plane.transition(
         namespace=ns,
