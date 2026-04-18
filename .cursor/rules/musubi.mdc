@@ -1,0 +1,37 @@
+---
+description: Musubi project rules — see CLAUDE.md at the repo root for the full working agreement. This file is a short shim so Cursor picks up the rules that every agent on the project follows.
+globs: ["**/*"]
+alwaysApply: true
+---
+
+# Musubi project rules (Cursor)
+
+The canonical working agreement for coding agents on this project lives at [CLAUDE.md](mdc:../../CLAUDE.md) in the repo root. Read it before any meaningful edit.
+
+Also read:
+
+- [AGENTS.md](mdc:../../AGENTS.md) — condensed version for all agent tools.
+- [docs/AGENT-PROCESS.md](mdc:../../docs/AGENT-PROCESS.md) — multi-agent concurrency model.
+- [docs/architecture/00-index/agent-guardrails.md](mdc:../../docs/architecture/00-index/agent-guardrails.md) — the four non-negotiables.
+
+## Top rules (don't forget)
+
+1. **Stay inside the slice's `owns_paths`.** Read anywhere; write only there. Every slice is described at `docs/architecture/_slices/slice-<id>.md`.
+2. **Tests first.** The first commit on your branch is the test file derived from the spec's Test Contract.
+3. **API surface is frozen per version.** Don't touch `src/musubi/api/`, `openapi.yaml`, or `proto/` unless your slice is `slice-api-*`.
+4. **Types are owned by `slice-types`.** Don't touch `src/musubi/types/` unless your slice is that one.
+5. **Conventional Commits.** `feat(scope): ...`, `test(scope): ...`, `docs(scope): ...`. Same-PR spec changes get a `spec-update: <doc-path>` trailer.
+6. **`make check` must pass** before you open a PR.
+
+## File patterns to remember
+
+- `src/musubi/<module>/` → implementation.
+- `tests/<module>/` mirrors it.
+- `docs/architecture/<NN-section>/<topic>.md` → specs.
+- `docs/architecture/_slices/slice-<id>.md` → your work order.
+- `docs/architecture/13-decisions/NNNN-<slug>.md` → ADRs.
+
+## Tool-use gotchas specific to Cursor
+
+- Cursor's auto-apply can easily drift outside `owns_paths` when following suggestions across files. Keep a mental map of your slice's allowed paths and reject cross-slice edits into `forbidden_paths`.
+- When Cursor offers to "fix all" across the repo, confirm the scope is inside your slice — don't rubber-stamp a sweeping refactor in a slice PR.

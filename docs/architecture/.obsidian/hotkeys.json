@@ -1,0 +1,15 @@
+{
+  "app:go-back":             [{ "modifiers": ["Mod"],        "key": "[" }],
+  "app:go-forward":          [{ "modifiers": ["Mod"],        "key": "]" }],
+  "switcher:open":           [{ "modifiers": ["Mod"],        "key": "O" }],
+  "command-palette:open":    [{ "modifiers": ["Mod"],        "key": "P" }],
+  "graph:open":              [{ "modifiers": ["Mod"],        "key": "G" }],
+  "graph:open-local":        [{ "modifiers": ["Mod", "Shift"], "key": "G" }],
+  "backlink:open-backlinks": [{ "modifiers": ["Mod", "Shift"], "key": "B" }],
+  "outline:open":            [{ "modifiers": ["Mod", "Shift"], "key": "O" }],
+  "templater-obsidian:insert-templater": [{ "modifiers": ["Mod", "Shift"], "key": "T" }],
+  "obsidian-linter:lint-file":           [{ "modifiers": ["Mod", "Alt"],   "key": "L" }],
+  "breadcrumbs:open-matrix":             [{ "modifiers": ["Mod", "Shift"], "key": "M" }],
+  "breadcrumbs:open-tree":               [{ "modifiers": ["Mod", "Shift"], "key": "N" }],
+  "obsidian-tasks-plugin:edit-task":     [{ "modifiers": ["Mod", "Shift"], "key": "K" }]
+}

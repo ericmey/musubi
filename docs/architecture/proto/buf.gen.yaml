@@ -1,0 +1,13 @@
+# buf.gen.yaml — codegen recipe.
+# Generates Python + TypeScript stubs from musubi/v1/*.proto.
+# Usage: `buf generate`
+version: v2
+plugins:
+  - remote: buf.build/protocolbuffers/python
+    out: ../musubi/_generated/proto
+  - remote: buf.build/grpc/python
+    out: ../musubi/_generated/proto
+  - remote: buf.build/bufbuild/es
+    out: ../musubi-sdk-ts/src/_generated
+    opt:
+      - target=ts

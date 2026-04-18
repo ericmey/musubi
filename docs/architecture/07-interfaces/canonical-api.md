@@ -1,0 +1,355 @@
+---
+title: Canonical API
+section: 07-interfaces
+tags: [api, grpc, http, interfaces, section/interfaces, status/complete, type/spec]
+type: spec
+status: complete
+updated: 2026-04-17
+up: "[[07-interfaces/index]]"
+reviewed: false
+---
+# Canonical API
+
+The authoritative interface to Musubi Core. Everything else — SDK, adapters, CLI — calls this. The spec lives in the `musubi-core` repo under `api/openapi.yaml` (generated from pydantic) and `api/musubi.proto` (for gRPC).
+
+This document describes the **shape** of the API; the generated OpenAPI/proto files are the normative source.
+
+## Base URL
+
+```
+https://musubi.example.local.<tld>/v1/
+```
+
+HTTPS is mandatory. TLS via Kong reverse-proxy in front of Uvicorn. Local dev uses Kong with a self-signed cert.
+
+For LAN-only deploys where TLS is overkill, explicit opt-out via `MUSUBI_ALLOW_PLAINTEXT=true` — not recommended for anything cross-host.
+
+## Auth
+
+```
+Authorization: Bearer <jwt-or-opaque-token>
+```
+
+Tokens carry a scope list; each scope is a namespace glob:
+
+- `eric/claude-code/episodic:rw` — read+write to that specific namespace.
+- `eric/*/episodic:r` — read any of Eric's episodic (rare; operator scope).
+- `eric/_shared/curated:rw` — shared curated.
+- `operator` — meta scope for admin endpoints.
+
+See [[10-security/auth]] for token issuance and validation.
+
+## Content types
+
+- Request: `application/json` (REST) or protobuf (gRPC).
+- Response: same.
+- File uploads: `multipart/form-data` (only for `/v1/artifacts`).
+- Streaming: newline-delimited JSON (NDJSON) for large result sets (retrieval over 100 items).
+
+## Endpoints
+
+### 1. Episodic memory
+
+```
+POST   /v1/memories                          # capture
+POST   /v1/memories/batch                    # batch capture
+GET    /v1/memories/{id}                     # fetch one
+PATCH  /v1/memories/{id}                     # update tags/importance (limited fields)
+DELETE /v1/memories/{id}                     # soft delete (state=archived)
+```
+
+See [[06-ingestion/capture]] for semantics. Common errors: 400 (validation), 401/403, 503 (backend down).
+
+### 2. Curated knowledge
+
+```
+POST   /v1/curated-knowledge                 # rare — usually via vault edit
+GET    /v1/curated-knowledge/{id}?include=body
+PATCH  /v1/curated-knowledge/{id}            # metadata only; body edits via vault
+DELETE /v1/curated-knowledge/{id}            # soft-delete, archives vault file
+GET    /v1/curated-knowledge                 # list with filters
+```
+
+Body of a curated doc is normally edited via the vault; POST exists for programmatic creation (e.g., Lifecycle Worker's promotion goes through `curated_create_from_concept` internally — but clients may POST too if they want to create a file through the API).
+
+### 3. Concepts
+
+```
+GET    /v1/concepts/{id}
+PATCH  /v1/concepts/{id}                     # operator only; mostly for contradiction resolution
+POST   /v1/concepts/{id}/reinforce           # explicit reinforcement (rare; usually implicit)
+POST   /v1/concepts/{id}/promote             # operator: force promotion
+POST   /v1/concepts/{id}/reject              # operator: permanent reject
+GET    /v1/concepts                          # list with filters
+```
+
+No POST `/v1/concepts` — concepts come from synthesis, not external writes.
+
+### 4. Artifacts
+
+```
+POST   /v1/artifacts                         # upload raw file
+GET    /v1/artifacts/{id}                    # metadata
+GET    /v1/artifacts/{id}/blob               # download bytes
+GET    /v1/artifacts/{id}/chunks             # list chunks
+GET    /v1/artifacts/{id}/chunks/{chunk_id}  # single chunk
+POST   /v1/artifacts/{id}/archive            # soft archive
+POST   /v1/artifacts/{id}/purge              # operator: hard delete (blob + chunks + metadata)
+GET    /v1/artifacts                         # list with filters
+```
+
+### 5. Thoughts
+
+```
+POST   /v1/thoughts/send
+POST   /v1/thoughts/check                    # unread for a presence
+POST   /v1/thoughts/read                     # mark read
+POST   /v1/thoughts/history                  # semantic search
+```
+
+Shape preserved from POC (see [[04-data-model/thoughts]]), just under the `/v1/thoughts/...` path.
+
+### 6. Retrieval
+
+```
+POST   /v1/retrieve                          # body = RetrievalQuery
+POST   /v1/retrieve/stream                   # NDJSON stream for large K
+```
+
+Single entry point for fast and deep path. Mode selected by `query.mode`. See [[05-retrieval/orchestration]].
+
+### 7. Lifecycle
+
+```
+POST   /v1/lifecycle/transition              # operator: explicit transition
+GET    /v1/lifecycle/events                  # list events
+GET    /v1/lifecycle/events/{object_id}      # events for a specific object
+POST   /v1/lifecycle/reconcile               # operator: trigger reconciler
+```
+
+### 8. Contradictions
+
+```
+GET    /v1/contradictions                    # list active
+POST   /v1/contradictions/resolve            # operator: pick winner, set reason
+```
+
+### 9. Ops
+
+```
+GET    /v1/ops/health                        # liveness + readiness
+GET    /v1/ops/status                        # per-component status
+GET    /v1/ops/metrics                       # Prometheus format (internal only; protected)
+POST   /v1/ops/reindex                       # operator: full reindex
+```
+
+### 10. Namespaces
+
+```
+GET    /v1/namespaces                        # list namespaces in scope
+GET    /v1/namespaces/{ns}/stats             # counts, sizes, last activity
+```
+
+## Request shapes
+
+All request bodies are pydantic models. Examples:
+
+### Capture
+
+```json
+POST /v1/memories
+{
+  "namespace": "eric/claude-code/episodic",
+  "content": "CUDA 13 driver 575 installed; reboot required.",
+  "tags": ["cuda", "ops"],
+  "topics": ["infrastructure/gpu"],
+  "importance": 7,
+  "content_type": "observation",
+  "capture_source": "claude-code-session",
+  "source_ref": "session:ksuid-...",
+  "ingestion_metadata": { ... }
+}
+```
+
+### Retrieve
+
+```json
+POST /v1/retrieve
+{
+  "namespace": "eric/_shared/blended",
+  "query_text": "how do I restart the livekit agent",
+  "mode": "fast",
+  "limit": 5,
+  "planes": ["curated", "concept", "episodic"],
+  "filters": {
+    "tags_any": null,
+    "min_importance": null,
+    "since": null
+  },
+  "include_archived": false
+}
+```
+
+### Thought send
+
+```json
+POST /v1/thoughts/send
+{
+  "from_presence": "claude-code",
+  "to_presence": "livekit-voice",
+  "channel": "default",
+  "content": "Heads up: I restarted the LiveKit agent at 09:03 UTC.",
+  "importance": 5
+}
+```
+
+## Response shapes
+
+All responses are pydantic models. Errors follow the same shape:
+
+```json
+{
+  "error": {
+    "code": "FORBIDDEN",
+    "detail": "namespace 'eric/other-presence/episodic' not in token scope",
+    "hint": "request a token with scope including this namespace"
+  }
+}
+```
+
+Common error codes:
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `BAD_REQUEST` | 400 | Validation failed |
+| `UNAUTHORIZED` | 401 | Missing / invalid token |
+| `FORBIDDEN` | 403 | Token valid, scope insufficient |
+| `NOT_FOUND` | 404 | Unknown object_id |
+| `CONFLICT` | 409 | Version mismatch or idempotency collision |
+| `RATE_LIMITED` | 429 | Too many requests |
+| `BACKEND_UNAVAILABLE` | 503 | Qdrant / TEI / Ollama down |
+| `INTERNAL` | 500 | Unexpected |
+
+## Rate limits
+
+Per-token:
+
+- 100 captures / minute
+- 500 retrievals / minute
+- 20 artifact uploads / minute
+- 50 batch writes / minute
+
+Returned via `X-RateLimit-*` headers. Operator-scoped tokens have 10x limits.
+
+Rate limits live in Kong (simpler) or in the Core (more precise). v1: Kong. Post-v1: move to Core for namespace-scoped limits.
+
+## Pagination
+
+List endpoints use cursor pagination:
+
+```
+GET /v1/memories?namespace=eric/...&limit=50&cursor=<opaque>
+```
+
+Response includes `next_cursor` if more results exist. `null` when exhausted.
+
+Cursors are opaque ksuid+epoch packed strings; rotating behind the scenes without breaking clients.
+
+## Idempotency
+
+`Idempotency-Key: <uuid>` header on any POST. 24h TTL. See [[06-ingestion/capture#idempotency]].
+
+## Versioning
+
+Path-prefixed (`/v1/…`). Breaking changes → `/v2/…`. Both run side-by-side for 180 days.
+
+Non-breaking additions (new optional fields, new optional enum values) stay in `/v1/…`.
+
+## gRPC
+
+Generated from the pydantic models via `protoc`. Same endpoints, same shapes, same errors. Used where low latency + streaming matters — primarily the LiveKit adapter.
+
+Endpoint map:
+
+```proto
+service Musubi {
+  rpc Capture(CaptureRequest) returns (CaptureResponse);
+  rpc Retrieve(RetrieveRequest) returns (RetrieveResponse);
+  rpc RetrieveStream(RetrieveRequest) returns (stream RetrievalResult);
+  rpc ThoughtSend(ThoughtSendRequest) returns (ThoughtSendResponse);
+  // ... one rpc per HTTP endpoint
+}
+```
+
+gRPC is optional in v1 (build flag `MUSUBI_GRPC=true` at container build). Default off for simplicity.
+
+## NDJSON streaming
+
+For `POST /v1/retrieve/stream`, response is newline-delimited JSON:
+
+```
+{"object_id": "...", "score": 0.82, ...}
+{"object_id": "...", "score": 0.79, ...}
+...
+```
+
+Client parses line-by-line; useful for large `limit` queries to start showing results before the whole batch lands.
+
+## Observability headers
+
+Requests receive:
+
+- `X-Request-Id` (UUID; echoed in all logs).
+- `X-Musubi-Duration-Ms` on responses.
+- `X-Musubi-Warnings` (comma-separated codes) on responses with non-fatal issues.
+
+Clients can propagate `X-Request-Id` through their own logs for cross-system tracing.
+
+## Test contract
+
+**Module under test:** `musubi/api/` + OpenAPI + `tests/contract/`
+
+Shape:
+
+1. `test_openapi_generated_matches_pydantic`
+2. `test_all_documented_endpoints_routable`
+3. `test_error_shape_consistent_across_endpoints`
+
+Auth:
+
+4. `test_missing_token_returns_401`
+5. `test_out_of_scope_returns_403`
+6. `test_operator_scope_accesses_admin_endpoints`
+
+Content negotiation:
+
+7. `test_json_default`
+8. `test_protobuf_via_grpc_matches_rest_semantics`
+9. `test_multipart_upload_for_artifacts`
+
+Idempotency:
+
+10. `test_idempotency_key_roundtrip`
+11. `test_idempotency_key_expires_after_24h`
+
+Versioning:
+
+12. `test_v1_path_lives_alongside_v2_when_present`
+
+Rate limits:
+
+13. `test_rate_limit_enforces_token_bucket`
+14. `test_rate_limit_operator_scope_10x_limit`
+
+Streaming:
+
+15. `test_ndjson_retrieve_stream_yields_per_result`
+
+Pagination:
+
+16. `test_cursor_roundtrip_exhausts_list`
+17. `test_cursor_opaque_to_client`
+
+Contract:
+
+18. `test_contract_suite_runs_end_to_end` (subset of [[07-interfaces/contract-tests]])

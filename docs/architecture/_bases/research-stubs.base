@@ -1,0 +1,24 @@
+filters:
+  and:
+    - file.ext == "md"
+    - 'note.status == "research-needed" || note.status == "stub"'
+    - '!file.folder.startsWith("_templates")'
+views:
+  - type: table
+    name: Research + Stubs
+    order:
+      - file.name
+      - note.section
+      - note.status
+      - note.updated
+    sort:
+      - property: note.status
+        direction: ASC
+      - property: file.path
+        direction: ASC
+  - type: cards
+    name: Research cards
+    order:
+      - file.name
+      - note.status
+      - note.section

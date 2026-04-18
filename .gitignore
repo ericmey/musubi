@@ -15,6 +15,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 coverage.xml
 htmlcov/
 
@@ -30,3 +31,42 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+
+# Obsidian — vault lives at docs/architecture/
+# Transient / per-machine state is ignored; config + plugin settings are kept.
+docs/architecture/.obsidian/workspace.json
+docs/architecture/.obsidian/workspace-mobile.json
+docs/architecture/.obsidian/workspaces.json
+docs/architecture/.obsidian/cache/
+docs/architecture/.obsidian/appearance.json.bak
+docs/architecture/.obsidian/plugins/*/data.json.bak
+docs/architecture/.trash/
+
+# Plugins that store credentials / keys / certs in data.json — ignore them entirely.
+# (Local REST API writes an apiKey + RSA private key + TLS cert to its data.json
+#  on first run. If another plugin does similar, add a line here.)
+docs/architecture/.obsidian/plugins/obsidian-local-rest-api/data.json
+
+# Attachments >1MB should go to git-lfs; keep the dir tracked but don't let accidental binaries bloat history.
+# (Add a pre-commit check later once attachment volume warrants it.)
+
+# ==========================================================================
+# Operator-local agent context
+# Any of these paths may hold secrets, SSH credentials, internal hostnames,
+# or other info agents need locally but must never be pushed. Commit nothing
+# that matches:
+# ==========================================================================
+.agent-context.local.md
+.agent-context.local/
+*.local.md
+!docs/**/*.local.md   # whitelist: intentional local docs inside vault are OK
+.secrets/
+.env.local
+*.secret
+*.pem
+*.key
+id_rsa
+id_ed25519
+id_ecdsa
+*.pfx
+*.p12

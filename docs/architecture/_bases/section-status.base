@@ -1,0 +1,20 @@
+filters:
+  and:
+    - file.ext == "md"
+    - '!file.folder.startsWith("_templates")'
+    - '!file.folder.startsWith("_attachments")'
+    - '!file.folder.startsWith(".obsidian")'
+formulas:
+  section_label: 'file.folder.split("/").first()'
+views:
+  - type: table
+    name: By section
+    groupBy: formula.section_label
+    order:
+      - file.name
+      - note.status
+      - note.type
+      - note.updated
+    sort:
+      - property: file.path
+        direction: ASC

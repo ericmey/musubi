@@ -1,0 +1,16 @@
+filters:
+  and:
+    - file.ext == "md"
+    - 'note.status == "draft"'
+    - '!file.folder.startsWith("_templates")'
+views:
+  - type: table
+    name: Drafts needing completion
+    order:
+      - file.name
+      - note.section
+      - note.status
+      - note.updated
+    sort:
+      - property: note.updated
+        direction: ASC

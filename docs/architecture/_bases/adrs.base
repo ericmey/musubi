@@ -1,0 +1,26 @@
+filters:
+  and:
+    - file.ext == "md"
+    - file.folder.startsWith("13-decisions")
+    - 'note.type == "adr"'
+views:
+  - type: table
+    name: All ADRs
+    order:
+      - file.name
+      - note.title
+      - note.status
+      - note.date
+      - note.supersedes
+      - note.superseded-by
+    sort:
+      - property: file.name
+        direction: ASC
+  - type: cards
+    name: Active ADRs
+    filters:
+      and:
+        - 'note.status == "accepted"'
+    order:
+      - note.title
+      - note.date

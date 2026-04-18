@@ -1,0 +1,22 @@
+{
+  "newLinkFormat": "absolute",
+  "useMarkdownLinks": false,
+  "attachmentFolderPath": "_attachments",
+  "newFileLocation": "current",
+  "alwaysUpdateLinks": true,
+  "showLineNumber": true,
+  "foldIndent": true,
+  "foldHeading": true,
+  "showFrontmatter": true,
+  "livePreview": true,
+  "defaultViewMode": "source",
+  "readableLineLength": true,
+  "promptDelete": true,
+  "trashOption": "system",
+  "spellcheck": true,
+  "autoPairMarkdown": true,
+  "autoPairBrackets": true,
+  "smartIndentList": true,
+  "showInlineTitle": false,
+  "tabSize": 2
+}

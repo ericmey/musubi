@@ -1,0 +1,57 @@
+/*
+ * Musubi vault — status colour coding.
+ * Applies to note headers, inline-title, and tag pills based on the `status` frontmatter value.
+ * Also colours the properties-panel tag pills.
+ */
+
+/* --- Tag pills everywhere (editor, graph, tag pane, file properties) --- */
+.tag[href="#status/complete"]         { background: #1c5a2e; color: #e9fce9; border-color: #2f8a48; }
+.tag[href="#status/draft"]            { background: #6b5a16; color: #fff8dc; border-color: #c6a432; }
+.tag[href="#status/stub"]             { background: #5a2f6b; color: #f5e6ff; border-color: #9e56c1; }
+.tag[href="#status/research-needed"]  { background: #6b1c1c; color: #ffe8e0; border-color: #c25043; }
+.tag[href="#status/accepted"]         { background: #1c4a6b; color: #e0f2ff; border-color: #3f86c1; }
+.tag[href="#status/proposed"]         { background: #5a5a1c; color: #fffbe0; border-color: #b5b84a; }
+.tag[href="#status/superseded"]       { background: #444444; color: #e0e0e0; border-color: #777; text-decoration: line-through; }
+.tag[href="#status/rejected"]         { background: #3a1111; color: #ffd0d0; border-color: #883333; text-decoration: line-through; }
+.tag[href="#status/living-document"]  { background: #1c3d6b; color: #e0edff; border-color: #4673b8; }
+
+/* --- Type tags --- */
+.tag[href="#type/adr"]                { background: #2a2a5a; color: #e0e0ff; border-color: #5a5aa0; }
+.tag[href="#type/index"]              { background: #2a5a2a; color: #e0ffe0; border-color: #5aa05a; }
+.tag[href="#type/runbook"]            { background: #5a3a1c; color: #ffedd0; border-color: #a06a30; }
+.tag[href="#type/spec"]               { background: #333844; color: #d8dcee; border-color: #666a80; }
+.tag[href="#type/research-question"]  { background: #6b1c5a; color: #fde0ff; border-color: #c14094; }
+.tag[href="#type/migration-phase"]    { background: #1c6b5a; color: #e0fff5; border-color: #40c1a5; }
+.tag[href="#type/vault-readme"]       { background: #1a1a1a; color: #eeeeee; border-color: #555; }
+
+/* --- Base / table alternating rows --- */
+.bases-table tbody tr:nth-child(even) { background: rgba(255,255,255,0.02); }
+
+/* --- File explorer: colour file rows whose note is a stub / research / draft --- */
+/* Obsidian exposes frontmatter values to CSS only via tag classes on nodes,
+   not file-explorer rows. As a lightweight proxy, highlight rows by name patterns. */
+.nav-file-title[data-path$="evals.md"],
+.nav-file-title[data-path$="concept-synthesis.md"],
+.nav-file-title[data-path$="runbooks.md"],
+.nav-file-title[data-path$="prompt-hygiene.md"],
+.nav-file-title[data-path$="audit.md"],
+.nav-file-title[data-path$="phase-1-schema.md"] {
+  border-left: 3px solid #c25043;
+  padding-left: 6px;
+}
+
+/* --- Graph: status-colored nodes (pairs with graph.json colorGroups) --- */
+/* The graph plugin handles colouring; this snippet only adds a subtle glow to
+   the currently-focused node so the gap clusters are easier to spot. */
+.graph-view.color-circle:hover { filter: drop-shadow(0 0 6px rgba(255,255,255,0.5)); }
+
+/* --- Property panel: bolder section header --- */
+.metadata-property[data-property-key="status"] .metadata-property-key-input { font-weight: 600; }
+.metadata-property[data-property-key="section"] .metadata-property-key-input { font-weight: 600; }
+.metadata-property[data-property-key="type"]    .metadata-property-key-input { font-weight: 600; }
+
+/* --- Callout styling for section indexes --- */
+.callout[data-callout="section-index"] {
+  --callout-color: 90, 130, 200;
+  --callout-icon: list;
+}

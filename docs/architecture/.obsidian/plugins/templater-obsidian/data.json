@@ -1,0 +1,78 @@
+{
+  "command_timeout": 5,
+  "templates_folder": "_templates",
+  "templates_pairs": [
+    [
+      "",
+      ""
+    ]
+  ],
+  "trigger_on_file_creation": false,
+  "auto_jump_to_cursor": true,
+  "enable_system_commands": false,
+  "shell_path": "",
+  "user_scripts_folder": "",
+  "enable_folder_templates": true,
+  "folder_templates": [
+    {
+      "folder": "13-decisions",
+      "template": "_templates/adr.md"
+    },
+    {
+      "folder": "03-system-design",
+      "template": "_templates/spec.md"
+    },
+    {
+      "folder": "04-data-model",
+      "template": "_templates/spec.md"
+    },
+    {
+      "folder": "05-retrieval",
+      "template": "_templates/spec.md"
+    },
+    {
+      "folder": "06-ingestion",
+      "template": "_templates/spec.md"
+    },
+    {
+      "folder": "07-interfaces",
+      "template": "_templates/spec.md"
+    },
+    {
+      "folder": "08-deployment",
+      "template": "_templates/spec.md"
+    },
+    {
+      "folder": "09-operations",
+      "template": "_templates/runbook.md"
+    },
+    {
+      "folder": "10-security",
+      "template": "_templates/spec.md"
+    },
+    {
+      "folder": "11-migration",
+      "template": "_templates/migration-phase.md"
+    },
+    {
+      "folder": "_inbox/research",
+      "template": "_templates/research-question.md"
+    }
+  ],
+  "enable_file_templates": false,
+  "file_templates": [
+    {
+      "regex": ".*",
+      "template": ""
+    }
+  ],
+  "syntax_highlighting": true,
+  "syntax_highlighting_mobile": false,
+  "enabled_templates_hotkeys": [
+    ""
+  ],
+  "startup_templates": [
+    ""
+  ],
+  "intellisense_render": 1
+}

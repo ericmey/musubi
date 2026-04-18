@@ -1,0 +1,16 @@
+filters:
+  and:
+    - file.ext == "md"
+    - note.type == "spec" || note.type == "runbook"
+    - file.content.contains("Test Contract")
+views:
+  - type: table
+    name: Specs with test contracts
+    order:
+      - file.name
+      - section
+      - status
+      - updated
+    sort:
+      - property: section
+        direction: ASC
