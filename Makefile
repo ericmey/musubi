@@ -2,7 +2,7 @@
 # All targets assume `uv` is installed.
 
 .PHONY: install fmt lint typecheck test test-cov check clean \
-        agent-check spec-check slice-check vault-check issue-check
+        agent-check spec-check slice-check vault-check issue-check wikilink-check
 
 # --------------------------------------------------------------------------
 # Code gates — scoped to src/ + tests/ so vault tooling under
@@ -56,6 +56,9 @@ spec-check:
 
 issue-check:
 	@python3 docs/architecture/_tools/check.py issues
+
+wikilink-check:
+	@python3 docs/architecture/_tools/check.py wikilinks
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache build dist *.egg-info
