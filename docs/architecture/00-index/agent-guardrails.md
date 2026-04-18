@@ -5,54 +5,78 @@ tags: [agents, contributing, guardrails, section/index, status/complete, type/in
 audience: coding-agents
 type: index
 status: complete
-updated: 2026-04-17
+updated: 2026-04-18
 up: "[[00-index/index]]"
-reviewed: false
+reviewed: true
 ---
 # Agent Guardrails — Rules for Coding Agents
 
-This vault will be worked on by a fleet of coding agents in parallel. This document is the **contract** between them. Violating these rules produces merge conflicts, duplicated abstractions, and drift. Read this first, every time.
+This repo is worked on by a fleet of coding agents (Claude Code, Claude Cowork, Codex, Cursor, Gemini, Grok, …) in parallel. This document is the **contract** between them. Violating these rules produces merge conflicts, duplicated abstractions, silent scope reduction, and drift. Read this first, every time.
 
-> **Agent onboarding path:** start at [[CLAUDE|CLAUDE.md]] (the entry point), then this file, then [[00-index/agent-handoff]], then your slice file in [[_slices/index|_slices/]]. The section your slice touches has a local `CLAUDE.md` (e.g. `04-data-model/CLAUDE.md`) — read that before editing any file in that section.
+> **Agent onboarding path:** start at `CLAUDE.md` at the repo root (the entry point), then `docs/AGENT-PROCESS.md` (multi-agent concurrency model), then this file, then [[00-index/agent-handoff]], then your slice file in [[_slices/index|_slices/]]. The section your slice touches has a local `CLAUDE.md` (e.g. `04-data-model/CLAUDE.md`) — read that before editing any file in that section.
 
 ## The four non-negotiables
 
-1. **Stay inside your slice.** Every slice has its own note in [[_slices/index|_slices/]] with an explicit `slice_id`, `owns_paths` list, and `forbidden_paths` list. You may read anywhere. You may only *write* to files under `owns_paths`. If you need to change a file outside your slice, **open a cross-slice ticket** (create a markdown file in `_inbox/cross-slice/<slice-id>-<target>.md`) and flip your slice to `blocked` until a human or meta-agent resolves it.
-2. **The canonical API is frozen per version.** If your slice is not `slice=api-v*`, you do not modify `musubi/api/` or the OpenAPI/proto files. Additive changes (new optional fields, new endpoints) require an ADR; breaking changes bump the version.
-3. **Every module has a test contract. Write tests first.** The spec in `04-data-model`, `05-retrieval`, `06-ingestion`, etc. contains a **Test Contract** section. Your first commit in a slice must be the test file realizing that contract. Your PR is not mergeable until the contract tests pass AND branch coverage on your owned files is ≥ 85%.
-4. **Do not silently rebase the vault.** This documentation vault is versioned. If your implementation forces a spec change, update the spec file **in the same PR** as the code change and tag the commit with `spec-update: <doc-path>`.
+1. **Stay inside your slice.** Every slice has its own note in [[_slices/index|_slices/]] with an explicit `slice_id`, `owns_paths` list, and `forbidden_paths` list. You may read anywhere. You may only *write* to files under `owns_paths`. If you need to change a file outside your slice, **open a cross-slice ticket** (a markdown file in `docs/architecture/_inbox/cross-slice/<slice-id>-<target>.md` plus a GitHub Issue using the `cross-slice` template) and flip your slice to `blocked` until a human or meta-agent resolves it.
+2. **The canonical API is frozen per version.** If your slice is not `slice-api-v*`, you do not modify `src/musubi/api/`, `openapi.yaml`, or `proto/`. Additive changes (new optional fields, new endpoints) require an ADR; breaking changes bump the version.
+3. **Every spec has a Test Contract. Write tests first.** The spec in `04-data-model/`, `05-retrieval/`, `06-ingestion/`, etc. contains a **Test Contract** section. Your first commit in a slice is the test file realising that contract. Your PR is not mergeable until the contract tests pass AND branch coverage on your owned files is ≥ 85 % (90 % for `src/musubi/planes/**` and `src/musubi/retrieve/**`).
+4. **Do not silently rebase the spec.** If your implementation forces a spec change, update the spec file **in the same PR** as the code change and tag the commit with `spec-update: <doc-path>` in the trailer.
+
+## Test Contract Closure Rule
+
+At handoff, every bullet in the spec's `## Test Contract` section is in **exactly one of three closure states**:
+
+1. **Passing test** — a function in `tests/` whose name transcribes the bullet text verbatim (with `_` for spaces). Running `pytest` shows it green.
+2. **Skipped test with reason** — `@pytest.mark.skip(reason="deferred to slice-<id>: <one-line-why>")` or `@pytest.mark.xfail(reason="...")`. The skip reason must name the follow-up slice **and** justify the deferral.
+3. **Declared out-of-scope in the slice's work log** — an entry under `## Work log` in `_slices/<slice-id>.md` naming the bullet, the reason it's deferred, and the follow-up home. A GitHub Issue for the follow-up must exist.
+
+**Silent omission is not one of the three states.** A spec Test Contract bullet with no passing test, no skipped-with-reason test, and no work-log entry is an **automatic review request-changes**. The reviewer agent (`musubi-reviewer`) surfaces silent omissions as a Must-fix in the PR review.
+
+Rationale: on 2026-04-18 a slice first-cut deferred `patch()` + `delete()` + `access_count` to downstream slices silently — some correctly scoped, some not. The result was that other agents reading the spec could not tell which bullets had been consciously punted vs. overlooked. This rule closes that loophole.
+
+## Method-ownership rule
+
+**If the method's code would live inside your `owns_paths`, you own the method.**
+
+Corollary: you may **not** defer a method to a slice that merely exposes it through a different surface. Example pattern: `EpisodicPlane.patch()` is owned by the plane slice (its code lives in `src/musubi/planes/episodic/`). The API slice (`slice-api-v0`) exposes that method via `PATCH /v1/episodic-memories/{id}` but does not own the implementation. Pushing `patch()` onto slice-api-v0 mis-scopes the work.
+
+When you believe a method belongs to a different slice, the test is mechanical: would that slice's `owns_paths` list contain the file the method lives in? If yes, defer. If no, you own it.
 
 ## Slice boundaries
 
-The repo is partitioned into ownership zones. See [[12-roadmap/ownership-matrix]] for the full matrix. High level:
+The repo is partitioned into ownership zones. See [[12-roadmap/ownership-matrix]] for the full matrix. High level (under the monorepo layout — see [[13-decisions/0015-monorepo-supersedes-multi-repo]] and [[13-decisions/0016-vault-in-monorepo]]):
 
 | Zone | Path | Who may write |
 |---|---|---|
-| **Core types** | `musubi/types/`, `musubi/schema/` | Only `slice=types` agents |
-| **Planes** | `musubi/planes/episodic/`, `musubi/planes/curated/`, `musubi/planes/artifact/` | Plane-specific slice agents only |
-| **Retrieval** | `musubi/retrieval/` | `slice=retrieval-*` agents |
-| **Lifecycle engine** | `musubi/lifecycle/` | `slice=lifecycle-*` agents |
-| **Canonical API** | `musubi/api/`, `openapi.yaml`, `proto/` | Only `slice=api-v*` agents, one at a time |
-| **SDK** | separate repo `musubi-sdk-py`, `musubi-sdk-ts` | SDK slice agents |
-| **Adapters** | separate repos `musubi-mcp`, `musubi-livekit`, `musubi-openclaw` | Adapter slice agents |
-| **Deployment** | `deploy/ansible/` | `slice=ops-*` agents |
-| **Docs** | `docs/musubi-architecture/` | Any agent for their owned slice's docs; cross-cutting doc changes require a meta-agent |
+| **Core types** | `src/musubi/types/` | Only `slice-types` agents |
+| **Planes** | `src/musubi/planes/{episodic,curated,artifact,concept,thoughts}/` | Plane-specific slice agents only |
+| **Retrieval** | `src/musubi/retrieve/` | `slice-retrieval-*` agents |
+| **Lifecycle engine** | `src/musubi/lifecycle/` | `slice-lifecycle-*` agents |
+| **Canonical API** | `src/musubi/api/`, `openapi.yaml`, `proto/` | Only `slice-api-v*` agents, one at a time |
+| **SDK** | `src/musubi/sdk/` | `slice-sdk-*` agents |
+| **Adapters** | `src/musubi/adapters/{mcp,obsidian,cli}/` | Adapter slice agents |
+| **Contract tests** | `src/musubi/contract_tests/` | `slice-contract-tests` agent |
+| **Deployment** | `deploy/` | `slice-ops-*` agents |
+| **Architecture vault** | `docs/architecture/` | Any agent for their slice's specs; cross-cutting changes require a meta-agent or `spec-update:` trailer in the same PR |
 
 ## Locking and coordination
 
-- **One agent per module per slice.** Use a trivial file-lock pattern: before starting work, create `docs/musubi-architecture/_inbox/locks/<module-path>.lock` containing your agent ID and start timestamp. Remove it on PR open. If a lock exists and is > 4h old, it is stale — any agent may delete it.
-- **Long-running agents must heartbeat.** Update the `.lock` file timestamp every 30 minutes. This is how stale-detection works.
-- **PR size cap: 800 LOC** (excluding generated code and fixtures). Bigger slices must be subdivided in the roadmap before starting.
+Primary lock is a **GitHub Issue** with the `slice` label and the agent as assignee. The Issue's labels reflect slice status (`status:ready` / `status:in-progress` / `status:in-review` / `status:blocked` / `status:done`). See [docs/AGENT-PROCESS.md](../../docs/AGENT-PROCESS.md) for the full concurrency model.
+
+Secondary (belt-and-braces) lock: create `docs/architecture/_inbox/locks/<slice-id>.lock` containing your agent ID and start timestamp. Remove it when the PR is marked ready-for-review. If a lock is > 4 h old with no corresponding commits on `slice/<id>`, it is stale — any agent may delete it after commenting on the Issue.
+
+**PR size cap: 800 LOC** (excluding generated code and fixtures). Bigger slices must be subdivided in the roadmap before starting.
 
 ## Style and conventions
 
-- **Python:** black-compatible, ruff linted, mypy strict. No exceptions.
-- **Types:** every public function has a type hint. Every payload is a pydantic model, not a dict. Dicts are only at the Qdrant boundary.
-- **Error handling:** every public function returns a `Result[T, Error]` (either a typed error dataclass or a success). No raising across module boundaries. Unhandled exceptions get caught at the API layer and converted to 5xx with a correlation ID.
-- **Async vs sync:** the public surface is async. Internal worker loops may be sync if they don't touch I/O.
+- **Python:** black-compatible via ruff. mypy strict. No exceptions.
+- **Types:** every public function has a type hint. Every payload is a pydantic v2 model, not a dict. Dicts are only at the Qdrant boundary.
+- **Error handling:** public functions at module boundaries return `Result[T, E]` with a typed error dataclass — not raised exceptions. Unhandled exceptions get caught at the API layer and converted to 5xx with a correlation ID.
+- **Async vs sync:** public surface is async. Internal worker loops may be sync if they don't touch I/O.
 - **Logging:** structured JSON logs, one field per concept. No f-strings in log messages (use `logger.info("event", extra={...})`). Correlation IDs propagate.
 - **No `print()`** anywhere. Ever.
 - **Comments explain *why*, not *what*.** If you need to explain what a function does, the function is named wrong.
+- **Test function names transcribe the spec's Test Contract bullet verbatim** (with `_` for spaces). See [[00-index/conventions#Test-name convention]].
 
 ## Qdrant rules (specific gotchas)
 
@@ -63,37 +87,41 @@ The repo is partitioned into ownership zones. See [[12-roadmap/ownership-matrix]
 
 ## Obsidian vault rules
 
-- You may read any file in the vault.
-- You may **only write** to files whose frontmatter has `musubi-managed: true` **AND** your slice is authorized in [[06-ingestion/vault-sync#write-authorization]].
-- **Never** modify files in `_inbox/` programmatically — that folder is human-only except for the agent-created ticket pattern described above.
-- All programmatic vault writes go through the `MusubiVault.write()` API, which handles debouncing, rename atomicity, and frontmatter schema validation.
+- You may read any file under `docs/architecture/`.
+- Programmatic writes to vault-managed knowledge notes (curated plane) go through the `MusubiVault.write()` API, which handles debouncing, rename atomicity, and frontmatter schema validation — see [[06-ingestion/vault-sync]].
+- Spec and ADR edits are a normal code-review change — commit them with the PR that motivated them, tagged `spec-update: <doc-path>` in the trailer.
+- **Never** modify files in `docs/architecture/_inbox/` outside the agent-created ticket pattern (cross-slice tickets, questions, lock files). That folder is operator-first.
 
 ## Escalation
 
 If you're blocked, unsure, or notice a contradiction in the spec:
 
 1. Don't guess. Don't "just make it work."
-2. Create `docs/musubi-architecture/_inbox/questions/<slice-id>-<short-title>.md` with: what you're trying to do, what you expected, what you observed, what options you see.
-3. Mark your slice status as `blocked` in [[12-roadmap/status]].
-4. Move on to another slice you own.
+2. Create `docs/architecture/_inbox/questions/<slice-id>-<short-title>.md` with: what you're trying to do, what you expected, what you observed, what options you see.
+3. Mark your slice status as `blocked` in its frontmatter **and** via the `status:blocked` label on the GitHub Issue.
+4. Move on to another slice you own (or release this one for another agent to pick up).
 
 ## Definition of Done for a slice
 
 A slice is done when all are true:
 
-- [ ] All test contracts for owned modules pass.
-- [ ] Branch coverage ≥ 85% on owned files, ≥ 70% on touched files.
-- [ ] `make check` passes clean (format, lint, mypy, tests).
-- [ ] Docs in the corresponding `docs/musubi-architecture/<section>/` are updated to reflect what was built.
-- [ ] If any spec file changed, PR commit is tagged `spec-update: <path>`.
-- [ ] A human has reviewed and merged the PR.
-- [ ] The slice's entry in [[12-roadmap/status]] is marked `done`.
+- [ ] Every bullet in every relevant Test Contract is in one of the three Closure states above.
+- [ ] Branch coverage ≥ 85 % on owned files (≥ 90 % on `src/musubi/planes/**` and `src/musubi/retrieve/**`).
+- [ ] `make check` passes clean (format, lint, mypy, tests, coverage).
+- [ ] `make agent-check` (aka `make vault-check`) is green.
+- [ ] Docs in the corresponding `docs/architecture/<section>/` are updated to reflect what was built (spec changes tagged `spec-update: <doc-path>` in the relevant commit).
+- [ ] A human OR a `musubi-reviewer` sub-agent has reviewed and merged the PR; you did not self-approve (see [docs/AGENT-PROCESS.md §7](../../docs/AGENT-PROCESS.md#7-review)).
+- [ ] The slice's entry in [[_slices/index]] is marked `done`; the GitHub Issue is closed via `Closes #<n>` in the PR.
 
 ## Prohibited patterns (automatic revert)
 
 - Silent `time.sleep()` in production code paths (use async waits with timeouts).
-- Environment-variable reads outside of `musubi/config.py`.
+- Environment-variable reads outside of `src/musubi/config.py`.
 - Hardcoded hosts, ports, collection names, or thresholds.
 - New top-level dependencies without an ADR.
 - Mutating shared global state without a lock.
 - `except Exception: pass`.
+- `git push --force` on shared branches; `--no-verify` on commits.
+- **Silently deferring a Test Contract bullet** — see the Closure Rule above.
+- **Punting a method to a slice that doesn't own its code path** — see the Method-ownership rule above.
+- Committing anything from `.agent-context.local.md`, `.env.local`, or files matching `.secrets/`.

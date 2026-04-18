@@ -56,7 +56,7 @@ make spec-check     # specs only — Test Contracts, implements:, tags
 
 - `musubi/` — core server code. Subdirs are owned by specific slices (see `_slices/`).
 - `tests/` — unit tests mirror source paths exactly. `musubi/retrieve/scoring.py` → `tests/retrieve/test_scoring.py`.
-- `docs/musubi-architecture/` — this vault. You may edit the spec your slice implements (same PR, tagged `spec-update:`).
+- `docs/architecture/` — this vault. You may edit the spec your slice implements (same PR, tagged `spec-update:`).
 - `_slices/<your-slice-id>.md` — your work log and status.
 - `_inbox/locks/<your-slice-id>.lock` — presence signal.
 
@@ -65,7 +65,7 @@ make spec-check     # specs only — Test Contracts, implements:, tags
 - `musubi/api/`, `openapi.yaml`, `proto/` — canonical API surface. Frozen per version.
 - `musubi/types/`, `musubi/schema/`, `musubi/models.py` — core types. Only `slice-types` writes here.
 - Any file owned by another active slice (check `_slices/` + `_inbox/locks/`).
-- `docs/musubi-architecture/00-index/conventions.md`, `agent-guardrails.md`, `agent-handoff.md`, `definition-of-done.md` — meta-rules. Changes require a human.
+- `docs/architecture/00-index/conventions.md`, `agent-guardrails.md`, `agent-handoff.md`, `definition-of-done.md` — meta-rules. Changes require a human.
 
 ## Style (enforced by linters)
 

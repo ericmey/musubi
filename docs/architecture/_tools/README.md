@@ -141,11 +141,11 @@ python3 _tools/check.py all || { echo "vault lint failed"; exit 1; }
 ## Makefile fragment
 
 Drop this into the musubi code repo's `Makefile` once the repo exists. Paths
-assume the vault lives at `docs/musubi-architecture/` inside the code repo.
+assume the vault lives at `docs/architecture/` inside the code repo.
 
 ```makefile
 # ---- Vault gates ----------------------------------------------------------
-VAULT ?= docs/musubi-architecture
+VAULT ?= docs/architecture
 
 .PHONY: vault-check spec-check slice-check agent-check slice-watch
 

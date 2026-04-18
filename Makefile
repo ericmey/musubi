@@ -1,28 +1,58 @@
 # Common dev commands for Musubi core.
 # All targets assume `uv` is installed.
 
-.PHONY: install fmt lint typecheck test test-cov check clean
+.PHONY: install fmt lint typecheck test test-cov check clean \
+        agent-check spec-check slice-check vault-check
+
+# --------------------------------------------------------------------------
+# Code gates — scoped to src/ + tests/ so vault tooling under
+# docs/architecture/_tools/ doesn't block code-only workflows. To exercise
+# the vault tooling lint, run `uv run ruff check .` explicitly.
+# --------------------------------------------------------------------------
 
 install:
 	uv sync --extra dev
 
 fmt:
-	uv run ruff format .
+	uv run ruff format src tests
 
 lint:
-	uv run ruff check .
+	uv run ruff check src tests
 
 typecheck:
 	uv run mypy src tests
 
 test:
-	uv run pytest
+	uv run pytest --cov=musubi --cov-report=term --cov-fail-under=85
 
 test-cov:
-	uv run pytest --cov=musubi --cov-report=term-missing
+	uv run pytest --cov=musubi --cov-report=term-missing --cov-fail-under=85
 
-check: fmt lint typecheck test
+# Full gate for slice-worker handoff. Runs fmt (check-only) + lint + typecheck + test + coverage.
+check:
+	uv run ruff format --check src tests
+	uv run ruff check src tests
+	uv run mypy src tests
+	uv run pytest --cov=musubi --cov-report=term --cov-fail-under=85
 	@echo "All checks passed."
+
+# --------------------------------------------------------------------------
+# Vault-state gates — advertised in docs/AGENT-PROCESS.md + CLAUDE.md.
+# Back them with the single source-of-truth checker at
+# docs/architecture/_tools/check.py; the four target names are aliases so
+# agents can reach for whichever vocabulary the spec they're reading used.
+# --------------------------------------------------------------------------
+
+agent-check:
+	@python3 docs/architecture/_tools/check.py all
+
+vault-check: agent-check
+
+slice-check:
+	@python3 docs/architecture/_tools/check.py slices
+
+spec-check:
+	@python3 docs/architecture/_tools/check.py specs
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache build dist *.egg-info
