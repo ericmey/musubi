@@ -3,12 +3,13 @@ name = "musubi"
 version = "0.2.0"
 description = "Shared memory + knowledge plane for a small-team AI agent fleet. See the Obsidian architecture vault for design."
 requires-python = ">=3.12"
-authors = [{ name = "Eric Mey", email = "eric.mey@salesai.com" }]
+authors = [{ name = "Eric Mey", email = "ericmey@gmail.com" }]
 license = { text = "Private" }
 readme = "README.md"
 
 dependencies = [
     "pydantic>=2.9",
+    "pydantic-settings>=2.4",
     "svix-ksuid>=0.6",
     "qdrant-client>=1.12",
 ]
