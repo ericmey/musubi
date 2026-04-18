@@ -262,6 +262,150 @@ def check_slices(rep: Report) -> None:
             rep.warn(str(lp.relative_to(VAULT)), f"stale lock (age {int(age / 3600)}h)")
 
 
+# ---------- Check: issue drift (vault slice ↔ GH Issue) -----------------------
+
+
+_ISSUE_TITLE_RE = re.compile(r"^slice:\s+(slice-[\w-]+)\s*$")
+
+
+def _fetch_slice_issues() -> list[dict] | None:
+    """Shell out to ``gh`` for all Issues labeled ``slice``.
+
+    Returns a list of dicts (``number``, ``title``, ``labels``, ``state``,
+    ``assignees``), or ``None`` if the ``gh`` CLI is unavailable / errors
+    out — in which case the caller skips this check with a warning rather
+    than blocking. This is deliberate: many CI runners don't provision
+    ``gh`` by default, and the drift check is advisory, not a gate.
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            [
+                "gh", "issue", "list",
+                "--label", "slice",
+                "--state", "all",
+                "--limit", "200",
+                "--json", "number,title,labels,state,assignees",
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def check_issues(rep: Report) -> None:
+    """Cross-reference slice frontmatter with GitHub Issues.
+
+    Enforces the Dual-update rule (see agent-guardrails.md) by reporting
+    drift between a slice's ``status:`` frontmatter and its Issue's
+    ``status:*`` label. Acceptable drift is the handoff race window:
+    frontmatter ``in-review`` + Issue ``status:in-progress`` (label not
+    yet flipped by the handoff skill) is fine for one PR cycle; everything
+    else is a warning.
+    """
+    issues = _fetch_slice_issues()
+    if issues is None:
+        rep.warn(
+            "_tools/check.py",
+            "gh CLI unavailable; skipping issue drift check "
+            "(install gh + authenticate, or run this check outside CI)",
+        )
+        return
+
+    # Build: slice-id -> issue dict.
+    by_slice: dict[str, dict] = {}
+    for it in issues:
+        m = _ISSUE_TITLE_RE.match(it.get("title", ""))
+        if not m:
+            continue
+        by_slice[m.group(1)] = it
+
+    # Read slices from the vault.
+    sroot = VAULT / "_slices"
+    slice_fms: dict[str, dict] = {}
+    for p in sorted(sroot.glob("slice-*.md")):
+        fm, _ = read_frontmatter(p)
+        if fm.get("type") != "slice":
+            continue
+        sid = fm.get("slice_id") or p.stem
+        slice_fms[sid] = fm
+
+    # 1. Every slice has an Issue.
+    for sid in slice_fms:
+        if sid not in by_slice:
+            rep.warn(
+                f"_slices/{sid}.md",
+                f"no GH Issue titled 'slice: {sid}' — run "
+                "`python3 docs/architecture/_tools/bootstrap_slice_issues.py --apply`",
+            )
+
+    # 2. Every Issue labeled `slice` has a matching slice file.
+    for sid, issue in by_slice.items():
+        if sid not in slice_fms:
+            rep.warn(
+                f"gh-issue#{issue['number']}",
+                f"Issue 'slice: {sid}' has no matching slice file — either slice was "
+                "renamed/retired (close the Issue), or slice file is missing",
+            )
+
+    # 3. status drift: frontmatter `status:` ↔ Issue `status:*` label.
+    #    Acceptable drift (handoff race window):
+    #      frontmatter `in-review` + Issue `status:in-progress` — handoff in flight
+    #      frontmatter `done` + Issue state `closed` — expected
+    ACCEPTABLE = {
+        ("in-review", "status:in-progress"),  # handoff flipped frontmatter but not label yet
+        ("in-progress", "status:ready"),       # claim flipped label but not frontmatter yet (rare; flipped order)
+    }
+    for sid, fm in slice_fms.items():
+        if sid not in by_slice:
+            continue
+        issue = by_slice[sid]
+        vault_status = str(fm.get("status", ""))
+        labels = [l.get("name", "") for l in issue.get("labels", [])]
+        issue_status_labels = [l for l in labels if l.startswith("status:")]
+
+        # Issue closed state = slice should be done
+        if issue.get("state") == "CLOSED":
+            if vault_status != "done":
+                rep.warn(
+                    f"_slices/{sid}.md",
+                    f"Issue #{issue['number']} is closed but frontmatter status is '{vault_status}' "
+                    "(expected 'done')",
+                )
+            continue
+
+        # Open Issue: label should be present + match frontmatter
+        if not issue_status_labels:
+            rep.warn(
+                f"gh-issue#{issue['number']}",
+                f"'slice: {sid}' has no status:* label; expected 'status:{vault_status}'",
+            )
+            continue
+        if len(issue_status_labels) > 1:
+            rep.warn(
+                f"gh-issue#{issue['number']}",
+                f"'slice: {sid}' has multiple status:* labels {issue_status_labels}; only one allowed",
+            )
+            continue
+        issue_label = issue_status_labels[0]
+        expected = f"status:{vault_status}"
+        if issue_label != expected:
+            if (vault_status, issue_label) in ACCEPTABLE:
+                continue
+            rep.warn(
+                f"_slices/{sid}.md",
+                f"drift: frontmatter status='{vault_status}' but Issue #{issue['number']} "
+                f"label='{issue_label}' (expected '{expected}')",
+            )
+
+
 # ---------- Check: specs -------------------------------------------------------
 
 SPEC_SECTIONS = (
@@ -322,7 +466,9 @@ def list_wiki_targets(val) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
-        "command", choices=["vault", "slices", "specs", "all"], default="all", nargs="?"
+        "command",
+        choices=["vault", "slices", "specs", "issues", "all"],
+        default="all", nargs="?",
     )
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
@@ -334,6 +480,8 @@ def main() -> int:
         check_slices(rep)
     if args.command in ("specs", "all"):
         check_specs(rep)
+    if args.command in ("issues", "all"):
+        check_issues(rep)
 
     if args.json:
         print(

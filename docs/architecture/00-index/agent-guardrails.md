@@ -42,6 +42,65 @@ Corollary: you may **not** defer a method to a slice that merely exposes it thro
 
 When you believe a method belongs to a different slice, the test is mechanical: would that slice's `owns_paths` list contain the file the method lives in? If yes, defer. If no, you own it.
 
+## Dual-update rule (vault frontmatter ↔ GitHub Issue)
+
+**Every slice state change updates both the vault file AND the Issue, atomically, in the same PR.**
+
+The GitHub Issue is the authoritative lock (per [docs/AGENT-PROCESS.md](../../docs/AGENT-PROCESS.md) — assignee is atomic across machines). The slice file's frontmatter is the authoritative *intent* record (audited, diffable, reviewed in PRs, read in Obsidian). They must not be allowed to drift.
+
+The three state changes, with the required commands for each:
+
+### Claim (ready → in-progress)
+
+```bash
+# Atomic claim on the Issue:
+gh issue edit <n> --add-assignee @me \
+  --add-label "status:in-progress" --remove-label "status:ready"
+
+# Same PR — update the slice note's frontmatter:
+# status: ready → in-progress
+# owner: unassigned → <your-agent-id>
+```
+
+### Handoff (in-progress → in-review)
+
+```bash
+# Update the Issue:
+gh issue edit <n> \
+  --add-label "status:in-review" --remove-label "status:in-progress"
+
+# Same PR — update the slice note:
+# status: in-progress → in-review
+```
+
+### Merge (in-review → done)
+
+Handled by the PR auto-closing the Issue via `Closes #<n>` in its body. The merging agent (or a follow-up PR) flips the slice frontmatter `status: in-review → done` and the `status:done` label is applied automatically by the follow-up sync Action (or by hand, for now).
+
+### Block (any → blocked)
+
+```bash
+# Update the Issue:
+gh issue edit <n> --add-label "status:blocked"
+gh issue comment <n> --body "Blocked on <reason + link to cross-slice ticket or question>"
+
+# Same PR — update the slice note:
+# status: <previous> → blocked
+# append a work-log entry naming the blocker
+```
+
+### Enforcement
+
+- **`make issue-check`** (or `make agent-check`, which includes it) cross-references slice frontmatter against Issue labels and reports any drift. It's PR-blocking as a warning in review; agents must resolve drift before handoff.
+- **`musubi-reviewer` sub-agent** treats dual-update violations as an automatic request-changes.
+- **Renames / splits / retires** go through the `slice-reconcile` skill (see `.claude/skills/` and `.agents/skills/`), which walks the agent through updating both the vault files and the Issues coherently. Manual edits to one side without the other are a merge-blocker.
+
+### What's NOT automated (yet)
+
+- Bidirectional sync between free-form Issue body text and slice note body — write-once on Issue creation, diverge freely thereafter.
+- Work-log mirroring into Issue comments — the vault is the single narrative record. Issue comments are for real-time coordination.
+- Automatic creation of an Issue when a new slice file is added — the `bootstrap_slice_issues.py` tool handles this, but it's manually invoked (`python3 docs/architecture/_tools/bootstrap_slice_issues.py --apply`). Skipped intentionally; running it automatically could race with PR reviews that haven't merged yet.
+
 ## Slice boundaries
 
 The repo is partitioned into ownership zones. See [[12-roadmap/ownership-matrix]] for the full matrix. High level (under the monorepo layout — see [[13-decisions/0015-monorepo-supersedes-multi-repo]] and [[13-decisions/0016-vault-in-monorepo]]):

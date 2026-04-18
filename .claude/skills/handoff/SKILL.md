@@ -7,6 +7,12 @@ description: Move a slice from `in-progress` to `in-review` — verify Definitio
 
 Transition one in-flight slice to review-ready. This is the opposite bookend to `pick-slice` — you took the slice, you did the work, now you're handing it off.
 
+## Rules this skill enforces
+
+- **Test Contract Closure Rule** (see `docs/architecture/00-index/agent-guardrails.md#Test-Contract-Closure-Rule`) — every bullet in every relevant spec's `## Test Contract` section must be in one of three states at handoff: passing test with verbatim name / skipped with reason / declared-out-of-scope in the slice work log. This skill surfaces silent omissions; don't suppress them.
+- **Dual-update rule** — handoff flips BOTH the GitHub Issue (`status:in-progress → status:in-review`) AND the vault slice file's frontmatter in the same PR. `make issue-check` catches any drift.
+- **No self-approval** — handoff marks the PR ready for review; a *different* agent (or a human) approves + merges. If you push a commit in response to review, a different reviewer takes the next pass.
+
 ## When to invoke
 
 - User says: "hand it off", "this is ready for review", "close it out", `/handoff`.
