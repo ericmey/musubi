@@ -27,6 +27,22 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 
 ## Entries
 
+### 2026-04-18 — eric — cleanup: retired `feat/lifecycle-scripts` (v1 orphan)
+
+Deleted stale v1-era branch `origin/feat/lifecycle-scripts` (4 commits dated 2026-04-06, all touching the v1 `musubi/` package that v2 replaced). No changes from those commits transfer cleanly to v2's architecture; branch was obstructing the GitHub UI's PR-suggestion prompts.
+
+Commits preserved in git graph (reachable by SHA on GitHub for months):
+
+- `f8ed1fb` — Add lifecycle scripts: install, update, uninstall *(already squash-merged to main as PR #2 → `a9dadc4`)*
+- `e3d92be` — Slim response payloads and add session_sync for context preservation
+- `011b50a` — Enhance development setup and memory handling
+- `501e115` — Fix critical thought/memory bugs and harden architecture
+
+The `session_sync` concept (from `e3d92be`) is the only idea worth revisiting — if v2 ever wants persistent-session context beyond what the plane model provides, that's the historical reference point. Recover via `git fetch origin 501e115:recovered/v1-lifecycle-scripts`.
+
+Vault changes:
+- (this entry, no spec-level changes)
+
 ### 2026-04-18 — Inference weights pre-staged; Open WebUI reachable to Ollama
 
 Two things landed on the Musubi host ahead of the compose stack.
