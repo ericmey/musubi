@@ -47,6 +47,11 @@ docs/architecture/.trash/
 #  on first run. If another plugin does similar, add a line here.)
 docs/architecture/.obsidian/plugins/obsidian-local-rest-api/data.json
 
+# Large plugin payloads / caches — reinstallable from the Obsidian store;
+# no need to bloat git history.
+docs/architecture/.obsidian/plugins/mcp-tools/
+docs/architecture/.smart-env/
+
 # Attachments >1MB should go to git-lfs; keep the dir tracked but don't let accidental binaries bloat history.
 # (Add a pre-commit check later once attachment volume warrants it.)
 
