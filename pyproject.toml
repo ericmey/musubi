@@ -77,3 +77,31 @@ markers = [
 filterwarnings = [
     "ignore:Payload indexes have no effect in the local Qdrant:UserWarning",
 ]
+
+# --------------------------------------------------------------------------
+# Coverage — enforced by `make check` and the CI workflow. The 85 % floor
+# is the Definition of Done's baseline; slices under `src/musubi/planes/**`
+# and `src/musubi/retrieve/**` carry a 90 % expectation documented in
+# docs/architecture/00-index/definition-of-done.md and verified by review
+# rather than pytest (no per-module fail_under exists in coverage.py).
+# --------------------------------------------------------------------------
+
+[tool.coverage.run]
+branch = true
+source = ["musubi"]
+omit = [
+    # Thin protocol stubs + __init__ re-exports — no branchable logic.
+    "src/musubi/*/__init__.py",
+]
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "\\.\\.\\.$",  # Protocol method bodies
+]

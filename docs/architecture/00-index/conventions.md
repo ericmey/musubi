@@ -148,13 +148,30 @@ See [[06-ingestion/vault-frontmatter-schema]] for the full spec.
 
 ## Testing conventions
 
-- **Test files mirror source paths.** `musubi/retrieval/scoring.py` → `tests/retrieval/test_scoring.py`.
-- **Test names are assertions.** `test_fast_path_excludes_provisional_memories` not `test_fast_path_1`.
-- **Each module spec has a "Test Contract" section** listing the behaviors that must be tested. The test file realizes them.
+- **Test files mirror source paths.** `src/musubi/retrieve/scoring.py` → `tests/retrieve/test_scoring.py`.
+- **Test names are assertions.** `test_fast_path_excludes_provisional_memories`, not `test_fast_path_1`.
+- **Test-name convention (enforced):** when a spec has a `## Test Contract` section, **test function names transcribe the bullet text verbatim** with `_` for spaces and no paraphrasing. The spec is the authoring source; the test name is the mechanical copy. This is how [[00-index/agent-guardrails#Test Contract Closure Rule]] is auditable — a grep over `tests/` against the spec bullet list shows silent omissions immediately.
+
+  Example:
+
+  ```
+  # In docs/architecture/04-data-model/episodic-memory.md §Test contract:
+  - test_create_sets_provisional_state
+  - test_create_dedup_hit_updates_existing_instead_of_inserting
+  - test_patch_tags_is_additive_by_default
+
+  # In tests/planes/test_episodic.py (matching verbatim):
+  def test_create_sets_provisional_state(...): ...
+  def test_create_dedup_hit_updates_existing_instead_of_inserting(...): ...
+  @pytest.mark.skip(reason="deferred to slice-plane-episodic follow-up: patch not yet implemented")
+  def test_patch_tags_is_additive_by_default(...): ...
+  ```
+
+- **Each module spec has a "Test Contract" section** listing the behaviors that must be tested. At handoff, every bullet is in one of the three Closure states defined in [[00-index/agent-guardrails#Test Contract Closure Rule]].
 - **Fixtures** live in `tests/conftest.py` (package-wide) or `tests/<area>/conftest.py` (area-specific).
-- **No external services in unit tests.** Qdrant and Gemini are always mocked via `mock_qdrant` and `mock_embed`.
-- **Integration tests** go in `tests/integration/` and can hit a dockerized Qdrant. They run in CI but not in `make test`.
-- **Coverage target:** 85% on owned files. Thin wrappers (API routing, CLI main) are excluded via `.coveragerc`.
+- **No external services in unit tests.** Qdrant runs in-memory via `QdrantClient(":memory:")`; TEI / Gemini / Ollama are mocked (see the FakeEmbedder pattern in `src/musubi/embedding/fake.py`).
+- **Integration tests** go in `tests/integration/` and can hit a dockerized Qdrant + real TEI. They run in CI but not in `make test`.
+- **Coverage target:** 85 % branch coverage on owned files (90 % on `src/musubi/planes/**` and `src/musubi/retrieve/**`). Enforced via `fail_under = 85` in `pyproject.toml` `[tool.coverage.report]`. Thin wrappers (API routing, CLI main) excluded via `[tool.coverage.run].omit`.
 
 ## Commits & PRs
 

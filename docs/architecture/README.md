@@ -13,7 +13,7 @@ reviewed: false
 
 This is the architectural specification for **Musubi (結び)** — the shared memory and knowledge plane for a small-team AI agent fleet. It is designed to be opened as an Obsidian vault.
 
-Open `musubi/docs/musubi-architecture/` as a vault in Obsidian. Start at [[00-index/index|Root Index]].
+Open `musubi/docs/architecture/` as a vault in Obsidian. Start at [[00-index/index|Root Index]].
 
 ## What this vault is
 

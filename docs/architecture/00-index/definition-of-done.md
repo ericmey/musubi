@@ -17,7 +17,7 @@ The universal checklist every slice must satisfy before it can be marked `status
 - [ ] **Coverage gates** met: 90% branch on `musubi/planes/**`, `musubi/retrieve/**`, 85% on `musubi/lifecycle/**`, `musubi/vault_sync/**`, 80% on `musubi/api/**`, 95% on `musubi/auth/**`.
 - [ ] **`make check` passes clean** — ruff format, ruff lint, mypy strict, pytest + coverage.
 - [ ] **No prohibited patterns** (see [[00-index/agent-guardrails#Prohibited patterns (automatic revert)]]): no `time.sleep()` in prod, no env reads outside `musubi/config.py`, no hardcoded hosts/ports/thresholds, no `except Exception: pass`.
-- [ ] **Docs touched** where behavior changed — spec in `docs/musubi-architecture/` updated, `spec-update: <path>` in commit trailer, spec `status:` still `complete` after the change.
+- [ ] **Docs touched** where behavior changed — spec in `docs/architecture/` updated, `spec-update: <path>` in commit trailer, spec `status:` still `complete` after the change.
 - [ ] **Frontmatter updated** — slice note `status:` advanced, `updated:` bumped, PR link appended to the slice's PR list.
 - [ ] **Lock released** — `_inbox/locks/<module>.lock` file removed.
 - [ ] **Cross-slice tickets resolved** — any ticket this slice opened in `_inbox/cross-slice/` is either resolved or explicitly deferred.
