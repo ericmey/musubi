@@ -3,12 +3,12 @@ title: "Slice: Qdrant layout + indexes"
 slice_id: slice-qdrant-layout
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: eric
 phase: "1 Schema"
-tags: [section/slices, status/in-progress, type/slice]
-updated: 2026-04-17
-reviewed: false
+tags: [section/slices, status/done, type/slice]
+updated: 2026-04-18
+reviewed: true
 depends-on: ["[[_slices/slice-types]]"]
 blocks: ["[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-retrieval-hybrid]]"]
 ---
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-concept]]", 
 
 > `ensure_collections()` + named-vector configuration + payload indexes. Idempotent on boot.
 
-**Phase:** 1 Schema · **Status:** `in-progress` · **Owner:** `eric`
+**Phase:** 1 Schema · **Status:** `done` · **Owner:** `eric`
 
 ## Specs to implement
 
@@ -80,6 +80,33 @@ Agents append one entry per work session. Format:
 - Tests: 5 test modules under `tests/store/`, 46 tests covering names, spec registries, ensure_collections (including partial-state tolerance — a pre-existing collection is left alone), ensure_indexes (call shape, idempotency-by-schema-lookup, idempotency-by-exception-handling, `only=` filter), and bootstrap end-to-end. Test contract items covered: `ensure_collections_idempotent` ✓, `ensure_indexes_idempotent` ✓, `adding_new_index_does_not_rebuild_collection` ✓ (partial-state tolerance test), `quantization_applied_to_dense_vector` ✓, `sparse_vector_full_scan_threshold_configurable` ✓ (via CollectionSpec field), `collection_names_come_from_config_only` ✓. Deferred to later slices: `hybrid_search_returns_rrf_fused_scores`, `scroll_pagination_handles_large_collection`, `namespace_filter_required_on_every_query` (lint-style) → integration tests + slice-retrieval-hybrid.
 - `make check` clean: ruff format + lint + `mypy --strict` on 36 files + 156/156 pytest (adds 46 to the 110 from slice-types).
 - Commit on `v2`: see PR links below.
+
+### 2026-04-18 — eric — closure (retrospective, under the new Closure Rule)
+
+Flipping `status: in-progress → done`. This slice's first cut (commit `0f46281`) has been successfully consumed by slice-plane-episodic (which imports `store.collection_for_plane("episodic")`, `store.specs.DENSE_VECTOR_NAME`, and `store.specs.SPARSE_VECTOR_NAME` directly for its upsert + query paths). The in-memory Qdrant client tests in `tests/store/` + the live-behavior evidence from `tests/planes/test_episodic.py` (which uses the same `store` module to boot collections before each test) confirm the public surface works.
+
+Applying the [Test Contract Closure Rule](../00-index/agent-guardrails.md#Test-Contract-Closure-Rule) retrospectively. Per the spec's `## Test contract` in [[04-data-model/qdrant-layout]]:
+
+| Bullet | Closure state | Evidence |
+|---|---|---|
+| `test_ensure_collections_idempotent` | ✓ passing | `tests/store/test_collections.py::TestIdempotency::test_second_boot_creates_nothing` + `test_third_boot_still_creates_nothing` |
+| `test_ensure_indexes_idempotent` | ✓ passing | `tests/store/test_indexes.py::TestIdempotency::test_second_boot_is_no_op_when_server_reports_existing_schema` + `test_already_exists_exception_treated_as_noop` |
+| `test_adding_new_index_does_not_rebuild_collection` | ✓ passing | `tests/store/test_collections.py::TestPartialStateTolerance::test_existing_subset_is_not_re_created` |
+| `test_quantization_applied_to_dense_vector` | ✓ passing | `tests/store/test_collections.py::TestVectorConfig::test_quantization_applied_to_dense` |
+| `test_hybrid_search_returns_rrf_fused_scores` | ⊘ out-of-scope for this slice | Hybrid search is `slice-retrieval-hybrid`'s concern; this slice owns the *layout* that makes hybrid possible (named dense + sparse vectors configured). Explicit per Method-ownership rule. |
+| `test_namespace_filter_required_on_every_query` | ⊘ deferred (lint-style) | A lint-style check belongs in a future `import-linter` / custom lint rule, not in this slice's pytest surface. Tracked as a lint TODO; enforced by review today. |
+| `test_scroll_pagination_handles_large_collection` | ⊘ deferred (integration) | Pagination against a real Qdrant (not in-memory) belongs in `tests/integration/`. This slice doesn't own a query API to paginate. |
+| `test_batch_update_points_preferred_over_loop` | ⊘ deferred (lint-style) | Same as #6 — belongs to a lint rule + reviewer enforcement. |
+| `test_sparse_vector_full_scan_threshold_configurable` | ✓ passing | `tests/store/test_specs.py::TestRegistry::test_sparse_opt_in_per_collection` + `CollectionSpec.sparse_full_scan_threshold` field |
+| `test_collection_names_come_from_config_only` | ✓ passing | `tests/store/test_names.py` (4 tests asserting every consumer reaches through `store.names.collection_for_plane` / `COLLECTION_NAMES`) |
+
+Property tests (11, 12 in the spec — `hypothesis: RRF-fusion stability`, `hypothesis: scroll yields each point exactly once`) deferred with the same rationale as bullets 5 and 7: they belong to the retrieval slice and to integration, respectively.
+
+Integration tests (13, 14 in the spec) deferred entirely to `tests/integration/` — requires a dockerised Qdrant.
+
+**Historical footnote:** same as slice-types — this landed as a direct commit to `v2` before branch protection + the Issue board. Retrospective closure is a one-time reconciliation; all future `done` transitions go through the PR + review lifecycle.
+
+Closing the corresponding GitHub Issue via the Dual-update rule in the same commit that flips this frontmatter.
 
 ## Cross-slice tickets opened by this slice
 
