@@ -18,11 +18,19 @@ to the relevant commit.
 
 Per [agent-guardrails.md §Test Contract Closure Rule](../docs/architecture/00-index/agent-guardrails.md#test-contract-closure-rule), every bullet in the spec's `## Test Contract` section must be in one of three states: **passing test** / **skipped with reason** / **declared out-of-scope in slice work log**. Fill in one row per bullet. No silent omissions.
 
-| Bullet | State | Evidence |
-|---|---|---|
-| `test_foo_does_bar` | ✓ passing | `tests/module/test_foo.py:42` |
-| `test_baz_edge_case` | ⏭ skipped (deferred to `slice-xyz`: reason) | `tests/module/test_foo.py:110` (marker present) |
-| `test_out_of_scope_behavior` | ⊘ declared out-of-scope | `_slices/<slice-id>.md#Work log` |
+**Generate the matrix mechanically:**
+
+```bash
+make tc-coverage SLICE=<your-slice-id>     # emits the table below; paste it in
+```
+
+The tool at `docs/architecture/_tools/tc_coverage.py` parses every Test Contract bullet in your slice's linked specs and classifies each. Anything it marks `✗ missing` blocks merge — either write the test, add `@pytest.mark.skip(reason=...)`, or declare out-of-scope in the slice's work log, then re-run. Exits non-zero if missing bullets remain.
+
+| # | Bullet | State | Evidence |
+|---|---|---|---|
+| 1 | `test_foo_does_bar` | ✓ passing | `tests/module/test_foo.py:42` |
+| 2 | `test_baz_edge_case` | ⏭ skipped (deferred to `slice-xyz`: reason) | `tests/module/test_foo.py:110` |
+| 3 | `test_out_of_scope_behavior` | ⊘ out-of-scope | declared in slice work log |
 
 ## Definition of Done
 
