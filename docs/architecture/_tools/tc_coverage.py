@@ -37,7 +37,7 @@ import argparse
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -230,7 +230,7 @@ def main() -> int:
     specs = _extract_specs(slice_text)
     if not specs:
         print(
-            f"error: no specs found under '## Specs to implement' in slice file",
+            "error: no specs found under '## Specs to implement' in slice file",
             file=sys.stderr,
         )
         return 2
