@@ -1,5 +1,0 @@
-agent: cowork-auto
-issue: 11
-started: 2026-04-19T14:45:00Z
-branch: slice/slice-lifecycle-engine
-note: Secondary lock per agent-guardrails §Locking. Removed at handoff.
