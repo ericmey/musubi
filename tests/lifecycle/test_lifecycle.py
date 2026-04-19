@@ -339,7 +339,7 @@ async def test_event_written_for_every_transition(
         result = transition(
             qdrant,
             object_id=saved.object_id,
-            target_state=target,  # type: ignore[arg-type]
+            target_state=target,
             actor="t",
             reason="step",
             sink=sink,
@@ -362,37 +362,35 @@ async def test_concurrent_transitions_last_writer_wins_with_logged_warning(
 ) -> None:
     """Bullet 13 — concurrent transitions: last writer wins; warning logged."""
     saved = await _seed_matured(plane, ns, content="concurrent")
+    caplog.set_level(logging.WARNING, logger="musubi.lifecycle.transitions")
     # Two sequential transitions simulating the race — the second must see the
     # version bumped by the first and log a concurrent-modification warning.
-    with caplog.at_level(logging.WARNING, logger="musubi.lifecycle.transitions"):
-        first = transition(
-            qdrant,
-            object_id=saved.object_id,
-            target_state="demoted",
-            actor="worker-a",
-            reason="a-demote",
-            expected_version=saved.version,
-            sink=sink,
-        )
-        second = transition(
-            qdrant,
-            object_id=saved.object_id,
-            target_state="superseded",
-            actor="worker-b",
-            reason="b-supersede",
-            expected_version=saved.version,  # stale!
-            lineage_updates=LineageUpdates(superseded_by="0" * 27),
-            sink=sink,
-        )
+    first = transition(
+        qdrant,
+        object_id=saved.object_id,
+        target_state="demoted",
+        actor="worker-a",
+        reason="a-demote",
+        expected_version=saved.version,
+        sink=sink,
+    )
+    second = transition(
+        qdrant,
+        object_id=saved.object_id,
+        target_state="superseded",
+        actor="worker-b",
+        reason="b-supersede",
+        expected_version=saved.version,  # stale!
+        lineage_updates=LineageUpdates(superseded_by="0" * 27),
+        sink=sink,
+    )
     # Second transition is either (a) rejected and retried internally (Ok with warning),
     # or (b) wins last-write-wins semantics with a warning record. Either way a
-    # warning must be present.
+    # warning must be present in the captured log text.
     assert isinstance(first, Ok)
     assert isinstance(second, (Ok, Err))
-    assert any(
-        "concurrent" in r.message.lower() or "stale version" in r.message.lower()
-        for r in caplog.records
-    )
+    captured = caplog.text.lower()
+    assert "concurrent" in captured or "stale version" in captured, captured
 
 
 async def test_event_batch_flushed_within_5s_under_load(
@@ -472,7 +470,7 @@ async def test_sqlite_event_db_survives_worker_restart(
 
 def test_hypothesis_state_machine_reachability() -> None:
     """Bullet 16 body — every declared allowed transition is reachable from some state."""
-    from musubi.types.lifecycle_event import _ALLOWED  # type: ignore[attr-defined]
+    from musubi.types.lifecycle_event import _ALLOWED
 
     for object_type, table in _ALLOWED.items():
         # Every target state in the table must also be a declared source key —
@@ -748,9 +746,7 @@ def test_scheduler_db_persists_job_history(tmp_path: Path) -> None:
     conn = sqlite3.connect(str(jobstore))
     try:
         cur = conn.cursor()
-        rows = cur.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        rows = cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         assert rows, "no tables in scheduler db"
     finally:
         conn.close()
@@ -897,3 +893,191 @@ def test_transition_is_thread_safe_against_own_sink(
     recorded_ids = {e.event_id for e in events}
     persisted_ids = {e.event_id for e in persisted}
     assert recorded_ids <= persisted_ids
+
+
+# ---------------------------------------------------------------------------
+# Additional branch-coverage tests (non-spec-bullet, but required to pass the
+# ≥85 % coverage target on owned files from CLAUDE.md#Style).
+# ---------------------------------------------------------------------------
+
+
+def test_sink_rejects_invalid_flush_parameters(tmp_path: Path) -> None:
+    """Constructor validates flush_every_n and flush_every_s."""
+    with pytest.raises(ValueError, match="flush_every_n"):
+        LifecycleEventSink(db_path=tmp_path / "e1.db", flush_every_n=0)
+    with pytest.raises(ValueError, match="flush_every_s"):
+        LifecycleEventSink(db_path=tmp_path / "e2.db", flush_every_s=0.0)
+
+
+def test_sink_record_after_close_raises(tmp_path: Path) -> None:
+    """Recording into a closed sink raises RuntimeError."""
+    sink = LifecycleEventSink(db_path=tmp_path / "e.db")
+    sink.close()
+    ev = LifecycleEvent(
+        object_id="0" * 27,
+        object_type="episodic",
+        namespace="eric/claude-code/episodic",
+        from_state="provisional",
+        to_state="matured",
+        actor="t",
+        reason="r",
+    )
+    with pytest.raises(RuntimeError, match="closed"):
+        sink.record(ev)
+
+
+def test_sink_close_is_idempotent(tmp_path: Path) -> None:
+    """Calling close() twice is a no-op — best-effort cleanup path."""
+    sink = LifecycleEventSink(db_path=tmp_path / "e.db")
+    sink.close()
+    sink.close()  # second call must not raise
+
+
+def test_sink_read_all_after_close_opens_fresh_connection(tmp_path: Path) -> None:
+    """Closed sink's read_all uses the module-level helper instead of self._conn."""
+    sink = LifecycleEventSink(db_path=tmp_path / "e.db")
+    ev = LifecycleEvent(
+        object_id="0" * 27,
+        object_type="episodic",
+        namespace="eric/claude-code/episodic",
+        from_state="provisional",
+        to_state="matured",
+        actor="t",
+        reason="r",
+    )
+    sink.record(ev)
+    sink.flush()
+    sink.close()
+    events = sink.read_all()
+    assert len(events) == 1
+    assert events[0].event_id == ev.event_id
+
+
+def test_sink_deserialises_naive_datetime() -> None:
+    """Payloads round-tripped without a tz are coerced to UTC on read."""
+    from musubi.lifecycle.events import _deserialise, _serialise
+
+    ev = LifecycleEvent(
+        object_id="0" * 27,
+        object_type="episodic",
+        namespace="eric/claude-code/episodic",
+        from_state="provisional",
+        to_state="matured",
+        actor="t",
+        reason="r",
+    )
+    # Round-trip via JSON, then strip the tz-suffix to simulate a legacy
+    # payload that stored the naive form.
+    import json as _json
+
+    data = _json.loads(_serialise(ev))
+    data["occurred_at"] = "2026-04-19T12:00:00"
+    roundtripped = _deserialise(_json.dumps(data))
+    assert roundtripped.occurred_at.tzinfo is UTC
+
+
+def test_context_manager_closes_sink(tmp_path: Path) -> None:
+    """Using LifecycleEventSink as a context manager calls close on exit."""
+    db = tmp_path / "e.db"
+    with LifecycleEventSink(db_path=db) as sink:
+        ev = LifecycleEvent(
+            object_id="0" * 27,
+            object_type="episodic",
+            namespace="eric/claude-code/episodic",
+            from_state="provisional",
+            to_state="matured",
+            actor="t",
+            reason="r",
+        )
+        sink.record(ev)
+        sink.flush()  # make sure the buffer is persisted before close
+    # After exit, close() has run — reading still works via a fresh connection.
+    assert len(sink.read_all()) == 1
+
+
+def test_lineage_updates_serialises_all_fields() -> None:
+    """Every optional field on LineageUpdates reaches the payload patch."""
+    lu = LineageUpdates(
+        superseded_by="a" * 27,
+        supersedes=["b" * 27],
+        merged_from=["c" * 27],
+        contradicts=["d" * 27],
+    )
+    patch = lu.to_payload_patch()
+    assert set(patch.keys()) == {"superseded_by", "supersedes", "merged_from", "contradicts"}
+    # Empty LineageUpdates round-trips to an empty dict.
+    assert LineageUpdates().to_payload_patch() == {}
+    assert LineageUpdates().to_event_changes() == {}
+
+
+def test_transition_not_found_returns_typed_error(qdrant: QdrantClient) -> None:
+    """Missing object_id yields code='not_found' without mutating any plane."""
+    result = transition(
+        qdrant,
+        object_id="z" * 27,
+        target_state="matured",
+        actor="t",
+        reason="r",
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "not_found"
+
+
+def test_file_lock_non_linux_fallback_is_exercised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When fcntl is stubbed to None, file_lock still yields acquired=True.
+
+    Covers the defensive branch used on Windows CI (not our production target,
+    but the stub exists and needs at least one caller to keep it honest).
+    """
+    import musubi.lifecycle.scheduler as sched_mod
+
+    monkeypatch.setattr(sched_mod, "_fcntl", None)
+    with file_lock(tmp_path / "x.lock") as got:
+        assert got is True
+
+
+def test_namespace_lock_rejects_unsafe_hash(tmp_path: Path) -> None:
+    """Namespace hashes with path separators are rejected at construction."""
+    with pytest.raises(ValueError):
+        NamespaceLock(base_dir=tmp_path, job_name="j", ns_hash="a/b")
+    with pytest.raises(ValueError):
+        NamespaceLock(base_dir=tmp_path, job_name="j", ns_hash="..")
+
+
+def test_testing_scheduler_no_misfires_returns_zero(tmp_path: Path) -> None:
+    """force_coalesced_run with zero misfires is a no-op."""
+    sched = build_scheduler(
+        build_default_jobs(),
+        jobstore_path=tmp_path / "jobs.db",
+        testing=True,
+    )
+    assert sched.force_coalesced_run("synthesis", misfires=0) == 0
+
+
+async def test_transition_records_supersession_lineage(
+    qdrant: QdrantClient,
+    plane: EpisodicPlane,
+    ns: str,
+    sink: LifecycleEventSink,
+) -> None:
+    """Lineage updates propagate to both the payload and the LifecycleEvent."""
+    a = await plane.create(EpisodicMemory(namespace=ns, content="a"))
+    b = await plane.create(EpisodicMemory(namespace=ns, content="b"))
+    # Transition a to matured first so superseded is a legal next state.
+    assert isinstance(
+        transition(qdrant, object_id=a.object_id, target_state="matured", actor="t", reason="warm"),
+        Ok,
+    )
+    r = transition(
+        qdrant,
+        object_id=a.object_id,
+        target_state="superseded",
+        actor="t",
+        reason="dup",
+        lineage_updates=LineageUpdates(superseded_by=b.object_id),
+        sink=sink,
+    )
+    assert isinstance(r, Ok)
+    assert r.value.event.lineage_changes["superseded_by"] == b.object_id
