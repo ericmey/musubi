@@ -282,13 +282,21 @@ def _fetch_slice_issues() -> list[dict] | None:
     try:
         r = subprocess.run(
             [
-                "gh", "issue", "list",
-                "--label", "slice",
-                "--state", "all",
-                "--limit", "200",
-                "--json", "number,title,labels,state,assignees",
+                "gh",
+                "issue",
+                "list",
+                "--label",
+                "slice",
+                "--state",
+                "all",
+                "--limit",
+                "200",
+                "--json",
+                "number,title,labels,state,assignees",
             ],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -361,7 +369,10 @@ def check_issues(rep: Report) -> None:
     #      frontmatter `done` + Issue state `closed` — expected
     ACCEPTABLE = {
         ("in-review", "status:in-progress"),  # handoff flipped frontmatter but not label yet
-        ("in-progress", "status:ready"),       # claim flipped label but not frontmatter yet (rare; flipped order)
+        (
+            "in-progress",
+            "status:ready",
+        ),  # claim flipped label but not frontmatter yet (rare; flipped order)
     }
     for sid, fm in slice_fms.items():
         if sid not in by_slice:
@@ -558,7 +569,8 @@ def main() -> int:
     ap.add_argument(
         "command",
         choices=["vault", "slices", "specs", "issues", "wikilinks", "all"],
-        default="all", nargs="?",
+        default="all",
+        nargs="?",
     )
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()

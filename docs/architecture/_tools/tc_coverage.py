@@ -51,14 +51,13 @@ _TEST_CONTRACT_HEADING_RE = re.compile(r"^##\s+Test [Cc]ontract.*$", re.M)
 # line as the "note" — fixed by restricting horizontal whitespace only.
 _BULLET_RE = re.compile(r"^\d+\.[ \t]+`([^`]+)`[ \t]*(.*)$", re.M)
 _FUNCTION_DEF_RE = re.compile(r"^(?:async\s+)?def\s+(\w+)\b", re.M)
-_SKIP_DECORATOR_RE = re.compile(
-    r"@pytest\.mark\.(skip|xfail)\s*\(\s*reason\s*=\s*([\"'])(.+?)\2"
-)
+_SKIP_DECORATOR_RE = re.compile(r"@pytest\.mark\.(skip|xfail)\s*\(\s*reason\s*=\s*([\"'])(.+?)\2")
 
 
 @dataclass
 class Bullet:
     """One parsed Test Contract bullet."""
+
     spec: str
     index: int
     name: str
@@ -87,14 +86,16 @@ def _read_slice(slice_id: str) -> tuple[Path, str]:
 
 def _extract_specs(slice_text: str) -> list[Path]:
     """Find the specs the slice implements from its ``## Specs to implement`` section."""
-    section = _section_after_heading(slice_text, re.compile(r"^##\s+Specs?\s+to\s+implement\s*$", re.M))
+    section = _section_after_heading(
+        slice_text, re.compile(r"^##\s+Specs?\s+to\s+implement\s*$", re.M)
+    )
     if not section:
         return []
     paths: list[Path] = []
     for link in _WIKILINK_RE.findall(section):
         target = link.strip().rstrip("|")
         if target.startswith("docs/architecture/"):
-            target = target[len("docs/architecture/"):]
+            target = target[len("docs/architecture/") :]
         p = VAULT / f"{target}.md"
         if p.exists():
             paths.append(p)
@@ -132,7 +133,7 @@ def _find_test_definition(func_name: str) -> tuple[Path, int, str] | None:
         lineno = text[: m.start()].count("\n") + 1
         # Look up to 5 lines above for a pytest.mark.skip / .xfail decorator.
         start = m.start()
-        header = text[max(0, start - 400): start]
+        header = text[max(0, start - 400) : start]
         preceding_lines = header.splitlines()[-5:]
         decorator_block = "\n".join(preceding_lines)
         return py, lineno, decorator_block
@@ -199,17 +200,23 @@ def render_summary(bullets: list[Bullet]) -> str:
     total = len(bullets)
     missing = counts.get("✗ missing", 0)
     return (
-        f"\nTotal: {total} bullet(s) — " + ", ".join(parts) + "\n"
+        f"\nTotal: {total} bullet(s) — "
+        + ", ".join(parts)
+        + "\n"
         + (
             f"\n⚠ {missing} missing bullet(s) — Test Contract Closure Rule violated. "
             "Either write the test, mark @pytest.mark.skip with a reason, or declare "
-            "out-of-scope in the slice's ## Work log.\n" if missing else "\n✓ Closure Rule satisfied.\n"
+            "out-of-scope in the slice's ## Work log.\n"
+            if missing
+            else "\n✓ Closure Rule satisfied.\n"
         )
     )
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("slice_id", help="Slice id — e.g. slice-plane-episodic")
     ap.add_argument("--json", action="store_true", help="Emit JSON instead of a markdown table")
     args = ap.parse_args()
@@ -238,18 +245,26 @@ def main() -> int:
     classified = [classify(b, work_log) for b in all_bullets]
 
     if args.json:
-        print(json.dumps(
-            {
-                "slice": args.slice_id,
-                "specs": [s.relative_to(VAULT).as_posix() for s in specs],
-                "bullets": [
-                    {"index": b.index, "spec": b.spec, "name": b.name, "note": b.note,
-                     "state": b.state, "evidence": b.evidence}
-                    for b in classified
-                ],
-            },
-            indent=2,
-        ))
+        print(
+            json.dumps(
+                {
+                    "slice": args.slice_id,
+                    "specs": [s.relative_to(VAULT).as_posix() for s in specs],
+                    "bullets": [
+                        {
+                            "index": b.index,
+                            "spec": b.spec,
+                            "name": b.name,
+                            "note": b.note,
+                            "state": b.state,
+                            "evidence": b.evidence,
+                        }
+                        for b in classified
+                    ],
+                },
+                indent=2,
+            )
+        )
     else:
         print(f"Test Contract coverage for **{args.slice_id}**\n")
         print(f"Specs: {', '.join(f'`{s.relative_to(VAULT).as_posix()}`' for s in specs)}\n")
