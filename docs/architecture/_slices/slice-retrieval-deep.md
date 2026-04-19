@@ -24,12 +24,18 @@ blocks: ["[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-openclaw]]", 
 
 ## Owned paths (you MAY write here)
 
-- `musubi/retrieve/deep_path.py`
-- `tests/retrieve/test_deep_path.py`
+- `src/musubi/retrieve/deep.py`
+- `tests/retrieve/test_deep.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `musubi/planes/`
+- `src/musubi/retrieve/hybrid.py`   (owned by slice-retrieval-hybrid, done)
+- `src/musubi/retrieve/scoring.py`  (owned by slice-retrieval-scoring, done)
+- `src/musubi/retrieve/rerank.py`   (owned by slice-retrieval-rerank, done)
+- `src/musubi/retrieve/fast.py`     (owned by slice-retrieval-fast, done)
+- `src/musubi/planes/`
+- `src/musubi/api/`
+- `src/musubi/types/`
 
 ## Depends on
 
