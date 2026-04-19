@@ -3,10 +3,10 @@ title: "Slice: Curated knowledge plane"
 slice_id: slice-plane-curated
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: vscode-cc-opus47
 phase: "4 Planes"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]"]
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-api-v0]]", "[[_slices/slice-lifecycle-promotion]]", "[
 
 > Topic-first durable facts. Obsidian vault is the store of record; Qdrant is a derived index rebuilt from the vault.
 
-**Phase:** 4 Planes · **Status:** `in-review` · **Owner:** `vscode-cc-opus47`
+**Phase:** 4 Planes · **Status:** `done` · **Owner:** `vscode-cc-opus47`
 
 ## Specs to implement
 
