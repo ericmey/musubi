@@ -3,12 +3,12 @@ title: "Slice: Synthesized concept plane"
 slice_id: slice-plane-concept
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: vscode-cc-opus47
 phase: "4 Planes"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-plane-episodic]]"]
 blocks: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-lifecycle-promotion]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-lifecycle-pro
 
 > Bridge layer. Clustered episodic reinforcement emerges as concept objects; candidates for promotion into curated.
 
-**Phase:** 4 Planes · **Status:** `in-review` · **Owner:** `vscode-cc-opus47`
+**Phase:** 4 Planes · **Status:** `done` · **Owner:** `vscode-cc-opus47`
 
 ## Specs to implement
 

@@ -3,12 +3,12 @@ title: "Slice: Embedding client layer"
 slice_id: slice-embedding
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: cowork-auto
 phase: "2 Hybrid"
-tags: [section/slices, status/in-review, type/slice]
-updated: 2026-04-18
-reviewed: false
+tags: [section/slices, status/done, type/slice]
+updated: 2026-04-19
+reviewed: true
 depends-on: ["[[_slices/slice-config]]"]
 blocks: ["[[_slices/slice-ingestion-capture]]", "[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-rerank]]"]
 ---
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-ingestion-capture]]", "[[_slices/slice-retrieval-hybri
 
 > TEI (BGE-M3 dense, SPLADE++ sparse) + optional Gemini fallback. Named vectors: `{model}_{version}`.
 
-**Phase:** 2 Hybrid · **Status:** `in-review` · **Owner:** `cowork-auto`
+**Phase:** 2 Hybrid · **Status:** `done` · **Owner:** `cowork-auto`
 
 ## Specs to implement
 
