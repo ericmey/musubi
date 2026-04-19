@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from typing import Any, cast
 from unittest.mock import patch
 
 import pytest
@@ -22,81 +23,81 @@ Implements the Test Contract bullets from
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_content_dedup_jaccard_plus_cosine_deep_only():
+async def test_content_dedup_jaccard_plus_cosine_deep_only() -> None:
     """Bullet 3"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_dedup_keeps_highest_provenance():
+async def test_dedup_keeps_highest_provenance() -> None:
     """Bullet 4"""
 
 
 # Lineage
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_concept_dropped_when_promoted_curated_present():
+async def test_concept_dropped_when_promoted_curated_present() -> None:
     """Bullet 5"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_concept_kept_when_promoted_curated_absent():
+async def test_concept_kept_when_promoted_curated_absent() -> None:
     """Bullet 6"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_superseded_dropped_when_superseder_present():
+async def test_superseded_dropped_when_superseder_present() -> None:
     """Bullet 7"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_superseded_kept_when_superseder_absent():
+async def test_superseded_kept_when_superseder_absent() -> None:
     """Bullet 8"""
 
 
 # Scope
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_default_planes_cover_curated_concept_episodic():
+async def test_default_planes_cover_curated_concept_episodic() -> None:
     """Bullet 9"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_artifact_opted_in_surfaces_chunks():
+async def test_artifact_opted_in_surfaces_chunks() -> None:
     """Bullet 10"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_blended_namespace_expands_to_tenant_presences():
+async def test_blended_namespace_expands_to_tenant_presences() -> None:
     """Bullet 11"""
 
 
 # Scoring
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_relevance_normalized_across_planes_pre_score():
+async def test_relevance_normalized_across_planes_pre_score() -> None:
     """Bullet 12"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_plane_agnostic_rerank_orders_ignoring_plane():
+async def test_plane_agnostic_rerank_orders_ignoring_plane() -> None:
     """Bullet 13"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_provenance_still_influences_final_rank():
+async def test_provenance_still_influences_final_rank() -> None:
     """Bullet 14"""
 
 
 # Edge cases
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_one_plane_empty_merge_succeeds():
+async def test_one_plane_empty_merge_succeeds() -> None:
     """Bullet 15"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_all_planes_empty_returns_empty_warning():
+async def test_all_planes_empty_returns_empty_warning() -> None:
     """Bullet 16"""
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-blended-followup: out of time")
-async def test_cross_tenant_blend_forbidden():
+async def test_cross_tenant_blend_forbidden() -> None:
     """Bullet 17"""
 
 
