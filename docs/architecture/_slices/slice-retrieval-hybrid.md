@@ -97,6 +97,11 @@ Agents append one entry per work session. Format:
 | `integration: BEIR-style eval on 1000-doc synthetic corpus, hybrid beats dense-only by ≥ 2 NDCG@10 points` | ⏭ skipped (slice-retrieval-evals: benchmark corpus belongs to eval suite) | `tests/retrieve/test_hybrid.py:383` |
 | `integration: live Qdrant, hybrid with real BGE-M3 + SPLADE, p95 ≤ 150ms` | ⏭ skipped (slice-ops-gpu: live TEI/Qdrant p95 requires reference host) | `tests/retrieve/test_hybrid.py:392` |
 
+### Known gaps at in-review — 2026-04-19 — codex-gpt5
+
+- Empty-query behavior has a brief/spec mismatch: the spec Test Contract bullet is named `test_empty_query_returns_empty_not_error`, while the session brief required `Err(RetrievalError(code="empty_query"))`. The implementation follows the brief's semantics and keeps the verbatim test name for Closure Rule compatibility.
+- Recommended follow-up: reconcile `docs/architecture/05-retrieval/hybrid-search.md` so the Test Contract bullet name and implemented empty-query behavior match. That reconciliation belongs to the `slice-retrieval-hybrid` `status: done` prerequisite, not this PR.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
