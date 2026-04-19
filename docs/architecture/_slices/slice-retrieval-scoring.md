@@ -3,10 +3,10 @@ title: "Slice: Retrieval scoring model"
 slice_id: slice-retrieval-scoring
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "2 Hybrid"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]",
 
 > The single function that turns a raw hit into a rank-orderable number. Weights: relevance, recency, importance, maturity, reinforcement, provenance, penalties.
 
-**Phase:** 2 Hybrid · **Status:** `in-progress` · **Owner:** `codex-gpt5`
+**Phase:** 2 Hybrid · **Status:** `in-review` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
@@ -70,10 +70,36 @@ Agents append one entry per work session. Format:
 
 - Claimed Issue #32 and flipped slice frontmatter from `ready` to `in-progress`.
 
+### 2026-04-19 13:47 — codex-gpt5 — handoff to in-review
+
+- Added `src/musubi/retrieve/scoring.py` with deterministic `Hit`, `ScoreWeights`, `ScoreComponents`, `ScoredHit`, `score()`, `score_result()`, and `rank_hits()` APIs.
+- Implemented relevance normalization, rerank-score sigmoid normalization, plane-specific recency half-lives, importance clamp, provenance table, reinforcement/access log scaling, component exposure, and deterministic `(object_id, plane)` tiebreaks.
+- Added `tests/retrieve/test_scoring.py` for the scoring Test Contract. Focused coverage for `src/musubi/retrieve/scoring.py`: 100%; retrieval include coverage: 99%.
+- Verification: `make check` passed; `uv run coverage report --include='src/musubi/retrieve/*'` passed with 99% retrieval coverage.
+
+| Test Contract bullet | State | Evidence |
+|---|---|---|
+| `test_score_in_0_1_range_for_any_hit` | ✓ passing | `tests/retrieve/test_scoring.py:58` |
+| `test_components_sum_with_weights_equals_total` | ✓ passing | `tests/retrieve/test_scoring.py:80` |
+| `test_relevance_normalized_within_batch` | ✓ passing | `tests/retrieve/test_scoring.py:104` |
+| `test_recency_decay_matches_half_life_table` | ✓ passing | `tests/retrieve/test_scoring.py:125` |
+| `test_recency_half_life_per_plane_applied` | ✓ passing | `tests/retrieve/test_scoring.py:137` |
+| `test_importance_clamped_to_1_10` | ✓ passing | `tests/retrieve/test_scoring.py:152` |
+| `test_provenance_values_match_table` | ✓ passing | `tests/retrieve/test_scoring.py:173` |
+| `test_provenance_demoted_states_get_0_1` | ✓ passing | `tests/retrieve/test_scoring.py:180` |
+| `test_reinforcement_log_scaled` | ✓ passing | `tests/retrieve/test_scoring.py:192` |
+| `test_tiebreak_deterministic_on_object_id` | ✓ passing | `tests/retrieve/test_scoring.py:212` |
+| `test_score_components_exposed_on_result` | ✓ passing | `tests/retrieve/test_scoring.py:238` |
+| `test_weights_change_shifts_ranking_predictably` | ✓ passing | `tests/retrieve/test_scoring.py:251` |
+| `test_no_rng_used_in_scoring` | ✓ passing | `tests/retrieve/test_scoring.py:286` |
+| `hypothesis: scores are monotonic in each component holding others fixed` | ✓ passing property test; declared here for tc_coverage non-test handling | `tests/retrieve/test_scoring.py:296` |
+| `hypothesis: swapping weights reorders results consistently with the math` | ✓ passing property test; declared here for tc_coverage non-test handling | `tests/retrieve/test_scoring.py:324` |
+| `eval: golden query set MRR ≥ 0.7 with default weights` | ⏭ skipped (slice-retrieval-evals: golden query set lives there) | `tests/retrieve/test_scoring.py:380` |
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
 
 ## PR links
 
-- _(none yet)_
+- PR #54 — feat(retrieve): slice-retrieval-scoring
