@@ -9,10 +9,10 @@ from typing import Any, cast
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
-from musubi.retrieve.fast import FastResponseCache, run_fast_retrieve
 from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
+from musubi.retrieve.fast import FastResponseCache, run_fast_retrieve
 from musubi.retrieve.hybrid import HybridHit, QueryEmbeddingCache, RetrievalError
 from musubi.types.common import Err, Ok
 
@@ -79,6 +79,11 @@ def _hits() -> list[HybridHit]:
         _hybrid_hit("high", score=0.9, content="high content"),
         _hybrid_hit("mid", score=0.5, content="mid content"),
     ]
+
+
+def test_fast_response_cache_rejects_non_positive_ttl() -> None:
+    with pytest.raises(ValueError, match="ttl_s must be positive"):
+        FastResponseCache(ttl_s=0)
 
 
 @pytest.mark.asyncio
@@ -331,6 +336,44 @@ async def test_fast_path_response_cache_hits_within_30s(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
+async def test_fast_response_cache_expires_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+        nonlocal calls
+        calls += 1
+        return Ok(value=_hits())
+
+    import musubi.retrieve.fast as fast
+
+    monkeypatch.setattr(fast, "hybrid_search", fake_hybrid_search)
+    cache = FastResponseCache()
+    first = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        now=NOW,
+        response_cache=cache,
+    )
+    second = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        now=NOW + 31,
+        response_cache=cache,
+    )
+
+    assert isinstance(first, Ok)
+    assert isinstance(second, Ok)
+    assert calls == 2
+    assert second.value.cache_hit is False
+
+
+@pytest.mark.asyncio
 async def test_fast_path_response_cache_disabled_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -425,6 +468,217 @@ async def test_fast_path_lineage_summary_present_not_hydrated(
     assert isinstance(result, Ok)
     assert result.value.results[0].lineage_summary == {"promoted_to": "curated-id"}
     assert "hydrated_lineage" not in result.value.results[0].payload
+
+
+@pytest.mark.asyncio
+async def test_fast_path_empty_query_returns_typed_error_without_hybrid_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+        raise AssertionError("empty query must return before hybrid search")
+
+    import musubi.retrieve.fast as fast
+
+    monkeypatch.setattr(fast, "hybrid_search", fake_hybrid_search)
+    result = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="",
+        collection=COLLECTION,
+        now=NOW,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "empty_query"
+    assert result.error.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fast_path_invalid_limit_returns_typed_error_without_hybrid_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+        raise AssertionError("invalid limit must return before hybrid search")
+
+    import musubi.retrieve.fast as fast
+
+    monkeypatch.setattr(fast, "hybrid_search", fake_hybrid_search)
+    result = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        limit=0,
+        now=NOW,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "invalid_limit"
+    assert result.error.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fast_path_requires_collection_or_collections() -> None:
+    result = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        now=NOW,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "invalid_collections"
+    assert result.error.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fast_path_rejects_empty_collections() -> None:
+    result = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collections=[],
+        now=NOW,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "invalid_collections"
+    assert result.error.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fast_path_rejects_client_collection_mismatch() -> None:
+    result = await run_fast_retrieve(
+        [_client()],
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collections=[COLLECTION, "musubi_curated"],
+        now=NOW,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "fanout_mismatch"
+    assert result.error.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fast_path_all_planes_timeout_warns_all_planes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+        await asyncio.sleep(0.05)
+        return Ok(value=[])
+
+    import musubi.retrieve.fast as fast
+
+    monkeypatch.setattr(fast, "hybrid_search", fake_hybrid_search)
+    result = await run_fast_retrieve(
+        [_client(), _client()],
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collections=[COLLECTION, "musubi_curated"],
+        now=NOW,
+        plane_timeout_s=0.001,
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.results == []
+    assert result.value.warnings == ["all planes timed out"]
+
+
+@pytest.mark.asyncio
+async def test_fast_path_unknown_hybrid_error_maps_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Err[RetrievalError]:
+        return Err(error=RetrievalError(code="unknown_upstream", detail="unexpected"))
+
+    import musubi.retrieve.fast as fast
+
+    monkeypatch.setattr(fast, "hybrid_search", fake_hybrid_search)
+    result = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        now=NOW,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "unknown_upstream"
+    assert result.error.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_fast_path_dedupes_same_object_id_by_highest_score(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+        return Ok(
+            value=[
+                _hybrid_hit("same", score=0.1, content="low duplicate"),
+                _hybrid_hit("same", score=0.9, content="high duplicate"),
+            ]
+        )
+
+    import musubi.retrieve.fast as fast
+
+    monkeypatch.setattr(fast, "hybrid_search", fake_hybrid_search)
+    result = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        now=NOW,
+    )
+
+    assert isinstance(result, Ok)
+    assert len(result.value.results) == 1
+    assert result.value.results[0].snippet == "high duplicate"
+
+
+@pytest.mark.asyncio
+async def test_fast_path_defaults_plane_when_namespace_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+        return Ok(
+            value=[
+                HybridHit(
+                    object_id="fallback",
+                    score=1.0,
+                    payload={
+                        "object_id": "fallback",
+                        "state": "matured",
+                        "updated_epoch": NOW,
+                        "content": "fallback content",
+                    },
+                )
+            ]
+        )
+
+    import musubi.retrieve.fast as fast
+
+    monkeypatch.setattr(fast, "hybrid_search", fake_hybrid_search)
+    result = await run_fast_retrieve(
+        _client(),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="gpu",
+        collection=COLLECTION,
+        now=NOW,
+    )
+
+    assert isinstance(result, Ok)
+    assert result.value.results[0].score_components.relevance == pytest.approx(1.0)
 
 
 def test_fast_path_does_not_call_reranker() -> None:
