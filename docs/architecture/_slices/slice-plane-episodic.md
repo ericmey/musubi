@@ -3,12 +3,12 @@ title: "Slice: Episodic plane"
 slice_id: slice-plane-episodic
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: cowork-auto
 phase: "4 Planes"
-tags: [section/slices, status/in-review, type/slice]
-updated: 2026-04-18
-reviewed: false
+tags: [section/slices, status/done, type/slice]
+updated: 2026-04-19
+reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]"]
 blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-ingestion-capture]]", "[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-retrieval-fast]]"]
 ---
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-ingestion-capture]]",
 
 > Source-first time-indexed recollection. Qdrant-primary. Named dense + sparse vectors. Provisional → matured lifecycle.
 
-**Phase:** 4 Planes · **Status:** `in-review` · **Owner:** `cowork-auto`
+**Phase:** 4 Planes · **Status:** `done` · **Owner:** `cowork-auto`
 
 ## Specs to implement
 

@@ -3,12 +3,12 @@ title: "Slice: Config & environment loading"
 slice_id: slice-config
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: cowork-auto
 phase: "1 Schema"
-tags: [section/slices, status/in-review, type/slice]
-updated: 2026-04-18
-reviewed: false
+tags: [section/slices, status/done, type/slice]
+updated: 2026-04-19
+reviewed: true
 depends-on: []
 blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-auth]]", "[[_slices/slice-embedding]]"]
 ---
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-auth]]", "[[_slices/s
 
 > Single source of truth for environment variables. All config reads go through one module; agents must not read os.environ directly elsewhere.
 
-**Phase:** 1 Schema · **Status:** `in-review` · **Owner:** `cowork-auto`
+**Phase:** 1 Schema · **Status:** `done` · **Owner:** `cowork-auto`
 
 ## Specs to implement
 
