@@ -1,5 +1,0 @@
-agent: codex-gpt5
-slice: slice-ops-ansible
-issue: 16
-started: 2026-04-19 18:45 EDT
-pr: https://github.com/ericmey/musubi/pull/77
