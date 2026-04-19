@@ -249,3 +249,49 @@ async def test_thought_embedding_deferred_under_load_does_not_block_send(
         or "dense_bge_m3_v1" not in records[0].vector
         or records[0].vector["dense_bge_m3_v1"] == []
     )
+
+
+async def test_thought_transition_valid_state_change(plane: ThoughtsPlane, ns: str) -> None:
+    t = await plane.send(_make("transition me", ns, "a", "b"))
+    updated, event = await plane.transition(
+        namespace=ns,
+        object_id=t.object_id,
+        to_state="matured",
+        actor="test",
+        reason="test-change",
+    )
+
+    assert updated.state == "matured"
+    assert updated.version == t.version + 1
+
+    # Check event properties
+    from musubi.types.lifecycle_event import LifecycleEvent
+
+    assert isinstance(event, LifecycleEvent)
+    assert event.from_state == "provisional"
+    assert event.to_state == "matured"
+    assert event.actor == "test"
+    assert event.reason == "test-change"
+
+    # Wrong namespace -> LookupError
+    import pytest
+
+    with pytest.raises(LookupError):
+        await plane.transition(
+            namespace="wrong-namespace",
+            object_id=t.object_id,
+            to_state="archived",
+            actor="test",
+            reason="test-isolation",
+        )
+
+
+async def test_thought_transition_on_missing_object_raises_lookup(
+    plane: ThoughtsPlane, ns: str
+) -> None:
+    import pytest
+
+    with pytest.raises(LookupError):
+        await plane.transition(
+            namespace=ns, object_id="0" * 27, to_state="matured", actor="test", reason="missing"
+        )
