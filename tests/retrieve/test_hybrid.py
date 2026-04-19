@@ -44,6 +44,7 @@ class _SpyQdrantClient:
         *,
         points: list[_Point] | None = None,
         delay_s: float = 0.0,
+        error: Exception | None = None,
     ) -> None:
         self.points = points or [
             _Point(
@@ -57,10 +58,13 @@ class _SpyQdrantClient:
             )
         ]
         self.delay_s = delay_s
+        self.error = error
         self.calls: list[dict[str, Any]] = []
 
     def query_points(self, **kwargs: Any) -> _Response:
         self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
         if self.delay_s:
             time.sleep(self.delay_s)
         return _Response(points=list(self.points))
@@ -109,6 +113,18 @@ class _SlowSparseEmbedder(_CountingEmbedder):
         return [{1: 1.0} for _text in texts]
 
 
+class _BrokenDenseEmbedder(_CountingEmbedder):
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        self.dense_calls += 1
+        raise RuntimeError("dense broke")
+
+
+class _BrokenSparseEmbedder(_CountingEmbedder):
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        self.sparse_calls += 1
+        raise RuntimeError("sparse broke")
+
+
 def _client(client: _SpyQdrantClient) -> QdrantClient:
     return cast(QdrantClient, client)
 
@@ -119,11 +135,12 @@ async def _call(
     **kwargs: Any,
 ) -> tuple[_SpyQdrantClient, Any]:
     spy = client or _SpyQdrantClient()
+    query = kwargs.pop("query", "find gpu notes")
     result = await hybrid_search(
         _client(spy),
         embedder or _CountingEmbedder(),
         namespace=NAMESPACE,
-        query="find gpu notes",
+        query=query,
         collection=COLLECTION,
         **kwargs,
     )
@@ -379,3 +396,154 @@ def test_integration_live_qdrant_hybrid_with_real_bge_m3_splade_p95_150ms() -> N
 
 def test_default_hybrid_prefetch_limit_matches_spec() -> None:
     assert HYBRID_PREFETCH_LIMIT == 50
+
+
+def test_query_embedding_cache_rejects_non_positive_maxsize() -> None:
+    with pytest.raises(ValueError, match="maxsize"):
+        QueryEmbeddingCache(model_version="v1", maxsize=0)
+
+
+def test_query_embedding_cache_keeps_entries_when_model_version_unchanged() -> None:
+    cache = QueryEmbeddingCache(model_version="v1")
+
+    cache.set_model_version("v1")
+
+    assert cache.model_version == "v1"
+
+
+@pytest.mark.asyncio
+async def test_query_embedding_cache_evicts_lru_entry() -> None:
+    cache = QueryEmbeddingCache(model_version="v1", maxsize=1)
+    embedder = _CountingEmbedder()
+    await _call(embedder=embedder, cache=cache, query="first query")
+    await _call(embedder=embedder, cache=cache, query="second query")
+    await _call(embedder=embedder, cache=cache, query="first query")
+
+    assert embedder.dense_calls == 3
+    assert embedder.sparse_calls == 3
+
+
+@pytest.mark.asyncio
+async def test_invalid_limit_returns_typed_error_without_querying_qdrant() -> None:
+    spy = _SpyQdrantClient()
+    result = await hybrid_search(
+        _client(spy),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="find gpu notes",
+        collection=COLLECTION,
+        limit=0,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "invalid_limit"
+    assert spy.calls == []
+
+
+@pytest.mark.asyncio
+async def test_zero_dense_and_sparse_weights_return_typed_error() -> None:
+    result = await hybrid_search(
+        _client(_SpyQdrantClient()),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="find gpu notes",
+        collection=COLLECTION,
+        dense_weight=0.0,
+        sparse_weight=0.0,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "invalid_weights"
+
+
+@pytest.mark.asyncio
+async def test_qdrant_failure_returns_typed_error() -> None:
+    spy = _SpyQdrantClient(error=RuntimeError("qdrant down"))
+    result = await hybrid_search(
+        _client(spy),
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="find gpu notes",
+        collection=COLLECTION,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "qdrant_query_failed"
+
+
+@pytest.mark.asyncio
+async def test_dense_embedding_failure_returns_typed_error() -> None:
+    spy, result = await _call(embedder=_BrokenDenseEmbedder())
+
+    assert isinstance(result, Err)
+    assert result.error.code == "dense_embedding_failed"
+    assert spy.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sparse_embedding_failure_returns_typed_error() -> None:
+    spy, result = await _call(embedder=_BrokenSparseEmbedder())
+
+    assert isinstance(result, Err)
+    assert result.error.code == "sparse_embedding_failed"
+    assert spy.calls == []
+
+
+@pytest.mark.asyncio
+async def test_dense_only_search_omits_sparse_prefetch() -> None:
+    spy, result = await _call(sparse_weight=0.0)
+
+    assert isinstance(result, Ok)
+    assert [prefetch.using for prefetch in _prefetches(spy.calls[0])] == [DENSE_VECTOR_NAME]
+
+
+@pytest.mark.asyncio
+async def test_sparse_only_search_omits_dense_prefetch() -> None:
+    spy, result = await _call(dense_weight=0.0)
+
+    assert isinstance(result, Ok)
+    assert [prefetch.using for prefetch in _prefetches(spy.calls[0])] == [SPARSE_VECTOR_NAME]
+
+
+@pytest.mark.asyncio
+async def test_fanout_mismatched_clients_and_collections_returns_typed_error() -> None:
+    result = await hybrid_search_many(
+        [_client(_SpyQdrantClient())],
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="find gpu notes",
+        collections=[COLLECTION, "musubi_curated"],
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "fanout_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_fanout_returns_first_child_error() -> None:
+    result = await hybrid_search_many(
+        [_client(_SpyQdrantClient())],
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="",
+        collections=[COLLECTION],
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "empty_query"
+
+
+@pytest.mark.asyncio
+async def test_state_filter_overrides_default_visible_states() -> None:
+    spy, result = await _call(state_filter=("archived",))
+
+    assert isinstance(result, Ok)
+    conditions = _filter_conditions(spy.calls[0])
+    state_conditions = [
+        condition
+        for condition in conditions
+        if isinstance(condition, models.FieldCondition) and condition.key == "state"
+    ]
+    match = state_conditions[0].match
+    assert isinstance(match, models.MatchAny)
+    assert match.any == ["archived"]
