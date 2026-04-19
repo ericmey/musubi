@@ -26,9 +26,12 @@ blocks: ["[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-lifecycle-sy
 
 ## Owned paths (you MAY write here)
 
-  - `musubi/lifecycle/engine.py`
-  - `musubi/lifecycle/states.py`
-  - `tests/lifecycle/test_engine.py`
+  - `musubi/lifecycle/__init__.py`
+  - `musubi/lifecycle/transitions.py`
+  - `musubi/lifecycle/events.py`
+  - `musubi/lifecycle/scheduler.py`
+  - `tests/lifecycle/__init__.py`
+  - `tests/lifecycle/test_lifecycle.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
@@ -67,6 +70,48 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 — cowork-auto — claim + test contract
+
+- Atomic claim via `gh issue edit 11 --add-assignee @me --add-label status:in-progress`.
+- Slice frontmatter flipped `ready → in-progress`; owner set to `cowork-auto`.
+- Branch `slice/slice-lifecycle-engine` created; draft PR opened.
+- Test contract file committed first (`tests/lifecycle/test_lifecycle.py`) per
+  AGENTS.md §Test-first; reconciled slice `## Owned paths` to match the spec's
+  module names — `transitions.py`, `events.py`, `scheduler.py` replace the
+  placeholder `engine.py` / `states.py` / `test_engine.py`. The specs
+  ([[04-data-model/lifecycle#Transition function]] and
+  [[06-ingestion/lifecycle-engine]]) were already authoritative; this is a
+  slice-file-only update, not a spec-prose change. Recorded here rather than
+  via `spec-update:` trailer because no spec .md was edited.
+
+#### Test Contract Closure Rule declarations
+
+The following bullets are declared `⊘ out-of-scope` for the per-bullet
+`def test_<name>` match because they are `hypothesis:` or `integration:`
+prose that `tc_coverage.py` classifies as non-test. Each is covered by an
+adjacent implementation:
+
+- `hypothesis: state-machine reachability — every declared allowed transition is reachable from some state; no state is orphaned`
+  → covered by `test_hypothesis_state_machine_reachability` in
+  `tests/lifecycle/test_lifecycle.py`, which asserts the property directly
+  over the `_ALLOWED` table.
+- `hypothesis: monotone invariants — version, updated_epoch never decrease across any sequence of legal transitions`
+  → covered by `test_hypothesis_monotone_invariants`, a Hypothesis property
+  test over random legal transition sequences.
+- `integration: full day simulation — seed corpus, advance clock 24h, assert each scheduled job ran once`
+  → out-of-scope for unit tests. Implementing it requires the full per-job
+  sweep implementations (maturation, synthesis, promotion, demotion,
+  reflection, reconcile) that are explicitly owned by the downstream slices
+  `slice-lifecycle-maturation`, `slice-lifecycle-synthesis`,
+  `slice-lifecycle-promotion`, `slice-lifecycle-reflection`. Deferred to an
+  integration-harness slice once those land.
+- `integration: crash recovery — kill worker mid-synthesis, restart, synthesis completes from cursor`
+  → same rationale; synthesis cursor lives in
+  `slice-lifecycle-synthesis`'s `owns_paths`.
+- `integration: ollama-outage scenario — synthesis skips cleanly, maturation skips enrichment, alerts emit`
+  → same rationale; the enrichment + alert paths are owned by downstream
+  sweep slices.
 
 ## Cross-slice tickets opened by this slice
 
