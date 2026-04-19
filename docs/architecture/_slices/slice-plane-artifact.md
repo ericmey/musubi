@@ -105,3 +105,7 @@ Specs: `04-data-model/source-artifact.md`
 | 20 | `test_missing_blob_returns_clear_error_on_read` | ⏭ skipped | `tests/planes/test_artifact.py:307` (reason: deferred to slice-ingestion-capture: Blob read errors belong to blob reader) |
 | 21 | `test_namespace_isolation_reads` | ✓ passing | `tests/planes/test_artifact.py:315` |
 | 22 | `test_cross_namespace_citation_in_supporting_ref_is_logged` | ⏭ skipped | `tests/planes/test_artifact.py:326` (reason: deferred to slice-retrieval-blended: Cross-namespace references logged by retriever) |
+
+### Known gaps at in-review — 2026-04-19 — gemini-3-1-pro-hana
+
+- **Naive chunkers**: `TokenSlidingChunker` and `MarkdownHeadingChunker` use naive whitespace/word splitting instead of true tokenization. A cross-slice ticket has been opened (`[[_inbox/cross-slice/slice-plane-artifact-tokenizer]]`) to wire them up to the real tokenizer once available.
