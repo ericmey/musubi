@@ -3,11 +3,11 @@ title: "Slice: Reflection job"
 slice_id: slice-lifecycle-reflection
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: vscode-cc-sonnet47
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-engine]]", "[[_slices/slice-plane-curated]]"]
 blocks: []
@@ -17,7 +17,7 @@ blocks: []
 
 > Daily/weekly narrative digest. Writes to `vault/reflections/`. Read by operator + lifecycle-worker presence.
 
-**Phase:** 6 Lifecycle · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 6 Lifecycle · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
@@ -63,6 +63,11 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 — vscode-cc-sonnet47 — claim
+
+- Claimed slice atomically via `gh issue edit 14 --add-assignee @me`. Issue #14, PR #57 (draft).
+- Branch `slice/slice-lifecycle-reflection` off `v2`.
 
 ## Cross-slice tickets opened by this slice
 
