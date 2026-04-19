@@ -4,7 +4,7 @@ slice_id: slice-retrieval-blended
 section: _slices
 type: slice
 status: in-progress
-owner: gemini-3-1-pro-hana
+owner: gemini-2-0-flash
 phase: "5 Retrieval"
 tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-17
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-retrieval-orchestration]]"]
 
 > Single ranked list across planes with de-dup, lineage, provenance weight.
 
-**Phase:** 4 Planes · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 4 Planes · **Status:** `in-progress` · **Owner:** `gemini-2-0-flash`
 
 ## Specs to implement
 
@@ -72,3 +72,7 @@ Agents append one entry per work session. Format:
 ## PR links
 
 - _(none yet)_
+
+### 2026-04-19 — gemini-2-0-flash — claim
+
+- Claimed slice via Issue #26. Draft PR #79.
