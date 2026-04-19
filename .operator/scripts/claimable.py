@@ -183,9 +183,7 @@ def load_slices() -> dict[str, Slice]:
 
         # Specs: wikilinks under "## Specs to implement"
         spec_links: list[str] = []
-        m = re.search(
-            r"^##\s+Specs to implement\s*\n(.*?)(?=^##\s|\Z)", body, re.M | re.S
-        )
+        m = re.search(r"^##\s+Specs to implement\s*\n(.*?)(?=^##\s|\Z)", body, re.M | re.S)
         if m:
             spec_links = _extract_wikilinks(m.group(1))
 
@@ -218,11 +216,17 @@ def load_issues() -> dict[str, Issue]:
     try:
         out = subprocess.run(
             [
-                "gh", "issue", "list",
-                "--label", "slice",
-                "--state", "all",
-                "--limit", "200",
-                "--json", "number,title,state,labels,assignees",
+                "gh",
+                "issue",
+                "list",
+                "--label",
+                "slice",
+                "--state",
+                "all",
+                "--limit",
+                "200",
+                "--json",
+                "number,title,state,labels,assignees",
             ],
             check=True,
             capture_output=True,
@@ -283,11 +287,7 @@ def compute_claimability(slices: dict[str, Slice]) -> None:
                 continue
             # Tolerate the race where Issue is closed but vault frontmatter
             # hasn't been flipped to "done" yet (operator follows up within hours).
-            if (
-                dep.status == "in-review"
-                and dep.issue is not None
-                and dep.issue.state == "CLOSED"
-            ):
+            if dep.status == "in-review" and dep.issue is not None and dep.issue.state == "CLOSED":
                 continue
             unmet.append(f"{dep_id}({dep.status})")
 
@@ -483,9 +483,7 @@ def cmd_verify(slices: dict[str, Slice], slice_id: str) -> int:
             if not abs_dir.exists():
                 continue
             siblings = [
-                f.name
-                for f in abs_dir.glob("*.py")
-                if f.name != "__init__.py" and f.name != fname
+                f.name for f in abs_dir.glob("*.py") if f.name != "__init__.py" and f.name != fname
             ]
             if siblings and "_" in fname:
                 sibling_has_underscore = any("_" in sb for sb in siblings)
@@ -527,14 +525,10 @@ def main(argv: list[str]) -> int:
         help="filter to slices claimable right now",
     )
 
-    p_brief = sub.add_parser(
-        "brief", help="emit pasteable brief-block for a slice"
-    )
+    p_brief = sub.add_parser("brief", help="emit pasteable brief-block for a slice")
     p_brief.add_argument("slice_id")
 
-    p_verify = sub.add_parser(
-        "verify", help="sanity-check a slice file against ground truth"
-    )
+    p_verify = sub.add_parser("verify", help="sanity-check a slice file against ground truth")
     p_verify.add_argument("slice_id")
 
     args = parser.parse_args(argv)
