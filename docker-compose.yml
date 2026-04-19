@@ -115,7 +115,8 @@ services:
   core:
     image: ghcr.io/ericmey/musubi-core:v1.0.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
     env_file:
-      - /etc/musubi/.env.production
+      - path: /etc/musubi/.env.production
+        required: false
     volumes:
       - /var/lib/musubi/vault:/var/lib/musubi/vault
       - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
