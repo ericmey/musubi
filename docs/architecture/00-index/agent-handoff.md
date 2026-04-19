@@ -64,6 +64,17 @@ How coding agents coordinate without stepping on each other. This is a *protocol
 - Check [[00-index/definition-of-done]] line-by-line before requesting review.
 - Any CI failure reverts you to step 5.
 
+#### Reviewer notes — where they land
+
+PR review comments are transient: once the PR merges, they fade into the PR timeline and are no longer discoverable to the next agent picking up the slice. To keep reviewer findings durable, reviewers use the following homes:
+
+- **Merge-blockers (Must-fix).** Do not approve. Comment on the PR; the author pushes a fix; re-review.
+- **Non-blocking gaps inside the slice's scope (Should-fix).** Append a `### Known gaps at in-review — <YYYY-MM-DD> — <reviewer-id>` subsection to the slice's **Work log** in the same PR (push an extra commit to the PR branch, scoped to the slice file only). List each gap with its `src/…` path + line range + remedy. These items must be closed before the slice flips `status: done`.
+- **Non-blocking gaps outside the slice's scope (e.g. tool bugs, infrastructure).** Open a GitHub Issue with `type:followup` + the relevant `area:*` label + `priority:low`. Link the originating PR review comment.
+- **Stylistic / future-wondering / nice-to-haves (Nits).** PR comment only. Do not promote to the work log unless the author or reviewer judges they cross the Should-fix threshold.
+
+The rule: **if a reviewer note has to survive a PR merge to be useful, it goes in the slice work log or an Issue. Never leave actionable findings only on the PR timeline.**
+
 ### 7. Cross-slice coordination
 
 If your slice needs a change outside `owns_paths`:
