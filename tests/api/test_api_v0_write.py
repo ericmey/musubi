@@ -31,7 +31,6 @@ from fastapi.testclient import TestClient
 from musubi.planes.episodic import EpisodicPlane
 from musubi.types.episodic import EpisodicMemory
 
-
 # ---------------------------------------------------------------------------
 # Capture
 # ---------------------------------------------------------------------------
@@ -112,17 +111,12 @@ def test_capture_missing_token_returns_401(client: TestClient) -> None:
     assert r.json()["error"]["code"] == "UNAUTHORIZED"
 
 
-def test_batch_capture_writes_each_row(
-    client: TestClient, valid_token: str
-) -> None:
+def test_batch_capture_writes_each_row(client: TestClient, valid_token: str) -> None:
     headers = {"Authorization": f"Bearer {valid_token}"}
     namespace = "eric/claude-code/episodic"
     body = {
         "namespace": namespace,
-        "items": [
-            {"content": f"batch-row-{i}-uniq", "importance": 5}
-            for i in range(3)
-        ],
+        "items": [{"content": f"batch-row-{i}-uniq", "importance": 5} for i in range(3)],
     }
     r = client.post("/v1/memories/batch", headers=headers, json=body)
     assert r.status_code == 202
@@ -148,7 +142,7 @@ def test_patch_episodic_updates_tags_and_importance(
         saved = await episodic.create(
             EpisodicMemory(namespace=namespace, content="patchable", importance=3)
         )
-        return saved.object_id
+        return str(saved.object_id)
 
     oid = asyncio.run(_seed())
     r = client.patch(
@@ -177,7 +171,7 @@ def test_patch_rejects_state_field_changes(
         saved = await episodic.create(
             EpisodicMemory(namespace=namespace, content="state-patch-attempt")
         )
-        return saved.object_id
+        return str(saved.object_id)
 
     oid = asyncio.run(_seed())
     r = client.patch(
@@ -204,7 +198,7 @@ def test_delete_episodic_soft_archives(
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="bye"))
-        return saved.object_id
+        return str(saved.object_id)
 
     oid = asyncio.run(_seed())
     r = client.delete(
@@ -227,13 +221,13 @@ def test_delete_episodic_hard_requires_operator(
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="hardbye"))
-        return saved.object_id
+        return str(saved.object_id)
 
     oid = asyncio.run(_seed())
     r = client.delete(
-        f"/v1/memories/{oid}?hard=true",
+        f"/v1/memories/{oid}",
         headers={"Authorization": f"Bearer {valid_token}"},
-        params={"namespace": namespace},
+        params={"namespace": namespace, "hard": "true"},
     )
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "FORBIDDEN"
@@ -252,8 +246,10 @@ def test_lifecycle_transition_routes_to_canonical_primitive(
     namespace = "eric/claude-code/episodic"
 
     async def _seed() -> str:
-        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="transition-target"))
-        return saved.object_id
+        saved = await episodic.create(
+            EpisodicMemory(namespace=namespace, content="transition-target")
+        )
+        return str(saved.object_id)
 
     oid = asyncio.run(_seed())
     r = client.post(
@@ -283,7 +279,7 @@ def test_lifecycle_transition_illegal_returns_400(
 
     async def _seed() -> str:
         saved = await episodic.create(EpisodicMemory(namespace=namespace, content="illegal-target"))
-        return saved.object_id
+        return str(saved.object_id)
 
     oid = asyncio.run(_seed())
     r = client.post(
@@ -360,9 +356,9 @@ def test_concept_reinforce_bumps_count(
     api_settings: object,
     concept: object,
 ) -> None:
-    from tests.api.conftest import mint_token
     from musubi.types.common import generate_ksuid
     from musubi.types.concept import SynthesizedConcept
+    from tests.api.conftest import mint_token
 
     namespace = "eric/claude-code/concept"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
@@ -377,7 +373,7 @@ def test_concept_reinforce_bumps_count(
                 merged_from=[generate_ksuid() for _ in range(3)],
             )
         )
-        return saved.object_id
+        return str(saved.object_id)
 
     oid = asyncio.run(_seed())
     r = client.post(
@@ -427,9 +423,10 @@ def test_artifact_archive_soft_deletes(
     api_settings: object,
     artifact: object,
 ) -> None:
-    from tests.api.conftest import mint_token
-    from musubi.types.artifact import SourceArtifact
     import hashlib
+
+    from musubi.types.artifact import SourceArtifact
+    from tests.api.conftest import mint_token
 
     namespace = "eric/claude-code/artifact"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
@@ -438,15 +435,15 @@ def test_artifact_archive_soft_deletes(
         saved = await artifact.create(  # type: ignore[attr-defined]
             SourceArtifact(
                 namespace=namespace,
-                content="placeholder",
                 title="archive-target",
-                source_system="seed",
-                source_ref="seed",
-                content_type="text/plain",
+                filename="archive.txt",
                 sha256=hashlib.sha256(b"placeholder").hexdigest(),
+                content_type="text/plain",
+                size_bytes=11,
+                chunker="markdown-headings-v1",
             )
         )
-        return saved.object_id
+        return str(saved.object_id)
 
     oid = asyncio.run(_seed())
     r = client.post(
@@ -649,6 +646,7 @@ def test_ndjson_retrieve_stream_yields_per_result(
     assert len(lines) >= 1
     # Each line must be valid JSON.
     import json as _json
+
     for line in lines:
         row = _json.loads(line)
         assert "object_id" in row
@@ -772,6 +770,76 @@ def test_patch_curated_returns_404_when_missing(
         headers={"Authorization": f"Bearer {token}"},
         params={"namespace": namespace},
         json={"importance": 8},
+    )
+    assert r.status_code == 404
+
+
+def test_patch_curated_updates_and_delete_archives(
+    client: TestClient,
+    api_settings: object,
+    curated: object,
+) -> None:
+    """Round-trip the PATCH (importance/topics) + DELETE (soft-archive)
+    surfaces on a real curated row to cover the writes_curated handlers."""
+    import hashlib
+
+    from tests.api.conftest import mint_token
+
+    namespace = "eric/claude-code/curated"
+    token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
+    headers = {"Authorization": f"Bearer {token}"}
+    body_text = "Patch round trip body."
+    create_body = {
+        "namespace": namespace,
+        "title": "Patch+Delete target",
+        "content": body_text,
+        "vault_path": "curated/eric/patch-delete.md",
+        "body_hash": hashlib.sha256(body_text.encode()).hexdigest(),
+    }
+    r = client.post("/v1/curated-knowledge", headers=headers, json=create_body)
+    assert r.status_code == 202
+    oid = r.json()["object_id"]
+
+    p = client.patch(
+        f"/v1/curated-knowledge/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+        json={"importance": 10, "topics": ["patched-topic"]},
+    )
+    assert p.status_code == 200
+    assert p.json()["importance"] == 10
+    assert "patched-topic" in p.json()["topics"]
+
+    p_state = client.patch(
+        f"/v1/curated-knowledge/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+        json={"state": "matured"},
+    )
+    assert p_state.status_code == 400
+
+    d = client.delete(
+        f"/v1/curated-knowledge/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert d.status_code == 200
+    refreshed = asyncio.run(curated.get(namespace=namespace, object_id=oid))  # type: ignore[attr-defined]
+    assert refreshed is not None and refreshed.state == "archived"
+
+
+def test_delete_curated_404_when_missing(
+    client: TestClient,
+    api_settings: object,
+) -> None:
+    from tests.api.conftest import mint_token
+
+    namespace = "eric/claude-code/curated"
+    token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
+    r = client.delete(
+        "/v1/curated-knowledge/0000000000000000000000000000",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"namespace": namespace},
     )
     assert r.status_code == 404
 

@@ -131,6 +131,20 @@ def client(app_factory: object) -> Iterator[TestClient]:
         yield c
 
 
+@pytest.fixture(autouse=True)
+def _reset_global_middleware_state() -> Iterator[None]:
+    """Reset process-wide rate-limit + idempotency caches between tests
+    so one test's burst doesn't leak ceilings into the next."""
+    from musubi.api.idempotency import _GLOBAL_CACHE
+    from musubi.api.rate_limit import _GLOBAL_LIMITER
+
+    _GLOBAL_LIMITER.reset_for_test()
+    _GLOBAL_CACHE._entries.clear()
+    yield
+    _GLOBAL_LIMITER.reset_for_test()
+    _GLOBAL_CACHE._entries.clear()
+
+
 # ---------------------------------------------------------------------------
 # Token helpers
 # ---------------------------------------------------------------------------
@@ -167,11 +181,11 @@ def valid_token(api_settings: Settings) -> str:
     return mint_token(
         api_settings,
         scopes=[
-            "eric/claude-code/episodic:r",
-            "eric/claude-code/curated:r",
-            "eric/claude-code/concept:r",
-            "eric/claude-code/artifact:r",
-            "eric/claude-code/thought:r",
+            "eric/claude-code/episodic:rw",
+            "eric/claude-code/curated:rw",
+            "eric/claude-code/concept:rw",
+            "eric/claude-code/artifact:rw",
+            "eric/claude-code/thought:rw",
         ],
     )
 
