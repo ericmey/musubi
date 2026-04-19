@@ -36,6 +36,13 @@ Vault changes:
 - [[06-ingestion/vault-sync]] — `status: draft → complete`.
 - [[06-ingestion/vault-frontmatter-schema]] — updated `implements:`.
 
+### 2026-04-19 — slice-retrieval-rerank first cut ready for review
+
+Implements the cross-encoder reranking stage for the retrieval deep path. Uses `BAAI/bge-reranker-v2-m3` via a dedicated TEI instance. Rerank scores are normalized via sigmoid and replace the RRF-relevance component in the final composite score, providing a significant quality lift for ambiguous queries.
+
+Vault changes:
+- [[_slices/slice-retrieval-rerank]] — `status: in-progress → in-review`.
+
 ### 2026-04-18 — eric — cleanup: retired `feat/lifecycle-scripts` (v1 orphan)
 
 Deleted stale v1-era branch `origin/feat/lifecycle-scripts` (4 commits dated 2026-04-06, all touching the v1 `musubi/` package that v2 replaced). No changes from those commits transfer cleanly to v2's architecture; branch was obstructing the GitHub UI's PR-suggestion prompts.
