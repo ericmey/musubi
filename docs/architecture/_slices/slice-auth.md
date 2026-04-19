@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-config]]"]
-blocks: ["[[_slices/slice-api-v0]]"]
+blocks: ["[[_slices/slice-api-v0-read]]"]
 ---
 
 # Slice: Auth middleware
@@ -40,7 +40,7 @@ Start this slice only after every upstream slice has `status: done`.
 
 ## Unblocks
 
-- [[_slices/slice-api-v0]]
+- [[_slices/slice-api-v0-read]]
 
 ## Definition of Done
 
