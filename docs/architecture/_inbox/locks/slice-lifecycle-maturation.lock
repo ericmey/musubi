@@ -1,5 +1,0 @@
-agent: vscode-cc-sonnet47
-issue: 12
-started: 2026-04-19T16:57:36Z
-branch: slice/slice-lifecycle-maturation
-note: Secondary lock per agent-guardrails §Locking. Removed at handoff.
