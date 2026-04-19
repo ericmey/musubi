@@ -61,7 +61,6 @@ from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
 from musubi.types.episodic import EpisodicMemory
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -91,9 +90,7 @@ def ns() -> str:
 
 @pytest.fixture
 def sink(tmp_path: Path) -> Iterator[LifecycleEventSink]:
-    s = LifecycleEventSink(
-        db_path=tmp_path / "events.db", flush_every_n=10, flush_every_s=1.0
-    )
+    s = LifecycleEventSink(db_path=tmp_path / "events.db", flush_every_n=10, flush_every_s=1.0)
     try:
         yield s
     finally:
@@ -133,17 +130,13 @@ class FakeOllama:
         self.score_calls: list[list[OllamaImportance]] = []
         self.topic_calls: list[list[OllamaTopic]] = []
 
-    async def score_importance(
-        self, items: list[OllamaImportance]
-    ) -> dict[str, int] | None:
+    async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
         self.score_calls.append(list(items))
         if not self.available:
             return None
         return {item.object_id: self.importance for item in items}
 
-    async def infer_topics(
-        self, items: list[OllamaTopic]
-    ) -> dict[str, list[str]] | None:
+    async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
         self.topic_calls.append(list(items))
         if not self.available:
             return None
@@ -181,7 +174,7 @@ async def _seed_provisional(
     epoch = backdate.timestamp()
     from qdrant_client import models as qmodels
 
-    plane._client.set_payload(  # noqa: SLF001 — test-only back-dating
+    plane._client.set_payload(
         collection_name="musubi_episodic",
         payload={
             "created_at": backdate.isoformat(),
@@ -189,7 +182,7 @@ async def _seed_provisional(
             "updated_at": backdate.isoformat(),
             "updated_epoch": epoch,
         },
-        points_selector=qmodels.Filter(
+        points=qmodels.Filter(
             must=[
                 qmodels.FieldCondition(
                     key="object_id", match=qmodels.MatchValue(value=saved.object_id)
@@ -218,9 +211,7 @@ def _config(**overrides: object) -> MaturationConfig:
 
 
 def _read_state(plane: EpisodicPlane, ns: str, object_id: str) -> str | None:
-    mem = asyncio.get_event_loop().run_until_complete(
-        plane.get(namespace=ns, object_id=object_id)
-    )
+    mem = asyncio.get_event_loop().run_until_complete(plane.get(namespace=ns, object_id=object_id))
     return mem.state if mem else None
 
 
@@ -308,7 +299,7 @@ async def test_cursor_resumes_across_runs(
 
     # Second run: a fresh cursor object reading the same db must pick up
     # where the first one left off.
-    cursor2 = MaturationCursor(db_path=cursor._db_path)  # noqa: SLF001 — test re-open
+    cursor2 = MaturationCursor(db_path=cursor._db_path)
     second = await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
@@ -544,9 +535,7 @@ async def test_transition_uses_typed_function(
     sink.flush()
     events = sink.read_all()
     matured_events = [
-        e
-        for e in events
-        if e.object_id == seeded.object_id and e.to_state == "matured"
+        e for e in events if e.object_id == seeded.object_id and e.to_state == "matured"
     ]
     assert len(matured_events) == 1
     assert matured_events[0].reason == "maturation-sweep"
@@ -647,11 +636,7 @@ async def test_archival_emits_lifecycle_event(
     )
     sink.flush()
     events = sink.read_all()
-    archived = [
-        e
-        for e in events
-        if e.object_id == aged.object_id and e.to_state == "archived"
-    ]
+    archived = [e for e in events if e.object_id == aged.object_id and e.to_state == "archived"]
     assert len(archived) == 1
     assert archived[0].reason == "provisional-ttl"
 
@@ -695,7 +680,9 @@ def test_hypothesis_no_matured_memory_has_created_epoch_in_the_future() -> None:
     "(provisional > 7d always archived after one sweep) is exercised by "
     "test_provisional_older_than_7d_archived; full hypothesis run deferred."
 )
-def test_hypothesis_provisional_memories_older_than_7d_are_always_archived_after_one_sweep() -> None:
+def test_hypothesis_provisional_memories_older_than_7d_are_always_archived_after_one_sweep() -> (
+    None
+):
     """Bullet 22 placeholder."""
 
 
@@ -758,3 +745,304 @@ async def test_ttl_sweep_is_no_op_when_nothing_aged(
         config=_config(provisional_ttl_sec=7 * 86400),
     )
     assert report.transitioned == 0
+
+
+# ---------------------------------------------------------------------------
+# Coverage for the scope-extension sweeps + scheduler wiring — not Test
+# Contract bullets, but they ship in this slice so coverage clears the
+# 85 % gate for src/musubi/lifecycle/**.
+# ---------------------------------------------------------------------------
+
+
+async def test_episodic_demotion_sweep_demotes_inactive_matured_rows(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+) -> None:
+    """Matured row whose ``updated_epoch`` is older than the inactivity
+    cutoff is demoted; recently-active matured row is left alone."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import episodic_demotion_sweep
+
+    inactive = await _seed_provisional(plane, ns, content="demote-target", age_seconds=40 * 86400)
+    await plane.transition(
+        namespace=ns,
+        object_id=inactive.object_id,
+        to_state="matured",
+        actor="seed",
+        reason="seed",
+    )
+    backdate = datetime.now(UTC) - timedelta(days=40)
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={
+            "updated_at": backdate.isoformat(),
+            "updated_epoch": backdate.timestamp(),
+        },
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=inactive.object_id)
+                )
+            ]
+        ),
+    )
+    active = await plane.create(EpisodicMemory(namespace=ns, content="still-active"))
+    await plane.transition(
+        namespace=ns,
+        object_id=active.object_id,
+        to_state="matured",
+        actor="seed",
+        reason="seed",
+    )
+
+    report = await episodic_demotion_sweep(
+        client=qdrant,
+        sink=sink,
+        config=_config(demotion_inactivity_sec=30 * 86400),
+    )
+    assert report.transitioned == 1
+    refreshed_inactive = await plane.get(namespace=ns, object_id=inactive.object_id)
+    refreshed_active = await plane.get(namespace=ns, object_id=active.object_id)
+    assert refreshed_inactive is not None and refreshed_inactive.state == "demoted"
+    assert refreshed_active is not None and refreshed_active.state == "matured"
+
+
+async def test_episodic_demotion_sweep_no_op_when_empty(
+    qdrant: QdrantClient, sink: LifecycleEventSink
+) -> None:
+    from musubi.lifecycle.maturation import episodic_demotion_sweep
+
+    report = await episodic_demotion_sweep(client=qdrant, sink=sink, config=_config())
+    assert report.selected == 0
+
+
+async def test_concept_maturation_sweep_promotes_eligible(
+    qdrant: QdrantClient, sink: LifecycleEventSink
+) -> None:
+    """A synthesized concept past the quiet window with sufficient
+    reinforcement matures; one below the threshold is left alone."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import concept_maturation_sweep
+    from musubi.planes.concept import ConceptPlane
+    from musubi.types.common import generate_ksuid
+    from musubi.types.concept import SynthesizedConcept
+
+    plane = ConceptPlane(client=qdrant, embedder=FakeEmbedder())
+    eligible = await plane.create(
+        SynthesizedConcept(
+            namespace="eric/claude-code/concept",
+            title="GPU host pattern",
+            content="Pattern across CUDA bumps.",
+            synthesis_rationale="Three episodic memories about CUDA upgrades cluster.",
+            merged_from=[generate_ksuid() for _ in range(3)],
+        )
+    )
+    not_yet = await plane.create(
+        SynthesizedConcept(
+            namespace="eric/claude-code/concept",
+            title="Networking pattern",
+            content="Recent observation; not yet reinforced.",
+            synthesis_rationale="Only one source so far.",
+            merged_from=[generate_ksuid() for _ in range(3)],
+        )
+    )
+    for _ in range(3):
+        await plane.reinforce(namespace="eric/claude-code/concept", object_id=eligible.object_id)
+    backdate = datetime.now(UTC) - timedelta(days=2)
+    for cid in (eligible.object_id, not_yet.object_id):
+        qdrant.set_payload(
+            collection_name="musubi_concept",
+            payload={
+                "created_at": backdate.isoformat(),
+                "created_epoch": backdate.timestamp(),
+            },
+            points=qmodels.Filter(
+                must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=cid))]
+            ),
+        )
+
+    report = await concept_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        config=_config(concept_min_age_sec=24 * 3600, concept_reinforcement_threshold=3),
+    )
+    assert report.transitioned == 1
+    refreshed_eligible = await plane.get(
+        namespace="eric/claude-code/concept", object_id=eligible.object_id
+    )
+    refreshed_not_yet = await plane.get(
+        namespace="eric/claude-code/concept", object_id=not_yet.object_id
+    )
+    assert refreshed_eligible is not None and refreshed_eligible.state == "matured"
+    assert refreshed_not_yet is not None and refreshed_not_yet.state == "synthesized"
+
+
+async def test_concept_demotion_sweep_demotes_inactive(
+    qdrant: QdrantClient, sink: LifecycleEventSink
+) -> None:
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import concept_demotion_sweep
+    from musubi.planes.concept import ConceptPlane
+    from musubi.types.common import generate_ksuid
+    from musubi.types.concept import SynthesizedConcept
+
+    plane = ConceptPlane(client=qdrant, embedder=FakeEmbedder())
+    saved = await plane.create(
+        SynthesizedConcept(
+            namespace="eric/claude-code/concept",
+            title="Inactive pattern",
+            content="Hasn't been reinforced in a while.",
+            synthesis_rationale="Initial cluster of three.",
+            merged_from=[generate_ksuid() for _ in range(3)],
+        )
+    )
+    await plane.transition(
+        namespace="eric/claude-code/concept",
+        object_id=saved.object_id,
+        to_state="matured",
+        actor="seed",
+        reason="seed",
+    )
+    backdate = datetime.now(UTC) - timedelta(days=40)
+    qdrant.set_payload(
+        collection_name="musubi_concept",
+        payload={
+            "updated_at": backdate.isoformat(),
+            "updated_epoch": backdate.timestamp(),
+        },
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=saved.object_id)
+                )
+            ]
+        ),
+    )
+    report = await concept_demotion_sweep(
+        client=qdrant,
+        sink=sink,
+        config=_config(demotion_inactivity_sec=30 * 86400),
+    )
+    assert report.transitioned == 1
+    refreshed = await plane.get(namespace="eric/claude-code/concept", object_id=saved.object_id)
+    assert refreshed is not None and refreshed.state == "demoted"
+
+
+async def test_concept_maturation_sweep_no_op_when_empty(
+    qdrant: QdrantClient, sink: LifecycleEventSink
+) -> None:
+    from musubi.lifecycle.maturation import concept_maturation_sweep
+
+    report = await concept_maturation_sweep(client=qdrant, sink=sink, config=_config())
+    assert report.selected == 0
+
+
+async def test_concept_demotion_sweep_no_op_when_empty(
+    qdrant: QdrantClient, sink: LifecycleEventSink
+) -> None:
+    from musubi.lifecycle.maturation import concept_demotion_sweep
+
+    report = await concept_demotion_sweep(client=qdrant, sink=sink, config=_config())
+    assert report.selected == 0
+
+
+def test_default_ollama_client_returns_loud_stub() -> None:
+    from musubi.lifecycle.maturation import _NotConfiguredOllama, default_ollama_client
+
+    client = default_ollama_client()
+    assert isinstance(client, _NotConfiguredOllama)
+
+
+def test_build_maturation_jobs_registers_documented_names(
+    tmp_path: Path,
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """The five Job names this module owns line up with the lifecycle
+    scheduler's default-job registry exactly. Drift here would silently
+    keep the placeholder lambdas in production."""
+    from musubi.lifecycle.maturation import build_maturation_jobs
+
+    jobs = build_maturation_jobs(
+        client=qdrant,
+        sink=sink,
+        ollama=FakeOllama(),
+        cursor=cursor,
+        lock_dir=tmp_path / "locks",
+        config=_config(),
+    )
+    names = {j.name for j in jobs}
+    assert names == {
+        "maturation_episodic",
+        "provisional_ttl",
+        "demotion_episodic",
+        "concept_maturation",
+        "demotion_concept",
+    }
+    for job in jobs:
+        assert callable(job.func)
+        assert isinstance(job.trigger_kwargs, dict)
+
+
+def test_build_maturation_jobs_runner_skips_when_lock_held(
+    tmp_path: Path,
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """Wrapped jobs acquire the per-job file lock before running. We
+    verify by holding the lock externally and confirming the job's
+    runner returns cleanly without doing work."""
+    from musubi.lifecycle.maturation import build_maturation_jobs
+
+    jobs = build_maturation_jobs(
+        client=qdrant,
+        sink=sink,
+        ollama=FakeOllama(),
+        cursor=cursor,
+        lock_dir=tmp_path / "locks",
+        config=_config(),
+    )
+    by_name = {j.name: j for j in jobs}
+    target = by_name["maturation_episodic"]
+    lock_path = tmp_path / "locks" / "maturation_episodic.lock"
+    with file_lock(lock_path) as got:
+        assert got is True
+        target.func()  # observes lock, returns no-op
+    # Lock free again — runs cleanly against an empty plane.
+    target.func()
+
+
+def test_normalize_tags_drops_empty_strings() -> None:
+    out = normalize_tags(["", "   ", "real-tag"], aliases={})
+    assert out == ["real-tag"]
+
+
+async def test_supersession_no_predecessor_match(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """Supersession hint with no plausible predecessor leaves the new row
+    matured cleanly with empty ``supersedes`` — covers the
+    ``_find_supersession_candidate`` returns-None branch."""
+    new_row = await _seed_provisional(plane, ns, content="Update: novel-only-content")
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        ollama=FakeOllama(),
+        cursor=cursor,
+        config=_config(),
+    )
+    refreshed = await plane.get(namespace=ns, object_id=new_row.object_id)
+    assert refreshed is not None
+    assert refreshed.state == "matured"
+    assert refreshed.supersedes == []
