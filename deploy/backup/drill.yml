@@ -1,0 +1,26 @@
+---
+- name: Restore drill bootstrap
+  ansible.builtin.import_playbook: ../ansible/bootstrap.yml
+
+- name: Restore drill data
+  ansible.builtin.import_playbook: restore.yml
+
+- name: Validate restored Musubi
+  hosts: musubi
+  become: true
+  tasks:
+    - name: Rebuild curated index during drill
+      ansible.builtin.command:
+        cmd: musubi-cli index rebuild --collection musubi_curated --source /var/lib/musubi/vault
+      changed_when: true
+
+    - name: Rechunk artifacts during drill
+      ansible.builtin.command:
+        cmd: musubi-cli artifacts rechunk --all
+      changed_when: true
+
+    - name: Run restore smoke suite
+      ansible.builtin.command: musubi-contract-smoke --target http://127.0.0.1:8100
+      async: 300
+      poll: 10
+      changed_when: false
