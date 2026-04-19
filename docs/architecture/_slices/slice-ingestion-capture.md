@@ -25,13 +25,16 @@ blocks: ["[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-livekit]]"]
 
 ## Owned paths (you MAY write here)
 
-- `musubi/ingestion/capture.py`
+- `src/musubi/ingestion/capture.py`
 - `tests/ingestion/test_capture.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `musubi/lifecycle/`
-- `musubi/planes/`
+- `src/musubi/lifecycle/`
+- `src/musubi/planes/`
+- `src/musubi/api/`
+- `src/musubi/retrieve/`
+- `src/musubi/types/`
 
 ## Depends on
 
