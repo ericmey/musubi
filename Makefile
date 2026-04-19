@@ -6,19 +6,22 @@
         tc-coverage
 
 # --------------------------------------------------------------------------
-# Code gates — scoped to src/ + tests/ so vault tooling under
-# docs/architecture/_tools/ doesn't block code-only workflows. To exercise
-# the vault tooling lint, run `uv run ruff check .` explicitly.
+# Code gates — ruff format + lint are scoped to the whole repo (matching
+# `.github/workflows/ci.yml`'s `ruff format --check .` / `ruff check .`),
+# so that _tools/*.py drift can't turn an agent's "make check green" into
+# "CI red." mypy + pytest stay scoped to src/ + tests/ because those paths
+# are the typed / tested modules; _tools/ are scripts that mypy-strict
+# would flag for reasons unrelated to slice correctness.
 # --------------------------------------------------------------------------
 
 install:
 	uv sync --extra dev
 
 fmt:
-	uv run ruff format src tests
+	uv run ruff format .
 
 lint:
-	uv run ruff check src tests
+	uv run ruff check .
 
 typecheck:
 	uv run mypy src tests
@@ -31,8 +34,8 @@ test-cov:
 
 # Full gate for slice-worker handoff. Runs fmt (check-only) + lint + typecheck + test + coverage.
 check:
-	uv run ruff format --check src tests
-	uv run ruff check src tests
+	uv run ruff format --check .
+	uv run ruff check .
 	uv run mypy src tests
 	uv run pytest --cov=musubi --cov-report=term --cov-fail-under=85
 	@echo "All checks passed."

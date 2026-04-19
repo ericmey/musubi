@@ -80,9 +80,7 @@ def parse_slice(path: Path) -> Slice:
 
     # Pull spec wikilinks from the "Specs to implement" section.
     specs: list[str] = []
-    spec_section = re.search(
-        r"## Specs? to implement\s*\n((?:-\s*\[\[.*?\]\]\s*\n)+)", body
-    )
+    spec_section = re.search(r"## Specs? to implement\s*\n((?:-\s*\[\[.*?\]\]\s*\n)+)", body)
     if spec_section:
         specs = re.findall(r"\[\[([^\]]+)\]\]", spec_section.group(1))
 
@@ -100,7 +98,11 @@ def parse_slice(path: Path) -> Slice:
 
 
 def status_label(status: str) -> str:
-    return f"status:{status}" if status in {"ready", "in-progress", "in-review", "blocked", "done"} else "status:ready"
+    return (
+        f"status:{status}"
+        if status in {"ready", "in-progress", "in-review", "blocked", "done"}
+        else "status:ready"
+    )
 
 
 def render_body(s: Slice, all_slices: dict[str, Slice]) -> str:
@@ -151,7 +153,9 @@ def render_body(s: Slice, all_slices: dict[str, Slice]) -> str:
     lines.append("## How to claim")
     lines.append("")
     lines.append("```")
-    lines.append(f"gh issue edit $(gh issue list --search 'slice: {s.id}' --json number --jq '.[0].number') \\")
+    lines.append(
+        f"gh issue edit $(gh issue list --search 'slice: {s.id}' --json number --jq '.[0].number') \\"
+    )
     lines.append("  --add-assignee @me \\")
     lines.append("  --add-label 'status:in-progress' --remove-label 'status:ready'")
     lines.append("```")
@@ -168,9 +172,22 @@ def render_body(s: Slice, all_slices: dict[str, Slice]) -> str:
 def existing_slice_issues() -> dict[str, int]:
     """Map ``slice-id`` → Issue number for any pre-existing slice Issues."""
     result = subprocess.run(
-        ["gh", "issue", "list", "--label", "slice", "--state", "all",
-         "--limit", "200", "--json", "number,title"],
-        check=True, capture_output=True, text=True,
+        [
+            "gh",
+            "issue",
+            "list",
+            "--label",
+            "slice",
+            "--state",
+            "all",
+            "--limit",
+            "200",
+            "--json",
+            "number,title",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     )
     out: dict[str, int] = {}
     for item in json.loads(result.stdout):
@@ -183,8 +200,9 @@ def existing_slice_issues() -> dict[str, int]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--apply", action="store_true",
-                    help="Actually create Issues; default is dry-run.")
+    ap.add_argument(
+        "--apply", action="store_true", help="Actually create Issues; default is dry-run."
+    )
     args = ap.parse_args()
 
     slices: dict[str, Slice] = {}
@@ -214,11 +232,17 @@ def main() -> int:
         else:
             body = render_body(s, slices)
             cmd = [
-                "gh", "issue", "create",
-                "--title", f"slice: {sid}",
-                "--body", body,
-                "--label", "slice",
-                "--label", status_lbl,
+                "gh",
+                "issue",
+                "create",
+                "--title",
+                f"slice: {sid}",
+                "--body",
+                body,
+                "--label",
+                "slice",
+                "--label",
+                status_lbl,
             ]
             if phase_lbl:
                 cmd += ["--label", phase_lbl]
@@ -232,7 +256,9 @@ def main() -> int:
         print(f"{sid:<42}  {s.status:<14}  {s.phase:<20}  {action}")
 
     print()
-    print(f"Summary: {created} created, {skipped} already existed, {len(slices) - created - skipped} unprocessed.")
+    print(
+        f"Summary: {created} created, {skipped} already existed, {len(slices) - created - skipped} unprocessed."
+    )
     if not args.apply:
         print("(dry run — pass --apply to actually create)")
     return 0
