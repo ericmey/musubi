@@ -3,11 +3,11 @@ title: "Slice: Lifecycle scheduler"
 slice_id: slice-lifecycle-engine
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: cowork-auto
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]"]
 blocks: ["[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-lifecycle-promotion]]", "[[_slices/slice-lifecycle-reflection]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-lifecycle-sy
 
 > APScheduler-based worker. Emits LifecycleEvents. Idempotent per-job. Separate process from the API.
 
-**Phase:** 6 Lifecycle · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 6 Lifecycle · **Status:** `in-progress` · **Owner:** `cowork-auto`
 
 ## Specs to implement
 
