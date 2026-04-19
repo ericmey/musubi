@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any
 
 from musubi.vault.frontmatter import CuratedFrontmatter, dump_frontmatter
 from musubi.vault.writelog import WriteLog

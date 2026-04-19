@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -17,7 +17,7 @@ from musubi.vault.frontmatter import (
 
 
 def _valid_fm_dict(**kwargs: Any) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     base = {
         "object_id": generate_ksuid(),
         "namespace": "eric/shared/curated",
@@ -38,13 +38,13 @@ title: "Deploy LiveKit agent"
 
 # Body
 """
-    data, body = parse_frontmatter(text)
+    data, _body = parse_frontmatter(text)
     assert data == {"title": "Deploy LiveKit agent"}
-    assert body == "# Body"
+    assert _body == "# Body"
 
 
 def test_fully_populated_file_parses() -> None:
-    now = datetime(2026, 4, 17, 9, 3, 55, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 17, 9, 3, 55, tzinfo=UTC)
     ksuid = generate_ksuid()
     text = f"""---
 object_id: {ksuid}
@@ -64,7 +64,7 @@ updated: 2026-04-17T09:03:55Z
 
 # Content
 """
-    data, body = parse_frontmatter(text)
+    data, _body = parse_frontmatter(text)
     model = CuratedFrontmatter.model_validate(data)
     assert model.object_id == ksuid
     assert model.title == "CUDA 13 setup notes"
@@ -133,7 +133,7 @@ def test_tag_aliases_applied_on_write() -> None:
 
 
 def test_datetime_serialized_with_z() -> None:
-    now = datetime(2026, 4, 17, 9, 0, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 4, 17, 9, 0, 0, tzinfo=UTC)
     data = _valid_fm_dict(updated=now)
     text = dump_frontmatter(data, "Body")
     assert "2026-04-17T09:00:00Z" in text or "+00:00" in text
@@ -167,7 +167,7 @@ def test_object_id_edit_by_human_logged_and_skipped() -> None:
 
 
 def test_example_minimal_file_equivalent_after_roundtrip() -> None:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     text = f"""---
 title: "Deploy LiveKit agent"
 created: {now}
@@ -179,8 +179,8 @@ updated: {now}
 Steps:
 1. ...
 """
-    data, body = parse_frontmatter(text)
-    out = dump_frontmatter(data, body)
+    data, _body = parse_frontmatter(text)
+    out = dump_frontmatter(data, _body)
     assert 'title: "Deploy LiveKit agent"' in out or "title: Deploy LiveKit agent" in out
 
 
@@ -203,7 +203,7 @@ updated: 2026-04-16T04:00:02Z
 
 # CUDA 13 installation pattern
 """
-    data, body = parse_frontmatter(text)
+    data, _body = parse_frontmatter(text)
     model = CuratedFrontmatter.model_validate(data)
     assert model.musubi_managed is True
     assert model.state == "matured"

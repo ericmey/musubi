@@ -29,7 +29,7 @@ class VaultReconciler:
         vault_files = list(self.vault_root.rglob("*"))
         logger.info("Found %d total items in vault", len(vault_files))
         print(f"DEBUG: all vault items: {vault_files}")
-        
+
         processed = 0
         for file_path in vault_files:
             if not file_path.is_file() or file_path.suffix.lower() != ".md":
@@ -58,16 +58,17 @@ class VaultReconciler:
             body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
             fm = CuratedFrontmatter.model_validate(data)
 
-            # Plane.create is idempotent if body_hash matches
+            from typing import Literal, cast
+
             memory = CuratedKnowledge(
-                object_id=fm.object_id,
-                namespace=fm.namespace,
+                object_id=fm.object_id,  # type: ignore
+                namespace=fm.namespace,  # type: ignore
                 vault_path=rel_path,
                 body_hash=body_hash,
                 title=fm.title,
                 content=body,
                 summary=fm.summary,
-                state=fm.state,
+                state=cast(Literal["matured", "superseded", "archived"], fm.state),
                 importance=fm.importance,
                 topics=fm.topics,
                 tags=fm.tags,

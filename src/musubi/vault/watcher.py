@@ -62,7 +62,7 @@ class VaultWatcher:
         self.writer = VaultWriter(vault_root, write_log)
 
         self._pending_tasks: dict[str, asyncio.Task[None]] = {}
-        self._observer: Observer | None = None
+        self._observer: Any = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
     def enqueue_event(self, event: FileSystemEvent) -> None:
@@ -123,7 +123,8 @@ class VaultWatcher:
         logger.info("Handling event %s for %s", event.event_type, path_str)
         path = Path(path_str)
         if event.event_type == "moved" and hasattr(event, "dest_path"):
-            path = Path(event.dest_path)
+            dp = event.dest_path
+            path = Path(dp.decode("utf-8") if isinstance(dp, bytes) else dp)
             path_str = str(path)
 
         try:
@@ -172,6 +173,8 @@ class VaultWatcher:
             logger.error("Missing object_id or namespace for %s after validation", rel_path)
             return
 
+        from typing import Literal, cast
+
         memory = CuratedKnowledge(
             object_id=fm.object_id,
             namespace=fm.namespace,
@@ -180,7 +183,7 @@ class VaultWatcher:
             title=fm.title,
             content=body,
             summary=fm.summary,
-            state=fm.state,
+            state=cast(Literal["matured", "superseded", "archived"], fm.state),
             importance=fm.importance,
             topics=fm.topics,
             tags=fm.tags,
@@ -228,7 +231,9 @@ class VaultWatcher:
             except RuntimeError:
                 # If no loop in current thread, we might be starting from a main thread
                 # but Watcher expects to work with a running loop for its tasks.
-                raise RuntimeError("VaultWatcher.start() must be called from a thread with a running loop, or provided a loop.")
+                raise RuntimeError(
+                    "VaultWatcher.start() must be called from a thread with a running loop, or provided a loop."
+                ) from None
         self._loop = loop
         self._observer = Observer()
         handler = WatcherHandler(self, loop)

@@ -71,6 +71,7 @@ State changes update **both** the slice file's frontmatter **and** the GitHub Is
 
 ### Additional handoff rules Gemini is most likely to trip
 
+- **New top-level dependencies require an ADR in the SAME PR.** Don't ship the import without the decision record. The ADR doesn't have to be long (20-40 lines is fine), but it has to exist before merge.
 - **Symmetric coverage.** A docstring promising X and Y needs tests for both. Defensive-branch coverage gaps are only OK for validation + error paths, not for advertised features.
 - **Coverage thresholds are evaluated per-module, not just per-repo.** The global 85% fail-under in pytest does not guarantee compliance with the 90% floor specifically required for `src/musubi/planes/**`. Validate localized coverage individually using `uv run coverage report --include='src/musubi/<your-module>/*'` prior to handoff.
 - **ADR-punted deps fail loud, not silently no-op.** If you stub a dependency, `raise NotImplementedError` or log at `ERROR`/`CRITICAL` — never just `info`.

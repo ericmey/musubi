@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import time
 from pathlib import Path
-from typing import Any
 
 import pytest
 from watchdog.events import (
