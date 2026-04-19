@@ -3,11 +3,11 @@ title: "Slice: Hybrid dense + sparse search"
 slice_id: slice-retrieval-hybrid
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: codex-gpt5
 phase: "2 Hybrid"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]", "[[_slices/slice-embedding]]"]
 blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]"]
 
 > Qdrant Query API with server-side RRF fusion over named dense + sparse vectors.
 
-**Phase:** 2 Hybrid · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 2 Hybrid · **Status:** `in-progress` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
@@ -65,6 +65,10 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 12:54 — codex-gpt5 — claimed slice
+
+- Claimed Issue #29 and flipped slice frontmatter from `ready` to `in-progress`.
 
 ## Cross-slice tickets opened by this slice
 
