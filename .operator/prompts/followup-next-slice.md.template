@@ -1,0 +1,75 @@
+# followup-next-slice prompt template
+
+> Used when a PR has merged (cleanly or with a small follow-up commit) and the agent is ready to take another slice. Fill every `{{slot}}` before pasting. Slots documented at bottom.
+
+```
+{{agent_name}} on Musubi:
+
+PR #{{merged_pr_number}} merged. {{just_finished_slice_id}} is now status: done on v2 (commits {{merge_commit_sha}} + {{flip_commit_sha}}). Issue #{{just_finished_issue_number}} auto-closed. {{unblocked_downstream_summary}}
+
+{{optional_strengths_callout}}
+
+Pick up your next slice. Recommended candidates (both depend only on now-done slices):
+
+{{next_slice_candidates_list}}
+
+Pick the one you prefer and claim atomically:
+
+    cd {{clone_path}}
+    git switch v2 && git pull --ff-only
+    gh issue edit <N> --add-assignee @me --add-label "status:in-progress" --remove-label "status:ready"
+    gh issue view <N> --json assignees
+
+In the same PR, flip the slice frontmatter status: ready -> in-progress, owner: {{agent_id}}. Commit: chore(slice): take <slice-id>.
+
+Branch + draft PR immediately (first line of body is "Closes #<N>."):
+
+    git switch -c slice/<slice-id>
+    git push -u origin slice/<slice-id>
+    gh pr create --draft --base v2 --title "<type>(<scope>): <slice-id>" \
+      --body "Closes #<N>.
+
+Draft — work in progress per docs/architecture/_slices/<slice-id>.md."
+
+Test-first. First implementation commit is the test file — every bullet from the spec's ## Test contract as a pytest function with the verbatim name.
+
+Run the five handoff checks before flipping to ready-for-review (see {{entrypoint_file}} §Before handoff):
+
+  1. make check exits 0
+  2. make tc-coverage SLICE=<slice-id> exits 0
+  3. make agent-check — distinguish ✗ errors from ⚠ warnings
+  4. gh pr checks <pr> green remotely
+  5. PR body first line is "Closes #<N>."
+
+{{module_coverage_reminder}}
+
+### Parallel agents right now
+
+{{parallel_agents_block}}
+
+Your path will be <owns-path-of-new-slice>; verify no overlap with the list above.
+
+When stuck, drop docs/architecture/_inbox/questions/<slice-id>-<slug>.md (full frontmatter: title, section, type, status, tags, updated), flip slice + Issue to blocked, comment the Issue with the link, stop.
+
+{{optional_closing_remark}}
+```
+
+## Slots
+
+| Slot | Example | Notes |
+|---|---|---|
+| `{{agent_name}}` | `Codex (GPT-5)` | Same meaning as in slice-start. |
+| `{{agent_id}}` | `codex-gpt5` | Same. |
+| `{{clone_path}}` | `~/Projects/musubi-codex` | Same. |
+| `{{entrypoint_file}}` | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | Same. |
+| `{{merged_pr_number}}` | `50` | The PR that just merged. |
+| `{{just_finished_slice_id}}` | `slice-retrieval-hybrid` | |
+| `{{just_finished_issue_number}}` | `29` | |
+| `{{merge_commit_sha}}` | `667b99e` | Short SHA of the squash-merge commit on v2. |
+| `{{flip_commit_sha}}` | `cfd42c6` | Short SHA of the frontmatter-flip commit on v2. Omit `+ flip_commit_sha` clause if no flip was needed. |
+| `{{unblocked_downstream_summary}}` | `Downstream slice-retrieval-fast + slice-retrieval-deep are now unblocked.` | One sentence naming what this merge unblocked. |
+| `{{optional_strengths_callout}}` | `Excellent work this round — 98% coverage, textbook server-side RRF.` | Optional one-line positive feedback. Omit if not warranted. |
+| `{{next_slice_candidates_list}}` | `  - slice-retrieval-rerank (#31) — BGE reranker pass ...\n  - slice-retrieval-scoring (#32) — downstream scoring ...` | 1-3 options with one-line rationale each. Include depends-on status. |
+| `{{module_coverage_reminder}}` | `Symmetric coverage: src/musubi/retrieve/** has a 90% branch floor (not just 85%). Run uv run coverage report --include='src/musubi/retrieve/*' before handoff.` | Scoped to the agent's next-slice path family. Omit if slice isn't in a 90%-floor tree. |
+| `{{parallel_agents_block}}` | See `parallel-agents-block.snippet.md` | Current state of other agents in the round. |
+| `{{optional_closing_remark}}` | `Good work.` / `Strong round; cite the block/unblock discipline.` | Optional. Omit if redundant. |
