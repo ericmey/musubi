@@ -4,7 +4,8 @@ section: 06-ingestion
 tags: [frontmatter, ingestion, schema, section/ingestion, status/complete, type/spec, vault]
 type: spec
 status: complete
-updated: 2026-04-17
+implements: src/musubi/vault/frontmatter.py
+updated: 2026-04-19
 up: "[[06-ingestion/index]]"
 reviewed: false
 ---
@@ -249,7 +250,7 @@ updated: 2026-04-16T04:00:02Z
 ...
 ```
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/vault/frontmatter.py`
 

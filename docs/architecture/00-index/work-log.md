@@ -27,6 +27,15 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 
 ## Entries
 
+### 2026-04-19 — slice-vault-sync first cut ready for review
+
+Implements the bidirectional synchronization between the Obsidian vault and Qdrant. Ships a dedicated `musubi-vault-watcher` process using `watchdog` and `ruamel.yaml` for formatting-preserving frontmatter round-trips. Includes a sqlite-backed write log for echo prevention and a periodic drift reconciler.
+
+Vault changes:
+- [[_slices/slice-vault-sync]] — `status: in-progress → in-review`.
+- [[06-ingestion/vault-sync]] — `status: draft → complete`.
+- [[06-ingestion/vault-frontmatter-schema]] — updated `implements:`.
+
 ### 2026-04-19 — slice-retrieval-rerank first cut ready for review
 
 Implements the cross-encoder reranking stage for the retrieval deep path. Uses `BAAI/bge-reranker-v2-m3` via a dedicated TEI instance. Rerank scores are normalized via sigmoid and replace the RRF-relevance component in the final composite score, providing a significant quality lift for ambiguous queries.
