@@ -27,6 +27,13 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 
 ## Entries
 
+### 2026-04-19 — slice-lifecycle-promotion first cut ready for review
+
+Implements the promotion and demotion sweeps. Promotion renders a human-readable markdown file via an LLM and writes it to the Obsidian vault via VaultWriter, then creates a CuratedKnowledge point. Demotion decays mature episodic memories and concepts that are unreinforced or low importance.
+
+Vault changes:
+- [[_slices/slice-lifecycle-promotion]] — `status: in-progress → in-review`.
+
 ### 2026-04-19 — slice-vault-sync first cut ready for review
 
 Implements the bidirectional synchronization between the Obsidian vault and Qdrant. Ships a dedicated `musubi-vault-watcher` process using `watchdog` and `ruamel.yaml` for formatting-preserving frontmatter round-trips. Includes a sqlite-backed write log for echo prevention and a periodic drift reconciler.
