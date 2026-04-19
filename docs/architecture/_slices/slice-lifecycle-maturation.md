@@ -115,9 +115,17 @@ Agents append one entry per work session. Format:
 | 23 | `integration: real Ollama, 50 synthetic provisional memories mature in one sweep, importance distribution is plausible` | ⊘ out-of-scope | requires a live Ollama endpoint — deferred to a follow-up integration suite (no current slice owns it). Stub `@pytest.mark.skip` left in the test file. |
 | 24 | `integration: ollama-offline scenario — maturation completes without enrichment, re-enrichment sweep picks them up later` | ⊘ out-of-scope | the offline path itself is exercised by `test_ollama_outage_still_matures_without_enrichment`; the *re-enrichment sweep* (the secondary `WHERE state=matured AND importance_last_scored_at < now-7d` selection in spec §Re-enrichment on next sweep) requires an `importance_last_scored_at` field that is not on `EpisodicMemory` today. Deferred to a follow-up that lands the field via slice-types and the secondary sweep here. Stub `@pytest.mark.skip` left in the test file. |
 
+### Known gaps at in-review — 2026-04-19 — vscode-cc-sonnet47
+
+The two spec-vs-type drifts called out in the handoff "Architectural notes for the reviewer" are now formal cross-slice tickets against `slice-types`. They are non-blocking for this slice's merge (spec bullets affected are either passing on the field that exists or already declared out-of-scope), but they MUST be closed before this slice flips `status: done` so the next agent picking up follow-up work has a clean starting point:
+
+- [`_inbox/cross-slice/slice-lifecycle-maturation-slice-types-topics-vs-linked-to-topics.md`](../_inbox/cross-slice/slice-lifecycle-maturation-slice-types-topics-vs-linked-to-topics.md) — spec calls for `topics` on `EpisodicMemory`; model has only `linked_to_topics`. Bullets 9 + 10 currently pass against `linked_to_topics`; once slice-types reconciles, this slice's `_apply_enrichment` switches to whichever name lands.
+- [`_inbox/cross-slice/slice-lifecycle-maturation-slice-types-importance-last-scored-at.md`](../_inbox/cross-slice/slice-lifecycle-maturation-slice-types-importance-last-scored-at.md) — `importance_last_scored_at` field needed for the spec's re-enrichment sweep (bullet 24, declared out-of-scope here pending this ticket). Once the field lands, this slice's follow-up implements the secondary `WHERE state=matured AND importance_last_scored_at < now-7d` selection + bullet-24 unit test.
+
 ## Cross-slice tickets opened by this slice
 
-- _(none — see "Architectural notes for the reviewer" in the handoff entry above for spec-vs-type drifts noted but not blocked-on: `topics`/`linked_to_topics` on EpisodicMemory; future `importance_last_scored_at` for the re-enrichment sweep.)_
+- [`_inbox/cross-slice/slice-lifecycle-maturation-slice-types-topics-vs-linked-to-topics.md`](../_inbox/cross-slice/slice-lifecycle-maturation-slice-types-topics-vs-linked-to-topics.md) — open against `slice-types`. Reconcile `topics` (spec) vs `linked_to_topics` (model) on `EpisodicMemory`.
+- [`_inbox/cross-slice/slice-lifecycle-maturation-slice-types-importance-last-scored-at.md`](../_inbox/cross-slice/slice-lifecycle-maturation-slice-types-importance-last-scored-at.md) — open against `slice-types`. Add `importance_last_scored_at: datetime | None` so the spec's re-enrichment sweep (bullet 24) can be implemented in a follow-up.
 
 ## PR links
 
