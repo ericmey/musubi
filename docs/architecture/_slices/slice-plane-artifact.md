@@ -3,12 +3,12 @@ title: "Slice: Source artifact plane"
 slice_id: slice-plane-artifact
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-3-1-pro-hana
 phase: "4 Planes"
-tags: [section/slices, status/in-progress, type/slice]
-updated: 2026-04-17
-reviewed: false
+tags: [section/slices, status/done, type/slice]
+updated: 2026-04-19
+reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]"]
 blocks: ["[[_slices/slice-api-v0]]", "[[_slices/slice-retrieval-blended]]", "[[_slices/slice-retrieval-orchestration]]"]
 ---
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-api-v0]]", "[[_slices/slice-retrieval-blended]]", "[[_
 
 > Raw documents, transcripts, logs. Blob storage + Qdrant chunk index. Append-only; versioning via new artifact-id.
 
-**Phase:** 4 Planes · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 4 Planes · **Status:** `done` · **Owner:** `gemini-3-1-pro-hana`
 
 ## Specs to implement
 
