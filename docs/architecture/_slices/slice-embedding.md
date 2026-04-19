@@ -97,10 +97,17 @@ The **review pass** + the follow-up work to close the genuine in-scope deferrals
   - `integration: full re-embedding job — old named vector read + new named vector write, dual-exist, cutover flip, evals stable` — re-embedding migration integration follow-up.
   - `integration: boot scan with re-embedding — 10K files embedded in < 5 minutes on reference GPU` — ops/GPU integration follow-up.
 
+### 2026-04-19 11:08 — codex-gpt5 — follow-up handoff to in-review
+
+- Finished Issue #36 follow-up: TEI clients now chunk encode inputs at 64 items, truncate TEI inputs to 2048 chars, retry one transient 5xx with async jittered backoff, and expose `CachedEmbedder` for revision-keyed query embedding caching.
+- Tests: `make check` passed with 254 passing / 35 skipped; `make tc-coverage SLICE=slice-embedding` passed with 8 passing, 16 explicitly skipped to downstream slices, and 3 declared out-of-scope non-test bullets.
+- Coverage: repo total 94.64%; owned embedding files remain above the slice baseline except `cache.py`, whose uncovered lines are defensive validation / eviction / sparse-copy branches not required by Issue #36.
+- `make agent-check` exited clean with pre-existing vault warnings only.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
 
 ## PR links
 
-- _(none yet)_
+- PR #41 — `feat(embedding): batching + caching + truncation (slice-embedding follow-up)`
