@@ -69,7 +69,6 @@ from musubi.store import bootstrap
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -99,9 +98,7 @@ def curated(qdrant: QdrantClient) -> CuratedPlane:
 
 @pytest.fixture
 def sink(tmp_path: Path) -> Iterator[LifecycleEventSink]:
-    s = LifecycleEventSink(
-        db_path=tmp_path / "events.db", flush_every_n=10, flush_every_s=1.0
-    )
+    s = LifecycleEventSink(db_path=tmp_path / "events.db", flush_every_n=10, flush_every_s=1.0)
     try:
         yield s
     finally:
@@ -177,9 +174,7 @@ class FakeReflectionLLM:
     citations: list[str] = field(default_factory=list)
     calls: list[list[dict[str, object]]] = field(default_factory=list)
 
-    async def summarize_patterns(
-        self, items: list[dict[str, object]]
-    ) -> str | None:
+    async def summarize_patterns(self, items: list[dict[str, object]]) -> str | None:
         self.calls.append(list(items))
         if not self.available:
             return None
@@ -342,10 +337,7 @@ async def test_patterns_section_parses_llm_output(
         when=now - timedelta(hours=2),
     )
     llm = FakeReflectionLLM(
-        canned_patterns=(
-            "## CUDA work\n"
-            f"Three sessions. Cited: {seeded.object_id}.\n"
-        )
+        canned_patterns=(f"## CUDA work\nThree sessions. Cited: {seeded.object_id}.\n")
     )
     vault = FakeVaultWriter()
     await _run(
@@ -382,9 +374,7 @@ async def test_patterns_section_validates_cited_ids(
         when=now - timedelta(hours=3),
     )
     fake_id = "0" * 27
-    llm = FakeReflectionLLM(
-        canned_patterns=f"## Theme\nReal: {real.object_id}. Fake: {fake_id}.\n"
-    )
+    llm = FakeReflectionLLM(canned_patterns=f"## Theme\nReal: {real.object_id}. Fake: {fake_id}.\n")
     vault = FakeVaultWriter()
     await _run(
         qdrant=qdrant,
@@ -473,9 +463,7 @@ async def test_demotion_section_includes_at_risk(
 
     # Seed a matured episodic with low importance and old last-touch.
     at_risk = await episodic.create(
-        EpisodicMemory(
-            namespace=episodic_namespace, content="risky", importance=2
-        )
+        EpisodicMemory(namespace=episodic_namespace, content="risky", importance=2)
     )
     await episodic.transition(
         namespace=episodic_namespace,
@@ -666,9 +654,7 @@ async def test_file_indexed_in_musubi_curated(
         namespace=reflection_namespace,
         now=now,
     )
-    fetched = await curated.get(
-        namespace=reflection_namespace, object_id=result.object_id
-    )
+    fetched = await curated.get(namespace=reflection_namespace, object_id=result.object_id)
     assert fetched is not None
     assert "reflection" in fetched.topics
     assert fetched.musubi_managed is True
@@ -771,7 +757,9 @@ async def test_rerun_same_date_overwrites_same_file(
     "test; the unit-form bullets it covers (capture/promotion/demotion/file) "
     "are all passing here. Deferred to a follow-up integration suite."
 )
-def test_integration_seed_100_memories_across_24h_run_reflection_file_exists_sections_populated_point_indexed() -> None:
+def test_integration_seed_100_memories_across_24h_run_reflection_file_exists_sections_populated_point_indexed() -> (
+    None
+):
     pass
 
 
@@ -865,9 +853,7 @@ def test_default_thought_emitter_raises_loud() -> None:
 
     stub = _NotConfiguredThoughtEmitter()
     with pytest.raises(NotImplementedError, match="ThoughtEmitter"):
-        asyncio.run(
-            stub.emit(namespace="ns", channel="c", content="x", importance=5)
-        )
+        asyncio.run(stub.emit(namespace="ns", channel="c", content="x", importance=5))
 
 
 def test_default_reflection_llm_raises_loud() -> None:
@@ -937,3 +923,190 @@ async def test_capture_summary_is_zero_when_no_recent_episodics(
         now=now,
     )
     assert result.sections["capture"] == 0
+
+
+async def test_llm_exception_falls_back_to_skip_notice(
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+    curated: CuratedPlane,
+    now: datetime,
+) -> None:
+    """A non-NotImplementedError exception from the LLM (network blip,
+    parse error) should be logged + treated as outage, not propagate.
+    NotImplementedError is the misconfiguration signal and propagates."""
+
+    class RaisingLLM:
+        async def summarize_patterns(self, items: list[dict[str, object]]) -> str | None:
+            raise RuntimeError("transient network blip")
+
+    vault = FakeVaultWriter()
+    await run_reflection_sweep(
+        qdrant=qdrant,
+        sink=sink,
+        curated_plane=curated,
+        vault=vault,
+        thoughts=FakeThoughtEmitter(),
+        llm=RaisingLLM(),
+        namespace="eric/lifecycle-worker/curated",
+        now=now,
+        config=_config(),
+    )
+    body = vault.writes[-1][2]
+    assert "LLM was unavailable at reflection time" in body
+
+
+async def test_revisit_filters_recently_accessed(
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+    curated: CuratedPlane,
+    now: datetime,
+    reflection_namespace: str,
+) -> None:
+    """Curated row whose ``last_accessed_at`` is recent enough must NOT
+    appear in the revisit section. Covers the
+    ``last_accessed_epoch > cutoff`` branch."""
+    import hashlib as _h
+
+    def _hash(s: str) -> str:
+        return _h.sha256(s.encode()).hexdigest()
+
+    recent = await curated.create(
+        CuratedKnowledge(
+            namespace=reflection_namespace,
+            title="Recently read",
+            content="Touched yesterday.",
+            importance=9,
+            vault_path="curated/eric/recently-read.md",
+            body_hash=_hash("Touched yesterday."),
+        )
+    )
+    from qdrant_client import models as qmodels
+
+    recently_iso = (now - timedelta(days=1)).isoformat()
+    qdrant.set_payload(
+        collection_name="musubi_curated",
+        payload={"last_accessed_at": recently_iso},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=recent.object_id)
+                )
+            ]
+        ),
+    )
+    vault = FakeVaultWriter()
+    await _run(
+        qdrant=qdrant,
+        sink=sink,
+        curated=curated,
+        vault=vault,
+        thoughts=FakeThoughtEmitter(),
+        namespace=reflection_namespace,
+        now=now,
+    )
+    body = vault.writes[-1][2]
+    assert recent.object_id not in body
+
+
+async def test_revisit_handles_old_last_accessed_at(
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+    curated: CuratedPlane,
+    now: datetime,
+    reflection_namespace: str,
+) -> None:
+    """A curated row with a parseable, old ``last_accessed_at`` lands in
+    the revisit section with a computed days-since-access value."""
+    import hashlib as _h
+
+    def _hash(s: str) -> str:
+        return _h.sha256(s.encode()).hexdigest()
+
+    long_ago = await curated.create(
+        CuratedKnowledge(
+            namespace=reflection_namespace,
+            title="Old but important",
+            content="Long-untouched but high-importance.",
+            importance=9,
+            vault_path="curated/eric/long-untouched.md",
+            body_hash=_hash("Long-untouched but high-importance."),
+        )
+    )
+    from qdrant_client import models as qmodels
+
+    long_ago_iso = (now - timedelta(days=120)).isoformat()
+    qdrant.set_payload(
+        collection_name="musubi_curated",
+        payload={"last_accessed_at": long_ago_iso},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=long_ago.object_id)
+                )
+            ]
+        ),
+    )
+    vault = FakeVaultWriter()
+    await _run(
+        qdrant=qdrant,
+        sink=sink,
+        curated=curated,
+        vault=vault,
+        thoughts=FakeThoughtEmitter(),
+        namespace=reflection_namespace,
+        now=now,
+    )
+    body = vault.writes[-1][2]
+    assert long_ago.object_id in body
+    assert "d since access" in body or "days" in body.lower()
+
+
+async def test_revisit_handles_malformed_last_accessed_at(
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+    curated: CuratedPlane,
+    now: datetime,
+    reflection_namespace: str,
+) -> None:
+    """Non-parseable ``last_accessed_at`` falls back to "never accessed"
+    eligibility — covers the ``except ValueError`` branch."""
+    import hashlib as _h
+
+    def _hash(s: str) -> str:
+        return _h.sha256(s.encode()).hexdigest()
+
+    bad_ts = await curated.create(
+        CuratedKnowledge(
+            namespace=reflection_namespace,
+            title="Garbled timestamp",
+            content="Bad timestamp test.",
+            importance=9,
+            vault_path="curated/eric/garbled.md",
+            body_hash=_hash("Bad timestamp test."),
+        )
+    )
+    from qdrant_client import models as qmodels
+
+    qdrant.set_payload(
+        collection_name="musubi_curated",
+        payload={"last_accessed_at": "not-a-date"},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=bad_ts.object_id)
+                )
+            ]
+        ),
+    )
+    vault = FakeVaultWriter()
+    await _run(
+        qdrant=qdrant,
+        sink=sink,
+        curated=curated,
+        vault=vault,
+        thoughts=FakeThoughtEmitter(),
+        namespace=reflection_namespace,
+        now=now,
+    )
+    body = vault.writes[-1][2]
+    assert bad_ts.object_id in body
