@@ -3,10 +3,10 @@ title: "Slice: Blended multi-plane retrieval"
 slice_id: slice-retrieval-blended
 section: _slices
 type: slice
-status: ready
-owner: unassigned
-phase: "4 Planes"
-tags: [section/slices, status/ready, type/slice]
+status: in-progress
+owner: gemini-3-1-pro-hana
+phase: "5 Retrieval"
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-17
 reviewed: false
 depends-on: ["[[_slices/slice-retrieval-deep]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-artifact]]"]
