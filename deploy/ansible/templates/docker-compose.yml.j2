@@ -1,0 +1,110 @@
+services:
+  core:
+    image: {{ musubi_core_image }}
+    env_file:
+      - .env.production
+    ports:
+      - "{{ musubi_core_port }}:{{ musubi_core_port }}"
+    volumes:
+      - /var/lib/musubi/vault:/var/lib/musubi/vault
+      - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      tei-dense:
+        condition: service_healthy
+      tei-sparse:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+
+  qdrant:
+    image: {{ musubi_qdrant_image }}
+    volumes:
+      - /var/lib/musubi/qdrant-storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  tei-dense:
+    image: {{ musubi_tei_image }}
+    command: --model-id BAAI/bge-m3 --max-batch-tokens 32768 --max-client-batch-size 16
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  tei-sparse:
+    image: {{ musubi_tei_image }}
+    command: --model-id naver/splade-v3 --pooling splade --max-batch-tokens 16384
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  tei-reranker:
+    image: {{ musubi_tei_image }}
+    command: --model-id BAAI/bge-reranker-v2-m3 --pooling rerank
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: {{ musubi_ollama_image }}
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list | grep {{ musubi_ollama_model }}"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  tei-models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/musubi/tei-models
+  ollama-models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/musubi/ollama-models
