@@ -147,7 +147,7 @@ musubi-cli contradictions resolve <concept-a> <concept-b> --keep=a --reason "B w
 
 ## Test contract
 
-**Module under test:** `musubi/planes/synthesis/`, `musubi/lifecycle/synthesis.py`, `musubi/lifecycle/promotion.py`
+**Module under test:** `src/musubi/planes/concept/` (this slice — plane CRUD + transitions), `src/musubi/lifecycle/synthesis.py` (slice-lifecycle-synthesis), `src/musubi/lifecycle/promotion.py` (slice-lifecycle-promotion), `src/musubi/lifecycle/maturation.py` (slice-lifecycle-maturation)
 
 Schema / basics:
 
