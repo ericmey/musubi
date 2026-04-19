@@ -3,12 +3,12 @@ title: "Slice: Cross-encoder reranker"
 slice_id: slice-retrieval-rerank
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-3-1-pro
 phase: "3 Reranker"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-embedding]]"]
 blocks: ["[[_slices/slice-retrieval-deep]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-retrieval-deep]]"]
 
 > BGE-reranker-v2-m3 via TEI. Stateless; GPU-resident. Bounded by deep-path budget.
 
-**Phase:** 3 Reranker · **Status:** `in-review` · **Owner:** `gemini-3-1-pro`
+**Phase:** 3 Reranker · **Status:** `done` · **Owner:** `gemini-3-1-pro`
 
 ## Specs to implement
 
