@@ -3,19 +3,19 @@ title: "Slice: Obsidian vault watcher + reconciler"
 slice_id: slice-vault-sync
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-3-1-pro-nyla
 phase: "5 Vault"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-plane-curated]]", "[[_slices/slice-types]]"]
 blocks: ["[[_slices/slice-lifecycle-promotion]]", "[[_slices/slice-lifecycle-reflection]]"]
 ---
 
 # Slice: Obsidian vault watcher + reconciler
 
-**Phase:** 5 Vault · **Status:** `in-review` · **Owner:** `gemini-3-1-pro-nyla`
+**Phase:** 5 Vault · **Status:** `done` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Specs to implement
 
