@@ -3,11 +3,11 @@ title: "Slice: Synthesized concept plane"
 slice_id: slice-plane-concept
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: vscode-cc-opus47
 phase: "4 Planes"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-plane-episodic]]"]
 blocks: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-lifecycle-promotion]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-lifecycle-pro
 
 > Bridge layer. Clustered episodic reinforcement emerges as concept objects; candidates for promotion into curated.
 
-**Phase:** 4 Planes · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 4 Planes · **Status:** `in-progress` · **Owner:** `vscode-cc-opus47`
 
 ## Specs to implement
 
@@ -25,13 +25,14 @@ blocks: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-lifecycle-pro
 
 ## Owned paths (you MAY write here)
 
-- `musubi/planes/synthesis/`
-- `tests/planes/test_synthesis.py`
+- `musubi/planes/concept/`
+- `tests/planes/test_concept.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
 - `musubi/planes/episodic/`
 - `musubi/planes/curated/`
+- `musubi/lifecycle/`
 
 ## Depends on
 
@@ -65,6 +66,12 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 — vscode-cc-opus47 — claim
+
+- Claimed slice atomically via `gh issue edit 21 --add-assignee @me`. Issue #21, PR #42 (draft).
+- Branch `slice/slice-plane-concept` off `v2`.
+- **Slice fix-up:** corrected `owns_paths` from `musubi/planes/synthesis/` → `musubi/planes/concept/` to match the canonical plane-name convention used by `src/musubi/types/concept.py`, `_PLANE_TO_COLLECTION["concept"]` in `src/musubi/store/names.py`, and the `musubi_concept` collection. The `synthesis/` name conflated this slice with `slice-lifecycle-synthesis` (which owns `src/musubi/lifecycle/synthesis.py`). Spec's `## Test Contract` "Module under test" line updated in the same PR with `spec-update:` trailer.
 
 ## Cross-slice tickets opened by this slice
 
