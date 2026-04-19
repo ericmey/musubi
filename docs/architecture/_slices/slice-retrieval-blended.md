@@ -25,12 +25,19 @@ blocks: ["[[_slices/slice-retrieval-orchestration]]"]
 
 ## Owned paths (you MAY write here)
 
-- `musubi/retrieve/blended.py`
+- `src/musubi/retrieve/blended.py`
 - `tests/retrieve/test_blended.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `musubi/planes/`
+- `src/musubi/retrieve/hybrid.py`   (owned by slice-retrieval-hybrid, done)
+- `src/musubi/retrieve/scoring.py`  (owned by slice-retrieval-scoring, done)
+- `src/musubi/retrieve/rerank.py`   (owned by slice-retrieval-rerank, done)
+- `src/musubi/retrieve/fast.py`     (owned by slice-retrieval-fast, done)
+- `src/musubi/retrieve/deep.py`     (owned by slice-retrieval-deep, done; CALL run_deep_retrieve, don't modify)
+- `src/musubi/planes/`
+- `src/musubi/api/`
+- `src/musubi/types/`
 
 ## Depends on
 
