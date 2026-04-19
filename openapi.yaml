@@ -1,0 +1,1751 @@
+openapi: 3.1.0
+info:
+  title: Musubi Core API
+  description: The canonical HTTP surface over Musubi Core. Read-side; write surface lives in slice-api-v0-write.
+  version: 0.1.0
+paths:
+  /v1/ops/health:
+    get:
+      tags:
+      - ops
+      summary: Health
+      description: "Liveness probe. Always 200 if the process can serve requests.\nReadiness \u2014 does the process have\
+        \ working dependencies \u2014 is on\n``/v1/ops/status``."
+      operationId: health_v1_ops_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+  /v1/ops/status:
+    get:
+      tags:
+      - ops
+      summary: Status
+      description: 'Per-component readiness. Tries a cheap operation against each
+
+        dependency (Qdrant collections list; TEI / Ollama health checks land
+
+        in slice-ops-observability).'
+      operationId: status_v1_ops_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+  /v1/ops/metrics:
+    get:
+      tags:
+      - ops
+      summary: Metrics
+      description: 'Prometheus-format metrics passthrough.
+
+
+        The metrics surface ships in slice-ops-observability; this route
+
+        returns an empty body with the correct content type so adapters can
+
+        point Prometheus at it without errors.'
+      operationId: metrics_v1_ops_metrics_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /v1/memories/{object_id}:
+    get:
+      tags:
+      - episodic
+      summary: Get Memory
+      operationId: get_memory_v1_memories__object_id__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodicMemory'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/memories:
+    get:
+      tags:
+      - episodic
+      summary: List Memories
+      operationId: list_memories_v1_memories_get
+      parameters:
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_EpisodicMemory_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/curated-knowledge/{object_id}:
+    get:
+      tags:
+      - curated
+      summary: Get Curated
+      operationId: get_curated_v1_curated_knowledge__object_id__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CuratedKnowledge'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/curated-knowledge:
+    get:
+      tags:
+      - curated
+      summary: List Curated
+      operationId: list_curated_v1_curated_knowledge_get
+      parameters:
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_CuratedKnowledge_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/concepts/{object_id}:
+    get:
+      tags:
+      - concept
+      summary: Get Concept
+      operationId: get_concept_v1_concepts__object_id__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SynthesizedConcept'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/concepts:
+    get:
+      tags:
+      - concept
+      summary: List Concepts
+      operationId: list_concepts_v1_concepts_get
+      parameters:
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_SynthesizedConcept_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/artifacts/{object_id}:
+    get:
+      tags:
+      - artifact
+      summary: Get Artifact
+      operationId: get_artifact_v1_artifacts__object_id__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SourceArtifact'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/artifacts/{object_id}/chunks:
+    get:
+      tags:
+      - artifact
+      summary: Get Artifact Chunks
+      operationId: get_artifact_chunks_v1_artifacts__object_id__chunks_get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ArtifactChunk'
+                title: Response Get Artifact Chunks V1 Artifacts  Object Id  Chunks Get
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/artifacts/{object_id}/blob:
+    get:
+      tags:
+      - artifact
+      summary: Get Artifact Blob
+      description: "Stream the raw bytes of an artifact.\n\nThe artifact plane stores blobs out-of-band (filesystem or S3\
+        \ in\nproduction). For this read-side slice we serve a placeholder body \u2014\nthe production wiring of blob storage\
+        \ lives in slice-plane-artifact's\nfollow-up. The route + auth gate + 404 path are exercised here so\nadapters can\
+        \ call the endpoint."
+      operationId: get_artifact_blob_v1_artifacts__object_id__blob_get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/artifacts:
+    get:
+      tags:
+      - artifact
+      summary: List Artifacts
+      operationId: list_artifacts_v1_artifacts_get
+      parameters:
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 50
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Page_SourceArtifact_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/thoughts/check:
+    post:
+      tags:
+      - thoughts
+      summary: Check Thoughts
+      operationId: check_thoughts_v1_thoughts_check_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThoughtCheckRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThoughtListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/thoughts/history:
+    post:
+      tags:
+      - thoughts
+      summary: Thought History
+      description: 'First-cut: history is a namespace scroll. Semantic search will
+
+        land once slice-retrieval-fast wires its dense path through the API
+
+        in slice-api-v0-write.'
+      operationId: thought_history_v1_thoughts_history_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThoughtHistoryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThoughtListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/retrieve:
+    post:
+      tags:
+      - retrieve
+      summary: Retrieve
+      operationId: retrieve_v1_retrieve_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetrieveQuery'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetrieveResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/lifecycle/events:
+    get:
+      tags:
+      - lifecycle
+      summary: List Events
+      description: 'Operator-only: list lifecycle events.
+
+
+        The events themselves are recorded in a sqlite ledger by the
+
+        lifecycle engine (see ``src/musubi/lifecycle/events.py``); the
+
+        Qdrant mirror collection ``musubi_lifecycle_events`` is the
+
+        listable view per [[04-data-model/qdrant-layout]]. If the mirror
+
+        isn''t populated yet (the slice that does the dual-write hasn''t
+
+        landed), the list comes back empty rather than erroring.'
+      operationId: list_events_v1_lifecycle_events_get
+      parameters:
+      - name: namespace
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LifecycleEventListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/lifecycle/events/{object_id}:
+    get:
+      tags:
+      - lifecycle
+      summary: List Events For Object
+      operationId: list_events_for_object_v1_lifecycle_events__object_id__get
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LifecycleEventListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/contradictions:
+    get:
+      tags:
+      - contradictions
+      summary: List Contradictions
+      description: "Concept rows whose ``contradicts`` field is non-empty.\n\nCross-namespace by default (operator scope);\
+        \ namespace-scoped when\n``namespace`` is supplied. The data source is the concept plane\npayload \u2014 concepts\
+        \ mark each other as contradicting during synthesis\n(slice-lifecycle-synthesis)."
+      operationId: list_contradictions_v1_contradictions_get
+      parameters:
+      - name: namespace
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContradictionListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/namespaces:
+    get:
+      tags:
+      - namespaces
+      summary: List Namespaces
+      description: 'List the namespaces the bearer''s scope grants access to.
+
+
+        Reads ``request.state.auth.scopes`` (set by ``authenticate_request``)
+
+        and returns the namespace prefixes. Operator-scoped tokens get the
+
+        string ``"*"`` instead of a per-namespace list.'
+      operationId: list_namespaces_v1_namespaces_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceListResponse'
+  /v1/namespaces/{namespace_path}/stats:
+    get:
+      tags:
+      - namespaces
+      summary: Namespace Stats
+      description: "Counts per plane for the given namespace + last activity epoch.\n\nThe ``namespace_path`` arrives URL-encoded\
+        \ (slashes \u2192 ``%2F``) per\nstandard FastAPI ``:path`` handling."
+      operationId: namespace_stats_v1_namespaces__namespace_path__stats_get
+      parameters:
+      - name: namespace_path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Namespace Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceStats'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    ArtifactChunk:
+      properties:
+        chunk_id:
+          type: string
+          title: Chunk Id
+        artifact_id:
+          type: string
+          title: Artifact Id
+        chunk_index:
+          type: integer
+          minimum: 0.0
+          title: Chunk Index
+        content:
+          type: string
+          minLength: 1
+          title: Content
+        start_offset:
+          type: integer
+          minimum: 0.0
+          title: Start Offset
+        end_offset:
+          type: integer
+          minimum: 0.0
+          title: End Offset
+        chunk_metadata:
+          additionalProperties: true
+          type: object
+          title: Chunk Metadata
+      additionalProperties: false
+      type: object
+      required:
+      - chunk_id
+      - artifact_id
+      - chunk_index
+      - content
+      - start_offset
+      - end_offset
+      title: ArtifactChunk
+      description: "One chunk of a source artifact. Not a MusubiObject \u2014 lives inside one."
+    ArtifactRef:
+      properties:
+        artifact_id:
+          type: string
+          title: Artifact Id
+        chunk_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Chunk Id
+        quote:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Quote
+      additionalProperties: false
+      type: object
+      required:
+      - artifact_id
+      title: ArtifactRef
+      description: "A pointer into a ``SourceArtifact`` \u2014 whole artifact or a specific chunk.\n\nUsed by ``MemoryObject.supported_by``\
+        \ to cite evidence."
+    ComponentStatus:
+      properties:
+        name:
+          type: string
+          title: Name
+        healthy:
+          type: boolean
+          title: Healthy
+        detail:
+          type: string
+          title: Detail
+          default: ''
+      type: object
+      required:
+      - name
+      - healthy
+      title: ComponentStatus
+    ContradictionListResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/ContradictionPair'
+          type: array
+          title: Items
+      type: object
+      required:
+      - items
+      title: ContradictionListResponse
+    ContradictionPair:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        contradicts:
+          items:
+            type: string
+          type: array
+          title: Contradicts
+        namespace:
+          type: string
+          title: Namespace
+      type: object
+      required:
+      - object_id
+      - contradicts
+      - namespace
+      title: ContradictionPair
+    CuratedKnowledge:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        namespace:
+          type: string
+          title: Namespace
+        schema_version:
+          type: integer
+          title: Schema Version
+          default: 1
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        created_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Created Epoch
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        updated_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Updated Epoch
+        version:
+          type: integer
+          title: Version
+          default: 1
+        state:
+          type: string
+          enum:
+          - matured
+          - superseded
+          - archived
+          title: State
+          default: matured
+        content:
+          type: string
+          minLength: 1
+          title: Content
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        importance:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Importance
+          default: 5
+        reinforcement_count:
+          type: integer
+          minimum: 0.0
+          title: Reinforcement Count
+          default: 0
+        last_accessed_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Accessed At
+        access_count:
+          type: integer
+          minimum: 0.0
+          title: Access Count
+          default: 0
+        supersedes:
+          items:
+            type: string
+          type: array
+          title: Supersedes
+        superseded_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Superseded By
+        merged_from:
+          items:
+            type: string
+          type: array
+          title: Merged From
+        linked_to_topics:
+          items:
+            type: string
+          type: array
+          title: Linked To Topics
+        supported_by:
+          items:
+            $ref: '#/components/schemas/ArtifactRef'
+          type: array
+          title: Supported By
+        contradicts:
+          items:
+            type: string
+          type: array
+          title: Contradicts
+        derived_from:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Derived From
+        valid_from:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid From
+        valid_until:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid Until
+        valid_from_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Valid From Epoch
+        valid_until_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Valid Until Epoch
+        title:
+          type: string
+          minLength: 1
+          title: Title
+        topics:
+          items:
+            type: string
+          type: array
+          title: Topics
+        vault_path:
+          type: string
+          minLength: 1
+          title: Vault Path
+        body_hash:
+          type: string
+          maxLength: 64
+          minLength: 64
+          pattern: ^[0-9a-f]{64}$
+          title: Body Hash
+          description: sha256 hex digest of the rendered markdown body.
+        musubi_managed:
+          type: boolean
+          title: Musubi Managed
+          default: true
+        promoted_from:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Promoted From
+        promoted_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Promoted At
+      additionalProperties: false
+      type: object
+      required:
+      - namespace
+      - content
+      - title
+      - vault_path
+      - body_hash
+      title: CuratedKnowledge
+      description: "A curated, human-authored knowledge note mirrored from the vault.\n\n``vault_path`` points at the ``.md``\
+        \ file in the vault; ``body_hash`` is the\nsha256 of the rendered markdown body (frontmatter excluded) \u2014 used\
+        \ by the\nwatcher to detect real edits vs. metadata-only churn."
+    EpisodicMemory:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        namespace:
+          type: string
+          title: Namespace
+        schema_version:
+          type: integer
+          title: Schema Version
+          default: 1
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        created_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Created Epoch
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        updated_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Updated Epoch
+        version:
+          type: integer
+          title: Version
+          default: 1
+        state:
+          type: string
+          enum:
+          - provisional
+          - matured
+          - demoted
+          - archived
+          - superseded
+          title: State
+          default: provisional
+        content:
+          type: string
+          minLength: 1
+          title: Content
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        importance:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Importance
+          default: 5
+        reinforcement_count:
+          type: integer
+          minimum: 0.0
+          title: Reinforcement Count
+          default: 0
+        last_accessed_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Accessed At
+        access_count:
+          type: integer
+          minimum: 0.0
+          title: Access Count
+          default: 0
+        supersedes:
+          items:
+            type: string
+          type: array
+          title: Supersedes
+        superseded_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Superseded By
+        merged_from:
+          items:
+            type: string
+          type: array
+          title: Merged From
+        linked_to_topics:
+          items:
+            type: string
+          type: array
+          title: Linked To Topics
+        supported_by:
+          items:
+            $ref: '#/components/schemas/ArtifactRef'
+          type: array
+          title: Supported By
+        contradicts:
+          items:
+            type: string
+          type: array
+          title: Contradicts
+        derived_from:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Derived From
+        valid_from:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid From
+        valid_until:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid Until
+        valid_from_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Valid From Epoch
+        valid_until_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Valid Until Epoch
+        event_at:
+          type: string
+          format: date-time
+          title: Event At
+        ingested_at:
+          type: string
+          format: date-time
+          title: Ingested At
+        modality:
+          type: string
+          enum:
+          - text
+          - voice-transcript
+          - tool-call
+          - system-event
+          title: Modality
+          default: text
+        participants:
+          items:
+            type: string
+          type: array
+          title: Participants
+        source_context:
+          type: string
+          title: Source Context
+          description: Freeform origin hint, e.g. 'Claude Code session 2026-04-17 14:23'.
+          default: ''
+      additionalProperties: false
+      type: object
+      required:
+      - namespace
+      - content
+      title: EpisodicMemory
+      description: "One captured event \u2014 a message, a tool call, a system signal.\n\n``event_at`` is when the thing happened\
+        \ in the world. ``ingested_at`` is when\nMusubi learned about it (typically == ``created_at``)."
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    HealthResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        version:
+          type: string
+          title: Version
+          default: v0
+      type: object
+      required:
+      - status
+      title: HealthResponse
+    LifecycleEventListResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/LifecycleEventRow'
+          type: array
+          title: Items
+      type: object
+      required:
+      - items
+      title: LifecycleEventListResponse
+    LifecycleEventRow:
+      properties:
+        event_id:
+          type: string
+          title: Event Id
+        object_id:
+          type: string
+          title: Object Id
+        object_type:
+          type: string
+          title: Object Type
+        namespace:
+          type: string
+          title: Namespace
+        from_state:
+          type: string
+          title: From State
+        to_state:
+          type: string
+          title: To State
+        actor:
+          type: string
+          title: Actor
+        reason:
+          type: string
+          title: Reason
+        occurred_epoch:
+          type: number
+          title: Occurred Epoch
+      type: object
+      required:
+      - event_id
+      - object_id
+      - object_type
+      - namespace
+      - from_state
+      - to_state
+      - actor
+      - reason
+      - occurred_epoch
+      title: LifecycleEventRow
+    NamespaceListResponse:
+      properties:
+        items:
+          items:
+            type: string
+          type: array
+          title: Items
+      type: object
+      required:
+      - items
+      title: NamespaceListResponse
+    NamespaceStats:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        counts:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Counts
+        last_activity_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Last Activity Epoch
+      type: object
+      required:
+      - namespace
+      - counts
+      title: NamespaceStats
+    Page_CuratedKnowledge_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/CuratedKnowledge'
+          type: array
+          title: Items
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - items
+      title: Page[CuratedKnowledge]
+    Page_EpisodicMemory_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/EpisodicMemory'
+          type: array
+          title: Items
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - items
+      title: Page[EpisodicMemory]
+    Page_SourceArtifact_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/SourceArtifact'
+          type: array
+          title: Items
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - items
+      title: Page[SourceArtifact]
+    Page_SynthesizedConcept_:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/SynthesizedConcept'
+          type: array
+          title: Items
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - items
+      title: Page[SynthesizedConcept]
+    RetrieveQuery:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        query_text:
+          type: string
+          title: Query Text
+        mode:
+          type: string
+          title: Mode
+          default: fast
+        limit:
+          type: integer
+          title: Limit
+          default: 10
+        planes:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Planes
+        include_archived:
+          type: boolean
+          title: Include Archived
+          default: false
+      type: object
+      required:
+      - namespace
+      - query_text
+      title: RetrieveQuery
+    RetrieveResponse:
+      properties:
+        results:
+          items:
+            $ref: '#/components/schemas/RetrieveResultRow'
+          type: array
+          title: Results
+        mode:
+          type: string
+          title: Mode
+        limit:
+          type: integer
+          title: Limit
+      type: object
+      required:
+      - results
+      - mode
+      - limit
+      title: RetrieveResponse
+    RetrieveResultRow:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        score:
+          type: number
+          title: Score
+        plane:
+          type: string
+          title: Plane
+        content:
+          type: string
+          title: Content
+        namespace:
+          type: string
+          title: Namespace
+        extra:
+          additionalProperties: true
+          type: object
+          title: Extra
+          default: {}
+      type: object
+      required:
+      - object_id
+      - score
+      - plane
+      - content
+      - namespace
+      title: RetrieveResultRow
+    SourceArtifact:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        namespace:
+          type: string
+          title: Namespace
+        schema_version:
+          type: integer
+          title: Schema Version
+          default: 1
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        created_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Created Epoch
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        updated_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Updated Epoch
+        version:
+          type: integer
+          title: Version
+          default: 1
+        state:
+          type: string
+          enum:
+          - matured
+          - archived
+          - superseded
+          title: State
+          default: matured
+        title:
+          type: string
+          minLength: 1
+          title: Title
+        filename:
+          type: string
+          minLength: 1
+          title: Filename
+        sha256:
+          type: string
+          maxLength: 64
+          minLength: 64
+          pattern: ^[0-9a-f]{64}$
+          title: Sha256
+          description: sha256 hex digest of the raw bytes.
+        content_type:
+          type: string
+          minLength: 1
+          title: Content Type
+        size_bytes:
+          type: integer
+          minimum: 0.0
+          title: Size Bytes
+        chunk_count:
+          type: integer
+          minimum: 0.0
+          title: Chunk Count
+          default: 0
+        ingestion_metadata:
+          additionalProperties: true
+          type: object
+          title: Ingestion Metadata
+        chunker:
+          type: string
+          minLength: 1
+          title: Chunker
+          description: Name of the chunker used, e.g. 'markdown-headings-v1'.
+        artifact_state:
+          type: string
+          enum:
+          - indexing
+          - indexed
+          - failed
+          title: Artifact State
+          default: indexing
+        failure_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Failure Reason
+      additionalProperties: false
+      type: object
+      required:
+      - namespace
+      - title
+      - filename
+      - sha256
+      - content_type
+      - size_bytes
+      - chunker
+      title: SourceArtifact
+      description: "A raw uploaded file (PDF, VTT, markdown dump, etc.).\n\n``state`` tracks the *lifecycle* axis (archived/matured),\
+        \ while\n``artifact_state`` tracks the *indexing* axis (indexing/indexed/failed). The\ntwo are orthogonal \u2014 an\
+        \ artifact is typically ``state=matured`` its whole\nlife and moves only on the indexing axis."
+    StatusResponse:
+      properties:
+        status:
+          type: string
+          title: Status
+        components:
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentStatus'
+          type: object
+          title: Components
+      type: object
+      required:
+      - status
+      - components
+      title: StatusResponse
+    SynthesizedConcept:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        namespace:
+          type: string
+          title: Namespace
+        schema_version:
+          type: integer
+          title: Schema Version
+          default: 1
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        created_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Created Epoch
+        updated_at:
+          type: string
+          format: date-time
+          title: Updated At
+        updated_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Updated Epoch
+        version:
+          type: integer
+          title: Version
+          default: 1
+        state:
+          type: string
+          enum:
+          - synthesized
+          - matured
+          - promoted
+          - demoted
+          - superseded
+          title: State
+          default: synthesized
+        content:
+          type: string
+          minLength: 1
+          title: Content
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        importance:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Importance
+          default: 5
+        reinforcement_count:
+          type: integer
+          minimum: 0.0
+          title: Reinforcement Count
+          default: 0
+        last_accessed_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Accessed At
+        access_count:
+          type: integer
+          minimum: 0.0
+          title: Access Count
+          default: 0
+        supersedes:
+          items:
+            type: string
+          type: array
+          title: Supersedes
+        superseded_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Superseded By
+        merged_from:
+          items:
+            type: string
+          type: array
+          title: Merged From
+        linked_to_topics:
+          items:
+            type: string
+          type: array
+          title: Linked To Topics
+        supported_by:
+          items:
+            $ref: '#/components/schemas/ArtifactRef'
+          type: array
+          title: Supported By
+        contradicts:
+          items:
+            type: string
+          type: array
+          title: Contradicts
+        derived_from:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Derived From
+        valid_from:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid From
+        valid_until:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Valid Until
+        valid_from_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Valid From Epoch
+        valid_until_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Valid Until Epoch
+        title:
+          type: string
+          minLength: 1
+          title: Title
+        synthesis_rationale:
+          type: string
+          minLength: 1
+          title: Synthesis Rationale
+        promoted_to:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Promoted To
+        promoted_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Promoted At
+        promotion_rejected_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Promotion Rejected At
+        promotion_rejected_reason:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Promotion Rejected Reason
+      additionalProperties: false
+      type: object
+      required:
+      - namespace
+      - content
+      - title
+      - synthesis_rationale
+      title: SynthesizedConcept
+      description: 'A hypothesis bridging episodic evidence and potential curated knowledge.
+
+
+        ``merged_from`` (inherited from ``MemoryObject``) lists the EpisodicMemory ids
+
+        the concept was synthesised from; ``synthesis_rationale`` is the LLM''s
+
+        one-to-three-sentence explanation of why those memories cluster.'
+    ThoughtCheckRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        presence:
+          type: string
+          title: Presence
+        limit:
+          type: integer
+          title: Limit
+          default: 50
+      type: object
+      required:
+      - namespace
+      - presence
+      title: ThoughtCheckRequest
+    ThoughtHistoryRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        presence:
+          type: string
+          title: Presence
+        query_text:
+          type: string
+          title: Query Text
+        limit:
+          type: integer
+          title: Limit
+          default: 20
+      type: object
+      required:
+      - namespace
+      - presence
+      - query_text
+      title: ThoughtHistoryRequest
+    ThoughtListResponse:
+      properties:
+        items:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Items
+      type: object
+      required:
+      - items
+      title: ThoughtListResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError

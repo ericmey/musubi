@@ -16,6 +16,10 @@ dependencies = [
     "pyjwt[crypto]>=2.10",
     "ruamel.yaml>=0.18",
     "watchdog>=4.0",
+    # Canonical API framework — chosen by ADR-0011 + ADR-0013 (pydantic-first
+    # OpenAPI generation). Required by slice-api-v0-read for the FastAPI
+    # scaffolding the slice spec calls for.
+    "fastapi>=0.115",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +33,7 @@ dev = [
     "ruff>=0.6",
     # Vault tooling (docs/architecture/_tools/*.py) reads YAML frontmatter.
     "pyyaml>=6",
+    "types-PyYAML",
 ]
 
 [build-system]
@@ -49,6 +54,13 @@ ignore = ["E501"]   # line length — handled elsewhere
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B"]
+# FastAPI's Depends/Query/Body/Path/File patterns intentionally use
+# function-call defaults; B008 flags them but the framework requires
+# this shape. UP046 prefers PEP 695 type params on generics — Page is
+# a Generic[T] over a pydantic BaseModel, which doesn't translate
+# cleanly. Both are framework-specific exceptions scoped to the api
+# package.
+"src/musubi/api/*" = ["B008", "UP046"]
 
 [tool.ruff.format]
 quote-style = "double"
