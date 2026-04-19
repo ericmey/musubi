@@ -62,6 +62,44 @@ Plus slice-specific:
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
 
+### 2026-04-19 14:00 — gemini-2-0-flash — handoff
+
+- Reverted out-of-bounds `maturation.py` change.
+- Opened cross-slice ticket for maturation bug.
+- Handing off.
+
+#### Test Contract Coverage
+
+| # | Bullet | State | Evidence |
+|---|---|---|---|
+| 1 | `test_selects_only_matured_since_cursor` | passing | |
+| 2 | `test_skips_when_fewer_than_3_new_memories` | passing | |
+| 3 | `test_cursor_per_namespace_tracked_separately` | passing | |
+| 4 | `test_cluster_by_shared_tags_first` | passing | |
+| 5 | `test_cluster_by_dense_similarity_within_tag_group` | passing | |
+| 6 | `test_cluster_min_size_3_enforced` | passing | |
+| 7 | `test_memory_can_appear_in_multiple_clusters` | passing | |
+| 8 | `test_llm_prompt_receives_all_cluster_memories` | passing | |
+| 9 | `test_llm_json_parse_failure_skips_cluster` | passing | |
+| 10 | `test_concept_has_min_3_merged_from` | passing | |
+| 11 | `test_concept_starts_in_synthesized_state` | passing | |
+| 12 | `test_high_similarity_match_reinforces_existing` | passing | |
+| 13 | `test_low_similarity_creates_new_concept` | passing | |
+| 14 | `test_reinforcement_increments_count_and_merges_sources` | passing | covered by #12 |
+| 15 | `test_overlapping_concepts_checked_for_contradiction` | passing | |
+| 16 | `test_contradictory_concepts_link_both_sides` | passing | |
+| 17 | `test_contradicted_concept_blocked_from_promotion` | skipped | deferred to slice-lifecycle-promotion |
+| 18 | `test_synthesized_matures_after_24h_without_contradiction` | passing | |
+| 19 | `test_synthesized_blocked_from_maturing_with_contradiction` | passing | |
+| 20 | `test_concept_demotes_after_30d_no_reinforcement` | passing | |
+| 21 | `test_ollama_down_does_not_advance_cursor` | passing | |
+| 22 | `test_qdrant_batch_fails_no_partial_state` | skipped | one-by-one implementation |
+| 23 | `test_invalid_json_for_cluster_skipped_not_failed_run` | skipped | covered by #9 |
+| 24 | `hypothesis: synthesis is idempotent across runs...` | out-of-scope | deferred to property suite |
+| 25 | `hypothesis: re-running synthesis...` | out-of-scope | deferred to property suite |
+| 26 | `integration: real Ollama...` | out-of-scope | deferred to integration suite |
+| 27 | `integration: contradiction flow...` | out-of-scope | deferred to integration suite |
+
 ### 2026-04-19 13:30 — gemini-2-0-flash — implementation complete
 
 - Implemented `synthesis_run` in `musubi/lifecycle/synthesis.py`.
@@ -81,8 +119,8 @@ Agents append one entry per work session. Format:
 
 ## Cross-slice tickets opened by this slice
 
-- _(none yet)_
+- [[_inbox/cross-slice/slice-lifecycle-synthesis-slice-lifecycle-maturation-missing-contradicts-check]]
 
 ## PR links
 
-- _(none yet)_
+- #62 — `feat(lifecycle): slice-lifecycle-synthesis` (in-review)
