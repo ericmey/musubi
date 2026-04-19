@@ -75,7 +75,7 @@ def plane(qdrant: QdrantClient) -> CuratedPlane:
 
 @pytest.fixture
 def ns() -> str:
-    return "eric/_shared/curated"
+    return "eric/claude-code/curated"
 
 
 def _hash(body: str) -> str:
@@ -232,8 +232,8 @@ async def test_supersession_chain_read_returns_latest(plane: CuratedPlane, ns: s
 
 
 async def test_isolation_read_enforcement(plane: CuratedPlane) -> None:
-    a_ns = "eric/_shared/curated"
-    b_ns = "yua/_shared/curated"
+    a_ns = "eric/claude-code/curated"
+    b_ns = "yua/livekit/curated"
     a = await plane.create(
         _make(namespace=a_ns, vault_path="curated/eric/a.md", content="only-in-a")
     )
@@ -382,9 +382,7 @@ def test_hard_delete_requires_operator_scope() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_transition_to_superseded_emits_lifecycle_event(
-    plane: CuratedPlane, ns: str
-) -> None:
+async def test_transition_to_superseded_emits_lifecycle_event(plane: CuratedPlane, ns: str) -> None:
     saved = await plane.create(_make(namespace=ns))
     updated, event = await plane.transition(
         namespace=ns,
@@ -432,9 +430,7 @@ async def test_transition_illegal_raises(plane: CuratedPlane, ns: str) -> None:
         )
 
 
-async def test_transition_unknown_object_raises_lookup_error(
-    plane: CuratedPlane, ns: str
-) -> None:
+async def test_transition_unknown_object_raises_lookup_error(plane: CuratedPlane, ns: str) -> None:
     missing = "0" * 27
     with pytest.raises(LookupError):
         await plane.transition(
@@ -447,8 +443,8 @@ async def test_transition_unknown_object_raises_lookup_error(
 
 
 async def test_isolation_write_enforcement(plane: CuratedPlane) -> None:
-    a_ns = "eric/_shared/curated"
-    b_ns = "yua/_shared/curated"
+    a_ns = "eric/claude-code/curated"
+    b_ns = "yua/livekit/curated"
     a = await plane.create(_make(namespace=a_ns, content="write-iso-a"))
     with pytest.raises(LookupError):
         await plane.transition(
