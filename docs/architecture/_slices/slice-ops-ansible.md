@@ -3,12 +3,12 @@ title: "Slice: Ansible deployment"
 slice_id: slice-ops-ansible
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: ["[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-compose]]", "[[_slices/slice-ops-observability]]"]
 ---
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-compose]]", "[[_sl
 
 > Playbook stands up fresh Debian host: Qdrant + Core + Lifecycle Worker + vault bind-mount + Kong.
 
-**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `codex-gpt5`
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
