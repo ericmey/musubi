@@ -25,12 +25,13 @@ blocks: []
 
 ## Owned paths (you MAY write here)
 
-- `musubi-mcp/`
+- `src/musubi/adapters/mcp/`
+- `tests/adapters/test_mcp.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `musubi/`
-- `musubi-sdk-py/`
+- `src/musubi/` (any file outside `src/musubi/adapters/mcp/`)
+- `src/musubi/sdk/` (owned by slice-sdk-py)
 
 ## Depends on
 
