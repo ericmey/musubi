@@ -3,10 +3,10 @@ title: "Slice: Docker Compose stack"
 slice_id: slice-ops-compose
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-17
 reviewed: false
 depends-on: ["[[_slices/slice-ops-ansible]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-ops-observability]]"]
 
 > Compose file covering Qdrant, Core, Lifecycle, TEI, Ollama, Kong. Health checks + startup order.
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
@@ -63,6 +63,10 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 19:36 — codex-gpt5 — claimed slice
+
+- Claimed Issue #18 and flipped slice frontmatter from `ready` to `in-progress`.
 
 ## Cross-slice tickets opened by this slice
 
