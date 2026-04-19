@@ -124,6 +124,24 @@ Paste this into your PR description (the template has it):
 
 One row per spec Test Contract bullet. Silent omissions get request-changes.
 
+### Before handoff — the five checks
+
+Before flipping slice `in-progress → in-review` and marking a PR ready-for-review, run and carefully read the output of each:
+
+1. **`make check`** — ruff format + lint (whole repo, matches CI) + mypy strict + pytest + coverage. Must exit 0.
+2. **`make tc-coverage SLICE=<slice-id>`** — Closure Rule audit. Must exit 0.
+3. **`make agent-check`** — vault-hygiene audit. **Distinguish `✗` errors from `⚠` warnings.** Exit non-zero? Grep for `✗` first — don't wave off a pre-existing warning.
+4. **`gh pr checks <pr-number>`** — remote CI state. Local-green + remote-red means tooling drift; stop and diagnose, do not `--admin` past it.
+5. **PR body linkage:**
+   - Slice PRs: first line of the body is `Closes #<issue-number>.` (exact keyword, case-insensitive: `Closes` / `Fixes` / `Resolves` — prefer `Closes`). Without it GitHub doesn't auto-link and the Issue stays open after merge.
+   - Chore / infra / docs PRs with no tracking Issue: include a line `No tracking Issue: <one-sentence reason>` so the absence is deliberate.
+
+### Additional handoff-readiness rules
+
+- **Symmetric coverage.** A class / function / module that promises X and Y in its docstring needs tests for both. Defensive-branch exceptions apply only to validation + error paths, never to advertised features.
+- **ADR-punted dependencies must fail loud.** If you defer a dependency behind an ADR, the production path must `raise NotImplementedError` or log at `ERROR`/`CRITICAL` with an explicit stub message. `info` logs are not safety gates.
+- **PR body reflects shipped code.** If the design evolved during implementation, update the PR description before marking ready-for-review. Don't make the reviewer reconcile stale intent against actual behaviour.
+
 ## Hard prohibitions (automatic revert)
 
 - Silent `time.sleep()` in production code (async waits + timeouts only).
