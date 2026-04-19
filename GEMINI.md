@@ -45,6 +45,8 @@ State changes update **both** the slice file's frontmatter **and** the GitHub Is
 
 `make issue-check` detects drift. Drift is a merge-blocker at review time.
 
+- **Frontmatter fields must be explicit, top-level key-value pairs.** Including `status/open` or `type/cross-slice` purely within the `tags:` array is insufficient. A markdown note requires explicit, top-level definitions like `status: open` and `type: cross-slice`. Always duplicate the structure of a known-good sibling file when creating new notes.
+
 ### Other hard prohibitions
 
 - Silent `time.sleep()` in production; no `except Exception: pass`; no `os.environ` outside `src/musubi/config.py`.
@@ -58,7 +60,7 @@ State changes update **both** the slice file's frontmatter **and** the GitHub Is
 2. Claim via Dual-update rule §Claim (both Issue label AND frontmatter).
 3. `git switch -c slice/<slice-id>`, push with `-u`.
 4. `gh pr create --draft --base v2` with **first line of body = `Closes #<n>.`** (exact keyword; GitHub doesn't auto-link otherwise).
-5. First commit: the test file (every Test Contract bullet = function with verbatim name).
+5. First commit: the test file (every Test Contract bullet = function with verbatim name). **Test-first implies atomic, cleanly separated commits** — Don't merge implementation, tests, and documentation updates into a single monolithic "handoff" commit. Follow the sequence: `chore(take)`, `test(initial)`, `feat(impl)`, and finally `docs(handoff)`.
 6. Implement. Respect `forbidden_paths`.
 7. Before `gh pr ready`, run the **five handoff checks**:
    - `make check` (whole repo; matches CI)
@@ -70,8 +72,13 @@ State changes update **both** the slice file's frontmatter **and** the GitHub Is
 ### Additional handoff rules Gemini is most likely to trip
 
 - **Symmetric coverage.** A docstring promising X and Y needs tests for both. Defensive-branch coverage gaps are only OK for validation + error paths, not for advertised features.
+- **Coverage thresholds are evaluated per-module, not just per-repo.** The global 85% fail-under in pytest does not guarantee compliance with the 90% floor specifically required for `src/musubi/planes/**`. Validate localized coverage individually using `uv run coverage report --include='src/musubi/<your-module>/*'` prior to handoff.
 - **ADR-punted deps fail loud, not silently no-op.** If you stub a dependency, `raise NotImplementedError` or log at `ERROR`/`CRITICAL` — never just `info`.
 - **PR body and code stay in sync.** If the design evolved during implementation, rewrite the description before handoff.
+- **Ruff format is a strict gatekeeper, not just an auto-fixer.** `make check` executes `ruff format --check`. If any file merely *would* be reformatted, the script fails (exit 1). Prevent this by always running `uv run ruff format .` explicitly before committing.
+- **Agent checks differentiate hard errors from soft warnings.** When `make agent-check` fails with a non-zero exit code, do not assume it's just noisy warnings. Always verify the output directly with `grep "^  ✗"` to locate the blocking hard errors.
+- **"All handoff checks pass" is an empirical statement, not an assumption.** Do not claim all gates are green just because they passed prior to your last small edit. Re-verify each check individually (`make check`, `make tc-coverage`, `make agent-check`, `gh pr checks`) and actually read the output to confirm the fix didn't inadvertently introduce a regression.
+
 
 ## Style
 
