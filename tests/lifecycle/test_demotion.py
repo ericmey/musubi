@@ -5,7 +5,7 @@ from __future__ import annotations
 import warnings
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import QdrantClient
@@ -22,15 +22,15 @@ from musubi.types.episodic import EpisodicMemory
 
 
 class FakeThoughtEmitter:
-    def __init__(self):
-        self.calls = []
+    def __init__(self) -> None:
+        self.calls: list[Any] = []
 
     async def emit(self, channel: str, content: str, title: str | None = None) -> None:
         self.calls.append((channel, content, title))
 
 
 @pytest.fixture
-def qdrant() -> QdrantClient:
+def qdrant() -> Any:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         client = QdrantClient(":memory:")
@@ -50,7 +50,7 @@ def concept_plane(qdrant: QdrantClient) -> ConceptPlane:
 
 
 @pytest.fixture
-def events_sink(tmp_path: Path) -> LifecycleEventSink:
+def events_sink(tmp_path: Path) -> Any:
     s = LifecycleEventSink(db_path=tmp_path / "events.db", flush_every_n=10, flush_every_s=1.0)
     yield s
     s.close()
@@ -86,7 +86,7 @@ def _episodic(**kwargs: Any) -> EpisodicMemory:
         "importance": 3,
     }
     d.update(kwargs)
-    return EpisodicMemory(**d)
+    return EpisodicMemory(**d)  # type: ignore
 
 
 def _set_old(deps: DemotionDeps, plane_name: str, object_id: str, days_old: int = 61) -> None:
@@ -118,7 +118,7 @@ async def test_episodic_demotion_selects_by_all_four_criteria(deps: DemotionDeps
     assert count == 1
 
     p = await deps.episodic_plane.get(namespace=e.namespace, object_id=e.object_id)
-    assert p.state == "demoted"
+    assert p and p.state == "demoted"
 
 
 @pytest.mark.asyncio
@@ -225,8 +225,8 @@ async def test_concept_demotion_emits_ops_thought(deps: DemotionDeps) -> None:
 
     count = await demotion_concept(deps)
     assert count == 1
-    assert len(deps.thoughts.calls) == 1
-    assert deps.thoughts.calls[0][0] == "ops-alerts"
+    assert len(cast(Any, deps.thoughts).calls) == 1
+    assert cast(Any, deps.thoughts).calls[0][0] == "ops-alerts"
 
 
 @pytest.mark.skip(reason="deferred to slice-plane-concept: missing last_reinforced_at")
@@ -265,7 +265,7 @@ async def test_reinstate_moves_back_to_matured(deps: DemotionDeps) -> None:
     await reinstate(deps, e.namespace, str(e.object_id), "because")
 
     p = await deps.episodic_plane.get(namespace=e.namespace, object_id=e.object_id)
-    assert p.state == "matured"
+    assert p and p.state == "matured"
 
 
 @pytest.mark.skip(reason="deferred to slice-plane-concept: missing last_reinforced_at")

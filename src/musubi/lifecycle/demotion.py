@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol, cast
 
 from qdrant_client import QdrantClient, models
 
@@ -50,7 +50,7 @@ async def demotion_episodic(deps: DemotionDeps, batch_size: int = 100) -> int:
     now = utc_now()
     cutoff_epoch = epoch_of(now) - (DEMOTION_EPISODIC_AGE_DAYS * 24 * 3600)
 
-    must_conditions = [
+    must_conditions: list[Any] = [
         models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
         models.FieldCondition(key="access_count", match=models.MatchValue(value=0)),
         models.FieldCondition(key="reinforcement_count", match=models.MatchValue(value=0)),
@@ -85,8 +85,8 @@ async def demotion_episodic(deps: DemotionDeps, batch_size: int = 100) -> int:
                 namespace = point.payload.get("namespace")
                 object_id_str = point.payload.get("object_id")
                 await deps.episodic_plane.transition(
-                    namespace=namespace,
-                    object_id=object_id_str,
+                    namespace=cast(Any, namespace),
+                    object_id=cast(Any, object_id_str),
                     to_state="demoted",
                     actor=_LIFECYCLE_ACTOR,
                     reason="decay-rule:untouched-low-importance",
@@ -116,7 +116,7 @@ async def demotion_concept(deps: DemotionDeps, batch_size: int = 100) -> int:
     now = utc_now()
     cutoff_epoch = epoch_of(now) - (DEMOTION_CONCEPT_NO_REINFORCE_DAYS * 24 * 3600)
 
-    must_conditions = [
+    must_conditions: list[Any] = [
         models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
         models.FieldCondition(key="updated_epoch", range=models.Range(lt=cutoff_epoch)),
     ]
@@ -146,8 +146,8 @@ async def demotion_concept(deps: DemotionDeps, batch_size: int = 100) -> int:
                 namespace = point.payload.get("namespace")
                 object_id_str = point.payload.get("object_id")
                 await deps.concept_plane.transition(
-                    namespace=namespace,
-                    object_id=object_id_str,
+                    namespace=cast(Any, namespace),
+                    object_id=cast(Any, object_id_str),
                     to_state="demoted",
                     actor=_LIFECYCLE_ACTOR,
                     reason="decay-rule:no-reinforcement",
@@ -184,10 +184,10 @@ async def reinstate(deps: DemotionDeps, namespace: str, object_id: str, reason: 
 
     # Try episodic
     try:
-        current = await deps.episodic_plane.get(namespace=namespace, object_id=obj_ksuid)
-        if current:
+        e_mem = await deps.episodic_plane.get(namespace=cast(Any, namespace), object_id=obj_ksuid)
+        if e_mem:
             await deps.episodic_plane.transition(
-                namespace=namespace,
+                namespace=cast(Any, namespace),
                 object_id=obj_ksuid,
                 to_state="matured",
                 actor=_LIFECYCLE_ACTOR,
@@ -199,10 +199,10 @@ async def reinstate(deps: DemotionDeps, namespace: str, object_id: str, reason: 
 
     # Try concept
     try:
-        current = await deps.concept_plane.get(namespace=namespace, object_id=obj_ksuid)
-        if current:
+        c_mem = await deps.concept_plane.get(namespace=cast(Any, namespace), object_id=obj_ksuid)
+        if c_mem:
             await deps.concept_plane.transition(
-                namespace=namespace,
+                namespace=cast(Any, namespace),
                 object_id=obj_ksuid,
                 to_state="matured",
                 actor=_LIFECYCLE_ACTOR,

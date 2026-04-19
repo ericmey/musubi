@@ -50,7 +50,7 @@ class FakeThoughtEmitter:
 
 
 @pytest.fixture
-def qdrant() -> QdrantClient:
+def qdrant() -> Any:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         client = QdrantClient(":memory:")
@@ -70,7 +70,7 @@ def curated_plane(qdrant: QdrantClient) -> CuratedPlane:
 
 
 @pytest.fixture
-def events_sink(tmp_path: Path) -> LifecycleEventSink:
+def events_sink(tmp_path: Path) -> Any:
     s = LifecycleEventSink(db_path=tmp_path / "events.db", flush_every_n=10, flush_every_s=1.0)
     yield s
     s.close()
@@ -118,7 +118,7 @@ def _concept(**kwargs: Any) -> SynthesizedConcept:
         "merged_from": [generate_ksuid() for _ in range(3)],
     }
     d.update(kwargs)
-    return SynthesizedConcept(**d)
+    return SynthesizedConcept(**d)  # type: ignore
 
 
 def test_gate_requires_matured_state() -> None:
@@ -412,8 +412,8 @@ async def test_thought_emitted_to_ops_alerts(deps: Any) -> None:
     from musubi.lifecycle.promotion import run_promotion_sweep
 
     class Emitter:
-        def __init__(self):
-            self.calls = []
+        def __init__(self) -> None:
+            self.calls: list[Any] = []
 
         async def emit(self, channel: str, content: str, title: str | None = None) -> None:
             self.calls.append((channel, content, title))

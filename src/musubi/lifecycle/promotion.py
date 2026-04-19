@@ -12,7 +12,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, model_validator
 from qdrant_client import QdrantClient, models
@@ -166,7 +166,7 @@ async def run_promotion_sweep(
 
     coll_name = collection_for_plane("concept")
 
-    must_conditions = [
+    must_conditions: list[Any] = [
         models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
         models.FieldCondition(
             key="reinforcement_count", range=models.Range(gte=PROMOTION_REINFORCEMENT_THRESHOLD)
@@ -273,7 +273,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
 
     curated_id = generate_ksuid()
 
-    fm_obj = CuratedFrontmatter(
+    fm_obj = CuratedFrontmatter(  # type: ignore
         object_id=curated_id,
         namespace=concept.namespace,
         title=concept.title,
