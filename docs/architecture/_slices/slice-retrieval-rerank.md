@@ -67,6 +67,7 @@ Agents append one entry per work session. Format:
 ### 2026-04-19 14:00 — gemini-3-1-pro — claim
 
 - Claimed slice via `pick-slice` skill. Issue #31, PR #60 (draft).
+- Declared `integration: deep-path NDCG@10 on golden` and `integration: deep-path p95 latency under` out-of-scope (deferred to follow-up integration slices).
 
 ### 2026-04-17 — generator — slice created
 
