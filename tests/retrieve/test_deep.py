@@ -12,11 +12,6 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from musubi.retrieve.deep import (
-    DeepRetrievalLLM,
-    RetrievalQuery,
-    run_deep_retrieve,
-)
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.fake import FakeEmbedder
@@ -24,6 +19,11 @@ from musubi.planes.artifact.plane import ArtifactPlane
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
+from musubi.retrieve.deep import (
+    DeepRetrievalLLM,
+    RetrievalQuery,
+    run_deep_retrieve,
+)
 from musubi.store import bootstrap
 from musubi.types.artifact import SourceArtifact
 from musubi.types.common import ArtifactRef, Err, generate_ksuid, utc_now
