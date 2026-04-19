@@ -57,10 +57,21 @@ State changes update **both** the slice file's frontmatter **and** the GitHub Is
 1. `gh issue list --label "slice,status:ready"` → pick one.
 2. Claim via Dual-update rule §Claim (both Issue label AND frontmatter).
 3. `git switch -c slice/<slice-id>`, push with `-u`.
-4. `gh pr create --draft --base v2` with `Closes #<n>` in the body.
+4. `gh pr create --draft --base v2` with **first line of body = `Closes #<n>.`** (exact keyword; GitHub doesn't auto-link otherwise).
 5. First commit: the test file (every Test Contract bullet = function with verbatim name).
 6. Implement. Respect `forbidden_paths`.
-7. `make check` + `make agent-check` green → Dual-update rule §Handoff → `gh pr ready <m>`.
+7. Before `gh pr ready`, run the **five handoff checks**:
+   - `make check` (whole repo; matches CI)
+   - `make tc-coverage SLICE=<id>` — exit 0
+   - `make agent-check` — distinguish `✗` errors from `⚠` warnings; only `✗` blocks
+   - `gh pr checks <pr>` — remote CI green too (not just local)
+   - PR body first line is `Closes #<n>.` for slice PRs, or `No tracking Issue: <reason>` for chore/infra PRs
+
+### Additional handoff rules Gemini is most likely to trip
+
+- **Symmetric coverage.** A docstring promising X and Y needs tests for both. Defensive-branch coverage gaps are only OK for validation + error paths, not for advertised features.
+- **ADR-punted deps fail loud, not silently no-op.** If you stub a dependency, `raise NotImplementedError` or log at `ERROR`/`CRITICAL` — never just `info`.
+- **PR body and code stay in sync.** If the design evolved during implementation, rewrite the description before handoff.
 
 ## Style
 

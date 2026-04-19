@@ -131,6 +131,24 @@ Not all agents are equivalent. Rough guide (details in [docs/AGENT-PROCESS.md §
 3. Flip your slice to `blocked` (frontmatter + Issue label).
 4. Pick up another slice.
 
+## Before handoff (the five checks)
+
+Before you flip a slice `in-progress → in-review` and mark a PR ready-for-review, run and carefully read the output of each:
+
+1. **`make check`** — ruff format + ruff lint (both scan the whole repo, matching CI) + mypy strict + pytest + coverage. Must exit 0.
+2. **`make tc-coverage SLICE=<slice-id>`** — Closure Rule audit. Every Test Contract bullet must be in one of the three Closure states (passing / `@pytest.mark.skip(reason="deferred to slice-X: ...")` / declared out-of-scope in the slice's `## Work log`). Must exit 0.
+3. **`make agent-check`** — vault-hygiene audit. **Distinguish `✗` errors from `⚠` warnings**: errors block, warnings don't. If exit code is non-zero, grep the output for `✗` first — don't assume a pre-existing warning is the cause.
+4. **`gh pr checks <your-pr-number>`** — remote GitHub Actions state. Remote CI can fail on drift that local gates don't surface. If local green + remote red, stop and diagnose — don't `--admin` past it.
+5. **PR body linkage:**
+   - **Slice PRs:** first line of the body must be `Closes #<issue-number>.` on its own. GitHub only auto-links on those exact keywords (`Closes`, `Fixes`, `Resolves`, case-insensitive — prefer `Closes` for consistency). Missing the keyword breaks auto-close on merge, the "Linked issues" sidebar, and the Dual-update drift check's PR↔Issue path.
+   - **Chore / infra / docs PRs with no tracking Issue:** include a line `No tracking Issue: <one-sentence reason>` so the absence is a deliberate choice, not an oversight.
+
+Additional handoff-readiness rules:
+
+- **Symmetric coverage.** If a class, module, or function docstring promises features X *and* Y, both need tests. "Defensive branch" is only a valid coverage-gap justification for validation / exception paths — never for a feature promised in the docstring.
+- **ADR-punted dependencies must fail loud, not silently no-op.** If you defer wiring a real dependency (e.g. production scheduler, LLM client) behind an ADR, the production path must `raise NotImplementedError` or emit at `ERROR`/`CRITICAL` with an explicit "THIS DOES NOT TICK / IS STUBBED" message. An `info` log is not a safety gate.
+- **Keep PR body and code in sync.** If the design evolved during implementation, rewrite the design note in the PR description before marking ready-for-review. Reviewers shouldn't have to reconcile stale intent against actual behaviour.
+
 ## When you ship
 
 1. PR merged, CI green.
@@ -169,10 +187,10 @@ Not all agents are equivalent. Rough guide (details in [docs/AGENT-PROCESS.md §
 - [ ] GitHub Issue claimed (you are the assignee; label is `status:in-progress`).
 - [ ] `_inbox/locks/<slice-id>.lock` dropped in the vault as a secondary signal.
 - [ ] Slice frontmatter: `status: in-progress`, `owner:` set.
-- [ ] Draft PR opened.
+- [ ] Draft PR opened; **body first line is `Closes #<issue>.`** (or `No tracking Issue: <reason>` for chore/infra).
 - [ ] First commit on the branch is the test file.
-- [ ] `make check` passes.
-- [ ] PR description references the slice id and the specs implemented.
+- [ ] `make check` + `make tc-coverage SLICE=<id>` + `make agent-check` all exit 0.
+- [ ] `gh pr checks <pr>` reports green *before* flipping to ready-for-review.
 - [ ] Definition of Done items checked.
 
 Now go read [docs/AGENT-PROCESS.md](docs/AGENT-PROCESS.md) and either open the Issue you were assigned or `gh issue list --label "slice,status:ready"`.
