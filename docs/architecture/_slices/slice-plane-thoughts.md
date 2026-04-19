@@ -60,6 +60,10 @@ Plus slice-specific:
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
 
+### 2026-04-19 12:05 — gemini-3-1-pro-nyla — unblocked by PR #53
+- v2 56991f2 adds Thought.in_reply_to + Thought.supersedes
+- Rebased slice/slice-plane-thoughts onto v2; resuming.
+
 ### 2026-04-19 12:00 — gemini-3-1-pro-nyla — blocked on slice-types
 - Created `ThoughtsPlane` draft implementation and `tests/planes/test_thoughts.py`
 - Blocked: the `Thought` type in `src/musubi/types/thought.py` is missing `in_reply_to` and `supersedes`.
