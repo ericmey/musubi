@@ -30,7 +30,6 @@ from musubi.planes.episodic import EpisodicPlane
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
 
-
 # ---------------------------------------------------------------------------
 # Shape — bullets 1-3
 # ---------------------------------------------------------------------------
@@ -99,9 +98,11 @@ def test_error_shape_consistent_across_endpoints(
     assert "code" in body["error"]
     assert body["error"]["code"] == "UNAUTHORIZED"
     assert "detail" in body["error"]
-    # 404 — valid auth, missing object.
+    # 404 — valid auth + namespace, missing object.
     r = client.get(
-        "/v1/memories/0000000000000000000000000000", headers=auth
+        "/v1/memories/0000000000000000000000000000",
+        headers=auth,
+        params={"namespace": "eric/claude-code/episodic"},
     )
     assert r.status_code == 404
     body = r.json()
@@ -201,8 +202,7 @@ def test_idempotency_key_roundtrip() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to slice-api-v0-write: idempotency cache TTL is bound to "
-    "the write surface."
+    reason="deferred to slice-api-v0-write: idempotency cache TTL is bound to the write surface."
 )
 def test_idempotency_key_expires_after_24h() -> None:
     pass
@@ -285,7 +285,7 @@ def test_cursor_roundtrip_exhausts_list(
     seen: set[str] = set()
     cursor: str | None = None
     for _ in range(10):  # safety bound
-        params = {"namespace": namespace, "limit": 2}
+        params: dict[str, str | int] = {"namespace": namespace, "limit": 2}
         if cursor is not None:
             params["cursor"] = cursor
         r = client.get("/v1/memories", headers=auth, params=params)
@@ -316,9 +316,7 @@ def test_cursor_opaque_to_client(
             )
 
     asyncio.run(_seed())
-    r = client.get(
-        "/v1/memories", headers=auth, params={"namespace": namespace, "limit": 1}
-    )
+    r = client.get("/v1/memories", headers=auth, params={"namespace": namespace, "limit": 1})
     assert r.status_code == 200
     cursor = r.json().get("next_cursor")
     if cursor is not None:
@@ -342,6 +340,270 @@ def test_cursor_opaque_to_client(
 )
 def test_contract_suite_runs_end_to_end() -> None:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Contract-tests.md "Test contract (meta)" bullets — these are tests OF
+# the future ``musubi-contract-tests`` repo (a separate Python package
+# per ADR-0011). They cannot exist in the musubi-core monorepo by
+# design. Listed here as ``@pytest.mark.skip`` so the Closure Rule
+# audit (``make tc-coverage``) sees a named follow-up rather than a
+# silent omission.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo: meta-test of the contract "
+    "suite's per-test scoped_namespace fixture; lives in that repo, not here."
+)
+def test_every_test_declares_scoped_namespace() -> None:
+    pass
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo: meta-test of the suite's "
+    "teardown hook; lives in that repo, not here."
+)
+def test_teardown_archives_created_data() -> None:
+    pass
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo: meta-test that the "
+    "canonical suite runs clean against a reference Musubi; lives in that repo."
+)
+def test_suite_runs_clean_against_reference_musubi() -> None:
+    pass
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo: smoke-suite latency budget "
+    "is a property of that repo's perf harness, not the API codebase."
+)
+def test_smoke_suite_completes_under_30s_on_reference_hw() -> None:
+    pass
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo: operator-hook env-flag "
+    "gating is enforced by the suite, lives in that repo."
+)
+def test_operator_hooks_gated_behind_env_flag() -> None:
+    pass
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo + slice-api-grpc: dual REST "
+    "+ gRPC parametrization lives in the contract suite; gRPC support is a "
+    "separate slice."
+)
+def test_transport_parametrization_covers_rest_and_grpc() -> None:
+    pass
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo: cross-endpoint error-shape "
+    "contract test lives in that repo. The same property is exercised here on "
+    "the read surface by test_error_shape_consistent_across_endpoints."
+)
+def test_all_error_shapes_are_consistent_across_endpoints() -> None:
+    pass
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo: multi-run isolation is a "
+    "property of the suite's fixtures, lives in that repo."
+)
+def test_no_test_leaks_data_between_runs() -> None:
+    pass
+
+
+@pytest.mark.skip(
+    reason="deferred to musubi-contract-tests repo: suite version-pin policy "
+    "lives in that repo's release tooling, not the API codebase."
+)
+def test_suite_version_tagged_against_api_major() -> None:
+    pass
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage on owned routers — ensures the 85 % gate clears
+# on src/musubi/api/.
+# ---------------------------------------------------------------------------
+
+
+def test_get_artifact_404_when_missing(client: TestClient, auth: dict[str, str]) -> None:
+    r = client.get(
+        "/v1/artifacts/0000000000000000000000000000",
+        headers=auth,
+        params={"namespace": "eric/claude-code/artifact"},
+    )
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "NOT_FOUND"
+
+
+def test_get_artifact_chunks_404_when_missing(client: TestClient, auth: dict[str, str]) -> None:
+    r = client.get(
+        "/v1/artifacts/0000000000000000000000000000/chunks",
+        headers=auth,
+        params={"namespace": "eric/claude-code/artifact"},
+    )
+    assert r.status_code == 404
+
+
+def test_get_artifact_blob_404_when_missing(client: TestClient, auth: dict[str, str]) -> None:
+    r = client.get(
+        "/v1/artifacts/0000000000000000000000000000/blob",
+        headers=auth,
+        params={"namespace": "eric/claude-code/artifact"},
+    )
+    assert r.status_code == 404
+
+
+def test_list_artifacts_returns_empty_page(client: TestClient, auth: dict[str, str]) -> None:
+    r = client.get(
+        "/v1/artifacts",
+        headers=auth,
+        params={"namespace": "eric/claude-code/artifact"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["items"] == []
+    assert body["next_cursor"] is None
+
+
+def test_get_concept_404_when_missing(client: TestClient, auth: dict[str, str]) -> None:
+    r = client.get(
+        "/v1/concepts/0000000000000000000000000000",
+        headers=auth,
+        params={"namespace": "eric/claude-code/concept"},
+    )
+    assert r.status_code == 404
+
+
+def test_list_concepts_returns_empty_page(client: TestClient, auth: dict[str, str]) -> None:
+    r = client.get(
+        "/v1/concepts",
+        headers=auth,
+        params={"namespace": "eric/claude-code/concept"},
+    )
+    assert r.status_code == 200
+    assert r.json()["items"] == []
+
+
+def test_list_curated_returns_empty_page(client: TestClient, auth: dict[str, str]) -> None:
+    r = client.get(
+        "/v1/curated-knowledge",
+        headers=auth,
+        params={"namespace": "eric/claude-code/curated"},
+    )
+    assert r.status_code == 200
+    assert r.json()["items"] == []
+
+
+def test_lifecycle_events_with_namespace_returns_items_field(
+    client: TestClient, operator_token: str
+) -> None:
+    headers = {"Authorization": f"Bearer {operator_token}"}
+    r = client.get(
+        "/v1/lifecycle/events",
+        headers=headers,
+        params={"namespace": "eric/claude-code/episodic"},
+    )
+    assert r.status_code == 200
+    assert "items" in r.json()
+
+
+def test_lifecycle_events_for_object_returns_items_field(
+    client: TestClient, operator_token: str
+) -> None:
+    headers = {"Authorization": f"Bearer {operator_token}"}
+    r = client.get(
+        "/v1/lifecycle/events/0000000000000000000000000000",
+        headers=headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["items"] == []
+
+
+def test_namespace_stats_returns_per_plane_counts(client: TestClient, auth: dict[str, str]) -> None:
+    ns = "eric/claude-code/episodic"
+    r = client.get(
+        f"/v1/namespaces/{ns}/stats",
+        headers=auth,
+        params={"namespace": ns},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["namespace"] == ns
+    assert "episodic" in body["counts"]
+
+
+def test_metrics_endpoint_returns_prometheus_text(client: TestClient) -> None:
+    r = client.get("/v1/ops/metrics")
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/plain")
+
+
+def test_thought_history_endpoint_responds(
+    client: TestClient,
+    api_settings: object,
+) -> None:
+    from tests.api.conftest import mint_token
+
+    namespace = "eric/claude-code/thought"
+    token = mint_token(api_settings, scopes=[f"{namespace}:r"])  # type: ignore[arg-type]
+    r = client.post(
+        "/v1/thoughts/history",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "namespace": namespace,
+            "presence": "eric/claude-code",
+            "query_text": "what happened",
+        },
+    )
+    assert r.status_code == 200
+    assert "items" in r.json()
+
+
+def test_correlation_id_echoed_on_response(client: TestClient) -> None:
+    """Per the spec § Observability headers, the X-Request-Id is echoed
+    on every response (minted if absent from the request)."""
+    r = client.get("/v1/ops/health")
+    assert "x-request-id" in {k.lower() for k in r.headers}
+
+
+def test_correlation_id_passthrough_when_provided(client: TestClient) -> None:
+    cid = "test-correlation-12345"
+    r = client.get("/v1/ops/health", headers={"X-Request-Id": cid})
+    assert r.headers.get("x-request-id") == cid
+
+
+def test_invalid_cursor_returns_empty_or_400(client: TestClient, auth: dict[str, str]) -> None:
+    """Malformed cursor strings should not crash the endpoint."""
+    r = client.get(
+        "/v1/memories",
+        headers=auth,
+        params={"namespace": "eric/claude-code/episodic", "cursor": "not-a-cursor"},
+    )
+    # Either treated as no cursor (200) or rejected (400). Both are acceptable.
+    assert r.status_code in (200, 400)
+
+
+def test_dependencies_factories_raise_when_unconfigured() -> None:
+    """The default dependency factories raise NotImplementedError per the
+    ADR-punted-deps-fail-loud rule. Tests override; production wires
+    them through deploy-side bootstrap."""
+    from musubi.api import dependencies
+
+    for fn in (
+        dependencies.get_episodic_plane,
+        dependencies.get_curated_plane,
+        dependencies.get_concept_plane,
+        dependencies.get_artifact_plane,
+    ):
+        with pytest.raises(NotImplementedError):
+            fn()
 
 
 # ---------------------------------------------------------------------------
@@ -372,15 +634,11 @@ def test_get_episodic_by_id_routes_to_plane(
     namespace = "eric/claude-code/episodic"
 
     async def _seed() -> str:
-        saved = await episodic.create(
-            EpisodicMemory(namespace=namespace, content="route-target")
-        )
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="route-target"))
         return saved.object_id
 
     oid = asyncio.run(_seed())
-    r = client.get(
-        f"/v1/memories/{oid}", headers=auth, params={"namespace": namespace}
-    )
+    r = client.get(f"/v1/memories/{oid}", headers=auth, params={"namespace": namespace})
     assert r.status_code == 200
     body = r.json()
     assert body["object_id"] == oid
@@ -390,7 +648,7 @@ def test_get_episodic_by_id_routes_to_plane(
 
 def test_get_curated_by_id_routes_to_plane(
     client: TestClient,
-    api_settings: object,  # noqa: ARG001 — fixture order
+    api_settings: object,
     curated: CuratedPlane,
 ) -> None:
     import hashlib as _h
@@ -418,9 +676,7 @@ def test_get_curated_by_id_routes_to_plane(
         return saved.object_id
 
     oid = asyncio.run(_seed())
-    r = client.get(
-        f"/v1/curated-knowledge/{oid}", headers=headers, params={"namespace": namespace}
-    )
+    r = client.get(f"/v1/curated-knowledge/{oid}", headers=headers, params={"namespace": namespace})
     assert r.status_code == 200
     assert r.json()["object_id"] == oid
 
