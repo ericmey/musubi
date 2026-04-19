@@ -3,11 +3,11 @@ title: "Slice: Curated knowledge plane"
 slice_id: slice-plane-curated
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: vscode-cc-opus47
 phase: "4 Planes"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]"]
 blocks: ["[[_slices/slice-api-v0]]", "[[_slices/slice-lifecycle-promotion]]", "[[_slices/slice-lifecycle-reflection]]", "[[_slices/slice-retrieval-blended]]", "[[_slices/slice-vault-sync]]"]
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-api-v0]]", "[[_slices/slice-lifecycle-promotion]]", "[
 
 > Topic-first durable facts. Obsidian vault is the store of record; Qdrant is a derived index rebuilt from the vault.
 
-**Phase:** 4 Planes · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 4 Planes · **Status:** `in-progress` · **Owner:** `vscode-cc-opus47`
 
 ## Specs to implement
 
@@ -64,6 +64,11 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 — vscode-cc-opus47 — claim
+
+- Claimed slice atomically via `gh issue edit 22 --add-assignee @me`. Issue #22, PR #39 (draft).
+- Branch `slice/slice-plane-curated` off `v2`.
 
 ## Cross-slice tickets opened by this slice
 
