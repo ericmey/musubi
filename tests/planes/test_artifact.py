@@ -325,3 +325,39 @@ async def test_namespace_isolation_reads(plane: ArtifactPlane) -> None:
 )
 def test_cross_namespace_citation_in_supporting_ref_is_logged() -> None:
     pass
+from musubi.planes.artifact.chunking import JsonChunker, TokenSlidingChunker
+
+def test_json_chunker_splits_list() -> None:
+    chunker = JsonChunker()
+    text = '[{"a": 1}, {"b": 2}]'
+    chunks = chunker.chunk(text)
+    assert len(chunks) == 2
+    assert "a" in chunks[0].content
+    assert chunks[0].metadata.get("json_path") == "[0]"
+    assert chunks[1].metadata.get("json_path") == "[1]"
+
+def test_json_chunker_single_object_produces_single_chunk() -> None:
+    chunker = JsonChunker()
+    text = '{"a": 1}'
+    chunks = chunker.chunk(text)
+    assert len(chunks) == 1
+    assert "a" in chunks[0].content
+
+def test_json_chunker_invalid_json_single_chunk() -> None:
+    chunker = JsonChunker()
+    text = 'not json'
+    chunks = chunker.chunk(text)
+    assert len(chunks) == 1
+    assert chunks[0].content == "not json"
+
+def test_get_chunker_returns_token_sliding_for_token_sliding_v1() -> None:
+    chunker = get_chunker("token-sliding-v1")
+    assert isinstance(chunker, TokenSlidingChunker)
+
+def test_get_chunker_returns_json_for_json_v1() -> None:
+    chunker = get_chunker("json-v1")
+    assert isinstance(chunker, JsonChunker)
+
+def test_get_chunker_returns_token_sliding_for_unknown() -> None:
+    chunker = get_chunker("unknown-chunker")
+    assert isinstance(chunker, TokenSlidingChunker)
