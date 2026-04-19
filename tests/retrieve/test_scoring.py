@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+
 from musubi.retrieve.scoring import (
     SCORE_WEIGHTS,
     Hit,
@@ -107,6 +108,20 @@ def test_relevance_normalized_within_batch() -> None:
     assert components.relevance == pytest.approx(0.5)
 
 
+def test_relevance_uses_sigmoid_for_rerank_score() -> None:
+    _, positive = score(_hit(rerank_score=2.0), now=NOW)
+    _, negative = score(_hit(rerank_score=-2.0), now=NOW)
+
+    assert positive.relevance == pytest.approx(1.0 / (1.0 + math.exp(-2.0)))
+    assert negative.relevance == pytest.approx(math.exp(-2.0) / (1.0 + math.exp(-2.0)))
+
+
+def test_relevance_zero_when_batch_max_rrf_is_not_positive() -> None:
+    _, components = score(_hit(rrf_score=1.0, batch_max_rrf=0.0), now=NOW)
+
+    assert components.relevance == pytest.approx(0.0)
+
+
 def test_recency_decay_matches_half_life_table() -> None:
     _, same_day = score(_hit(updated_epoch=NOW), now=NOW)
     _, seven_days = score(_hit(updated_epoch=NOW - 7 * 24 * 3600), now=NOW)
@@ -168,6 +183,12 @@ def test_provenance_demoted_states_get_0_1(state: str) -> None:
     assert components.provenance == pytest.approx(0.1)
 
 
+def test_unknown_provenance_defaults_to_0_1() -> None:
+    _, components = score(_hit(plane="thought", state="matured"), now=NOW)
+
+    assert components.provenance == pytest.approx(0.1)
+
+
 def test_reinforcement_log_scaled() -> None:
     _, none = score(_hit(reinforcement_count=0), now=NOW)
     _, one = score(_hit(reinforcement_count=1), now=NOW)
@@ -182,19 +203,35 @@ def test_reinforcement_log_scaled() -> None:
     assert capped.reinforce == pytest.approx(1.0)
 
 
+def test_access_count_used_when_reinforcement_count_absent() -> None:
+    _, components = score(_hit(reinforcement_count=0, access_count=10), now=NOW)
+
+    assert components.reinforce == pytest.approx(math.log1p(10) / math.log1p(100))
+
+
 def test_tiebreak_deterministic_on_object_id() -> None:
     hits = [
-        _hit(object_id="b", plane="curated"),
+        _hit(object_id="b", plane="episodic"),
         _hit(object_id="a", plane="episodic"),
-        _hit(object_id="a", plane="concept"),
+        _hit(object_id="a", plane="concept", state="archived"),
     ]
 
-    ranked = rank_hits(hits, now=NOW)
+    ranked = rank_hits(
+        hits,
+        now=NOW,
+        weights=ScoreWeights(
+            relevance=0.0,
+            recency=0.0,
+            importance=0.0,
+            provenance=0.0,
+            reinforce=0.0,
+        ),
+    )
 
     assert [(hit.object_id, hit.plane) for hit in ranked] == [
         ("a", "concept"),
         ("a", "episodic"),
-        ("b", "curated"),
+        ("b", "episodic"),
     ]
 
 
