@@ -15,11 +15,13 @@ from jwt.algorithms import AllowedPrivateKeys
 from pydantic import AnyHttpUrl, SecretStr
 from pytest_httpx import HTTPXMock
 
+from musubi.auth import tokens as tokens_module
 from musubi.auth.middleware import AuthRequirement, authenticate_request
 from musubi.auth.scopes import (
     ScopeError,
     require_operator_scope,
     require_thought_check_scope,
+    require_thought_send_scope,
     resolve_blended_query_scope,
     resolve_namespace_scope,
 )
@@ -330,3 +332,242 @@ def test_every_auth_decision_emits_audit_line(caplog: pytest.LogCaptureFixture) 
 )
 def test_operator_issued_only_via_cli() -> None:
     raise AssertionError("covered by a future auth authority CLI slice")
+
+
+def test_validate_token_rejects_malformed_and_unsupported_algorithm(
+    auth_settings: Settings,
+) -> None:
+    malformed = validate_token("not-a-jwt", settings=auth_settings)
+    unsupported = validate_token(
+        jwt.encode(
+            _payload(),
+            "other-secret-with-at-least-48-bytes-for-hs384-tests",
+            algorithm="HS384",
+        ),
+        settings=auth_settings,
+    )
+
+    assert isinstance(malformed, Err)
+    assert isinstance(malformed.error, InvalidTokenError)
+    assert isinstance(unsupported, Err)
+    assert "unsupported" in unsupported.error.detail
+
+
+def test_validate_token_rejects_bad_signature_and_claim_shapes(
+    auth_settings: Settings,
+) -> None:
+    bad_signature = validate_token(
+        jwt.encode(_payload(), "other-secret-with-at-least-32-bytes", algorithm="HS256"),
+        settings=auth_settings,
+    )
+    missing_presence = validate_token(
+        _hs_token(auth_settings, {k: v for k, v in _payload().items() if k != "presence"}),
+        settings=auth_settings,
+    )
+    invalid_scope = validate_token(
+        _hs_token(auth_settings, _payload(scopes=["ok", 1])),  # type: ignore[list-item]
+        settings=auth_settings,
+    )
+    invalid_jti_payload = _payload()
+    invalid_jti_payload["jti"] = 123
+    invalid_jti = validate_token(
+        _hs_token(auth_settings, invalid_jti_payload), settings=auth_settings
+    )
+    scope_string_payload = _payload(scopes=None)
+    scope_string_payload["scope"] = "eric/*/episodic:r thoughts:send"
+    scope_string = validate_token(
+        _hs_token(auth_settings, scope_string_payload), settings=auth_settings
+    )
+
+    assert isinstance(bad_signature, Err)
+    assert isinstance(missing_presence, Err)
+    assert "presence" in missing_presence.error.detail
+    assert isinstance(invalid_scope, Err)
+    assert "scope" in invalid_scope.error.detail
+    assert isinstance(invalid_jti, Err)
+    assert "JWT ID" in invalid_jti.error.detail
+    assert isinstance(scope_string, Ok)
+    assert scope_string.value.scopes == ("eric/*/episodic:r", "thoughts:send")
+
+
+def test_rs256_validation_handles_jwks_failures(
+    auth_settings: Settings,
+    rsa_keypair: tuple[AllowedPrivateKeys, dict[str, object]],
+    httpx_mock: HTTPXMock,
+) -> None:
+    private_key, public_jwk = rsa_keypair
+    missing_kid_token = jwt.encode(_payload(), private_key, algorithm="RS256")
+    missing_kid = validate_token(missing_kid_token, settings=auth_settings)
+
+    httpx_mock.add_response(
+        url="https://auth.example.test/.well-known/jwks.json",
+        status_code=500,
+    )
+    failed_fetch = validate_token(_rs_token(private_key), settings=auth_settings)
+
+    wrong_kid_jwk = dict(public_jwk)
+    wrong_kid_jwk["kid"] = "not-the-token-kid"
+    httpx_mock.add_response(
+        url="https://auth.example.test/.well-known/jwks.json",
+        json={"keys": [wrong_kid_jwk]},
+    )
+    no_matching_key = validate_token(_rs_token(private_key), settings=auth_settings)
+
+    httpx_mock.add_response(
+        url="https://auth.example.test/.well-known/jwks.json",
+        json=[],
+    )
+    non_object_jwks = validate_token(_rs_token(private_key), settings=auth_settings)
+
+    bad_jwk = dict(public_jwk)
+    bad_jwk["n"] = "not-base64url"
+    httpx_mock.add_response(
+        url="https://auth.example.test/.well-known/jwks.json",
+        json={"keys": [bad_jwk]},
+    )
+    invalid_jwk = validate_token(_rs_token(private_key), settings=auth_settings)
+
+    assert isinstance(missing_kid, Err)
+    assert "kid" in missing_kid.error.detail
+    assert isinstance(failed_fetch, Err)
+    assert "jwks fetch failed" in failed_fetch.error.detail
+    assert isinstance(no_matching_key, Err)
+    assert "no matching jwk" in no_matching_key.error.detail
+    assert isinstance(non_object_jwks, Err)
+    assert "jwks response" in non_object_jwks.error.detail
+    assert isinstance(invalid_jwk, Err)
+    assert "invalid jwk" in invalid_jwk.error.detail
+
+
+def test_middleware_attaches_context_and_maps_operator_requirements(
+    auth_settings: Settings,
+) -> None:
+    user_token = _hs_token(auth_settings)
+    expired_token = _hs_token(auth_settings, _payload(expires_delta=timedelta(seconds=-1)))
+    operator_token = _hs_token(auth_settings, _payload(scopes=["operator"]))
+    user_request = SimpleNamespace(
+        headers={"Authorization": f"Bearer {user_token}"},
+        state=SimpleNamespace(),
+    )
+    bad_scheme_request = SimpleNamespace(
+        headers={"authorization": f"Token {user_token}"},
+        state=SimpleNamespace(),
+    )
+    operator_request = SimpleNamespace(
+        headers={"authorization": f"Bearer {operator_token}"},
+        state=SimpleNamespace(),
+    )
+    expired_request = SimpleNamespace(
+        headers={"authorization": f"Bearer {expired_token}"},
+        state=SimpleNamespace(),
+    )
+
+    user_result = authenticate_request(user_request, settings=auth_settings)
+    namespace_result = authenticate_request(
+        user_request,
+        AuthRequirement(namespace="eric/claude-code/episodic", access="r"),
+        settings=auth_settings,
+    )
+    bad_scheme = authenticate_request(bad_scheme_request, settings=auth_settings)
+    expired = authenticate_request(expired_request, settings=auth_settings)
+    denied_operator = authenticate_request(
+        user_request,
+        AuthRequirement(operator=True),
+        settings=auth_settings,
+    )
+    allowed_operator = authenticate_request(
+        operator_request,
+        AuthRequirement(operator=True),
+        settings=auth_settings,
+    )
+
+    assert isinstance(user_result, Ok)
+    assert user_request.state.auth == user_result.value
+    assert isinstance(namespace_result, Ok)
+    assert isinstance(bad_scheme, Err)
+    assert bad_scheme.error.status_code == 401
+    assert isinstance(expired, Err)
+    assert expired.error.status_code == 401
+    assert isinstance(denied_operator, Err)
+    assert denied_operator.error.status_code == 403
+    assert isinstance(allowed_operator, Ok)
+
+
+def test_special_glob_and_invalid_namespace_scopes() -> None:
+    context = AuthContext(
+        subject="eric-claude-code",
+        issuer="https://auth.example.test",
+        audience="musubi",
+        scopes=(
+            "thoughts:send",
+            "**:r",
+            "eric/*/episodic:w",
+            "malformed",
+            "thoughts:check:claude-code",
+        ),
+        presence="eric/claude-code",
+        token_id="token-123",
+    )
+    no_send_context = AuthContext(
+        subject="eric-claude-code",
+        issuer="https://auth.example.test",
+        audience="musubi",
+        scopes=("eric/claude-code/episodic:r",),
+        presence="eric/claude-code",
+        token_id="token-123",
+    )
+    malformed_context = AuthContext(
+        subject="eric-claude-code",
+        issuer="https://auth.example.test",
+        audience="musubi",
+        scopes=("malformed",),
+        presence="eric/claude-code",
+        token_id="token-123",
+    )
+
+    send_allowed = require_thought_send_scope(context)
+    send_denied = require_thought_send_scope(no_send_context)
+    operator_read = resolve_namespace_scope(context, namespace="any/namespace/here", access="r")
+    wildcard_write = resolve_namespace_scope(
+        context,
+        namespace="eric/livekit-voice/episodic",
+        access="w",
+    )
+    malformed_only = resolve_namespace_scope(
+        malformed_context,
+        namespace="eric/claude-code/episodic/extra",
+        access="r",
+    )
+
+    assert isinstance(send_allowed, Ok)
+    assert isinstance(send_denied, Err)
+    assert isinstance(operator_read, Ok)
+    assert operator_read.value.scope_used == "**:r"
+    assert isinstance(wildcard_write, Ok)
+    assert wildcard_write.value.scope_used == "eric/*/episodic:w"
+    assert isinstance(malformed_only, Err)
+
+
+def test_token_payload_parser_rejects_missing_required_claims() -> None:
+    base = {
+        "iss": "https://auth.example.test",
+        "sub": "eric-claude-code",
+        "aud": "musubi",
+        "scope": ["eric/claude-code/episodic:r"],
+        "presence": "eric/claude-code",
+        "jti": 123,
+    }
+
+    missing_sub = tokens_module._context_from_payload({k: v for k, v in base.items() if k != "sub"})
+    missing_iss = tokens_module._context_from_payload({k: v for k, v in base.items() if k != "iss"})
+    missing_aud = tokens_module._context_from_payload({k: v for k, v in base.items() if k != "aud"})
+    invalid_jti = tokens_module._context_from_payload(base)
+
+    assert isinstance(missing_sub, Err)
+    assert "sub" in missing_sub.error.detail
+    assert isinstance(missing_iss, Err)
+    assert "iss" in missing_iss.error.detail
+    assert isinstance(missing_aud, Err)
+    assert "aud" in missing_aud.error.detail
+    assert isinstance(invalid_jti, Err)
+    assert "jti" in invalid_jti.error.detail
