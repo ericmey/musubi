@@ -1,0 +1,123 @@
+---
+- name: Back up Musubi canonical stores
+  hosts: musubi
+  become: true
+  vars:
+    backup_timestamp: "{{ ansible_date_time.iso8601_basic_short }}"
+    qdrant_collections:
+      - musubi_episodic
+      - musubi_concept
+      - musubi_curated
+      - musubi_artifact_heads
+      - musubi_artifact_chunks
+      - musubi_thoughts
+  tasks:
+    - name: Ensure snapshot directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: musubi
+        group: musubi
+        mode: "0750"
+      loop:
+        - /mnt/snapshots/qdrant/{{ backup_timestamp }}
+        - /mnt/snapshots/artifact-blobs
+        - /mnt/snapshots/sqlite
+        - /mnt/snapshots/cursors
+        - /mnt/snapshots/restic
+
+    - name: Render vault git sync helper
+      ansible.builtin.template:
+        src: templates/git-sync.sh.j2
+        dest: /opt/musubi/git-sync.sh
+        owner: root
+        group: musubi
+        mode: "0750"
+
+    - name: Sync vault to private git remote
+      ansible.builtin.command: /opt/musubi/git-sync.sh
+      changed_when: "'committed' in git_sync.stdout"
+      register: git_sync
+
+    - name: Fallback rsync of vault when git remote is unavailable
+      ansible.posix.synchronize:
+        src: /var/lib/musubi/vault/
+        dest: /mnt/snapshots/vault/
+        archive: true
+        delete: false
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Create Qdrant collection snapshots
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:6333/collections/{{ item }}/snapshots"
+        method: POST
+        headers:
+          api-key: "{{ vault_qdrant_api_key }}"
+        status_code: 200
+      loop: "{{ qdrant_collections }}"
+      no_log: true
+
+    - name: Copy Qdrant snapshots to warm tier
+      ansible.posix.synchronize:
+        src: /var/lib/musubi/qdrant-storage/snapshots/
+        dest: /mnt/snapshots/qdrant/{{ backup_timestamp }}/
+        archive: true
+        delete: false
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Write Qdrant snapshot checksums
+      ansible.builtin.shell: |
+        find /mnt/snapshots/qdrant/{{ backup_timestamp }} -type f -name '*.snapshot' -print0 \
+          | sort -z \
+          | xargs -0 sha256sum > /mnt/snapshots/qdrant/{{ backup_timestamp }}/SHA256SUMS
+      changed_when: true
+
+    - name: Sync artifact blobs to warm tier
+      ansible.posix.synchronize:
+        src: /var/lib/musubi/artifact-blobs/
+        dest: /mnt/snapshots/artifact-blobs/
+        archive: true
+        rsync_opts:
+          - "--delete-after"
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Back up sqlite lifecycle ledger
+      ansible.builtin.command:
+        cmd: >-
+          sqlite3 /var/lib/musubi/lifecycle-work.sqlite
+          ".backup /mnt/snapshots/sqlite/lifecycle-work-{{ backup_timestamp }}.sqlite"
+      changed_when: true
+
+    - name: Sync lifecycle cursor files
+      ansible.posix.synchronize:
+        src: /var/lib/musubi/
+        dest: /mnt/snapshots/cursors/
+        archive: true
+        rsync_opts:
+          - "--include=*.cursor"
+          - "--include=*cursor*.sqlite"
+          - "--exclude=*"
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Render restic environment
+      ansible.builtin.template:
+        src: templates/restic.env.j2
+        dest: /etc/musubi/restic.env
+        owner: root
+        group: musubi
+        mode: "0640"
+      no_log: true
+
+    - name: Push warm snapshots to encrypted offsite repository
+      ansible.builtin.shell: |
+        set -a
+        . /etc/musubi/restic.env
+        set +a
+        restic backup /mnt/snapshots
+      changed_when: true
+      no_log: true
+
+    - name: Prune warm Qdrant snapshots after retention window
+      ansible.builtin.command:
+        cmd: find /mnt/snapshots/qdrant -mindepth 1 -maxdepth 1 -type d -mtime +90 -exec rm -rf {} +
+      changed_when: false
