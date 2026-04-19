@@ -3,10 +3,10 @@ title: "Slice: Canonical API v0.1 — read surface"
 slice_id: slice-api-v0-read
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: vscode-cc-sonnet47
 phase: "7 Adapters"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-config]]", "[[_slices/slice-auth]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-artifact]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-api-v0-write]]", "[[_slices/slice-adapter-livekit]]", 
 
 > HTTP read surface + scaffolding. Every GET endpoint defined in canonical-api.md, plus the auth middleware + OpenAPI spec + error taxonomy + pagination + health probes that every adapter and the write-side slice inherit.
 
-**Phase:** 7 Adapters · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 7 Adapters · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
 
 **Split origin:** this slice was split from the original `slice-api-v0` (closed Issue #6) because the combined read+write scope would exceed the 800 LoC PR cap. Write-side is `slice-api-v0-write`, which depends on this slice.
 
@@ -92,6 +92,11 @@ Agents append one entry per work session. Format:
 
 - Created from the operator-side slice-reconcile that split the original `slice-api-v0` (closed Issue #6) into `-read` + `-write` to respect the 800 LoC PR cap. See the chore PR that landed this file + the sibling `slice-api-v0-write.md` + closed #6 + opened new Issues.
 - Discovered by `vscode-cc-sonnet47` during claim-time brief verification; agent correctly paused per "don't split a slice mid-flight" before claiming.
+
+### 2026-04-19 — vscode-cc-sonnet47 — claim
+
+- Claimed slice atomically via `gh issue edit 70 --add-assignee @me`. Issue #70, PR #73 (draft).
+- Branch `slice/slice-api-v0-read` off `v2`.
 
 ## Cross-slice tickets opened by this slice
 
