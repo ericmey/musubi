@@ -3,10 +3,10 @@ title: "Slice: Backup / restore"
 slice_id: slice-ops-backup
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-ops-ansible]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > Nightly snapshot to local NAS + S3-compatible offsite + weekly restore-into-scratch drill.
 
-**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `codex-gpt5`
+**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
@@ -68,10 +68,32 @@ Agents append one entry per work session. Format:
 
 - Claimed Issue #17 and flipped slice frontmatter from `ready` to `in-progress`.
 
+### 2026-04-19 19:25 — codex-gpt5 — handoff to in-review
+
+- Added backup, restore, and restore-drill playbooks under `deploy/backup/`, plus git-sync/restic templates and an operator README.
+- Added lightweight backup helper code at `src/musubi/ops/backup.py` for deterministic checksum and SQLite backup behavior.
+- Extended the Ansible scaffold with `ansible.posix` and vault example placeholders needed by the backup playbooks.
+- Verification: `make check` passed; `make tc-coverage SLICE=slice-ops-backup` passed; `make agent-check` reported warnings only and no `✗` hard errors.
+
+| Test Contract bullet | State | Evidence |
+|---|---|---|
+| `test_git_sync_commits_only_when_changed` | ✓ passing | `tests/ops/test_backup.py:35` |
+| `test_qdrant_snapshot_creates_file_and_rsyncs` | ✓ passing | `tests/ops/test_backup.py:43` |
+| `test_artifact_rsync_delete_after_removes_purged_blobs` | ✓ passing | `tests/ops/test_backup.py:53` |
+| `test_sqlite_backup_completes_under_5s_at_v1_scale` | ✓ passing | `tests/ops/test_backup.py:61` |
+| `test_drill_playbook_restores_to_working_musubi` | ✓ passing | `tests/ops/test_backup.py:76` |
+| `test_restore_drill_smoke_suite_passes_within_5min` | ✓ passing | `tests/ops/test_backup.py:85` |
+| `test_corruption_check_fails_on_tampered_snapshot` | ✓ passing | `tests/ops/test_backup.py:99` |
+| `test_every_asset_has_canonical_owner_documented` | ✓ passing | `tests/ops/test_backup.py:109` |
+| `test_backup_cadence_matches_claimed_rpo` | ✓ passing | `tests/ops/test_backup.py:127` |
+| `test_restore_drills_run_quarterly` | ✓ passing | `tests/ops/test_backup.py:136` |
+| `test_curated_rebuild_from_vault_produces_matching_qdrant_count` | ✓ passing | `tests/ops/test_backup.py:142` |
+| `test_artifact_rechunk_produces_same_chunk_count_as_snapshot` | ✓ passing | `tests/ops/test_backup.py:150` |
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
 
 ## PR links
 
-- _(none yet)_
+- [PR #82](https://github.com/ericmey/musubi/pull/82)
