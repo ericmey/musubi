@@ -630,6 +630,14 @@ async def concept_maturation_sweep(
     for row in candidates:
         if int(row.get("reinforcement_count", 0)) < cfg.concept_reinforcement_threshold:
             continue
+        # Check for active contradictions
+        contradicts = row.get("contradicts", [])
+        if isinstance(contradicts, list) and len(contradicts) > 0:
+            log.info(
+                "Skipping maturation for concept %s: has active contradictions", row["object_id"]
+            )
+            continue
+
         result = transition(
             client,
             object_id=row["object_id"],
