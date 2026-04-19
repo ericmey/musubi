@@ -192,7 +192,13 @@ async def test_tei_dense_client_raises_typed_error_on_5xx(
         status_code=503,
         text="inference backend unavailable",
     )
-    client = TEIDenseClient(base_url="http://tei-dense")
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        status_code=503,
+        text="inference backend unavailable",
+    )
+    client = TEIDenseClient(base_url="http://tei-dense", retry_backoff=0.0)
     with pytest.raises(EmbeddingError) as excinfo:
         await client.embed_dense(["x"])
     # Error carries the status and a useful message — not just "HTTPError".
@@ -209,7 +215,13 @@ async def test_tei_sparse_client_raises_typed_error_on_5xx(
         status_code=500,
         text="boom",
     )
-    client = TEISparseClient(base_url="http://tei-sparse")
+    httpx_mock.add_response(
+        url="http://tei-sparse/embed_sparse",
+        method="POST",
+        status_code=500,
+        text="boom",
+    )
+    client = TEISparseClient(base_url="http://tei-sparse", retry_backoff=0.0)
     with pytest.raises(EmbeddingError):
         await client.embed_sparse(["x"])
 
@@ -223,7 +235,13 @@ async def test_tei_reranker_client_raises_typed_error_on_5xx(
         status_code=502,
         text="bad gateway",
     )
-    client = TEIRerankerClient(base_url="http://tei-reranker")
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        status_code=502,
+        text="bad gateway",
+    )
+    client = TEIRerankerClient(base_url="http://tei-reranker", retry_backoff=0.0)
     with pytest.raises(EmbeddingError):
         await client.rerank("q", ["c"])
 
