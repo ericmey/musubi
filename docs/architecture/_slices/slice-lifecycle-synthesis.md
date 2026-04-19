@@ -3,12 +3,12 @@ title: "Slice: Concept synthesis job"
 slice_id: slice-lifecycle-synthesis
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-2-0-flash
 phase: "6 Lifecycle"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-lifecycle-engine]]", "[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-plane-concept]]"]
 blocks: ["[[_slices/slice-lifecycle-promotion]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-lifecycle-promotion]]"]
 
 > Daily job. Cluster matured episodics; generate SynthesizedConcept objects. Fact-extraction + consolidation.
 
-**Phase:** 6 Lifecycle · **Status:** `in-progress` · **Owner:** `gemini-2-0-flash`
+**Phase:** 6 Lifecycle · **Status:** `done` · **Owner:** `gemini-2-0-flash`
 
 ## Specs to implement
 
