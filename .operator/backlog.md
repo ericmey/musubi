@@ -16,6 +16,34 @@ Enumerates all slices, cross-references with `gh issue list`, flags claim-readin
 
 ## Next up
 
+### `scripts/handoff-audit.py`
+
+**Priority: top.** Catches a class of failure `claimable.py` can't: agent pushed commits + claimed "all checks passed" locally, but the committed tree is missing files their tests import (because the files were in their local working directory, never `git add`'d).
+
+Surfaced by PR #67 (Hana, slice-retrieval-deep): agent claimed 92% coverage + all checks green, but `src/musubi/retrieve/deep.py` was never committed. Tests + coverage + mypy all failed remotely because CI saw only what was pushed.
+
+**Shape:**
+
+```bash
+# Run this after an agent reports handoff-green, before reviewing the PR:
+python3 .operator/scripts/handoff-audit.py <pr-number>
+```
+
+**Checks:**
+
+1. Every file listed in the slice's `## Owned paths` exists in the PR branch's git tree (`git ls-files` on the head SHA).
+2. Commit graph contains at least one `feat(...)` commit, and that commit touches at least one file under `owns_paths`.
+3. Canonical 7-commit shape approximately present (chore → chore-flip → chore-lock → test → feat → docs-handoff → chore-lock-release). Warn on deviation; don't fail.
+4. `gh pr view --json mergeStateStatus` = `CLEAN` (not `UNSTABLE` / `DIRTY`).
+5. Slice-file frontmatter `status: in-review` (not still `in-progress`).
+6. PR body first line matches `^Closes #<N>\.$`.
+
+Exit code 0 = ready-to-review; 1 = audit failed (flags specific failure).
+
+**Motivation:** operator-time sink per agent handoff. Had 3-4 instances this session where agent-claimed green didn't match reality. This is the push-time complement to `claimable.py`'s claim-time checks.
+
+**Estimate:** ~150 lines on top of `claimable.py` library functions.
+
 ### `scripts/merge-flow.py`
 
 **Priority: high.** The post-merge ritual I run manually on every slice PR, automated:
