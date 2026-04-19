@@ -1,0 +1,5 @@
+agent: vscode-cc-sonnet47
+issue: 70
+started: 2026-04-19T21:46:22Z
+branch: slice/slice-api-v0-read
+note: Secondary lock per agent-guardrails §Locking. Removed at handoff.
