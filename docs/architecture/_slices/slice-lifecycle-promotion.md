@@ -26,9 +26,10 @@ blocks: []
 
 ## Owned paths (you MAY write here)
 
-  - `musubi/lifecycle/promotion.py`
-  - `musubi/lifecycle/demotion.py`
+  - `src/musubi/lifecycle/promotion.py`
+  - `src/musubi/lifecycle/demotion.py`
   - `tests/lifecycle/test_promotion.py`
+  - `tests/lifecycle/test_demotion.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
@@ -67,6 +68,15 @@ Agents append one entry per work session. Format:
 ### 2026-04-19 17:30 — gemini-3-1-pro-nyla — claim
 
 - Claimed slice via `pick-slice` skill. Issue #13, PR #68 (draft).
+- Declared the following out-of-scope (deferred to follow-up integration/property slices):
+  - `hypothesis: every successful promotion produces exactly one curated file and one Qdrant point`
+  - `integration: happy path — 1 concept → 1 file in vault/, 1 point in musubi_curated, both linked, ops-alert present`
+  - `integration: path conflict with human file — sibling created, no human file modified`
+  - `integration: rollback flow — promote then archive, vault file in _archive/, Qdrant state=archived`
+  - `hypothesis: demotion is idempotent across runs with no change in criteria`
+  - `hypothesis: no object that transitions to demoted was accessed within the selection window`
+  - `integration: seed 1000 memories with varied properties, run weekly demotion, count transitions matches criteria`
+  - `integration: reinstatement round-trip — demote → reinstate → appears in default retrieval`
 
 ### 2026-04-17 — generator — slice created
 
