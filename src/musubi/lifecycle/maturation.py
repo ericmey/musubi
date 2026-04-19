@@ -630,6 +630,18 @@ async def concept_maturation_sweep(
     for row in candidates:
         if int(row.get("reinforcement_count", 0)) < cfg.concept_reinforcement_threshold:
             continue
+        # Skip concepts with active contradictions — spec says maturation is
+        # blocked until the contradiction is resolved (surfaced by
+        # slice-lifecycle-synthesis; see cross-slice ticket
+        # _inbox/cross-slice/slice-lifecycle-synthesis-slice-lifecycle-maturation-missing-contradicts-check.md).
+        contradicts = row.get("contradicts", [])
+        if isinstance(contradicts, list) and len(contradicts) > 0:
+            log.info(
+                "skipping concept-maturation for %s: %d active contradiction(s)",
+                row["object_id"],
+                len(contradicts),
+            )
+            continue
         result = transition(
             client,
             object_id=row["object_id"],
