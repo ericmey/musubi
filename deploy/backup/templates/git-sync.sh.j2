@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd /var/lib/musubi/vault
+git add -A
+if git diff --cached --quiet; then
+  echo "clean"
+  exit 0
+fi
+
+git commit -m "autosync $(date -Iseconds)"
+git push --quiet origin main
+echo "committed"

@@ -1,0 +1,94 @@
+---
+- name: Restore Musubi canonical stores
+  hosts: musubi
+  become: true
+  vars:
+    restore_timestamp: "{{ backup_timestamp | default('latest') }}"
+  tasks:
+    - name: Stop Musubi before restore
+      ansible.builtin.systemd_service:
+        name: musubi
+        state: stopped
+
+    - name: Restore vault from git remote
+      ansible.builtin.command:
+        cmd: >-
+          git clone {{ vault_musubi_vault_remote }}
+          /var/lib/musubi/vault.restore
+      changed_when: true
+      no_log: true
+
+    - name: Swap restored vault into place
+      ansible.builtin.command:
+        cmd: >-
+          rsync -a --delete-after /var/lib/musubi/vault.restore/
+          /var/lib/musubi/vault/
+      changed_when: true
+
+    - name: Restore artifact blobs
+      ansible.posix.synchronize:
+        src: /mnt/snapshots/artifact-blobs/
+        dest: /var/lib/musubi/artifact-blobs/
+        archive: true
+        delete: false
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Restore sqlite lifecycle ledger
+      ansible.builtin.copy:
+        src: /mnt/snapshots/sqlite/lifecycle-work-{{ restore_timestamp }}.sqlite
+        dest: /var/lib/musubi/lifecycle-work.sqlite
+        remote_src: true
+        owner: musubi
+        group: musubi
+        mode: "0640"
+
+    - name: Restore lifecycle cursor files
+      ansible.posix.synchronize:
+        src: /mnt/snapshots/cursors/
+        dest: /var/lib/musubi/
+        archive: true
+        delete: false
+      delegate_to: "{{ inventory_hostname }}"
+
+    - name: Start Musubi with restored filesystem stores
+      ansible.builtin.systemd_service:
+        name: musubi
+        state: started
+
+    - name: Recover Qdrant collections from snapshot files
+      ansible.builtin.command:
+        cmd: musubi-cli qdrant recover-from-snapshot --name {{ restore_timestamp }}
+      changed_when: true
+
+    - name: Rebuild curated Qdrant index from vault
+      ansible.builtin.command:
+        cmd: musubi-cli index rebuild --collection musubi_curated --source /var/lib/musubi/vault
+      changed_when: true
+
+    - name: Count curated Qdrant records after rebuild
+      ansible.builtin.command:
+        cmd: musubi-cli index count --collection musubi_curated
+      changed_when: false
+      register: curated_qdrant_count
+
+    - name: Rechunk artifact blobs after restore
+      ansible.builtin.command:
+        cmd: musubi-cli artifacts rechunk --all
+      changed_when: true
+
+    - name: Count artifact chunks in Qdrant
+      ansible.builtin.command:
+        cmd: musubi-cli artifacts chunk-count --source qdrant
+      changed_when: false
+      register: qdrant_chunk_count
+
+    - name: Count artifact chunks from filesystem source
+      ansible.builtin.command:
+        cmd: musubi-cli artifacts chunk-count --source filesystem
+      changed_when: false
+      register: filesystem_chunk_count
+
+    - name: Assert restored artifact chunks match source count
+      ansible.builtin.assert:
+        that:
+          - qdrant_chunk_count.stdout == filesystem_chunk_count.stdout

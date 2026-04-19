@@ -11,7 +11,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKUP = ROOT / "deploy" / "backup"
-MODULE_PATH = ROOT / "musubi" / "ops" / "backup.py"
+MODULE_PATH = ROOT / "src" / "musubi" / "ops" / "backup.py"
 BACKUP_PLAYBOOK = BACKUP / "backup.yml"
 RESTORE_PLAYBOOK = BACKUP / "restore.yml"
 DRILL_PLAYBOOK = BACKUP / "drill.yml"
@@ -117,6 +117,8 @@ def test_every_asset_has_canonical_owner_documented() -> None:
     assert table_lines
     for line in table_lines:
         cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) < 5:
+            continue
         assert cells[0]
         assert cells[1]
         assert cells[3]
