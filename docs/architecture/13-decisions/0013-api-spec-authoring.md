@@ -91,4 +91,4 @@ Rejected because:
 - FastAPI OpenAPI emission: `app.openapi()` and `docs_url="/docs"`.
 - [[07-interfaces/canonical-api]] — the human-readable spec that both OpenAPI and proto are the machine-readable embodiments of.
 - [[07-interfaces/contract-tests]] — the proto-parity test lives here.
-- [[_slices/slice-api-v0]] — the slice that owns this.
+- [[_slices/slice-api-v0-read]] — the slice that owns this.

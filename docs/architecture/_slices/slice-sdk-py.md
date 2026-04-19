@@ -9,7 +9,7 @@ phase: "5 Vault"
 tags: [section/slices, status/ready, type/slice]
 updated: 2026-04-17
 reviewed: false
-depends-on: ["[[_slices/slice-api-v0]]"]
+depends-on: ["[[_slices/slice-api-v0-write]]"]
 blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-openclaw]]"]
 ---
 # Slice: Python SDK
@@ -32,7 +32,7 @@ blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "
 
 ## Depends on
 
-- [[_slices/slice-api-v0]]
+- [[_slices/slice-api-v0-write]]
 
 Start this slice only after every upstream slice has `status: done`.
 

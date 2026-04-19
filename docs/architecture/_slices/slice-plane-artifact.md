@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]"]
-blocks: ["[[_slices/slice-api-v0]]", "[[_slices/slice-retrieval-blended]]", "[[_slices/slice-retrieval-orchestration]]"]
+blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-retrieval-blended]]", "[[_slices/slice-retrieval-orchestration]]"]
 ---
 # Slice: Source artifact plane
 
