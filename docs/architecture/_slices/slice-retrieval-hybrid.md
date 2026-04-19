@@ -3,12 +3,12 @@ title: "Slice: Hybrid dense + sparse search"
 slice_id: slice-retrieval-hybrid
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "2 Hybrid"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]", "[[_slices/slice-embedding]]"]
 blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]"]
 
 > Qdrant Query API with server-side RRF fusion over named dense + sparse vectors.
 
-**Phase:** 2 Hybrid · **Status:** `in-review` · **Owner:** `codex-gpt5`
+**Phase:** 2 Hybrid · **Status:** `done` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
