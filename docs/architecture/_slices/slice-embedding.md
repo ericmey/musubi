@@ -89,10 +89,35 @@ Test Contract Closure state via `make tc-coverage SLICE=slice-embedding`:
 
 The **review pass** + the follow-up work to close the genuine in-scope deferrals are both prerequisites for flipping to `done`.
 
+### 2026-04-19 11:08 — codex-gpt5 — follow-up claim
+
+- Claimed follow-up Issue #36 and draft PR #41 to close in-scope embedding deferrals: `test_batch_encode_64_items_one_call`, `test_truncate_content_to_2048_chars`, `test_query_cache_hit_on_repeat`, `test_query_cache_miss_on_different_query`, `test_query_cache_cleared_on_model_revision_change`, and transient 5xx retry.
+- Out-of-scope Test Contract bullets remain in downstream homes and are represented as explicit skipped tests or non-test declarations:
+  - `hypothesis: for any content, encode(content) is stable across repeats (same weights)` — property suite follow-up, not required for this unit follow-up.
+  - `integration: full re-embedding job — old named vector read + new named vector write, dual-exist, cutover flip, evals stable` — re-embedding migration integration follow-up.
+  - `integration: boot scan with re-embedding — 10K files embedded in < 5 minutes on reference GPU` — ops/GPU integration follow-up.
+
+### 2026-04-19 11:08 — codex-gpt5 — follow-up handoff to in-review
+
+- Finished Issue #36 follow-up: TEI clients now chunk encode inputs at 64 items, truncate TEI inputs to 2048 chars, retry one transient 5xx with async jittered backoff, and expose `CachedEmbedder` for revision-keyed query embedding caching.
+- Tests: `make check` passed with 254 passing / 35 skipped; `make tc-coverage SLICE=slice-embedding` passed with 8 passing, 16 explicitly skipped to downstream slices, and 3 declared out-of-scope non-test bullets.
+- Coverage: repo total 94.64%; owned embedding files remain above the slice baseline except `cache.py`, whose uncovered lines are defensive validation / eviction / sparse-copy branches not required by Issue #36.
+- `make agent-check` exited clean with pre-existing vault warnings only.
+
+### Known gaps at in-review — 2026-04-19 — claude-code-opus47
+
+Non-blocking Should-fix items surfaced during the musubi-reviewer pass on PR #41. None blocks the in-review → merge transition individually (repo-wide coverage floor is satisfied), but all three should be closed before `slice-embedding` flips `status: done`. Full context in the review comment on PR #41 (`COMMENTED` review by `claude-code-opus47`, 2026-04-19).
+
+1. **`CachedEmbedder.embed_sparse` has zero test coverage.** `src/musubi/embedding/cache.py` lines 48–56 and `_remember_sparse` (71–73) are uncovered. The class docstring promises "Cache dense **and** sparse query embeddings"; the dense path has three tests (`test_query_cache_hit_on_repeat`, `test_query_cache_miss_on_different_query`, `test_query_cache_cleared_on_model_revision_change`), sparse has none. Remedy: add symmetric `test_query_sparse_cache_hit_on_repeat` and `test_query_sparse_cache_cleared_on_model_revision_change` (~15 lines, mirror of the existing dense tests).
+2. **`CachedEmbedder` eviction path untested.** Line 67 (`self._dense.pop(next(iter(self._dense)))` at `_max_entries`) has no test. Bounded-memory is a correctness property worth one small test: construct with `max_entries=2`, insert three distinct texts, assert the oldest key is gone.
+3. **`TEIRerankerClient` missing-scores branch untested.** `tei.py` lines 236–237 raise `EmbeddingError("TEI reranker response missing scores for indexes …")` when the server omits an index. That's a real invariant ("reranker returns one score per candidate"). Remedy: one `test_tei_reranker_raises_on_missing_scores` with a mock response that drops an entry from the `[{"index": i, "score": …}, …]` array.
+
+All three together lift `src/musubi/embedding/` from 83 % → ~90 % branch coverage. Repo-wide floor (85 %) is already satisfied (94.64 %), so the slice is technically shippable without them — but the embedding module is below its own reasonable bar and the specific code paths the gaps hide *are* part of the spec's contract.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
 
 ## PR links
 
-- _(none yet)_
+- PR #41 — `feat(embedding): batching + caching + truncation (slice-embedding follow-up)`

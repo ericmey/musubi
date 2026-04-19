@@ -10,6 +10,7 @@ Public surface:
 - :class:`Embedder` — runtime-checkable protocol with ``embed_dense``,
   ``embed_sparse``, ``rerank``.
 - :class:`FakeEmbedder` — deterministic in-process double for unit tests.
+- :class:`CachedEmbedder` — in-memory query embedding cache wrapper.
 - :class:`TEIDenseClient`, :class:`TEISparseClient`, :class:`TEIRerankerClient`
   — thin httpx-backed TEI clients.
 - :class:`EmbeddingError` — typed error raised by the TEI clients on
@@ -22,10 +23,12 @@ Specs realised:
 """
 
 from musubi.embedding.base import Embedder, EmbeddingError
+from musubi.embedding.cache import CachedEmbedder
 from musubi.embedding.fake import FakeEmbedder
 from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
 
 __all__ = [
+    "CachedEmbedder",
     "Embedder",
     "EmbeddingError",
     "FakeEmbedder",

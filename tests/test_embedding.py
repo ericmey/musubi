@@ -23,6 +23,7 @@ Contract (from the spec + the slice brief):
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import AsyncIterator
 
@@ -31,6 +32,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from musubi.embedding import (
+    CachedEmbedder,
     Embedder,
     EmbeddingError,
     FakeEmbedder,
@@ -64,6 +66,11 @@ async def test_embed_dense_returns_correct_dimensionality(fake: FakeEmbedder) ->
         assert all(isinstance(x, float) for x in v)
 
 
+async def test_encode_dense_returns_1024_dim(fake: FakeEmbedder) -> None:
+    [vector] = await fake.embed_dense(["hello"])
+    assert len(vector) == DENSE_SIZE
+
+
 # ---------------------------------------------------------------------------
 # 2. embed_sparse shape
 # ---------------------------------------------------------------------------
@@ -81,6 +88,12 @@ async def test_embed_sparse_returns_dict_index_to_weight(fake: FakeEmbedder) -> 
         assert weight >= 0.0
 
 
+async def test_encode_sparse_returns_nonempty_dict(fake: FakeEmbedder) -> None:
+    [vector] = await fake.embed_sparse(["hello world"])
+    assert vector
+    assert all(isinstance(index, int) for index in vector)
+
+
 # ---------------------------------------------------------------------------
 # 3. rerank
 # ---------------------------------------------------------------------------
@@ -90,6 +103,15 @@ async def test_rerank_returns_score_per_candidate(fake: FakeEmbedder) -> None:
     scores = await fake.rerank("query", ["candidate 1", "candidate 2", "candidate 3"])
     assert len(scores) == 3
     assert all(isinstance(s, float) for s in scores)
+
+
+async def test_encode_parallel_dense_sparse(fake: FakeEmbedder) -> None:
+    dense, sparse = await asyncio.gather(
+        fake.embed_dense(["parallel"]),
+        fake.embed_sparse(["parallel"]),
+    )
+    assert len(dense[0]) == DENSE_SIZE
+    assert sparse[0]
 
 
 # ---------------------------------------------------------------------------
@@ -191,7 +213,13 @@ async def test_tei_dense_client_raises_typed_error_on_5xx(
         status_code=503,
         text="inference backend unavailable",
     )
-    client = TEIDenseClient(base_url="http://tei-dense")
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        status_code=503,
+        text="inference backend unavailable",
+    )
+    client = TEIDenseClient(base_url="http://tei-dense", retry_backoff=0.0)
     with pytest.raises(EmbeddingError) as excinfo:
         await client.embed_dense(["x"])
     # Error carries the status and a useful message — not just "HTTPError".
@@ -208,7 +236,13 @@ async def test_tei_sparse_client_raises_typed_error_on_5xx(
         status_code=500,
         text="boom",
     )
-    client = TEISparseClient(base_url="http://tei-sparse")
+    httpx_mock.add_response(
+        url="http://tei-sparse/embed_sparse",
+        method="POST",
+        status_code=500,
+        text="boom",
+    )
+    client = TEISparseClient(base_url="http://tei-sparse", retry_backoff=0.0)
     with pytest.raises(EmbeddingError):
         await client.embed_sparse(["x"])
 
@@ -222,7 +256,13 @@ async def test_tei_reranker_client_raises_typed_error_on_5xx(
         status_code=502,
         text="bad gateway",
     )
-    client = TEIRerankerClient(base_url="http://tei-reranker")
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        status_code=502,
+        text="bad gateway",
+    )
+    client = TEIRerankerClient(base_url="http://tei-reranker", retry_backoff=0.0)
     with pytest.raises(EmbeddingError):
         await client.rerank("q", ["c"])
 
@@ -256,6 +296,223 @@ async def test_fake_batch_preserves_order(fake: FakeEmbedder) -> None:
     assert batch == per_item
 
 
+async def test_batch_encode_64_items_one_call(httpx_mock: HTTPXMock) -> None:
+    texts = [f"item-{i}" for i in range(64)]
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[float(i)] + [0.0] * (DENSE_SIZE - 1) for i in range(64)],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense", max_batch_size=64)
+    out = await client.embed_dense(texts)
+
+    assert len(out) == 64
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    assert requests[0].read().decode().count("item-") == 64
+
+
+async def test_batch_encode_above_64_chunks_requests(httpx_mock: HTTPXMock) -> None:
+    texts = [f"item-{i}" for i in range(65)]
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[float(i)] + [0.0] * (DENSE_SIZE - 1) for i in range(64)],
+    )
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[64.0] + [0.0] * (DENSE_SIZE - 1)],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense", max_batch_size=64)
+    out = await client.embed_dense(texts)
+
+    assert len(out) == 65
+    assert [vec[0] for vec in out] == [float(i) for i in range(65)]
+    assert len(httpx_mock.get_requests()) == 2
+
+
+async def test_truncate_content_to_2048_chars(httpx_mock: HTTPXMock) -> None:
+    long_text = "x" * 2050
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[0.0] * DENSE_SIZE],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense")
+    await client.embed_dense([long_text])
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    payload = request.content.decode()
+    assert "x" * 2048 in payload
+    assert "x" * 2049 not in payload
+
+
+async def test_query_cache_hit_on_repeat() -> None:
+    wrapped = CountingEmbedder()
+    cached = CachedEmbedder(wrapped, model_revision="dense-v1")
+
+    first = await cached.embed_dense(["same query"])
+    second = await cached.embed_dense(["same query"])
+
+    assert first == second
+    assert wrapped.dense_calls == 1
+
+
+async def test_query_cache_miss_on_different_query() -> None:
+    wrapped = CountingEmbedder()
+    cached = CachedEmbedder(wrapped, model_revision="dense-v1")
+
+    await cached.embed_dense(["alpha"])
+    await cached.embed_dense(["beta"])
+
+    assert wrapped.dense_calls == 2
+
+
+async def test_query_cache_cleared_on_model_revision_change() -> None:
+    wrapped = CountingEmbedder()
+    cached = CachedEmbedder(wrapped, model_revision="dense-v1")
+
+    first = await cached.embed_dense(["same query"])
+    cached.set_model_revision("dense-v2")
+    second = await cached.embed_dense(["same query"])
+
+    assert first != second
+    assert wrapped.dense_calls == 2
+
+
+async def test_tei_transient_5xx_retries_once(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        status_code=503,
+        text="warming",
+    )
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[1.0] + [0.0] * (DENSE_SIZE - 1)],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense", retry_backoff=0.0)
+    out = await client.embed_dense(["x"])
+
+    assert out[0][0] == 1.0
+    assert len(httpx_mock.get_requests()) == 2
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-retrieval-hybrid: Qdrant upsert lives outside embedding"
+)
+def test_upsert_specifies_both_named_vectors() -> None:
+    raise AssertionError("covered by retrieval/store integration follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-retrieval-hybrid: Qdrant query construction lives outside embedding"
+)
+def test_query_uses_specified_named_vector() -> None:
+    raise AssertionError("covered by retrieval/store integration follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-reembedding-migration: migration vector add/rebuild lives outside embedding"
+)
+def test_collection_can_add_new_named_vector_without_rebuild() -> None:
+    raise AssertionError("covered by re-embedding migration follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-vault-sync: body_hash re-embed decisions live outside embedding"
+)
+def test_body_hash_unchanged_skips_reembed() -> None:
+    raise AssertionError("covered by vault-sync follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-vault-sync: body_hash re-embed decisions live outside embedding"
+)
+def test_body_hash_changed_triggers_reembed() -> None:
+    raise AssertionError("covered by vault-sync follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-lifecycle-promotion: synthesis reinforcement lives outside embedding"
+)
+def test_synthesis_reinforce_does_not_reembed() -> None:
+    raise AssertionError("covered by lifecycle follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-api-v0: capture endpoint 503 mapping lives outside embedding"
+)
+def test_tei_down_capture_returns_503() -> None:
+    raise AssertionError("covered by API follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ingestion-capture: sequential fallback policy lives outside TEI client"
+)
+def test_tei_timeout_on_batch_falls_back_to_sequential() -> None:
+    raise AssertionError("covered by ingestion capture follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-compose: service health budgets require Docker Compose"
+)
+def test_all_four_services_healthy_within_60s() -> None:
+    raise AssertionError("covered by ops integration follow-up")
+
+
+@pytest.mark.skip(reason="deferred to slice-ops-gpu: VRAM budget requires reference GPU host")
+def test_vram_below_9_5gb_after_cold_start() -> None:
+    raise AssertionError("covered by ops GPU follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability: latency budgets require live TEI dense service"
+)
+def test_tei_dense_encode_latency_p95_lt_50ms() -> None:
+    raise AssertionError("covered by ops performance follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability: latency budgets require live TEI sparse service"
+)
+def test_tei_sparse_encode_latency_p95_lt_80ms() -> None:
+    raise AssertionError("covered by ops performance follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability: latency budgets require live reranker service"
+)
+def test_reranker_40pair_batch_p95_lt_200ms() -> None:
+    raise AssertionError("covered by ops performance follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability: latency budgets require live Ollama service"
+)
+def test_ollama_qwen25_generation_p50_lt_4s_for_200_token_output() -> None:
+    raise AssertionError("covered by ops performance follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-retrieval-hybrid: Ollama degradation belongs to retrieval/core"
+)
+def test_core_degrades_gracefully_if_ollama_killed() -> None:
+    raise AssertionError("covered by retrieval/core integration follow-up")
+
+
+@pytest.mark.skip(reason="deferred to slice-api-v0: TEI outage-to-503 mapping belongs to API/core")
+def test_core_503s_if_tei_dense_killed() -> None:
+    raise AssertionError("covered by API/core integration follow-up")
+
+
 # ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
@@ -271,6 +528,26 @@ def test_tei_clients_can_stand_alone() -> None:
     TEIDenseClient(base_url="http://tei-dense")
     TEISparseClient(base_url="http://tei-sparse")
     TEIRerankerClient(base_url="http://tei-reranker")
+
+
+class CountingEmbedder(Embedder):
+    def __init__(self) -> None:
+        self.dense_calls = 0
+        self.sparse_calls = 0
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        self.dense_calls += 1
+        return [
+            [float(self.dense_calls), float(len(text)), *([0.0] * (DENSE_SIZE - 2))]
+            for text in texts
+        ]
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        self.sparse_calls += 1
+        return [{self.sparse_calls: float(len(text))} for text in texts]
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return [float(len(query) + len(candidate)) for candidate in candidates]
 
 
 # ---------------------------------------------------------------------------
