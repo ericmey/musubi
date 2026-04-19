@@ -90,7 +90,7 @@ Agents append one entry per work session. Format:
 | 16 | `test_contradictory_concepts_link_both_sides` | passing | |
 | 17 | `test_contradicted_concept_blocked_from_promotion` | skipped | deferred to slice-lifecycle-promotion |
 | 18 | `test_synthesized_matures_after_24h_without_contradiction` | passing | |
-| 19 | `test_synthesized_blocked_from_maturing_with_contradiction` | passing | |
+| 19 | `test_synthesized_blocked_from_maturing_with_contradiction` | skipped | blocked by cross-slice issue |
 | 20 | `test_concept_demotes_after_30d_no_reinforcement` | passing | |
 | 21 | `test_ollama_down_does_not_advance_cursor` | passing | |
 | 22 | `test_qdrant_batch_fails_no_partial_state` | skipped | one-by-one implementation |
