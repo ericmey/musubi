@@ -1,0 +1,39 @@
+---
+operator_ssh_user: "<operator-user>"
+musubi_service_user: musubi
+musubi_service_group: musubi
+
+musubi_root: /var/lib/musubi
+musubi_config_dir: /etc/musubi
+musubi_log_dir: /var/log/musubi
+musubi_data_dirs:
+  - /var/lib/musubi/vault
+  - /var/lib/musubi/artifact-blobs
+  - /var/lib/musubi/qdrant-storage
+  - /var/lib/musubi/tei-models
+  - /var/lib/musubi/ollama-models
+
+musubi_core_port: 8100
+musubi_core_image: "ghcr.io/example/musubi-core@sha256:<core-digest>"
+musubi_qdrant_image: "qdrant/qdrant@sha256:<qdrant-digest>"
+musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference@sha256:<tei-digest>"
+musubi_ollama_image: "ollama/ollama@sha256:<ollama-digest>"
+musubi_ollama_model: "qwen3:4b"
+
+musubi_required_packages:
+  - ca-certificates
+  - chrony
+  - curl
+  - docker-ce
+  - docker-ce-cli
+  - docker-compose-plugin
+  - gnupg
+  - logrotate
+  - nvidia-container-toolkit
+  - nvidia-driver-560-server
+  - unattended-upgrades
+
+musubi_health_urls:
+  core: "http://127.0.0.1:8100/v1/ops/health"
+  qdrant: "http://127.0.0.1:6333/health"
+  ollama: "http://127.0.0.1:11434/api/tags"

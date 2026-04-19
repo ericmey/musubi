@@ -1,0 +1,29 @@
+---
+- name: Refresh Musubi runtime configuration
+  hosts: musubi
+  become: true
+  tasks:
+    - name: Render production environment
+      ansible.builtin.template:
+        src: templates/env.production.j2
+        dest: "{{ musubi_config_dir }}/.env.production"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      no_log: true
+      notify: Restart Musubi stack
+
+    - name: Render docker-compose anchor
+      ansible.builtin.template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ musubi_config_dir }}/docker-compose.yml"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      notify: Restart Musubi stack
+
+  handlers:
+    - name: Restart Musubi stack
+      ansible.builtin.systemd_service:
+        name: musubi
+        state: restarted

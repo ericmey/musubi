@@ -1,0 +1,18 @@
+---
+all:
+  children:
+    ansible_control:
+      hosts:
+        ansible-controller:
+          ansible_host: "<ansible-host>"
+          ansible_user: "{{ operator_ssh_user }}"
+    musubi:
+      hosts:
+        musubi-workload:
+          ansible_host: "<musubi-host>"
+          ansible_user: "{{ operator_ssh_user }}"
+          ansible_become: true
+          musubi_hostname: "<musubi-host>"
+          musubi_core_bind: "<musubi-ip>"
+          musubi_kong_gateway: "<kong-gateway>"
+          musubi_kong_ip: "<kong-ip>"

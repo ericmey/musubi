@@ -1,0 +1,15 @@
+[Unit]
+Description=Musubi stack
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+WorkingDirectory={{ musubi_config_dir }}
+ExecStart=/usr/bin/docker compose --env-file {{ musubi_config_dir }}/.env.production up
+ExecStop=/usr/bin/docker compose --env-file {{ musubi_config_dir }}/.env.production down
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

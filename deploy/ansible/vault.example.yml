@@ -1,0 +1,8 @@
+---
+# Copy to vault.yml and encrypt with:
+#   ansible-vault encrypt deploy/ansible/vault.yml
+vault_musubi_jwt_signing_key: "change-me"
+vault_github_deploy_token: "change-me"
+vault_kong_jwt_secret: "change-me"
+vault_backblaze_key_id: "reserved-for-slice-ops-backup"
+vault_backblaze_application_key: "reserved-for-slice-ops-backup"
