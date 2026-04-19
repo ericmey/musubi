@@ -3,11 +3,11 @@ title: "Slice: Fast-path retrieval"
 slice_id: slice-retrieval-fast
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: codex-gpt5
 phase: "3 Reranker"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-scoring]]", "[[_slices/slice-plane-episodic]]"]
 blocks: ["[[_slices/slice-adapter-livekit]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-adapter-livekit]]"]
 
 > Latency-budgeted (<400ms) episodic-only retrieval path. Cached; no cross-plane orchestration.
 
-**Phase:** 3 Reranker · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 3 Reranker · **Status:** `in-progress` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
@@ -70,6 +70,10 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 17:49 — codex-gpt5 — claimed slice
+
+- Claimed Issue #28 and flipped slice frontmatter from `ready` to `in-progress`.
 
 ## Cross-slice tickets opened by this slice
 
