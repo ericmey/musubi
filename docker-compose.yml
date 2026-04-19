@@ -1,0 +1,139 @@
+name: musubi
+
+x-logging: &default-logging
+  driver: journald
+  options:
+    tag: "musubi.{{.Name}}"
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - capabilities: [gpu]
+
+x-health-defaults: &health-defaults
+  interval: 30s
+  timeout: 5s
+  retries: 5
+
+networks:
+  musubi-net:
+    name: musubi-net
+
+volumes:
+  tei-models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/musubi/tei-models
+  ollama-models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/musubi/ollama-models
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.15.0@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    volumes:
+      - /var/lib/musubi/qdrant-storage:/qdrant/storage
+    networks: [musubi-net]
+    expose:
+      - "6333"
+      - "6334"
+    healthcheck:
+      <<: *health-defaults
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      start_period: 60s
+    restart: unless-stopped
+    logging: *default-logging
+
+  tei-dense:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    command: --model-id BAAI/bge-m3 --max-batch-tokens 32768 --max-client-batch-size 16
+    volumes:
+      - tei-models:/data
+    networks: [musubi-net]
+    healthcheck:
+      <<: *health-defaults
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      start_period: 120s
+    <<: *gpu
+    restart: unless-stopped
+    logging: *default-logging
+
+  tei-sparse:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    command: --model-id naver/splade-v3 --pooling splade --max-batch-tokens 16384
+    volumes:
+      - tei-models:/data
+    networks: [musubi-net]
+    healthcheck:
+      <<: *health-defaults
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      start_period: 120s
+    <<: *gpu
+    restart: unless-stopped
+    logging: *default-logging
+
+  tei-reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.5-cuda@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    command: --model-id BAAI/bge-reranker-v2-m3 --pooling rerank
+    volumes:
+      - tei-models:/data
+    networks: [musubi-net]
+    healthcheck:
+      <<: *health-defaults
+      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
+      start_period: 120s
+    <<: *gpu
+    restart: unless-stopped
+    logging: *default-logging
+
+  ollama:
+    image: ollama/ollama:0.4.0-cuda@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "1"
+    volumes:
+      - ollama-models:/root/.ollama
+    networks: [musubi-net]
+    healthcheck:
+      <<: *health-defaults
+      test: ["CMD-SHELL", "ollama list | grep -q qwen3:4b"]
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    <<: *gpu
+    restart: unless-stopped
+    logging: *default-logging
+
+  core:
+    image: ghcr.io/ericmey/musubi-core:v1.0.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    env_file:
+      - path: /etc/musubi/.env.production
+        required: false
+    volumes:
+      - /var/lib/musubi/vault:/var/lib/musubi/vault
+      - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
+      - /var/lib/musubi/lifecycle-work.sqlite:/var/lib/musubi/lifecycle-work.sqlite
+      - /var/log/musubi:/var/log/musubi
+    networks: [musubi-net]
+    ports:
+      - "127.0.0.1:8100:8100"
+    depends_on:
+      qdrant: {condition: service_healthy}
+      tei-dense: {condition: service_healthy}
+      tei-sparse: {condition: service_healthy}
+      tei-reranker: {condition: service_healthy}
+      ollama: {condition: service_healthy}
+    healthcheck:
+      <<: *health-defaults
+      test: ["CMD", "curl", "-f", "http://localhost:8100/v1/ops/health"]
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
