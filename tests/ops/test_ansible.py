@@ -41,12 +41,9 @@ def _iter_yaml_files() -> Iterator[Path]:
 
 def _iter_tasks(playbook: list[dict[str, Any]]) -> Iterator[dict[str, Any]]:
     for play in playbook:
-        for task in play.get("pre_tasks", []):
-            yield task
-        for task in play.get("tasks", []):
-            yield task
-        for handler in play.get("handlers", []):
-            yield handler
+        yield from play.get("pre_tasks", [])
+        yield from play.get("tasks", [])
+        yield from play.get("handlers", [])
 
 
 def _task_module(task: dict[str, Any]) -> str | None:
@@ -113,6 +110,7 @@ def test_playbook_idempotent_on_clean_vm() -> None:
         "ansible.builtin.service",
         "ansible.builtin.systemd_service",
         "ansible.builtin.template",
+        "ansible.builtin.uri",
         "ansible.builtin.user",
         "community.docker.docker_compose_v2",
         "community.docker.docker_compose_v2_pull",

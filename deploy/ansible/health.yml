@@ -1,0 +1,30 @@
+---
+- name: Check Musubi host health
+  hosts: musubi
+  become: true
+  tasks:
+    - name: Check NVIDIA visibility
+      ansible.builtin.command: nvidia-smi
+      changed_when: false
+
+    - name: Check Docker service
+      ansible.builtin.systemd_service:
+        name: docker
+        state: started
+
+    - name: Check Musubi service
+      ansible.builtin.systemd_service:
+        name: musubi
+        state: started
+
+    - name: Check Core health
+      ansible.builtin.uri:
+        url: "{{ musubi_health_urls.core }}"
+        status_code: 200
+      changed_when: false
+
+    - name: Check Ollama model endpoint
+      ansible.builtin.uri:
+        url: "{{ musubi_health_urls.ollama }}"
+        status_code: 200
+      changed_when: false

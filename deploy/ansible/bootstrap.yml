@@ -1,0 +1,124 @@
+---
+- name: Bootstrap Musubi workload host
+  hosts: musubi
+  become: true
+  pre_tasks:
+    - name: Install required apt packages
+      ansible.builtin.apt:
+        name: "{{ musubi_required_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Ensure Docker service is enabled
+      ansible.builtin.systemd_service:
+        name: docker
+        enabled: true
+        state: started
+
+  tasks:
+    - name: Create Musubi group
+      ansible.builtin.group:
+        name: "{{ musubi_service_group }}"
+        system: true
+        state: present
+
+    - name: Create Musubi system user
+      ansible.builtin.user:
+        name: "{{ musubi_service_user }}"
+        group: "{{ musubi_service_group }}"
+        groups: docker
+        append: true
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+        state: present
+
+    - name: Create Musubi data directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ musubi_service_user }}"
+        group: "{{ musubi_service_group }}"
+        mode: "0750"
+      loop: "{{ musubi_data_dirs }}"
+
+    - name: Create Musubi config directory
+      ansible.builtin.file:
+        path: "{{ musubi_config_dir }}"
+        state: directory
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0750"
+
+    - name: Create Musubi log directory
+      ansible.builtin.file:
+        path: "{{ musubi_log_dir }}"
+        state: directory
+        owner: "{{ musubi_service_user }}"
+        group: "{{ musubi_service_group }}"
+        mode: "0750"
+
+    - name: Configure UFW default deny
+      community.general.ufw:
+        policy: deny
+        direction: incoming
+
+    - name: Allow SSH from admin network placeholder
+      community.general.ufw:
+        rule: allow
+        port: "22"
+        proto: tcp
+        comment: "replace with admin subnet in vault vars before first deploy"
+
+    - name: Allow Musubi Core from Kong only
+      community.general.ufw:
+        rule: allow
+        port: "{{ musubi_core_port }}"
+        proto: tcp
+        from_ip: "{{ musubi_kong_ip }}"
+        comment: "Kong upstream only"
+
+    - name: Enable UFW
+      community.general.ufw:
+        state: enabled
+
+    - name: Configure NVIDIA runtime for Docker
+      ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
+      changed_when: false
+      notify: Restart Docker
+
+    - name: Render docker-compose anchor
+      ansible.builtin.template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ musubi_config_dir }}/docker-compose.yml"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render production environment
+      ansible.builtin.template:
+        src: templates/env.production.j2
+        dest: "{{ musubi_config_dir }}/.env.production"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      no_log: true
+
+    - name: Install Musubi systemd unit
+      ansible.builtin.template:
+        src: templates/musubi.service.j2
+        dest: /etc/systemd/system/musubi.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload systemd
+
+  handlers:
+    - name: Restart Docker
+      ansible.builtin.systemd_service:
+        name: docker
+        state: restarted
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
