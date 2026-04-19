@@ -1,5 +1,0 @@
-agent: vscode-cc-sonnet47
-issue: 10
-started: 2026-04-19T23:38:16Z
-branch: slice/slice-ingestion-capture
-note: Secondary lock per agent-guardrails §Locking. Removed at handoff.
