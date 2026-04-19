@@ -3,11 +3,11 @@ title: "Slice: Ansible deployment"
 slice_id: slice-ops-ansible
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: []
 blocks: ["[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-compose]]", "[[_slices/slice-ops-observability]]"]
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-compose]]", "[[_sl
 
 > Playbook stands up fresh Debian host: Qdrant + Core + Lifecycle Worker + vault bind-mount + Kong.
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
@@ -62,6 +62,10 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 18:45 — codex-gpt5 — claimed slice
+
+- Claimed Issue #16 and flipped slice frontmatter from `ready` to `in-progress`.
 
 ## Cross-slice tickets opened by this slice
 
