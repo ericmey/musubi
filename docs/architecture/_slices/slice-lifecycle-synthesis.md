@@ -3,11 +3,11 @@ title: "Slice: Concept synthesis job"
 slice_id: slice-lifecycle-synthesis
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-2-0-flash
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-engine]]", "[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-plane-concept]]"]
 blocks: ["[[_slices/slice-lifecycle-promotion]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-lifecycle-promotion]]"]
 
 > Daily job. Cluster matured episodics; generate SynthesizedConcept objects. Fact-extraction + consolidation.
 
-**Phase:** 6 Lifecycle · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 6 Lifecycle · **Status:** `in-progress` · **Owner:** `gemini-2-0-flash`
 
 ## Specs to implement
 
@@ -61,6 +61,10 @@ Plus slice-specific:
 
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
+
+### 2026-04-19 12:00 — gemini-2-0-flash — claim
+
+- Claimed slice via `pick-slice` skill. Issue #15, PR #62 (draft).
 
 ### 2026-04-17 — generator — slice created
 
