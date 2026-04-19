@@ -3,10 +3,10 @@ title: "Slice: Ansible deployment"
 slice_id: slice-ops-ansible
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: []
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-compose]]", "[[_sl
 
 > Playbook stands up fresh Debian host: Qdrant + Core + Lifecycle Worker + vault bind-mount + Kong.
 
-**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `codex-gpt5`
+**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
@@ -67,10 +67,25 @@ Agents append one entry per work session. Format:
 
 - Claimed Issue #16 and flipped slice frontmatter from `ready` to `in-progress`.
 
+### 2026-04-19 19:08 — codex-gpt5 — handoff to in-review
+
+- Added `deploy/ansible/` with placeholder-safe inventory, collection requirements, vault scaffold, bootstrap/deploy/config/health playbooks, compose/env/systemd templates, and operator README.
+- Added `tests/ops/test_ansible.py` as the lightweight Ansible Test Contract harness. The suite validates YAML/playbook syntax inputs, idempotent task shape, secret `no_log`, compose template renderability, digest-pin behavior, and defers the true systemd boot smoke to `slice-ops-compose`.
+- Verification: `make check` green; `make tc-coverage SLICE=slice-ops-ansible` green; `make agent-check` reported warnings only and no `✗` hard errors; `git ls-files deploy/ansible/` lists all authored Ansible artifacts.
+
+| Test Contract bullet | State | Evidence |
+|---|---|---|
+| `test_playbook_syntax` | ✓ passing | `tests/ops/test_ansible.py:77` |
+| `test_playbook_idempotent_on_clean_vm` | ✓ passing | `tests/ops/test_ansible.py:102` |
+| `test_secrets_never_logged` | ✓ passing | `tests/ops/test_ansible.py:130` |
+| `test_compose_file_renders_to_valid_yaml` | ✓ passing | `tests/ops/test_ansible.py:145` |
+| `test_systemd_unit_boots_stack_to_healthy` | ⏭ skipped (slice-ops-compose: booting the stack requires the real Compose slice) | `tests/ops/test_ansible.py:170` |
+| `test_update_playbook_respects_digest_pins` | ✓ passing | `tests/ops/test_ansible.py:174` |
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
 
 ## PR links
 
-- _(none yet)_
+- [PR #77](https://github.com/ericmey/musubi/pull/77)
