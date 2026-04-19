@@ -1,0 +1,126 @@
+# slice-start prompt template
+
+> Copy the block below to the operator. The operator pastes it directly to the agent as the opening message. Fill every `{{slot}}` before pasting; they are documented in the `## Slots` section at the bottom.
+
+```
+{{agent_name}} on Musubi:
+
+Starting {{slice_id}} (Issue #{{issue_number}}).
+
+Your isolated local clone is at {{clone_path}} (not the operator's clone at ~/Projects/musubi/). All agents this round push to the shared remote github.com:ericmey/musubi.git; each agent works from its own checkout.
+
+First commands:
+
+    cd {{clone_path}}
+    git switch v2 && git pull --ff-only
+
+Use {{agent_id}} as your agent id in work-log entries.
+
+Required reads, in order:
+
+  1. {{entrypoint_file}} at repo root — the contract includes a "Before handoff (the five checks)" section. Read it carefully; it encodes drift patterns from prior rounds.
+  2. docs/AGENT-PROCESS.md — multi-agent concurrency model.
+  3. docs/architecture/00-index/agent-guardrails.md — four non-negotiables + Closure Rule + Method-ownership rule + Dual-update rule.
+  4. docs/architecture/00-index/agent-handoff.md — includes the "Reviewer notes — where they land" subsection.
+  5. docs/architecture/00-index/conventions.md — style guide; Testing section on verbatim-bullet-name convention.
+
+Slice file: docs/architecture/_slices/{{slice_id}}.md. Read end-to-end first.
+
+Spec(s) to implement: {{spec_paths}}. Every bullet in the spec's ## Test contract section must land in one of the three Closure states at handoff.
+
+Owned paths (you MAY write here):
+{{owns_paths_list}}
+
+Forbidden paths (you MUST NOT write here):
+{{forbidden_paths_list}}
+
+Depends on (all must be status: done on v2 before you start):
+{{depends_on_list}}
+
+What you build:
+
+{{implementation_notes}}
+
+### Hard constraints
+
+1. Claim atomically via the Dual-update rule:
+
+       gh issue edit {{issue_number}} --add-assignee @me \
+         --add-label "status:in-progress" --remove-label "status:ready"
+       gh issue view {{issue_number}} --json assignees   # re-read; yield if conflicts
+
+   In the SAME PR, flip slice-file frontmatter: status: ready -> in-progress, owner: {{agent_id}}. Commit: chore(slice): take {{slice_id}}.
+
+2. Branch + draft PR immediately (first line of body is "Closes #{{issue_number}}."):
+
+       git switch -c slice/{{slice_id}}
+       git push -u origin slice/{{slice_id}}
+       gh pr create --draft --base v2 --title "{{pr_title}}" \
+         --body "Closes #{{issue_number}}.
+
+Draft — work in progress per docs/architecture/_slices/{{slice_id}}.md."
+
+3. Test-first. FIRST implementation commit is the test file — every bullet from the spec's ## Test contract as a pytest function with the verbatim name. Property tests (if any) -> hypothesis strategies.
+
+4. Then: feat commit for the implementation. Then: docs(slice) handoff commit (thin; frontmatter flip + work-log entry with coverage matrix only — NO code).
+
+5. Run the FIVE handoff checks before flipping to ready-for-review (see {{entrypoint_file}} §Before handoff):
+
+   a. uv run make check                            — exits 0
+   b. uv run make tc-coverage SLICE={{slice_id}}   — exits 0
+   c. uv run make agent-check                      — grep `^  ✗` first; only ✗ errors block, ⚠ warnings don't
+   d. gh pr checks <pr-number>                     — remote green, not just local
+   e. PR body first line is "Closes #{{issue_number}}." — exact keyword
+
+6. Module-scope coverage floor: {{coverage_floor_note}}
+   Run `uv run coverage report --include='{{coverage_include_glob}}'` before handoff to verify the MODULE floor, not just the repo floor.
+
+7. Do NOT push to v2 or --force anything (force-with-lease to your slice branch is OK if rebasing).
+
+8. Do NOT touch anything under docs/architecture/ except your slice file's work log + any spec you explicitly updated (with spec-update: trailer).
+
+### Handoff
+
+After all five checks pass:
+
+    # Flip frontmatter: status: in-progress -> in-review; append work-log entry with Test Contract coverage matrix.
+    git commit -am "docs(slice): handoff {{slice_id}} to in-review"
+    git push
+    gh pr ready <pr-number>
+    gh pr edit <pr-number> --add-label "status:in-review" --remove-label "status:in-progress"
+    gh issue edit {{issue_number}} --add-label "status:in-review" --remove-label "status:in-progress"
+
+Do NOT self-approve or merge. The reviewer will take it from there.
+
+### Parallel agents this round
+
+{{parallel_agents_block}}
+
+### When stuck
+
+Drop docs/architecture/_inbox/questions/{{slice_id}}-<slug>.md with full frontmatter (title, section, type, status, tags, updated). Flip slice + Issue to blocked. Comment the Issue with the link. Stop.
+
+Do NOT guess. Do NOT "just make it work."
+
+Good luck.
+```
+
+## Slots
+
+| Slot | Example | Notes |
+|---|---|---|
+| `{{agent_name}}` | `Codex (GPT-5)`, `Claude Code (VS Code)`, `Gemini 3.1 Pro on Nyla` | Human-friendly agent label. |
+| `{{agent_id}}` | `codex-gpt5`, `vscode-cc-sonnet47`, `gemini-3-1-pro-nyla` | Machine-friendly id used in work-log entries. |
+| `{{clone_path}}` | `~/Projects/musubi-codex` | Per-agent isolated clone. Not `~/Projects/musubi/` (that's the operator). |
+| `{{slice_id}}` | `slice-retrieval-rerank` | The slice filename stem. |
+| `{{issue_number}}` | `31` | GitHub Issue number for the slice. |
+| `{{entrypoint_file}}` | `CLAUDE.md`, `AGENTS.md`, `GEMINI.md` | The agent's entry doc — one of the three at repo root. |
+| `{{spec_paths}}` | `docs/architecture/05-retrieval/rerank.md` | Comma-separated if multiple. |
+| `{{owns_paths_list}}` | `  - src/musubi/retrieve/rerank.py\n  - tests/retrieve/test_rerank.py` | Markdown bullet list; two-space indent. |
+| `{{forbidden_paths_list}}` | `  - src/musubi/planes/\n  - src/musubi/api/\n  - src/musubi/types/` | Same shape as owns. |
+| `{{depends_on_list}}` | `  - slice-types (done) — you import ...\n  - slice-embedding (done) — you depend on Embedder ...` | Bullet list; each entry names what the agent imports/uses. |
+| `{{implementation_notes}}` | free-form paragraph + optional signature sketch + design callouts | Slice-specific. Include Method-ownership decision points, distinct constants (e.g. `_POINT_NS`) if applicable. |
+| `{{pr_title}}` | `feat(retrieve): slice-retrieval-rerank` | Conventional-commits title for the PR + eventual squash commit. |
+| `{{coverage_floor_note}}` | `src/musubi/retrieve/** has a 90% branch floor per guardrails (not just 85%).` | Slice-scoped reminder. |
+| `{{coverage_include_glob}}` | `src/musubi/retrieve/*` | The `--include` pattern matching owns_paths. |
+| `{{parallel_agents_block}}` | See `parallel-agents-block.snippet.md` in this directory | List: `- <agent-name> — <slice-id> — <owns-path>.` Call out non-overlap explicitly. |
