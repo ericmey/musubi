@@ -3,10 +3,10 @@ title: "Slice: Auth middleware"
 slice_id: slice-auth
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "1 Schema"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-config]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-api-v0]]"]
 
 > Bearer token validation + namespace scope check + optional mTLS. Sits as middleware; business logic never parses auth headers.
 
-**Phase:** 1 Schema · **Status:** `in-review` · **Owner:** `codex-gpt5`
+**Phase:** 1 Schema · **Status:** `done` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
