@@ -22,7 +22,7 @@ import asyncio
 import json
 
 import pytest
-import yaml  # type: ignore
+import yaml
 from fastapi.testclient import TestClient
 
 from musubi.planes.curated import CuratedPlane
