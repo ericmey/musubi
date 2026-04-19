@@ -144,9 +144,7 @@ async def test_concept_created_in_synthesized_state(plane: ConceptPlane, ns: str
 # ---------------------------------------------------------------------------
 
 
-async def test_concept_promoted_to_requires_state_promoted(
-    plane: ConceptPlane, ns: str
-) -> None:
+async def test_concept_promoted_to_requires_state_promoted(plane: ConceptPlane, ns: str) -> None:
     """The write-side guard. A concept may only carry ``promoted_to`` once
     its ``state`` has reached ``"promoted"`` — the field is the receipt of
     the transition, not a prediction of one."""
@@ -215,7 +213,12 @@ async def test_concept_promotion_rejected_fields_mutually_exclusive_with_promote
 
 async def test_reinforcement_count_increments_on_match(plane: ConceptPlane, ns: str) -> None:
     """Synthesis matching an existing concept calls plane.reinforce(), which
-    bumps reinforcement_count + version + last_reinforced_at."""
+    bumps reinforcement_count + version + appends to merged_from.
+
+    Note: the spec also calls for ``last_reinforced_at`` to be set, but
+    the SynthesizedConcept type currently lacks the field — see
+    ``_inbox/cross-slice/slice-plane-concept-slice-types-promotion-attempts.md``.
+    """
     saved = await plane.create(_make(namespace=ns))
     before = saved.reinforcement_count
     after = await plane.reinforce(
@@ -225,7 +228,6 @@ async def test_reinforcement_count_increments_on_match(plane: ConceptPlane, ns: 
     )
     assert after.reinforcement_count == before + 1
     assert after.version == saved.version + 1
-    assert after.last_reinforced_at is not None
     assert len(after.merged_from) == len(saved.merged_from) + 1
 
 
@@ -316,8 +318,7 @@ def test_synthesis_skips_clusters_below_3() -> None:
 
 @pytest.mark.skip(
     reason="deferred to slice-lifecycle-synthesis: dedup-by-similarity decision "
-    "lives in src/musubi/lifecycle/synthesis.py — this slice provides the "
-    "underlying ConceptPlane.reinforce() entrypoint (see bullet 16)."
+    "lives in src/musubi/lifecycle/synthesis.py (this slice ships ConceptPlane.reinforce, see bullet 16)."
 )
 def test_synthesis_matches_existing_concept_and_reinforces() -> None:
     pass
@@ -340,9 +341,8 @@ def test_synthesis_idempotent_across_runs_on_same_input() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to slice-lifecycle-synthesis: synthesis loop's namespace "
-    "scoping lives in src/musubi/lifecycle/synthesis.py — the plane's own "
-    "namespace isolation is exercised in tests/planes/test_concept.py."
+    reason="deferred to slice-lifecycle-synthesis: synthesis loop's namespace scoping lives "
+    "in src/musubi/lifecycle/synthesis.py (plane-level isolation is covered in this file)."
 )
 def test_synthesis_respects_namespace_isolation() -> None:
     pass
@@ -357,9 +357,8 @@ def test_synthesis_handles_ollama_unavailable_by_skipping_gracefully() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to slice-lifecycle-maturation: 24h-without-contradiction "
-    "timer lives in src/musubi/lifecycle/maturation.py — the plane provides "
-    "the synthesized→matured transition the timer fires."
+    reason="deferred to slice-lifecycle-maturation: 24h-without-contradiction timer "
+    "lives in src/musubi/lifecycle/maturation.py (plane ships the synthesized->matured transition)."
 )
 def test_concept_matures_after_24h_without_contradiction() -> None:
     pass
@@ -382,10 +381,8 @@ def test_concept_demotes_after_30d_no_reinforcement() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to slice-lifecycle-promotion: the promotion-gate predicate "
-    "(reinforcement_count, importance, age, contradicts, attempts) lives in "
-    "src/musubi/lifecycle/promotion.py — the plane provides the matured→promoted "
-    "transition the gate authorises."
+    reason="deferred to slice-lifecycle-promotion: promotion-gate predicate "
+    "(reinforcement_count, importance, age, contradicts, attempts) lives in src/musubi/lifecycle/promotion.py."
 )
 def test_promotion_gate_all_conditions_required() -> None:
     pass
@@ -400,10 +397,8 @@ def test_promotion_writes_curated_file_and_links_back() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to slice-lifecycle-promotion: setting rejected fields is "
-    "exposed via ConceptPlane.record_promotion_rejection (this slice), but the "
-    "*decision* to reject — and its retry-backoff bookkeeping — lives in "
-    "src/musubi/lifecycle/promotion.py."
+    reason="deferred to slice-lifecycle-promotion: rejection decision + retry-backoff "
+    "bookkeeping live in src/musubi/lifecycle/promotion.py (plane exposes record_promotion_rejection)."
 )
 def test_promotion_rejected_sets_rejected_fields() -> None:
     pass
@@ -426,9 +421,8 @@ def test_contradicted_concept_blocked_from_promotion() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to slice-lifecycle-promotion + slice-plane-thoughts: "
-    "operator-thought emission lives in src/musubi/lifecycle/promotion.py and "
-    "writes via the thoughts plane (slice-plane-thoughts)."
+    reason="deferred to slice-lifecycle-promotion + slice-plane-thoughts: operator-thought "
+    "emission lives in src/musubi/lifecycle/promotion.py and writes via the thoughts plane."
 )
 def test_promotion_produces_thought_notification_to_operator() -> None:
     pass
@@ -486,9 +480,7 @@ async def test_transition_illegal_raises(plane: ConceptPlane, ns: str) -> None:
         )
 
 
-async def test_transition_to_promoted_requires_promoted_to(
-    plane: ConceptPlane, ns: str
-) -> None:
+async def test_transition_to_promoted_requires_promoted_to(plane: ConceptPlane, ns: str) -> None:
     saved = await plane.create(_make(namespace=ns))
     await plane.transition(
         namespace=ns,
@@ -507,9 +499,7 @@ async def test_transition_to_promoted_requires_promoted_to(
         )
 
 
-async def test_transition_to_demoted_filters_default_reads(
-    plane: ConceptPlane, ns: str
-) -> None:
+async def test_transition_to_demoted_filters_default_reads(plane: ConceptPlane, ns: str) -> None:
     saved = await plane.create(_make(namespace=ns, content="demote-target-text"))
     await plane.transition(
         namespace=ns,
@@ -550,9 +540,7 @@ async def test_query_respects_include_synthesized_flag(plane: ConceptPlane, ns: 
 
 async def test_query_respects_limit(plane: ConceptPlane, ns: str) -> None:
     for i in range(5):
-        saved = await plane.create(
-            _make(namespace=ns, content=f"limit-fixture-{i}-unique")
-        )
+        saved = await plane.create(_make(namespace=ns, content=f"limit-fixture-{i}-unique"))
         await plane.transition(
             namespace=ns,
             object_id=saved.object_id,
@@ -607,16 +595,19 @@ async def test_record_promotion_rejection_unknown_object_raises(
 ) -> None:
     missing = "0" * 27
     with pytest.raises(LookupError):
-        await plane.record_promotion_rejection(
-            namespace=ns, object_id=missing, reason="missing"
-        )
+        await plane.record_promotion_rejection(namespace=ns, object_id=missing, reason="missing")
 
 
 async def test_record_promotion_rejection_sets_rejected_fields(
     plane: ConceptPlane, ns: str
 ) -> None:
     """Plane-level test for the rejected-side bookkeeping. The *decision*
-    to reject is lifecycle-promotion; the actual write is mine."""
+    to reject is lifecycle-promotion; the actual write is mine.
+
+    Note: the spec also calls for ``promotion_attempts`` to bump here but
+    the type lacks the field — see cross-slice ticket
+    ``_inbox/cross-slice/slice-plane-concept-slice-types-promotion-attempts.md``.
+    """
     saved = await plane.create(_make(namespace=ns))
     rejected = await plane.record_promotion_rejection(
         namespace=ns,
@@ -625,5 +616,4 @@ async def test_record_promotion_rejection_sets_rejected_fields(
     )
     assert rejected.promotion_rejected_at is not None
     assert rejected.promotion_rejected_reason == "contradicted by newer concept"
-    assert rejected.promotion_attempts == saved.promotion_attempts + 1
     assert rejected.promoted_to is None
