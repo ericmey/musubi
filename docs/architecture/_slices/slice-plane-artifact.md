@@ -3,10 +3,10 @@ title: "Slice: Source artifact plane"
 slice_id: slice-plane-artifact
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-3-1-pro-hana
 phase: "4 Planes"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-17
 reviewed: false
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]"]
