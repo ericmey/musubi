@@ -2,9 +2,17 @@
 title: "Cross-slice: concept_maturation_sweep should respect contradicts list"
 section: _inbox/cross-slice
 type: cross-slice
-status: open
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+status: resolved
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-19
+---
+
+## Resolution
+
+Fixed by operator chore PR on 2026-04-19 — see v2 commit for `src/musubi/lifecycle/maturation.py` adding the contradicts-list check in `concept_maturation_sweep`. Test `test_synthesized_blocked_from_maturing_with_contradiction` in `tests/lifecycle/test_synthesis.py` un-skipped as part of the same fix.
+
+Original ticket preserved below for audit.
+
 ---
 
 ## Bug
