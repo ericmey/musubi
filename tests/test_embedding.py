@@ -31,6 +31,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from musubi.embedding import (
+    CachedEmbedder,
     Embedder,
     EmbeddingError,
     FakeEmbedder,
@@ -256,6 +257,115 @@ async def test_fake_batch_preserves_order(fake: FakeEmbedder) -> None:
     assert batch == per_item
 
 
+async def test_batch_encode_64_items_one_call(httpx_mock: HTTPXMock) -> None:
+    texts = [f"item-{i}" for i in range(64)]
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[float(i)] + [0.0] * (DENSE_SIZE - 1) for i in range(64)],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense", max_batch_size=64)
+    out = await client.embed_dense(texts)
+
+    assert len(out) == 64
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 1
+    assert requests[0].read().decode().count("item-") == 64
+
+
+async def test_batch_encode_above_64_chunks_requests(httpx_mock: HTTPXMock) -> None:
+    texts = [f"item-{i}" for i in range(65)]
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[float(i)] + [0.0] * (DENSE_SIZE - 1) for i in range(64)],
+    )
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[64.0] + [0.0] * (DENSE_SIZE - 1)],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense", max_batch_size=64)
+    out = await client.embed_dense(texts)
+
+    assert len(out) == 65
+    assert [vec[0] for vec in out] == [float(i) for i in range(65)]
+    assert len(httpx_mock.get_requests()) == 2
+
+
+async def test_truncate_content_to_2048_chars(httpx_mock: HTTPXMock) -> None:
+    long_text = "x" * 2050
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[0.0] * DENSE_SIZE],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense")
+    await client.embed_dense([long_text])
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    payload = request.content.decode()
+    assert "x" * 2048 in payload
+    assert "x" * 2049 not in payload
+
+
+async def test_query_cache_hit_on_repeat() -> None:
+    wrapped = CountingEmbedder()
+    cached = CachedEmbedder(wrapped, model_revision="dense-v1")
+
+    first = await cached.embed_dense(["same query"])
+    second = await cached.embed_dense(["same query"])
+
+    assert first == second
+    assert wrapped.dense_calls == 1
+
+
+async def test_query_cache_miss_on_different_query() -> None:
+    wrapped = CountingEmbedder()
+    cached = CachedEmbedder(wrapped, model_revision="dense-v1")
+
+    await cached.embed_dense(["alpha"])
+    await cached.embed_dense(["beta"])
+
+    assert wrapped.dense_calls == 2
+
+
+async def test_query_cache_cleared_on_model_revision_change() -> None:
+    wrapped = CountingEmbedder()
+    cached = CachedEmbedder(wrapped, model_revision="dense-v1")
+
+    first = await cached.embed_dense(["same query"])
+    cached.set_model_revision("dense-v2")
+    second = await cached.embed_dense(["same query"])
+
+    assert first != second
+    assert wrapped.dense_calls == 2
+
+
+async def test_tei_transient_5xx_retries_once(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        status_code=503,
+        text="warming",
+    )
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[1.0] + [0.0] * (DENSE_SIZE - 1)],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense", retry_backoff=0.0)
+    out = await client.embed_dense(["x"])
+
+    assert out[0][0] == 1.0
+    assert len(httpx_mock.get_requests()) == 2
+
+
 # ---------------------------------------------------------------------------
 # Protocol conformance
 # ---------------------------------------------------------------------------
@@ -271,6 +381,26 @@ def test_tei_clients_can_stand_alone() -> None:
     TEIDenseClient(base_url="http://tei-dense")
     TEISparseClient(base_url="http://tei-sparse")
     TEIRerankerClient(base_url="http://tei-reranker")
+
+
+class CountingEmbedder(Embedder):
+    def __init__(self) -> None:
+        self.dense_calls = 0
+        self.sparse_calls = 0
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        self.dense_calls += 1
+        return [
+            [float(self.dense_calls), float(len(text)), *([0.0] * (DENSE_SIZE - 2))]
+            for text in texts
+        ]
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        self.sparse_calls += 1
+        return [{self.sparse_calls: float(len(text))} for text in texts]
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return [float(len(query) + len(candidate)) for candidate in candidates]
 
 
 # ---------------------------------------------------------------------------
