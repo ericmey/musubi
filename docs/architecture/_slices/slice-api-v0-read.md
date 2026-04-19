@@ -3,12 +3,12 @@ title: "Slice: Canonical API v0.1 — read surface"
 slice_id: slice-api-v0-read
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: vscode-cc-sonnet47
 phase: "7 Adapters"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-config]]", "[[_slices/slice-auth]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-artifact]]"]
 blocks: ["[[_slices/slice-api-v0-write]]", "[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-openclaw]]", "[[_slices/slice-sdk-py]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-api-v0-write]]", "[[_slices/slice-adapter-livekit]]", 
 
 > HTTP read surface + scaffolding. Every GET endpoint defined in canonical-api.md, plus the auth middleware + OpenAPI spec + error taxonomy + pagination + health probes that every adapter and the write-side slice inherit.
 
-**Phase:** 7 Adapters · **Status:** `in-review` · **Owner:** `vscode-cc-sonnet47`
+**Phase:** 7 Adapters · **Status:** `done` · **Owner:** `vscode-cc-sonnet47`
 
 **Split origin:** this slice was split from the original `slice-api-v0` (closed Issue #6) because the combined read+write scope would exceed the 800 LoC PR cap. Write-side is `slice-api-v0-write`, which depends on this slice.
 

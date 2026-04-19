@@ -3,12 +3,12 @@ title: "Slice: Fast-path retrieval"
 slice_id: slice-retrieval-fast
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "3 Reranker"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-scoring]]", "[[_slices/slice-plane-episodic]]"]
 blocks: ["[[_slices/slice-adapter-livekit]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-adapter-livekit]]"]
 
 > Latency-budgeted (<400ms) episodic-only retrieval path. Cached; no cross-plane orchestration.
 
-**Phase:** 3 Reranker · **Status:** `in-review` · **Owner:** `codex-gpt5`
+**Phase:** 3 Reranker · **Status:** `done` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
