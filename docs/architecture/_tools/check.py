@@ -91,7 +91,7 @@ class Report:
     def warn(self, path: str, msg: str) -> None:
         self.warnings.append((path, msg))
 
-    def merge(self, other: "Report") -> None:
+    def merge(self, other: Report) -> None:
         self.errors.extend(other.errors)
         self.warnings.extend(other.warnings)
 
@@ -108,13 +108,11 @@ def iter_notes(root: Path, exclude_infra: bool = True) -> list[Path]:
         rel = p.relative_to(VAULT)
         if any(part.startswith(".") for part in rel.parts):
             continue
-        if exclude_infra:
-            # Skip any note whose immediate parent-chain hits an infra folder.
-            if any(
-                str(rel).startswith(f + "/") or str(rel).startswith(f + os.sep)
-                for f in INFRA_FOLDERS
-            ):
-                continue
+        # Skip any note whose immediate parent-chain hits an infra folder.
+        if exclude_infra and any(
+            str(rel).startswith(f + "/") or str(rel).startswith(f + os.sep) for f in INFRA_FOLDERS
+        ):
+            continue
         out.append(p)
     return out
 
@@ -160,9 +158,15 @@ def check_vault(rep: Report) -> None:
                 rep.warn(rel, f"H1 '{title_only}' != frontmatter title '{fm.get('title')}'")
         # Section field matches parent folder (for foldered notes)
         parent = p.parent.name
-        if "/" in rel and parent and parent != "_inbox":
-            if fm.get("section") and fm["section"] != parent and not parent.startswith("_"):
-                rep.warn(rel, f"section '{fm.get('section')}' != folder '{parent}'")
+        if (
+            "/" in rel
+            and parent
+            and parent != "_inbox"
+            and fm.get("section")
+            and fm["section"] != parent
+            and not parent.startswith("_")
+        ):
+            rep.warn(rel, f"section '{fm.get('section')}' != folder '{parent}'")
         # Tags include canonical namespaces
         tags = fm.get("tags") or []
         if isinstance(tags, str):
@@ -234,7 +238,7 @@ def check_slices(rep: Report) -> None:
             claims[path] = sid
 
     # 3. status transitions
-    for sid, s in slices.items():
+    for _sid, s in slices.items():
         status = s["fm"].get("status")
         if status not in {"ready", "in-progress", "in-review", "blocked", "done"}:
             rep.err(str(s["path"].relative_to(VAULT)), f"invalid slice status '{status}'")
@@ -282,13 +286,21 @@ def _fetch_slice_issues() -> list[dict] | None:
     try:
         r = subprocess.run(
             [
-                "gh", "issue", "list",
-                "--label", "slice",
-                "--state", "all",
-                "--limit", "200",
-                "--json", "number,title,labels,state,assignees",
+                "gh",
+                "issue",
+                "list",
+                "--label",
+                "slice",
+                "--state",
+                "all",
+                "--limit",
+                "200",
+                "--json",
+                "number,title,labels,state,assignees",
             ],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True,
+            text=True,
+            timeout=15,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -361,15 +373,18 @@ def check_issues(rep: Report) -> None:
     #      frontmatter `done` + Issue state `closed` — expected
     ACCEPTABLE = {
         ("in-review", "status:in-progress"),  # handoff flipped frontmatter but not label yet
-        ("in-progress", "status:ready"),       # claim flipped label but not frontmatter yet (rare; flipped order)
+        (
+            "in-progress",
+            "status:ready",
+        ),  # claim flipped label but not frontmatter yet (rare; flipped order)
     }
     for sid, fm in slice_fms.items():
         if sid not in by_slice:
             continue
         issue = by_slice[sid]
         vault_status = str(fm.get("status", ""))
-        labels = [l.get("name", "") for l in issue.get("labels", [])]
-        issue_status_labels = [l for l in labels if l.startswith("status:")]
+        labels = [lab.get("name", "") for lab in issue.get("labels", [])]
+        issue_status_labels = [lab for lab in labels if lab.startswith("status:")]
 
         # Issue closed state = slice should be done
         if issue.get("state") == "CLOSED":
@@ -536,10 +551,7 @@ def list_wiki_targets(val) -> list[str]:
     """Extract paths from a list-of-wikilinks frontmatter value."""
     if val is None:
         return []
-    if isinstance(val, str):
-        items = [val]
-    else:
-        items = list(val)
+    items = [val] if isinstance(val, str) else list(val)
     out = []
     for s in items:
         m = re.match(r"\[\[([^|\]]+)(?:\|[^\]]+)?\]\]", s.strip().strip('"').strip("'"))
@@ -558,7 +570,8 @@ def main() -> int:
     ap.add_argument(
         "command",
         choices=["vault", "slices", "specs", "issues", "wikilinks", "all"],
-        default="all", nargs="?",
+        default="all",
+        nargs="?",
     )
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
