@@ -23,6 +23,7 @@ Contract (from the spec + the slice brief):
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import AsyncIterator
 
@@ -65,6 +66,11 @@ async def test_embed_dense_returns_correct_dimensionality(fake: FakeEmbedder) ->
         assert all(isinstance(x, float) for x in v)
 
 
+async def test_encode_dense_returns_1024_dim(fake: FakeEmbedder) -> None:
+    [vector] = await fake.embed_dense(["hello"])
+    assert len(vector) == DENSE_SIZE
+
+
 # ---------------------------------------------------------------------------
 # 2. embed_sparse shape
 # ---------------------------------------------------------------------------
@@ -82,6 +88,12 @@ async def test_embed_sparse_returns_dict_index_to_weight(fake: FakeEmbedder) -> 
         assert weight >= 0.0
 
 
+async def test_encode_sparse_returns_nonempty_dict(fake: FakeEmbedder) -> None:
+    [vector] = await fake.embed_sparse(["hello world"])
+    assert vector
+    assert all(isinstance(index, int) for index in vector)
+
+
 # ---------------------------------------------------------------------------
 # 3. rerank
 # ---------------------------------------------------------------------------
@@ -91,6 +103,15 @@ async def test_rerank_returns_score_per_candidate(fake: FakeEmbedder) -> None:
     scores = await fake.rerank("query", ["candidate 1", "candidate 2", "candidate 3"])
     assert len(scores) == 3
     assert all(isinstance(s, float) for s in scores)
+
+
+async def test_encode_parallel_dense_sparse(fake: FakeEmbedder) -> None:
+    dense, sparse = await asyncio.gather(
+        fake.embed_dense(["parallel"]),
+        fake.embed_sparse(["parallel"]),
+    )
+    assert len(dense[0]) == DENSE_SIZE
+    assert sparse[0]
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +403,114 @@ async def test_tei_transient_5xx_retries_once(httpx_mock: HTTPXMock) -> None:
 
     assert out[0][0] == 1.0
     assert len(httpx_mock.get_requests()) == 2
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-retrieval-hybrid: Qdrant upsert lives outside embedding"
+)
+def test_upsert_specifies_both_named_vectors() -> None:
+    raise AssertionError("covered by retrieval/store integration follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-retrieval-hybrid: Qdrant query construction lives outside embedding"
+)
+def test_query_uses_specified_named_vector() -> None:
+    raise AssertionError("covered by retrieval/store integration follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-reembedding-migration: migration vector add/rebuild lives outside embedding"
+)
+def test_collection_can_add_new_named_vector_without_rebuild() -> None:
+    raise AssertionError("covered by re-embedding migration follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-vault-sync: body_hash re-embed decisions live outside embedding"
+)
+def test_body_hash_unchanged_skips_reembed() -> None:
+    raise AssertionError("covered by vault-sync follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-vault-sync: body_hash re-embed decisions live outside embedding"
+)
+def test_body_hash_changed_triggers_reembed() -> None:
+    raise AssertionError("covered by vault-sync follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-lifecycle-promotion: synthesis reinforcement lives outside embedding"
+)
+def test_synthesis_reinforce_does_not_reembed() -> None:
+    raise AssertionError("covered by lifecycle follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-api-v0: capture endpoint 503 mapping lives outside embedding"
+)
+def test_tei_down_capture_returns_503() -> None:
+    raise AssertionError("covered by API follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ingestion-capture: sequential fallback policy lives outside TEI client"
+)
+def test_tei_timeout_on_batch_falls_back_to_sequential() -> None:
+    raise AssertionError("covered by ingestion capture follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-compose: service health budgets require Docker Compose"
+)
+def test_all_four_services_healthy_within_60s() -> None:
+    raise AssertionError("covered by ops integration follow-up")
+
+
+@pytest.mark.skip(reason="deferred to slice-ops-gpu: VRAM budget requires reference GPU host")
+def test_vram_below_9_5gb_after_cold_start() -> None:
+    raise AssertionError("covered by ops GPU follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability: latency budgets require live TEI dense service"
+)
+def test_tei_dense_encode_latency_p95_lt_50ms() -> None:
+    raise AssertionError("covered by ops performance follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability: latency budgets require live TEI sparse service"
+)
+def test_tei_sparse_encode_latency_p95_lt_80ms() -> None:
+    raise AssertionError("covered by ops performance follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability: latency budgets require live reranker service"
+)
+def test_reranker_40pair_batch_p95_lt_200ms() -> None:
+    raise AssertionError("covered by ops performance follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability: latency budgets require live Ollama service"
+)
+def test_ollama_qwen25_generation_p50_lt_4s_for_200_token_output() -> None:
+    raise AssertionError("covered by ops performance follow-up")
+
+
+@pytest.mark.skip(
+    reason="deferred to slice-retrieval-hybrid: Ollama degradation belongs to retrieval/core"
+)
+def test_core_degrades_gracefully_if_ollama_killed() -> None:
+    raise AssertionError("covered by retrieval/core integration follow-up")
+
+
+@pytest.mark.skip(reason="deferred to slice-api-v0: TEI outage-to-503 mapping belongs to API/core")
+def test_core_503s_if_tei_dense_killed() -> None:
+    raise AssertionError("covered by API/core integration follow-up")
 
 
 # ---------------------------------------------------------------------------

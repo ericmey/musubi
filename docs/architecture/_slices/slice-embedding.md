@@ -89,6 +89,14 @@ Test Contract Closure state via `make tc-coverage SLICE=slice-embedding`:
 
 The **review pass** + the follow-up work to close the genuine in-scope deferrals are both prerequisites for flipping to `done`.
 
+### 2026-04-19 11:08 — codex-gpt5 — follow-up claim
+
+- Claimed follow-up Issue #36 and draft PR #41 to close in-scope embedding deferrals: `test_batch_encode_64_items_one_call`, `test_truncate_content_to_2048_chars`, `test_query_cache_hit_on_repeat`, `test_query_cache_miss_on_different_query`, `test_query_cache_cleared_on_model_revision_change`, and transient 5xx retry.
+- Out-of-scope Test Contract bullets remain in downstream homes and are represented as explicit skipped tests or non-test declarations:
+  - `hypothesis: for any content, encode(content) is stable across repeats (same weights)` — property suite follow-up, not required for this unit follow-up.
+  - `integration: full re-embedding job — old named vector read + new named vector write, dual-exist, cutover flip, evals stable` — re-embedding migration integration follow-up.
+  - `integration: boot scan with re-embedding — 10K files embedded in < 5 minutes on reference GPU` — ops/GPU integration follow-up.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
