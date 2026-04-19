@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt.algorithms import AllowedPrivateKeys
+from pydantic import AnyHttpUrl, SecretStr
 from pytest_httpx import HTTPXMock
 
 from musubi.auth.middleware import AuthRequirement, authenticate_request
@@ -27,32 +30,35 @@ from musubi.auth.tokens import (
     validate_token,
 )
 from musubi.settings import Settings
+from musubi.types.common import Err, Ok
 
 
 @pytest.fixture
-def auth_settings(tmp_path: object) -> Settings:
-    return Settings(
-        qdrant_host="qdrant",
-        qdrant_api_key="test-qdrant-key",
-        tei_dense_url="http://tei-dense",
-        tei_sparse_url="http://tei-sparse",
-        tei_reranker_url="http://tei-reranker",
-        ollama_url="http://ollama:11434",
-        embedding_model="BAAI/bge-m3",
-        sparse_model="naver/splade-v3",
-        reranker_model="BAAI/bge-reranker-v2-m3",
-        llm_model="qwen2.5:7b-instruct-q4_K_M",
-        vault_path="/tmp/musubi-test/vault",
-        artifact_blob_path="/tmp/musubi-test/artifacts",
-        lifecycle_sqlite_path="/tmp/musubi-test/lifecycle.sqlite",
-        log_dir="/tmp/musubi-test/log",
-        jwt_signing_key="test-hs256-secret",
-        oauth_authority="https://auth.example.test",
+def auth_settings() -> Settings:
+    return Settings.model_validate(
+        {
+            "qdrant_host": "qdrant",
+            "qdrant_api_key": SecretStr("test-qdrant-key"),
+            "tei_dense_url": AnyHttpUrl("http://tei-dense"),
+            "tei_sparse_url": AnyHttpUrl("http://tei-sparse"),
+            "tei_reranker_url": AnyHttpUrl("http://tei-reranker"),
+            "ollama_url": AnyHttpUrl("http://ollama:11434"),
+            "embedding_model": "BAAI/bge-m3",
+            "sparse_model": "naver/splade-v3",
+            "reranker_model": "BAAI/bge-reranker-v2-m3",
+            "llm_model": "qwen2.5:7b-instruct-q4_K_M",
+            "vault_path": Path("/tmp/musubi-test/vault"),
+            "artifact_blob_path": Path("/tmp/musubi-test/artifacts"),
+            "lifecycle_sqlite_path": Path("/tmp/musubi-test/lifecycle.sqlite"),
+            "log_dir": Path("/tmp/musubi-test/log"),
+            "jwt_signing_key": SecretStr("test-hs256-secret-with-at-least-32-bytes"),
+            "oauth_authority": AnyHttpUrl("https://auth.example.test"),
+        }
     )
 
 
 @pytest.fixture
-def rsa_keypair() -> Iterator[tuple[object, dict[str, object]]]:
+def rsa_keypair() -> Iterator[tuple[AllowedPrivateKeys, dict[str, object]]]:
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(private_key.public_key()))
     public_jwk.update({"alg": "RS256", "kid": "kid-1", "use": "sig"})
@@ -90,7 +96,11 @@ def _hs_token(settings: Settings, payload: dict[str, object] | None = None) -> s
     )
 
 
-def _rs_token(private_key: object, payload: dict[str, object] | None = None, kid: str = "kid-1") -> str:
+def _rs_token(
+    private_key: AllowedPrivateKeys,
+    payload: dict[str, object] | None = None,
+    kid: str = "kid-1",
+) -> str:
     return jwt.encode(payload or _payload(), private_key, algorithm="RS256", headers={"kid": kid})
 
 
@@ -104,6 +114,7 @@ def test_missing_bearer_returns_401(auth_settings: Settings) -> None:
     )
 
     assert result.is_err()
+    assert isinstance(result, Err)
     assert result.error.status_code == 401
     assert result.error.code == "UNAUTHORIZED"
 
@@ -114,6 +125,7 @@ def test_expired_token_returns_401(auth_settings: Settings) -> None:
     result = validate_token(token, settings=auth_settings)
 
     assert result.is_err()
+    assert isinstance(result, Err)
     assert isinstance(result.error, ExpiredTokenError)
 
 
@@ -123,12 +135,15 @@ def test_wrong_issuer_returns_401(auth_settings: Settings) -> None:
     result = validate_token(token, settings=auth_settings)
 
     assert result.is_err()
+    assert isinstance(result, Err)
     assert isinstance(result.error, InvalidTokenError)
     assert result.error.status_code == 401
 
 
 def test_scope_match_grants_access(
-    auth_settings: Settings, rsa_keypair: tuple[object, dict[str, object]], httpx_mock: HTTPXMock
+    auth_settings: Settings,
+    rsa_keypair: tuple[AllowedPrivateKeys, dict[str, object]],
+    httpx_mock: HTTPXMock,
 ) -> None:
     private_key, public_jwk = rsa_keypair
     token = _rs_token(private_key)
@@ -139,6 +154,7 @@ def test_scope_match_grants_access(
 
     token_result = validate_token(token, settings=auth_settings)
     assert token_result.is_ok()
+    assert isinstance(token_result, Ok)
 
     scope_result = resolve_namespace_scope(
         token_result.value,
@@ -147,6 +163,7 @@ def test_scope_match_grants_access(
     )
 
     assert scope_result.is_ok()
+    assert isinstance(scope_result, Ok)
     assert scope_result.value.scope_used == "eric/claude-code/episodic:rw"
 
 
@@ -164,6 +181,7 @@ def test_scope_mismatch_returns_403_with_detail(auth_settings: Settings) -> None
     )
 
     assert result.is_err()
+    assert isinstance(result, Err)
     assert result.error.status_code == 403
     assert "eric/livekit-voice/episodic" in result.error.detail
 
@@ -190,6 +208,7 @@ def test_operator_scope_required_for_admin_endpoints() -> None:
     allowed = require_operator_scope(with_operator)
 
     assert denied.is_err()
+    assert isinstance(denied, Err)
     assert isinstance(denied.error, ScopeError)
     assert denied.error.status_code == 403
     assert allowed.is_ok()
@@ -210,6 +229,7 @@ def test_thought_check_scope_is_presence_specific() -> None:
 
     assert own_inbox.is_ok()
     assert other_inbox.is_err()
+    assert isinstance(other_inbox, Err)
     assert "livekit-voice" in other_inbox.error.detail
 
 
@@ -236,10 +256,13 @@ def test_blended_query_expands_and_checks_plane_scopes() -> None:
 
     assert allowed.is_ok()
     assert denied.is_err()
+    assert isinstance(denied, Err)
     assert "eric/_shared/artifact" in denied.error.detail
 
 
-@pytest.mark.skip(reason="deferred to slice-auth-authority: PKCE OAuth service is outside Core auth middleware")
+@pytest.mark.skip(
+    reason="deferred to slice-auth-authority: PKCE OAuth service is outside Core auth middleware"
+)
 def test_pkce_flow_end_to_end() -> None:
     raise AssertionError("covered by a future auth authority integration slice")
 
@@ -284,6 +307,7 @@ def test_signing_key_rotation_dual_verify_period(
 
 
 def test_every_auth_decision_emits_audit_line(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level("INFO", logger="musubi.auth.scopes")
     context = AuthContext(
         subject="eric-claude-code",
         issuer="https://auth.example.test",
@@ -301,6 +325,8 @@ def test_every_auth_decision_emits_audit_line(caplog: pytest.LogCaptureFixture) 
     assert "auth.deny" in messages
 
 
-@pytest.mark.skip(reason="deferred to slice-auth-authority: operator token issuing belongs to CLI/service")
+@pytest.mark.skip(
+    reason="deferred to slice-auth-authority: operator token issuing belongs to CLI/service"
+)
 def test_operator_issued_only_via_cli() -> None:
     raise AssertionError("covered by a future auth authority CLI slice")
