@@ -3,11 +3,11 @@ title: "Slice: Cross-encoder reranker"
 slice_id: slice-retrieval-rerank
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-3-1-pro
 phase: "3 Reranker"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-embedding]]"]
 blocks: ["[[_slices/slice-retrieval-deep]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-retrieval-deep]]"]
 
 > BGE-reranker-v2-m3 via TEI. Stateless; GPU-resident. Bounded by deep-path budget.
 
-**Phase:** 3 Reranker · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 3 Reranker · **Status:** `in-progress` · **Owner:** `gemini-3-1-pro`
 
 ## Specs to implement
 
@@ -63,6 +63,10 @@ Plus slice-specific:
 
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
+
+### 2026-04-19 14:00 — gemini-3-1-pro — claim
+
+- Claimed slice via `pick-slice` skill. Issue #31, PR #60 (draft).
 
 ### 2026-04-17 — generator — slice created
 
