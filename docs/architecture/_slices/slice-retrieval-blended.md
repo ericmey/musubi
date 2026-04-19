@@ -3,12 +3,12 @@ title: "Slice: Blended multi-plane retrieval"
 slice_id: slice-retrieval-blended
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-2-0-flash
 phase: "5 Retrieval"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-17
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-retrieval-deep]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-artifact]]"]
 blocks: ["[[_slices/slice-retrieval-orchestration]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-retrieval-orchestration]]"]
 
 > Single ranked list across planes with de-dup, lineage, provenance weight.
 
-**Phase:** 4 Planes · **Status:** `in-progress` · **Owner:** `gemini-2-0-flash`
+**Phase:** 4 Planes · **Status:** `done` · **Owner:** `gemini-2-0-flash`
 
 ## Specs to implement
 
