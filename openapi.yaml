@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Musubi Core API
-  description: The canonical HTTP surface over Musubi Core. Read-side; write surface lives in slice-api-v0-write.
+  description: The canonical HTTP surface over Musubi Core. Read + write; full v0.1 surface.
   version: 0.1.0
 paths:
   /v1/ops/health:
@@ -89,6 +89,87 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - episodic-writes
+      summary: Patch Episodic
+      description: "Update non-state metadata on an existing episodic row.\n\nState changes are forbidden on this surface\
+        \ \u2014 they go through\nPOST /v1/lifecycle/transition so the lifecycle ledger records every\nstate mutation. Tags\
+        \ / importance / summary are non-state metadata\nand land via a payload-only ``set_payload`` (analogous to the\nenrichment\
+        \ writes the maturation sweep does \u2014 see\n:mod:`musubi.lifecycle.maturation` for precedent)."
+      operationId: patch_episodic.bucket=default
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchEpisodicRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EpisodicMemory'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - episodic-writes
+      summary: Delete Episodic
+      description: "Soft-delete by default (state \u2192 archived via the canonical\n``transition()`` primitive). ``?hard=true``\
+        \ requires operator\nscope and removes the point from Qdrant entirely.\n\nThe operator-scope check on the hard path\
+        \ reads the\n:class:`AuthContext` that the outer ``require_auth`` dependency has\nalready attached to ``request.state.auth``."
+      operationId: delete_episodic.bucket=default
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      - name: hard
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Hard
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/memories:
     get:
       tags:
@@ -132,6 +213,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - episodic-writes
+      summary: Capture
+      operationId: capture_episodic.bucket=capture
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CaptureRequest'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CaptureResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/curated-knowledge/{object_id}:
     get:
       tags:
@@ -158,6 +263,73 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CuratedKnowledge'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    patch:
+      tags:
+      - curated-writes
+      summary: Patch Curated
+      operationId: patch_curated.bucket=default
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchCuratedRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CuratedKnowledge'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - curated-writes
+      summary: Delete Curated
+      operationId: delete_curated.bucket=default
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
         '422':
           description: Validation Error
           content:
@@ -207,6 +379,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - curated-writes
+      summary: Create Curated
+      operationId: create_curated.bucket=capture
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CuratedCreateRequest'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CuratedCreateResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/concepts/{object_id}:
     get:
       tags:
@@ -233,6 +429,36 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SynthesizedConcept'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - concept-writes
+      summary: Delete Concept
+      operationId: delete_concept.bucket=default
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
         '422':
           description: Validation Error
           content:
@@ -421,6 +647,30 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Page_SourceArtifact_'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - artifact-writes
+      summary: Upload Artifact
+      operationId: upload_artifact.bucket=artifact-upload
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/bucket_artifact-upload'
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArtifactCreateResponse'
         '422':
           description: Validation Error
           content:
@@ -655,6 +905,314 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/memories/batch:
+    post:
+      tags:
+      - episodic-writes
+      summary: Batch Capture
+      operationId: batch_capture.bucket=batch-write
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BatchCaptureRequest'
+        required: true
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchCaptureResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/concepts/{object_id}/reinforce:
+    post:
+      tags:
+      - concept-writes
+      summary: Reinforce Concept
+      operationId: reinforce_concept.bucket=default
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReinforceRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SynthesizedConcept'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/concepts/{object_id}/promote:
+    post:
+      tags:
+      - concept-writes
+      summary: Promote Concept
+      description: "Operator-forced promotion. Writes the matured\u2192promoted transition\non the concept with the supplied\
+        \ ``promoted_to`` curated id.\n\nRequires operator scope (read from the auth context attached by the\ninline ``require_auth``\
+        \ invocation)."
+      operationId: promote_concept.bucket=transition
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromoteRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SynthesizedConcept'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/concepts/{object_id}/reject:
+    post:
+      tags:
+      - concept-writes
+      summary: Reject Concept
+      operationId: reject_concept.bucket=transition
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RejectRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SynthesizedConcept'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/artifacts/{object_id}/archive:
+    post:
+      tags:
+      - artifact-writes
+      summary: Archive Artifact
+      operationId: archive_artifact.bucket=default
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/artifacts/{object_id}/purge:
+    post:
+      tags:
+      - artifact-writes
+      summary: Purge Artifact
+      description: 'Operator-only hard delete of the artifact metadata + blob.
+
+
+        Reads the AuthContext attached by the outer ``require_auth`` dep
+
+        and rejects with 403 if the operator scope isn''t on the bearer.'
+      operationId: purge_artifact.bucket=default
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/thoughts/send:
+    post:
+      tags:
+      - thoughts-writes
+      summary: Send Thought
+      operationId: send_thought.bucket=thought
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThoughtSendRequest'
+        required: true
+      responses:
+        '202':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThoughtSendResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/thoughts/read:
+    post:
+      tags:
+      - thoughts-writes
+      summary: Read Thoughts
+      operationId: read_thoughts.bucket=default
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ThoughtReadRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ThoughtReadResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/lifecycle/transition:
+    post:
+      tags:
+      - lifecycle-writes
+      summary: Lifecycle Transition
+      operationId: lifecycle_transition.bucket=transition
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransitionRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionResponseBody'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/retrieve/stream:
+    post:
+      tags:
+      - retrieve-stream
+      summary: Retrieve Stream
+      operationId: retrieve_stream.bucket=default
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetrieveQuery'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
 components:
   schemas:
     ArtifactChunk:
@@ -696,6 +1254,27 @@ components:
       - end_offset
       title: ArtifactChunk
       description: "One chunk of a source artifact. Not a MusubiObject \u2014 lives inside one."
+    ArtifactCreateResponse:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        state:
+          type: string
+          title: State
+        size_bytes:
+          type: integer
+          title: Size Bytes
+        sha256:
+          type: string
+          title: Sha256
+      type: object
+      required:
+      - object_id
+      - state
+      - size_bytes
+      - sha256
+      title: ArtifactCreateResponse
     ArtifactRef:
       properties:
         artifact_id:
@@ -718,6 +1297,109 @@ components:
       title: ArtifactRef
       description: "A pointer into a ``SourceArtifact`` \u2014 whole artifact or a specific chunk.\n\nUsed by ``MemoryObject.supported_by``\
         \ to cite evidence."
+    BatchCaptureRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        items:
+          items:
+            $ref: '#/components/schemas/CaptureItem'
+          type: array
+          title: Items
+      type: object
+      required:
+      - namespace
+      - items
+      title: BatchCaptureRequest
+    BatchCaptureResponse:
+      properties:
+        object_ids:
+          items:
+            type: string
+          type: array
+          title: Object Ids
+      type: object
+      required:
+      - object_ids
+      title: BatchCaptureResponse
+    CaptureItem:
+      properties:
+        content:
+          type: string
+          minLength: 1
+          title: Content
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        importance:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Importance
+          default: 5
+      type: object
+      required:
+      - content
+      title: CaptureItem
+      description: One row in a batch capture. Inherits ``namespace`` from the parent.
+    CaptureRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        content:
+          type: string
+          minLength: 1
+          title: Content
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        importance:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Importance
+          default: 5
+      type: object
+      required:
+      - namespace
+      - content
+      title: CaptureRequest
+    CaptureResponse:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        state:
+          type: string
+          title: State
+        dedup:
+          anyOf:
+          - additionalProperties:
+              type: string
+            type: object
+          - type: 'null'
+          title: Dedup
+      type: object
+      required:
+      - object_id
+      - state
+      title: CaptureResponse
     ComponentStatus:
       properties:
         name:
@@ -765,6 +1447,71 @@ components:
       - contradicts
       - namespace
       title: ContradictionPair
+    CuratedCreateRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        title:
+          type: string
+          minLength: 1
+          title: Title
+        content:
+          type: string
+          minLength: 1
+          title: Content
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        vault_path:
+          type: string
+          minLength: 1
+          title: Vault Path
+        body_hash:
+          type: string
+          maxLength: 64
+          minLength: 64
+          pattern: ^[0-9a-f]{64}$
+          title: Body Hash
+        topics:
+          items:
+            type: string
+          type: array
+          title: Topics
+        tags:
+          items:
+            type: string
+          type: array
+          title: Tags
+        importance:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Importance
+          default: 7
+      type: object
+      required:
+      - namespace
+      - title
+      - content
+      - vault_path
+      - body_hash
+      title: CuratedCreateRequest
+    CuratedCreateResponse:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        state:
+          type: string
+          title: State
+      type: object
+      required:
+      - object_id
+      - state
+      title: CuratedCreateResponse
     CuratedKnowledge:
       properties:
         object_id:
@@ -1288,6 +2035,98 @@ components:
       required:
       - items
       title: Page[SynthesizedConcept]
+    PatchCuratedRequest:
+      properties:
+        tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Tags
+        importance:
+          anyOf:
+          - type: integer
+            maximum: 10.0
+            minimum: 1.0
+          - type: 'null'
+          title: Importance
+        topics:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Topics
+      additionalProperties: true
+      type: object
+      title: PatchCuratedRequest
+      description: "Non-state metadata only \u2014 same convention as PATCH /v1/memories.\n\n``extra=\"allow\"`` so the handler\
+        \ can return a typed BAD_REQUEST\nnaming the forbidden field instead of a generic 422."
+    PatchEpisodicRequest:
+      properties:
+        tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Tags
+        importance:
+          anyOf:
+          - type: integer
+            maximum: 10.0
+            minimum: 1.0
+          - type: 'null'
+          title: Importance
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+      additionalProperties: true
+      type: object
+      title: PatchEpisodicRequest
+      description: 'Non-state field updates only. ``state`` mutations go through
+
+        POST /v1/lifecycle/transition (the canonical primitive). Extra
+
+        fields are captured (``extra="allow"``) so the handler can return
+
+        a typed BAD_REQUEST naming the forbidden field instead of a
+
+        generic 422.'
+    PromoteRequest:
+      properties:
+        promoted_to:
+          type: string
+          title: Promoted To
+        reason:
+          type: string
+          title: Reason
+          default: operator-force
+      type: object
+      required:
+      - promoted_to
+      title: PromoteRequest
+    ReinforceRequest:
+      properties:
+        additional_source:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Additional Source
+      type: object
+      title: ReinforceRequest
+    RejectRequest:
+      properties:
+        reason:
+          type: string
+          title: Reason
+      type: object
+      required:
+      - reason
+      title: RejectRequest
     RetrieveQuery:
       properties:
         namespace:
@@ -1723,6 +2562,138 @@ components:
       required:
       - items
       title: ThoughtListResponse
+    ThoughtReadRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        ids:
+          items:
+            type: string
+          type: array
+          title: Ids
+        reader:
+          type: string
+          minLength: 1
+          title: Reader
+      type: object
+      required:
+      - namespace
+      - ids
+      - reader
+      title: ThoughtReadRequest
+    ThoughtReadResponse:
+      properties:
+        count:
+          type: integer
+          title: Count
+      type: object
+      required:
+      - count
+      title: ThoughtReadResponse
+    ThoughtSendRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        from_presence:
+          type: string
+          minLength: 1
+          title: From Presence
+        to_presence:
+          type: string
+          minLength: 1
+          title: To Presence
+        content:
+          type: string
+          minLength: 1
+          title: Content
+        channel:
+          type: string
+          title: Channel
+          default: default
+        importance:
+          type: integer
+          maximum: 10.0
+          minimum: 1.0
+          title: Importance
+          default: 5
+      type: object
+      required:
+      - namespace
+      - from_presence
+      - to_presence
+      - content
+      title: ThoughtSendRequest
+    ThoughtSendResponse:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        state:
+          type: string
+          title: State
+      type: object
+      required:
+      - object_id
+      - state
+      title: ThoughtSendResponse
+    TransitionRequest:
+      properties:
+        object_id:
+          type: string
+          maxLength: 27
+          minLength: 27
+          title: Object Id
+        to_state:
+          type: string
+          title: To State
+        actor:
+          type: string
+          minLength: 1
+          title: Actor
+        reason:
+          type: string
+          minLength: 1
+          title: Reason
+        superseded_by:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Superseded By
+        supersedes:
+          items:
+            type: string
+          type: array
+          title: Supersedes
+      type: object
+      required:
+      - object_id
+      - to_state
+      - actor
+      - reason
+      title: TransitionRequest
+    TransitionResponseBody:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        from_state:
+          type: string
+          title: From State
+        to_state:
+          type: string
+          title: To State
+        version:
+          type: integer
+          title: Version
+      type: object
+      required:
+      - object_id
+      - from_state
+      - to_state
+      - version
+      title: TransitionResponseBody
     ValidationError:
       properties:
         loc:
@@ -1749,3 +2720,33 @@ components:
       - msg
       - type
       title: ValidationError
+    bucket_artifact-upload:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        title:
+          type: string
+          title: Title
+        content_type:
+          type: string
+          title: Content Type
+        source_system:
+          type: string
+          title: Source System
+          default: api-upload
+        chunker:
+          type: string
+          title: Chunker
+          default: markdown-headings-v1
+        file:
+          type: string
+          contentMediaType: application/octet-stream
+          title: File
+      type: object
+      required:
+      - namespace
+      - title
+      - content_type
+      - file
+      title: Body_upload_artifact.bucket=artifact-upload
