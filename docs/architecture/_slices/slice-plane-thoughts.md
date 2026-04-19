@@ -3,10 +3,10 @@ title: "Slice: Thoughts subsystem"
 slice_id: slice-plane-thoughts
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: gemini-3-1-pro-nyla
 phase: "4 Planes"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]"]
