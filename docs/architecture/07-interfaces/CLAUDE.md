@@ -45,6 +45,6 @@ Local rules for `musubi/api/`, `openapi.yaml`, `proto/`, and all adapter/SDK rep
 
 ## Related slices
 
-- [[_slices/slice-api-v0]] — canonical API (one-at-a-time writer).
+- [[_slices/slice-api-v0-read]] — canonical API (one-at-a-time writer).
 - [[_slices/slice-sdk-py]] — Python SDK.
 - [[_slices/slice-adapter-mcp]], [[_slices/slice-adapter-livekit]], [[_slices/slice-adapter-openclaw]].

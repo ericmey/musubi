@@ -10,7 +10,7 @@ tags: [section/slices, status/in-review, type/slice]
 updated: 2026-04-18
 reviewed: false
 depends-on: []
-blocks: ["[[_slices/slice-api-v0]]", "[[_slices/slice-auth]]", "[[_slices/slice-embedding]]"]
+blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-auth]]", "[[_slices/slice-embedding]]"]
 ---
 # Slice: Config & environment loading
 
@@ -41,7 +41,7 @@ Start this slice only after every upstream slice has `status: done`.
 
 ## Unblocks
 
-- [[_slices/slice-api-v0]]
+- [[_slices/slice-api-v0-read]]
 - [[_slices/slice-auth]]
 
 ## Definition of Done
