@@ -22,6 +22,8 @@ Error handling contract:
 
 from __future__ import annotations
 
+import asyncio
+import random
 from typing import Any
 
 import httpx
@@ -29,6 +31,9 @@ import httpx
 from musubi.embedding.base import EmbeddingError
 
 _DEFAULT_TIMEOUT = 30.0
+_DEFAULT_MAX_BATCH_SIZE = 64
+_DEFAULT_MAX_INPUT_CHARS = 2048
+_DEFAULT_RETRY_BACKOFF = 0.05
 
 
 def _raise_for_httpx(exc: httpx.HTTPError) -> None:
@@ -61,17 +66,45 @@ async def _post_json(
     payload: dict[str, Any],
     *,
     timeout: float,
+    retry_backoff: float,
 ) -> Any:
     """POST ``payload`` as JSON; raise :class:`EmbeddingError` on failure."""
     url = f"{base_url.rstrip('/')}{path}"
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload)
-    except httpx.HTTPError as exc:
-        _raise_for_httpx(exc)
-        raise  # pragma: no cover — _raise_for_httpx always raises
-    _raise_for_status(response)
-    return response.json()
+    for attempt in range(2):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, json=payload)
+        except httpx.HTTPError as exc:
+            _raise_for_httpx(exc)
+            raise  # pragma: no cover — _raise_for_httpx always raises
+        if _should_retry(response, attempt):
+            await _sleep_with_jitter(retry_backoff)
+            continue
+        _raise_for_status(response)
+        return response.json()
+    raise AssertionError("retry loop must return or raise")  # pragma: no cover
+
+
+def _should_retry(response: httpx.Response, attempt: int) -> bool:
+    return attempt == 0 and 500 <= response.status_code <= 599
+
+
+async def _sleep_with_jitter(backoff: float) -> None:
+    if backoff <= 0.0:
+        return
+    await asyncio.sleep(random.uniform(0.0, backoff))
+
+
+def _chunks(texts: list[str], max_batch_size: int) -> list[list[str]]:
+    if max_batch_size <= 0:
+        raise ValueError("max_batch_size must be positive")
+    return [texts[i : i + max_batch_size] for i in range(0, len(texts), max_batch_size)]
+
+
+def _truncate(text: str, max_input_chars: int) -> str:
+    if max_input_chars <= 0:
+        raise ValueError("max_input_chars must be positive")
+    return text[:max_input_chars]
 
 
 class TEIDenseClient:
@@ -81,21 +114,36 @@ class TEIDenseClient:
     of vectors, one per input, in input order.
     """
 
-    def __init__(self, *, base_url: str, timeout: float = _DEFAULT_TIMEOUT) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout: float = _DEFAULT_TIMEOUT,
+        max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE,
+        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
+        retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
+    ) -> None:
         self._base_url = base_url
         self._timeout = timeout
+        self._max_batch_size = max_batch_size
+        self._max_input_chars = max_input_chars
+        self._retry_backoff = retry_backoff
 
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        data = await _post_json(
-            self._base_url,
-            "/embed",
-            {"inputs": list(texts)},
-            timeout=self._timeout,
-        )
-        # TEI returns list[list[float]] in input order.
-        return [[float(x) for x in vec] for vec in data]
+        out: list[list[float]] = []
+        for batch in _chunks(texts, self._max_batch_size):
+            data = await _post_json(
+                self._base_url,
+                "/embed",
+                {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
+                timeout=self._timeout,
+                retry_backoff=self._retry_backoff,
+            )
+            # TEI returns list[list[float]] in input order.
+            out.extend([[float(x) for x in vec] for vec in data])
+        return out
 
 
 class TEISparseClient:
@@ -106,21 +154,38 @@ class TEISparseClient:
     each to a ``dict[int, float]`` so downstream code sees a uniform shape.
     """
 
-    def __init__(self, *, base_url: str, timeout: float = _DEFAULT_TIMEOUT) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout: float = _DEFAULT_TIMEOUT,
+        max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE,
+        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
+        retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
+    ) -> None:
         self._base_url = base_url
         self._timeout = timeout
+        self._max_batch_size = max_batch_size
+        self._max_input_chars = max_input_chars
+        self._retry_backoff = retry_backoff
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         if not texts:
             return []
-        data = await _post_json(
-            self._base_url,
-            "/embed_sparse",
-            {"inputs": list(texts)},
-            timeout=self._timeout,
-        )
-        # data: list[list[{"index": int, "value": float}]]
-        return [{int(entry["index"]): float(entry["value"]) for entry in row} for row in data]
+        out: list[dict[int, float]] = []
+        for batch in _chunks(texts, self._max_batch_size):
+            data = await _post_json(
+                self._base_url,
+                "/embed_sparse",
+                {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
+                timeout=self._timeout,
+                retry_backoff=self._retry_backoff,
+            )
+            # data: list[list[{"index": int, "value": float}]]
+            out.extend(
+                [{int(entry["index"]): float(entry["value"]) for entry in row} for row in data]
+            )
+        return out
 
 
 class TEIRerankerClient:
@@ -133,9 +198,18 @@ class TEIRerankerClient:
     expects from an :class:`Embedder`.
     """
 
-    def __init__(self, *, base_url: str, timeout: float = _DEFAULT_TIMEOUT) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        timeout: float = _DEFAULT_TIMEOUT,
+        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
+        retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
+    ) -> None:
         self._base_url = base_url
         self._timeout = timeout
+        self._max_input_chars = max_input_chars
+        self._retry_backoff = retry_backoff
 
     async def rerank(self, query: str, candidates: list[str]) -> list[float]:
         if not candidates:
@@ -143,8 +217,12 @@ class TEIRerankerClient:
         data = await _post_json(
             self._base_url,
             "/rerank",
-            {"query": query, "texts": list(candidates)},
+            {
+                "query": _truncate(query, self._max_input_chars),
+                "texts": [_truncate(candidate, self._max_input_chars) for candidate in candidates],
+            },
             timeout=self._timeout,
+            retry_backoff=self._retry_backoff,
         )
         # data: list[{"index": int, "score": float}] — possibly out of order.
         scores = [0.0] * len(candidates)
