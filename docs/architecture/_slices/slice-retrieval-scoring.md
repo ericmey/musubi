@@ -3,12 +3,12 @@ title: "Slice: Retrieval scoring model"
 slice_id: slice-retrieval-scoring
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "2 Hybrid"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-types]]"]
 blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]", "[[_slices/slice-retrieval-blended]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]",
 
 > The single function that turns a raw hit into a rank-orderable number. Weights: relevance, recency, importance, maturity, reinforcement, provenance, penalties.
 
-**Phase:** 2 Hybrid · **Status:** `in-review` · **Owner:** `codex-gpt5`
+**Phase:** 2 Hybrid · **Status:** `done` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 

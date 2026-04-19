@@ -3,12 +3,12 @@ title: "Slice: Thoughts subsystem"
 slice_id: slice-plane-thoughts
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-3-1-pro-nyla
 phase: "4 Planes"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-types]]"]
 blocks: ["[[_slices/slice-adapter-mcp]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-adapter-mcp]]"]
 
 > POC-preserved inter-presence durable message channel. Per-presence read-state via `read_by` list.
 
-**Phase:** 4 Planes · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 4 Planes · **Status:** `done` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Specs to implement
 

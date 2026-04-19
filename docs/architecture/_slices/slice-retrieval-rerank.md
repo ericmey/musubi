@@ -25,13 +25,16 @@ blocks: ["[[_slices/slice-retrieval-deep]]"]
 
 ## Owned paths (you MAY write here)
 
-- `musubi/rerank/`
-- `tests/test_rerank.py`
+- `src/musubi/retrieve/rerank.py`
+- `tests/retrieve/test_rerank.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `musubi/retrieve/`
-- `musubi/planes/`
+- `src/musubi/retrieve/hybrid.py`   (owned by slice-retrieval-hybrid, done)
+- `src/musubi/retrieve/scoring.py`  (owned by slice-retrieval-scoring, done)
+- `src/musubi/planes/`
+- `src/musubi/api/`
+- `src/musubi/types/`
 
 ## Depends on
 
