@@ -3,12 +3,12 @@ title: "Slice: Canonical API v0.1 — write surface"
 slice_id: slice-api-v0-write
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: vscode-cc-sonnet47
 phase: "7 Adapters"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-types]]", "[[_slices/slice-auth]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-artifact]]"]
 blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-openclaw]]", "[[_slices/slice-ingestion-capture]]", "[[_slices/slice-sdk-py]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "
 
 > HTTP write surface. POST / PATCH / DELETE across every plane + lifecycle transition endpoints + write-side contract tests. Inherits auth + OpenAPI + error scaffolding from `slice-api-v0-read`.
 
-**Phase:** 7 Adapters · **Status:** `in-review` · **Owner:** `vscode-cc-sonnet47`
+**Phase:** 7 Adapters · **Status:** `done` · **Owner:** `vscode-cc-sonnet47`
 
 **Split origin:** split from original `slice-api-v0` (closed Issue #6) to respect the 800 LoC PR cap. See `slice-api-v0-read` for the read-side + scaffolding; this slice extends that foundation with mutations.
 
