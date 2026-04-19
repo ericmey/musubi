@@ -206,7 +206,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.loop <= 0:
-        n = tick()
+        tick()
         return 0
     while True:
         try:

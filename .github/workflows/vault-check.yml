@@ -37,6 +37,11 @@ jobs:
         #   - slice DAG (no cycles, owns_paths non-conflict, status valid)
         #   - spec Test Contract hygiene (presence, implements: field)
         #   - wikilink resolution (.md + .canvas + .base; skips code spans + _templates/)
-        #   - vault ↔ GitHub Issue drift (skipped here since gh CLI isn't authed
-        #     in PR builds; runs locally via `make issue-check`)
+        #   - vault ↔ GitHub Issue drift (Dual-update rule, via GH_TOKEN below).
+        env:
+          # gh is pre-installed on ubuntu-latest; surface the Actions token as
+          # GH_TOKEN so check.py's `_fetch_slice_issues` shell-out can read
+          # Issue labels and enforce the Dual-update rule in CI (not just
+          # locally via `make issue-check`).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 docs/architecture/_tools/check.py all
