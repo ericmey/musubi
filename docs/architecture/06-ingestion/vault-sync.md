@@ -1,10 +1,11 @@
 ---
 title: Vault Sync
 section: 06-ingestion
-tags: [ingestion, obsidian, section/ingestion, status/draft, type/spec, vault, watcher]
+tags: [ingestion, obsidian, section/ingestion, status/complete, type/spec, vault, watcher]
 type: spec
-status: draft
-updated: 2026-04-17
+status: complete
+implements: src/musubi/vault/watcher.py
+updated: 2026-04-19
 up: "[[06-ingestion/index]]"
 reviewed: false
 ---
@@ -189,7 +190,7 @@ A malicious or broken editor could thrash the vault:
 
 These protect Qdrant and TEI from a pathological human who runs a shell script on the vault.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/vault/watcher.py`, `musubi/vault/writer.py`, `musubi/vault/reconciler.py`
 

@@ -14,6 +14,8 @@ dependencies = [
     "qdrant-client>=1.12",
     "httpx>=0.27",
     "pyjwt[crypto]>=2.10",
+    "ruamel.yaml>=0.18",
+    "watchdog>=4.0",
 ]
 
 [project.optional-dependencies]
