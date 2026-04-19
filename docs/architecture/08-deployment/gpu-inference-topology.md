@@ -4,13 +4,15 @@ section: 08-deployment
 tags: [deployment, gpu, inference, ollama, section/deployment, status/complete, tei, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-04-19
 up: "[[08-deployment/index]]"
 reviewed: false
 ---
 # GPU Inference Topology
 
-How 10 GB of VRAM hosts BGE-M3, SPLADE++ V3, BGE-reranker-v2-m3, and Qwen2.5-7B-Instruct Q4 simultaneously — without OOMs.
+How 10 GB of VRAM hosts BGE-M3, SPLADE++ V3, BGE-reranker-v2-m3, and a Qwen 3 4B LLM simultaneously — without OOMs.
+
+**Host:** `musubi.example.local` — bare-metal Ubuntu 24.04, RTX 3080 10 GB, dedicated to Musubi. See [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]] for the phase-gated LLM placement decision behind the model choice below.
 
 ## The constraint
 
@@ -18,14 +20,33 @@ RTX 3080 has **10 GB VRAM**. We need:
 
 | Model | Role | VRAM (loaded, FP16 or Q4) |
 |---|---|---|
-| BGE-M3 (dense encoder, 560M) | Embedding | ~1.4 GB |
+| BGE-M3 (dense encoder, 560M) | Embedding | ~2.3 GB |
 | SPLADE++ V3 (~110M) | Sparse encoder | ~0.5 GB |
-| BGE-reranker-v2-m3 (~560M) | Cross-encoder rerank | ~1.4 GB |
-| Qwen2.5-7B-Instruct Q4_K_M | LLM for synthesis / rendering | ~4.8 GB |
-| CUDA context + KV cache headroom | — | ~1.5 GB |
-| **Total** | | **~9.6 GB** |
+| BGE-reranker-v2-m3 (~560M) | Cross-encoder rerank | ~2.0 GB |
+| **Qwen 3 4B Q4_K_M** | LLM for synthesis / rendering / rationale | **~2.5 GB** |
+| CUDA context + KV cache (shared across services) | — | ~1.5-2.0 GB |
+| **Total** | | **~8.8-9.3 GB** |
 
-Tight. Leaves ~0.4 GB overhead. Acceptable, but we need discipline — model reloads, large batch queries, or multi-request LLM usage can push it over.
+Workable. Leaves ~0.7-1.2 GB headroom. Tight enough that growth (larger TEI batch sizes, hot-path retrieval-deep LLM calls, multi-model experiments) will trigger the Phase 2 plan below.
+
+## Phase 2 triggers (summary)
+
+Move Qwen off musubi — either to `photo.example.local` (5070 Ti 16 GB) over the VLAN, or upgrade musubi's GPU — if any of:
+
+- VRAM OOM / model-eviction events >1 per week
+- Sweep wall-time exceeds schedule window (hourly >15 min, daily >2 hours)
+- TEI error rate >5 % during sweep windows
+- Hybrid-search P95 latency regresses >2x during sweep windows
+- Operator review: 2+ consecutive thumbs-down on generated digests / concepts
+- Operator judgment at Day 14 that Qwen 3 4B quality is insufficient
+
+Full decision, alternatives, and trigger table: [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]].
+
+## Why Qwen 3 4B (not Qwen 2.5 7B)
+
+The prior version of this spec named Qwen 2.5 7B Q4 (~4.8 GB). On a 10 GB card alongside three TEI services, that left ~0.4 GB headroom — fragile under real load. Qwen 3 4B Q4 (~2.5 GB) lands at ~1 GB headroom, which is the minimum for stable operation with KV-cache growth across all four services.
+
+Qwen 3 4B benchmarks as approaching Qwen 2.5 7B quality on synthesis-class tasks per published evals. Subjective quality at this size is acceptable for Phase 1; see Phase 2 criteria for the quality-fail escalation path.
 
 ## Service layout
 
@@ -51,12 +72,13 @@ Four GPU services, all co-resident:
 - Port: 8012
 - Batch cross-encoder: ~40 pairs/batch at ~100ms.
 
-### Ollama (Qwen2.5-7B-Instruct Q4)
+### Ollama (Qwen 3 4B Q4_K_M) — Phase 1
 
-- Container: `ollama/ollama:0.4.0-cuda`
-- Model: `qwen2.5:7b-instruct-q4_K_M`
-- Port: 11434
-- Use: concept synthesis, curated rendering, maturation enrichment.
+- Container: `ollama/ollama:latest-cuda` (verify Blackwell / Ada compute capability support for whichever Ollama tag is current)
+- Model: `qwen3:4b` (explicit: `qwen3:4b-instruct-q4_K_M`)
+- Port: 11434 (bound to `127.0.0.1` — self-contained per Phase 1 topology; not exposed on the VLAN)
+- Env: `OLLAMA_KEEP_ALIVE=24h`, `OLLAMA_MAX_LOADED_MODELS=1` — single-model residency; no spare capacity to swap in a second model on the 10 GB card.
+- Use: concept synthesis, curated rendering, maturation enrichment, reflection digest, future promotion rationale.
 - Always-loaded (long cold-start otherwise).
 
 ## GPU sharing strategy
@@ -91,7 +113,7 @@ At compose up:
 1. TEI dense boots. Downloads weights on first run (~1.3 GB).
 2. TEI sparse boots in parallel.
 3. TEI reranker boots next.
-4. Ollama boots last and pulls Qwen2.5-7B Q4 on first run (~4.7 GB).
+4. Ollama boots last and pulls Qwen 3 4B Q4 on first run (~2.4 GB).
 
 Each service has a `/health` endpoint; Compose waits for healthy before Core comes up.
 
@@ -143,7 +165,7 @@ Given April 2026 model quality:
 
 - BGE-M3 beats or matches Gemini text-embedding-004 on multilingual retrieval benchmarks.
 - SPLADE++ V3 is state of the art for learned sparse (no Gemini equivalent).
-- Qwen2.5-7B Q4 is good enough for the specific tasks we use it for (structured extraction, concept naming, brief renders). We're not trying to do open-ended reasoning with it.
+- Qwen 3 4B Q4 is good enough for the specific tasks we use it for (structured extraction, concept naming, brief renders). We're not trying to do open-ended reasoning with it. If Phase 2 triggers on quality, the escalation path in ADR-0019 moves Qwen off-host rather than compromising here.
 
 Trade-off: latency. Local calls are 10-50ms for encoding, ~2s for LLM inference on Q4. A hosted API would be similar for encoding, faster for LLM — but with network and privacy costs.
 
