@@ -3,11 +3,11 @@ title: "Slice: Promotion / demotion"
 slice_id: slice-lifecycle-promotion
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-3-1-pro-nyla
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-vault-sync]]"]
 blocks: []
@@ -17,7 +17,7 @@ blocks: []
 
 > Threshold-gated write to vault (promotion) + soft-delete flag (demotion). All mutations versioned.
 
-**Phase:** 6 Lifecycle · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 6 Lifecycle · **Status:** `in-progress` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Specs to implement
 
@@ -63,6 +63,10 @@ Plus slice-specific:
 
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
+
+### 2026-04-19 17:30 — gemini-3-1-pro-nyla — claim
+
+- Claimed slice via `pick-slice` skill. Issue #13, PR #68 (draft).
 
 ### 2026-04-17 — generator — slice created
 
