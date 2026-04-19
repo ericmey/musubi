@@ -3,10 +3,10 @@ title: "Slice: MCP adapter"
 slice_id: slice-adapter-mcp
 section: _slices
 type: slice
-status: in-progress
+status: blocked
 owner: gemini-3-1-pro-nyla
 phase: "5 Vault"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/blocked, type/slice]
 updated: 2026-04-17
 reviewed: false
 depends-on: ["[[_slices/slice-sdk-py]]", "[[_slices/slice-ingestion-capture]]", "[[_slices/slice-retrieval-deep]]"]
@@ -60,6 +60,10 @@ Plus slice-specific:
 
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
+
+### 2026-04-19 13:45 — gemini-3-1-pro-nyla — blocked on path contradiction
+- Discovered a contradiction between `slice-adapter-mcp.md`, `mcp-adapter.md`, and ADR 0015 regarding the physical path for the MCP adapter.
+- Created question file: `docs/architecture/_inbox/questions/slice-adapter-mcp-path-contradiction.md`
 
 ### 2026-04-17 — generator — slice created
 
