@@ -13,15 +13,14 @@ from hypothesis import strategies as st
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import Err, Ok
-
 from musubi.retrieve.hybrid import (
     HYBRID_PREFETCH_LIMIT,
     QueryEmbeddingCache,
     hybrid_search,
     hybrid_search_many,
 )
+from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.types.common import Err, Ok
 
 NAMESPACE = "tenant/presence/episodic"
 COLLECTION = "musubi_episodic"
