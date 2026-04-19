@@ -3,12 +3,12 @@ title: "Slice: Backup / restore"
 slice_id: slice-ops-backup
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-ops-ansible]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Nightly snapshot to local NAS + S3-compatible offsite + weekly restore-into-scratch drill.
 
-**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `codex-gpt5`
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
