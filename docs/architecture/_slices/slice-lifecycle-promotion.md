@@ -3,12 +3,12 @@ title: "Slice: Promotion / demotion"
 slice_id: slice-lifecycle-promotion
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-3-1-pro-nyla
 phase: "6 Lifecycle"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-vault-sync]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Threshold-gated write to vault (promotion) + soft-delete flag (demotion). All mutations versioned.
 
-**Phase:** 6 Lifecycle · **Status:** `in-review` · **Owner:** `gemini-3-1-pro-nyla`
+**Phase:** 6 Lifecycle · **Status:** `done` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Specs to implement
 
