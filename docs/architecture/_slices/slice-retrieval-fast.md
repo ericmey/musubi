@@ -25,13 +25,18 @@ blocks: ["[[_slices/slice-adapter-livekit]]"]
 
 ## Owned paths (you MAY write here)
 
-- `musubi/retrieve/fast_path.py`
-- `tests/retrieve/test_fast_path.py`
+- `src/musubi/retrieve/fast.py`
+- `tests/retrieve/test_fast.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `musubi/planes/`
-- `musubi/api/`
+- `src/musubi/retrieve/hybrid.py`    (owned by slice-retrieval-hybrid, done)
+- `src/musubi/retrieve/scoring.py`   (owned by slice-retrieval-scoring, done)
+- `src/musubi/retrieve/rerank.py`    (owned by slice-retrieval-rerank, done)
+- `src/musubi/retrieve/deep.py`      (owned by slice-retrieval-deep, in-flight — Hana)
+- `src/musubi/planes/`
+- `src/musubi/api/`
+- `src/musubi/types/`
 
 ## Depends on
 
