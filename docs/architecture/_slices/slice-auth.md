@@ -3,11 +3,11 @@ title: "Slice: Auth middleware"
 slice_id: slice-auth
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: done
+owner: codex-gpt5
 phase: "1 Schema"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/done, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-config]]"]
 blocks: ["[[_slices/slice-api-v0]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-api-v0]]"]
 
 > Bearer token validation + namespace scope check + optional mTLS. Sits as middleware; business logic never parses auth headers.
 
-**Phase:** 1 Schema · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 1 Schema · **Status:** `done` · **Owner:** `codex-gpt5`
 
 ## Specs to implement
 
@@ -63,10 +63,22 @@ Agents append one entry per work session. Format:
 
 - Seeded from the roadmap + guardrails matrix.
 
+### 2026-04-19 10:38 — codex-gpt5 — claim
+
+- Claimed slice via Issue #7 and branch `slice/slice-auth`.
+
+### 2026-04-19 10:38 — codex-gpt5 — handoff to in-review
+
+- Landed Core auth middleware surface: HS256/RS256 JWT validation with JWKS lookup, namespace/special-scope checks, blended-query plane expansion, and FastAPI-compatible request auth context attachment.
+- Added `pyjwt[crypto]` because RS256/JWKS verification needs vetted RSA/JWT primitives rather than a hand-rolled stdlib verifier.
+- Tests: `make check` passed with 230 passed / 4 skipped; Test Contract coverage is 10 passing and 4 skipped for `slice-auth-authority` follow-up (`test_pkce_flow_end_to_end`, `test_refresh_token_rotation_issues_new_refresh`, `test_revocation_invalidates_token_within_60s_cache`, `test_operator_issued_only_via_cli`).
+- Coverage: auth package 98.40% branch/line combined on focused `musubi.auth` coverage run; repo total 96.30%.
+- `make agent-check` exited clean with pre-existing vault warnings only.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
 
 ## PR links
 
-- _(none yet)_
+- PR #38 — `feat(auth): slice-auth`
