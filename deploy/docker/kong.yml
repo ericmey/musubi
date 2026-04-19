@@ -1,0 +1,49 @@
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: musubi-core
+    url: http://<musubi-ip>:8100
+    retries: 2
+    connect_timeout: 2000
+    write_timeout: 30000
+    read_timeout: 30000
+    routes:
+      - name: musubi-api-v1
+        hosts: ["<musubi-host>"]
+        paths: ["/v1", "/oauth", "/healthz"]
+        protocols: [https]
+        strip_path: false
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 300
+          policy: local
+      - name: cors
+        config:
+          origins: ["https://claude.ai", "http://localhost:*"]
+          credentials: true
+      - name: request-transformer
+        config:
+          add:
+            headers: ["X-Forwarded-Proto:https"]
+      - name: file-log
+        config:
+          path: /var/log/kong/musubi-api.log
+          reopen: true
+
+  - name: ollama
+    url: http://<musubi-ip>:11434
+    routes:
+      - name: ollama-api
+        hosts: ["ollama.<homelab-domain>"]
+        paths: ["/"]
+        protocols: [https]
+    plugins:
+      - name: key-auth
+        config:
+          key_names: ["X-API-Key"]
+      - name: rate-limiting
+        config:
+          minute: 60
+          policy: local

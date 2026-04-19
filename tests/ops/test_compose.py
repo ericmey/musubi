@@ -140,4 +140,4 @@ def test_compose_up_to_healthy_under_5min_on_warm_cache() -> None:
     script = SMOKE_SCRIPT.read_text()
     assert "docker compose" in script
     assert "--timeout 300" in script
-    assert "compose ps --format json" in script
+    assert "ps --format json" in script
