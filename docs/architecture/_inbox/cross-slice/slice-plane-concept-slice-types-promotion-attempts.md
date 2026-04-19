@@ -7,6 +7,8 @@ target_slice: slice-types
 status: open
 opened_by: vscode-cc-opus47
 opened_at: 2026-04-19
+tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+updated: 2026-04-19
 ---
 
 # Add `promotion_attempts: int` and `last_reinforced_at: datetime | None` to `SynthesizedConcept`
