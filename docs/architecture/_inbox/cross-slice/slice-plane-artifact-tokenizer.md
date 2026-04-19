@@ -1,7 +1,9 @@
 ---
 title: "Cross-slice: Tokenizer wiring for artifact chunkers"
 section: _inbox/cross-slice
-tags: [cross-slice, type/ticket, status/blocked]
+type: cross-slice
+status: open
+tags: [section/inbox-cross-slice, type/cross-slice, status/open]
 updated: 2026-04-19
 ---
 # Tokenizer wiring for artifact chunkers
