@@ -9,10 +9,11 @@ from pydantic import BaseModel
 from qdrant_client import QdrantClient
 
 from musubi.api.auth import require_auth
-from musubi.api.dependencies import get_artifact_plane, get_qdrant_client
+from musubi.api.dependencies import get_artifact_plane, get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError
 from musubi.lifecycle.transitions import transition
 from musubi.planes.artifact import ArtifactPlane
+from musubi.settings import Settings
 from musubi.types.artifact import SourceArtifact
 from musubi.types.common import Ok
 
@@ -41,6 +42,7 @@ async def upload_artifact(
     chunker: str = Form("markdown-headings-v1"),
     file: UploadFile = File(...),
     plane: ArtifactPlane = Depends(get_artifact_plane),
+    settings: Settings = Depends(get_settings_dep),
 ) -> ArtifactCreateResponse:
     raw = await file.read()
     sha = hashlib.sha256(raw).hexdigest()
@@ -56,6 +58,13 @@ async def upload_artifact(
             ingestion_metadata={"source_system": source_system},
         )
     )
+    # Persist raw bytes under artifact_blob_path/<namespace>/<object_id>.
+    # The layout matches ops/cleanup.py's hard-delete walker and is the
+    # minimum wiring for GET /artifacts/{id}/blob to round-trip. Real
+    # content-addressed blob storage (S3 / by-sha256) is a follow-up.
+    blob_path = settings.artifact_blob_path / saved.namespace / saved.object_id
+    blob_path.parent.mkdir(parents=True, exist_ok=True)
+    blob_path.write_bytes(raw)
     return ArtifactCreateResponse(
         object_id=saved.object_id,
         state=saved.state,
