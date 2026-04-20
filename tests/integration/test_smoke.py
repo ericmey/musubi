@@ -6,23 +6,11 @@ fixture skips otherwise) so the unit-only `make test` invocation
 on a docker-less machine doesn't error on collection. CI verifies
 them via `.github/workflows/integration.yml`.
 
-**Status of bullets 5-14 at slice-ops-integration-harness landing:**
-
-The harness's first CI run surfaced a real architectural gap none
-of the existing slices addressed: ``musubi.api.app.create_app()``
-ships with the canonical ``ADR-punted-deps-fail-loud`` stubs for
-every plane factory in ``musubi.api.dependencies``. Unit tests
-override these via ``app.dependency_overrides``, but production
-``create_app()`` has no bootstrap that wires real plane instances.
-
-This was hidden until tonight because nothing was running the
-production app outside unit tests. Bullets 5-9 + 12 — every
-plane-touching scenario — are therefore deferred against
-cross-slice ticket
-``slice-ops-integration-harness-production-app-bootstrap.md``,
-with the harness shipping the scaffolding (compose stack +
-fixtures + scenarios) so each consumer slice (or whoever picks up
-the bootstrap) unskips against an already-wired suite.
+Bullets 5/6/7/9/12 (every plane-touching scenario) unskipped in
+slice-api-app-bootstrap (PR #126) — `create_app()` now wires real
+Qdrant + TEI + plane factories on init via the production bootstrap,
+which closed the cross-slice ticket
+``slice-ops-integration-harness-production-app-bootstrap.md``.
 
 Bullets 8 (SSE), 10/11 (synthesis worker triggers), 13/14 (perf
 budgets) remain skipped against their own follow-ups.
@@ -50,23 +38,11 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-_BOOTSTRAP_SKIP_REASON = (
-    "deferred to slice-ops-integration-harness-production-app-bootstrap: "
-    "create_app() ships with ADR-punted-deps-fail-loud stubs for every "
-    "plane factory in musubi.api.dependencies; production bootstrap is "
-    "not wired. Cross-slice ticket "
-    "_inbox/cross-slice/slice-ops-integration-harness-production-app-bootstrap.md "
-    "tracks the fix; this harness ships the scenario scaffolding so the "
-    "consumer slice unskips against an already-wired suite."
-)
-
-
 # --------------------------------------------------------------------------
 # Bullet 5 — capture_then_retrieve_roundtrip
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason=_BOOTSTRAP_SKIP_REASON)
 def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
     namespace = "eric/integration-test/episodic"
     content = f"smoke-test-capture-{uuid.uuid4().hex[:8]}"
@@ -96,7 +72,6 @@ def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason=_BOOTSTRAP_SKIP_REASON)
 def test_capture_dedup_against_existing(api_client: Any) -> None:
     """Capture the same content twice; the second hit should fold into
     the first via the dedup pipeline (reinforcement_count == 2)."""
@@ -129,7 +104,6 @@ def test_capture_dedup_against_existing(api_client: Any) -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason=_BOOTSTRAP_SKIP_REASON)
 def test_thought_send_check_read_history(api_client: Any) -> None:
     namespace = "eric/integration-test/thought"
 
@@ -172,7 +146,6 @@ def test_thought_stream_delivers_live() -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason=_BOOTSTRAP_SKIP_REASON)
 def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
     """The SDK's curated namespace is read-only (`get`); the create
     surface lives at the API layer (POST /v1/curated-knowledge) and
@@ -243,7 +216,6 @@ def test_concept_synthesis_flow_ollama_offline() -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason=_BOOTSTRAP_SKIP_REASON)
 def test_artifact_upload_multipart_then_retrieve_blob(
     live_stack: StackHandle,
 ) -> None:
