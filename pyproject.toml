@@ -16,6 +16,7 @@ dependencies = [
     "pyjwt[crypto]>=2.10",
     "ruamel.yaml>=0.18",
     "watchdog>=4.0",
+    "mcp>=1.2.0",
     # Canonical API framework — chosen by ADR-0011 + ADR-0013 (pydantic-first
     # OpenAPI generation). Required by slice-api-v0-read for the FastAPI
     # scaffolding the slice spec calls for.
@@ -28,6 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
+    "types-PyYAML>=6",
     "pytest-cov>=5",
     "pytest-asyncio>=0.23",
     "pytest-httpx>=0.30",

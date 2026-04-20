@@ -65,6 +65,9 @@ Agents append one entry per work session. Format:
 ### 2026-04-19 23:00 — gemini-3-1-pro-nyla — claim
 
 - Claimed slice via `pick-slice` skill. Issue #4, PR #95 (draft).
+- Declared the following out-of-scope (deferred to follow-up integration slices):
+  - `integration: runs canonical contract suite against adapter + live Musubi container`
+  - `integration: claude-code spawns adapter via stdio, captures + recalls — round trip < 500ms`
 
 ### 2026-04-17 — generator — slice created
 
