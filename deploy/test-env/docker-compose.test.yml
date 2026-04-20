@@ -75,9 +75,13 @@ services:
     environment:
       HF_HUB_ENDPOINT: https://huggingface.co
       HF_HOME: /data
+    # naver/efficient-splade-VI-BT-large-doc is TEI's documented sparse
+    # reference model + ships with ONNX weights so the CPU build loads
+    # cleanly. prithivida/Splade_PP_en_v1 lacks ONNX/safetensors and
+    # 404s the model download on the CPU image.
     command:
       - "--model-id"
-      - "prithivida/Splade_PP_en_v1"
+      - "naver/efficient-splade-VI-BT-large-doc"
       - "--pooling"
       - "splade"
       - "--port"

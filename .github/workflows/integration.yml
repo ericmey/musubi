@@ -57,8 +57,8 @@ jobs:
           path: |
             ~/.cache/huggingface
             ~/.ollama
-          key: integration-models-v2
-          restore-keys: integration-models-v2
+          key: integration-models-v3
+          restore-keys: integration-models-v3
 
       - name: Boot the test-env compose stack
         run: |
