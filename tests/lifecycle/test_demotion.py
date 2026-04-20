@@ -99,7 +99,7 @@ def _set_old(deps: DemotionDeps, plane_name: str, object_id: str, days_old: int 
     cutoff = epoch_of(utc_now()) - days_old * 24 * 3600
     deps.qdrant.set_payload(
         collection_name=coll_name,
-        payload={"updated_epoch": cutoff, "created_epoch": cutoff},
+        payload={"updated_epoch": cutoff, "created_epoch": cutoff, "last_accessed_at": None},
         points=[point_id],
     )
 
