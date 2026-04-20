@@ -4,10 +4,10 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-ingestion-capture
 target_slice: slice-types
-status: open
+status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-19
 ---
 
@@ -89,3 +89,7 @@ bends the "every event is a transition" invariant.
 - One of A / B is chosen and applied in `src/musubi/types/`.
 - `slice-ingestion-capture` follow-up wires the emit in
   `CaptureService.capture` and unskips test bullet 5.
+
+## Resolution
+
+Resolved by PR #113 (`slice-types-followup`).

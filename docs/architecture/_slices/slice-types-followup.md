@@ -179,6 +179,19 @@ Those are downstream followup PRs against the respective consumer slices after T
 - Recommended Option A on each either/or choice (keep invariants clean; prefer new fields over bending existing validators). Implementing agent has authority to choose B on either with justification in the feat-commit message.
 - Paths and wikilinks verified against actual file layout 2026-04-19.
 
+
+### 2026-04-19 23:45 — gemini-2-0-flash — claim
+
+- Claimed slice via Issue #107. Draft PR #113.
+- Out of scope deferrals (downstream consumer unskips):
+  - test_maturation_sets_matured_after_ttl_and_scores_importance
+  - test_maturation_skips_already_matured
+  - test_query_hybrid_returns_scored_results_in_descending_order
+  - test_forward_compat_reads_schema_version_0_point
+  - test_perf_create_under_100ms_p95_on_reference_host
+  - test_perf_dedup_query_under_30ms_p95
+
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet; resolution path for the 6 source tickets is documented in DoD)_
@@ -186,7 +199,3 @@ Those are downstream followup PRs against the respective consumer slices after T
 ## PR links
 
 - _(none yet)_
-
-### 2026-04-19 23:45 — gemini-2-0-flash — claim
-
-- Claimed slice via Issue #107. Draft PR #113.
