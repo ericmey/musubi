@@ -69,6 +69,7 @@ def patch_qdrant_ok() -> Iterator[Any]:
     with (
         patch("musubi.api.bootstrap.QdrantClient") as mock_qd_cls,
         patch("musubi.api.bootstrap._probe_tei", return_value=None),
+        patch("musubi.store.bootstrap"),
     ):
         instance = mock_qd_cls.return_value
         instance.get_collections.return_value = type("Collections", (), {"collections": []})()
@@ -93,6 +94,7 @@ def patch_qdrant_recovers() -> Iterator[Any]:
     with (
         patch("musubi.api.bootstrap.QdrantClient") as mock_cls,
         patch("musubi.api.bootstrap._probe_tei", return_value=None),
+        patch("musubi.store.bootstrap"),
     ):
         instance = mock_cls.return_value
         instance.get_collections.side_effect = [

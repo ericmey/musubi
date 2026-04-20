@@ -183,6 +183,13 @@ def bootstrap_production_app(
         backoff_s=retry_backoff_s,
     )
 
+    # Ensure the canonical Musubi collections exist on this Qdrant
+    # before any plane.create() touches them. Idempotent: bootstrap()
+    # short-circuits per-collection if already present.
+    from musubi.store import bootstrap as bootstrap_collections
+
+    bootstrap_collections(qdrant)
+
     dense = TEIDenseClient(base_url=str(settings.tei_dense_url))
     sparse = TEISparseClient(base_url=str(settings.tei_sparse_url))
     reranker = TEIRerankerClient(base_url=str(settings.tei_reranker_url))
