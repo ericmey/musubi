@@ -1,0 +1,12 @@
+[Unit]
+Description=Musubi Hard-Delete Cleanup Worker
+After=network.target
+
+[Service]
+Type=oneshot
+User=musubi
+Group=musubi
+WorkingDirectory=/opt/musubi/src
+EnvironmentFile=/etc/musubi/.env
+# Replace with actual command to run cleanup
+ExecStart=/opt/musubi/.venv/bin/python -m musubi.ops.cleanup_cmd
