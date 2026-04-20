@@ -3,12 +3,12 @@ title: "Slice: Python SDK"
 slice_id: slice-sdk-py
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: vscode-cc-sonnet47
 phase: "5 Vault"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-api-v0-write]]"]
 blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-openclaw]]"]
 ---
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "
 
 > Thin HTTP + gRPC client. Handles auth, retries, typed errors. Separate repo; pinned to API version.
 
-**Phase:** 5 Vault · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
+**Phase:** 5 Vault · **Status:** `done` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
