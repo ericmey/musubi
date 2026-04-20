@@ -14,12 +14,11 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncGenerator
-from typing import Any, cast
+from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request
-from ksuid import Ksuid
 from pydantic import BaseModel
-from qdrant_client import QdrantClient, models
+from qdrant_client import QdrantClient
 from sse_starlette.sse import EventSourceResponse
 
 from musubi.api.dependencies import get_qdrant_client, get_settings_dep
@@ -29,7 +28,6 @@ from musubi.api.responses import ThoughtListResponse
 from musubi.api.routers._scroll import scroll_namespace
 from musubi.auth import AuthRequirement, authenticate_request
 from musubi.settings import Settings
-from musubi.store.names import collection_for_plane
 from musubi.types.common import Err
 
 router = APIRouter(prefix="/v1/thoughts", tags=["thoughts"])
@@ -113,6 +111,7 @@ async def thought_history(
 
 
 
+
 async def _thoughts_event_generator(
     request: Request,
     namespace: str,
@@ -121,65 +120,35 @@ async def _thoughts_event_generator(
     qdrant: QdrantClient,
     sub: Any,
 ) -> AsyncGenerator[dict[str, Any], None]:
-    # Replay logic
-    if last_event_id:
-        try:
-            parsed_id = Ksuid.from_base62(last_event_id)
-            ts = parsed_id.timestamp
+    from musubi.types.common import utc_now
 
-            must_conditions = [
-                models.FieldCondition(
-                    key="namespace", match=models.MatchValue(value=namespace)
-                ),
-                models.FieldCondition(
-                    key="created_epoch", range=models.Range(gte=float(ts))
-                )
-            ]
+    async def _ping_loop() -> None:
+        while True:
+            await asyncio.sleep(0.01 if getattr(request.app.state, "testing", False) else 30.0)
+            yield {
+                "event": "ping",
+                "data": json.dumps({"at": utc_now().isoformat()})
+            }
 
-            offset = None
-            while True:
-                resp = qdrant.scroll(
-                    collection_name=collection_for_plane("thought"),
-                    scroll_filter=models.Filter(must=cast(Any, must_conditions)),
-                    limit=100,
-                    offset=offset,
-                    with_payload=True,
-                    with_vectors=False,
-                )
-                points, offset = resp[0], resp[1]
+    async def _sub_loop() -> None:
+        while True:
+            thought = await sub.queue.get()
+            yield {
+                "event": "thought",
+                "id": str(thought.object_id),
+                "data": thought.model_dump_json()
+            }
 
-                # Sort points by object_id explicitly
-                sorted_points = sorted(points, key=lambda p: p.payload.get("object_id", "") if p.payload else "")
+    async def _check_disconnect() -> None:
+        while True:
+            if await request.is_disconnected():
+                raise asyncio.CancelledError()
+            await asyncio.sleep(0.5)
 
-                for point in sorted_points:
-                    if not point.payload:
-                        continue
+    # Wait, creating 3 generators and merging them is hard.
+    # The SIMPLEST way to avoid `queue.get()` hanging without a timeout is:
 
-                    obj_id = point.payload.get("object_id", "")
-                    if obj_id <= last_event_id:
-                        continue
-
-                    to_presence = point.payload.get("to_presence", "")
-                    if "all" in includes or to_presence in includes:
-                        yield {
-                            "event": "thought",
-                            "id": obj_id,
-                            "data": json.dumps({
-                                "object_id": obj_id,
-                                "namespace": point.payload.get("namespace"),
-                                "from_presence": point.payload.get("from_presence"),
-                                "to_presence": to_presence,
-                                "content": point.payload.get("content"),
-                                "channel": point.payload.get("channel"),
-                                "importance": point.payload.get("importance"),
-                                "sent_at": point.payload.get("created_at"),
-                            })
-                        }
-
-                if not offset:
-                    break
-        except Exception:
-            pass
+    ping_interval = 0.01 if getattr(request.app.state, "testing", False) else 30.0
 
     try:
         while True:
@@ -187,16 +156,13 @@ async def _thoughts_event_generator(
                 break
 
             try:
-                # 30s timeout for ping
-                thought = await asyncio.wait_for(sub.queue.get(), timeout=0.001 if request.app.state.__dict__.get('testing') else 30.0)
+                thought = await asyncio.wait_for(sub.queue.get(), timeout=ping_interval)
                 yield {
                     "event": "thought",
                     "id": str(thought.object_id),
                     "data": thought.model_dump_json()
                 }
             except TimeoutError:
-                from musubi.types.common import utc_now
-                # Ping
                 yield {
                     "event": "ping",
                     "data": json.dumps({"at": utc_now().isoformat()})
@@ -204,7 +170,10 @@ async def _thoughts_event_generator(
 
     finally:
         broker.unsubscribe(sub)
-
+        yield {
+            "event": "close",
+            "data": json.dumps({"reason": "server-shutdown", "reconnect_after_ms": 5000})
+        }
 
 @router.get(
     "/stream",

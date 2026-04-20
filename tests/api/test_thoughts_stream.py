@@ -6,20 +6,17 @@ Implements the 21 bullets from docs/architecture/_slices/slice-api-thoughts-stre
 from __future__ import annotations
 
 import asyncio
-import json
-from unittest.mock import AsyncMock
 from typing import Any, cast
 
 import pytest
-from httpx import AsyncClient, ASGITransport
-from httpx_sse import aconnect_sse
 from fastapi import FastAPI
-from qdrant_client import QdrantClient
+from httpx import ASGITransport, AsyncClient
 from pytest import LogCaptureFixture
 
-from musubi.api.events import broker, Subscription
-from musubi.types.common import generate_ksuid, utc_now
+from musubi.api.events import broker
+from musubi.types.common import generate_ksuid
 from musubi.types.thought import Thought
+
 
 @pytest.fixture
 def app(app_factory: Any) -> FastAPI:
@@ -54,19 +51,28 @@ async def test_stream_returns_sse_content_type(app: FastAPI, valid_token: str) -
                 break
 
 @pytest.mark.asyncio
-async def test_stream_emits_ping_every_30s(app: FastAPI, valid_token: str, monkeypatch: Any) -> None:
-    import musubi.api.routers.thoughts as thoughts_module
-    import asyncio
-    async def fast_wait(*args: Any, **kwargs: Any) -> None:
-        raise TimeoutError()
-    monkeypatch.setattr(asyncio, "wait_for", fast_wait)
-    
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
-            async for line in resp.aiter_lines():
-                if "event: ping" in line:
-                    break
+async def test_stream_emits_ping_every_30s(app: FastAPI, valid_token: str) -> None:
+    app.state.testing = True
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            async with client.stream(
+                "GET",
+                "/v1/thoughts/stream?namespace=eric/claude-code/thought",
+                headers={"Authorization": f"Bearer {valid_token}"},
+            ) as resp:
+                assert resp.status_code == 200
+
+                async def _wait_for_ping() -> None:
+                    async for line in resp.aiter_lines():
+                        if "event: ping" in line:
+                            return
+                    raise AssertionError("stream ended before ping")
+
+                import asyncio
+                await asyncio.wait_for(_wait_for_ping(), timeout=0.1)
+    finally:
+        app.state.testing = False
 
 @pytest.mark.asyncio
 async def test_stream_returns_403_without_read_scope(app: FastAPI, out_of_scope_token: str) -> None:
@@ -79,7 +85,7 @@ async def test_stream_returns_403_without_read_scope(app: FastAPI, out_of_scope_
 async def test_stream_returns_503_when_connection_cap_exceeded(app: FastAPI, valid_token: str, monkeypatch: Any) -> None:
     import musubi.api.events as ev
     monkeypatch.setattr(ev, "MAX_SUBSCRIBERS", 0)
-    
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get("/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"})
@@ -91,7 +97,7 @@ async def test_stream_returns_503_when_connection_cap_exceeded(app: FastAPI, val
 async def test_stream_filters_by_namespace(app: FastAPI, valid_token: str) -> None:
     t = _thought(namespace="other/namespace/thought")
     broker.publish(t)
-    
+
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
@@ -138,10 +144,10 @@ async def test_stream_never_delivers_cross_namespace_events() -> None:
 async def test_two_subscribers_same_presence_both_receive_every_event() -> None:
     sub1 = broker.subscribe("test/ns/thought", {"me"})
     sub2 = broker.subscribe("test/ns/thought", {"me"})
-    
+
     t = _thought(namespace="test/ns/thought", to_presence="me")
     broker.publish(t)
-    
+
     assert sub1.queue.qsize() == 1
     assert sub2.queue.qsize() == 1
     broker.unsubscribe(sub1)
@@ -152,16 +158,16 @@ async def test_three_subscribers_one_slow_fast_ones_unaffected() -> None:
     sub1 = broker.subscribe("test/ns/thought", {"me"})
     sub2 = broker.subscribe("test/ns/thought", {"me"})
     sub3 = broker.subscribe("test/ns/thought", {"me"})
-    
+
     for _ in range(1005):
         sub1.queue.put_nowait(_thought())
-        
+
     t = _thought(namespace="test/ns/thought", to_presence="me")
     broker.publish(t)
-    
+
     assert sub2.queue.qsize() == 1
     assert sub3.queue.qsize() == 1
-    
+
     broker.unsubscribe(sub1)
     broker.unsubscribe(sub2)
     broker.unsubscribe(sub3)
@@ -221,7 +227,7 @@ async def test_slow_consumer_events_dropped_and_metered(caplog: LogCaptureFixtur
     sub = broker.subscribe("test/ns/thought", {"all"})
     for _ in range(1005):
         sub.queue.put_nowait(_thought())
-        
+
     t = _thought(namespace="test/ns/thought", to_presence="all")
     broker.publish(t)
     assert "Dropped thought" in caplog.text
@@ -244,7 +250,7 @@ async def test_client_disconnect_cleans_up_subscription(app: FastAPI, valid_toke
         async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
             # We connect and then drop
             assert resp.status_code == 200
-            
+
     # Need event loop to process disconnect
     await asyncio.sleep(0.05)
     assert len(broker._subscribers) == initial_subs
