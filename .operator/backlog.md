@@ -12,53 +12,25 @@ Enumerates all slices, cross-references with `gh issue list`, flags claim-readin
 
 **Status:** v1 shipped 2026-04-19. Future enhancements noted inline below.
 
+### ✅ `scripts/handoff-audit.py`
+
+Pre-review audit script. Confirms an agent's "handoff green" claim matches what's actually pushed to the PR branch: owns_paths files exist in git tree, feat commit touches owns_paths, canonical commit shape approximately present, mergeStateStatus CLEAN, frontmatter in-review, PR body `Closes #N`, CI green.
+
+**Motivation:** PR #67 (Hana, slice-retrieval-deep, 2026-04-19) claimed 92% coverage + make check green but `src/musubi/retrieve/deep.py` was never `git add`'d. CI failed with ImportError; her local tools saw the unstaged working-tree file.
+
+**Status:** v1 shipped 2026-04-19 (PR #80). v1.1 accepts either `docs(slice): handoff` or `chore(slice): handoff` prefix (PR #99, 2026-04-19 evening).
+
+### ✅ `scripts/merge-flow.py`
+
+Automates the per-slice post-merge ritual: merge, pull v2, flip slice frontmatter (status + tags + reviewed + updated + inline Status line), commit + push, close tracking Issue if `Closes #N` didn't auto-close it, audit paths-touched against owns_paths, sweep orphan branches on origin.
+
+**Motivation:** operator-time sink. Ran this by hand ~15+ times during the 2026-04-18/19 burst. Each run was 4-6 hand-curated git/gh calls that occasionally slipped. Drift was operator-caught, not tool-caught.
+
+**Status:** v1 shipped 2026-04-19 (PR #TBD — this PR). Supports `--dry-run`, `--skip-merge`, `--no-push`, `--force` modes.
+
 ---
 
 ## Next up
-
-### `scripts/handoff-audit.py`
-
-**Priority: top.** Catches a class of failure `claimable.py` can't: agent pushed commits + claimed "all checks passed" locally, but the committed tree is missing files their tests import (because the files were in their local working directory, never `git add`'d).
-
-Surfaced by PR #67 (Hana, slice-retrieval-deep): agent claimed 92% coverage + all checks green, but `src/musubi/retrieve/deep.py` was never committed. Tests + coverage + mypy all failed remotely because CI saw only what was pushed.
-
-**Shape:**
-
-```bash
-# Run this after an agent reports handoff-green, before reviewing the PR:
-python3 .operator/scripts/handoff-audit.py <pr-number>
-```
-
-**Checks:**
-
-1. Every file listed in the slice's `## Owned paths` exists in the PR branch's git tree (`git ls-files` on the head SHA).
-2. Commit graph contains at least one `feat(...)` commit, and that commit touches at least one file under `owns_paths`.
-3. Canonical 7-commit shape approximately present (chore → chore-flip → chore-lock → test → feat → docs-handoff → chore-lock-release). Warn on deviation; don't fail.
-4. `gh pr view --json mergeStateStatus` = `CLEAN` (not `UNSTABLE` / `DIRTY`).
-5. Slice-file frontmatter `status: in-review` (not still `in-progress`).
-6. PR body first line matches `^Closes #<N>\.$`.
-
-Exit code 0 = ready-to-review; 1 = audit failed (flags specific failure).
-
-**Motivation:** operator-time sink per agent handoff. Had 3-4 instances this session where agent-claimed green didn't match reality. This is the push-time complement to `claimable.py`'s claim-time checks.
-
-**Estimate:** ~150 lines on top of `claimable.py` library functions.
-
-### `scripts/merge-flow.py`
-
-**Priority: high.** The post-merge ritual I run manually on every slice PR, automated:
-
-1. Merge the PR (via `gh pr merge --squash --admin`).
-2. Flip slice frontmatter `status: in-review → done`, `tags: status/in-review → status/done`, `reviewed: false → true`, `updated` to today's date.
-3. Update the `**Phase:** X · **Status:** \`<x>\`` inline line in the slice markdown.
-4. Commit + push to v2.
-5. Close the Issue if it didn't auto-close via `Closes #N` in PR body.
-6. Delete any orphan branches on origin matching `slice/<slice-id>`.
-7. Audit + warn if the PR touched paths outside the slice's `owns_paths`.
-
-**Motivation:** operator-time sink. Happens ~once per slice landed; ~20 times this session alone. Each run is 4-6 hand-curated git/gh calls that occasionally slip.
-
-**Estimate:** ~250 lines. One Python file + integration test that exercises it against a fake PR on a throwaway branch.
 
 ### `scripts/render-prompt.py`
 
