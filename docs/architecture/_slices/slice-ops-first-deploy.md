@@ -3,10 +3,10 @@ title: "Slice: First-deploy runbook + validation"
 slice_id: slice-ops-first-deploy
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice, ops, deploy, phase-2]
+tags: [section/slices, status/in-progress, type/slice, ops, deploy, phase-2]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-ops-ansible]]", "[[_slices/slice-ops-compose]]", "[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-observability]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > Authors the step-by-step first-deploy procedure for `musubi.mey.house`, the systemd units + Kong config stitching the shipped Ansible/compose/backup/observability work together, and the post-deploy smoke + verify scripts. Ships the operator runbook; operator (Eric) executes the deploy with the runbook open.
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `codex-gpt5`
 
 ## Why this slice exists
 
@@ -181,6 +181,10 @@ Those are operator actions with the runbook open.
 - Phase 2 critical path; binds the shipped ops slices (ansible/compose/backup/observability) into a deterministic first-deploy procedure.
 - Routed to Codex: his track record owns three of the four dependency slices; this is the composition of that body of work.
 - Does NOT execute the deploy — Eric does that with the runbook open. This slice ships the authored procedure + validated scripts + systemd units + post-deploy smoke harness.
+
+### 2026-04-19 23:46 — codex-gpt5 — claimed slice
+
+- Claimed Issue #116 and flipped slice frontmatter from `ready` to `in-progress`.
 
 ## Cross-slice tickets opened by this slice
 
