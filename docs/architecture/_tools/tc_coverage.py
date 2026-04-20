@@ -34,6 +34,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
@@ -120,8 +121,34 @@ def _parse_bullets(spec_text: str, spec_rel: str) -> list[Bullet]:
     return out
 
 
-def _find_test_definition(func_name: str) -> tuple[Path, int, str] | None:
-    """Search tests/ for ``def <func_name>``. Returns (path, lineno, decorator-text-if-any)."""
+def _extract_skip_reason(decorator: ast.expr) -> str | None:
+    """Extract reason from @pytest.mark.skip(reason=...) or xfail."""
+    if not isinstance(decorator, ast.Call):
+        return None
+    func = decorator.func
+    if not isinstance(func, ast.Attribute):
+        return None
+    if func.attr not in ("skip", "xfail"):
+        return None
+    if not isinstance(func.value, ast.Attribute):
+        return None
+    if func.value.attr != "mark":
+        return None
+    if not isinstance(func.value.value, ast.Name) or func.value.value.id != "pytest":
+        return None
+
+    for kw in decorator.keywords:
+        if (
+            kw.arg == "reason"
+            and isinstance(kw.value, ast.Constant)
+            and isinstance(kw.value.value, str)
+        ):
+            return kw.value.value
+    return None
+
+
+def _find_test_definition(func_name: str) -> tuple[Path, int, str | None] | None:
+    """Search tests/ for ``def <func_name>``. Returns (path, lineno, reason-if-any)."""
     if not TESTS_DIR.exists():
         return None
     needle = re.compile(rf"^(?:async\s+)?def\s+{re.escape(func_name)}\b", re.M)
@@ -130,13 +157,21 @@ def _find_test_definition(func_name: str) -> tuple[Path, int, str] | None:
         m = needle.search(text)
         if not m:
             continue
-        lineno = text[: m.start()].count("\n") + 1
-        # Look up to 5 lines above for a pytest.mark.skip / .xfail decorator.
-        start = m.start()
-        header = text[max(0, start - 400) : start]
-        preceding_lines = header.splitlines()[-5:]
-        decorator_block = "\n".join(preceding_lines)
-        return py, lineno, decorator_block
+
+        try:
+            tree = ast.parse(text, filename=str(py))
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                reason = None
+                for decorator in node.decorator_list:
+                    r = _extract_skip_reason(decorator)
+                    if r is not None:
+                        reason = r
+                        break
+                return py, node.lineno, reason
     return None
 
 
@@ -156,12 +191,11 @@ def classify(bullet: Bullet, work_log: str) -> Bullet:
 
     found = _find_test_definition(name)
     if found:
-        path, lineno, decorator_block = found
-        skip = _SKIP_DECORATOR_RE.search(decorator_block)
+        path, lineno, skip_reason = found
         rel = path.relative_to(ROOT).as_posix()
-        if skip:
+        if skip_reason is not None:
             bullet.state = "⏭ skipped"
-            bullet.evidence = f"`{rel}:{lineno}` (reason: {skip.group(3)})"
+            bullet.evidence = f"`{rel}:{lineno}` (reason: {skip_reason})"
         else:
             bullet.state = "✓ passing"
             bullet.evidence = f"`{rel}:{lineno}`"
