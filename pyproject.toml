@@ -89,7 +89,7 @@ ignore_missing_imports = true
 pythonpath = ["src"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-ra --strict-markers --strict-config"
+addopts = "-ra --strict-markers --strict-config -m 'not integration'"
 markers = [
     "integration: requires Qdrant / TEI / Ollama; skipped by default",
     "property: Hypothesis-based property test",
