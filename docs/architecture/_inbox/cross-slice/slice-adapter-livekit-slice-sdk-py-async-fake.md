@@ -1,5 +1,5 @@
 ---
-title: "Cross-slice: AsyncFakeMusubiClient for adapter testing"
+title: "Add `AsyncFakeMusubiClient` to `musubi.sdk.testing`"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-adapter-livekit

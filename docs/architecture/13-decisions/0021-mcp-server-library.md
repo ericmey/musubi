@@ -1,5 +1,5 @@
 ---
-title: "ADR 0021: Use Anthropic's mcp package"
+title: "ADR 0021: Use Anthropic's `mcp` package"
 section: 13-decisions
 type: adr
 status: accepted

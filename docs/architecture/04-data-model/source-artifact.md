@@ -7,6 +7,7 @@ status: draft
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: "tests/planes/test_artifact.py"
 ---
 # Source Artifact
 
@@ -153,7 +154,7 @@ We have two options:
 
 If Qdrant zero-vector storage is awkward, we embed `title + summary` with BGE-M3 and get free search-by-artifact for free — arguably useful.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/planes/artifact/` + `musubi/store/`
 

@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[08-deployment/index]]"
 reviewed: false
+implements: "src/musubi/store/"
 ---
 # Qdrant Config
 
@@ -250,7 +251,7 @@ Plus per-collection `optimizer_status` (healthy | indexing | suboptimal).
 | Disk full | Core switches to read-only; no new writes; ops alert. |
 | Network partition (N/A v1) | — |
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/collections.py` + this config
 

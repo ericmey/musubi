@@ -1,9 +1,9 @@
 ---
 title: "Cross-slice: add lineage fields to Thought type"
-section: _inbox
+section: _inbox/cross-slice
 type: cross-slice
-status: proposed
-tags: [section/inbox, status/proposed, type/cross-slice]
+status: resolved
+tags: [section/inbox-cross-slice, status/resolved, type/cross-slice]
 updated: 2026-04-19
 depends-on: ["[[_slices/slice-types]]"]
 ---

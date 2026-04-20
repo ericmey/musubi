@@ -1,5 +1,5 @@
 ---
-title: "Cross-slice: LifecycleEvent rejects capture-time provisional → provisional emit"
+title: "Add a non-transition `CaptureEvent` (or relax `LifecycleEvent`) for capture-time provenance"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-ingestion-capture

@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[03-system-design/index]]"
 reviewed: false
+implements: ["src/musubi/api/", "tests/api/"]
 ---
 # Namespaces
 
@@ -115,7 +116,7 @@ See [[10-security/auth]] for the full token model.
 4. **Namespace strings are case-sensitive, ASCII, kebab-case.**
 5. **Namespace cannot be changed after write.** Moving a memory across namespaces is a delete + insert with new lineage.
 
-## Test contract
+## Test Contract
 
 Every plane's module-level tests must include:
 

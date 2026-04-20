@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[06-ingestion/index]]"
 reviewed: false
+implements: "tests/lifecycle/test_maturation.py"
 ---
 # Maturation
 
@@ -177,7 +178,7 @@ At our capture rate (~500/day episodic typical, ~5000/day peak), an hourly sweep
 
 Well within the one-run-per-hour window.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/lifecycle/maturation.py`
 

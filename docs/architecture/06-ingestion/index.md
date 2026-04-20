@@ -1,5 +1,5 @@
 ---
-title: "Ingestion & Lifecycle"
+title: "06 — Ingestion & Lifecycle"
 section: 06-ingestion
 tags: [ingestion, lifecycle, maturation, promotion, section/ingestion, status/stub, synthesis, type/spec]
 type: spec

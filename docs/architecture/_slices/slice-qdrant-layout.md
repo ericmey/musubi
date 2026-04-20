@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-18
 reviewed: true
 depends-on: ["[[_slices/slice-types]]"]
-blocks: ["[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-retrieval-hybrid]]"]
+blocks: ["[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-poc-data-migration]]", "[[_slices/slice-retrieval-hybrid]]"]
 ---
 # Slice: Qdrant layout + indexes
 

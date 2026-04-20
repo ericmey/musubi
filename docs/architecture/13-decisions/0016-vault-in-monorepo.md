@@ -1,5 +1,5 @@
 ---
-title: "ADR 0016: Obsidian vault lives in the monorepo at docs/architecture/"
+title: "ADR 0016: Obsidian vault lives in the monorepo at `docs/architecture/`"
 section: 13-decisions
 type: adr
 status: accepted

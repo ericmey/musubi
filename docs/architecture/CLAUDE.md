@@ -1,5 +1,5 @@
 ---
-title: Agent Entry Point (CLAUDE.md)
+title: "Musubi — Coding Agent Entry Point"
 type: vault-readme
 status: living-document
 tags: [type/vault-readme, status/living-document, agents]

@@ -1,5 +1,5 @@
 ---
-title: Reading Tour
+title: "Reading Tour — \"I've never read this vault\""
 section: 00-index
 type: index
 status: complete

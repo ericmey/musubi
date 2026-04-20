@@ -1,5 +1,5 @@
 ---
-title: Agent Guardrails
+title: "Agent Guardrails — Rules for Coding Agents"
 section: 00-index
 tags: [agents, contributing, guardrails, section/index, status/complete, type/index]
 audience: coding-agents

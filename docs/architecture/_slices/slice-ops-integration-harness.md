@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice, integration, testing, phase-2]
 updated: 2026-04-20
 reviewed: true
 depends-on: ["[[_slices/slice-ops-compose]]"]
-blocks: []
+blocks: ["[[_slices/slice-ops-hardening-suite]]"]
 ---
 
 # Slice: Integration test harness

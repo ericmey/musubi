@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-plane-episodic]]"]
-blocks: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-lifecycle-promotion]]"]
+blocks: ["[[_slices/slice-api-app-bootstrap]]", "[[_slices/slice-lifecycle-promotion]]", "[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-poc-data-migration]]"]
 ---
 
 # Slice: Synthesized concept plane

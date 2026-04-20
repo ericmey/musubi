@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-types]]"]
-blocks: ["[[_slices/slice-adapter-mcp]]"]
+blocks: ["[[_slices/slice-adapter-mcp]]", "[[_slices/slice-api-app-bootstrap]]", "[[_slices/slice-api-thoughts-stream]]", "[[_slices/slice-poc-data-migration]]"]
 ---
 
 # Slice: Thoughts subsystem

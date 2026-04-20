@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[06-ingestion/index]]"
 reviewed: false
+implements: ["src/musubi/ingestion/capture.py", "tests/ingestion/test_capture.py"]
 ---
 # Capture
 
@@ -172,7 +173,7 @@ Without idempotency keys, dedup (step 4) catches most accidental duplicates but 
 
 Used by Claude Code's session-end "flush these captured observations" flow.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/planes/episodic/` (capture entry points) + `musubi/api/v1/memories.py`
 

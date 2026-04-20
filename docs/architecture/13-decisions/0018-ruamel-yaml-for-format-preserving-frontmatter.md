@@ -1,5 +1,5 @@
 ---
-title: "ADR 0018: Use ruamel.yaml for format-preserving frontmatter"
+title: "ADR 0018: Use `ruamel.yaml` for format-preserving frontmatter"
 section: 13-decisions
 type: adr
 status: accepted

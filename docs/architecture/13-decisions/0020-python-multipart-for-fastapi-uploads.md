@@ -1,5 +1,5 @@
 ---
-title: "ADR 0020: Use python-multipart for FastAPI multipart/form-data uploads"
+title: "ADR 0020: Use `python-multipart` for FastAPI `multipart/form-data` uploads"
 section: 13-decisions
 type: adr
 status: accepted

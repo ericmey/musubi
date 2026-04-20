@@ -1,6 +1,6 @@
 ---
-title: OpenAPI Snapshots
-section: 07-interfaces
+title: "OpenAPI snapshots"
+section: 07-interfaces/openapi
 type: index
 status: complete
 tags: [section/interfaces, status/complete, type/index, api]

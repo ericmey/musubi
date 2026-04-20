@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: []
-blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-auth]]", "[[_slices/slice-embedding]]"]
+blocks: ["[[_slices/slice-api-app-bootstrap]]", "[[_slices/slice-api-v0-read]]", "[[_slices/slice-auth]]", "[[_slices/slice-embedding]]"]
 ---
 # Slice: Config & environment loading
 

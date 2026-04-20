@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: ["src/musubi/store/specs.py", "src/musubi/types/base.py", "src/musubi/types/concept.py", "src/musubi/types/episodic.py", "src/musubi/types/lifecycle_event.py", "src/musubi/types/thought.py", "tests/test_thoughts.py", "tests/types/"]
 ---
 # Thoughts
 
@@ -106,7 +107,7 @@ Thoughts follow the standard namespace rules, with one subtlety: a thought sent 
 
 Cross-tenant thoughts are allowed but require the token to carry scope for both tenants. Logged in audit.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/planes/thoughts/` (direct port of POC `musubi/thoughts.py` with schema upgrades)
 

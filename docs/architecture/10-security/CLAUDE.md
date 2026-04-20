@@ -1,5 +1,5 @@
 ---
-title: Agent Rules — Security
+title: "Agent Rules — Security (10)"
 section: 10-security
 type: index
 status: complete

@@ -1,5 +1,5 @@
 ---
-title: Bases Index
+title: "Bases — Dynamic Views"
 section: _bases
 type: index
 status: complete

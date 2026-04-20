@@ -1,5 +1,5 @@
 ---
-title: Agent Rules — Interfaces
+title: "Agent Rules — Interfaces (07)"
 section: 07-interfaces
 type: index
 status: complete

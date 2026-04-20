@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-19
 up: "[[07-interfaces/index]]"
 reviewed: false
+implements: ["src/musubi/adapters/livekit/", "tests/adapters/test_livekit.py"]
 ---
 # LiveKit Adapter
 
@@ -197,7 +198,7 @@ Voice transcripts can be sensitive. Configurable per-adapter:
 - `livekit.session.captured_bytes` histogram.
 - `livekit.fact.captured` counter.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `src/musubi/adapters/livekit/*.py`
 

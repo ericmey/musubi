@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: []
-blocks: ["[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-compose]]", "[[_slices/slice-ops-observability]]"]
+blocks: ["[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-compose]]", "[[_slices/slice-ops-first-deploy]]", "[[_slices/slice-ops-observability]]"]
 ---
 # Slice: Ansible deployment
 

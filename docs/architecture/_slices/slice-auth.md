@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-config]]"]
-blocks: ["[[_slices/slice-api-v0-read]]"]
+blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-v0-write]]"]
 ---
 
 # Slice: Auth middleware

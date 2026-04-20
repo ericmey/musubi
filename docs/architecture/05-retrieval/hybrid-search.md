@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[05-retrieval/index]]"
 reviewed: false
+implements: "tests/retrieve/test_hybrid.py"
 ---
 # Hybrid Search
 
@@ -149,7 +150,7 @@ TEI + our reference host:
 
 These numbers hold for our corpus size; see [[05-retrieval/evals]] for benchmarks.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/retrieval/hybrid.py`, `musubi/retrieval/embed.py`
 

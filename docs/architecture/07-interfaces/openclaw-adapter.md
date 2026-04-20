@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-19
 up: "[[07-interfaces/index]]"
 reviewed: false
+implements: "docs/architecture/07-interfaces/"
 ---
 # OpenClaw Adapter
 
@@ -168,7 +169,7 @@ Metrics forwarded to a small local collector; not public.
 - **Privacy first.** No capture on pages marked private, banking domains, or user-configured excludes.
 - **Export**: "Export all my memories" — downloads JSON + Markdown of everything the extension captured. User always owns the data.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi-openclaw-adapter/src/*` (TypeScript)
 

@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[03-system-design/index]]"
 reviewed: false
+implements: "docs/architecture/03-system-design/"
 ---
 # Failure Modes
 
@@ -173,3 +174,7 @@ If synthesis runs are backing up (queue > 1000 pending), Worker starts dropping 
 ## Principle: fail loudly to callers, silently to users
 
 Internal logs are verbose. Adapter responses carry diagnostic headers. The user-facing message (surfaced by the adapter) is plain: "I'm having trouble remembering right now." We do not dump stack traces into a voice turn.
+
+## Test Contract
+
+This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the per-component slices listed in the sibling specs under this section, each of which carries its own `## Test Contract` section bound to an owning slice.

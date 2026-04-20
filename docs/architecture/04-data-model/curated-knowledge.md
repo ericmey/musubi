@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: "tests/planes/test_curated.py"
 ---
 # Curated Knowledge
 
@@ -175,7 +176,7 @@ Deletes are **soft** by default:
 - Qdrant point: `state = "archived"`.
 - Operator scope required for **hard delete** (remove file + Qdrant point + lineage rewrites).
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/planes/curated/` + `musubi/vault/`
 

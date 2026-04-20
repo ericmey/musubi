@@ -1,5 +1,5 @@
 ---
-title: "Cross-slice: lifecycle workers emit job-start/job-end metrics"
+title: "Lifecycle workers should emit job start/end metrics"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-ops-observability

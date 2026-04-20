@@ -1,5 +1,5 @@
 ---
-title: Agent Rules — Ingestion & Lifecycle
+title: "Agent Rules — Ingestion & Lifecycle (06)"
 section: 06-ingestion
 type: index
 status: complete

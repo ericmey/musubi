@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[05-retrieval/index]]"
 reviewed: false
+implements: "tests/retrieve/test_scoring.py"
 ---
 # Scoring Model
 
@@ -180,7 +181,7 @@ Every result surfaces its components:
 
 Debugging "why did this result rank here?" is a first-class feature. The Slow Thinker and the evals harness both use these to validate ranking intuitions.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/retrieval/scoring.py`
 

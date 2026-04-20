@@ -7,6 +7,7 @@ status: draft
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: ["src/musubi/store/specs.py", "src/musubi/types/base.py", "src/musubi/types/concept.py", "src/musubi/types/episodic.py", "src/musubi/types/lifecycle_event.py", "src/musubi/types/thought.py", "tests/planes/test_concept.py", "tests/types/"]
 ---
 # Synthesized Concept
 
@@ -145,7 +146,7 @@ During synthesis, when a candidate concept overlaps semantically with an existin
 musubi-cli contradictions resolve <concept-a> <concept-b> --keep=a --reason "B was about a deprecated setup"
 ```
 
-## Test contract
+## Test Contract
 
 **Module under test:** `src/musubi/planes/concept/` (this slice — plane CRUD + transitions), `src/musubi/lifecycle/synthesis.py` (slice-lifecycle-synthesis), `src/musubi/lifecycle/promotion.py` (slice-lifecycle-promotion), `src/musubi/lifecycle/maturation.py` (slice-lifecycle-maturation)
 

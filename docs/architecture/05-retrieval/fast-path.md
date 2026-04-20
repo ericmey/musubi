@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[05-retrieval/index]]"
 reviewed: false
+implements: ["src/musubi/retrieve/fast.py", "tests/retrieve/test_fast.py"]
 ---
 # Fast Path
 
@@ -131,7 +132,7 @@ Fast path is hot. We emit metrics per request:
 
 Grafana dashboard: p50, p95, cache hit rate, empty-result rate per namespace. Alerts on p95 > 500ms for 5m.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/retrieval/fast.py`, `musubi/retrieval/orchestration.py`
 

@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[06-ingestion/index]]"
 reviewed: false
+implements: "tests/lifecycle/test_reflection.py"
 ---
 # Reflection
 
@@ -208,7 +209,7 @@ If Ollama is unavailable:
 
 Running reflection twice for the same date: second run overwrites the file (same path, same date-keyed frontmatter). No duplicate.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/lifecycle/reflection.py`
 

@@ -1,15 +1,19 @@
 ---
-title: "Cross-slice: EpisodicPlane.reinforce should accept a merge strategy"
+title: "Add a merge-strategy parameter to `EpisodicPlane.create`/`_reinforce`"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-ingestion-capture
 target_slice: slice-plane-episodic
-status: open
+status: tracked
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
-updated: 2026-04-19
+tracked_by: "https://github.com/ericmey/musubi/issues/142"
+tags: [section/inbox-cross-slice, type/cross-slice, status/tracked]
+updated: 2026-04-20
 ---
+
+> **Tracked as GH Issue #142** — https://github.com/ericmey/musubi/issues/142
+> The ticket body below is preserved for audit; new discussion happens on the Issue.
 
 # Add a merge-strategy parameter to `EpisodicPlane.create`/`_reinforce`
 

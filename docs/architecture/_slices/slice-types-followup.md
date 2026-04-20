@@ -1,5 +1,5 @@
 ---
-title: "Slice: Types followup — add 6 missing fields cited by cross-slice tickets"
+title: "Slice: Types followup — add 6 missing fields"
 slice_id: slice-types-followup
 section: _slices
 type: slice

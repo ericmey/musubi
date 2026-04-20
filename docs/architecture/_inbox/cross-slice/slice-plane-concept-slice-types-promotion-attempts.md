@@ -1,5 +1,5 @@
 ---
-title: "Cross-slice: SynthesizedConcept missing promotion_attempts + last_reinforced_at fields"
+title: "Add `promotion_attempts: int` and `last_reinforced_at: datetime | None` to `SynthesizedConcept`"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-plane-concept

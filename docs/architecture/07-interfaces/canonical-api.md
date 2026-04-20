@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[07-interfaces/index]]"
 reviewed: false
+implements: ["src/musubi/api/", "src/musubi/api/app.py", "src/musubi/api/bootstrap.py", "src/musubi/api/dependencies.py", "src/musubi/api/events.py", "src/musubi/api/routers/thoughts.py", "src/musubi/api/routers/writes_thoughts.py", "tests/api/", "tests/api/test_bootstrap.py", "tests/api/test_thoughts_stream.py"]
 ---
 # Canonical API
 
@@ -363,7 +364,7 @@ Requests receive:
 
 Clients can propagate `X-Request-Id` through their own logs for cross-system tracing.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/api/` + OpenAPI + `tests/contract/`
 

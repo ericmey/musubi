@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[03-system-design/index]]"
 reviewed: false
+implements: "docs/architecture/03-system-design/"
 ---
 # Data Flow
 
@@ -272,3 +273,7 @@ Budget: minutes per run. Runs in background; no user-facing latency impact.
 ```
 
 See [[07-interfaces/livekit-adapter]] for the adapter-side logic and [[05-retrieval/fast-path]] for the budget analysis.
+
+## Test Contract
+
+This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the per-component slices listed in the sibling specs under this section, each of which carries its own `## Test Contract` section bound to an owning slice.

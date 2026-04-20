@@ -1,5 +1,5 @@
 ---
-title: "Cross-slice: SDK OTel span emission for slice-sdk-py-otel-spans"
+title: "Add OpenTelemetry span emission to the Python SDK"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-sdk-py

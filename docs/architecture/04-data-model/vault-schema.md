@@ -7,6 +7,7 @@ status: draft
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: ["src/musubi/vault/", "tests/vault/"]
 ---
 # Vault Schema
 
@@ -204,7 +205,7 @@ Musubi works with stock Obsidian — no special plugin required. We recommend (o
 
 Musubi does not rely on any of these — the source of truth is the raw Markdown file + frontmatter.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/vault/`, `musubi/vault/frontmatter.py`, `musubi/vault/watcher.py`
 

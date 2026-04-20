@@ -1,5 +1,5 @@
 ---
-title: "Slice: Ops hardening suite — storage/cleanup/gpu/rate-limits/vault-sync followup"
+title: "Slice: Ops hardening suite"
 slice_id: slice-ops-hardening-suite
 section: _slices
 type: slice

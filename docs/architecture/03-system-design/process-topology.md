@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[03-system-design/index]]"
 reviewed: false
+implements: "docs/architecture/03-system-design/"
 ---
 # Process Topology
 
@@ -93,3 +94,7 @@ Kong routes `/` only to ready-core instances. If Core is unready, Kong returns 5
 - All services expose `/metrics` in Prometheus format.
 - Correlation IDs propagate via `X-Musubi-Request-Id` header.
 - See [[09-operations/observability]].
+
+## Test Contract
+
+This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the per-component slices listed in the sibling specs under this section, each of which carries its own `## Test Contract` section bound to an owning slice.

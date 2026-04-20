@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-19
 up: "[[07-interfaces/index]]"
 reviewed: false
+implements: ["src/musubi/sdk/", "tests/sdk/"]
 ---
 # Python SDK
 
@@ -224,7 +225,7 @@ Integration tests against a real Musubi instance use a shared test-container fix
 - Optional extras: `grpcio` for gRPC support (re-exported from the parent monorepo's `[grpc]` extra).
 - Test deps (dev extra): `pytest`, `pytest-asyncio`, `respx`.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `src/musubi/sdk/*.py`
 

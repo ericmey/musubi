@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: ["tests/lifecycle/__init__.py", "tests/lifecycle/test_lifecycle.py"]
 ---
 # Lifecycle
 
@@ -185,7 +186,7 @@ It is an invariant of Musubi that **every state change produces a LifecycleEvent
 
 If a coder writes `set_payload` directly bypassing `transition()`, they've violated the rule. There's a lint rule + an integration test that scrolls recent Qdrant updates and checks for matching events.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/lifecycle/transitions.py`, `musubi/lifecycle/states.py`
 

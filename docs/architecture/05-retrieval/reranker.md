@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[05-retrieval/index]]"
 reviewed: false
+implements: ["src/musubi/retrieve/rerank.py", "tests/retrieve/test_rerank.py"]
 ---
 # Reranker
 
@@ -111,7 +112,7 @@ That's the gap we're paying rerank latency for. On queries where the hybrid retr
 
 We'll measure our own corpus via [[05-retrieval/evals]] and adjust if the win is smaller than expected.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/retrieval/rerank.py`
 

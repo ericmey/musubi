@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[05-retrieval/index]]"
 reviewed: false
+implements: ["src/musubi/retrieve/blended.py", "tests/retrieve/test_blended.py"]
 ---
 # Blended Retrieval
 
@@ -154,7 +155,7 @@ If one plane returns 100 hits and another returns 2, we still rerank everything 
 
 Explicitly allowed. Token must carry scope for all expanded namespaces. Cross-tenant is still disallowed in v1.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/retrieval/blending.py`
 

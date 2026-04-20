@@ -1,5 +1,5 @@
 ---
-title: Agent Rules — Data Model
+title: "Agent Rules — Data Model (04)"
 section: 04-data-model
 type: index
 status: complete

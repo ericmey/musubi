@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-18
 up: "[[08-deployment/index]]"
 reviewed: true
+implements: "docs/architecture/08-deployment/"
 ---
 
 # Kong API Gateway
@@ -167,3 +168,7 @@ No other LAN ingress. `ufw` rules codified in [[08-deployment/ansible-layout#fir
 - [[07-interfaces/canonical-api]] — what Kong routes to.
 - [[10-security/auth]] — layered auth: Kong edge + Core deep.
 - [[08-deployment/compose-stack]] — what lives behind the gateway.
+
+## Test Contract
+
+Realized by **[[_slices/slice-ops-compose]]** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.
