@@ -114,13 +114,18 @@ def _probe_qdrant(client: QdrantClient) -> None:
     client.get_collections()
 
 
-def _probe_tei(dense: TEIDenseClient) -> None:
-    """Cheap probe: try to embed one short string against the dense
-    client. If TEI is unreachable, the underlying httpx call raises;
-    we propagate so the retry loop catches it."""
-    import asyncio
+def _probe_tei(dense_url: str) -> None:
+    """Cheap synchronous probe: GET ``{dense_url}/health``. Bootstrap
+    runs from sync context inside ``create_app()``; the TEI clients
+    are async (uvicorn loop), so we can't call them with
+    ``asyncio.run`` here without "cannot be called from a running
+    event loop". Direct sync httpx hits the same endpoint TEI's
+    docker healthcheck uses."""
+    import httpx
 
-    asyncio.run(dense.embed_dense(["bootstrap-probe"]))
+    with httpx.Client(timeout=5.0) as client:
+        resp = client.get(f"{dense_url.rstrip('/')}/health")
+        resp.raise_for_status()
 
 
 def _retry(probe: Any, *, dep: str, attempts: int, backoff_s: float) -> None:
@@ -182,7 +187,7 @@ def bootstrap_production_app(
     sparse = TEISparseClient(base_url=str(settings.tei_sparse_url))
     reranker = TEIRerankerClient(base_url=str(settings.tei_reranker_url))
     _retry(
-        lambda: _probe_tei(dense),
+        lambda: _probe_tei(str(settings.tei_dense_url)),
         dep="tei",
         attempts=retry_attempts,
         backoff_s=retry_backoff_s,
