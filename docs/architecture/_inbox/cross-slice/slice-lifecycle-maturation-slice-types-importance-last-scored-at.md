@@ -4,10 +4,10 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-lifecycle-maturation
 target_slice: slice-types
-status: open
+status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-19
 ---
 
@@ -91,3 +91,7 @@ keyword/float-indexed path the rest of the spec uses for
 - `slice-lifecycle-maturation` follow-up adds the secondary
   re-enrichment sweep + a bullet-24 unit test that exercises the
   outage-then-re-enrich path end-to-end against an in-memory Qdrant.
+
+## Resolution
+
+Resolved by PR #113 (`slice-types-followup`).

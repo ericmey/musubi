@@ -140,7 +140,40 @@ class LifecycleEvent(BaseModel):
         return self
 
 
+class CaptureEvent(BaseModel):
+    """An audit-log row describing the initial capture/creation of an object."""
+
+    model_config = ConfigDict(extra="forbid", validate_assignment=True)
+
+    event_id: KSUID = Field(default_factory=generate_ksuid)
+    object_id: KSUID
+    object_type: ObjectType
+    namespace: Namespace
+    schema_version: int = SCHEMA_VERSION
+    state: LifecycleState
+    actor: str = Field(
+        min_length=1,
+        description="Presence or system identifier that triggered the capture.",
+    )
+    reason: str = Field(min_length=1)
+    occurred_at: datetime = Field(default_factory=utc_now)
+    occurred_epoch: float | None = None
+    lineage_changes: dict[str, Any] = Field(default_factory=dict)
+    correlation_id: str = Field(
+        default="",
+        description="Request-scoped correlation ID; empty on background-job events.",
+    )
+
+    @model_validator(mode="after")
+    def _validate(self) -> CaptureEvent:
+        object.__setattr__(self, "occurred_at", ensure_utc(self.occurred_at))
+        if self.occurred_epoch is None:
+            object.__setattr__(self, "occurred_epoch", epoch_of(self.occurred_at))
+        return self
+
+
 __all__ = [
+    "CaptureEvent",
     "LifecycleEvent",
     "ObjectType",
     "allowed_states",

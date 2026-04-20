@@ -4,10 +4,10 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-plane-concept
 target_slice: slice-types
-status: open
+status: resolved
 opened_by: vscode-cc-opus47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-19
 ---
 
@@ -78,3 +78,7 @@ No store-side change is needed — both indexes already exist.
 - `SynthesizedConcept(merged_from=[...], ..., promotion_attempts=2, last_reinforced_at=utc_now())` validates.
 - `ConceptPlane.reinforce` + `ConceptPlane.record_promotion_rejection`
   (this slice) can be updated in a follow-up PR to populate them.
+
+## Resolution
+
+Resolved by PR #113 (`slice-types-followup`).

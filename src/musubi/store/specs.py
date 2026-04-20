@@ -102,6 +102,7 @@ _EPISODIC_DELTAS: Final[tuple[IndexSpec, ...]] = (
     IndexSpec(field_name="supported_by.artifact_id", schema="keyword"),
     IndexSpec(field_name="merged_into", schema="keyword"),
     IndexSpec(field_name="superseded_by", schema="keyword"),
+    IndexSpec(field_name="importance_last_scored_epoch", schema="float"),
 )
 
 _CURATED_DELTAS: Final[tuple[IndexSpec, ...]] = (

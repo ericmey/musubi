@@ -145,3 +145,20 @@ class TestStateMachineReachability:
             for s in states:
                 # legal_next_states returns a frozenset; no KeyError here
                 legal_next_states(obj_type, s)
+
+
+def test_capture_event_validates(sample_namespace: str) -> None:
+    from musubi.types.common import generate_ksuid
+    from musubi.types.lifecycle_event import CaptureEvent
+
+    event = CaptureEvent(
+        object_id=generate_ksuid(),
+        object_type="episodic",
+        namespace=sample_namespace,
+        state="provisional",
+        actor="user",
+        reason="test capture",
+    )
+    assert event.state == "provisional"
+    assert event.occurred_at is not None
+    assert event.occurred_epoch is not None
