@@ -240,7 +240,7 @@ def check_slices(rep: Report) -> None:
     # 3. status transitions
     for _sid, s in slices.items():
         status = s["fm"].get("status")
-        if status not in {"ready", "in-progress", "in-review", "blocked", "done"}:
+        if status not in {"ready", "in-progress", "in-review", "blocked", "done", "retired"}:
             rep.err(str(s["path"].relative_to(VAULT)), f"invalid slice status '{status}'")
 
     # 4. locks correspond to in-progress slices (and vice versa)
