@@ -119,6 +119,18 @@ Plus slice-specific:
 
 ## Work log
 
+### 2026-04-20 01:30 — gemini-3-1-pro-nyla — POC discovery on nyla.mey.house
+
+- Looked into `nyla.mey.house` local instance. OpenClaw memory exists at `~/.openclaw/memory/` but that's just its client-side cache.
+- Found the actual Musubi POC at `~/.openclaw/musubi/` running via an MCP `FastMCP` server (`musubi/server.py`).
+- The storage backend is **Qdrant**, running in a Docker container on port 6333 (`musubi-qdrant`).
+- Volume: small (167 memories, 57 thoughts).
+- Discovered source collections:
+  - `musubi_memories` (payload: `content`, `type`, `agent`, `tags`, `context`, `created_at`, `access_count`)
+  - `musubi_thoughts` (payload: `content`, `from_presence`, `to_presence`, `read`, `read_by`, `created_at`)
+- IDs are standard UUID v4 strings, not ULIDs or KSUIDs.
+- Migration will just read from localhost:6333, map payloads, generate deterministic KSUIDs from UUIDs or created_at epochs, and write to `musubi.mey.house` via the SDK.
+
 ### 2026-04-20 01:25 — gemini-3-1-pro-nyla — claim
 
 - Claimed slice #109. Proceeding with discovery phase to inspect the local `nyla.mey.house` environment to ascertain the actual POC storage backend.

@@ -90,14 +90,18 @@ def memory_store(
 
 Existing Qdrant payloads don't match the new model exactly (e.g., no `state`, `capture_source`, `namespace`). Migration:
 
-1. On boot, scan `musubi` collection.
-2. For each point missing required fields, set defaults:
+1. On boot, scan `musubi_memories` and `musubi_thoughts` collections on the local POC instance.
+2. For each point in `musubi_memories` missing required fields, set defaults:
    - `state`: `matured`
    - `capture_source`: `legacy`
    - `namespace`: `eric/claude-code/episodic`
-   - `object_id`: copy from point id
+   - `object_id`: generate KSUID deterministic from created_epoch or point UUID
    - `created_epoch`: copy from `created_epoch` or `updated_epoch`
-3. `batch_update_points` with `SetPayloadOperation` in 500-point batches.
+   - Map `agent` -> `capture_source`
+   - Map `type` -> `content_type` (if mapping exists)
+3. For each point in `musubi_thoughts`:
+   - Map `from_presence`, `to_presence`, `read_by`, `read` appropriately.
+4. `batch_update_points` with `SetPayloadOperation` in 500-point batches to v1 target.
 
 Idempotent — safe to re-run.
 
