@@ -57,6 +57,39 @@ paths:
           content:
             application/json:
               schema: {}
+  /v1/ops/debug/trigger-synthesis:
+    post:
+      tags:
+      - ops
+      summary: Trigger Synthesis
+      description: 'Operator-scope debug endpoint that drives one synthesis tick
+        on demand. Test-hook for the integration harness (Issue #119); restricted
+        to operator-scope tokens because the synthesis loop is expensive. Production
+        workers run synthesis on their own tick loop; this endpoint exists so the
+        integration suite can deterministically exercise the path without an embedded
+        worker.'
+      operationId: debug_trigger_synthesis.bucket=default
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [namespace]
+              properties:
+                namespace:
+                  type: string
+                simulate_ollama_offline:
+                  type: boolean
+                  default: false
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '501':
+          description: Real Ollama client impl unavailable; pass simulate_ollama_offline=true.
   /v1/memories/{object_id}:
     get:
       tags:
