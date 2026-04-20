@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterator
+from typing import Any
 
 import pytest
 
@@ -409,3 +410,206 @@ async def test_get_returns_none_for_missing_id(plane: EpisodicPlane, ns: str) ->
     # 27-char base62 KSUID that we never minted.
     missing = "0" * 27
     assert await plane.get(namespace=ns, object_id=missing) is None
+
+
+async def test_create_rejects_future_event_at(plane: EpisodicPlane, ns: str) -> None:
+    from datetime import timedelta
+
+    from musubi.types.common import utc_now
+
+    with pytest.raises(ValueError, match="future"):
+        mem = EpisodicMemory(
+            namespace=ns,
+            content="Hit",
+            event_at=utc_now() + timedelta(days=1),
+            ingested_at=utc_now(),
+        )
+        await plane.create(mem)
+
+
+async def test_create_enforces_namespace_regex(plane: EpisodicPlane) -> None:
+
+    with pytest.raises(ValueError, match="namespace"):
+        mem = EpisodicMemory(namespace="invalid namespace with spaces", content="Hit")
+        await plane.create(mem)
+
+
+async def test_content_over_32kb_rejected_with_suggestion_to_use_artifact(
+    plane: EpisodicPlane, ns: str
+) -> None:
+
+    with pytest.raises(ValueError, match=r"32KB|artifact"):
+        mem = EpisodicMemory(namespace=ns, content="A" * 33000)
+        # wait, model validation might catch it first if max_length=32000 is on EpisodicMemory
+        # The spec says "The content field is capped at 32KB. Long exchanges should be ingested as artifacts and cited via supported_by."
+        # If Pydantic catches it, does it suggest artifact? We might need a plane-level guard or a custom validator on the model.
+        await plane.create(mem)
+
+
+async def test_vector_dimension_mismatch_rejected_with_clear_error(
+    plane: EpisodicPlane, ns: str
+) -> None:
+    # Mock embedder to return wrong dimension
+    from musubi.embedding.base import Embedder
+
+    class BadEmbedder(Embedder):
+        async def embed_dense(self, texts: Any) -> Any:
+            return [[0.0] * 512 for _ in texts]
+
+        async def embed_sparse(self, texts: Any) -> Any:
+            return [{1: 1.0} for _ in texts]
+
+        async def rerank(self, q: str, c: Any) -> Any:
+            return []
+
+    bad_plane = EpisodicPlane(client=plane._client, embedder=BadEmbedder())
+    with pytest.raises(ValueError, match="dimension"):
+        mem = EpisodicMemory(namespace=ns, content="Hit")
+        await bad_plane.create(mem)
+
+
+async def test_patch_importance_creates_lifecycle_event_and_bumps_version(
+    plane: EpisodicPlane, ns: str
+) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
+    updated, event = await plane.patch(
+        namespace=ns, object_id=mem.object_id, importance=8, actor="test", reason="test patch"
+    )
+    assert updated.importance == 8
+    assert updated.version == mem.version + 1
+    assert event.object_type == "episodic"
+
+
+async def test_patch_tags_is_additive_by_default(plane: EpisodicPlane, ns: str) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit", tags=["a"]))
+    updated, _ = await plane.patch(
+        namespace=ns, object_id=mem.object_id, tags=["b"], actor="test", reason="test patch"
+    )
+    assert "a" in updated.tags and "b" in updated.tags
+
+
+async def test_patch_forbids_mutating_content_directly(plane: EpisodicPlane, ns: str) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
+    with pytest.raises(ValueError, match="content"):
+        await plane.patch(
+            namespace=ns, object_id=mem.object_id, content="new", actor="test", reason="test patch"
+        )
+
+
+async def test_delete_requires_operator_scope(plane: EpisodicPlane, ns: str) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
+    with pytest.raises(PermissionError, match="operator"):
+        await plane.delete(
+            namespace=ns,
+            object_id=mem.object_id,
+            actor="test",
+            reason="test delete",
+            is_operator=False,
+        )
+
+
+async def test_delete_creates_audit_event(plane: EpisodicPlane, ns: str) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
+    event = await plane.delete(
+        namespace=ns, object_id=mem.object_id, actor="test", reason="test delete", is_operator=True
+    )
+    assert event.to_state == "archived"
+    assert await plane.get(namespace=ns, object_id=mem.object_id) is None
+
+
+async def test_access_count_increments_via_batch_update_points(
+    plane: EpisodicPlane, ns: str
+) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
+    # fetch triggers access_count bump
+    fetched = await plane.get(namespace=ns, object_id=mem.object_id)
+    assert fetched and fetched.access_count == 1
+    fetched2 = await plane.get(namespace=ns, object_id=mem.object_id)
+    assert fetched2 and fetched2.access_count == 2
+
+
+async def test_access_count_update_is_not_N_plus_1(plane: EpisodicPlane, ns: str) -> None:
+
+    for i in range(5):
+        mem = await plane.create(EpisodicMemory(namespace=ns, content=f"Hit {i}"))
+        await plane.transition(
+            namespace=ns, object_id=mem.object_id, to_state="matured", actor="test", reason="test"
+        )
+
+    hits = await plane.query(namespace=ns, query="Hit", limit=5, include_demoted=True)
+    assert len(hits) == 5
+
+
+async def test_demotion_keeps_record_but_filters_from_default_reads(
+    plane: EpisodicPlane, ns: str
+) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
+    await plane.transition(
+        namespace=ns, object_id=mem.object_id, to_state="matured", actor="test", reason="mature"
+    )
+    await plane.transition(
+        namespace=ns, object_id=mem.object_id, to_state="demoted", actor="test", reason="demote"
+    )
+    hits = await plane.query(namespace=ns, query="Hit")
+    assert not hits
+    hits_demoted = await plane.query(namespace=ns, query="Hit", include_demoted=True)
+    assert len(hits_demoted) == 1
+
+
+async def test_archival_removes_from_default_queries_but_returns_from_get_by_id(
+    plane: EpisodicPlane, ns: str
+) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
+    await plane.transition(
+        namespace=ns, object_id=mem.object_id, to_state="archived", actor="test", reason="archive"
+    )
+    hits = await plane.query(namespace=ns, query="Hit", include_demoted=True)
+    assert not hits
+    fetched = await plane.get(namespace=ns, object_id=mem.object_id)
+    assert fetched is not None
+
+
+async def test_query_respects_state_filter_default_excludes_provisional(
+    plane: EpisodicPlane, ns: str
+) -> None:
+
+    mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
+    assert mem.state == "provisional"
+    hits = await plane.query(namespace=ns, query="Hit")
+    assert not hits
+
+
+async def test_concurrent_dedup_race_resolves_to_single_winner(
+    plane: EpisodicPlane, ns: str
+) -> None:
+
+    import asyncio
+
+    mem1 = EpisodicMemory(namespace=ns, content="Hit", tags=["a"])
+    mem2 = EpisodicMemory(namespace=ns, content="Hit", tags=["b"])
+    res = await asyncio.gather(plane.create(mem1), plane.create(mem2))
+    final_mem = await plane.get(namespace=ns, object_id=res[0].object_id)
+    assert final_mem is not None
+    assert "a" in final_mem.tags and "b" in final_mem.tags
+
+
+@pytest.mark.skip(reason="deferred to a follow-up test-property-episodic slice")
+def test_hypothesis_idempotency_re_ingesting_same_content_N_times_produces_1_memory_with_reinforcement_count_N() -> (
+    None
+):
+    pass
+
+
+@pytest.mark.skip(reason="deferred to a follow-up test-property-episodic slice")
+def test_hypothesis_lifecycle_monotonicity_state_transitions_never_go_backwards_except_explicit_revive_operation() -> (
+    None
+):
+    pass

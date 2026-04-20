@@ -100,12 +100,21 @@ class EpisodicPlane:
         final state of the row (original object id on dedup hit, new id on
         fresh insert).
         """
-        # Enforce plane contract — every fresh write starts at provisional,
-        # version 1, reinforcement 0. Ignore whatever the caller passed for
-        # these so dedup logic can rely on the invariant.
+        if len(memory.content.encode("utf-8")) > 32768:
+            raise ValueError("content exceeds 32KB limit, please use artifact plane instead")
+        if memory.event_at > utc_now():
+            raise ValueError("event_at cannot be in the future")
+        import re
+
+        if not re.match(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$", memory.namespace):
+            raise ValueError("invalid namespace format")
+
         now = utc_now()
         text = memory.summary or memory.content
         dense, sparse = await self._embed_both(text)
+
+        if len(dense) != 1024:
+            raise ValueError(f"vector dimension mismatch: got {len(dense)}, expected 1024")
 
         existing = self._find_dedup_candidate(memory.namespace, dense)
         if existing is not None:
@@ -196,12 +205,10 @@ class EpisodicPlane:
     # Read
     # ------------------------------------------------------------------
 
-    async def get(self, *, namespace: Namespace, object_id: KSUID) -> EpisodicMemory | None:
-        """Fetch one object by id, scoped to ``namespace``.
-
-        Wrong-namespace lookups return ``None`` — this is how namespace
-        isolation is enforced on the read path.
-        """
+    async def get(
+        self, *, namespace: Namespace, object_id: KSUID, bump_access: bool = True
+    ) -> EpisodicMemory | None:
+        """Fetch one object by id, scoped to ``namespace``."""
         records, _ = self._client.scroll(
             collection_name=self._collection,
             scroll_filter=models.Filter(
@@ -222,6 +229,25 @@ class EpisodicPlane:
         payload = records[0].payload
         if not payload:
             return None
+
+        if bump_access:
+            access_count = payload.get("access_count", 0) + 1
+            now = utc_now()
+            now_str = now.isoformat().replace("+00:00", "Z")
+            self._client.batch_update_points(
+                collection_name=self._collection,
+                update_operations=[
+                    models.SetPayloadOperation(
+                        set_payload=models.SetPayload(
+                            payload={"access_count": access_count, "last_accessed_at": now_str},
+                            points=[_point_id(object_id)],
+                        )
+                    )
+                ],
+            )
+            payload["access_count"] = access_count
+            payload["last_accessed_at"] = now_str
+
         return _memory_from_payload(payload)
 
     async def query(
@@ -260,14 +286,136 @@ class EpisodicPlane:
             with_payload=True,
         )
         out: list[EpisodicMemory] = []
+        updates = []
+        now = utc_now()
+        now_str = now.isoformat().replace("+00:00", "Z")
+
         for point in resp.points:
             if point.payload:
-                out.append(_memory_from_payload(point.payload))
+                payload = dict(point.payload)
+                ac = payload.get("access_count", 0) + 1
+                updates.append(
+                    models.SetPayloadOperation(
+                        set_payload=models.SetPayload(
+                            payload={"access_count": ac, "last_accessed_at": now_str},
+                            points=[point.id],
+                        )
+                    )
+                )
+                payload["access_count"] = ac
+                payload["last_accessed_at"] = now_str
+                out.append(_memory_from_payload(payload))
+
+        if updates:
+            self._client.batch_update_points(
+                collection_name=self._collection,
+                update_operations=updates,
+            )
         return out
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
+
+    async def patch(
+        self,
+        *,
+        namespace: Namespace,
+        object_id: KSUID,
+        tags: list[str] | None = None,
+        importance: int | None = None,
+        content: str | None = None,
+        actor: str,
+        reason: str,
+    ) -> tuple[EpisodicMemory, LifecycleEvent]:
+        if content is not None:
+            raise ValueError("mutating content directly is forbidden")
+
+        current = await self.get(namespace=namespace, object_id=object_id, bump_access=False)
+        if not current:
+            raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
+
+        now = utc_now()
+        data = current.model_dump()
+
+        if tags is not None:
+            merged = sorted(set(current.tags) | set(tags))
+            data["tags"] = merged
+
+        if importance is not None:
+            data["importance"] = importance
+
+        data.update(
+            version=current.version + 1,
+            updated_at=now,
+            updated_epoch=epoch_of(now),
+        )
+        updated = EpisodicMemory.model_validate(data)
+
+        from musubi.types.common import generate_ksuid
+
+        event = LifecycleEvent.model_construct(
+            event_id=generate_ksuid(),
+            object_id=object_id,
+            object_type="episodic",
+            namespace=namespace,
+            schema_version=1,
+            from_state=current.state,
+            to_state=current.state,
+            actor=actor,
+            reason=reason,
+            occurred_at=now,
+            occurred_epoch=epoch_of(now),
+            lineage_changes={},
+            correlation_id="",
+        )
+
+        self._client.set_payload(
+            collection_name=self._collection,
+            payload=updated.model_dump(mode="json"),
+            points=[_point_id(object_id)],
+        )
+        return updated, event
+
+    async def delete(
+        self,
+        *,
+        namespace: Namespace,
+        object_id: KSUID,
+        actor: str,
+        reason: str,
+        is_operator: bool = False,
+    ) -> LifecycleEvent:
+        if not is_operator:
+            raise PermissionError("operator scope required")
+
+        current = await self.get(namespace=namespace, object_id=object_id, bump_access=False)
+        if not current:
+            raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
+
+        now = utc_now()
+        from musubi.types.common import generate_ksuid
+
+        event = LifecycleEvent.model_construct(
+            event_id=generate_ksuid(),
+            object_id=object_id,
+            object_type="episodic",
+            namespace=namespace,
+            schema_version=1,
+            from_state=current.state,
+            to_state="archived",
+            actor=actor,
+            reason=reason,
+            occurred_at=now,
+            occurred_epoch=epoch_of(now),
+            lineage_changes={},
+            correlation_id="",
+        )
+        self._client.delete(
+            collection_name=self._collection,
+            points_selector=models.PointIdsList(points=[_point_id(object_id)]),
+        )
+        return event
 
     async def transition(
         self,
@@ -285,7 +433,7 @@ class EpisodicPlane:
         :class:`ValueError` if the transition is illegal per the episodic
         transition table.
         """
-        current = await self.get(namespace=namespace, object_id=object_id)
+        current = await self.get(namespace=namespace, object_id=object_id, bump_access=False)
         if current is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
         # LifecycleEvent's own validator raises ValueError on illegal
