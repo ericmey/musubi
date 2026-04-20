@@ -4,10 +4,10 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-adapter-livekit
 target_slice: slice-sdk-py
-status: open
+status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-19
 ---
 
@@ -61,3 +61,7 @@ MCP / OpenClaw adapters can drop their local copies.
 - The LiveKit adapter's local `_AsyncFake` is deleted; tests still pass.
 - The MCP + OpenClaw adapter slices can use the shared fake from day one.
 - Coverage on `src/musubi/sdk/testing.py` does not regress.
+
+## Resolution
+
+Resolved by PR #129.
