@@ -389,7 +389,7 @@ def check_issues(rep: Report) -> None:
         # Issue closed state = slice should be done
         if issue.get("state") == "CLOSED":
             if vault_status != "done":
-                rep.warn(
+                rep.err(
                     f"_slices/{sid}.md",
                     f"Issue #{issue['number']} is closed but frontmatter status is '{vault_status}' "
                     "(expected 'done')",
@@ -414,11 +414,19 @@ def check_issues(rep: Report) -> None:
         if issue_label != expected:
             if (vault_status, issue_label) in ACCEPTABLE:
                 continue
-            rep.warn(
-                f"_slices/{sid}.md",
-                f"drift: frontmatter status='{vault_status}' but Issue #{issue['number']} "
-                f"label='{issue_label}' (expected '{expected}')",
-            )
+
+            if issue_label == "status:in-review" and vault_status not in ("in-review", "done"):
+                rep.err(
+                    f"_slices/{sid}.md",
+                    f"drift: frontmatter status='{vault_status}' but Issue #{issue['number']} "
+                    f"label='{issue_label}' (expected 'in-review' or 'done')",
+                )
+            else:
+                rep.warn(
+                    f"_slices/{sid}.md",
+                    f"drift: frontmatter status='{vault_status}' but Issue #{issue['number']} "
+                    f"label='{issue_label}' (expected '{expected}')",
+                )
 
 
 # ---------- Check: wikilinks --------------------------------------------------
