@@ -21,22 +21,25 @@ blocks: []
 
 ## Why this slice exists
 
-Musubi v1 ships with a clean-slate Qdrant schema per the per-plane data-model specs in `docs/architecture/04-data-model/` + `src/musubi/store/specs.py`. Eric's existing POC memories live somewhere else — either a pre-v1 Qdrant with a different schema, a JSONL/markdown export, or another datastore. Before v1 is operationally useful as a memory system for Eric's agent fleet, that data has to migrate into the v1 layout.
+Musubi v1 ships with a clean-slate Qdrant schema per the per-plane data-model specs in `docs/architecture/04-data-model/` + `src/musubi/store/specs.py`. Eric's POC is currently running on `control.example.local` (10.0.0.25) with its own memory store. Before v1 is operationally useful as a memory system for Eric's agent fleet, the POC's accumulated memory has to migrate into the v1 layout on `musubi.example.local`.
 
-## ⚠ OPERATOR DECISION REQUIRED before implementation
+## Source: confirmed
 
-**Source data location is not documented anywhere in the vault.** The implementing agent must confirm with the operator (Eric) at claim time:
+**Source host:** `control.example.local` (10.0.0.25 — bare-metal Ubuntu server).
 
-1. **Where does the POC data live?** (Options we've seen so far:)
-   - Pre-v1 Qdrant instance on some host/port — if so, collection names + schema version.
-   - JSONL / Markdown export — if so, path + schema.
-   - Another Musubi-v0 running somewhere — if so, its API endpoint.
-   - None of the above — POC data is ephemeral; fresh-start is acceptable.
-2. **Which planes have POC data?** (episodic, curated, concept, artifact, thoughts — any subset.)
-3. **Rough volume?** (Drives whether we stream the migration or batch it; affects target wall-clock.)
-4. **Any content-transformation concerns?** (Namespaces may have renamed; presence mapping may have shifted; KSUIDs may need re-minting if POC used ULIDs.)
+**Source is a running POC service** on that host. The "Nyla" coding agent (Gemini 3.1 Pro) runs on the same machine, which means it can introspect the live POC directly: `ps`, `systemctl`, config files, whatever storage backend the POC uses (Qdrant collections, SQLite, JSONL on disk — TBD at claim time).
 
-This slice's owns_paths + DoD below are written assuming a Qdrant-to-Qdrant migration as the likely shape. The implementing agent adjusts scope in-PR if reality differs, landing a `spec-update:` trailer to update THIS slice file with the confirmed source.
+**Routing:** this slice is best claimed by the **Nyla coding agent**. Any other agent would need Eric to proxy the POC source data over the network.
+
+**Format: discover at claim time.** First substantive commit on the branch is a **discovery commit**: Nyla walks the running POC on `control.example.local`, identifies the storage shape (inspecting the running process, its config, its open file descriptors, and whatever HTTP / gRPC / socket it exposes), writes findings into this slice file's work log via `docs(slice): POC discovery on control.example.local`, and lands a `spec-update:` trailer to `11-migration/phase-1-schema.md` with the confirmed source shape. Only AFTER discovery does the migration script start.
+
+**Discovery surfaces (unknowns at carve time):**
+- Which planes have POC data (episodic, curated, concept, artifact, thoughts — any subset).
+- Storage backend (Qdrant collection names + schema version / SQLite path / JSONL / embedded KV).
+- Rough volume (drives streaming vs batch).
+- Content-transformation concerns (namespace renames, presence mapping, ID format shifts if POC used ULIDs or opaque IDs instead of KSUIDs).
+
+Design notes below assume the most likely case — Qdrant-on-nyla to Qdrant-on-musubi over HTTPS. Implementing agent adjusts design in-PR if discovery reveals otherwise; the discovery commit is the authority.
 
 ## Specs to implement
 
