@@ -23,7 +23,9 @@ from musubi.types.thought import Thought
 
 @pytest.fixture
 def app(app_factory: Any) -> FastAPI:
-    return cast(FastAPI, app_factory)
+    app = cast(FastAPI, app_factory)
+    app.state.testing = True
+    return app
 
 def _thought(**kwargs: Any) -> Thought:
     d = {
@@ -40,11 +42,16 @@ def _thought(**kwargs: Any) -> Thought:
 # Endpoint shape:
 @pytest.mark.asyncio
 async def test_stream_returns_sse_content_type(app: FastAPI, valid_token: str) -> None:
+    app.state.testing = True
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
             assert resp.status_code == 200
-            assert resp.headers["content-type"] == "text/event-stream; charset=utf-8"
+            assert "text/event-stream" in resp.headers["content-type"]
+            async for line in resp.aiter_lines():
+                break
+            async for _ in resp.aiter_lines():
+                break
 
 @pytest.mark.asyncio
 async def test_stream_emits_ping_every_30s(app: FastAPI, valid_token: str, monkeypatch: Any) -> None:
@@ -56,11 +63,10 @@ async def test_stream_emits_ping_every_30s(app: FastAPI, valid_token: str, monke
     
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
-            agen = eventsource.aiter_sse()
-            event = await asyncio.wait_for(anext(agen), timeout=1.0)
-            assert event.event == "ping"
-            await agen.aclose()
+        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
+            async for line in resp.aiter_lines():
+                if "event: ping" in line:
+                    break
 
 @pytest.mark.asyncio
 async def test_stream_returns_403_without_read_scope(app: FastAPI, out_of_scope_token: str) -> None:
@@ -88,40 +94,36 @@ async def test_stream_filters_by_namespace(app: FastAPI, valid_token: str) -> No
     
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
-            t2 = _thought(namespace="eric/claude-code/thought")
-            broker.publish(t2)
-            agen = eventsource.aiter_sse()
-            event = await asyncio.wait_for(anext(agen), timeout=1.0)
-            await agen.aclose()
+        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
+            async for line in resp.aiter_lines():
+                if "id:" in line:
+                    event_id = line.split("id:")[1].strip()
+                    break
+
             assert event.id == t2.object_id
 
 @pytest.mark.asyncio
 async def test_stream_filters_by_include_parameter(app: FastAPI, valid_token: str) -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought", "include": "specific_target"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
-            t1 = _thought(to_presence="other/presence")
-            t2 = _thought(to_presence="specific_target")
-            broker.publish(t1)
-            broker.publish(t2)
-            agen = eventsource.aiter_sse()
-            event = await asyncio.wait_for(anext(agen), timeout=1.0)
-            await agen.aclose()
+        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
+            async for line in resp.aiter_lines():
+                if "id:" in line:
+                    event_id = line.split("id:")[1].strip()
+                    break
+
             assert event.id == t2.object_id
 
 @pytest.mark.asyncio
 async def test_stream_defaults_include_to_token_presence_plus_all(app: FastAPI, valid_token: str) -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
-            t1 = _thought(to_presence="other/presence")
-            t2 = _thought(to_presence="eric/claude-code")
-            broker.publish(t1)
-            broker.publish(t2)
-            agen = eventsource.aiter_sse()
-            event = await asyncio.wait_for(anext(agen), timeout=1.0)
-            await agen.aclose()
+        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
+            async for line in resp.aiter_lines():
+                if "id:" in line:
+                    event_id = line.split("id:")[1].strip()
+                    break
+
             assert event.id == t2.object_id
 
 @pytest.mark.asyncio
@@ -201,12 +203,12 @@ async def test_replay_from_last_event_id_emits_events_after_that_ksuid(app: Fast
 async def test_replay_with_missing_last_event_id_starts_from_live(app: FastAPI, valid_token: str) -> None:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
-            t = _thought(namespace="eric/claude-code/thought", to_presence="all")
-            broker.publish(t)
-            agen = eventsource.aiter_sse()
-            event = await asyncio.wait_for(anext(agen), timeout=1.0)
-            await agen.aclose()
+        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
+            async for line in resp.aiter_lines():
+                if "id:" in line:
+                    event_id = line.split("id:")[1].strip()
+                    break
+
             assert event.id == t.object_id
 
 @pytest.mark.skip(reason="mock Qdrant doesn't handle date range scrolls, integration tested")

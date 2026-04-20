@@ -188,7 +188,7 @@ async def _thoughts_event_generator(
 
             try:
                 # 30s timeout for ping
-                thought = await asyncio.wait_for(sub.queue.get(), timeout=0.01 if request.app.state.__dict__.get('testing') else 30.0)
+                thought = await asyncio.wait_for(sub.queue.get(), timeout=0.001 if request.app.state.__dict__.get('testing') else 30.0)
                 yield {
                     "event": "thought",
                     "id": str(thought.object_id),
