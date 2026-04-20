@@ -4,10 +4,10 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-sdk-py
 target_slice: slice-sdk-py-otel-spans
-status: open
+status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-19
 ---
 
@@ -81,3 +81,11 @@ to track in the install matrix.
   spy tracer's recorded spans.
 - The SDK has zero behaviour change when OTel is NOT configured —
   no import errors, no perf regression, no spans in process memory.
+
+## Resolution
+
+Resolved by PR #131.
+
+## Resolution
+
+Resolved by PR #131.
