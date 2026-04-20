@@ -3,12 +3,12 @@ title: "Slice: Types followup — add 6 missing fields cited by cross-slice tick
 slice_id: slice-types-followup
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-2-0-flash
 phase: "1 Schema"
-tags: [section/slices, status/in-review, type/slice, types, cross-slice-consolidation]
+tags: [section/slices, status/done, type/slice, types, cross-slice-consolidation]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-types]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Consolidates 6 open cross-slice tickets that all request small field additions to `src/musubi/types/`. Each was filed by a downstream slice that couldn't land its own test bullets because the types surface was missing a field the spec requires. Parent `slice-types` is `status: done` — this is the standard Option-3 followup pattern (same as blended-followup, episodic-followup).
 
-**Phase:** 1 Schema · **Status:** `in-review` · **Owner:** `gemini-2-0-flash`
+**Phase:** 1 Schema · **Status:** `done` · **Owner:** `gemini-2-0-flash`
 
 ## Why this slice exists
 
