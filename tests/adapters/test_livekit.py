@@ -21,6 +21,7 @@ Closure plan:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from typing import Any
 
@@ -37,7 +38,6 @@ from musubi.adapters.livekit import (
 )
 from musubi.sdk.testing import FakeMusubiClient
 
-
 _NS = "eric/livekit-voice/episodic"
 
 
@@ -46,9 +46,54 @@ _NS = "eric/livekit-voice/episodic"
 # ---------------------------------------------------------------------------
 
 
-def _fake(**canned: Any) -> FakeMusubiClient:
-    """Standard FakeMusubiClient with permissive canned returns so the
-    adapter's calls don't blow up on un-faked methods."""
+class _AsyncFake:
+    """Adapter-local async wrapper around :class:`FakeMusubiClient`.
+
+    The shipped FakeMusubiClient is sync (mirrors :class:`MusubiClient`);
+    the LiveKit adapter targets :class:`AsyncMusubiClient` semantics so
+    every call site is awaited. This shim exposes coroutine versions of
+    the sync fake's surface and forwards the calls log + canned returns.
+
+    A native ``AsyncFakeMusubiClient`` belongs in :mod:`musubi.sdk.testing`
+    but that path is forbidden to slice-adapter-livekit; cross-slice
+    ticket ``slice-sdk-py-async-fake.md`` documents the follow-up.
+    """
+
+    def __init__(self, fake: FakeMusubiClient) -> None:
+        self._fake = fake
+        self.calls = fake.calls
+        self.memories = _AsyncNamespace(fake.memories, async_methods=("capture", "get"))
+        self.curated = _AsyncNamespace(fake.curated, async_methods=("get",))
+        self.concepts = _AsyncNamespace(fake.concepts, async_methods=("get",))
+        self.artifacts = _AsyncNamespace(fake.artifacts, async_methods=("get", "blob"))
+        self.thoughts = _AsyncNamespace(fake.thoughts, async_methods=("send", "check"))
+        self.lifecycle = _AsyncNamespace(fake.lifecycle, async_methods=("events",))
+        self.ops = _AsyncNamespace(fake.ops, async_methods=("health", "status"))
+        # Optional override hook for the test_upload_*_failure tests.
+        self._upload_handler: Any = None
+
+    async def retrieve(self, **kw: Any) -> dict[str, Any]:
+        return self._fake.retrieve(**kw)
+
+
+class _AsyncNamespace:
+    def __init__(self, sync_ns: Any, *, async_methods: tuple[str, ...]) -> None:
+        self._ns = sync_ns
+        for name in async_methods:
+            sync_method = getattr(sync_ns, name)
+            setattr(self, name, _wrap_async(sync_method))
+
+
+def _wrap_async(sync_fn: Any) -> Any:
+    async def _async_wrapper(**kw: Any) -> Any:
+        return sync_fn(**kw)
+
+    return _async_wrapper
+
+
+def _fake(**canned: Any) -> _AsyncFake:
+    """Standard async-shim'd FakeMusubiClient with permissive canned
+    returns so the adapter's calls don't blow up on un-faked methods."""
     defaults: dict[str, Any] = {
         "retrieve_returns": {"results": [], "mode": "deep", "limit": 15},
         "capture_returns": {"object_id": "m" * 27, "state": "provisional"},
@@ -57,7 +102,7 @@ def _fake(**canned: Any) -> FakeMusubiClient:
         "artifact_blob_returns": b"",
     }
     defaults.update(canned)
-    return FakeMusubiClient(**defaults)
+    return _AsyncFake(FakeMusubiClient(**defaults))
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +114,9 @@ def test_slow_thinker_restarts_on_new_transcript_segment() -> None:
     """Bullet 1 — a new utterance segment cancels the prior pre-fetch."""
 
     cache = ContextCache(max_entries=10)
-    fake = _fake(retrieve_returns={"results": [{"object_id": "x" * 27}], "mode": "deep", "limit": 15})
+    fake = _fake(
+        retrieve_returns={"results": [{"object_id": "x" * 27}], "mode": "deep", "limit": 15}
+    )
     slow = SlowThinker(client=fake, namespace=_NS, cache=cache)
 
     async def _run() -> tuple[bool, bool]:
@@ -80,11 +127,12 @@ def test_slow_thinker_restarts_on_new_transcript_segment() -> None:
         await slow.on_user_utterance_segment("second")
         # Wait for the second task to settle.
         if slow._task is not None:
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await slow._task
-            except asyncio.CancelledError:
-                pass
-        return first_task.cancelled() or first_task.done(), slow._task is not None and slow._task.done()
+        return (
+            first_task.cancelled() or first_task.done(),
+            slow._task is not None and slow._task.done(),
+        )
 
     first_done, second_done = asyncio.run(_run())
     assert first_done
@@ -95,7 +143,13 @@ def test_slow_thinker_writes_cache_on_completion() -> None:
     """Bullet 2 — completed pre-fetch writes results into the cache."""
 
     cache = ContextCache(max_entries=10)
-    fake = _fake(retrieve_returns={"results": [{"object_id": "z" * 27, "score": 0.9}], "mode": "deep", "limit": 15})
+    fake = _fake(
+        retrieve_returns={
+            "results": [{"object_id": "z" * 27, "score": 0.9}],
+            "mode": "deep",
+            "limit": 15,
+        }
+    )
     slow = SlowThinker(client=fake, namespace=_NS, cache=cache)
 
     async def _run() -> None:
@@ -113,24 +167,11 @@ def test_slow_thinker_cancelled_during_user_interrupt() -> None:
     """Bullet 3 — CancelledError does NOT propagate to the caller."""
 
     cache = ContextCache(max_entries=10)
-
-    # Use a slow handler that yields control so the cancel can land.
-    capture_calls = {"n": 0}
-
-    class _SlowFake(FakeMusubiClient):
-        def __init__(self) -> None:
-            super().__init__(
-                retrieve_returns={"results": [], "mode": "deep", "limit": 15}
-            )
-
-    # Use an async wrapper that sleeps so cancellation is visible.
-    fake = _SlowFake()
-
-    original_retrieve = fake.retrieve
+    fake = _fake()
 
     async def slow_retrieve(**kw: Any) -> dict[str, Any]:
         await asyncio.sleep(0.5)
-        return original_retrieve(**kw)
+        return {"results": [], "mode": "deep", "limit": 15}
 
     fake.retrieve = slow_retrieve  # type: ignore[method-assign]
     slow = SlowThinker(client=fake, namespace=_NS, cache=cache)
@@ -139,21 +180,14 @@ def test_slow_thinker_cancelled_during_user_interrupt() -> None:
         await slow.on_user_utterance_segment("first")
         first_task = slow._task
         assert first_task is not None
-        # Cancel by starting a new segment immediately.
         await slow.on_user_utterance_segment("second")
         # Old task must be cancelled cleanly — no exception escapes.
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await first_task
-        except asyncio.CancelledError:
-            pass
-        # New task can complete without raising.
+        # New task settles without raising.
         if slow._task is not None and slow._task is not first_task:
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await slow._task
-            except asyncio.CancelledError:
-                pass
-        # Drain any unused capture_calls — quiet ruff
-        _ = capture_calls
 
     asyncio.run(_run())
 
@@ -182,7 +216,11 @@ def test_fast_talker_fallback_on_cache_miss() -> None:
 
     cache = ContextCache(max_entries=10)
     fake = _fake(
-        retrieve_returns={"results": [{"object_id": "f" * 27, "score": 0.6}], "mode": "fast", "limit": 5}
+        retrieve_returns={
+            "results": [{"object_id": "f" * 27, "score": 0.6}],
+            "mode": "fast",
+            "limit": 5,
+        }
     )
     fast = FastTalker(client=fake, namespace=_NS, cache=cache)
 
@@ -349,7 +387,7 @@ def test_upload_retries_on_transient_failure() -> None:
 
     fake = _fake()
     # Patch the artifact upload path on the fake.
-    fake._upload_handler = flaky_upload  # type: ignore[attr-defined]
+    fake._upload_handler = flaky_upload
     adapter = LiveKitAdapter(
         client=fake,
         namespace=_NS,
@@ -375,7 +413,7 @@ def test_upload_queue_persists_on_hard_failure() -> None:
         raise BackendUnavailable(code="BACKEND_UNAVAILABLE", detail="x", status_code=503)
 
     fake = _fake()
-    fake._upload_handler = always_fail  # type: ignore[attr-defined]
+    fake._upload_handler = always_fail
     adapter = LiveKitAdapter(
         client=fake,
         namespace=_NS,
@@ -405,9 +443,7 @@ def test_capture_disabled_env_flag_skips_all_writes() -> None:
         client=fake,
         namespace=_NS,
         artifact_namespace="eric/_shared/artifact",
-        config=LiveKitAdapterConfig(
-            capture_transcripts=False, capture_facts=False
-        ),
+        config=LiveKitAdapterConfig(capture_transcripts=False, capture_facts=False),
     )
 
     async def _run() -> None:
@@ -422,7 +458,8 @@ def test_capture_disabled_env_flag_skips_all_writes() -> None:
     # Retrieval-only calls (Slow Thinker) are read-only and still allowed;
     # but no writes (memories.capture / thoughts.send / artifact upload).
     writes = [
-        c for c in fake.calls
+        c
+        for c in fake.calls
         if c[0] in ("memories.capture", "thoughts.send", "memories.batch.capture")
     ]
     assert writes == []
@@ -446,17 +483,23 @@ def test_redaction_pass_removes_pii_if_enabled() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="out-of-scope in slice work log: needs docker-up Musubi + LiveKit session simulator; deferred to musubi-contract-tests repo per ADR-0011")
+@pytest.mark.skip(
+    reason="out-of-scope in slice work log: needs docker-up Musubi + LiveKit session simulator; deferred to musubi-contract-tests repo per ADR-0011"
+)
 def test_integration_mock_livekit_session_inside_budget() -> None:
     """Bullet 17 — placeholder."""
 
 
-@pytest.mark.skip(reason="out-of-scope in slice work log: contract suite ships in musubi-contract-tests per ADR-0011")
+@pytest.mark.skip(
+    reason="out-of-scope in slice work log: contract suite ships in musubi-contract-tests per ADR-0011"
+)
 def test_integration_canonical_contract_suite_passes_via_adapter() -> None:
     """Bullet 18 — placeholder."""
 
 
-@pytest.mark.skip(reason="out-of-scope in slice work log: 10-minute session perf test needs reference host + live Musubi")
+@pytest.mark.skip(
+    reason="out-of-scope in slice work log: 10-minute session perf test needs reference host + live Musubi"
+)
 def test_integration_artifact_storage_10min_session_under_500ms_e2e() -> None:
     """Bullet 19 — placeholder."""
 
