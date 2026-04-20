@@ -143,7 +143,7 @@ Plus slice-specific:
 
 ## Cross-slice tickets opened by this slice
 
-- _(none yet; may open if POC source shape requires a plane-side schema adjustment — unlikely but possible)_
+- `[[_inbox/cross-slice/migrator-needs-created-at-override]]` — The v1 SDK and API `capture` routes currently lack a `created_at` override parameter, preventing the migration script from preserving the original POC timestamps during capture.
 
 ## PR links
 
