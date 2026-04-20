@@ -3,10 +3,10 @@ title: "Slice: Metrics / logs / traces"
 slice_id: slice-ops-observability
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: vscode-cc-sonnet47
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-ops-compose]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > Structured logs (Loki), metrics (Prometheus), traces (Tempo). Alert rules and dashboards ship in repo.
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
@@ -85,10 +85,34 @@ Agents append one entry per work session. Format:
 - `blocks`: removed `slice-ops-backup` (spurious — backup was done independently this session).
 - Brief path I gave VS Code said `08-deployment/observability.md`; actual spec path is `09-operations/observability.md` + `09-operations/alerts.md`. Slice file's `## Specs to implement` wikilinks were already correct; brief was wrong — noted for future render-prompt.py script (claimable.py reads specs from the slice file, so this class of error would have been auto-caught in an automated brief).
 
+### 2026-04-19 — vscode-cc-sonnet47 — take
+
+- Claimed atomically via `gh issue edit 19 --add-assignee @me` + label flip `status:ready → status:in-progress` (dual-update before writes; post-#93 frontmatter-vs-label drift is a hard `✗`).
+- Branch `slice/slice-ops-observability` off `v2` at 66d5066 (post-reconcile).
+- Caught the spec-path + owns_paths drift in the pre-claim verify pass and waited for the operator's reconcile (option a per the canonical handoff playbook). 9th drift-fix tonight; render-prompt.py automation will eliminate this class.
+- Same agent that landed slice-sdk-py + slice-adapter-livekit; the StatusResponse / ComponentStatus shape the wiring needs to populate is fresh context from those slices.
+
+### 2026-04-19 — vscode-cc-sonnet47 — handoff to in-review
+
+- Implemented `src/musubi/observability/` (5 modules: `__init__`, `registry`, `logging_setup`, `health`, `metrics_middleware`). Hand-rolled in-process Prometheus registry — Counter / Histogram / Gauge + text-format renderer — instead of pulling `prometheus-client` (kept the dep tree tight; the exposition format is small enough that hand-rolling beats an ADR for a 12-deep transitive set).
+- Wired `src/musubi/api/routers/ops.py`: `/ops/status` populates `StatusResponse.components` with one row per declared dependency (qdrant + tei-dense + tei-sparse + tei-reranker + ollama) — closes Aoi's v0.1 health-granularity ask. `/ops/metrics` serves the live `default_registry()` in Prometheus text format.
+- Touched `src/musubi/api/app.py` (NOT in slice forbidden_paths but adjacent — flagging here for the reviewer): one-line `install_metrics_middleware(app)` install + 3-line wiring of the existing correlation-id middleware's id into `request_id_var` so structured-log records carry the id end-to-end. No reshape of the existing middleware chain.
+- Shipped `deploy/{prometheus,grafana,loki,tempo}/` configs + four dashboards (overview, latency, lifecycle, vault) + the alert rule catalog. Every push alert has a runbook URL annotation and a `for:` clause; tested against the YAML directly.
+- 47 unit tests; all 10 testable Test Contract bullets pass; 4 bullets skipped against documented closure (2 cross-slice, 2 declared out-of-scope per work log). Branch coverage on owned code: 89% (gate 85%).
+- One cross-slice ticket opened: `slice-ops-observability-slice-lifecycle-job-emit.md` — lifecycle workers should wrap their tick body in the `musubi_lifecycle_job_duration_seconds` + `musubi_lifecycle_job_errors_total` instruments shipped here. Slice-sdk-py-otel-spans.md (existing ticket from slice-sdk-py) covers the OTel deferral.
+- Handoff checks: `make check` green (870 passed, 226 skipped), `make tc-coverage SLICE=slice-ops-observability` reports closure satisfied, `make agent-check` clean (warnings only — none touching this slice; the two ⚠ are about other slices flapping in parallel).
+- Flipping `status: in-review`, marking PR ready, removing the lock.
+
+### Known gaps at in-review
+
+- **OTel deferred** to slice-sdk-py-otel-spans.md (existing cross-slice ticket). Spec § Tracing describes the full Tempo wiring; the deploy/tempo/ config + dashboard panels exist as scaffolding so the compose stack stands up, but the SDK doesn't emit spans yet.
+- **Lifecycle worker emit deferred** to slice-ops-observability-slice-lifecycle-job-emit.md (new). The metrics + dashboards + email alert (`lifecycle_job_failing`) all reference the `musubi_lifecycle_job_*` family; the workers (in slice-lifecycle-* paths, forbidden here) need to wrap their ticks in the instrument-emit pattern shown in the ticket.
+- **No real backfill of `musubi_capture_total` / `musubi_retrieve_total` / `musubi_vault_*`.** The middleware emits `musubi_http_requests_total` + `musubi_http_request_duration_ms` + `musubi_5xx_total` from real traffic; the planes / retrieve / vault families need the same instrument-emit treatment in their respective slices (already-shipped) — same pattern as the lifecycle ticket. Could be one consolidated cross-slice ticket if desired; left as-is for now since the dashboards explicitly call those metrics out and the absence is a noisy "no data" hint.
+
 ## Cross-slice tickets opened by this slice
 
-- _(none yet)_
+- [[_inbox/cross-slice/slice-ops-observability-slice-lifecycle-job-emit|slice-ops-observability-slice-lifecycle-job-emit]] — lifecycle workers wrap their tick body in `musubi_lifecycle_job_*` + ledger emit; unskips Test Contract bullet 7.
 
 ## PR links
 
-- _(none yet)_
+- [#104](https://github.com/ericmey/musubi/pull/104) — `slice/slice-ops-observability` → `v2`.
