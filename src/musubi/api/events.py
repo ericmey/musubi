@@ -56,8 +56,14 @@ class ThoughtBroker:
             if sub.namespace != namespace:
                 continue
 
-            # Check if this thought matches the subscriber's filter
-            if "all" in sub.includes or to_presence in sub.includes:
+            # Subscriber's `includes` is a set of `to_presence` values the
+            # client wants to receive. Default at the endpoint is
+            # {token_presence, "all"} — so broadcasts (to_presence="all")
+            # reach every subscriber who kept the default. A client that
+            # explicitly narrows `include` (e.g. `include=openclaw`) opts out
+            # of broadcasts. "all" is NOT a subscriber-side wildcard; it's a
+            # to_presence literal.
+            if to_presence in sub.includes:
                 try:
                     if sub.queue.qsize() > 1000:
                         # Drop event (slow consumer)

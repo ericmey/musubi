@@ -81,6 +81,7 @@ async def send_thought(
 
     # Fire-and-forget publish hook
     from musubi.api.events import broker
+
     broker.publish(saved)
 
     return ThoughtSendResponse(object_id=saved.object_id, state=saved.state)

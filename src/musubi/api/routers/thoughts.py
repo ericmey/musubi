@@ -1,12 +1,10 @@
-"""Thought read endpoints — check (unread) + history (semantic search).
+"""Thought read endpoints — check (unread) + history (semantic search) + stream (SSE).
 
-Both are POST endpoints per [[07-interfaces/canonical-api]] §5 (the body
-carries query parameters). They're reads in disguise — no state mutation
-— and live on the read surface per the slice-api-v0 split.
+POST /check, /history, /read take body-carried params (namespace via body, not
+query string, so they validate scope manually after body parse rather than through
+the query-param-based require_auth dependency).
 
-These endpoints take ``namespace`` in the request body, not the query
-string, so they validate scope manually after body parse rather than
-through the query-param-based ``require_auth`` dependency.
+GET /stream is SSE per [[07-interfaces/canonical-api]] §5 Thoughts stream.
 """
 
 from __future__ import annotations
@@ -17,21 +15,20 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
-from sse_starlette.sse import EventSourceResponse
 
 from musubi.api.dependencies import get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError, ErrorCode
-from musubi.api.events import broker
+from musubi.api.events import Subscription, broker
 from musubi.api.responses import ThoughtListResponse
 from musubi.api.routers._scroll import scroll_namespace
 from musubi.auth import AuthRequirement, authenticate_request
 from musubi.settings import Settings
-from musubi.types.common import Err
+from musubi.types.common import Err, utc_now
 
 router = APIRouter(prefix="/v1/thoughts", tags=["thoughts"])
-
 
 
 class ThoughtCheckRequest(BaseModel):
@@ -91,8 +88,7 @@ async def thought_history(
     settings: Settings = Depends(get_settings_dep),
 ) -> ThoughtListResponse:
     """First-cut: history is a namespace scroll. Semantic search will
-    land once slice-retrieval-fast wires its dense path through the API
-    in slice-api-v0-write."""
+    land once slice-retrieval-fast wires its dense path through the API."""
     _check_body_scope(request, body.namespace, settings)
     items, _ = scroll_namespace(
         qdrant,
@@ -104,81 +100,57 @@ async def thought_history(
     return ThoughtListResponse(items=items)
 
 
+def _sse_frame(event: str, data: str, event_id: str | None = None) -> bytes:
+    """Format a single SSE frame as bytes.
 
-
-
-
-
-
+    Follows the SSE wire format: optional ``id: <...>``, ``event: <...>``,
+    ``data: <...>``, then a blank line terminator.
+    """
+    parts: list[str] = []
+    if event_id is not None:
+        parts.append(f"id: {event_id}")
+    parts.append(f"event: {event}")
+    parts.append(f"data: {data}")
+    parts.append("")  # frame terminator
+    parts.append("")  # trailing newline
+    return "\n".join(parts).encode("utf-8")
 
 
 async def _thoughts_event_generator(
     request: Request,
-    namespace: str,
-    includes: set[str],
-    last_event_id: str | None,
-    qdrant: QdrantClient,
-    sub: Any,
-) -> AsyncGenerator[dict[str, Any], None]:
-    from musubi.types.common import utc_now
+    sub: Subscription,
+) -> AsyncGenerator[bytes, None]:
+    """Yield SSE byte frames until the client disconnects or the server shuts down.
 
-    async def _ping_loop() -> None:
-        while True:
-            await asyncio.sleep(0.01 if getattr(request.app.state, "testing", False) else 30.0)
-            yield {
-                "event": "ping",
-                "data": json.dumps({"at": utc_now().isoformat()})
-            }
+    In test mode (``app.state.testing = True``), the ping cadence drops from 30s
+    to 10ms so tests observe pings sub-second. Queue reads use
+    ``asyncio.wait_for`` bounded by the ping interval so the loop always
+    makes progress (delivers a ping on timeout, a thought otherwise).
 
-    async def _sub_loop() -> None:
-        while True:
-            thought = await sub.queue.get()
-            yield {
-                "event": "thought",
-                "id": str(thought.object_id),
-                "data": thought.model_dump_json()
-            }
-
-    async def _check_disconnect() -> None:
-        while True:
-            if await request.is_disconnected():
-                raise asyncio.CancelledError()
-            await asyncio.sleep(0.5)
-
-    # Wait, creating 3 generators and merging them is hard.
-    # The SIMPLEST way to avoid `queue.get()` hanging without a timeout is:
-
+    Cancellation path: when the HTTP connection is closed client-side,
+    Starlette cancels this coroutine; the ``finally`` block unsubscribes.
+    """
     ping_interval = 0.01 if getattr(request.app.state, "testing", False) else 30.0
 
     try:
         while True:
-            if await request.is_disconnected():
-                break
-
             try:
                 thought = await asyncio.wait_for(sub.queue.get(), timeout=ping_interval)
-                yield {
-                    "event": "thought",
-                    "id": str(thought.object_id),
-                    "data": thought.model_dump_json()
-                }
+                yield _sse_frame(
+                    event="thought",
+                    event_id=str(thought.object_id),
+                    data=thought.model_dump_json(),
+                )
             except TimeoutError:
-                yield {
-                    "event": "ping",
-                    "data": json.dumps({"at": utc_now().isoformat()})
-                }
-
+                yield _sse_frame(
+                    event="ping",
+                    data=json.dumps({"at": utc_now().isoformat()}),
+                )
     finally:
         broker.unsubscribe(sub)
-        yield {
-            "event": "close",
-            "data": json.dumps({"reason": "server-shutdown", "reconnect_after_ms": 5000})
-        }
 
-@router.get(
-    "/stream",
-    operation_id="stream_thoughts.bucket=default",
-)
+
+@router.get("/stream", operation_id="stream_thoughts.bucket=default")
 async def stream_thoughts(
     request: Request,
     namespace: str = Query(...),
@@ -187,7 +159,14 @@ async def stream_thoughts(
     qdrant: QdrantClient = Depends(get_qdrant_client),
     settings: Settings = Depends(get_settings_dep),
 ) -> Any:
-    # Authenticate manually since namespace is query param
+    """SSE endpoint for real-time thought delivery.
+
+    Replay semantics via Last-Event-ID are declared in the spec but deferred to
+    the integration harness (needs a real Qdrant with live range queries; mocked
+    Qdrant in unit tests doesn't model lex-sorted epoch-range scrolls). The
+    header is accepted and validated but currently the stream begins from the
+    live broker queue only. See slice-api-thoughts-stream work log.
+    """
     requirement = AuthRequirement(namespace=namespace, access="r")
     result = authenticate_request(
         request,  # type: ignore[arg-type]
@@ -204,7 +183,6 @@ async def stream_thoughts(
         )
 
     ctx = result.value
-
     includes = set(include.split(",")) if include else {ctx.presence, "all"}
 
     try:
@@ -212,12 +190,23 @@ async def stream_thoughts(
     except ConnectionError:
         from musubi.api.errors import error_response
 
-        # We need to return a JSONResponse with the header
-        # error_response doesn't take headers, so we construct it
-        resp = error_response(status_code=503, detail="Connection cap exceeded", code="BACKEND_UNAVAILABLE")
+        resp = error_response(
+            status_code=503,
+            detail="Connection cap exceeded",
+            code="BACKEND_UNAVAILABLE",
+        )
         resp.headers["Retry-After"] = "5"
         return resp
 
-    return EventSourceResponse(_thoughts_event_generator(request, namespace, includes, last_event_id, qdrant, sub))
+    return StreamingResponse(
+        _thoughts_event_generator(request, sub),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable nginx/proxy buffering
+        },
+    )
+
 
 __all__ = ["router"]
