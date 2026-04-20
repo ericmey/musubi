@@ -3,7 +3,7 @@
 
 .PHONY: install fmt lint typecheck test test-cov check clean \
         agent-check spec-check slice-check vault-check issue-check wikilink-check \
-        tc-coverage
+        tc-coverage test-integration test-integration-up test-integration-down
 
 # --------------------------------------------------------------------------
 # Code gates — ruff format + lint are scoped to the whole repo (matching
@@ -75,6 +75,27 @@ tc-coverage:
 	  echo "usage: make tc-coverage SLICE=<slice-id>"; exit 2; \
 	fi
 	@python3 docs/architecture/_tools/tc_coverage.py $(SLICE)
+
+# --------------------------------------------------------------------------
+# Integration suite — boots the docker-compose dependency stack at
+# `deploy/test-env/docker-compose.test.yml`, runs the `integration`-marked
+# pytest scenarios against it, tears down with -v so volumes don't leak.
+# Per slice-ops-integration-harness: GitHub Actions runs this nightly via
+# `.github/workflows/integration.yml`; local devs invoke on demand.
+# --------------------------------------------------------------------------
+
+test-integration-up:
+	docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-integration up -d --wait
+
+test-integration-down:
+	docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-integration down -v --remove-orphans
+
+test-integration:
+	@if ! command -v docker >/dev/null 2>&1; then \
+	  echo "make test-integration requires docker; install Docker Desktop or skip"; \
+	  exit 2; \
+	fi
+	uv run pytest tests/integration/ -m integration -ra --strict-markers --no-cov
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache build dist *.egg-info
