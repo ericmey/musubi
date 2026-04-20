@@ -323,8 +323,59 @@ def audit_paths(pr: PRInfo, s: Slice) -> list[str]:
 
 
 def orphan_branches(slice_id: str) -> list[str]:
-    out = git("branch", "-r", "--list", f"origin/slice/{slice_id}*")
-    return [line.strip().removeprefix("origin/") for line in out.splitlines() if line.strip()]
+    """Query origin for branches matching `slice/<slice-id>*` authoritatively.
+
+    Uses `git ls-remote` rather than `git branch -r --list`, because the local
+    remote-tracking cache goes stale the moment GitHub auto-deletes a merged
+    branch (via --delete-branch on merge or branch-protection settings).
+    `ls-remote` hits the origin directly and returns only references that
+    actually exist server-side.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-remote", "--heads", "origin", f"refs/heads/slice/{slice_id}*"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    except subprocess.CalledProcessError:
+        return []
+    # Each line: "<sha>\trefs/heads/slice/<name>"
+    refs: list[str] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split("\t", 1)
+        if len(parts) != 2:
+            continue
+        ref = parts[1].removeprefix("refs/heads/")
+        refs.append(ref)
+    return refs
+
+
+def delete_orphan_branch(branch_name: str) -> tuple[bool, str]:
+    """Delete an origin branch; return (ok, message).
+
+    Tolerates the race where the branch was already deleted between the
+    orphan sweep and this call (another agent / auto-delete / manual rm).
+    Returns ok=True with a soft message in that case; only returns ok=False
+    for unexpected failures.
+    """
+    result = subprocess.run(
+        ["git", "push", "origin", "--delete", branch_name],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return True, f"deleted origin/{branch_name}"
+    stderr = (result.stderr or "").lower()
+    # GitHub's stderr when the branch is already gone:
+    #   error: unable to delete '<name>': remote ref does not exist
+    if "remote ref does not exist" in stderr:
+        return True, f"origin/{branch_name} already deleted (race-ok)"
+    return False, f"delete failed: {stderr.strip()[:120]}"
 
 
 # ---- Main -------------------------------------------------------------------
@@ -470,8 +521,11 @@ def run(args: argparse.Namespace) -> int:
                 print(yellow(f"  ⚠ {o}"))
                 # Only delete if it's exactly slice/<slice-id> (not slice-id-followup etc.)
                 if not dry and o == f"slice/{s.id}":
-                    _run(["git", "push", "origin", "--delete", f"slice/{s.id}"])
-                    print(green(f"    ✓ deleted origin/slice/{s.id}"))
+                    ok, msg = delete_orphan_branch(o)
+                    if ok:
+                        print(green(f"    ✓ {msg}"))
+                    else:
+                        print(yellow(f"    ⚠ {msg}"))
 
     print()
     print(green(f"✓ merge-flow complete for PR #{pr.number}"))
