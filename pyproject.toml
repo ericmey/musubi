@@ -23,8 +23,13 @@ dependencies = [
     "fastapi>=0.115",
     # Multipart parsing for POST /v1/artifacts file uploads
     # (slice-api-v0-write).
+
     "python-multipart>=0.0.9",
 ]
+otel = [
+    "opentelemetry-api>=1.27",
+]
+
 
 [project.optional-dependencies]
 dev = [
@@ -38,9 +43,13 @@ dev = [
     "ruff>=0.6",
     # Vault tooling (docs/architecture/_tools/*.py) reads YAML frontmatter.
     "pyyaml>=6",
+
     "types-PyYAML",
     "jinja2>=3",
+    "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
 ]
+
 
 [build-system]
 requires = ["hatchling"]

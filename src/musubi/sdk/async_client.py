@@ -86,6 +86,7 @@ class AsyncMusubiClient:
         return await self._json(
             "POST",
             "/retrieve",
+            operation_name="retrieve",
             json_body={
                 "namespace": namespace,
                 "query_text": query_text,
@@ -111,19 +112,25 @@ class AsyncMusubiClient:
             "limit": limit,
         }
         headers = self._headers(request_id=request_id, idempotency_key=None, post=False)
-        async with self._http.stream(
-            "POST", "/retrieve/stream", json=body, headers=headers
-        ) as resp:
-            if resp.status_code >= 400:
-                await resp.aread()
-                raise self._exception_from_response(resp)
-            async for line in resp.aiter_lines():
-                if not line:
-                    continue
-                yield json.loads(line)
+        full_url = str(self._http.base_url.join("/retrieve/stream"))
+        from musubi.sdk.tracing import sdk_span
+
+        with sdk_span(
+            "retrieve_stream", "POST", full_url, namespace=namespace, request_id=request_id
+        ):
+            async with self._http.stream(
+                "POST", "/retrieve/stream", json=body, headers=headers
+            ) as resp:
+                if resp.status_code >= 400:
+                    await resp.aread()
+                    raise self._exception_from_response(resp)
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    yield json.loads(line)
 
     async def probe_version(self) -> str:
-        body = await self._json("GET", "/ops/status")
+        body = await self._json("GET", "/ops/status", operation_name="probe_version")
         observed = str(body.get("version", "0.0.0"))
         if _is_older(observed, _MIN_CORE_VERSION):
             msg = (
@@ -169,6 +176,7 @@ class AsyncMusubiClient:
         method: str,
         path: str,
         *,
+        operation_name: str = "unknown",
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         request_id: str | None = None,
@@ -177,6 +185,7 @@ class AsyncMusubiClient:
         resp = await self._request(
             method,
             path,
+            operation_name=operation_name,
             json_body=json_body,
             params=params,
             request_id=request_id,
@@ -191,10 +200,13 @@ class AsyncMusubiClient:
         method: str,
         path: str,
         *,
+        operation_name: str = "unknown",
         params: dict[str, Any] | None = None,
         request_id: str | None = None,
     ) -> bytes:
-        resp = await self._request(method, path, params=params, request_id=request_id)
+        resp = await self._request(
+            method, path, operation_name=operation_name, params=params, request_id=request_id
+        )
         return resp.content
 
     async def _request(
@@ -202,6 +214,7 @@ class AsyncMusubiClient:
         method: str,
         path: str,
         *,
+        operation_name: str = "unknown",
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
         request_id: str | None = None,
@@ -213,36 +226,54 @@ class AsyncMusubiClient:
             idempotency_key=idempotency_key,
             post=is_post,
         )
-        last_retry_after: float | None = None
-        for attempt in range(1, self._retry.max_attempts + 1):
-            if attempt > 1:
-                delay = self._retry.backoff_for(attempt, retry_after=last_retry_after)
-                if delay > 0:
-                    await asyncio.sleep(delay)
-            try:
-                resp = await self._http.request(
-                    method,
-                    path,
-                    json=json_body,
-                    params=params,
-                    headers=headers,
-                )
-            except httpx.HTTPError as exc:
-                if attempt >= self._retry.max_attempts:
-                    raise NetworkError(
-                        code="NETWORK_ERROR",
-                        detail=f"transport error: {exc!r}",
-                    ) from exc
-                continue
-            if resp.status_code in self._retry.retryable_statuses:
-                last_retry_after = _retry_after_from(resp.headers)
-                if attempt >= self._retry.max_attempts:
-                    raise self._exception_from_response(resp)
-                continue
-            if resp.status_code >= 400:
-                raise self._exception_from_response(resp)
-            return resp
-        raise RuntimeError("unreachable: retry loop exited without return")
+        ns = None
+        if json_body and "namespace" in json_body:
+            ns = json_body["namespace"]
+        elif params and "namespace" in params:
+            ns = params["namespace"]
+        full_url = str(self._http.base_url.join(path))
+        from musubi.sdk.tracing import sdk_span
+
+        with sdk_span(operation_name, method, full_url, namespace=ns, request_id=request_id):
+            ns = None
+            if json_body and "namespace" in json_body:
+                ns = json_body["namespace"]
+            elif params and "namespace" in params:
+                ns = params["namespace"]
+            full_url = str(self._http.base_url.join(path))
+            from musubi.sdk.tracing import sdk_span
+
+            with sdk_span(operation_name, method, full_url, namespace=ns, request_id=request_id):
+                last_retry_after: float | None = None
+                for attempt in range(1, self._retry.max_attempts + 1):
+                    if attempt > 1:
+                        delay = self._retry.backoff_for(attempt, retry_after=last_retry_after)
+                        if delay > 0:
+                            await asyncio.sleep(delay)
+                    try:
+                        resp = await self._http.request(
+                            method,
+                            path,
+                            json=json_body,
+                            params=params,
+                            headers=headers,
+                        )
+                    except httpx.HTTPError as exc:
+                        if attempt >= self._retry.max_attempts:
+                            raise NetworkError(
+                                code="NETWORK_ERROR",
+                                detail=f"transport error: {exc!r}",
+                            ) from exc
+                        continue
+                    if resp.status_code in self._retry.retryable_statuses:
+                        last_retry_after = _retry_after_from(resp.headers)
+                        if attempt >= self._retry.max_attempts:
+                            raise self._exception_from_response(resp)
+                        continue
+                    if resp.status_code >= 400:
+                        raise self._exception_from_response(resp)
+                    return resp
+                raise RuntimeError("unreachable: retry loop exited without return")
 
     @staticmethod
     def _exception_from_response(resp: httpx.Response) -> MusubiError:
@@ -282,6 +313,7 @@ class _AsyncMemories:
         return await self._c._json(
             "POST",
             "/memories",
+            operation_name="memories.capture",
             json_body={
                 "namespace": namespace,
                 "content": content,
@@ -302,6 +334,7 @@ class _AsyncMemories:
         return await self._c._json(
             "GET",
             f"/memories/{object_id}",
+            operation_name="memories.get",
             params={"namespace": namespace},
         )
 
@@ -336,6 +369,7 @@ class _AsyncBatchContext:
         self.results = await self._c._json(
             "POST",
             "/memories/batch",
+            operation_name="memories.batch.capture",
             json_body={"namespace": self._namespace, "items": self._items},
         )
 
@@ -348,6 +382,7 @@ class _AsyncCurated:
         return await self._c._json(
             "GET",
             f"/curated-knowledge/{object_id}",
+            operation_name="curated.get",
             params={"namespace": namespace},
         )
 
@@ -360,6 +395,7 @@ class _AsyncConcepts:
         return await self._c._json(
             "GET",
             f"/concepts/{object_id}",
+            operation_name="concepts.get",
             params={"namespace": namespace},
         )
 
@@ -372,6 +408,7 @@ class _AsyncArtifacts:
         return await self._c._json(
             "GET",
             f"/artifacts/{object_id}",
+            operation_name="artifacts.get",
             params={"namespace": namespace},
         )
 
@@ -379,6 +416,7 @@ class _AsyncArtifacts:
         return await self._c._bytes(
             "GET",
             f"/artifacts/{object_id}/blob",
+            operation_name="artifacts.blob",
             params={"namespace": namespace},
         )
 
@@ -400,6 +438,7 @@ class _AsyncThoughts:
         return await self._c._json(
             "POST",
             "/thoughts/send",
+            operation_name="thoughts.send",
             json_body={
                 "namespace": namespace,
                 "from_presence": from_presence,
@@ -414,6 +453,7 @@ class _AsyncThoughts:
         return await self._c._json(
             "POST",
             "/thoughts/check",
+            operation_name="thoughts.check",
             json_body={"namespace": namespace, "presence": presence},
         )
 
@@ -426,6 +466,7 @@ class _AsyncLifecycle:
         return await self._c._json(
             "GET",
             "/lifecycle/events",
+            operation_name="lifecycle.events",
             params={"namespace": namespace} if namespace else None,
         )
 
@@ -435,10 +476,10 @@ class _AsyncOps:
         self._c = client
 
     async def health(self) -> dict[str, Any]:
-        return await self._c._json("GET", "/ops/health")
+        return await self._c._json("GET", "/ops/health", operation_name="ops.health")
 
     async def status(self) -> dict[str, Any]:
-        return await self._c._json("GET", "/ops/status")
+        return await self._c._json("GET", "/ops/status", operation_name="ops.status")
 
 
 __all__ = ["AsyncMusubiClient"]
