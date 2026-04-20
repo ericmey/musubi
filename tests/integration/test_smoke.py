@@ -182,9 +182,6 @@ def test_concept_synthesis_flow_ollama_offline() -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="bullet 12: artifact upload route returns 500 with a substantial markdown payload; root cause is downstream of the bootstrap surface (chunker / artifact-plane / blob-path interaction). Bullets 6/7/9 PASS through the same bootstrap path. Issue #134 tracks the unskip."
-)
 async def test_artifact_upload_multipart_then_retrieve_blob(
     live_stack: StackHandle,
 ) -> None:

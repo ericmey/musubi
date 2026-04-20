@@ -532,3 +532,38 @@ def test_token_sliding_chunker_prefers_sentence_boundary_when_enabled() -> None:
         assert c.content.rstrip().endswith("."), (
             f"chunk {c.index} should end at sentence boundary, got: ...{c.content[-30:]}"
         )
+
+
+@pytest.mark.asyncio
+async def test_create_does_not_fail_with_tei_empty_input_rejection(qdrant: QdrantClient) -> None:
+    import hashlib
+
+    from musubi.embedding.base import Embedder
+    from musubi.planes.artifact.plane import ArtifactPlane
+    from musubi.types.artifact import SourceArtifact
+
+    class RejectEmptyEmbedder(Embedder):
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            if any(not t.strip() for t in texts if t == ""):  # TEI rejects literally empty
+                raise ValueError("TEI: inputs cannot be empty")
+            return [[0.0] * 1024 for _ in texts]
+
+        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+            return [{0: 1.0} for _ in texts]
+
+        async def rerank(self, query: str, docs: list[str]) -> list[float]:
+            return []
+
+    plane = ArtifactPlane(client=qdrant, embedder=RejectEmptyEmbedder())
+    art = SourceArtifact(
+        namespace="eric/claude-code/artifact",
+        title="t",
+        filename="f",
+        sha256=hashlib.sha256(b"raw").hexdigest(),
+        content_type="text/plain",
+        size_bytes=3,
+        chunker="markdown-headings-v1",
+    )
+    # Regression for Issue #134: ArtifactPlane.create fetches dimensionality
+    # by embedding a dummy string. Using "" crashed TEI with 413. Using " " works.
+    await plane.create(art)
