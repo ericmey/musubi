@@ -3,10 +3,10 @@ title: "Slice: Blended retrieval — Test Contract followup"
 slice_id: slice-retrieval-blended-followup
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-2-0-flash
 phase: "5 Retrieval"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-retrieval-blended]]"]
@@ -19,7 +19,7 @@ blocks: []
 > Implementation landed in slice-retrieval-blended (PR #79); this slice
 > implements the 13 Test Contract bullets deferred there under time pressure.
 
-**Phase:** 5 Retrieval · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 5 Retrieval · **Status:** `in-progress` · **Owner:** `gemini-2-0-flash`
 
 ## Specs to implement
 
@@ -68,3 +68,7 @@ Agents append one entry per work session. Format:
   bullets from 05-retrieval/blended.md were deferred during the parent slice's
   implementation due to time pressure; all had skip-reason pointing at this
   slice. This slice legitimizes that pointer.
+
+### 2026-04-19 22:30 — gemini-2-0-flash — claim
+
+- Claimed slice via Issue #84. Draft PR #88.
