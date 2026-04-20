@@ -180,6 +180,12 @@ Plus slice-specific:
 - CRITICAL PATH: every Phase 2 consumer (integration harness smoke bullets, first-deploy, POC migration, OpenClaw) is gated on this.
 - VS Code hit the bug; he's the natural implementer (freshest context). Alternative: Hana (similar scope to types-followup #107 she just shipped). Operator picks.
 
+### 2026-04-20 — vscode-cc-sonnet47 — take
+
+- Claimed atomically via `gh issue edit 123 --add-assignee @me` + label flip `status:ready → status:in-progress` (dual-update before writes).
+- Branch `slice/slice-api-app-bootstrap` off the carve branch `origin/docs/slice-api-app-bootstrap` (carve PR #124 still open at claim time but CLEAN+green; branching off the carve branch so I inherit the slice file without waiting for the merge — when #124 squashes to v2, the squashed commit's content matches my history so a later rebase is a no-op).
+- Same agent that opened the cross-slice ticket on PR #114 → wrote most of the spec for this slice → freshest context for the implementation. Canonical 7-commit shape this time (separate `test(api):` commit before `feat(api):`) per the lesson saved to memory after PR #114's audit soft-warning.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
