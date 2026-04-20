@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 
 from mcp.server.fastmcp import FastMCP
+
 from musubi.adapters.mcp.tools import attach_tools
+from musubi.config import get_settings
 from musubi.sdk.async_client import AsyncMusubiClient
 
 logger = logging.getLogger(__name__)
@@ -20,44 +21,39 @@ def create_mcp_server(client: AsyncMusubiClient) -> FastMCP:
     return mcp
 
 
-def run_stdio() -> None:
-    """Run the MCP server over stdio.
+def _build_client() -> AsyncMusubiClient:
+    """Construct an SDK client from process-wide Settings.
 
-    Expects MUSUBI_API_URL and MUSUBI_TOKEN in the environment.
+    Reads ``MUSUBI_API_URL`` and ``MUSUBI_TOKEN`` via pydantic-settings at
+    ``musubi.config`` — the single allowed env-read site per project
+    guardrails. Non-MCP processes don't need to set these; defaults keep
+    them safe.
     """
-    api_url = os.environ.get("MUSUBI_API_URL", "http://localhost:8000/v1")
-    token = os.environ.get("MUSUBI_TOKEN", "")
-
+    settings = get_settings()
+    api_url = str(settings.musubi_api_url)
+    token = settings.musubi_token.get_secret_value()
     if not token:
-        logger.warning(
-            "No MUSUBI_TOKEN found in environment; auth will fail if server requires it."
-        )
+        logger.warning("No MUSUBI_TOKEN configured; auth will fail if the API requires it.")
+    return AsyncMusubiClient(base_url=api_url, token=token)
 
-    client = AsyncMusubiClient(base_url=api_url, token=token)
+
+def run_stdio() -> None:
+    """Run the MCP server over stdio."""
+    client = _build_client()
     mcp = create_mcp_server(client)
-
-    # We must run this synchronously since mcp.run() handles its own event loop
+    # mcp.run() owns the event loop; runs until the transport closes.
     mcp.run()
 
 
 def run_sse() -> None:
     """Run the MCP server over SSE via Starlette/FastAPI.
 
-    This is intended to be mounted or run via uvicorn in a production deployment
-    behind an OAuth 2.1 reverse proxy.
+    Intended to be mounted or run via uvicorn in production, behind an
+    OAuth 2.1 reverse proxy (Kong).
     """
-    # The ASGI app can be extracted from mcp via mcp.create_app() but FastMCP
-    # run() doesn't return the app directly if we want to run uvicorn.
-    # For this adapter, we just provide the basic structure.
-
-    api_url = os.environ.get("MUSUBI_API_URL", "http://localhost:8000/v1")
-    token = os.environ.get("MUSUBI_TOKEN", "")
-
-    client = AsyncMusubiClient(base_url=api_url, token=token)
+    client = _build_client()
     mcp = create_mcp_server(client)
-
-    # Normally we'd use mcp.run() with transport="sse", which starts uvicorn internally.
-    # FastMCP defaults to stdio if not specified, so we specify transport.
+    # FastMCP defaults to stdio if transport is unspecified; pin to sse here.
     mcp.run(transport="sse")
 
 

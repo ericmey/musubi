@@ -99,6 +99,23 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # MCP adapter (client-side config for the MCP server process only;
+    # unused by core Musubi processes — optional with sensible defaults)
+    # ------------------------------------------------------------------
+    musubi_api_url: AnyHttpUrl = Field(
+        default=AnyHttpUrl("http://localhost:8100/v1"),
+        description="URL of the Musubi API the MCP server should call. "
+        "Defaults to localhost when the MCP server runs on the same host "
+        "as Musubi Core (the typical `mcp.musubi.example.local` deployment).",
+    )
+    musubi_token: SecretStr = Field(
+        default=SecretStr(""),
+        description="Bearer token the MCP server uses to authenticate with "
+        "Musubi's API. Empty default means no auth header is sent; auth "
+        "failures will surface as 401s from the API.",
+    )
+
+    # ------------------------------------------------------------------
     # repr: pydantic-settings already masks SecretStr as ``**********``;
     # override to prune internal pydantic noise for a cleaner log line.
     # ------------------------------------------------------------------
