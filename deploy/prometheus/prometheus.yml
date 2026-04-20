@@ -1,5 +1,5 @@
 # Prometheus scrape config for the single-host Musubi deployment.
-# Per docs/architecture/09-operations/observability.md § Metrics.
+# Per docs/Musubi/09-operations/observability.md § Metrics.
 #
 # All scrape targets are co-resident on the musubi host (compose stack
 # from slice-ops-compose). Storage is local TSDB with a 30-day

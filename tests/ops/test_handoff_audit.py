@@ -39,7 +39,7 @@ def _pr_info() -> Any:
 def _slice(owns_paths: list[str]) -> Any:
     return handoff_audit.Slice(
         id="slice-example",
-        path=Path("docs/architecture/_slices/slice-example.md"),
+        path=Path("docs/Musubi/_slices/slice-example.md"),
         title="Example",
         status="in-review",
         owner="codex-gpt5",

@@ -1,5 +1,5 @@
 ---
-description: Musubi project rules — apply to every edit in this repo. Covers the non-negotiables, Test Contract Closure Rule, Method-ownership rule, and Dual-update rule. Authoritative expansion lives in docs/architecture/00-index/agent-guardrails.md.
+description: Musubi project rules — apply to every edit in this repo. Covers the non-negotiables, Test Contract Closure Rule, Method-ownership rule, and Dual-update rule. Authoritative expansion lives in docs/Musubi/00-index/agent-guardrails.md.
 globs: ["**/*"]
 alwaysApply: true
 ---
@@ -10,11 +10,11 @@ This file is Cursor's always-apply rule pack. The full contract for every coding
 
 - [AGENTS.md](mdc:../../AGENTS.md)
 - [docs/AGENT-PROCESS.md](mdc:../../docs/AGENT-PROCESS.md) — multi-agent concurrency model
-- [docs/architecture/00-index/agent-guardrails.md](mdc:../../docs/architecture/00-index/agent-guardrails.md) — authoritative rule expansion
+- [docs/Musubi/00-index/agent-guardrails.md](mdc:../../docs/Musubi/00-index/agent-guardrails.md) — authoritative rule expansion
 
 ## The four non-negotiables
 
-1. **Stay inside `owns_paths`.** Your slice's `docs/architecture/_slices/<slice-id>.md` names what you may write. Read anywhere, write only there.
+1. **Stay inside `owns_paths`.** Your slice's `docs/Musubi/_slices/<slice-id>.md` names what you may write. Read anywhere, write only there.
 2. **Canonical API is frozen per version.** Don't edit `src/musubi/api/`, `openapi.yaml`, `proto/` unless your slice is `slice-api-v*`.
 3. **Tests first.** The spec's `## Test Contract` section is authoritative; first commit on your branch is the test file realising it.
 4. **Don't silently rebase the spec.** Spec edits that accompany code go in the same PR, with `spec-update: <doc-path>` on the commit.
@@ -69,9 +69,9 @@ Claim / handoff / block each touch both sides **in the same PR**:
 
 - `src/musubi/<module>/` → implementation
 - `tests/<module>/` mirrors it
-- `docs/architecture/<NN-section>/<doc>.md` → specs
-- `docs/architecture/_slices/slice-<id>.md` → your work order
-- `docs/architecture/13-decisions/NNNN-<slug>.md` → ADRs
+- `docs/Musubi/<NN-section>/<doc>.md` → specs
+- `docs/Musubi/_slices/slice-<id>.md` → your work order
+- `docs/Musubi/13-decisions/NNNN-<slug>.md` → ADRs
 
 ## Cursor-specific guidance
 

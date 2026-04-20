@@ -7,7 +7,7 @@ labels: ["spec"]
 
 ## Spec
 
-- Path: `docs/architecture/<NN-section>/<doc>.md`
+- Path: `docs/Musubi/<NN-section>/<doc>.md`
 - Current status: `complete | draft | stub | research-needed`
 
 ## What changes and why

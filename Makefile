@@ -43,26 +43,26 @@ check:
 # --------------------------------------------------------------------------
 # Vault-state gates — advertised in docs/AGENT-PROCESS.md + CLAUDE.md.
 # Back them with the single source-of-truth checker at
-# docs/architecture/_tools/check.py; the four target names are aliases so
+# docs/Musubi/_tools/check.py; the four target names are aliases so
 # agents can reach for whichever vocabulary the spec they're reading used.
 # --------------------------------------------------------------------------
 
 agent-check:
-	@uv run python3 docs/architecture/_tools/check.py all
+	@uv run python3 docs/Musubi/_tools/check.py all
 
 vault-check: agent-check
 
 slice-check:
-	@uv run python3 docs/architecture/_tools/check.py slices
+	@uv run python3 docs/Musubi/_tools/check.py slices
 
 spec-check:
-	@uv run python3 docs/architecture/_tools/check.py specs
+	@uv run python3 docs/Musubi/_tools/check.py specs
 
 issue-check:
-	@uv run python3 docs/architecture/_tools/check.py issues
+	@uv run python3 docs/Musubi/_tools/check.py issues
 
 wikilink-check:
-	@uv run python3 docs/architecture/_tools/check.py wikilinks
+	@uv run python3 docs/Musubi/_tools/check.py wikilinks
 
 # Mechanical audit of the Test Contract Closure Rule for one slice.
 # Reads the slice file, finds the specs it implements, parses each spec's
@@ -74,7 +74,7 @@ tc-coverage:
 	@if [ -z "$(SLICE)" ]; then \
 	  echo "usage: make tc-coverage SLICE=<slice-id>"; exit 2; \
 	fi
-	@uv run python3 docs/architecture/_tools/tc_coverage.py $(SLICE)
+	@uv run python3 docs/Musubi/_tools/tc_coverage.py $(SLICE)
 
 # --------------------------------------------------------------------------
 # Integration suite — boots the docker-compose dependency stack at

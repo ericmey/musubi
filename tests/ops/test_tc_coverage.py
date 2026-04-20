@@ -1,7 +1,7 @@
 import ast
 from typing import cast
 
-from docs.architecture._tools.tc_coverage import _extract_skip_reason
+from docs.Musubi._tools.tc_coverage import _extract_skip_reason
 
 
 def test_extract_skip_reason_single_line() -> None:

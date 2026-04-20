@@ -1,5 +1,5 @@
 # Grafana datasource provisioning for Musubi.
-# Per docs/architecture/09-operations/observability.md § Stack.
+# Per docs/Musubi/09-operations/observability.md § Stack.
 
 apiVersion: 1
 

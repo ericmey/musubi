@@ -9,7 +9,7 @@ Transition one in-flight slice to review-ready. This is the opposite bookend to 
 
 ## Rules this skill enforces
 
-- **Test Contract Closure Rule** (see `docs/architecture/00-index/agent-guardrails.md#Test-Contract-Closure-Rule`) — every bullet in every relevant spec's `## Test Contract` section must be in one of three states at handoff: passing test with verbatim name / skipped with reason / declared-out-of-scope in the slice work log. This skill surfaces silent omissions; don't suppress them.
+- **Test Contract Closure Rule** (see `docs/Musubi/00-index/agent-guardrails.md#Test-Contract-Closure-Rule`) — every bullet in every relevant spec's `## Test Contract` section must be in one of three states at handoff: passing test with verbatim name / skipped with reason / declared-out-of-scope in the slice work log. This skill surfaces silent omissions; don't suppress them.
 - **Dual-update rule** — handoff flips BOTH the GitHub Issue (`status:in-progress → status:in-review`) AND the vault slice file's frontmatter in the same PR. `make issue-check` catches any drift.
 - **No self-approval** — handoff marks the PR ready for review; a *different* agent (or a human) approves + merges. If you push a commit in response to review, a different reviewer takes the next pass.
 
@@ -47,7 +47,7 @@ If any check fails → do not proceed. Tell the user what's failing.
 
 ### 2. Re-read the Definition of Done
 
-Open `docs/architecture/00-index/definition-of-done.md` and the slice's own Definition-of-Done section. Verify each bullet — walk the list aloud in your reply so the user can see you checked:
+Open `docs/Musubi/00-index/definition-of-done.md` and the slice's own Definition-of-Done section. Verify each bullet — walk the list aloud in your reply so the user can see you checked:
 
 - [ ] Every Test Contract item in the linked spec(s) is a passing test (or explicitly deferred with a named follow-up slice).
 - [ ] Branch coverage ≥ 85 % on owned paths (90 % for `planes/**` / `retrieve/**`).
@@ -59,7 +59,7 @@ If any bullet is not ticked → stop, ask the user whether to finish it or defer
 
 ### 3. Append the work-log entry
 
-Edit `docs/architecture/_slices/<slice-id>.md` under `## Work log`:
+Edit `docs/Musubi/_slices/<slice-id>.md` under `## Work log`:
 
 ```markdown
 ### YYYY-MM-DD HH:MM — <agent-id> — handoff to in-review
@@ -82,7 +82,7 @@ Include this in the same commit as step 3 if you haven't pushed yet.
 
 ### 5. Append to the project work-log
 
-If this slice realises a spec (most do), add an entry to `docs/architecture/00-index/work-log.md`. Keep it short; the detail is in the slice note.
+If this slice realises a spec (most do), add an entry to `docs/Musubi/00-index/work-log.md`. Keep it short; the detail is in the slice note.
 
 ```markdown
 ### YYYY-MM-DD — <slice-id> first cut ready for review
@@ -108,7 +108,7 @@ gh pr comment <m> --body "Ready for review. Recommending \`musubi-reviewer\` sub
 ### 7. Remove the file-based lock
 
 ```bash
-git rm docs/architecture/_inbox/locks/<slice-id>.lock
+git rm docs/Musubi/_inbox/locks/<slice-id>.lock
 git commit -m "chore(lock): release <slice-id> — handed off to in-review"
 git push
 ```

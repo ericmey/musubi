@@ -4,11 +4,11 @@ How a fleet of AI coding agents coordinates on this repo without stepping on eac
 
 ## 1. One clone, many agents
 
-Every agent works out of `~/Projects/musubi/` (or its worktree equivalent on the agent's machine). Code lives under `src/`, tests under `tests/`, and **the Obsidian architecture vault lives under `docs/architecture/`**. No agent has to discover a second repo or a sibling directory — one `git clone` gives it everything it needs. See [docs/architecture/13-decisions/0016-vault-in-monorepo.md](architecture/13-decisions/0016-vault-in-monorepo.md) for the rationale.
+Every agent works out of `~/Projects/musubi/` (or its worktree equivalent on the agent's machine). Code lives under `src/`, tests under `tests/`, and **the Obsidian architecture vault lives under `docs/Musubi/`**. No agent has to discover a second repo or a sibling directory — one `git clone` gives it everything it needs. See [docs/Musubi/13-decisions/0016-vault-in-monorepo.md](architecture/13-decisions/0016-vault-in-monorepo.md) for the rationale.
 
 ## 2. The coordination primitive is a GitHub Issue, not a file
 
-Earlier iterations of this project used file-based locks under `docs/architecture/_inbox/locks/`. That mechanism still exists (belt-and-braces) but it is no longer authoritative. **GitHub Issues are the lock board.** Reasons:
+Earlier iterations of this project used file-based locks under `docs/Musubi/_inbox/locks/`. That mechanism still exists (belt-and-braces) but it is no longer authoritative. **GitHub Issues are the lock board.** Reasons:
 
 - GitHub's assignment endpoint is atomic across agent machines — two agents can't both "win" it.
 - Assignees and labels are visible in the GitHub UI without cloning the repo.
@@ -19,7 +19,7 @@ Earlier iterations of this project used file-based locks under `docs/architectur
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ 1. Slice is ready                                                         │
-│    docs/architecture/_slices/slice-<id>.md  has  status: ready            │
+│    docs/Musubi/_slices/slice-<id>.md  has  status: ready            │
 │    GitHub Issue exists with labels [slice, status:ready] and no assignee. │
 └──────────────────────────────────────────────────────────────────────────┘
                                  │
@@ -31,7 +31,7 @@ Earlier iterations of this project used file-based locks under `docs/architectur
 │    Branch: slice/<id> pushed to origin                                    │
 │    Draft PR: opened immediately with "Closes #<n>"                        │
 │    Slice frontmatter: status: in-progress, owner: <agent-id>              │
-│    Lock file: docs/architecture/_inbox/locks/<id>.lock  (secondary)       │
+│    Lock file: docs/Musubi/_inbox/locks/<id>.lock  (secondary)       │
 └──────────────────────────────────────────────────────────────────────────┘
                                  │
                                  │  (test-first, implementation, make check)
@@ -110,14 +110,14 @@ gh issue edit <n> --remove-assignee @me --add-label "status:ready" --remove-labe
 git switch -c slice/<slice-id>
 git commit --allow-empty -m "chore(slice): take <slice-id>
 
-Claims docs/architecture/_slices/<slice-id>.md. See issue #<n>."
+Claims docs/Musubi/_slices/<slice-id>.md. See issue #<n>."
 git push -u origin slice/<slice-id>
 gh pr create --draft --base v2 \
   --title "feat(<scope>): <slice-id>" \
   --body "Closes #<n>."
 
 # 5. Flip slice frontmatter + secondary lock file
-# (edit docs/architecture/_slices/<slice-id>.md; add lock file; commit)
+# (edit docs/Musubi/_slices/<slice-id>.md; add lock file; commit)
 
 # 6. Write the test file first.
 # 7. Implement. Verify. Hand off.
@@ -129,7 +129,7 @@ When tests pass + `make check` is clean:
 
 ```bash
 # Flip frontmatter to in-review, add work-log entry, remove lock.
-# (edit docs/architecture/_slices/<slice-id>.md)
+# (edit docs/Musubi/_slices/<slice-id>.md)
 git commit -am "docs(slice): handoff <slice-id> to in-review"
 git push
 gh pr ready <m>
@@ -147,7 +147,7 @@ Rule: the same agent that made the last code commit does not self-approve. If yo
 
 ## 8. Branch + merge strategy
 
-- `v2` is the active development branch (will become `main` after V2 is feature-complete — see [docs/architecture/13-decisions/0016-vault-in-monorepo.md](architecture/13-decisions/0016-vault-in-monorepo.md)).
+- `v2` is the active development branch (will become `main` after V2 is feature-complete — see [docs/Musubi/13-decisions/0016-vault-in-monorepo.md](architecture/13-decisions/0016-vault-in-monorepo.md)).
 - Feature branches are `slice/<slice-id>` — one slice per branch, no bundling.
 - PRs merge into `v2` with **squash merge** so the branch history reads one slice = one commit on `v2`.
 - `v2` is branch-protected once this first push lands: require PR, require CI passing (`CI` workflow + `Vault check` workflow), require CODEOWNERS approval for the locked paths.
@@ -169,9 +169,9 @@ When a PR's commit changed a spec in the same diff, add a trailer:
 ```
 feat(retrieve): hybrid scoring landed
 
-Implements docs/architecture/05-retrieval/hybrid-search.md §Weighted score.
+Implements docs/Musubi/05-retrieval/hybrid-search.md §Weighted score.
 
-spec-update: docs/architecture/05-retrieval/hybrid-search.md
+spec-update: docs/Musubi/05-retrieval/hybrid-search.md
 ```
 
 ## 10. Concurrency gotchas
@@ -198,7 +198,7 @@ The Issue will still show that agent as assignee even though they're not working
 
 ### Vault edits conflict
 
-Simultaneous edits to `docs/architecture/00-index/work-log.md` or a slice note are the most likely conflict point. Guidance:
+Simultaneous edits to `docs/Musubi/00-index/work-log.md` or a slice note are the most likely conflict point. Guidance:
 
 - Keep your vault edits in the same PR as the code that motivated them.
 - If you need to append to the work-log while someone else is also in-flight: land your PR first, or rebase + re-append on merge.
@@ -213,7 +213,7 @@ Simultaneous edits to `docs/architecture/00-index/work-log.md` or a slice note a
 ## 12. TL;DR for a new agent
 
 1. Clone: `git clone git@github.com:ericmey/musubi.git && cd musubi && git switch v2`.
-2. Read `CLAUDE.md`, this file, and `docs/architecture/00-index/agent-guardrails.md`.
+2. Read `CLAUDE.md`, this file, and `docs/Musubi/00-index/agent-guardrails.md`.
 3. `gh issue list --label "slice,status:ready"` to see what's available.
 4. Claim one. Branch. Draft PR. Tests first. Implement. `make check`. Mark ready.
 5. A different agent or a human reviews. You don't self-approve.

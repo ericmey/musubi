@@ -29,6 +29,6 @@ Your suggestion — not a demand. The target slice's owner may prefer a differen
 
 ## References
 
-- `docs/architecture/_slices/slice-<source>.md`
-- `docs/architecture/_slices/slice-<target>.md`
-- If a spec disagreement drove this, name the spec: `docs/architecture/<NN>/<doc>.md#<section>`.
+- `docs/Musubi/_slices/slice-<source>.md`
+- `docs/Musubi/_slices/slice-<target>.md`
+- If a spec disagreement drove this, name the spec: `docs/Musubi/<NN>/<doc>.md#<section>`.

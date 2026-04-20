@@ -1,5 +1,5 @@
 # Tempo single-binary config for the Musubi single-host deployment.
-# Per docs/architecture/09-operations/observability.md § Tracing.
+# Per docs/Musubi/09-operations/observability.md § Tracing.
 #
 # OTel collection lands here when slice-sdk-py-otel-spans ships;
 # until then this is a static config that just stands the service up
