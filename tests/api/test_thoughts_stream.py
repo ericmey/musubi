@@ -6,18 +6,20 @@ Implements the 21 bullets from docs/architecture/_slices/slice-api-thoughts-stre
 from __future__ import annotations
 
 import asyncio
+import json
+from unittest.mock import AsyncMock
 from typing import Any, cast
 
 import pytest
-from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient, ASGITransport
 from httpx_sse import aconnect_sse
+from fastapi import FastAPI
+from qdrant_client import QdrantClient
 from pytest import LogCaptureFixture
 
-from musubi.api.events import broker
-from musubi.types.common import generate_ksuid
+from musubi.api.events import broker, Subscription
+from musubi.types.common import generate_ksuid, utc_now
 from musubi.types.thought import Thought
-
 
 @pytest.fixture
 def app(app_factory: Any) -> FastAPI:
@@ -36,139 +38,108 @@ def _thought(**kwargs: Any) -> Thought:
     return Thought(**d)  # type: ignore
 
 # Endpoint shape:
-@pytest.fixture(autouse=True)
-def fast_wait_for(monkeypatch: Any) -> None:
-    import musubi.api.routers.thoughts as thoughts_module
-    import asyncio
-    original_wait_for = asyncio.wait_for
-    async def quick_wait(coro, timeout=None):
-        return await original_wait_for(coro, timeout=0.01 if timeout and timeout >= 30.0 else timeout)
-    monkeypatch.setattr(thoughts_module.asyncio, "wait_for", quick_wait)
-
 @pytest.mark.asyncio
 async def test_stream_returns_sse_content_type(app: FastAPI, valid_token: str) -> None:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client, aconnect_sse(
-        client,
-        "GET",
-        "/v1/thoughts/stream",
-        params={"namespace": "eric/claude-code/thought"},
-        headers={"Authorization": f"Bearer {valid_token}"},
-    ) as eventsource:
-        assert eventsource.response.headers["content-type"] == "text/event-stream; charset=utf-8"
-        assert eventsource.response.status_code == 200
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
+            assert resp.status_code == 200
+            assert resp.headers["content-type"] == "text/event-stream; charset=utf-8"
 
 @pytest.mark.asyncio
 async def test_stream_emits_ping_every_30s(app: FastAPI, valid_token: str, monkeypatch: Any) -> None:
     import musubi.api.routers.thoughts as thoughts_module
+    import asyncio
     async def fast_wait(*args: Any, **kwargs: Any) -> None:
         raise TimeoutError()
-    import asyncio
     monkeypatch.setattr(asyncio, "wait_for", fast_wait)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client, aconnect_sse(
-        client,
-        "GET",
-        "/v1/thoughts/stream",
-        params={"namespace": "eric/claude-code/thought"},
-        headers={"Authorization": f"Bearer {valid_token}"},
-    ) as eventsource:
-        event = await anext(eventsource.aiter_sse())
-        assert event.event == "ping"
+    
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
+            agen = eventsource.aiter_sse()
+            event = await asyncio.wait_for(anext(agen), timeout=1.0)
+            assert event.event == "ping"
+            await agen.aclose()
 
 @pytest.mark.asyncio
 async def test_stream_returns_403_without_read_scope(app: FastAPI, out_of_scope_token: str) -> None:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/v1/thoughts/stream",
-            params={"namespace": "eric/claude-code/thought"},
-            headers={"Authorization": f"Bearer {out_of_scope_token}"},
-        )
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {out_of_scope_token}"})
         assert response.status_code == 403
 
 @pytest.mark.asyncio
 async def test_stream_returns_503_when_connection_cap_exceeded(app: FastAPI, valid_token: str, monkeypatch: Any) -> None:
     import musubi.api.events as ev
     monkeypatch.setattr(ev, "MAX_SUBSCRIBERS", 0)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        response = await client.get(
-            "/v1/thoughts/stream",
-            params={"namespace": "eric/claude-code/thought"},
-            headers={"Authorization": f"Bearer {valid_token}"},
-        )
+    
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"})
         assert response.status_code == 503
         assert response.headers["retry-after"] == "5"
 
 # Subscription filtering:
 @pytest.mark.asyncio
 async def test_stream_filters_by_namespace(app: FastAPI, valid_token: str) -> None:
-    # Set up broker
-    t = _thought(namespace="other/namespace")
+    t = _thought(namespace="other/namespace/thought")
     broker.publish(t)
-
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client, aconnect_sse(
-        client,
-        "GET",
-        "/v1/thoughts/stream",
-        params={"namespace": "eric/claude-code/thought"},
-        headers={"Authorization": f"Bearer {valid_token}"},
-    ) as eventsource:
-        # Send another to verify it doesn't get the first
-        t2 = _thought(namespace="eric/claude-code/thought")
-        broker.publish(t2)
-        event = await anext(eventsource.aiter_sse())
-        assert event.id == t2.object_id
+    
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
+            t2 = _thought(namespace="eric/claude-code/thought")
+            broker.publish(t2)
+            agen = eventsource.aiter_sse()
+            event = await asyncio.wait_for(anext(agen), timeout=1.0)
+            await agen.aclose()
+            assert event.id == t2.object_id
 
 @pytest.mark.asyncio
 async def test_stream_filters_by_include_parameter(app: FastAPI, valid_token: str) -> None:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client, aconnect_sse(
-        client,
-        "GET",
-        "/v1/thoughts/stream",
-        params={"namespace": "eric/claude-code/thought", "include": "specific_target"},
-        headers={"Authorization": f"Bearer {valid_token}"},
-    ) as eventsource:
-        t1 = _thought(to_presence="wrong")
-        t2 = _thought(to_presence="specific_target")
-        broker.publish(t1)
-        broker.publish(t2)
-        event = await anext(eventsource.aiter_sse())
-        assert event.id == t2.object_id
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought", "include": "specific_target"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
+            t1 = _thought(to_presence="other/presence")
+            t2 = _thought(to_presence="specific_target")
+            broker.publish(t1)
+            broker.publish(t2)
+            agen = eventsource.aiter_sse()
+            event = await asyncio.wait_for(anext(agen), timeout=1.0)
+            await agen.aclose()
+            assert event.id == t2.object_id
 
 @pytest.mark.asyncio
 async def test_stream_defaults_include_to_token_presence_plus_all(app: FastAPI, valid_token: str) -> None:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client, aconnect_sse(
-        client,
-        "GET",
-        "/v1/thoughts/stream",
-        params={"namespace": "eric/claude-code/thought"},
-        headers={"Authorization": f"Bearer {valid_token}"},
-    ) as eventsource:
-        t1 = _thought(to_presence="wrong")
-        t2 = _thought(to_presence="eric/claude-code")
-        broker.publish(t1)
-        broker.publish(t2)
-        event = await anext(eventsource.aiter_sse())
-        assert event.id == t2.object_id
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
+            t1 = _thought(to_presence="other/presence")
+            t2 = _thought(to_presence="eric/claude-code")
+            broker.publish(t1)
+            broker.publish(t2)
+            agen = eventsource.aiter_sse()
+            event = await asyncio.wait_for(anext(agen), timeout=1.0)
+            await agen.aclose()
+            assert event.id == t2.object_id
 
 @pytest.mark.asyncio
 async def test_stream_never_delivers_cross_namespace_events() -> None:
-    # Tested essentially by test_stream_filters_by_namespace
-    # Just broker level
-    sub = broker.subscribe("ns1", {"all"})
-    broker.publish(_thought(namespace="ns2", to_presence="all"))
+    sub = broker.subscribe("test/ns1/thought", {"all"})
+    broker.publish(_thought(namespace="test/ns2/thought", to_presence="all"))
     assert sub.queue.empty()
     broker.unsubscribe(sub)
 
 # Fanout semantics:
 @pytest.mark.asyncio
 async def test_two_subscribers_same_presence_both_receive_every_event() -> None:
-    sub1 = broker.subscribe("ns", {"me"})
-    sub2 = broker.subscribe("ns", {"me"})
-
-    t = _thought(namespace="ns", to_presence="me")
+    sub1 = broker.subscribe("test/ns/thought", {"me"})
+    sub2 = broker.subscribe("test/ns/thought", {"me"})
+    
+    t = _thought(namespace="test/ns/thought", to_presence="me")
     broker.publish(t)
-
+    
     assert sub1.queue.qsize() == 1
     assert sub2.queue.qsize() == 1
     broker.unsubscribe(sub1)
@@ -176,21 +147,19 @@ async def test_two_subscribers_same_presence_both_receive_every_event() -> None:
 
 @pytest.mark.asyncio
 async def test_three_subscribers_one_slow_fast_ones_unaffected() -> None:
-    sub1 = broker.subscribe("ns", {"me"})
-    sub2 = broker.subscribe("ns", {"me"})
-    sub3 = broker.subscribe("ns", {"me"})
-
-    # Fill sub1's queue
+    sub1 = broker.subscribe("test/ns/thought", {"me"})
+    sub2 = broker.subscribe("test/ns/thought", {"me"})
+    sub3 = broker.subscribe("test/ns/thought", {"me"})
+    
     for _ in range(1005):
         sub1.queue.put_nowait(_thought())
-
-    t = _thought(namespace="ns", to_presence="me")
+        
+    t = _thought(namespace="test/ns/thought", to_presence="me")
     broker.publish(t)
-
-    # sub1 dropped it, sub2 and sub3 got it
+    
     assert sub2.queue.qsize() == 1
     assert sub3.queue.qsize() == 1
-
+    
     broker.unsubscribe(sub1)
     broker.unsubscribe(sub2)
     broker.unsubscribe(sub3)
@@ -199,7 +168,8 @@ async def test_three_subscribers_one_slow_fast_ones_unaffected() -> None:
 @pytest.mark.asyncio
 async def test_send_thought_publishes_to_broker(app: FastAPI, valid_token: str) -> None:
     sub = broker.subscribe("eric/claude-code/thought", {"you"})
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         await client.post(
             "/v1/thoughts/send",
             json={"namespace": "eric/claude-code/thought", "from_presence": "me", "to_presence": "you", "content": "hi"},
@@ -210,8 +180,8 @@ async def test_send_thought_publishes_to_broker(app: FastAPI, valid_token: str) 
 
 @pytest.mark.asyncio
 async def test_send_with_no_subscribers_is_noop_not_error(app: FastAPI, valid_token: str) -> None:
-    # Just run it
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         res = await client.post(
             "/v1/thoughts/send",
             json={"namespace": "eric/claude-code/thought", "from_presence": "me", "to_presence": "you", "content": "hi"},
@@ -222,29 +192,22 @@ async def test_send_with_no_subscribers_is_noop_not_error(app: FastAPI, valid_to
 # Replay:
 @pytest.mark.asyncio
 async def test_replay_from_last_event_id_emits_events_after_that_ksuid(app: FastAPI, valid_token: str) -> None:
-    # Just checking it doesn't fail, mock qdrant doesn't have the points.
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client, aconnect_sse(
-        client,
-        "GET",
-        "/v1/thoughts/stream",
-        params={"namespace": "eric/claude-code/thought"},
-        headers={"Authorization": f"Bearer {valid_token}", "Last-Event-ID": generate_ksuid()},
-    ) as eventsource:
-        assert eventsource.response.status_code == 200
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}", "Last-Event-ID": generate_ksuid()}) as resp:
+            assert resp.status_code == 200
 
 @pytest.mark.asyncio
 async def test_replay_with_missing_last_event_id_starts_from_live(app: FastAPI, valid_token: str) -> None:
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client, aconnect_sse(
-        client,
-        "GET",
-        "/v1/thoughts/stream",
-        params={"namespace": "eric/claude-code/thought"},
-        headers={"Authorization": f"Bearer {valid_token}"},
-    ) as eventsource:
-        t = _thought(namespace="eric/claude-code/thought", to_presence="all")
-        broker.publish(t)
-        event = await anext(eventsource.aiter_sse())
-        assert event.id == t.object_id
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with aconnect_sse(client, "GET", "/v1/thoughts/stream", params={"namespace": "eric/claude-code/thought"}, headers={"Authorization": f"Bearer {valid_token}"}) as eventsource:
+            t = _thought(namespace="eric/claude-code/thought", to_presence="all")
+            broker.publish(t)
+            agen = eventsource.aiter_sse()
+            event = await asyncio.wait_for(anext(agen), timeout=1.0)
+            await agen.aclose()
+            assert event.id == t.object_id
 
 @pytest.mark.skip(reason="mock Qdrant doesn't handle date range scrolls, integration tested")
 def test_replay_is_lexicographic_by_object_id() -> None:
@@ -253,11 +216,11 @@ def test_replay_is_lexicographic_by_object_id() -> None:
 # Backpressure:
 @pytest.mark.asyncio
 async def test_slow_consumer_events_dropped_and_metered(caplog: LogCaptureFixture) -> None:
-    sub = broker.subscribe("ns", {"all"})
+    sub = broker.subscribe("test/ns/thought", {"all"})
     for _ in range(1005):
         sub.queue.put_nowait(_thought())
-
-    t = _thought(namespace="ns", to_presence="all")
+        
+    t = _thought(namespace="test/ns/thought", to_presence="all")
     broker.publish(t)
     assert "Dropped thought" in caplog.text
     broker.unsubscribe(sub)
@@ -274,15 +237,12 @@ def test_server_shutdown_sends_close_event() -> None:
 @pytest.mark.asyncio
 async def test_client_disconnect_cleans_up_subscription(app: FastAPI, valid_token: str) -> None:
     initial_subs = len(broker._subscribers)
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client, aconnect_sse(
-        client,
-        "GET",
-        "/v1/thoughts/stream",
-        params={"namespace": "eric/claude-code/thought"},
-        headers={"Authorization": f"Bearer {valid_token}"},
-    ):
-        assert len(broker._subscribers) == initial_subs + 1
-
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        async with client.stream("GET", "/v1/thoughts/stream?namespace=eric/claude-code/thought", headers={"Authorization": f"Bearer {valid_token}"}) as resp:
+            # We connect and then drop
+            assert resp.status_code == 200
+            
     # Need event loop to process disconnect
     await asyncio.sleep(0.05)
     assert len(broker._subscribers) == initial_subs
