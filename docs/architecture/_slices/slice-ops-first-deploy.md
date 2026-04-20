@@ -3,10 +3,10 @@ title: "Slice: First-deploy runbook + validation"
 slice_id: slice-ops-first-deploy
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice, ops, deploy, phase-2]
+tags: [section/slices, status/in-review, type/slice, ops, deploy, phase-2]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-ops-ansible]]", "[[_slices/slice-ops-compose]]", "[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-observability]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > Authors the step-by-step first-deploy procedure for `musubi.mey.house`, the systemd units + Kong config stitching the shipped Ansible/compose/backup/observability work together, and the post-deploy smoke + verify scripts. Ships the operator runbook; operator (Eric) executes the deploy with the runbook open.
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `codex-gpt5`
 
 ## Why this slice exists
 
@@ -182,10 +182,43 @@ Those are operator actions with the runbook open.
 - Routed to Codex: his track record owns three of the four dependency slices; this is the composition of that body of work.
 - Does NOT execute the deploy — Eric does that with the runbook open. This slice ships the authored procedure + validated scripts + systemd units + post-deploy smoke harness.
 
+### 2026-04-19 23:46 — codex-gpt5 — claimed slice
+
+- Claimed Issue #116 and flipped slice frontmatter from `ready` to `in-progress`.
+
+### 2026-04-20 00:23 — codex-gpt5 — handoff to in-review
+
+- Shipped the first-deploy runbook, systemd unit templates, smoke verification scripts, Kong decK production config, and mocked smoke-script tests.
+- Added the first-deploy cross-link and quarterly game-day cycle to [[09-operations/runbooks]].
+- Verification: `make check`, `make tc-coverage SLICE=slice-ops-first-deploy`.
+
+| Test Contract bullet | State | Evidence |
+|---|---|---|
+| `test_runbook_has_all_10_sections` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_runbook_every_command_has_expected_output_block` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_runbook_mentions_rollback_path_for_every_destructive_step` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_systemd_unit_api_has_restart_on_failure` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_systemd_unit_lifecycle_worker_depends_on_docker` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_systemd_unit_vault_sync_logs_to_journal` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_check_api_passes_when_all_components_healthy` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_check_api_fails_when_qdrant_unhealthy` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_check_capture_round_trip_passes_with_real_response` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_check_capture_fails_when_content_mismatch` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_check_thoughts_send_check_roundtrip` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_check_observability_scrapes_valid_prometheus_text` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_verify_sh_aggregates_all_checks` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_verify_sh_exits_non_zero_on_any_failure` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_kong_config_yaml_parses_via_deck_validate` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_kong_routes_cover_every_v1_endpoint_family` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_every_alert_has_a_runbook_section` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_runbooks_reference_real_files_and_commands` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_each_runbook_lists_success_criteria` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+| `test_quarterly_game_day_drills_cycle_through_runbooks` | ✓ passing | `tests/ops/test_first_deploy_smoke.py` |
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet; may open one to slice-api-rate-limits for Kong rate-limit plugin config if the in-app enforcement shape demands it)_
 
 ## PR links
 
-- _(none yet)_
+- [PR #121](https://github.com/ericmey/musubi/pull/121)

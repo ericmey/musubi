@@ -1,0 +1,21 @@
+[Unit]
+Description=Musubi API service
+Requires=docker.service
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=musubi
+Group=musubi
+WorkingDirectory=/opt/musubi/current
+EnvironmentFile=/etc/musubi/.env.production
+ExecStart=/usr/bin/env uv run uvicorn musubi.api.app:create_app --factory --host 127.0.0.1 --port 8100
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=musubi-api
+
+[Install]
+WantedBy=multi-user.target
