@@ -46,6 +46,8 @@ def obs_settings(tmp_path: Path) -> Settings:
             "log_dir": tmp_path / "logs",
             "jwt_signing_key": SecretStr("a-very-long-test-signing-key-for-hs256-tokens-32+bytes"),
             "oauth_authority": AnyHttpUrl("https://auth.example.test"),
+            # Skip the production bootstrap — see tests/api/conftest.py.
+            "musubi_skip_bootstrap": True,
         }
     )
 
