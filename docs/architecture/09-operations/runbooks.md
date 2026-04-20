@@ -12,6 +12,17 @@ reviewed: false
 
 Step-by-step procedures for each alert and common operator actions. Read-while-half-asleep format: numbered steps, copy-pasteable commands.
 
+## First deploy
+
+The authored first-deploy procedure lives in `deploy/runbooks/first-deploy.md`.
+It binds the Ansible bootstrap, Compose stack, systemd units, Kong route sync,
+TLS handoff, smoke verification, rollback, and go-live checklist into one
+operator-facing sequence.
+
+Success criteria: every step in the first-deploy runbook has an expected-output
+block; `deploy/smoke/verify.sh` exits 0; Kong routes `/v1` and `/mcp`; rollback
+instructions are present for every destructive step.
+
 ## Qdrant down
 
 **Alert:** `qdrant_down` (Qdrant `/healthz` failing for 2m)
@@ -212,6 +223,22 @@ musubi-cli index rebuild --collection musubi_curated --source vault
 
 Never run this on `musubi_episodic` or `musubi_concept` — they are canonical.
 
+## Quarterly game-day drills
+
+Cycle through one operations drill each quarter so recovery paths stay fresh:
+
+1. Q1 — `Qdrant down`: restore a Qdrant snapshot into a scratch environment and
+   verify `/v1/ops/status`.
+2. Q2 — `Restore from snapshot`: run the full restore playbook against a scratch
+   target and execute `deploy/smoke/verify.sh`.
+3. Q3 — `Backup failure 24h`: simulate a missing snapshot target and verify the
+   manual backup path.
+4. Q4 — `First deploy`: rehearse the rollback section from
+   `deploy/runbooks/first-deploy.md` against a disposable VM.
+
+Success criteria: the drill owner records the runbook used, the command log, the
+observed recovery time, and any follow-up Issue before closing the drill.
+
 ## Test contract
 
 **Module under test:** the runbooks (readiness, not code)
@@ -219,4 +246,4 @@ Never run this on `musubi_episodic` or `musubi_concept` — they are canonical.
 1. `test_every_alert_has_a_runbook_section`
 2. `test_runbooks_reference_real_files_and_commands` (lint)
 3. `test_each_runbook_lists_success_criteria`
-4. `test_quarterly_game-day_drills_cycle_through_runbooks`
+4. `test_quarterly_game_day_drills_cycle_through_runbooks`

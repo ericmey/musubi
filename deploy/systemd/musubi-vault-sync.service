@@ -1,0 +1,21 @@
+[Unit]
+Description=Musubi vault sync watcher
+Requires=docker.service
+After=network-online.target docker.service musubi-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=musubi
+Group=musubi
+WorkingDirectory=/opt/musubi/current
+EnvironmentFile=/etc/musubi/.env.production
+ExecStart=/usr/bin/env uv run python -m musubi.vault.watcher
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=musubi-vault-sync
+
+[Install]
+WantedBy=multi-user.target
