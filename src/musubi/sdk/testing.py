@@ -246,4 +246,138 @@ class _FakeOps:
         return self._c._ops_status_returns
 
 
-__all__ = ["FakeMusubiClient"]
+class _AsyncFakeBatchContext:
+    def __init__(self, sync_batch: Any) -> None:
+        self._sync = sync_batch
+        self.results: dict[str, Any] | None = None
+
+    def capture(self, **kw: Any) -> None:
+        self._sync.capture(**kw)
+
+    async def __aenter__(self) -> _AsyncFakeBatchContext:
+        self._sync.__enter__()
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        self._sync.__exit__(*exc_info)
+        self.results = self._sync.results
+
+
+class _AsyncMemoriesFake:
+    def __init__(self, sync_ns: Any) -> None:
+        self._ns = sync_ns
+
+    async def capture(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.capture(**kw)  # type: ignore
+
+    async def capture_result(self, **kw: Any) -> SDKResult[dict[str, Any]]:
+        return self._ns.capture_result(**kw)  # type: ignore
+
+    async def get(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.get(**kw)  # type: ignore
+
+    def batch(self, **kw: Any) -> _AsyncFakeBatchContext:
+        sync_batch = self._ns.batch(**kw)
+        return _AsyncFakeBatchContext(sync_batch)
+
+
+class _AsyncCuratedFake:
+    def __init__(self, sync_ns: Any) -> None:
+        self._ns = sync_ns
+
+    async def get(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.get(**kw)  # type: ignore
+
+
+class _AsyncConceptsFake:
+    def __init__(self, sync_ns: Any) -> None:
+        self._ns = sync_ns
+
+    async def get(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.get(**kw)  # type: ignore
+
+
+class _AsyncArtifactsFake:
+    def __init__(self, sync_ns: Any) -> None:
+        self._ns = sync_ns
+
+    async def get(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.get(**kw)  # type: ignore
+
+    async def blob(self, **kw: Any) -> bytes:
+        return self._ns.blob(**kw)  # type: ignore
+
+
+class _AsyncThoughtsFake:
+    def __init__(self, sync_ns: Any) -> None:
+        self._ns = sync_ns
+
+    async def send(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.send(**kw)  # type: ignore
+
+    async def check(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.check(**kw)  # type: ignore
+
+
+class _AsyncLifecycleFake:
+    def __init__(self, sync_ns: Any) -> None:
+        self._ns = sync_ns
+
+    async def events(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.events(**kw)  # type: ignore
+
+
+class _AsyncOpsFake:
+    def __init__(self, sync_ns: Any) -> None:
+        self._ns = sync_ns
+
+    async def health(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.health(**kw)  # type: ignore
+
+    async def status(self, **kw: Any) -> dict[str, Any]:
+        return self._ns.status(**kw)  # type: ignore
+
+
+class AsyncFakeMusubiClient:
+    """Async drop-in fake mirroring AsyncMusubiClient's public surface.
+
+    Same constructor signature + canned-return kwargs as
+    FakeMusubiClient; every method that's async on AsyncMusubiClient
+    is async here too. Shares the calls log shape so adapter tests
+    can assert against (method_name, kwargs) tuples identically."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        self._fake = FakeMusubiClient(**kwargs)
+        self.calls = self._fake.calls
+
+        self.memories = _AsyncMemoriesFake(self._fake.memories)
+        self.curated = _AsyncCuratedFake(self._fake.curated)
+        self.concepts = _AsyncConceptsFake(self._fake.concepts)
+        self.artifacts = _AsyncArtifactsFake(self._fake.artifacts)
+        self.thoughts = _AsyncThoughtsFake(self._fake.thoughts)
+        self.lifecycle = _AsyncLifecycleFake(self._fake.lifecycle)
+        self.ops = _AsyncOpsFake(self._fake.ops)
+        self._upload_handler: Any = None
+
+    async def retrieve(self, **kw: Any) -> dict[str, Any]:
+        return self._fake.retrieve(**kw)
+
+    async def retrieve_stream(self, **kw: Any) -> Any:
+        sync_stream = self._fake.retrieve_stream(**kw)
+        for item in sync_stream:
+            yield item
+
+    async def probe_version(self) -> str:
+        return self._fake.probe_version()
+
+    async def close(self) -> None:
+        self._fake.close()
+
+    async def __aenter__(self) -> AsyncFakeMusubiClient:
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        await self.close()
+
+
+__all__ = ["AsyncFakeMusubiClient", "FakeMusubiClient"]

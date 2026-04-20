@@ -1013,7 +1013,7 @@ def test_fake_capture_result_wraps_canned_ok() -> None:
     res = fake.memories.capture_result(namespace="x", content="y")
     assert res.is_ok()
     assert res.ok is not None
-    assert res.ok["object_id"] == "o" * 27
+    assert res.ok and res.ok["object_id"] == "o" * 27
 
 
 def test_fake_batch_context_records_calls() -> None:
@@ -1030,3 +1030,107 @@ def test_fake_context_manager_close_no_op() -> None:
         # close() is a no-op but the protocol must be honoured.
         assert fake is not None
     fake.close()  # extra direct call also tolerated
+
+
+@pytest.mark.asyncio
+async def test_async_fake_client_accepts_same_args_as_real() -> None:
+    from musubi.sdk.testing import AsyncFakeMusubiClient
+
+    fake = AsyncFakeMusubiClient(
+        base_url="https://different.test",
+        token="my-token",
+        strict_version=True,
+        capture_returns={"object_id": "a" * 27},
+    )
+    res = await fake.memories.capture(namespace="foo", content="bar")
+    assert res["object_id"] == "a" * 27
+    assert len(fake.calls) == 1
+    assert fake.calls[0][0] == "memories.capture"
+
+
+@pytest.mark.asyncio
+async def test_async_fake_returns_canned_for_every_method() -> None:
+    from musubi.sdk.testing import AsyncFakeMusubiClient
+
+    fake = AsyncFakeMusubiClient(
+        get_memory_returns={"object_id": "m1"},
+        retrieve_returns={"results": []},
+        retrieve_stream_returns=[{"r": 1}, {"r": 2}],
+        thoughts_send_returns={"object_id": "t1"},
+        thoughts_check_returns={"messages": []},
+        curated_get_returns={"object_id": "c1"},
+        concept_get_returns={"object_id": "x1"},
+        artifact_get_returns={"object_id": "a1"},
+        artifact_blob_returns=b"blob",
+        lifecycle_events_returns={"events": []},
+        ops_health_returns={"status": "ok"},
+        ops_status_returns={"version": "9.9.9"},
+        probe_version_returns="1.2.3",
+    )
+
+    assert (await fake.memories.get(namespace="n", object_id="id"))["object_id"] == "m1"
+    assert (await fake.retrieve(namespace="n", query_text="q"))["results"] == []
+
+    streamed = [x async for x in fake.retrieve_stream(namespace="n", query_text="q")]
+    assert len(streamed) == 2
+    assert streamed[0]["r"] == 1
+
+    assert (
+        await fake.thoughts.send(namespace="n", from_presence="a", to_presence="b", content="hi")
+    )["object_id"] == "t1"
+    assert (await fake.thoughts.check(namespace="n", presence="b"))["messages"] == []
+    assert (await fake.curated.get(namespace="n", object_id="id"))["object_id"] == "c1"
+    assert (await fake.concepts.get(namespace="n", object_id="id"))["object_id"] == "x1"
+    assert (await fake.artifacts.get(namespace="n", object_id="id"))["object_id"] == "a1"
+    assert await fake.artifacts.blob(namespace="n", object_id="id") == b"blob"
+    assert (await fake.lifecycle.events(namespace="n"))["events"] == []
+    assert (await fake.ops.health())["status"] == "ok"
+    assert (await fake.ops.status())["version"] == "9.9.9"
+    assert await fake.probe_version() == "1.2.3"
+
+
+@pytest.mark.asyncio
+async def test_async_fake_capture_result_wraps_canned_error() -> None:
+    from musubi.sdk.exceptions import BadRequest
+    from musubi.sdk.testing import AsyncFakeMusubiClient
+
+    fake = AsyncFakeMusubiClient(
+        capture_error=BadRequest(code="BAD", detail="err", status_code=400)
+    )
+    res = await fake.memories.capture_result(namespace="n", content="c")
+    assert res.is_err()
+    assert res.err and res.err.code == "BAD"
+
+
+@pytest.mark.asyncio
+async def test_async_fake_capture_result_wraps_canned_ok() -> None:
+    from musubi.sdk.testing import AsyncFakeMusubiClient
+
+    fake = AsyncFakeMusubiClient(capture_returns={"object_id": "o" * 27})
+    res = await fake.memories.capture_result(namespace="n", content="c")
+    assert res.is_ok()
+    assert res.ok and res.ok["object_id"] == "o" * 27
+
+
+@pytest.mark.asyncio
+async def test_async_fake_batch_context_records_calls() -> None:
+    from musubi.sdk.testing import AsyncFakeMusubiClient
+
+    fake = AsyncFakeMusubiClient()
+    async with fake.memories.batch(namespace="n") as batch:
+        batch.capture(content="first")
+        batch.capture(content="second")
+
+    assert len(fake.calls) == 2
+    assert fake.calls[0][0] == "memories.batch.capture"
+    assert fake.calls[0][1]["content"] == "first"
+    assert fake.calls[1][1]["content"] == "second"
+
+
+@pytest.mark.asyncio
+async def test_async_fake_context_manager_close_no_op() -> None:
+    from musubi.sdk.testing import AsyncFakeMusubiClient
+
+    async with AsyncFakeMusubiClient() as fake:
+        pass
+    assert len(fake.calls) == 0
