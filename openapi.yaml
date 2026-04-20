@@ -677,6 +677,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/thoughts/stream:
+    get:
+      summary: Stream Thoughts
+      operationId: stream_thoughts_bucket_default
+      parameters:
+        - required: true
+          schema:
+            type: string
+          name: namespace
+          in: query
+        - required: false
+          schema:
+            type: string
+          name: include
+          in: query
+        - required: false
+          schema:
+            type: string
+          name: Last-Event-ID
+          in: header
+      responses:
+        '200':
+          description: Successful Response
+        '403':
+          description: Forbidden
+        '503':
+          description: Service Unavailable
   /v1/thoughts/check:
     post:
       tags:
