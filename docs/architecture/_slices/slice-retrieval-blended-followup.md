@@ -3,12 +3,12 @@ title: "Slice: Blended retrieval — Test Contract followup"
 slice_id: slice-retrieval-blended-followup
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-2-0-flash
 phase: "5 Retrieval"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-retrieval-blended]]"]
 blocks: []
 ---
@@ -19,7 +19,7 @@ blocks: []
 > Implementation landed in slice-retrieval-blended (PR #79); this slice
 > implements the 13 Test Contract bullets deferred there under time pressure.
 
-**Phase:** 5 Retrieval · **Status:** `in-review` · **Owner:** `gemini-2-0-flash`
+**Phase:** 5 Retrieval · **Status:** `done` · **Owner:** `gemini-2-0-flash`
 
 ## Specs to implement
 
