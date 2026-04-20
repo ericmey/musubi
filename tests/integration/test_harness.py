@@ -187,7 +187,8 @@ def test_mint_operator_token_returns_valid_hs256(monkeypatch: pytest.MonkeyPatch
     secret = "test-signing-key-must-be-long-enough-for-hs256-32-bytes-min"
     token = harness._mint_operator_token(secret)
     decoded = jwt.decode(token, secret, audience="musubi", algorithms=["HS256"])
-    assert decoded["scope"] == "operator"
+    # Scope is a space-separated set: operator + per-namespace :rw entries.
+    assert "operator" in decoded["scope"].split()
     assert decoded["aud"] == "musubi"
 
 

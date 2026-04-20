@@ -182,12 +182,23 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 
 
 def _mint_operator_token(jwt_signing_key: str) -> str:
-    """HS256 token with the operator scope for the integration tests."""
+    """HS256 token granting per-namespace ``:rw`` access to every
+    integration-test namespace + the operator scope. The auth layer
+    checks per-namespace scopes (operator alone doesn't bypass)."""
     from datetime import UTC, datetime, timedelta
 
     import jwt
 
     now = datetime.now(UTC)
+    namespaces = [
+        "eric/integration-test/episodic",
+        "eric/integration-test/curated",
+        "eric/integration-test/concept",
+        "eric/integration-test/artifact",
+        "eric/integration-test/thought",
+        "eric/_shared/episodic",
+    ]
+    scopes = ["operator", *(f"{ns}:rw" for ns in namespaces)]
     payload = {
         "iss": "https://auth.test.local",
         "sub": "integration-test",
@@ -195,7 +206,7 @@ def _mint_operator_token(jwt_signing_key: str) -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=2)).timestamp()),
         "jti": "integration-test-token",
-        "scope": "operator",
+        "scope": " ".join(scopes),
         "presence": "integration-test/harness",
     }
     return jwt.encode(payload, jwt_signing_key, algorithm="HS256")

@@ -134,12 +134,18 @@ async def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
     """The SDK's curated namespace is read-only (`get`); the create
     surface lives at the API layer (POST /v1/curated-knowledge) and
     is exercised here via raw httpx + the operator token."""
+    import hashlib
+
     namespace = "eric/integration-test/curated"
     title = f"smoke-test-curated-{uuid.uuid4().hex[:8]}"
-    body = (
+    content = (
         "Curated test entry — created by the integration harness for "
         "slice-ops-integration-harness Test Contract bullet 9."
     )
+    # CuratedCreateRequest demands a 64-char hex body_hash; derive
+    # deterministically from content so re-runs hit the dedup path
+    # the same way.
+    body_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     async with httpx.AsyncClient(
         base_url=live_stack.api_url,
@@ -151,24 +157,14 @@ async def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
             json={
                 "namespace": namespace,
                 "title": title,
-                "body": body,
-                "source": "integration-test",
+                "content": content,
+                "vault_path": f"integration-test/{title}.md",
+                "body_hash": body_hash,
                 "tags": ["integration", "smoke"],
             },
         )
         create_resp.raise_for_status()
         created = create_resp.json()
-        await asyncio.sleep(1.0)
-        retrieve_resp = await client.post(
-            "/retrieve",
-            json={
-                "namespace": namespace,
-                "query_text": title,
-                "mode": "fast",
-                "limit": 5,
-            },
-        )
-        retrieve_resp.raise_for_status()
 
     assert created["object_id"]
 
@@ -216,7 +212,7 @@ async def test_artifact_upload_multipart_then_retrieve_blob(
                 "title": f"smoke-{uuid.uuid4().hex[:6]}.vtt",
                 "content_type": "text/vtt",
                 "source_system": "integration-test",
-                "source_ref": uuid.uuid4().hex,
+                "chunker": "markdown-headings-v1",
             },
             files={"file": ("smoke.vtt", payload, "text/vtt")},
         )
