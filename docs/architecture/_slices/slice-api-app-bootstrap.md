@@ -3,10 +3,10 @@ title: "Slice: API app bootstrap — wire production plane factories"
 slice_id: slice-api-app-bootstrap
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: vscode-cc-sonnet47
 phase: "7 Adapters"
-tags: [section/slices, status/ready, type/slice, api, bootstrap, phase-2, critical-path]
+tags: [section/slices, status/in-progress, type/slice, api, bootstrap, phase-2, critical-path]
 updated: 2026-04-20
 reviewed: false
 depends-on: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-v0-write]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-thoughts]]", "[[_slices/slice-embedding]]", "[[_slices/slice-config]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > **CRITICAL PATH.** Production `create_app()` currently ships every plane factory as `raise NotImplementedError` per the ADR-punted-deps-fail-loud pattern. Unit tests override via `app.dependency_overrides`; nothing wires production. Until this slice lands, the deployed app comes up but 500s on first hit. Every consumer-slice unskip against the integration harness (PR #114) is gated on this.
 
-**Phase:** 7 Adapters · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 7 Adapters · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
 
 ## Why this slice exists
 
