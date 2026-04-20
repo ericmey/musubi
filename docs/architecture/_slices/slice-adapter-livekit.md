@@ -3,10 +3,10 @@ title: "Slice: LiveKit adapter"
 slice_id: slice-adapter-livekit
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: vscode-cc-sonnet47
 phase: "6 Lifecycle"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-sdk-py]]", "[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > LiveKit Agents toolkit: Fast Talker + Slow Thinker pattern. `on_user_turn_completed` hook. Hard 200ms budget.
 
-**Phase:** 6 Lifecycle · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
+**Phase:** 6 Lifecycle · **Status:** `in-review` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
@@ -96,10 +96,25 @@ Agents append one entry per work session. Format:
 - Branch `slice/slice-adapter-livekit` off `v2`.
 - Same agent that landed slice-sdk-py (#90) — the SDK surface is fresh context, so the Fast Talker + Slow Thinker wiring against `AsyncMusubiClient` lands without re-reading the SDK.
 
+### 2026-04-19 — vscode-cc-sonnet47 — handoff to in-review
+
+- Implemented `src/musubi/adapters/livekit/` (8 modules: `__init__`, `config`, `cache`, `slow_thinker`, `fast_talker`, `heuristics`, `redaction`, `adapter`). `LiveKitAdapter` is the per-session orchestrator wiring `on_transcript_segment` / `on_user_turn_completed` / `on_session_end` / `maybe_capture_fact` to the SDK.
+- 23 unit tests; all 16 testable Test Contract bullets pass; 3 integration bullets (17-19) declared out-of-scope per the work log (need docker-up Musubi + LiveKit session simulator). Branch coverage on owned code: 91% (gate 85%).
+- Spec rename `musubi-livekit-adapter` → `musubi.adapters.livekit` per ADR-0015 / ADR-0016 applied in same PR with `spec-update: docs/architecture/07-interfaces/livekit-adapter.md` trailer on the feat commit.
+- One cross-slice ticket opened: `slice-adapter-livekit-slice-sdk-py-async-fake.md` (promote the adapter-local `_AsyncFake` shim into `musubi.sdk.testing` as `AsyncFakeMusubiClient`; MCP + OpenClaw will need the same).
+- Handoff checks: `make check` green (814 passed, 201 skipped), `make tc-coverage SLICE=slice-adapter-livekit` reports closure satisfied, `make agent-check` clean (warnings only — none touching this slice; the two outstanding ⚠ are about Nyla/Hana's parallel slices), feat commit landed with `spec-update:` trailer.
+- Flipping `status: in-review`, marking PR ready, removing the lock.
+
+### Known gaps at in-review
+
+- **No native `AsyncFakeMusubiClient`.** Adapter ships its own one-file `_AsyncFake` shim wrapping `FakeMusubiClient`; cross-slice ticket above tracks promoting it into `musubi.sdk.testing`. Once that lands, this adapter and the next two (MCP, OpenClaw) drop their local shims.
+- **Artifact upload routes through `memories.capture` placeholder.** The SDK's `artifacts.upload` endpoint isn't shipped yet (the SDK has `artifacts.get` + `artifacts.blob` only — write-side moves through the canonical API in slice-api-v0-write). Tests use a `client._upload_handler` injection seam to validate retry + queue semantics; once `artifacts.upload` ships in the SDK, swap the placeholder for the real call (one-line change in `_upload_transcript_with_retry`).
+- **Latency budget unverified.** The spec's 200ms p95 budget for fast-path retrieval is asserted by the integration suite (bullet 17), which is out-of-scope. Unit tests verify the surface is correct; latency is the contract-test layer's job.
+
 ## Cross-slice tickets opened by this slice
 
-- _(none yet)_
+- [[_inbox/cross-slice/slice-adapter-livekit-slice-sdk-py-async-fake|slice-adapter-livekit-slice-sdk-py-async-fake]] — add `AsyncFakeMusubiClient` to `musubi.sdk.testing`; lets adapters drop the local `_AsyncFake` shim.
 
 ## PR links
 
-- _(none yet)_
+- [#96](https://github.com/ericmey/musubi/pull/96) — `slice/slice-adapter-livekit` → `v2`.
