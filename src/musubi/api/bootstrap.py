@@ -160,10 +160,16 @@ def bootstrap_production_app(
     ``retry_attempts`` probes; preserves the fail-loud invariant the
     pre-bootstrap ``NotImplementedError`` stubs encoded.
     """
+    # qdrant-client defaults to https=True when api_key is supplied;
+    # honour MUSUBI_ALLOW_PLAINTEXT explicitly so test-env / dev
+    # plaintext Qdrant doesn't ssl-handshake-fail against an HTTP
+    # endpoint. Production deploys leave the flag at its default
+    # (False) so https=True is the production default.
     qdrant = QdrantClient(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
         api_key=settings.qdrant_api_key.get_secret_value(),
+        https=not settings.musubi_allow_plaintext,
     )
     _retry(
         lambda: _probe_qdrant(qdrant),
