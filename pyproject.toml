@@ -127,3 +127,8 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "\\.\\.\\.$",  # Protocol method bodies
 ]
+
+[dependency-groups]
+dev = [
+    "pytest-timeout>=2.4.0",
+]
