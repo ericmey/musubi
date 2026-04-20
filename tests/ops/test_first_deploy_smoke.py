@@ -19,7 +19,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = ROOT / "deploy" / "runbooks" / "first-deploy.md"
-RUNBOOKS_SPEC = ROOT / "docs" / "architecture" / "09-operations" / "runbooks.md"
+RUNBOOKS_SPEC = ROOT / "docs" / "Musubi" / "09-operations" / "runbooks.md"
 SYSTEMD = ROOT / "deploy" / "systemd"
 SMOKE = ROOT / "deploy" / "smoke"
 KONG = ROOT / "deploy" / "kong" / "musubi-prod.yml"

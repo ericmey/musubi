@@ -306,9 +306,7 @@ def audit_paths(pr: PRInfo, s: Slice) -> list[str]:
         # explicitly in-scope; a full trailer-scan would be more precise but
         # the spec files live under docs/Musubi/ so allowlist by prefix
         # below is already forgiving enough.
-        if f.startswith("docs/Musubi/07-interfaces/") or f.startswith(
-            "docs/Musubi/04-data-model/"
-        ):
+        if f.startswith("docs/Musubi/07-interfaces/") or f.startswith("docs/Musubi/04-data-model/"):
             # reviewer still sees these in the preview
             violations.append(f"{f}  (spec update — likely intentional via spec-update: trailer)")
             continue
