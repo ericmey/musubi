@@ -42,59 +42,70 @@ services:
   # Using small models so first-boot model-download cost stays under
   # ~3 min on a cold cache. Production uses GPU + larger BGE-M3.
   # ----------------------------------------------------------------
+  # Note: TEI's `:cpu-1.5` had a hf-hub bug where the HF endpoint
+  # default was empty ("relative URL without a base" on first download);
+  # `:cpu-1.6` ships hf-hub 0.4 with the fix. Per-service volumes
+  # avoid the shared-cache race that briefly surfaced when all three
+  # raced to write `/data/token`.
   tei-dense:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
     container_name: musubi-test-tei-dense
     ports:
       - "${MUSUBI_TEST_TEI_DENSE_PORT:-8081}:80"
     volumes:
-      - tei-models:/data
+      - tei-dense-models:/data
     environment:
-      MODEL_ID: BAAI/bge-small-en-v1.5
+      HF_HUB_ENDPOINT: https://huggingface.co
       HF_HOME: /data
     command: ["--model-id", "BAAI/bge-small-en-v1.5", "--port", "80"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 60s
+      retries: 60
+      start_period: 90s
 
   tei-sparse:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
     container_name: musubi-test-tei-sparse
     ports:
       - "${MUSUBI_TEST_TEI_SPARSE_PORT:-8082}:80"
     volumes:
-      - tei-models:/data
+      - tei-sparse-models:/data
     environment:
-      MODEL_ID: prithivida/Splade_PP_en_v1
+      HF_HUB_ENDPOINT: https://huggingface.co
       HF_HOME: /data
-    command: ["--model-id", "prithivida/Splade_PP_en_v1", "--pooling", "splade", "--port", "80"]
+    command:
+      - "--model-id"
+      - "prithivida/Splade_PP_en_v1"
+      - "--pooling"
+      - "splade"
+      - "--port"
+      - "80"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 90s
+      retries: 60
+      start_period: 120s
 
   tei-reranker:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
     container_name: musubi-test-tei-reranker
     ports:
       - "${MUSUBI_TEST_TEI_RERANKER_PORT:-8083}:80"
     volumes:
-      - tei-models:/data
+      - tei-reranker-models:/data
     environment:
-      MODEL_ID: BAAI/bge-reranker-base
+      HF_HUB_ENDPOINT: https://huggingface.co
       HF_HOME: /data
     command: ["--model-id", "BAAI/bge-reranker-base", "--port", "80"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 30
-      start_period: 90s
+      retries: 60
+      start_period: 120s
 
   # ----------------------------------------------------------------
   # LLM — Ollama with the smallest viable model so concept synthesis
@@ -135,5 +146,7 @@ services:
 
 volumes:
   qdrant-storage:
-  tei-models:
+  tei-dense-models:
+  tei-sparse-models:
+  tei-reranker-models:
   ollama-models:
