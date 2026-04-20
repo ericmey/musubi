@@ -7,7 +7,7 @@ status: ready
 owner: unassigned
 phase: "5 Vault"
 tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-api-v0-write]]"]
 blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-openclaw]]"]
@@ -24,11 +24,27 @@ blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "
 
 ## Owned paths (you MAY write here)
 
-- `musubi-sdk-py/`
+- `src/musubi/sdk/`
+- `tests/sdk/`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `musubi/`
+- `src/musubi/api/`   (canonical API surface; frozen per version — see ADR-0011, ADR-0015)
+- `src/musubi/types/` (owned by slice-types, done)
+- `src/musubi/planes/`
+- `src/musubi/retrieve/`
+- `src/musubi/lifecycle/`
+- `src/musubi/ingestion/`
+- `src/musubi/adapters/`
+- `openapi.yaml`
+- `proto/`
+
+> **Spec drift note (reviewer convention):** [[07-interfaces/sdk]] predates ADR-0015
+> and still describes the SDK as a sibling package `musubi-client/musubi_client/`.
+> ADR-0015 / ADR-0016 move the SDK to `src/musubi/sdk/` inside the monorepo
+> (importable as `musubi.sdk`). Update the spec in-PR with a
+> `spec-update: docs/architecture/07-interfaces/sdk.md` commit trailer — rename
+> `musubi-client` → `musubi.sdk`, keep everything else. No canonical-API changes.
 
 ## Depends on
 
@@ -61,6 +77,17 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 — operator — reconcile paths to post-ADR-0015 monorepo layout
+
+- `owns_paths` was `musubi-sdk-py/` (pre-monorepo drift); reconciled to
+  `src/musubi/sdk/` + `tests/sdk/` per ADR-0015 §Decision.
+- `forbidden_paths` expanded from `musubi/` to the full post-monorepo list
+  (api/, types/, planes/, retrieve/, lifecycle/, ingestion/, adapters/,
+  openapi.yaml, proto/).
+- Spec [[07-interfaces/sdk]] still describes `musubi-client` package naming;
+  the implementing agent updates the spec in-PR with a `spec-update:` trailer
+  per the non-negotiables in CLAUDE.md rule 4.
 
 ## Cross-slice tickets opened by this slice
 
