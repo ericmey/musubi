@@ -67,7 +67,7 @@ class ArtifactPlane:
         if existing is not None:
             raise ValueError(f"artifact {artifact.object_id!r} already exists")
 
-        zero_dense = (await self._embedder.embed_dense([""]))[0]
+        zero_dense = (await self._embedder.embed_dense([" "]))[0]
         zero_dense = [0.0] * len(zero_dense)
 
         point = models.PointStruct(

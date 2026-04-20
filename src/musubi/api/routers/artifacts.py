@@ -7,11 +7,12 @@ from fastapi.responses import Response
 from qdrant_client import QdrantClient
 
 from musubi.api.auth import require_auth
-from musubi.api.dependencies import get_artifact_plane, get_qdrant_client
+from musubi.api.dependencies import get_artifact_plane, get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError
 from musubi.api.pagination import Page
 from musubi.api.routers._scroll import scroll_namespace
 from musubi.planes.artifact import ArtifactPlane
+from musubi.settings import Settings
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifact"])
@@ -67,14 +68,16 @@ async def get_artifact_blob(
     object_id: str,
     namespace: str = Query(...),
     plane: ArtifactPlane = Depends(get_artifact_plane),
+    settings: Settings = Depends(get_settings_dep),
 ) -> Response:
     """Stream the raw bytes of an artifact.
 
-    The artifact plane stores blobs out-of-band (filesystem or S3 in
-    production). For this read-side slice we serve a placeholder body —
-    the production wiring of blob storage lives in slice-plane-artifact's
-    follow-up. The route + auth gate + 404 path are exercised here so
-    adapters can call the endpoint.
+    Bytes are served from ``settings.artifact_blob_path/<namespace>/<object_id>``
+    — the same layout the cleanup worker walks (ops/cleanup.py). The
+    write path lives in ``writes_artifact.upload_artifact``. Content-
+    addressed storage (by sha256, S3 backend) is a follow-up; this
+    slice is the minimum viable round-trip so adapters can retrieve
+    what they uploaded.
     """
     parent = await plane.get(namespace=namespace, object_id=object_id)
     if parent is None:
@@ -83,11 +86,19 @@ async def get_artifact_blob(
             code="NOT_FOUND",
             detail=f"artifact {object_id!r} not found in namespace {namespace!r}",
         )
-    # Placeholder: stream an empty 0-byte body with the artifact's
-    # declared content-type. Real bytes-from-blob-store wiring is the
-    # write-slice / blob-store follow-up.
+    blob_path = settings.artifact_blob_path / namespace / object_id
+    if not blob_path.exists():
+        # Metadata exists but bytes don't — either the artifact was
+        # created before blob persistence wiring landed, or the blob
+        # was garbage-collected. Surface 404 rather than a misleading
+        # empty body so callers can distinguish "missing" from "empty".
+        raise APIError(
+            status_code=404,
+            code="NOT_FOUND",
+            detail=f"blob for artifact {object_id!r} not found",
+        )
     return Response(
-        content=b"",
+        content=blob_path.read_bytes(),
         media_type=getattr(parent, "content_type", "application/octet-stream"),
     )
 
