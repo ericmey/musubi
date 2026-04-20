@@ -104,6 +104,7 @@ Agents append one entry per work session. Format:
 - One cross-slice ticket opened: `slice-adapter-livekit-slice-sdk-py-async-fake.md` (promote the adapter-local `_AsyncFake` shim into `musubi.sdk.testing` as `AsyncFakeMusubiClient`; MCP + OpenClaw will need the same).
 - Handoff checks: `make check` green (814 passed, 201 skipped), `make tc-coverage SLICE=slice-adapter-livekit` reports closure satisfied, `make agent-check` clean (warnings only — none touching this slice; the two outstanding ⚠ are about Nyla/Hana's parallel slices), feat commit landed with `spec-update:` trailer.
 - Flipping `status: in-review`, marking PR ready, removing the lock.
+- `.operator/scripts/handoff-audit.py 96` passes after this `docs(slice)` follow-up — the audit gates strictly on the `docs(slice)` commit prefix for the handoff commit (initial attempt used `chore(slice)`, which the audit rejected as "missing handoff commit"). Cross-slice convention-check: agent-handoff.md should call out the prefix requirement explicitly so the next adapter slice doesn't repeat the round-trip.
 
 ### Known gaps at in-review
 
