@@ -21,7 +21,7 @@ The `docker compose` stack. One file captures every container Musubi runs.
 
 | Service | Image | Role |
 |---|---|---|
-| `qdrant` | `qdrant/qdrant:v1.15.0` | Vector DB |
+| `qdrant` | `qdrant/qdrant:v1.17.1` | Vector DB |
 | `tei-dense` | `ghcr.io/huggingface/text-embeddings-inference:1.5-cuda` | Dense embeddings (BGE-M3) |
 | `tei-sparse` | same image | Sparse embeddings (SPLADE++ V3) |
 | `tei-reranker` | same image | Cross-encoder rerank (BGE-reranker-v2-m3) |
@@ -217,7 +217,7 @@ x-logging: &default-logging
 
 services:
   qdrant:
-    image: qdrant/qdrant:v1.15.0@sha256:...
+    image: qdrant/qdrant:v1.17.1@sha256:...
     volumes:
       - qdrant-storage:/qdrant/storage
       - /etc/musubi/qdrant-config.yaml:/qdrant/config/production.yaml

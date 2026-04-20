@@ -6,7 +6,7 @@ status: accepted
 date: 2026-04-17
 deciders: [Eric]
 tags: [section/decisions, status/accepted, type/adr]
-updated: 2026-04-18
+updated: 2026-04-20
 up: "[[13-decisions/index]]"
 reviewed: true
 supersedes: ""
@@ -15,9 +15,14 @@ superseded-by: ""
 
 # ADR 0014: Kong API Gateway replaces Caddy on the Musubi host
 
-**Status:** accepted
+**Status:** accepted (implementation deferred — see [[13-decisions/0024-kong-deferred-for-musubi-v1]])
 **Date:** 2026-04-17
 **Deciders:** Eric
+
+> **2026-04-20 update:** This ADR remains the forward architectural target.
+> Implementation is deferred for Musubi v1 because Kong currently routes only
+> `<external-domain>` traffic while Musubi lives on `<homelab-domain>` with no
+> external address. Full rationale and re-enablement triggers in [[13-decisions/0024-kong-deferred-for-musubi-v1]].
 
 > Concrete hostnames and IPs use placeholder tokens (`<kong-gateway>`, `<musubi-host>`, `<homelab-domain>`, etc.). Real values live in `.agent-context.local.md` at the repo root, gitignored.
 

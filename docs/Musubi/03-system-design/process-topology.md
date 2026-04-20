@@ -20,7 +20,7 @@ How processes map to containers, which talk to which, restart / crash behavior, 
 | 1 | `musubi-core` | built local | API server | `:8100` HTTP, `:8101` gRPC (both on Docker net only; edge TLS via Kong) | `/srv/musubi/vault:ro`, `/srv/musubi/artifacts` |
 | 2 | `musubi-lifecycle` | same as core | Background jobs | `:9100` /metrics, /healthz | `/srv/musubi/vault`, `/srv/musubi/artifacts`, `/srv/musubi/lifecycle-state` |
 | 3 | `musubi-vault-watcher` | same as core | Vault reindexer | `:9101` /metrics, /healthz | `/srv/musubi/vault` |
-| 4 | `musubi-qdrant` | `qdrant/qdrant:v1.15+` | Vector DB | `:6333`, `:6334` (Docker net only) | `/srv/musubi/qdrant/storage` |
+| 4 | `musubi-qdrant` | `qdrant/qdrant:v1.17+` | Vector DB | `:6333`, `:6334` (Docker net only) | `/srv/musubi/qdrant/storage` |
 | 5 | `musubi-tei` | `ghcr.io/huggingface/text-embeddings-inference:1.7-gpu-cuda13` | Embeddings + reranker | `:8080` (Docker net only) | `/srv/musubi/models:ro` (HF cache) |
 | 6 | `musubi-ollama` | `ollama/ollama:latest` | Local LLM | `:11434` (Docker net only) | `/srv/musubi/ollama` |
 | 7 | `kong` | `(Kong image; managed outside this repo)` | TLS edge proxy | `:80`, `:443` | Kong route config, certs |
