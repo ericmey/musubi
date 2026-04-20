@@ -3,10 +3,10 @@ title: "Slice: Python SDK"
 slice_id: slice-sdk-py
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: vscode-cc-sonnet47
 phase: "5 Vault"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-api-v0-write]]"]
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "
 
 > Thin HTTP + gRPC client. Handles auth, retries, typed errors. Separate repo; pinned to API version.
 
-**Phase:** 5 Vault · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 5 Vault · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
@@ -88,6 +88,12 @@ Agents append one entry per work session. Format:
 - Spec [[07-interfaces/sdk]] still describes `musubi-client` package naming;
   the implementing agent updates the spec in-PR with a `spec-update:` trailer
   per the non-negotiables in CLAUDE.md rule 4.
+
+### 2026-04-19 — vscode-cc-sonnet47 — claim
+
+- Claimed slice atomically via `gh issue edit 33 --add-assignee @me`. Issue #33, PR #90 (draft).
+- Branch `slice/slice-sdk-py` off `v2`.
+- Verified slice file already canonical (operator pre-reconciled tonight); same agent that landed slice-api-v0-{read,write} + slice-ingestion-capture is closing the SDK loop on top of its own scaffolding.
 
 ## Cross-slice tickets opened by this slice
 
