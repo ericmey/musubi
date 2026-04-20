@@ -76,8 +76,8 @@ _PATH_TO_BUCKET: tuple[tuple[str, str], ...] = (
     ("/v1/thoughts/read", "default"),
     ("/v1/lifecycle/transition", "transition"),
     ("/v1/concepts", "default"),
-    ("/v1/retrieve/stream", "default"),
-    ("/v1/retrieve", "default"),
+    ("/v1/retrieve/stream", "retrieve"),
+    ("/v1/retrieve", "retrieve"),
 )
 
 

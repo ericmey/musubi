@@ -93,6 +93,16 @@ class Settings(BaseSettings):
     # Feature flags
     # ------------------------------------------------------------------
     musubi_grpc: bool = Field(default=False, description="Expose the gRPC API alongside REST.")
+
+    # ------------------------------------------------------------------
+    # Rate limits (tokens per second)
+    # ------------------------------------------------------------------
+    rate_limit_capture: float = Field(default=10.0, description="Tokens per second for capture.")
+    rate_limit_retrieve: float = Field(default=20.0, description="Tokens per second for retrieve.")
+    rate_limit_thought: float = Field(
+        default=5.0, description="Tokens per second for thought sending."
+    )
+
     musubi_allow_plaintext: bool = Field(
         default=False,
         description="Permit non-TLS downstream calls. Strictly dev-only.",

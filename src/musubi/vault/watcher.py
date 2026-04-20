@@ -224,6 +224,67 @@ class VaultWatcher:
         # TODO: Implement archival flow
         logger.info("File deleted: %s", rel_path)
 
+    def boot_scan(self) -> None:
+        """Run a background scan over the vault to catch missed edits."""
+        if not self._loop:
+            logger.warning("VaultWatcher.boot_scan called without a running loop")
+            return
+
+        async def _scan_task() -> None:
+            logger.info("Starting vault boot scan")
+            try:
+                known_hashes = {}
+                offset = None
+                while True:
+                    resp = self.curated_plane._client.scroll(
+                        collection_name="musubi_curated",
+                        limit=1000,
+                        offset=offset,
+                        with_payload=["vault_path", "body_hash"],
+                        with_vectors=False,
+                    )
+                    points, offset = resp[0], resp[1]
+                    for pt in points:
+                        if pt.payload:
+                            vp = pt.payload.get("vault_path")
+                            bh = pt.payload.get("body_hash")
+                            if vp and bh:
+                                known_hashes[vp] = bh
+                    if offset is None:
+                        break
+            except Exception as exc:
+                logger.error("Failed to fetch curated paths for boot scan: %s", exc)
+                return
+
+            import hashlib
+
+            from watchdog.events import FileSystemEvent
+
+            from musubi.vault.frontmatter import parse_frontmatter
+
+            for path in self.vault_root.rglob("*.md"):
+                try:
+                    rel_path = path.relative_to(self.vault_root)
+                    if any(part.startswith(".") or part.startswith("_") for part in rel_path.parts):
+                        continue
+
+                    rel_str = str(rel_path)
+                    content = path.read_text(encoding="utf-8")
+                    _, body = parse_frontmatter(content)
+                    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+                    if known_hashes.get(rel_str) != body_hash:
+                        logger.info("Boot scan found drift in %s", rel_str)
+                        evt = FileSystemEvent(str(path))
+                        evt.event_type = "modified"
+                        await self._handle_event(rel_str, evt)
+                except Exception as exc:
+                    logger.error("Boot scan failed on path %s: %s", path, exc)
+
+            logger.info("Boot scan complete")
+
+        self._loop.create_task(_scan_task())
+
     def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
         if not loop:
             try:

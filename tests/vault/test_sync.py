@@ -354,21 +354,6 @@ async def test_writelog_entry_purged_after_1h(write_log: WriteLog) -> None:
     assert count == 1
 
 
-@pytest.mark.skip(reason="Boot scan not yet implemented in Watcher")
-def test_boot_scan_indexes_new_files() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Boot scan not yet implemented in Watcher")
-def test_boot_scan_detects_body_hash_change() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Boot scan not yet implemented in Watcher")
-def test_boot_scan_archives_removed_files() -> None:
-    pass
-
-
 @pytest.mark.skip(reason="Large file handling deferred to slice-plane-artifact integration")
 def test_large_file_body_chunked_as_artifact() -> None:
     pass
