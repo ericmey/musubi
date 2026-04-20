@@ -42,9 +42,9 @@ jobs:
         # runs for flake characterization (DoD evidence path).
         run: ${{ github.event_name == 'schedule' && fromJSON('[1, 2, 3]') || fromJSON('[1]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: astral-sh/setup-uv@v3
+      - uses: astral-sh/setup-uv@v8.1.0
         with:
           enable-cache: true
 
@@ -52,13 +52,13 @@ jobs:
         run: uv sync --extra dev
 
       - name: Cache HuggingFace + Ollama models
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/huggingface
             ~/.ollama
-          key: integration-models-v2
-          restore-keys: integration-models-v2
+          key: integration-models-v4
+          restore-keys: integration-models-v4
 
       - name: Boot the test-env compose stack
         run: |
@@ -66,13 +66,15 @@ jobs:
             -p musubi-integration up -d --wait --wait-timeout 600
         timeout-minutes: 12
 
-      - name: Wait for ollama-pull side-car to finish
+      - name: Pull the Ollama test model (one-shot side-car)
         run: |
-          # The ollama-pull container exits 0 once the test model is
-          # cached; tail logs until it's done so concept-synthesis
-          # bullets don't race the pull.
-          docker wait musubi-test-ollama-pull || true
-          docker logs musubi-test-ollama-pull || true
+          # ollama-pull lives behind the `pull` profile so the main
+          # `--wait` boot doesn't trip on its clean exit. Run it now
+          # synchronously; the test stack waits on it before any
+          # concept-synthesis bullet executes.
+          docker compose -f deploy/test-env/docker-compose.test.yml \
+            -p musubi-integration --profile pull run --rm ollama-pull
+        timeout-minutes: 5
 
       - name: Run integration suite
         env:
@@ -96,7 +98,7 @@ jobs:
 
       - name: Upload test log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: integration-log-run-${{ matrix.run }}
           path: integration.log

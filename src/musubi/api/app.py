@@ -133,8 +133,19 @@ def _is_operator(request: Request) -> bool:
 
 
 def create_app(*, settings: Settings | None = None) -> FastAPI:
-    """Build the canonical Musubi API app."""
-    del settings
+    """Build the canonical Musubi API app.
+
+    Production: ``settings`` is loaded via :func:`musubi.config.get_settings`
+    when not supplied; the production bootstrap (slice-api-app-bootstrap)
+    runs at the bottom of this function to wire real Qdrant + TEI + plane
+    factories into the FastAPI dep map. Tests override that via
+    ``settings.musubi_skip_bootstrap=True`` (the api_factory fixture path)
+    or by pre-installing dependency_overrides on the returned app.
+    """
+    if settings is None:
+        from musubi.config import get_settings as _get_settings
+
+        settings = _get_settings()
     app = FastAPI(
         title="Musubi Core API",
         version="0.1.0",
@@ -309,6 +320,19 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
     app.include_router(writes_thoughts.router)
     app.include_router(writes_lifecycle.router)
     app.include_router(writes_retrieve_stream.router)
+
+    # ------------------------------------------------------------------
+    # Production bootstrap (slice-api-app-bootstrap, #123)
+    # ------------------------------------------------------------------
+    # Wires real Qdrant + TEI + every plane factory into the FastAPI
+    # dep map. Skipped when settings.musubi_skip_bootstrap=True (test
+    # fixtures that bypass app_factory) OR when overrides are already
+    # installed. Without this, every plane endpoint 500s on first hit
+    # because dependencies.py ships fail-loud NotImplementedError stubs.
+    from musubi.api.bootstrap import _should_bootstrap, bootstrap_production_app
+
+    if _should_bootstrap(app, settings):
+        bootstrap_production_app(app, settings)
 
     return app
 

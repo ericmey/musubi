@@ -57,13 +57,18 @@ services:
     environment:
       HF_HUB_ENDPOINT: https://huggingface.co
       HF_HOME: /data
-    command: ["--model-id", "BAAI/bge-small-en-v1.5", "--port", "80"]
+    # bge-large-en-v1.5 is 1024-dim — matches the Qdrant collection
+    # schema slice-qdrant-layout bootstrapped (fixed at 1024 for the
+    # production BGE-M3). bge-small-en-v1.5 (384-dim) caused
+    # "vector dimension mismatch: got 384, expected 1024" on every
+    # plane.create() call.
+    command: ["--model-id", "BAAI/bge-large-en-v1.5", "--port", "80"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 60
-      start_period: 90s
+      start_period: 120s
 
   tei-sparse:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
@@ -75,9 +80,13 @@ services:
     environment:
       HF_HUB_ENDPOINT: https://huggingface.co
       HF_HOME: /data
+    # naver/efficient-splade-VI-BT-large-doc is TEI's documented sparse
+    # reference model + ships with ONNX weights so the CPU build loads
+    # cleanly. prithivida/Splade_PP_en_v1 lacks ONNX/safetensors and
+    # 404s the model download on the CPU image.
     command:
       - "--model-id"
-      - "prithivida/Splade_PP_en_v1"
+      - "naver/efficient-splade-VI-BT-large-doc"
       - "--pooling"
       - "splade"
       - "--port"
@@ -127,12 +136,16 @@ services:
       retries: 30
       start_period: 30s
 
-  # Side-car that pulls the test model on first boot. Exits 0 when
-  # done; the harness waits on this before running concept-synthesis
-  # bullets.
+  # Side-car that pulls the test model on first boot. One-shot —
+  # exits 0 after pull completes. Lives behind the `pull` profile
+  # so `docker compose up -d --wait` (which trips on one-shot
+  # containers' clean exit) doesn't see it; the workflow / Makefile
+  # runs `docker compose run --rm ollama-pull` separately after
+  # the main stack is up.
   ollama-pull:
     image: ollama/ollama:0.4.0
     container_name: musubi-test-ollama-pull
+    profiles: ["pull"]
     depends_on:
       ollama:
         condition: service_healthy

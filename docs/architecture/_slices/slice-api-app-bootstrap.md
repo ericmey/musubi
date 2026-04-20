@@ -3,10 +3,10 @@ title: "Slice: API app bootstrap — wire production plane factories"
 slice_id: slice-api-app-bootstrap
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: vscode-cc-sonnet47
 phase: "7 Adapters"
-tags: [section/slices, status/ready, type/slice, api, bootstrap, phase-2, critical-path]
+tags: [section/slices, status/in-review, type/slice, api, bootstrap, phase-2, critical-path]
 updated: 2026-04-20
 reviewed: false
 depends-on: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-v0-write]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-thoughts]]", "[[_slices/slice-embedding]]", "[[_slices/slice-config]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > **CRITICAL PATH.** Production `create_app()` currently ships every plane factory as `raise NotImplementedError` per the ADR-punted-deps-fail-loud pattern. Unit tests override via `app.dependency_overrides`; nothing wires production. Until this slice lands, the deployed app comes up but 500s on first hit. Every consumer-slice unskip against the integration harness (PR #114) is gated on this.
 
-**Phase:** 7 Adapters · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 7 Adapters · **Status:** `in-review` · **Owner:** `vscode-cc-sonnet47`
 
 ## Why this slice exists
 
@@ -180,10 +180,39 @@ Plus slice-specific:
 - CRITICAL PATH: every Phase 2 consumer (integration harness smoke bullets, first-deploy, POC migration, OpenClaw) is gated on this.
 - VS Code hit the bug; he's the natural implementer (freshest context). Alternative: Hana (similar scope to types-followup #107 she just shipped). Operator picks.
 
+### 2026-04-20 — vscode-cc-sonnet47 — take
+
+- Claimed atomically via `gh issue edit 123 --add-assignee @me` + label flip `status:ready → status:in-progress` (dual-update before writes).
+- Branch `slice/slice-api-app-bootstrap` off the carve branch `origin/docs/slice-api-app-bootstrap` (carve PR #124 still open at claim time but CLEAN+green; branching off the carve branch so I inherit the slice file without waiting for the merge — when #124 squashes to v2, the squashed commit's content matches my history so a later rebase is a no-op).
+- Same agent that opened the cross-slice ticket on PR #114 → wrote most of the spec for this slice → freshest context for the implementation. Canonical 7-commit shape this time (separate `test(api):` commit before `feat(api):`) per the lesson saved to memory after PR #114's audit soft-warning.
+
+### 2026-04-20 — vscode-cc-sonnet47 — handoff to in-review
+
+- Implemented `src/musubi/api/bootstrap.py` with `bootstrap_production_app(app, settings)`: constructs real `QdrantClient` + a TEI-backed composite `Embedder` (`_TEICompositeEmbedder` delegates each protocol method to the right TEI client), health-probes both with bounded linear retry, then installs `app.dependency_overrides` for qdrant + embedder + 5 plane factories + lifecycle service. Idempotent. Fails loud via typed `BootstrapError(dep=...)` on probe exhaustion.
+- Extended `src/musubi/api/dependencies.py` with the missing factory stubs (`get_embedder`, `get_thoughts_plane`, `get_lifecycle_service`) for symmetry with the existing 4 plane factories. All raise `NotImplementedError` per the existing pattern; bootstrap supplies the override.
+- Wired `src/musubi/api/app.py`: `create_app()` now resolves Settings from config when not supplied + calls `bootstrap_production_app(app, settings)` at the bottom of the build gated on `_should_bootstrap`. Gate skips when `settings.musubi_skip_bootstrap=True` (test escape hatch) OR when overrides are already installed.
+- Added `musubi_skip_bootstrap: bool = False` to `Settings`. Updated `tests/api/conftest.py` + `tests/observability/conftest.py` to set it `=True` so unit tests' `app_factory`-pattern fixtures continue to work unchanged (bullet 12 regression invariant).
+- 16 unit tests in `tests/api/test_bootstrap.py` (12 contract + 4 coverage), all mocked Qdrant + TEI per spec. All pass locally.
+- Closed cross-slice ticket `slice-ops-integration-harness-production-app-bootstrap.md` (status open → resolved).
+- **Integration harness unskips** (operator-preferred-in-PR per slice DoD): 12 cycles of CI iteration on PR #126 surfaced 11 distinct adjacent-layer config bugs each fixed in their own commit (TEI sparse model id, Qdrant SSL default, compose --wait-timeout, ollama-pull profile, TEI async-loop conflict, smoke-tests event-loop-closed, token per-namespace scopes, curated payload schema, artifact upload schema, vector dim mismatch, missing collection bootstrap). End state: **3/5 plane-touching bullets PASSING in CI** (capture_dedup, thoughts_send_check, curated_create — proving the bootstrap wiring works end-to-end through the production path); 2 remaining (bullet 5 retrieve-after-capture, bullet 12 artifact-upload) re-skipped against new follow-up Issues #133 + #134 (downstream surface bugs, not bootstrap issues).
+- Handoff checks: `make check` green (1000+ passed locally), `make agent-check` clean of slice-touching errors, all 3 CI checks green (`Vault hygiene` + `check` + `Integration (run 1)` pass at 2m flat).
+- Flipping `status: in-review`, marking PR ready, removing the lock.
+
+### Known gaps at in-review
+
+- **2 of 5 unskipped integration bullets re-skipped** against follow-up Issues #133 + #134. The bootstrap deliverable is proven by the 3 passing bullets through the same production wiring path; the remaining failures are downstream of bootstrap (Qdrant local-mode indexing latency on bullet 5; chunker/artifact-plane interaction on bullet 12). Each issue documents the likely root cause + fix path.
+- **Pre-existing mypy error** in `src/musubi/sdk/tracing.py` (PR #131's OTel addition — `Module "opentelemetry" has no attribute "trace"` warning). Not from this slice; CI tolerates it because its dep-install path differs from local. Operator may want a follow-up to add `# type: ignore` or pin opentelemetry-api differently.
+- **Operator merged 4 PRs into the slice branch mid-iteration** (#128 POC migration, #129 async fake client promotion, #130 lifecycle worker metrics, #131 OTel SDK spans, plus CI version fixes). Rebased cleanly each time. Surface-area increased but no integration regressions surfaced.
+
 ## Cross-slice tickets opened by this slice
 
-- _(none yet)_
+- _(none — this slice resolved the existing `slice-ops-integration-harness-production-app-bootstrap.md` cross-slice ticket; no new tickets opened.)_
+
+## Follow-up Issues opened (re-skip targets for in-PR unskip)
+
+- [#133](https://github.com/ericmey/musubi/issues/133) — bullet 5 capture-then-retrieve unskip; needs Qdrant `wait=True` or longer poll budget on cold-cache CI.
+- [#134](https://github.com/ericmey/musubi/issues/134) — bullet 12 artifact-upload unskip; downstream chunker / artifact-plane root-cause investigation.
 
 ## PR links
 
-- _(none yet)_
+- [#126](https://github.com/ericmey/musubi/pull/126) — `slice/slice-api-app-bootstrap` → `v2`.

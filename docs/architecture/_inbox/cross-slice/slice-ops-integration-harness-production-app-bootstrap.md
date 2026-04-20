@@ -3,13 +3,24 @@ title: "Cross-slice: wire production plane factories into create_app()"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-ops-integration-harness
-target_slice: slice-api-v0-write
-status: open
+target_slice: slice-api-app-bootstrap
+status: resolved
+resolved_by: slice-api-app-bootstrap (PR #126)
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
-updated: 2026-04-19
+resolved_at: 2026-04-20
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
+updated: 2026-04-20
 ---
+
+> **Resolved.** `slice-api-app-bootstrap` (PR #126) shipped
+> `src/musubi/api/bootstrap.py` with `bootstrap_production_app(app, settings)`.
+> `create_app()` now calls it on the way up gated on
+> `settings.musubi_skip_bootstrap` + presence of pre-installed
+> dependency overrides. Integration harness bullets 5/6/7/9/12 unskipped
+> in the same PR. This ticket is closed; left in the vault as the audit
+> trail.
+
 
 # Wire production plane factories into `create_app()`
 

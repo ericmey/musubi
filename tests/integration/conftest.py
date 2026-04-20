@@ -43,7 +43,10 @@ _COMPOSE_FILE = _REPO_ROOT / "deploy" / "test-env" / "docker-compose.test.yml"
 _ENV_FILE = _REPO_ROOT / "deploy" / "test-env" / ".env.test"
 
 _DEFAULT_API_PORT = 8100
-_BOOT_TIMEOUT_S = 300.0
+# 600s gives first-cold-cache CI runs enough headroom for TEI model
+# downloads (each ~150-450MB on CPU; sparse loaded at ~284s on the
+# stock GHA runner before its healthcheck could tick "Healthy").
+_BOOT_TIMEOUT_S = 600.0
 _BOOT_POLL_INTERVAL_S = 1.0
 
 
@@ -179,12 +182,23 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 
 
 def _mint_operator_token(jwt_signing_key: str) -> str:
-    """HS256 token with the operator scope for the integration tests."""
+    """HS256 token granting per-namespace ``:rw`` access to every
+    integration-test namespace + the operator scope. The auth layer
+    checks per-namespace scopes (operator alone doesn't bypass)."""
     from datetime import UTC, datetime, timedelta
 
     import jwt
 
     now = datetime.now(UTC)
+    namespaces = [
+        "eric/integration-test/episodic",
+        "eric/integration-test/curated",
+        "eric/integration-test/concept",
+        "eric/integration-test/artifact",
+        "eric/integration-test/thought",
+        "eric/_shared/episodic",
+    ]
+    scopes = ["operator", *(f"{ns}:rw" for ns in namespaces)]
     payload = {
         "iss": "https://auth.test.local",
         "sub": "integration-test",
@@ -192,7 +206,7 @@ def _mint_operator_token(jwt_signing_key: str) -> str:
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=2)).timestamp()),
         "jti": "integration-test-token",
-        "scope": "operator",
+        "scope": " ".join(scopes),
         "presence": "integration-test/harness",
     }
     return jwt.encode(payload, jwt_signing_key, algorithm="HS256")
@@ -244,27 +258,18 @@ def live_stack(request: pytest.FixtureRequest) -> Iterator[StackHandle]:
 
 
 @pytest.fixture
-def api_client(live_stack: StackHandle) -> Iterator[Any]:
-    """Per-test :class:`AsyncMusubiClient`. Closed on test exit.
-
-    Tests run via ``asyncio.run(...)`` create + tear down their own
-    event loop per call, so the loop is already closed when this
-    finalizer runs. We allocate a fresh loop just for the close to
-    avoid the ``RuntimeError: Event loop is closed`` chain that
-    surfaces otherwise."""
-    import asyncio
-
+def api_client(live_stack: StackHandle) -> Any:
+    """Per-test :class:`AsyncMusubiClient`. Tests are ``async def``
+    so pytest-asyncio (auto mode) manages one event loop per test
+    and the client's httpx pool binds cleanly to it. We do NOT
+    explicitly ``await client.close()`` in a finalizer — the
+    asyncio.run-per-test pattern that motivated such a finalizer
+    would re-trigger the "Event loop is closed" chain. Test
+    process exits drop the connection pool implicitly; in CI
+    each test session is short-lived so leaks are bounded."""
     from musubi.sdk import AsyncMusubiClient
 
-    client = AsyncMusubiClient(
+    return AsyncMusubiClient(
         base_url=live_stack.api_url,
         token=live_stack.operator_token,
     )
-    try:
-        yield client
-    finally:
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(client.close())
-        finally:
-            loop.close()
