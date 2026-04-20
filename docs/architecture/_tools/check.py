@@ -228,13 +228,16 @@ def check_slices(rep: Report) -> None:
         if not m:
             continue
         owned_section = m.group(1)
-        for pm in re.finditer(r"^\s*-\s+`([^`]+)`\s*$", owned_section, re.M):
+        for pm in re.finditer(r"^\s*-\s+`([^`]+)`.*$", owned_section, re.M):
             path = pm.group(1).strip()
             if path in claims and claims[path] != sid:
-                rep.err(
-                    str(s["path"].relative_to(VAULT)),
-                    f"owns_paths conflict: '{path}' also claimed by '{claims[path]}'",
-                )
+                status_cur = s["fm"].get("status")
+                status_prev = slices[claims[path]]["fm"].get("status")
+                msg = f"owns_paths conflict: '{path}' also claimed by '{claims[path]}'"
+                if status_cur == "done" or status_prev == "done":
+                    rep.warn(str(s["path"].relative_to(VAULT)), msg)
+                else:
+                    rep.err(str(s["path"].relative_to(VAULT)), msg)
             claims[path] = sid
 
     # 3. status transitions
@@ -388,7 +391,7 @@ def check_issues(rep: Report) -> None:
 
         # Issue closed state = slice should be done
         if issue.get("state") == "CLOSED":
-            if vault_status != "done":
+            if vault_status not in ("done", "retired"):
                 rep.err(
                     f"_slices/{sid}.md",
                     f"Issue #{issue['number']} is closed but frontmatter status is '{vault_status}' "
