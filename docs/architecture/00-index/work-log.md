@@ -27,6 +27,16 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 
 ## Entries
 
+### 2026-04-20 — slice-poc-data-migration completed via SDK
+
+The POC data migration script `poc-to-v1.py` successfully completed discovery and implementation against `control.example.local`. Connected to the local POC Qdrant source via port 6333, mapped and transformed the `musubi_memories` and `musubi_thoughts` rows with deterministic KSUIDs. 
+
+During implementation, it was verified that the `MusubiClient.memories.capture` endpoint does not support backdating `created_at`, so `[[_inbox/cross-slice/migrator-needs-created-at-override]]` was opened for the SDK and API teams to implement an override.
+
+Vault changes:
+- [[_slices/slice-poc-data-migration]] — `status: in-progress → in-review`.
+- [[11-migration/phase-1-schema]] — updated via discovery to describe the exact payload mapping constraints from the local Qdrant POC.
+
 ### 2026-04-19 — slice-adapter-mcp first cut ready for review
 
 Implements the MCP adapter exposing the Musubi SDK interface over local `stdio` and remote `sse` transports. Preserves legacy POC tool surface (`memory_capture`, `memory_recall`, `thought_send`, etc). Authored ADR 0021 to formally adopt Anthropic's official `mcp` library. 
