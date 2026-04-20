@@ -386,13 +386,15 @@ def check_issues(rep: Report) -> None:
         labels = [lab.get("name", "") for lab in issue.get("labels", [])]
         issue_status_labels = [lab for lab in labels if lab.startswith("status:")]
 
-        # Issue closed state = slice should be done
+        # Issue closed state = slice should be done OR retired. Both are valid
+        # closure reasons: `done` means shipped, `retired` means the slice was
+        # superseded by an ADR (see e.g. ADR-0022 retiring slice-adapter-openclaw).
         if issue.get("state") == "CLOSED":
-            if vault_status != "done":
+            if vault_status not in ("done", "retired"):
                 rep.err(
                     f"_slices/{sid}.md",
                     f"Issue #{issue['number']} is closed but frontmatter status is '{vault_status}' "
-                    "(expected 'done')",
+                    "(expected 'done' or 'retired')",
                 )
             continue
 

@@ -105,9 +105,67 @@ POST   /v1/thoughts/send
 POST   /v1/thoughts/check                    # unread for a presence
 POST   /v1/thoughts/read                     # mark read
 POST   /v1/thoughts/history                  # semantic search
+GET    /v1/thoughts/stream                   # SSE — real-time thought delivery
 ```
 
-Shape preserved from POC (see [[04-data-model/thoughts]]), just under the `/v1/thoughts/...` path.
+Shape preserved from POC (see [[04-data-model/thoughts]]), just under the `/v1/thoughts/...` path. Real-time delivery over SSE is the push counterpart to the poll-only `/check` endpoint; see §Thoughts stream below.
+
+#### Thoughts stream (SSE)
+
+Real-time thought delivery for consumers that need push semantics without polling — browser extensions (can't receive webhooks), voice-agent workers (low-latency context updates), any future homelab service subscribing to cross-presence notifications.
+
+**Request:**
+
+```http
+GET /v1/thoughts/stream?namespace=eric/openclaw&include=openclaw,all
+Accept: text/event-stream
+Authorization: Bearer <token>
+Last-Event-ID: <optional — KSUID of last seen thought; triggers replay>
+```
+
+Query params:
+- `namespace` (required) — presence namespace to subscribe against; must match a namespace the token can read.
+- `include` (optional, default `<token-presence>,all`) — comma-separated `to_presence` filter applied server-side.
+
+**Auth:** same convention as the other thoughts endpoints — `AuthRequirement(namespace=<ns>, access="r")`. A token that can call `/thoughts/check` for a namespace can stream `/thoughts/stream` for the same namespace. No new scope keyword.
+
+**Response frames:**
+
+```
+event: thought
+id: 2iVVRLuCjwsSIxfv8KKaZg3NoXc
+data: {"object_id":"...","from_presence":"eric/claude-code","to_presence":"openclaw","namespace":"eric/openclaw","content":"...","channel":"default","importance":7,"sent_at":"2026-04-19T23:14:22.104Z"}
+
+event: ping
+data: {"at":"2026-04-19T23:14:52.000Z"}
+
+event: close
+data: {"reason":"server-shutdown","reconnect_after_ms":5000}
+```
+
+Event semantics:
+- `thought` — one per new thought matching the subscription filter. The SSE `id:` field IS the thought's `object_id` (27-char base62 KSUID; lex-sortable by time).
+- `ping` — keepalive, every **30 seconds**; VPN/proxy-survivable.
+- `close` — graceful-shutdown signal; client reconnects after the hinted delay. Error paths just close the TCP connection.
+
+**Replay on reconnect:** `Last-Event-ID: <ksuid>` triggers replay of every thought matching the subscription where `object_id > <ksuid>` (lexicographic, ascending) before entering live-tail mode. Single bounded range query against the thoughts plane — cheap because KSUIDs sort by time.
+
+**Fanout semantics — BROADCAST (NORMATIVE).** Two clients subscribed to the same presence receive **the same events**. Example: user has OpenClaw open in two browsers + a LiveKit worker connected for `eric/openclaw` — all three streams see every thought addressed to `openclaw` or `all`. This is intentional and MUST NOT be regressed to competing-consumer round-robin under any "scaling" justification.
+
+**Backpressure:** slow-consumer events drop in-memory for that connection (metered via `thoughts_stream_dropped_events_total{reason="slow_consumer"}`); reconnect + `Last-Event-ID` recovers them because thoughts are durable in Qdrant.
+
+**Connection cap:** 100 concurrent SSE streams per API process (v1.0 single-host scope). Over-cap connections receive `503 Service Unavailable` with `Retry-After: 5`.
+
+#### Consumer expectations (for any `/thoughts/stream` subscriber)
+
+These are shared contract, not implementation suggestions. OpenClaw, LiveKit worker, and any future Python homelab consumer all build to these:
+
+1. **Reconnect with exponential backoff + jitter** on drop. `min(2^n * 1s + rand(0, 1s), 60s)`. Reset after 5 minutes of stable connection. Don't hammer Musubi when it's down.
+2. **Persist `Last-Event-ID` across restarts.** OpenClaw uses `chrome.storage.local` / IndexedDB; Python consumers a file or KV. Lose the ID and you replay the entire plane on restart.
+3. **Bounded local dedup set** — last 1000 `object_id`s or 1h TTL cache. Skip any event already in the set (replay + in-flight can overlap).
+4. **Scope-mismatch handling.** `403 Forbidden` on initial GET is a token-scope problem; do NOT reconnect on 403. Bubble to user as "re-authenticate."
+5. **Ping-gap timeout.** No frame in 2× ping interval (60s) → connection dead; close client-side to trigger reconnect. Catches silent half-open TCPs.
+6. **Lexicographic ID comparison.** `object_id` is KSUID (27-char base62). String compare, not numeric. `"2iVVRLuCj..." > "2iVVRLuAh..."` is the correct dedup-set insertion order.
 
 ### 6. Retrieval
 
