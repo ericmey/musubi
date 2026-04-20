@@ -189,12 +189,29 @@ def match_slice_from_closes_issue(
 def flip_slice_frontmatter(slice_path: Path, dry_run: bool = False) -> tuple[bool, str]:
     """Flip frontmatter in-review → done + inline Status line.
 
-    Returns (changed, human-readable diff-preview). Idempotent: re-running
-    on an already-done slice is a no-op.
+    Only fires when the slice is currently `status: in-review` — this is the
+    implementation-landing case. Slice carve PRs (operator adds a new
+    `status: ready` slice file) and non-slice PRs must NOT trigger a flip.
+    Returns (changed, preview). Idempotent: re-running on already-done or
+    still-ready slices is a no-op.
     """
     original = slice_path.read_text(encoding="utf-8")
-    text = original
 
+    # Gate on current status. `in-review` is the only state where flip is valid.
+    # `ready` → a carve PR that hasn't yet been claimed; `in-progress` → agent
+    # handed off incorrectly; `done`/`retired` → already flipped.
+    status_match = re.search(r"^status:\s*(\S+)\s*$", original, flags=re.M)
+    if not status_match:
+        return False, "no status field in frontmatter — not a slice file"
+    current_status = status_match.group(1)
+    if current_status != "in-review":
+        return False, (
+            f"status is '{current_status}' — flip only fires on 'in-review'. "
+            "If this PR did implement the slice and the agent forgot to flip "
+            "to in-review before handoff, fix it manually and re-run."
+        )
+
+    text = original
     # Frontmatter: status
     text = re.sub(r"^status:\s*in-review\s*$", "status: done", text, count=1, flags=re.M)
     # Frontmatter: tags (may be an inline list with many other tags)
