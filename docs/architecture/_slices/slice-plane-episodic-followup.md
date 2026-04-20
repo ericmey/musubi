@@ -3,12 +3,12 @@ title: "Slice: Episodic plane — finish first cut"
 slice_id: slice-plane-episodic-followup
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-2-0-flash
 phase: "4 Planes"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-plane-episodic]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Close the 18 in-scope Test Contract bullets deferred by `slice-plane-episodic`'s first cut: add `patch()`, `delete()`, access-count bump on read, four plane-boundary guards, three transition-behavior tests, one concurrency test, and two Hypothesis properties.
 
-**Phase:** 4 Planes · **Status:** `in-review` · **Owner:** `gemini-2-0-flash`
+**Phase:** 4 Planes · **Status:** `done` · **Owner:** `gemini-2-0-flash`
 
 ## Specs to implement
 
