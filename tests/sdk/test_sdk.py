@@ -388,11 +388,44 @@ def test_async_client_context_manager_cleanup() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-sdk-py-otel-spans: opentelemetry-api is opt-in per spec; cross-slice ticket _inbox/cross-slice/slice-sdk-py-otel-spans.md"
-)
 def test_otel_span_emitted_per_call() -> None:
-    """Bullet 16 — placeholder."""
+    import httpx
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from musubi.sdk import MusubiClient
+
+    # In Python tests, the global tracer provider might already be initialized.
+    # We can just mock musubi.sdk.tracing.trace.get_tracer to return our specific tracer.
+    provider = TracerProvider()
+    exporter = InMemorySpanExporter()
+    processor = SimpleSpanProcessor(exporter)
+    provider.add_span_processor(processor)
+    tracer = provider.get_tracer("test")
+
+    from unittest.mock import patch
+
+    with (
+        patch("musubi.sdk.tracing.trace.get_tracer", return_value=tracer),
+        patch("musubi.sdk.tracing.HAS_OTEL", True),
+    ):
+        with MusubiClient(
+            base_url="http://x.test/v1",
+            token="t",
+            transport=httpx.MockTransport(lambda r: httpx.Response(204)),
+        ) as c:
+            c.memories.capture(namespace="ns", content="x")
+
+        spans = exporter.get_finished_spans()
+        assert len(spans) == 1
+        assert spans[0].name == "musubi.memories.capture"
+        assert spans[0].attributes["http.method"] if spans[0].attributes else None == "POST"
+        assert spans[0].attributes and "http://x.test/memories" in str(
+            spans[0].attributes["http.url"]
+        )
+        assert spans[0].attributes["musubi.namespace"] if spans[0].attributes else None == "ns"
+        assert spans[0].attributes and "musubi.duration_ms" in spans[0].attributes
 
 
 def test_request_id_propagated() -> None:
