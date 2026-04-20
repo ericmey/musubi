@@ -3,10 +3,10 @@ title: "Slice: LiveKit adapter"
 slice_id: slice-adapter-livekit
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: vscode-cc-sonnet47
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-sdk-py]]", "[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > LiveKit Agents toolkit: Fast Talker + Slow Thinker pattern. `on_user_turn_completed` hook. Hard 200ms budget.
 
-**Phase:** 6 Lifecycle · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 6 Lifecycle · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
