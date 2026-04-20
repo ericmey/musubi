@@ -3,10 +3,10 @@ title: "Slice: POC → v1 data migration"
 slice_id: slice-poc-data-migration
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-3-1-pro-nyla
 phase: "11 Migration"
-tags: [section/slices, status/ready, type/slice, migration, phase-2]
+tags: [section/slices, status/in-progress, type/slice, migration, phase-2]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-thoughts]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > ETL from the pre-v1 POC store(s) into v1's canonical Qdrant collections with post-ADR-0015 schemas. Idempotent, resumable, reversible (via backup-first). Phase 2 critical path — v1 isn't actually useful to Eric until his real POC memories are in it.
 
-**Phase:** 11 Migration · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 11 Migration · **Status:** `in-progress` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Why this slice exists
 
@@ -118,6 +118,10 @@ Plus slice-specific:
 14. `integration: migrate_100_row_synthetic_corpus_end_to_end`
 
 ## Work log
+
+### 2026-04-20 01:25 — gemini-3-1-pro-nyla — claim
+
+- Claimed slice #109. Proceeding with discovery phase to inspect the local `nyla.mey.house` environment to ascertain the actual POC storage backend.
 
 ### 2026-04-19 — operator — slice carved
 
