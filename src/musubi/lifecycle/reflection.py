@@ -49,15 +49,18 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Iterable
+import time
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import wraps
 from typing import Any, Protocol
 
 from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
 from musubi.lifecycle.events import LifecycleEventSink
+from musubi.observability import default_registry
 from musubi.planes.curated import CuratedPlane
 from musubi.types.common import KSUID, Namespace, generate_ksuid, utc_now
 from musubi.types.curated import CuratedKnowledge
@@ -69,6 +72,35 @@ _DEFAULT_IMPORTANCE = 6
 _LLM_OUTAGE_NOTICE = "> LLM was unavailable at reflection time; patterns section skipped."
 
 _KSUID_RE = re.compile(r"\b[0-9A-Za-z]{27}\b")
+
+_REG = default_registry()
+_DURATION = _REG.histogram(
+    "musubi_lifecycle_job_duration_seconds",
+    "lifecycle worker tick duration",
+    labelnames=("job",),
+)
+_ERRORS = _REG.counter(
+    "musubi_lifecycle_job_errors_total",
+    "lifecycle worker tick errors",
+    labelnames=("job",),
+)
+
+
+def _instrument_reflection_job[**P, R](
+    func: Callable[P, Awaitable[R]],
+) -> Callable[P, Awaitable[R]]:
+    @wraps(func)
+    async def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
+        start = time.monotonic()
+        try:
+            return await func(*args, **kwargs)
+        except Exception:
+            _ERRORS.labels(job="reflection").inc()
+            raise
+        finally:
+            _DURATION.labels(job="reflection").observe(time.monotonic() - start)
+
+    return _wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +670,7 @@ def render_markdown(
 # ---------------------------------------------------------------------------
 
 
+@_instrument_reflection_job
 async def run_reflection_sweep(
     *,
     qdrant: QdrantClient,

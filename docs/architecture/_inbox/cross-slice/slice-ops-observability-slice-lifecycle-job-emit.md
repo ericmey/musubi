@@ -4,11 +4,11 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-ops-observability
 target_slice: slice-lifecycle-maturation
-status: open
+status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
-updated: 2026-04-19
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
+updated: 2026-04-20
 ---
 
 # Lifecycle workers should emit job start/end metrics
@@ -78,3 +78,7 @@ names — they just won't show data until the workers emit.
   panels render real data on the staging compose stack.
 - `slice-ops-observability` test bullet 7 unskipped + asserts on
   the metric increment.
+
+## Resolution
+
+Resolved by PR: lifecycle maturation, synthesis, promotion, and reflection worker ticks now observe `musubi_lifecycle_job_duration_seconds` and increment `musubi_lifecycle_job_errors_total` on raised errors.

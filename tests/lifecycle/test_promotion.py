@@ -14,6 +14,7 @@ from qdrant_client import QdrantClient
 from musubi.embedding.fake import FakeEmbedder
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.promotion import PromotionRender, _is_eligible, compute_path
+from musubi.observability import default_registry, render_text_format
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.store.bootstrap import bootstrap
@@ -119,6 +120,15 @@ def _concept(**kwargs: Any) -> SynthesizedConcept:
     }
     d.update(kwargs)
     return SynthesizedConcept(**d)  # type: ignore
+
+
+def _duration_count(job: str) -> int:
+    text = render_text_format(default_registry())
+    prefix = f'musubi_lifecycle_job_duration_seconds_count{{job="{job}"}} '
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return int(line.removeprefix(prefix))
+    return 0
 
 
 def test_gate_requires_matured_state() -> None:
@@ -341,6 +351,15 @@ async def test_curated_point_upserted_with_promoted_from(deps: Any) -> None:
     )
     assert len(curated_points[0]) == 1
     assert curated_points[0][0].payload["promoted_from"] == str(c.object_id)
+
+
+@pytest.mark.asyncio
+async def test_promotion_worker_observes_lifecycle_job_duration(deps: Any) -> None:
+    from musubi.lifecycle.promotion import run_promotion_sweep
+
+    before = _duration_count("promotion")
+    assert await run_promotion_sweep(deps) == 0
+    assert _duration_count("promotion") == before + 1
 
 
 @pytest.mark.asyncio

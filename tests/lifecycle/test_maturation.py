@@ -57,6 +57,7 @@ from musubi.lifecycle.maturation import (
     normalize_tags,
     provisional_ttl_sweep,
 )
+from musubi.observability import default_registry, render_text_format
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
 from musubi.types.episodic import EpisodicMemory
@@ -208,6 +209,15 @@ def _config(**overrides: object) -> MaturationConfig:
     }
     base.update(overrides)
     return MaturationConfig(**base)  # type: ignore[arg-type]
+
+
+def _duration_count(job: str) -> int:
+    text = render_text_format(default_registry())
+    prefix = f'musubi_lifecycle_job_duration_seconds_count{{job="{job}"}} '
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return int(line.removeprefix(prefix))
+    return 0
 
 
 def _read_state(plane: EpisodicPlane, ns: str, object_id: str) -> str | None:
@@ -940,6 +950,16 @@ async def test_concept_maturation_sweep_no_op_when_empty(
 
     report = await concept_maturation_sweep(client=qdrant, sink=sink, config=_config())
     assert report.selected == 0
+
+
+async def test_maturation_worker_observes_lifecycle_job_duration(
+    qdrant: QdrantClient, sink: LifecycleEventSink
+) -> None:
+    from musubi.lifecycle.maturation import concept_maturation_sweep
+
+    before = _duration_count("maturation")
+    await concept_maturation_sweep(client=qdrant, sink=sink, config=_config())
+    assert _duration_count("maturation") == before + 1
 
 
 async def test_concept_demotion_sweep_no_op_when_empty(

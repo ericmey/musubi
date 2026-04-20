@@ -63,6 +63,7 @@ from musubi.lifecycle.reflection import (
     validate_cited_ids,
     vault_path_for,
 )
+from musubi.observability import default_registry, render_text_format
 from musubi.planes.curated import CuratedPlane
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
@@ -248,6 +249,15 @@ def _config(**overrides: object) -> ReflectionConfig:
     return ReflectionConfig(**base)  # type: ignore[arg-type]
 
 
+def _duration_count(job: str) -> int:
+    text = render_text_format(default_registry())
+    prefix = f'musubi_lifecycle_job_duration_seconds_count{{job="{job}"}} '
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return int(line.removeprefix(prefix))
+    return 0
+
+
 async def _run(
     *,
     qdrant: QdrantClient,
@@ -317,6 +327,27 @@ async def test_capture_summary_counts_correct(
     # Body actually says "2 new episodic captures".
     body = vault.writes[-1][2]
     assert "2 new episodic captures" in body or "2 episodic captures" in body
+
+
+async def test_reflection_worker_observes_lifecycle_job_duration(
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+    curated: CuratedPlane,
+    now: datetime,
+    reflection_namespace: str,
+) -> None:
+    before = _duration_count("reflection")
+    await _run(
+        qdrant=qdrant,
+        sink=sink,
+        curated=curated,
+        vault=FakeVaultWriter(),
+        thoughts=FakeThoughtEmitter(),
+        llm=FakeReflectionLLM(available=False),
+        namespace=reflection_namespace,
+        now=now,
+    )
+    assert _duration_count("reflection") == before + 1
 
 
 async def test_patterns_section_parses_llm_output(

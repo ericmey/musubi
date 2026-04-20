@@ -27,6 +27,7 @@ from musubi.lifecycle.synthesis import (
     SynthesisOutput,
     synthesis_run,
 )
+from musubi.observability import default_registry, render_text_format
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.store import bootstrap
 from musubi.store.names import collection_for_plane
@@ -118,6 +119,15 @@ def _ns(base: str, plane: str) -> str:
     return f"{base}/{plane}"
 
 
+def _duration_count(job: str) -> int:
+    text = render_text_format(default_registry())
+    prefix = f'musubi_lifecycle_job_duration_seconds_count{{job="{job}"}} '
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return int(line.removeprefix(prefix))
+    return 0
+
+
 async def _inject_episodic(
     client: QdrantClient,
     embedder: FakeEmbedder,
@@ -202,6 +212,19 @@ async def test_skips_when_fewer_than_3_new_memories(
     report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
     assert report.memories_selected == 2
     assert report.clusters_formed == 0
+
+
+async def test_synthesis_worker_observes_lifecycle_job_duration(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    before = _duration_count("synthesis")
+    report = await synthesis_run(qdrant, sink, FakeSynthesisOllama(), embedder, cursor, ns)
+    assert report.memories_selected == 0
+    assert _duration_count("synthesis") == before + 1
 
 
 async def test_cursor_per_namespace_tracked_separately(
