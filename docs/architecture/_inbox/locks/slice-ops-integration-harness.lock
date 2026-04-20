@@ -1,5 +1,0 @@
-agent: vscode-cc-sonnet47
-issue: 108
-started: 2026-04-19T23:00:00Z
-branch: slice/slice-ops-integration-harness
-note: Secondary lock per agent-guardrails §Locking. Removed at handoff.

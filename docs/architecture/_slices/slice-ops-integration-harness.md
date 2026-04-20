@@ -3,10 +3,10 @@ title: "Slice: Integration test harness"
 slice_id: slice-ops-integration-harness
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: vscode-cc-sonnet47
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice, integration, testing, phase-2]
+tags: [section/slices, status/in-review, type/slice, integration, testing, phase-2]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-ops-compose]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > Docker-compose test environment + end-to-end scenarios + `make test-integration` target. Closes ~19 Test Contract bullets currently skipped with "deferred to integration harness" across the done slices, and is the first Phase 2 hardening deliverable — everything downstream (perf baselines, load tests, chaos scenarios) depends on this existing.
 
-**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
+**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `vscode-cc-sonnet47`
 
 ## Why this slice exists
 
@@ -144,10 +144,44 @@ Tests use `api_client` and assert end-to-end behaviour.
 - Same agent that landed slice-ops-compose, slice-sdk-py (FakeMusubiClient pattern), slice-adapter-livekit (fixture wiring), slice-ops-observability (cross-cutting instrumentation) — those four are the composition target this harness exercises end-to-end.
 - **Pre-flight constraint surfaced + resolved with operator before going deep:** Docker is not installed on this agent's dev machine. Operator confirmed CI-as-first-verification is acceptable for this slice. Approach: split the 14 Test Contract bullets — bullets 1-4 (harness-shape) verified locally via mocked-subprocess pattern; bullets 5-14 (real-services smoke) verified by initial CI run via PR-trigger path-filter on `.github/workflows/integration.yml`; flake-characterization evidence comes from the post-merge nightly cron's matrix-of-3.
 
+### 2026-04-19 — vscode-cc-sonnet47 — handoff to in-review
+
+- Implemented the harness scaffolding per the operator-confirmed verifiability split:
+  - `deploy/test-env/docker-compose.test.yml` — 5 dependency services (Qdrant + TEI dense/sparse/reranker on `:cpu-1.6` + Ollama with side-car model pull). CPU-image variants throughout so the stack runs on stock GitHub Actions runners.
+  - `deploy/test-env/.env.test` — env-file the harness sources for the in-process musubi-core uvicorn.
+  - `deploy/test-env/README.md` — local-run + port-collision-override + perf-budget gating.
+  - `tests/integration/conftest.py` — session-scoped `live_stack` (boots compose deps, spawns uvicorn for `musubi.api.app:create_app`, mints operator JWT, polls `/v1/ops/health`); per-test `api_client`. Single `_run` chokepoint for all subprocess shell-outs so harness-shape tests can monkeypatch.
+  - `tests/integration/_corpus/seed.py` — deterministic 10k-memory template-expansion generator (perf-bullet baseline).
+  - `tests/integration/test_harness.py` — 11 tests realising bullets 1-4 + coverage; verified locally on this docker-less machine via the mocked-subprocess pattern.
+  - `tests/integration/test_smoke.py` — 10 scenarios scaffolded for bullets 5-14; current state below.
+  - `Makefile` — `test-integration` target invokes `pytest -m integration`; default `test` excludes integration via pyproject `addopts`.
+  - `.github/workflows/integration.yml` — PR-trigger path-filter (this PR + any harness-touching followup) + nightly cron with `[1, 2, 3]` matrix for flake characterization + workflow_dispatch.
+- **CI revealed two real issues local-only verification couldn't have caught — exactly the case for the CI-as-first-verification split:**
+  1. TEI `:cpu-1.5` had a hf-hub bug ("relative URL without a base") on first model download. Fixed by bumping to `:cpu-1.6` + per-service model volumes + explicit `HF_HUB_ENDPOINT`.
+  2. `musubi.api.app.create_app()` ships ADR-punted-deps-fail-loud stubs for every plane factory in `musubi.api.dependencies`. No production bootstrap wires real planes. Hidden until tonight because nothing was running the production app outside unit tests; this harness was the first to do so. Bullets 5/6/7/9/12 deferred against new cross-slice ticket `slice-ops-integration-harness-production-app-bootstrap.md`.
+- Handoff checks: `make check` green (889 passed, 226 skipped, 10 deselected), `make tc-coverage SLICE=slice-ops-integration-harness` reports closure satisfied (the slice's specs are compose-stack + observability — already shipped + green), `make agent-check` clean of slice-touching errors (one ✗ on slice-types-followup is Hana's flapping label, not mine), CI green (3/3 checks pass including the integration job at 1m29s).
+- Three follow-up Issues opened (#118 ingestion-capture, #119 plane-concept ollama-offline, #120 api-thoughts-stream SSE) — DoD evidence the harness serves consumer slices.
+- Flipping `status: in-review`, marking PR ready, removing the lock.
+
+### Known gaps at in-review
+
+- **Production app bootstrap is the gating cross-slice.** Five bullets (5/6/7/9/12) are skipped against `slice-ops-integration-harness-production-app-bootstrap.md`. That ticket is the real follow-up dependency every other consumer slice unskip needs to land first. Owner suggestion: slice-api-v0-write or a new `slice-api-app-bootstrap` carve-out.
+- **Perf bullets (13/14) are CPU-stack-unrealistic.** They skip unless `MUSUBI_TEST_PERF_BUDGETS=strict` is set; operator's nightly run on the GPU reference host is the evidence path.
+- **Concept-synthesis bullets (10/11)** need an operator-scope debug endpoint to trigger the lifecycle worker from a test; documented in scaffolded skip with consumer-slice ownership.
+- **SSE bullet (8)** scaffold-only; consumer slice (slice-api-thoughts-stream) owns the unskip per Issue #120.
+- **Flake-characterization evidence comes from the first ~week of nightly runs.** The PR-trigger run verified one boot + scenario-suite-collection; the "no flakes on 3 consecutive runs" DoD bullet's evidence is the nightly cron's matrix-of-3 over time.
+- **Local docker absence on agent dev machine** documented per the operator's brief refinement; CI provided the first verification of the docker-up path.
+
 ## Cross-slice tickets opened by this slice
 
-- _(none yet)_
+- [[_inbox/cross-slice/slice-ops-integration-harness-production-app-bootstrap|production-app-bootstrap]] — wire production plane factories into `create_app()`; gates consumer-slice unskips for bullets 5/6/7/9/12.
+
+## Follow-up Issues opened (DoD evidence)
+
+- [#118](https://github.com/ericmey/musubi/issues/118) — slice-ingestion-capture bullet 22 (100-item batch capture <1s) unskip path.
+- [#119](https://github.com/ericmey/musubi/issues/119) — slice-plane-concept bullet 24 (ollama-offline graceful degradation) unskip path.
+- [#120](https://github.com/ericmey/musubi/issues/120) — slice-api-thoughts-stream bullet 20 (SSE live delivery) unskip path.
 
 ## PR links
 
-- _(none yet)_
+- [#114](https://github.com/ericmey/musubi/pull/114) — `slice/slice-ops-integration-harness` → `v2`.
