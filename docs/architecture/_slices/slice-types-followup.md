@@ -3,10 +3,10 @@ title: "Slice: Types followup — add 6 missing fields cited by cross-slice tick
 slice_id: slice-types-followup
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: gemini-2-0-flash
 phase: "1 Schema"
-tags: [section/slices, status/ready, type/slice, types, cross-slice-consolidation]
+tags: [section/slices, status/in-review, type/slice, types, cross-slice-consolidation]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-types]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > Consolidates 6 open cross-slice tickets that all request small field additions to `src/musubi/types/`. Each was filed by a downstream slice that couldn't land its own test bullets because the types surface was missing a field the spec requires. Parent `slice-types` is `status: done` — this is the standard Option-3 followup pattern (same as blended-followup, episodic-followup).
 
-**Phase:** 1 Schema · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 1 Schema · **Status:** `in-review` · **Owner:** `gemini-2-0-flash`
 
 ## Why this slice exists
 
@@ -178,6 +178,19 @@ Those are downstream followup PRs against the respective consumer slices after T
 - Consolidates 6 cross-slice tickets (+ 1 redundant question) into one followup slice. Parent `slice-types` is `status: done`; this is the Option-3 followup pattern established tonight.
 - Recommended Option A on each either/or choice (keep invariants clean; prefer new fields over bending existing validators). Implementing agent has authority to choose B on either with justification in the feat-commit message.
 - Paths and wikilinks verified against actual file layout 2026-04-19.
+
+
+### 2026-04-19 23:45 — gemini-2-0-flash — claim
+
+- Claimed slice via Issue #107. Draft PR #113.
+- Out of scope deferrals (downstream consumer unskips):
+  - test_maturation_sets_matured_after_ttl_and_scores_importance
+  - test_maturation_skips_already_matured
+  - test_query_hybrid_returns_scored_results_in_descending_order
+  - test_forward_compat_reads_schema_version_0_point
+  - test_perf_create_under_100ms_p95_on_reference_host
+  - test_perf_dedup_query_under_30ms_p95
+
 
 ## Cross-slice tickets opened by this slice
 

@@ -28,3 +28,7 @@ Because `slice-plane-thoughts` cannot mutate `src/musubi/types/`, this blocks te
 ## Action required
 
 `slice-types` owner needs to add `in_reply_to: KSUID | None = None` and `supersedes: list[KSUID] = Field(default_factory=list)` to the `Thought` pydantic model in `src/musubi/types/thought.py`.
+
+## Resolution
+
+Resolved by PR #113 (`slice-types-followup`).

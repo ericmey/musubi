@@ -4,10 +4,10 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-lifecycle-promotion
 target_slice: slice-types
-status: open
+status: resolved
 opened_by: gemini-3-1-pro-nyla
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-19
 ---
 
@@ -42,3 +42,7 @@ topics: list[str] = Field(default_factory=list)
 
 - `SynthesizedConcept(..., topics=["a/b"])` validates.
 - Follow-up updates `slice-lifecycle-promotion` to use `concept.topics` instead of the `linked_to_topics` fallback.
+
+## Resolution
+
+Resolved by PR #113 (`slice-types-followup`).

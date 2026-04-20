@@ -43,6 +43,7 @@ from musubi.types.concept import SynthesizedConcept
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
 from musubi.types.lifecycle_event import (
+    CaptureEvent,
     LifecycleEvent,
     ObjectType,
     allowed_states,
@@ -58,6 +59,7 @@ __all__ = [
     "ArtifactChunk",
     "ArtifactIndexingState",
     "ArtifactRef",
+    "CaptureEvent",
     "CuratedKnowledge",
     "EpisodicMemory",
     "Err",

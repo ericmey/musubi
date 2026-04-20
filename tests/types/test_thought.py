@@ -47,3 +47,27 @@ def test_to_presence_all_supported(thought_namespace: str) -> None:
 def test_roundtrip_json(sample_thought: Thought) -> None:
     restored = Thought.model_validate_json(sample_thought.model_dump_json())
     assert restored == sample_thought
+
+
+def test_thought_in_reply_to_accepts_ksuid(thought_namespace: str) -> None:
+    from musubi.types.common import generate_ksuid
+
+    k = generate_ksuid()
+    t = Thought(
+        namespace=thought_namespace, content="h", from_presence="a", to_presence="b", in_reply_to=k
+    )
+    assert t.in_reply_to == k
+
+
+def test_thought_supersedes_accepts_ksuid_list(thought_namespace: str) -> None:
+    from musubi.types.common import generate_ksuid
+
+    k1, k2 = generate_ksuid(), generate_ksuid()
+    t = Thought(
+        namespace=thought_namespace,
+        content="h",
+        from_presence="a",
+        to_presence="b",
+        supersedes=[k1, k2],
+    )
+    assert t.supersedes == [k1, k2]

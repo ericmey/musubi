@@ -4,10 +4,10 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-lifecycle-maturation
 target_slice: slice-types
-status: open
+status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 updated: 2026-04-19
 ---
 
@@ -89,3 +89,7 @@ update accordingly.
 - `slice-lifecycle-maturation` follow-up updates
   `_apply_enrichment` + the two passing topic tests to match.
 - `make agent-check` reports no spec drift on the relevant fields.
+
+## Resolution
+
+Resolved by PR #113 (`slice-types-followup`).
