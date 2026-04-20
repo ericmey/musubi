@@ -63,9 +63,7 @@ async def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
         if any(r.get("object_id") == captured["object_id"] for r in rows):
             return
         await asyncio.sleep(0.5)
-    pytest.fail(
-        f"newly-captured object_id missing from retrieval results within 10s: {rows}"
-    )
+    pytest.fail(f"newly-captured object_id missing from retrieval results within 10s: {rows}")
 
 
 # --------------------------------------------------------------------------
@@ -205,7 +203,22 @@ async def test_artifact_upload_multipart_then_retrieve_blob(
 ) -> None:
     """Multipart upload → GET blob → bytes match."""
     namespace = "eric/integration-test/artifact"
-    payload = b"WEBVTT\n\n00:00 --> 00:02\nSmoke test transcript fixture."
+    # ArtifactPlane chunks the upload via the named chunker; tiny
+    # payloads can produce zero non-empty chunks, which TEI rejects
+    # with 413 "inputs cannot be empty". Use a payload with multiple
+    # markdown sections so the markdown-headings-v1 chunker yields
+    # at least one chunk.
+    payload = (
+        b"# Smoke Test Artifact\n\n"
+        b"This is a test artifact uploaded by the integration harness "
+        b"for slice-ops-integration-harness Test Contract bullet 12.\n\n"
+        b"## Section A\n\n"
+        b"The first section has some prose so the chunker has tokens "
+        b"to work with. Lorem ipsum dolor sit amet.\n\n"
+        b"## Section B\n\n"
+        b"Second section similarly carries prose for the chunker. "
+        b"More content here so the dense embedder has substance to embed.\n"
+    )
 
     async with httpx.AsyncClient(
         base_url=live_stack.api_url,
@@ -216,12 +229,12 @@ async def test_artifact_upload_multipart_then_retrieve_blob(
             "/artifacts",
             data={
                 "namespace": namespace,
-                "title": f"smoke-{uuid.uuid4().hex[:6]}.vtt",
-                "content_type": "text/vtt",
+                "title": f"smoke-{uuid.uuid4().hex[:6]}.md",
+                "content_type": "text/markdown",
                 "source_system": "integration-test",
                 "chunker": "markdown-headings-v1",
             },
-            files={"file": ("smoke.vtt", payload, "text/vtt")},
+            files={"file": ("smoke.md", payload, "text/markdown")},
         )
         upload_resp.raise_for_status()
         uploaded = upload_resp.json()
