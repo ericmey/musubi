@@ -27,6 +27,13 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 
 ## Entries
 
+### 2026-04-19 — slice-retrieval-orchestration first cut ready for review
+
+Implements the top-level retrieval pipeline entrypoint. Dispatches queries to fast, deep, or blended mode depending on query parameters, enforces timeouts, normalizes all backend outputs into standard `RetrievalResult` objects, and returns `RetrievalError` for any validation or retrieval failures.
+
+Vault changes:
+- [[_slices/slice-retrieval-orchestration]] — `status: in-progress → in-review`.
+
 ### 2026-04-19 — slice-lifecycle-promotion first cut ready for review
 
 Implements the promotion and demotion sweeps. Promotion renders a human-readable markdown file via an LLM and writes it to the Obsidian vault via VaultWriter, then creates a CuratedKnowledge point. Demotion decays mature episodic memories and concepts that are unreinforced or low importance.
