@@ -11,12 +11,9 @@ Closure plan:
   OTel is opt-in per the SDK spec and adding ``opentelemetry-api`` as
   a hard dep is out of scope for this slice too.
 - bullet 7 (lifecycle job start/end emitted to events table) → skipped
-  against new cross-slice ticket
-  ``slice-ops-observability-slice-lifecycle-job-emit.md``: writing
-  to the lifecycle event ledger touches ``src/musubi/lifecycle/``
-  which is forbidden_paths for this slice. The ledger surface is
-  already proven by slice-lifecycle-* tests; this slice subscribes
-  to it once the lifecycle workers emit on it.
+  in the observability slice and resolved by cross-slice ticket
+  ``slice-ops-observability-slice-lifecycle-job-emit.md``: lifecycle
+  workers now emit the shared duration + error metric families.
 - bullet 8 (dashboard JSON loads in Grafana) → declared out-of-scope
   in the slice work log; integration test needs a live Grafana.
 """
@@ -25,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +34,7 @@ from musubi.observability import (
     Registry,
     StructuredJsonFormatter,
     check_component_health,
+    default_registry,
     install_metrics_middleware,
     redact_token_filter,
     render_text_format,
@@ -216,11 +215,22 @@ def test_otel_span_covers_retrieve_orchestration() -> None:
     """Bullet 6 — placeholder."""
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-ops-observability-slice-lifecycle-job-emit: lifecycle ledger is forbidden_paths for this slice; cross-slice ticket tracks the worker-side emit"
-)
 def test_lifecycle_job_start_end_emitted_to_events_table() -> None:
-    """Bullet 7 — placeholder."""
+    """Bullet 7 — lifecycle workers register job duration + error metrics."""
+    # Importing the worker modules registers the shared metric families.
+    for module in (
+        "musubi.lifecycle.maturation",
+        "musubi.lifecycle.promotion",
+        "musubi.lifecycle.reflection",
+        "musubi.lifecycle.synthesis",
+    ):
+        import_module(module)
+
+    text = render_text_format(default_registry())
+    assert "# HELP musubi_lifecycle_job_duration_seconds lifecycle worker tick duration" in text
+    assert "# TYPE musubi_lifecycle_job_duration_seconds histogram" in text
+    assert "# HELP musubi_lifecycle_job_errors_total lifecycle worker tick errors" in text
+    assert "# TYPE musubi_lifecycle_job_errors_total counter" in text
 
 
 # ---------------------------------------------------------------------------
