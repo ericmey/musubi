@@ -11,7 +11,10 @@ from tokenizers import Tokenizer
 _BGE_M3_TOKENIZER = "BAAI/bge-m3"
 _DEFAULT_WINDOW_TOKENS = 512
 _DEFAULT_OVERLAP_TOKENS = 128
-_SENTENCE_END_RE = re.compile(r"[.!?。？！][\"')\]]*$")
+# Sentence-end markers cover ASCII + CJK. noqa: RUF001 — the fullwidth
+# variants are real punctuation in CJK text that the tokenizer may emit;
+# matching them by literal codepoint is intentional.
+_SENTENCE_END_RE = re.compile(r"[.!?。？！][\"')\]]*$")  # noqa: RUF001
 
 
 @dataclass
@@ -119,9 +122,7 @@ class MarkdownHeadingChunker:
             if tokenizer is not None:
                 token_count = len(_tokenize(section_text, tokenizer).ids)
 
-            if (
-                token_count is not None and token_count <= self._window_tokens
-            ) or (
+            if (token_count is not None and token_count <= self._window_tokens) or (
                 token_count is None and _likely_within_window(section_text, self._window_tokens)
             ):
                 start, end = _trim_span(text, section_start, section_end)
