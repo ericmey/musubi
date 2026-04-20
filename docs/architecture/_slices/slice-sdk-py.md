@@ -3,10 +3,10 @@ title: "Slice: Python SDK"
 slice_id: slice-sdk-py
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: vscode-cc-sonnet47
 phase: "5 Vault"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-api-v0-write]]"]
@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "
 
 > Thin HTTP + gRPC client. Handles auth, retries, typed errors. Separate repo; pinned to API version.
 
-**Phase:** 5 Vault · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 5 Vault · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
@@ -89,10 +89,31 @@ Agents append one entry per work session. Format:
   the implementing agent updates the spec in-PR with a `spec-update:` trailer
   per the non-negotiables in CLAUDE.md rule 4.
 
+### 2026-04-19 — vscode-cc-sonnet47 — claim
+
+- Claimed slice atomically via `gh issue edit 33 --add-assignee @me`. Issue #33, PR #90 (draft).
+- Branch `slice/slice-sdk-py` off `v2`.
+- Verified slice file already canonical (operator pre-reconciled tonight); same agent that landed slice-api-v0-{read,write} + slice-ingestion-capture is closing the SDK loop on top of its own scaffolding.
+
+### 2026-04-19 — vscode-cc-sonnet47 — handoff to in-review
+
+- Implemented `src/musubi/sdk/` with sync (`MusubiClient`) + async (`AsyncMusubiClient`) variants, typed exception hierarchy, `RetryPolicy` honouring `Retry-After`, `SDKResult[T]` wrapper, and `FakeMusubiClient` for adapter tests.
+- 53 unit tests (20 of 22 contract bullets passing; 1 skipped with cross-slice ticket; 1 declared out-of-scope per work log). Branch coverage on owned code: 93% (gate 85%).
+- Spec rename `musubi-client` → `musubi.sdk` (ADR-0015 / ADR-0016) applied in same PR with `spec-update: docs/architecture/07-interfaces/sdk.md` trailer on the feat commit.
+- One cross-slice ticket opened: `slice-sdk-py-otel-spans.md` (OpenTelemetry span emission, deferred — opentelemetry-api isn't in dev extras and the spec scopes OTel as opt-in).
+- Handoff checks: `make check` green, `make tc-coverage SLICE=slice-sdk-py` reports closure satisfied, `make agent-check` clean (warnings only, none touching this slice), `gh pr view 90 → mergeStateStatus=CLEAN, mergeable=MERGEABLE`, both PR checks (vault hygiene + check) pass.
+- Flipping `status: in-review`, marking PR ready, removing the lock.
+
+### Known gaps at in-review
+
+- **OTel emission deferred.** Bullet 16 is skipped against `slice-sdk-py-otel-spans.md`. Adapters that need OTel today should instrument at the adapter layer until the cross-slice lands.
+- **No gRPC client.** The spec mentions an optional `[grpc]` extra; this PR ships HTTP only. gRPC is intentionally a follow-up.
+- **No models module.** The spec's old `models.py` step ("re-exports from musubi-core.types") is unnecessary in the monorepo — adapters import directly from `musubi.types.*`. Spec was updated; no work needed.
+
 ## Cross-slice tickets opened by this slice
 
-- _(none yet)_
+- [[_inbox/cross-slice/slice-sdk-py-otel-spans|slice-sdk-py-otel-spans]] — add OpenTelemetry span emission (opt-in via extras / soft import); unskips Test Contract bullet 16.
 
 ## PR links
 
-- _(none yet)_
+- [#90](https://github.com/ericmey/musubi/pull/90) — `slice/slice-sdk-py` → `v2`.

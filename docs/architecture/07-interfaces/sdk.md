@@ -4,39 +4,42 @@ section: 07-interfaces
 tags: [interfaces, python, sdk, section/interfaces, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-04-19
 up: "[[07-interfaces/index]]"
 reviewed: false
 ---
 # Python SDK
 
-`musubi-client` — the Python package every adapter uses. A thin, typed, typed-error-returning wrapper around the canonical API.
+`musubi.sdk` — the Python package every adapter uses. A thin, typed, typed-error-returning wrapper around the canonical API.
 
 The SDK is ours. Adapters (MCP, LiveKit, OpenClaw) consume it. End-user programs can use it too.
+
+> **Layout note (ADR-0015 / ADR-0016):** the SDK ships as a sub-package
+> of the monorepo (`src/musubi/sdk/`), not the pre-monorepo sibling
+> `musubi-client/` package. Imports are `from musubi.sdk import …`.
 
 ## Package
 
 ```
-musubi-client/
-  musubi_client/
-    __init__.py
-    client.py               # MusubiClient class
-    async_client.py         # AsyncMusubiClient class
-    exceptions.py           # typed errors
-    models.py               # re-exports from musubi-core.types
-    auth.py                 # token helpers
-    retry.py                # retry policy
-    py.typed                # PEP 561 marker
+src/musubi/sdk/
+  __init__.py            # re-exports MusubiClient, AsyncMusubiClient, exceptions, RetryPolicy, SDKResult
+  client.py              # MusubiClient class
+  async_client.py        # AsyncMusubiClient class
+  exceptions.py          # typed errors
+  result.py              # SDKResult[T] wrapper
+  retry.py               # retry policy
+  testing.py             # FakeMusubiClient
 ```
 
-PyPI name: `musubi-client`. Version tied to API major version; patch/minor independent.
+Import path: `musubi.sdk` (sub-package of `musubi`). Version tracks the
+monorepo's release; SDK-only changes still bump that release.
 
 ## Public surface
 
 ### Construction
 
 ```python
-from musubi_client import MusubiClient
+from musubi.sdk import MusubiClient
 
 client = MusubiClient(
     base_url="https://musubi.example.local.example.com/v1",
@@ -49,7 +52,7 @@ client = MusubiClient(
 Async variant:
 
 ```python
-from musubi_client import AsyncMusubiClient
+from musubi.sdk import AsyncMusubiClient
 
 async with AsyncMusubiClient(...) as client:
     res = await client.retrieve(...)
@@ -105,7 +108,7 @@ Each resource is a typed namespace on the client; methods mirror the canonical e
 ## Errors
 
 ```python
-from musubi_client.exceptions import (
+from musubi.sdk.exceptions import (
     MusubiError,           # base
     BadRequest,            # 400
     Unauthorized,          # 401
@@ -198,7 +201,7 @@ The SDK pins a minimum Musubi Core version it supports. On first use, it probes 
 Adapters' unit tests mock the SDK:
 
 ```python
-from musubi_client.testing import FakeMusubiClient
+from musubi.sdk.testing import FakeMusubiClient
 
 fake = FakeMusubiClient(
     retrieve_returns=[
@@ -218,12 +221,12 @@ Integration tests against a real Musubi instance use a shared test-container fix
 
 - Python 3.12+.
 - Runtime deps: `httpx`, `pydantic>=2.0`, `orjson`.
-- Optional extras: `grpcio` for gRPC support (`pip install musubi-client[grpc]`).
+- Optional extras: `grpcio` for gRPC support (re-exported from the parent monorepo's `[grpc]` extra).
 - Test deps (dev extra): `pytest`, `pytest-asyncio`, `respx`.
 
 ## Test contract
 
-**Module under test:** `musubi-client/musubi_client/*.py`
+**Module under test:** `src/musubi/sdk/*.py`
 
 Happy path:
 
