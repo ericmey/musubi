@@ -24,14 +24,15 @@ blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-ingestion-capture]]",
 
 ## Owned paths (you MAY write here)
 
-- `musubi/planes/episodic/`
+- `src/musubi/planes/episodic/`
 - `tests/planes/test_episodic.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `musubi/planes/curated/`
-- `musubi/planes/artifact/`
-- `musubi/api/`
+- `src/musubi/planes/curated/`
+- `src/musubi/planes/artifact/`
+- `src/musubi/planes/concept/`
+- `src/musubi/api/`
 
 ## Depends on
 
@@ -65,6 +66,12 @@ Agents append one entry per work session. Format:
 ### 2026-04-17 — generator — slice created
 
 - Seeded from the roadmap + guardrails matrix.
+
+### 2026-04-19 — operator — reconcile paths to post-ADR-0015 monorepo layout
+
+- 7th pre-src-monorepo drift fix. `owns_paths` was `musubi/planes/episodic/`; reconciled to `src/musubi/planes/episodic/`. Sibling-plane forbidden paths also reprefixed; added `concept/` to the forbidden list (it was missing from the original seed).
+- Carved [[_slices/slice-plane-episodic-followup]] to legitimize Issue #37 (18 in-scope Test Contract bullets + `patch`/`delete`/access-count methods + plane-boundary guards). Followup pattern matches [[_slices/slice-retrieval-blended-followup]].
+- Parent `status: done` flag is preserved, per the pattern established with `slice-retrieval-blended` → `slice-retrieval-blended-followup`.
 
 ### 2026-04-18 — cowork-auto — first cut landed; `status: ready → in-review`
 
@@ -103,8 +110,8 @@ The review pass + the follow-up work on bucket A are both prerequisites for flip
 
 ## Cross-slice tickets opened by this slice
 
-- _(none yet)_
+- [[_slices/slice-plane-episodic-followup]] — closes the 13 bucket-A + bucket-C Test Contract bullets (Issue #37). Parent's `status: done` flag predates the followup slice; see followup slice's Context section.
 
 ## PR links
 
-- _(none yet)_
+- _(direct commits to v2 on 2026-04-18, pre-branch-protection — see commits `bbc0f5b` (test) and `05c1797` (feat) in the work log above)_
