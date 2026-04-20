@@ -3,12 +3,12 @@ title: "Slice: Integration test harness"
 slice_id: slice-ops-integration-harness
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: vscode-cc-sonnet47
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice, integration, testing, phase-2]
-updated: 2026-04-19
-reviewed: false
+tags: [section/slices, status/done, type/slice, integration, testing, phase-2]
+updated: 2026-04-20
+reviewed: true
 depends-on: ["[[_slices/slice-ops-compose]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Docker-compose test environment + end-to-end scenarios + `make test-integration` target. Closes ~19 Test Contract bullets currently skipped with "deferred to integration harness" across the done slices, and is the first Phase 2 hardening deliverable — everything downstream (perf baselines, load tests, chaos scenarios) depends on this existing.
 
-**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `vscode-cc-sonnet47`
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `vscode-cc-sonnet47`
 
 ## Why this slice exists
 
