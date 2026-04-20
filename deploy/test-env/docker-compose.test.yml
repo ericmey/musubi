@@ -57,13 +57,18 @@ services:
     environment:
       HF_HUB_ENDPOINT: https://huggingface.co
       HF_HOME: /data
-    command: ["--model-id", "BAAI/bge-small-en-v1.5", "--port", "80"]
+    # bge-large-en-v1.5 is 1024-dim — matches the Qdrant collection
+    # schema slice-qdrant-layout bootstrapped (fixed at 1024 for the
+    # production BGE-M3). bge-small-en-v1.5 (384-dim) caused
+    # "vector dimension mismatch: got 384, expected 1024" on every
+    # plane.create() call.
+    command: ["--model-id", "BAAI/bge-large-en-v1.5", "--port", "80"]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 60
-      start_period: 90s
+      start_period: 120s
 
   tei-sparse:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.6
