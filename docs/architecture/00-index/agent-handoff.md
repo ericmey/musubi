@@ -64,6 +64,23 @@ How coding agents coordinate without stepping on each other. This is a *protocol
 - Check [[00-index/definition-of-done]] line-by-line before requesting review.
 - Any CI failure reverts you to step 5.
 
+#### Canonical commit shape at handoff
+
+`.operator/scripts/handoff-audit.py` looks for a specific commit graph in your PR. In order:
+
+1. `chore(slice): take <slice-id>` — claim commit (label flip, Issue assignee).
+2. `chore(slice): flip <slice-id> to in-progress` — frontmatter status update.
+3. `chore(lock): add lock for <slice-id>` — presence lock file.
+4. `test(<scope>): initial test contract for <slice-id>` — the test file from step 4 above.
+5. `feat(<scope>): <what you built>` — the implementation. Touches `owns_paths`.
+6. **Handoff commit** — frontmatter flip to `in-review` + work-log entry + any reviewer-note block. Subject **must** start with one of:
+   - `docs(slice): handoff <slice-id> to in-review`
+   - `chore(slice): handoff <slice-id> to in-review`
+   Both prefixes are accepted by the audit (`docs(slice)` and `chore(slice)` are equally valid handoff-commit types). Pick one consistent with your agent's conventional-commit style and stick with it across the slice.
+7. `chore(lock): release <slice-id>` — remove the lock file.
+
+Deviations from this graph are soft-warned; missing feat or missing handoff commit are hard failures. Squash-merge collapses all seven into a single `feat(<scope>): <slice title>` on v2, but the pre-merge audit checks the unsquashed graph on your branch.
+
 #### Reviewer notes — where they land
 
 PR review comments are transient: once the PR merges, they fade into the PR timeline and are no longer discoverable to the next agent picking up the slice. To keep reviewer findings durable, reviewers use the following homes:

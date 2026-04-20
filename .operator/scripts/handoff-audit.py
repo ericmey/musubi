@@ -299,6 +299,17 @@ def check_feat_commit_present(pr: PRInfo, s: Slice, commits: list[dict]) -> Chec
 
 _CANONICAL_KINDS = ["chore(slice)", "chore(lock)", "test", "feat", "docs(slice)"]
 
+# The handoff commit (frontmatter flip to in-review + work-log entry) can be
+# either `docs(slice): handoff ...` or `chore(slice): handoff ...` — both are
+# in active use this session (Nyla uses chore(slice), VS Code uses docs(slice)).
+# The check recognises either form by subject-substring match so the canonical-
+# shape check doesn't false-fail on a valid handoff prefix.
+_HANDOFF_PREFIXES = ("docs(slice): handoff", "chore(slice): handoff")
+
+
+def _has_handoff_commit(subjects: list[str]) -> bool:
+    return any(s.startswith(_HANDOFF_PREFIXES) for s in subjects)
+
 
 def check_canonical_shape(pr: PRInfo, commits: list[dict]) -> CheckResult:
     """Approximate canonical 7-commit shape present. Warn on deviation."""
@@ -316,19 +327,28 @@ def check_canonical_shape(pr: PRInfo, commits: list[dict]) -> CheckResult:
             False,
             "missing feat commit — hard fail (tested separately in feat_commit_present)",
         )
-    if "docs(slice)" in missing:
+    # Handoff commit check: accept either `docs(slice): handoff ...` or
+    # `chore(slice): handoff ...`. The existence of the handoff commit is what
+    # matters; its conventional-commit type prefix is operator style.
+    handoff_present = _has_handoff_commit(subjects)
+    if not handoff_present:
         return CheckResult(
             "canonical_shape",
             False,
-            "missing docs(slice) handoff commit — required for frontmatter flip + "
-            "coverage-matrix work-log entry. Agent likely skipped the dedicated "
-            "handoff commit and rolled the flip into feat or something else.",
+            "missing handoff commit — required for frontmatter flip + "
+            "coverage-matrix work-log entry. Expected a commit whose subject "
+            "starts with `docs(slice): handoff` or `chore(slice): handoff`. "
+            "Agent likely rolled the flip into feat or something else.",
         )
-    if missing:
+    # `docs(slice)` / `chore(slice)` missing from the canonical-kinds report is
+    # fine once we've confirmed the handoff commit exists above — it just means
+    # the agent used the alternate prefix. Don't warn on either in that case.
+    soft_missing = [k for k in missing if k not in ("docs(slice)", "chore(slice)")]
+    if soft_missing:
         return CheckResult(
             "canonical_shape",
             True,  # warn, don't fail
-            f"canonical-7-commit-shape deviation (soft): missing {missing}. "
+            f"canonical-7-commit-shape deviation (soft): missing {soft_missing}. "
             f"Commits present: {', '.join(sorted(kinds_found.keys()))}",
         )
     return CheckResult("canonical_shape", True)
