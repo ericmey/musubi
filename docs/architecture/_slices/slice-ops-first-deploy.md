@@ -3,12 +3,12 @@ title: "Slice: First-deploy runbook + validation"
 slice_id: slice-ops-first-deploy
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice, ops, deploy, phase-2]
-updated: 2026-04-19
-reviewed: false
+tags: [section/slices, status/done, type/slice, ops, deploy, phase-2]
+updated: 2026-04-20
+reviewed: true
 depends-on: ["[[_slices/slice-ops-ansible]]", "[[_slices/slice-ops-compose]]", "[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-observability]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Authors the step-by-step first-deploy procedure for `musubi.mey.house`, the systemd units + Kong config stitching the shipped Ansible/compose/backup/observability work together, and the post-deploy smoke + verify scripts. Ships the operator runbook; operator (Eric) executes the deploy with the runbook open.
 
-**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `codex-gpt5`
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `codex-gpt5`
 
 ## Why this slice exists
 
