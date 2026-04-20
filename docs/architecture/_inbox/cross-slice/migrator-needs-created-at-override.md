@@ -1,3 +1,12 @@
+---
+title: "Cross-slice: Migrator needs created_at override"
+section: _inbox/cross-slice
+tags: [cross-slice, status/open]
+type: cross-slice
+status: open
+updated: 2026-04-20
+---
+
 # Cross-slice: Migrator needs `created_at` override
 
 **Opened by:** slice-poc-data-migration
