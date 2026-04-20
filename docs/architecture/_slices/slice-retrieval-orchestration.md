@@ -3,12 +3,12 @@ title: "Slice: Cross-plane orchestration"
 slice_id: slice-retrieval-orchestration
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-3-1-pro-nyla
 phase: "4 Planes"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-retrieval-blended]]", "[[_slices/slice-plane-artifact]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Compound queries: issue subqueries across planes, fuse programmatically. Pipeline-as-code.
 
-**Phase:** 4 Planes · **Status:** `in-review` · **Owner:** `gemini-3-1-pro-nyla`
+**Phase:** 4 Planes · **Status:** `done` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Specs to implement
 
