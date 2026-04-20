@@ -20,6 +20,11 @@ The **`[/]`** marker is in-progress. **`[x]`** is resolved.
 
 - [R] _Example:_ why do we use KSUID instead of UUIDv7? [[00-index/conventions]] says "not UUIDs" — is this a hard constraint or a preference?
 
+### 2026-04-20 — deploy-readiness findings (from ansible dry-run against `<musubi-host>`)
+
+- [R] **Ollama model drift.** `deploy/ansible/group_vars/all.yml` pins `musubi_ollama_model: "qwen3:4b"` but the pre-staged native install on the host has `qwen2.5:7b-instruct-q4_K_M` (~4.7 GB, confirmed via `curl /api/tags` on 2026-04-20). Decide which is authoritative. [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]] chose Qwen 3 4B; the host's pre-stage missed that bump. Either re-pull 3:4b and discard 2.5:7b, or update the ADR + group_vars to Qwen 2.5:7b.
+- [R] **Health-check target mismatch.** `deploy/ansible/health.yml` probes `http://127.0.0.1:6333/health` (Qdrant) and `http://127.0.0.1:11434/api/tags` (Ollama). [[13-decisions/0014-kong-over-caddy]] §Decision says inference services are "bridge-only inside Docker Compose. No host ports, no LAN access." These contradict each other — either (a) the compose file DOES publish Qdrant/Ollama on host 127.0.0.1 (and ADR 0014's phrasing is aspirational), or (b) `health.yml` needs to shell through `docker compose exec <svc>` to check. Decide and align.
+
 ## In progress
 
 ## Resolved
