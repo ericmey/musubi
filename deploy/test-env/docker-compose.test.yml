@@ -1,0 +1,139 @@
+# Integration-test compose stack for Musubi.
+# Spins up the dependencies the harness exercises against.
+#
+# Per docs/architecture/_slices/slice-ops-integration-harness.md §
+# Implementation notes: real services, not mocks. CPU-only image
+# variants chosen so the stack runs on a stock GitHub Actions runner
+# without GPU; perf bullets (#13, #14) skip when GPU is not available
+# (set MUSUBI_TEST_PERF_BUDGETS=strict to enforce them on a reference
+# host).
+#
+# musubi-core itself is NOT in this stack — the test harness boots
+# an in-process uvicorn against this dependency pool so the
+# integration suite exercises the same code path as `make test` and
+# avoids needing to build + tag a `musubi-core:test` image on every
+# CI run.
+
+name: musubi-integration
+
+services:
+  # ----------------------------------------------------------------
+  # Vector store
+  # ----------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.15.0
+    container_name: musubi-test-qdrant
+    ports:
+      - "${MUSUBI_TEST_QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  # ----------------------------------------------------------------
+  # Embeddings — TEI dense + sparse + reranker on CPU images.
+  # Using small models so first-boot model-download cost stays under
+  # ~3 min on a cold cache. Production uses GPU + larger BGE-M3.
+  # ----------------------------------------------------------------
+  tei-dense:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: musubi-test-tei-dense
+    ports:
+      - "${MUSUBI_TEST_TEI_DENSE_PORT:-8081}:80"
+    volumes:
+      - tei-models:/data
+    environment:
+      MODEL_ID: BAAI/bge-small-en-v1.5
+      HF_HOME: /data
+    command: ["--model-id", "BAAI/bge-small-en-v1.5", "--port", "80"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  tei-sparse:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: musubi-test-tei-sparse
+    ports:
+      - "${MUSUBI_TEST_TEI_SPARSE_PORT:-8082}:80"
+    volumes:
+      - tei-models:/data
+    environment:
+      MODEL_ID: prithivida/Splade_PP_en_v1
+      HF_HOME: /data
+    command: ["--model-id", "prithivida/Splade_PP_en_v1", "--pooling", "splade", "--port", "80"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
+  tei-reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.5
+    container_name: musubi-test-tei-reranker
+    ports:
+      - "${MUSUBI_TEST_TEI_RERANKER_PORT:-8083}:80"
+    volumes:
+      - tei-models:/data
+    environment:
+      MODEL_ID: BAAI/bge-reranker-base
+      HF_HOME: /data
+    command: ["--model-id", "BAAI/bge-reranker-base", "--port", "80"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 90s
+
+  # ----------------------------------------------------------------
+  # LLM — Ollama with the smallest viable model so concept synthesis
+  # bullets (#10, #11) can hit a real LLM without a GPU.
+  # ----------------------------------------------------------------
+  ollama:
+    image: ollama/ollama:0.4.0
+    container_name: musubi-test-ollama
+    ports:
+      - "${MUSUBI_TEST_OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Side-car that pulls the test model on first boot. Exits 0 when
+  # done; the harness waits on this before running concept-synthesis
+  # bullets.
+  ollama-pull:
+    image: ollama/ollama:0.4.0
+    container_name: musubi-test-ollama-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama-models:/root/.ollama
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        OLLAMA_HOST=ollama:11434 ollama pull qwen2.5:0.5b
+    restart: "no"
+
+volumes:
+  qdrant-storage:
+  tei-models:
+  ollama-models:

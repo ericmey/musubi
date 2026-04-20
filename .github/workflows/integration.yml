@@ -1,0 +1,103 @@
+# Integration suite — boots the test-env compose stack and runs the
+# real-services smoke scenarios from tests/integration/test_smoke.py.
+#
+# Triggers:
+#   - PR-trigger PATH FILTER: runs ONCE on PRs that touch the harness
+#     itself (so this PR — and any followup that edits the harness —
+#     verify before merge). Unrelated PRs don't pay the docker-in-docker
+#     cost.
+#   - SCHEDULE: nightly at 07:00 UTC, with a 3-run matrix so flakes
+#     surface over time. The "no flakes on 3 consecutive runs" DoD
+#     bullet is evidenced by the first ~week of nightly runs after
+#     this lands.
+#   - WORKFLOW_DISPATCH: operator can trigger on demand (e.g. before
+#     accepting a follow-up PR that should have been path-filtered
+#     but wasn't).
+#
+# Per slice-ops-integration-harness §Implementation notes.
+
+name: Integration suite
+
+on:
+  pull_request:
+    paths:
+      - 'tests/integration/**'
+      - 'deploy/test-env/**'
+      - '.github/workflows/integration.yml'
+      - 'Makefile'
+      - 'pyproject.toml'
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: Integration (run ${{ matrix.run }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # PR / dispatch: 1 run for fast feedback. Schedule: 3 parallel
+        # runs for flake characterization (DoD evidence path).
+        run: ${{ github.event_name == 'schedule' && fromJSON('[1, 2, 3]') || fromJSON('[1]') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Python deps
+        run: uv sync --extra dev
+
+      - name: Cache HuggingFace + Ollama models
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/huggingface
+            ~/.ollama
+          key: integration-models-v1
+          restore-keys: integration-models-v1
+
+      - name: Boot the test-env compose stack
+        run: |
+          docker compose -f deploy/test-env/docker-compose.test.yml \
+            -p musubi-integration up -d --wait --wait-timeout 600
+        timeout-minutes: 12
+
+      - name: Wait for ollama-pull side-car to finish
+        run: |
+          # The ollama-pull container exits 0 once the test model is
+          # cached; tail logs until it's done so concept-synthesis
+          # bullets don't race the pull.
+          docker wait musubi-test-ollama-pull || true
+          docker logs musubi-test-ollama-pull || true
+
+      - name: Run integration suite
+        env:
+          MUSUBI_TEST_PROJECT: musubi-integration
+        run: |
+          set -o pipefail
+          uv run pytest tests/integration/ -m integration -ra --strict-markers --no-cov -v 2>&1 | tee integration.log
+        timeout-minutes: 12
+
+      - name: Show compose logs on failure
+        if: failure()
+        run: |
+          docker compose -f deploy/test-env/docker-compose.test.yml \
+            -p musubi-integration logs --no-color --tail 200 || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          docker compose -f deploy/test-env/docker-compose.test.yml \
+            -p musubi-integration down -v --remove-orphans || true
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-log-run-${{ matrix.run }}
+          path: integration.log
+          if-no-files-found: ignore
