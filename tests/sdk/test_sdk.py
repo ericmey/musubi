@@ -389,11 +389,7 @@ def test_async_client_context_manager_cleanup() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to future slice-sdk-py-otel-spans: opentelemetry-api "
-    "is opt-in per spec ('when OTel is configured in the adapter'); "
-    "adding it as a hard dep on every SDK install is out of scope. "
-    "Cross-slice ticket "
-    "_inbox/cross-slice/slice-sdk-py-otel-spans.md tracks the follow-up."
+    reason="deferred to slice-sdk-py-otel-spans: opentelemetry-api is opt-in per spec; cross-slice ticket _inbox/cross-slice/slice-sdk-py-otel-spans.md"
 )
 def test_otel_span_emitted_per_call() -> None:
     """Bullet 16 — placeholder."""
@@ -500,11 +496,7 @@ def test_fake_client_returns_configured_fixtures() -> None:
 
 
 @pytest.mark.skip(
-    reason="declared out-of-scope in slice work log: 20-case integration "
-    "suite against a docker-up Musubi container; deferred to "
-    "musubi-contract-tests repo (per ADR-0011, that suite is a "
-    "separate Python package). The unit-form tests above exercise the "
-    "same surface against an in-process MockTransport."
+    reason="out-of-scope in slice work log: 20-case integration suite against docker-up Musubi container; deferred to musubi-contract-tests repo per ADR-0011"
 )
 def test_integration_sdk_against_real_musubi_container_20_case_contract_suite_passes() -> None:
     """Bullet 22 — placeholder."""
