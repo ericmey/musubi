@@ -19,7 +19,8 @@ Closure plan:
 - bullets 20-21 (single TEI / single Qdrant batch instrumentation) →
   skipped, cross-slice ticket to slice-plane-episodic to add a
   ``batch_create`` method
-- bullet 22 (100-item batch under 1s benchmark) → out-of-scope
+- bullet 22 (100-item batch under 1s benchmark) → moved to integration
+  suite (tests/integration/test_capture_perf.py) per Issue #118
 """
 
 from __future__ import annotations
@@ -499,12 +500,15 @@ def test_batch_capture_single_qdrant_upsert() -> None:
 
 
 @pytest.mark.skip(
-    reason="declared out-of-scope in slice work log: 100-item benchmark "
-    "needs a real warmed-up Qdrant + TEI; deferred to a follow-up perf "
-    "suite (slice-perf-bench)."
+    reason=(
+        "moved to integration suite: see tests/integration/test_capture_perf.py "
+        "(unskipped via #118 against the live docker-compose stack from "
+        "slice-ops-integration-harness PR #114). This unit-suite placeholder "
+        "is retained as a pointer."
+    )
 )
 def test_batch_capture_100_items_under_1s() -> None:
-    """Bullet 22 — placeholder."""
+    """Bullet 22 — moved to tests/integration/test_capture_perf.py."""
 
 
 @pytest.mark.skip(
