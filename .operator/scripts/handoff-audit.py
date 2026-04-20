@@ -156,13 +156,28 @@ def load_pr(pr_number: int) -> PRInfo:
     )
 
 
-def ensure_branch_fetched(head_ref: str) -> None:
-    """Make sure origin/<head_ref> is up to date locally."""
+def ensure_pr_head_fetched(pr_number: int, head_ref: str) -> str:
+    """Fetch the PR head and return the local ref to audit.
+
+    For merged or deleted branches, `origin/<head_ref>` can be stale or absent.
+    GitHub keeps `refs/pull/<n>/head`, so prefer that authoritative ref and
+    fall back to the branch ref only when the PR ref cannot be fetched.
+    """
+    pr_ref = f"refs/remotes/origin/pr/{pr_number}-head"
+    fetched = subprocess.run(
+        ["git", "fetch", "origin", f"+pull/{pr_number}/head:{pr_ref}"],
+        check=False,
+        capture_output=True,
+    )
+    if fetched.returncode == 0:
+        return pr_ref
+
     subprocess.run(
         ["git", "fetch", "origin", head_ref],
         check=False,
         capture_output=True,
     )
+    return f"origin/{head_ref}"
 
 
 def git_ls_tree(ref: str, path: str = "") -> set[str]:
@@ -177,6 +192,19 @@ def git_ls_tree(ref: str, path: str = "") -> set[str]:
     return {line.strip() for line in out.splitlines() if line.strip()}
 
 
+def git_object_type(ref: str, path: str) -> str | None:
+    """Return git object type for `path` at `ref`, or None if absent."""
+    try:
+        return subprocess.run(
+            ["git", "cat-file", "-t", f"{ref}:{path}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError:
+        return None
+
+
 def git_commits_between(base_ref: str, head_ref: str) -> list[dict]:
     """Return commits reachable from head but not base, as dicts."""
     try:
@@ -185,7 +213,7 @@ def git_commits_between(base_ref: str, head_ref: str) -> list[dict]:
                 "git",
                 "log",
                 "--format=%H%x09%s",
-                f"origin/{base_ref}..origin/{head_ref}",
+                f"origin/{base_ref}..{head_ref}",
             ],
             check=True,
             capture_output=True,
@@ -223,44 +251,46 @@ def _path_is_under(path: str, owns_paths: list[str]) -> bool:
     for raw in owns_paths:
         # normalize: strip leading "./", accept both "src/musubi/x" and "musubi/x"
         o = raw.strip().lstrip("./")
-        # If owns entry ends with .py or is a specific file: exact or prefix match
-        if o.endswith((".py", ".yaml", ".yml")) and (path == o or path.endswith("/" + o)):
+        if path == o or path == "src/" + o:
             return True
-        # If owns entry is a directory: prefix match
         if o.endswith("/") and (path.startswith(o) or path.startswith("src/" + o)):
             return True
-        if not o.endswith("/"):
-            # Treat as prefix regardless
-            if path.startswith(o + "/") or path.startswith("src/" + o + "/"):
-                return True
-            # And loose exact match
-            if path == o or path == "src/" + o:
-                return True
     return False
 
 
 # ---- Checks ------------------------------------------------------------------
 
 
-def check_owns_paths_exist(pr: PRInfo, s: Slice, branch_tree: set[str]) -> CheckResult:
+def check_owns_paths_exist(s: Slice, branch_tree: set[str], head_ref: str) -> CheckResult:
     """Every owns_path file or dir is present in the branch's git tree."""
     missing: list[str] = []
     for raw in s.owns_paths:
         o = raw.strip().lstrip("./")
-        # For specific files: check exact or with src/ prefix
         candidates = [o, f"src/{o}"] if not o.startswith("src/") else [o]
-        if any(o.endswith(ext) for ext in (".py", ".yaml", ".yml")):
-            if not any(c in branch_tree for c in candidates):
-                missing.append(o)
+
+        found = False
+        for candidate in candidates:
+            object_type = git_object_type(head_ref, candidate.rstrip("/"))
+            if object_type == "blob":
+                found = True
+                break
+            if object_type == "tree":
+                prefixes = [f"{candidate.rstrip('/')}/"]
+                if any(any(t.startswith(pre) for t in branch_tree) for pre in prefixes):
+                    found = True
+                    break
+
+        if found:
             continue
-        # Directory: check if ANY file under it exists
-        if o.endswith("/"):
-            o = o.rstrip("/")
-        prefixes = [f"{o}/", f"src/{o}/"]
+
+        # If the path itself is absent, it may still be a directory-like owns
+        # entry omitted from git's tree because only child files are tracked.
+        base_candidates = [candidate.rstrip("/") for candidate in candidates]
+        prefixes = [f"{candidate}/" for candidate in base_candidates]
         if not any(any(t.startswith(pre) for t in branch_tree) for pre in prefixes):
             # No file under this directory → might be a new directory whose
             # creation the agent forgot to commit. Flag as missing.
-            missing.append(f"{o}/ (directory; no files under it)")
+            missing.append(raw)
     if missing:
         return CheckResult(
             "owns_paths_exist",
@@ -387,7 +417,7 @@ def check_merge_state(pr: PRInfo) -> CheckResult:
     )
 
 
-def check_frontmatter_in_review(pr: PRInfo, s: Slice, branch_tree: set[str]) -> CheckResult:
+def check_frontmatter_in_review(s: Slice, branch_tree: set[str], head_ref: str) -> CheckResult:
     """Slice frontmatter on branch tip should be `status: in-review`."""
     slice_rel = str(s.path.relative_to(REPO_ROOT))
     if slice_rel not in branch_tree:
@@ -397,7 +427,7 @@ def check_frontmatter_in_review(pr: PRInfo, s: Slice, branch_tree: set[str]) -> 
             f"slice file not in branch tree: {slice_rel}",
         )
     try:
-        content = _run(["git", "show", f"origin/{pr.head_ref}:{slice_rel}"])
+        content = _run(["git", "show", f"{head_ref}:{slice_rel}"])
     except subprocess.CalledProcessError:
         return CheckResult(
             "frontmatter_in_review",
@@ -491,7 +521,7 @@ def run_audit(pr_number: int) -> int:
     print(f"  draft: {pr.is_draft}  mergeState: {pr.merge_state}")
     print()
 
-    ensure_branch_fetched(pr.head_ref)
+    head_ref = ensure_pr_head_fetched(pr.number, pr.head_ref)
     slices = load_slices()
     for sid, s in slices.items():
         s.issue = load_issues().get(sid) if s.issue is None else s.issue
@@ -517,15 +547,15 @@ def run_audit(pr_number: int) -> int:
     print()
 
     # Branch tree + commits
-    branch_tree = git_ls_tree(f"origin/{pr.head_ref}")
-    commits = git_commits_between(pr.base_ref, pr.head_ref)
+    branch_tree = git_ls_tree(head_ref)
+    commits = git_commits_between(pr.base_ref, head_ref)
 
     results: list[CheckResult] = [
-        check_owns_paths_exist(pr, s, branch_tree),
+        check_owns_paths_exist(s, branch_tree, head_ref),
         check_feat_commit_present(pr, s, commits),
         check_canonical_shape(pr, commits),
         check_merge_state(pr),
-        check_frontmatter_in_review(pr, s, branch_tree),
+        check_frontmatter_in_review(s, branch_tree, head_ref),
         check_pr_body_closes(pr, s),
         check_ci_pass(pr),
     ]
