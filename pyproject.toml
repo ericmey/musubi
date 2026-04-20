@@ -24,6 +24,7 @@ dependencies = [
     # Multipart parsing for POST /v1/artifacts file uploads
     # (slice-api-v0-write).
     "python-multipart>=0.0.9",
+    "tokenizers>=0.20",
 ]
 
 [project.optional-dependencies]
