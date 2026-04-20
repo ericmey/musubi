@@ -90,6 +90,12 @@ Agents append one entry per work session. Format:
 - Added `[[_slices/slice-retrieval-deep]]` to `depends-on` (Slow Thinker uses deep-path — was implicitly required but not declared).
 - Spec [[07-interfaces/livekit-adapter]] still references the external-repo layout (`musubi-livekit-adapter`); implementing agent updates the spec in-PR with a `spec-update:` trailer.
 
+### 2026-04-19 — vscode-cc-sonnet47 — take
+
+- Claimed atomically via `gh issue edit 3 --add-assignee @me` + label flip `status:ready → status:in-progress` (dual-update before writes, post-#93 drift is now `✗` not `⚠`).
+- Branch `slice/slice-adapter-livekit` off `v2`.
+- Same agent that landed slice-sdk-py (#90) — the SDK surface is fresh context, so the Fast Talker + Slow Thinker wiring against `AsyncMusubiClient` lands without re-reading the SDK.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
