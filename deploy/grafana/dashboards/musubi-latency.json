@@ -1,0 +1,57 @@
+{
+  "title": "Musubi · Latency",
+  "uid": "musubi-latency",
+  "schemaVersion": 39,
+  "tags": ["musubi"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Retrieve p50/p95/p99 (fast)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(musubi_retrieve_duration_ms_bucket{mode=\"fast\"}[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(musubi_retrieve_duration_ms_bucket{mode=\"fast\"}[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(musubi_retrieve_duration_ms_bucket{mode=\"fast\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Retrieve p50/p95/p99 (deep)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(musubi_retrieve_duration_ms_bucket{mode=\"deep\"}[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(musubi_retrieve_duration_ms_bucket{mode=\"deep\"}[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(musubi_retrieve_duration_ms_bucket{mode=\"deep\"}[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Capture p50/p95/p99",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum by (le) (rate(musubi_capture_duration_ms_bucket[5m])))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(musubi_capture_duration_ms_bucket[5m])))", "legendFormat": "p95" },
+        { "expr": "histogram_quantile(0.99, sum by (le) (rate(musubi_capture_duration_ms_bucket[5m])))", "legendFormat": "p99" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Rerank p95",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(tei_request_duration_ms_bucket{service=\"reranker\"}[5m])))" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Ollama generation p95",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (purpose, le) (rate(ollama_generation_ms_bucket[5m])))", "legendFormat": "{{purpose}}" }
+      ]
+    }
+  ]
+}

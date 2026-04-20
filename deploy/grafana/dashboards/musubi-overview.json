@@ -1,0 +1,91 @@
+{
+  "title": "Musubi · Overview",
+  "uid": "musubi-overview",
+  "schemaVersion": 39,
+  "tags": ["musubi"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Capture rate (per minute, by plane)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum by (plane) (rate(musubi_capture_total[1m]))", "legendFormat": "{{plane}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Retrieval rate (per minute, by mode)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum by (mode) (rate(musubi_retrieve_total[1m]))", "legendFormat": "{{mode}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Error rate (per minute, by code)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum by (code) (rate(musubi_errors_total[1m]))", "legendFormat": "{{code}}" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Promotions (last 24h)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum(increase(musubi_promotion_total{result=\"success\"}[24h]))" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Demotions (last 24h)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum(increase(musubi_lifecycle_events_total{to_state=\"demoted\"}[24h]))" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Contradictions (last 24h)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum(increase(musubi_lifecycle_events_total{to_state=\"contradicted\"}[24h]))" }
+      ]
+    },
+    {
+      "type": "gauge",
+      "title": "GPU VRAM (used / total MB)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "gpu_vram_used_mb" }
+      ]
+    },
+    {
+      "type": "gauge",
+      "title": "Vault disk used %",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "100 * (1 - (node_filesystem_avail_bytes{mountpoint=\"/var/lib/musubi\"} / node_filesystem_size_bytes{mountpoint=\"/var/lib/musubi\"}))" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Silent — single-retrieval p95 (informational, not alerted)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(musubi_retrieve_duration_ms_bucket[5m])))" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Silent — dedup rate (informational, not alerted)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "rate(musubi_capture_dedup_total{action=\"merged\"}[5m]) / rate(musubi_capture_total[5m])" }
+      ]
+    }
+  ]
+}

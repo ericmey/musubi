@@ -1,0 +1,35 @@
+# Tempo single-binary config for the Musubi single-host deployment.
+# Per docs/architecture/09-operations/observability.md § Tracing.
+#
+# OTel collection lands here when slice-sdk-py-otel-spans ships;
+# until then this is a static config that just stands the service up
+# so the compose stack doesn't error on a missing tempo container.
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+ingester:
+  trace_idle_period: 30s
+  max_block_bytes: 100000000
+  max_block_duration: 5m
+
+compactor:
+  compaction:
+    block_retention: 168h
+
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/lib/tempo/blocks
+    wal:
+      path: /var/lib/tempo/wal

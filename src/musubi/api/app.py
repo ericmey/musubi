@@ -56,6 +56,7 @@ from musubi.api.routers import (
     writes_retrieve_stream,
     writes_thoughts,
 )
+from musubi.observability import install_metrics_middleware, request_id_var
 from musubi.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -145,6 +146,8 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         redoc_url=None,
     )
 
+    install_metrics_middleware(app)
+
     @app.middleware("http")
     async def correlation_id_middleware(
         request: Request,
@@ -152,6 +155,10 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
     ) -> Response:
         cid = request.headers.get(_CORRELATION_HEADER) or str(uuid.uuid4())
         request.state.correlation_id = cid
+        # Make the id available to structured-log records via the
+        # observability contextvar; reset on response so it doesn't
+        # leak into the next request handled by the same task.
+        rid_token = request_id_var.set(cid)
         try:
             response = await _wrapped_call(request, call_next)
         except APIError as exc:
@@ -168,6 +175,7 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
                 hint="check server logs with the X-Request-Id header value",
             )
         response.headers[_CORRELATION_HEADER] = cid
+        request_id_var.reset(rid_token)
         return response
 
     async def _wrapped_call(
