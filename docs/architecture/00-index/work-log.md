@@ -27,6 +27,15 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 
 ## Entries
 
+### 2026-04-19 — slice-adapter-mcp first cut ready for review
+
+Implements the MCP adapter exposing the Musubi SDK interface over local `stdio` and remote `sse` transports. Preserves legacy POC tool surface (`memory_capture`, `memory_recall`, `thought_send`, etc). Authored ADR 0021 to formally adopt Anthropic's official `mcp` library. 
+
+Vault changes:
+- [[_slices/slice-adapter-mcp]] — `status: in-progress → in-review`.
+- [[07-interfaces/mcp-adapter]] — updated `implements:` + location context.
+- [[13-decisions/0021-mcp-server-library]] — newly authored.
+
 ### 2026-04-19 — slice-retrieval-orchestration first cut ready for review
 
 Implements the top-level retrieval pipeline entrypoint. Dispatches queries to fast, deep, or blended mode depending on query parameters, enforces timeouts, normalizes all backend outputs into standard `RetrievalResult` objects, and returns `RetrievalError` for any validation or retrieval failures.
