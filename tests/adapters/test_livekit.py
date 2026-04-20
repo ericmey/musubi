@@ -36,7 +36,7 @@ from musubi.adapters.livekit import (
     detect_interesting_fact,
     redact_pii,
 )
-from musubi.sdk.testing import FakeMusubiClient
+from musubi.sdk.testing import AsyncFakeMusubiClient
 
 _NS = "eric/livekit-voice/episodic"
 
@@ -46,52 +46,7 @@ _NS = "eric/livekit-voice/episodic"
 # ---------------------------------------------------------------------------
 
 
-class _AsyncFake:
-    """Adapter-local async wrapper around :class:`FakeMusubiClient`.
-
-    The shipped FakeMusubiClient is sync (mirrors :class:`MusubiClient`);
-    the LiveKit adapter targets :class:`AsyncMusubiClient` semantics so
-    every call site is awaited. This shim exposes coroutine versions of
-    the sync fake's surface and forwards the calls log + canned returns.
-
-    A native ``AsyncFakeMusubiClient`` belongs in :mod:`musubi.sdk.testing`
-    but that path is forbidden to slice-adapter-livekit; cross-slice
-    ticket ``slice-sdk-py-async-fake.md`` documents the follow-up.
-    """
-
-    def __init__(self, fake: FakeMusubiClient) -> None:
-        self._fake = fake
-        self.calls = fake.calls
-        self.memories = _AsyncNamespace(fake.memories, async_methods=("capture", "get"))
-        self.curated = _AsyncNamespace(fake.curated, async_methods=("get",))
-        self.concepts = _AsyncNamespace(fake.concepts, async_methods=("get",))
-        self.artifacts = _AsyncNamespace(fake.artifacts, async_methods=("get", "blob"))
-        self.thoughts = _AsyncNamespace(fake.thoughts, async_methods=("send", "check"))
-        self.lifecycle = _AsyncNamespace(fake.lifecycle, async_methods=("events",))
-        self.ops = _AsyncNamespace(fake.ops, async_methods=("health", "status"))
-        # Optional override hook for the test_upload_*_failure tests.
-        self._upload_handler: Any = None
-
-    async def retrieve(self, **kw: Any) -> dict[str, Any]:
-        return self._fake.retrieve(**kw)
-
-
-class _AsyncNamespace:
-    def __init__(self, sync_ns: Any, *, async_methods: tuple[str, ...]) -> None:
-        self._ns = sync_ns
-        for name in async_methods:
-            sync_method = getattr(sync_ns, name)
-            setattr(self, name, _wrap_async(sync_method))
-
-
-def _wrap_async(sync_fn: Any) -> Any:
-    async def _async_wrapper(**kw: Any) -> Any:
-        return sync_fn(**kw)
-
-    return _async_wrapper
-
-
-def _fake(**canned: Any) -> _AsyncFake:
+def _fake(**canned: Any) -> AsyncFakeMusubiClient:
     """Standard async-shim'd FakeMusubiClient with permissive canned
     returns so the adapter's calls don't blow up on un-faked methods."""
     defaults: dict[str, Any] = {
@@ -102,7 +57,7 @@ def _fake(**canned: Any) -> _AsyncFake:
         "artifact_blob_returns": b"",
     }
     defaults.update(canned)
-    return _AsyncFake(FakeMusubiClient(**defaults))
+    return AsyncFakeMusubiClient(**defaults)
 
 
 # ---------------------------------------------------------------------------
