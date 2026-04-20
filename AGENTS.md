@@ -6,7 +6,7 @@ Read this file top to bottom **before any edit**. The rules are not suggestions.
 
 ## What Musubi is
 
-Musubi (結び) is a three-plane shared-memory server for a small AI agent fleet. Standalone Python service, canonical HTTP/gRPC API, adapters (MCP, LiveKit, OpenClaw) that depend on the SDK. All code, SDK, adapters, deployment, contract tests, and the architecture vault live in this one repo (see [ADR 0015](docs/architecture/13-decisions/0015-monorepo-supersedes-multi-repo.md) and [ADR 0016](docs/architecture/13-decisions/0016-vault-in-monorepo.md)).
+Musubi (結び) is a three-plane shared-memory server for a small AI agent fleet. Standalone Python service, canonical HTTP/gRPC API, adapters (MCP, LiveKit, OpenClaw) that depend on the SDK. All code, SDK, adapters, deployment, contract tests, and the architecture vault live in this one repo (see [ADR 0015](docs/Musubi/13-decisions/0015-monorepo-supersedes-multi-repo.md) and [ADR 0016](docs/Musubi/13-decisions/0016-vault-in-monorepo.md)).
 
 ## Repo map
 
@@ -29,7 +29,7 @@ docs/
 
 ## The non-negotiables
 
-1. **Stay inside your slice.** Your slice file at `docs/architecture/_slices/<slice-id>.md` names `owns_paths` + `forbidden_paths`. Read anywhere; write only to `owns_paths`. Cross-slice work opens a ticket at `docs/architecture/_inbox/cross-slice/<slice>-<target>.md` + a `cross-slice` GitHub Issue, and your slice flips to `status: blocked`.
+1. **Stay inside your slice.** Your slice file at `docs/Musubi/_slices/<slice-id>.md` names `owns_paths` + `forbidden_paths`. Read anywhere; write only to `owns_paths`. Cross-slice work opens a ticket at `docs/Musubi/_inbox/cross-slice/<slice>-<target>.md` + a `cross-slice` GitHub Issue, and your slice flips to `status: blocked`.
 2. **The canonical API is frozen per version.** Only `slice-api-v*` agents modify `src/musubi/api/`, `openapi.yaml`, `proto/`. Additive changes require an ADR; breaking changes bump the version.
 3. **Tests first.** Every spec's `## Test Contract` section is a list of bullets. Your *first commit* on the branch is the test file realising those bullets. Implementation commits follow. PR isn't mergeable until tests pass + coverage ≥ 85 % on owned files (≥ 90 % on `src/musubi/planes/**` and `src/musubi/retrieve/**`).
 4. **Do not silently rebase the spec.** If implementation forces a spec change, update the spec file **in the same PR** with a `spec-update: <doc-path>` trailer on the commit.
@@ -65,7 +65,7 @@ GitHub Issues are the authoritative lock (atomic assignment across agent machine
 ```bash
 gh issue edit <n> --add-assignee @me \
   --add-label "status:in-progress" --remove-label "status:ready"
-# Same PR — edit docs/architecture/_slices/<slice-id>.md:
+# Same PR — edit docs/Musubi/_slices/<slice-id>.md:
 #   status: ready → in-progress
 #   owner: unassigned → <your-agent-id>   # e.g. codex-gpt5, gemini-3-1, cursor-claude
 ```
@@ -147,7 +147,7 @@ Before flipping slice `in-progress → in-review` and marking a PR ready-for-rev
 - Silent `time.sleep()` in production code (async waits + timeouts only).
 - `os.environ` reads outside `src/musubi/config.py`.
 - Hardcoded hosts, ports, collection names, thresholds. (Hostnames + IPs especially — see `.agent-context.local.md` placeholder scheme.)
-- New top-level dependencies without an ADR in `docs/architecture/13-decisions/`.
+- New top-level dependencies without an ADR in `docs/Musubi/13-decisions/`.
 - `except Exception: pass`.
 - `git push --force` on shared branches; `--no-verify` on commits.
 - **Silently deferring a Test Contract bullet** — see Closure Rule.
@@ -182,12 +182,12 @@ This lets humans + other agents see at a glance which tool shipped which work.
 ## When you're stuck
 
 1. Don't guess. Don't "just make it work."
-2. Drop a file at `docs/architecture/_inbox/questions/<slice-id>-<slug>.md`: goal, expectation, observation, options.
+2. Drop a file at `docs/Musubi/_inbox/questions/<slice-id>-<slug>.md`: goal, expectation, observation, options.
 3. Flip your slice to `blocked` on both sides (Dual-update rule §Block).
 4. Comment the Issue with a link to the question file.
 5. Pick another slice — don't hold a lock while stuck.
 
-## Definition of Done (from `docs/architecture/00-index/definition-of-done.md`)
+## Definition of Done (from `docs/Musubi/00-index/definition-of-done.md`)
 
 - [ ] Every Test Contract bullet in closure state 1, 2, or 3 (see above).
 - [ ] Coverage ≥ 85 % on owned files (≥ 90 % on planes/** + retrieve/**).
@@ -196,7 +196,7 @@ This lets humans + other agents see at a glance which tool shipped which work.
 - [ ] Spec files updated if prose changed (`spec-update:` trailer on the commit).
 - [ ] Frontmatter + Issue both flipped to `in-review` (then `done` at merge).
 - [ ] A *different* agent or a human reviews + merges. No self-approval.
-- [ ] Work-log entry on the slice note; cross-ref to `docs/architecture/00-index/work-log.md` if the slice realised a spec milestone.
+- [ ] Work-log entry on the slice note; cross-ref to `docs/Musubi/00-index/work-log.md` if the slice realised a spec milestone.
 
 ## Why this file is long
 
@@ -205,8 +205,8 @@ Because when you are not Claude Code, you do not have a tuned sub-agent system p
 ## For reference only (do not edit as an agent)
 
 - `CLAUDE.md` — Claude-specific entry point; same contract.
-- `docs/architecture/00-index/agent-guardrails.md` — authoritative expansion of every rule here, plus vault rules (Obsidian, curated plane writes). Read if you're working on vault-sync / curated plane.
+- `docs/Musubi/00-index/agent-guardrails.md` — authoritative expansion of every rule here, plus vault rules (Obsidian, curated plane writes). Read if you're working on vault-sync / curated plane.
 - `docs/AGENT-PROCESS.md` — multi-agent concurrency model: branch naming, review etiquette, concurrency gotchas.
-- `docs/architecture/00-index/conventions.md` — the full style guide, frontmatter schema, tag taxonomy.
+- `docs/Musubi/00-index/conventions.md` — the full style guide, frontmatter schema, tag taxonomy.
 
 If any of those contradict this file, ask before acting — contradictions are bugs, not features.

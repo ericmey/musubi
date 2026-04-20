@@ -5,11 +5,11 @@ description: Find the next unclaimed ready-to-work slice in the Musubi vault, cl
 
 # Skill: pick-slice
 
-Select the next slice from `docs/architecture/_slices/` that is `status: ready`, has all `depends-on` slices at `status: done` (or `in-progress` with their blocking surface landed), and has no active GitHub Issue assignee.
+Select the next slice from `docs/Musubi/_slices/` that is `status: ready`, has all `depends-on` slices at `status: done` (or `in-progress` with their blocking surface landed), and has no active GitHub Issue assignee.
 
 ## Rules this skill enforces
 
-- **Dual-update rule** (see `docs/architecture/00-index/agent-guardrails.md#Dual-update-rule`) — claiming a slice flips BOTH the GitHub Issue (assignee + `status:in-progress` label) AND the vault slice file's frontmatter (`status`, `owner`) in the same PR. This skill walks both updates; don't skip either half.
+- **Dual-update rule** (see `docs/Musubi/00-index/agent-guardrails.md#Dual-update-rule`) — claiming a slice flips BOTH the GitHub Issue (assignee + `status:in-progress` label) AND the vault slice file's frontmatter (`status`, `owner`) in the same PR. This skill walks both updates; don't skip either half.
 - **Atomic-claim rule** — GitHub Issue `--add-assignee` is the authoritative lock; re-read the Issue immediately after to detect races. Vault-file + lock-file edits are the *secondary* record.
 
 ## When to invoke
@@ -29,7 +29,7 @@ Select the next slice from `docs/architecture/_slices/` that is `status: ready`,
 
 ```bash
 cd ~/Projects/musubi  # or wherever pwd puts you
-grep -l "^status: ready" docs/architecture/_slices/slice-*.md
+grep -l "^status: ready" docs/Musubi/_slices/slice-*.md
 ```
 
 For each candidate, open the file and check:
@@ -64,7 +64,7 @@ gh issue create \
   --title "slice: <slice-id>" \
   --label "slice,status:in-progress" \
   --assignee @me \
-  --body "Tracks implementation of [docs/architecture/_slices/<slice-id>.md](docs/architecture/_slices/<slice-id>.md).
+  --body "Tracks implementation of [docs/Musubi/_slices/<slice-id>.md](docs/Musubi/_slices/<slice-id>.md).
 
 Owns paths, specs, Test Contract: see the slice note."
 ```
@@ -78,17 +78,17 @@ git switch -c slice/<slice-id>
 # Initial empty commit so the PR can open before any file changes.
 git commit --allow-empty -m "chore(slice): take <slice-id>
 
-Claims docs/architecture/_slices/<slice-id>.md. See issue #<n>."
+Claims docs/Musubi/_slices/<slice-id>.md. See issue #<n>."
 git push -u origin slice/<slice-id>
 gh pr create --draft \
   --base v2 \
   --title "feat(<scope>): <slice-id>" \
-  --body "Closes #<n>. Draft — work in progress per docs/architecture/_slices/<slice-id>.md."
+  --body "Closes #<n>. Draft — work in progress per docs/Musubi/_slices/<slice-id>.md."
 ```
 
 ### 5. Flip slice frontmatter
 
-Edit `docs/architecture/_slices/<slice-id>.md`:
+Edit `docs/Musubi/_slices/<slice-id>.md`:
 
 - `status: ready` → `status: in-progress`
 - `owner: unassigned` → `owner: <your-agent-id>` (e.g., `eric-cc-opus47`, `yua-cowork`, `codex-gpt5`)
@@ -105,9 +105,9 @@ Commit as `chore(slice): flip <slice-id> to in-progress`.
 ### 6. Drop the file-based lock (belt-and-braces)
 
 ```bash
-touch docs/architecture/_inbox/locks/<slice-id>.lock
-echo "<agent-id>  $(date -Iseconds)  PR #<m>" > docs/architecture/_inbox/locks/<slice-id>.lock
-git add docs/architecture/_inbox/locks/<slice-id>.lock
+touch docs/Musubi/_inbox/locks/<slice-id>.lock
+echo "<agent-id>  $(date -Iseconds)  PR #<m>" > docs/Musubi/_inbox/locks/<slice-id>.lock
+git add docs/Musubi/_inbox/locks/<slice-id>.lock
 git commit -m "chore(lock): <slice-id>"
 ```
 
@@ -120,5 +120,5 @@ One sentence back to the user: "Claimed `<slice-id>`. Issue #<n>, branch `slice/
 ## Conflict resolution
 
 - **Two agents claimed the same issue at the same time** → the one whose `gh issue edit --add-assignee` succeeded keeps it; the other observes multiple assignees on re-read and steps back. If both show as assignees, the one with the **later** `createdAt` on the self-assignment event yields. (GitHub Issue event log tells you who was first.)
-- **Depends-on slice isn't actually ready but slice said ready** → mark the candidate `status: blocked`, file a question in `docs/architecture/_inbox/questions/`, pick a different slice.
+- **Depends-on slice isn't actually ready but slice said ready** → mark the candidate `status: blocked`, file a question in `docs/Musubi/_inbox/questions/`, pick a different slice.
 - **No ready slices are available** → tell the user. Don't make up work.

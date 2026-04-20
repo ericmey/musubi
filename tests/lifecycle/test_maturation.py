@@ -6,7 +6,7 @@ Implements the Test Contract bullets from
 - a passing test whose name transcribes the bullet text verbatim, OR
 - ``@pytest.mark.skip(reason=...)`` pointing at the named follow-up slice, OR
 - declared out-of-scope in
-  ``docs/architecture/_slices/slice-lifecycle-maturation.md`` ``## Work log``
+  ``docs/Musubi/_slices/slice-lifecycle-maturation.md`` ``## Work log``
   (for the two hypothesis bullets and two integration bullets).
 
 Runs against an in-memory Qdrant (``QdrantClient(":memory:")``), a deterministic

@@ -56,7 +56,7 @@ def _make(
 
 
 # ---------------------------------------------------------------------------
-# Test Contract (verbatim from docs/architecture/04-data-model/thoughts.md)
+# Test Contract (verbatim from docs/Musubi/04-data-model/thoughts.md)
 # ---------------------------------------------------------------------------
 
 

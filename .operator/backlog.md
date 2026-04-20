@@ -90,7 +90,7 @@ Compares per-module coverage on the current PR against the 90% plane/retrieve fl
 
 ### `scripts/adr-new.py`
 
-`python3 adr-new.py "some decision"` → creates `docs/architecture/13-decisions/00NN-some-decision.md` with frontmatter + section skeleton + correct NN numbering based on existing ADRs.
+`python3 adr-new.py "some decision"` → creates `docs/Musubi/13-decisions/00NN-some-decision.md` with frontmatter + section skeleton + correct NN numbering based on existing ADRs.
 
 **Priority: low.** Fixed-cost per ADR; only ~5 ADRs/year probably.
 

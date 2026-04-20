@@ -1,5 +1,5 @@
 # Prometheus alert rules for Musubi.
-# Per docs/architecture/09-operations/alerts.md.
+# Per docs/Musubi/09-operations/alerts.md.
 #
 # Two severities:
 #   - "push" (urgent, ntfy/Pushover) — broken NOW.

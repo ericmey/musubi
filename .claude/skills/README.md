@@ -43,11 +43,11 @@ Considered. Rejected for now because:
 - A renderer would pull in extra build complexity and a separate "did you re-render after editing?" discipline that's arguably worse than the 5-line manual diff.
 - We can revisit if the set of skills grows past ~10 or if the per-tool divergence grows materially.
 
-A lightweight drift check could be added to `docs/architecture/_tools/check.py` in the future (flag if the body of a pair differs by >N substantive lines after stripping known tool-aware blocks). Not wired today; agent discipline + review carry it.
+A lightweight drift check could be added to `docs/Musubi/_tools/check.py` in the future (flag if the body of a pair differs by >N substantive lines after stripping known tool-aware blocks). Not wired today; agent discipline + review carry it.
 
 ## Where the authoritative rules live
 
-- Universal rules every agent on the project follows, regardless of skill invocation: `docs/architecture/00-index/agent-guardrails.md`.
+- Universal rules every agent on the project follows, regardless of skill invocation: `docs/Musubi/00-index/agent-guardrails.md`.
 - Multi-agent coordination: `docs/AGENT-PROCESS.md`.
 - Per-tool entry point: `CLAUDE.md` (Claude Code), `AGENTS.md` (everyone else), `GEMINI.md` (Gemini CLI), `.cursor/rules/musubi.mdc` (Cursor).
 

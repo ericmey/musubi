@@ -4,13 +4,13 @@ on:
   push:
     branches: [main, v2]
     paths:
-      - "docs/architecture/**"
+      - "docs/Musubi/**"
       - "docs/AGENT-PROCESS.md"
       - ".github/workflows/vault-check.yml"
   pull_request:
     branches: [main, v2]
     paths:
-      - "docs/architecture/**"
+      - "docs/Musubi/**"
       - "docs/AGENT-PROCESS.md"
       - ".github/workflows/vault-check.yml"
 
@@ -27,7 +27,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install PyYAML
-        # Required by docs/architecture/_tools/check.py for frontmatter parsing.
+        # Required by docs/Musubi/_tools/check.py for frontmatter parsing.
         run: pip install --no-cache-dir pyyaml
 
       - name: check.py all (authoritative gate)
@@ -44,4 +44,4 @@ jobs:
           # Issue labels and enforce the Dual-update rule in CI (not just
           # locally via `make issue-check`).
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 docs/architecture/_tools/check.py all
+        run: python3 docs/Musubi/_tools/check.py all

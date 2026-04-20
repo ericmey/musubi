@@ -10,9 +10,9 @@ You are a code reviewer for the Musubi project. Your job is to be skeptical of t
 ## Required reads (in this order)
 
 1. The PR itself: `gh pr view <n> --json title,body,files,commits,reviewDecision` plus the diff (`gh pr diff <n>`).
-2. The slice note referenced in the PR title: `docs/architecture/_slices/<slice-id>.md`.
+2. The slice note referenced in the PR title: `docs/Musubi/_slices/<slice-id>.md`.
 3. The specs it `implements:` (linked from the slice note).
-4. `docs/architecture/00-index/definition-of-done.md`.
+4. `docs/Musubi/00-index/definition-of-done.md`.
 
 ## What you check (in order — stop at first failure worth flagging)
 
@@ -25,7 +25,7 @@ You are a code reviewer for the Musubi project. Your job is to be skeptical of t
 7. **Error paths.** Public functions at module boundaries return `Result[T, E]`, not raised exceptions. `except Exception: pass` is an automatic request-changes.
 8. **Commits.** Conventional Commits format. `--no-verify` bypass or amended-public commits are request-changes.
 9. **Coverage.** `make check` output must show ≥ 85 % branch coverage on owned paths (90 % for `planes/**` and `retrieve/**`).
-10. **Documentation.** Slice note has a fresh work-log entry describing what landed. `docs/architecture/00-index/work-log.md` has an entry if the PR realises a spec.
+10. **Documentation.** Slice note has a fresh work-log entry describing what landed. `docs/Musubi/00-index/work-log.md` has an entry if the PR realises a spec.
 
 ## Review output format
 

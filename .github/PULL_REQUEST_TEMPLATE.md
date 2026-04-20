@@ -8,7 +8,7 @@ to the relevant commit.
 
 - ID: `slice-<id>`
 - Issue: #
-- Spec(s) implemented: `docs/architecture/<NN>/<doc>.md#<section>` (one per line)
+- Spec(s) implemented: `docs/Musubi/<NN>/<doc>.md#<section>` (one per line)
 
 ## Summary
 
@@ -16,7 +16,7 @@ to the relevant commit.
 
 ## Test Contract coverage matrix (required)
 
-Per [agent-guardrails.md §Test Contract Closure Rule](../docs/architecture/00-index/agent-guardrails.md#test-contract-closure-rule), every bullet in the spec's `## Test Contract` section must be in one of three states: **passing test** / **skipped with reason** / **declared out-of-scope in slice work log**. Fill in one row per bullet. No silent omissions.
+Per [agent-guardrails.md §Test Contract Closure Rule](../docs/Musubi/00-index/agent-guardrails.md#test-contract-closure-rule), every bullet in the spec's `## Test Contract` section must be in one of three states: **passing test** / **skipped with reason** / **declared out-of-scope in slice work log**. Fill in one row per bullet. No silent omissions.
 
 **Generate the matrix mechanically:**
 
@@ -24,7 +24,7 @@ Per [agent-guardrails.md §Test Contract Closure Rule](../docs/architecture/00-i
 make tc-coverage SLICE=<your-slice-id>     # emits the table below; paste it in
 ```
 
-The tool at `docs/architecture/_tools/tc_coverage.py` parses every Test Contract bullet in your slice's linked specs and classifies each. Anything it marks `✗ missing` blocks merge — either write the test, add `@pytest.mark.skip(reason=...)`, or declare out-of-scope in the slice's work log, then re-run. Exits non-zero if missing bullets remain.
+The tool at `docs/Musubi/_tools/tc_coverage.py` parses every Test Contract bullet in your slice's linked specs and classifies each. Anything it marks `✗ missing` blocks merge — either write the test, add `@pytest.mark.skip(reason=...)`, or declare out-of-scope in the slice's work log, then re-run. Exits non-zero if missing bullets remain.
 
 | # | Bullet | State | Evidence |
 |---|---|---|---|
@@ -37,13 +37,13 @@ The tool at `docs/architecture/_tools/tc_coverage.py` parses every Test Contract
 - [ ] Slice frontmatter: `status: in-progress → in-review`, `owner` set.
 - [ ] First commit in branch history is the test file (`test(...)` commit precedes any `feat(...)`).
 - [ ] `make check` passes (ruff format --check + ruff check + mypy --strict + pytest + coverage `fail_under=85`).
-- [ ] `make agent-check` passes (vault frontmatter + slice DAG + spec hygiene via `docs/architecture/_tools/check.py`).
+- [ ] `make agent-check` passes (vault frontmatter + slice DAG + spec hygiene via `docs/Musubi/_tools/check.py`).
 - [ ] Import discipline respected (`sdk` → `types` only; `adapters` → `sdk+types` only; `api` composes `planes`/`retrieve`/`lifecycle`).
 - [ ] No edits to `src/musubi/types/`, `src/musubi/api/`, `openapi.yaml`, or `proto/` unless this slice owns them.
 - [ ] Spec `status:` updated if prose changed. Commit trailer `spec-update: <doc-path>` present.
-- [ ] Method-ownership honoured — no methods deferred to a slice whose `owns_paths` wouldn't contain their implementation (per [agent-guardrails.md §Method-ownership rule](../docs/architecture/00-index/agent-guardrails.md#method-ownership-rule)).
+- [ ] Method-ownership honoured — no methods deferred to a slice whose `owns_paths` wouldn't contain their implementation (per [agent-guardrails.md §Method-ownership rule](../docs/Musubi/00-index/agent-guardrails.md#method-ownership-rule)).
 - [ ] Slice note's `## Work log` has a handoff entry describing what landed and naming any deferred Test Contract bullets + their follow-up home.
-- [ ] If this realises a spec: an entry in `docs/architecture/00-index/work-log.md` too.
+- [ ] If this realises a spec: an entry in `docs/Musubi/00-index/work-log.md` too.
 
 ## Agent attribution
 

@@ -13,7 +13,7 @@ for multi-agent development — assignee = owner; only one agent at a time.
 ## Slice
 
 - ID: `slice-<id>`
-- Path: `docs/architecture/_slices/slice-<id>.md`
+- Path: `docs/Musubi/_slices/slice-<id>.md`
 - Phase: `<1 Schema | 2 Infra | 3 … etc>`
 
 ## Depends on (must be `status: done` or first-cut merged)
@@ -28,7 +28,7 @@ for multi-agent development — assignee = owner; only one agent at a time.
 
 ## Specs to implement
 
-- `docs/architecture/<NN-section>/<doc>.md`
+- `docs/Musubi/<NN-section>/<doc>.md`
 
 ## Test Contract (reference)
 

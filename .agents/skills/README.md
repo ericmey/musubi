@@ -34,7 +34,7 @@ Current divergence between pairs is 1 line each (tool-specific reference). Maint
 
 ## Where the authoritative rules live
 
-- Universal rules: `docs/architecture/00-index/agent-guardrails.md`.
+- Universal rules: `docs/Musubi/00-index/agent-guardrails.md`.
 - Multi-agent coordination: `docs/AGENT-PROCESS.md`.
 - Non-Claude entry point: `AGENTS.md` at the repo root. (Gemini CLI: `GEMINI.md`. Cursor: `.cursor/rules/musubi.mdc`. Claude Code: `CLAUDE.md`.)
 

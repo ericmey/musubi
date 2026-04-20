@@ -134,7 +134,7 @@ def git(*args: str, check: bool = True) -> str:
 def git_working_tree_clean_enough() -> tuple[bool, str]:
     """Is the working tree safe to operate on?
 
-    Tolerates untracked files + modifications to docs/architecture/.obsidian/
+    Tolerates untracked files + modifications to docs/Musubi/.obsidian/
     (operator's Obsidian UI state, frequently changes without being committed).
     Fails only on modifications to tracked files outside that allowlist.
     """
@@ -146,7 +146,7 @@ def git_working_tree_clean_enough() -> tuple[bool, str]:
         code, path = line[:2], line[3:]
         if code.startswith("??"):  # untracked — ignored
             continue
-        if path.startswith("docs/architecture/.obsidian/"):
+        if path.startswith("docs/Musubi/.obsidian/"):
             continue
         bad.append(line)
     if bad:
@@ -269,13 +269,13 @@ def close_issue(issue_number: int, pr_number: int, dry_run: bool = False) -> Non
 
 
 _TOLERATED_OUTSIDE = {
-    "docs/architecture/00-index/work-log.md",
+    "docs/Musubi/00-index/work-log.md",
     "pyproject.toml",
     "uv.lock",
 }
 _TOLERATED_PREFIX = (
-    "docs/architecture/_inbox/cross-slice/",
-    "docs/architecture/13-decisions/",  # ADR updates via spec-update: trailer
+    "docs/Musubi/_inbox/cross-slice/",
+    "docs/Musubi/13-decisions/",  # ADR updates via spec-update: trailer
 )
 
 
@@ -304,16 +304,16 @@ def audit_paths(pr: PRInfo, s: Slice) -> list[str]:
             continue
         # Specs updated via a spec-update: trailer in a commit message are
         # explicitly in-scope; a full trailer-scan would be more precise but
-        # the spec files live under docs/architecture/ so allowlist by prefix
+        # the spec files live under docs/Musubi/ so allowlist by prefix
         # below is already forgiving enough.
-        if f.startswith("docs/architecture/07-interfaces/") or f.startswith(
-            "docs/architecture/04-data-model/"
+        if f.startswith("docs/Musubi/07-interfaces/") or f.startswith(
+            "docs/Musubi/04-data-model/"
         ):
             # reviewer still sees these in the preview
             violations.append(f"{f}  (spec update — likely intentional via spec-update: trailer)")
             continue
         # Slice file itself is always owned
-        if f == f"docs/architecture/_slices/{s.id}.md":
+        if f == f"docs/Musubi/_slices/{s.id}.md":
             continue
         violations.append(f)
     return violations

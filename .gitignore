@@ -32,25 +32,25 @@ htmlcov/
 *.swp
 .DS_Store
 
-# Obsidian — vault lives at docs/architecture/
+# Obsidian — vault lives at docs/Musubi/
 # Transient / per-machine state is ignored; config + plugin settings are kept.
-docs/architecture/.obsidian/workspace.json
-docs/architecture/.obsidian/workspace-mobile.json
-docs/architecture/.obsidian/workspaces.json
-docs/architecture/.obsidian/cache/
-docs/architecture/.obsidian/appearance.json.bak
-docs/architecture/.obsidian/plugins/*/data.json.bak
-docs/architecture/.trash/
+docs/Musubi/.obsidian/workspace.json
+docs/Musubi/.obsidian/workspace-mobile.json
+docs/Musubi/.obsidian/workspaces.json
+docs/Musubi/.obsidian/cache/
+docs/Musubi/.obsidian/appearance.json.bak
+docs/Musubi/.obsidian/plugins/*/data.json.bak
+docs/Musubi/.trash/
 
 # Plugins that store credentials / keys / certs in data.json — ignore them entirely.
 # (Local REST API writes an apiKey + RSA private key + TLS cert to its data.json
 #  on first run. If another plugin does similar, add a line here.)
-docs/architecture/.obsidian/plugins/obsidian-local-rest-api/data.json
+docs/Musubi/.obsidian/plugins/obsidian-local-rest-api/data.json
 
 # Large plugin payloads / caches — reinstallable from the Obsidian store;
 # no need to bloat git history.
-docs/architecture/.obsidian/plugins/mcp-tools/
-docs/architecture/.smart-env/
+docs/Musubi/.obsidian/plugins/mcp-tools/
+docs/Musubi/.smart-env/
 
 # Attachments >1MB should go to git-lfs; keep the dir tracked but don't let accidental binaries bloat history.
 # (Add a pre-commit check later once attachment volume warrants it.)

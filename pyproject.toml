@@ -42,7 +42,7 @@ dev = [
     "hypothesis>=6",
     "mypy>=1.11",
     "ruff>=0.6",
-    # Vault tooling (docs/architecture/_tools/*.py) reads YAML frontmatter.
+    # Vault tooling (docs/Musubi/_tools/*.py) reads YAML frontmatter.
     "pyyaml>=6",
 
     "types-PyYAML",
@@ -115,7 +115,7 @@ filterwarnings = [
 # Coverage — enforced by `make check` and the CI workflow. The 85 % floor
 # is the Definition of Done's baseline; slices under `src/musubi/planes/**`
 # and `src/musubi/retrieve/**` carry a 90 % expectation documented in
-# docs/architecture/00-index/definition-of-done.md and verified by review
+# docs/Musubi/00-index/definition-of-done.md and verified by review
 # rather than pytest (no per-module fail_under exists in coverage.py).
 # --------------------------------------------------------------------------
 

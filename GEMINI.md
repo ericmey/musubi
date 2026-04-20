@@ -6,14 +6,14 @@ The full rules applicable to *every* coding agent on this repo live in [AGENTS.m
 
 ## What you are working on
 
-Musubi (結び) — a three-plane shared-memory server for a small AI agent fleet. Python 3.12, pydantic v2, strict mypy, Qdrant + TEI + Ollama for inference. See [README.md](README.md) and [docs/architecture/00-index/index.md](docs/architecture/00-index/index.md).
+Musubi (結び) — a three-plane shared-memory server for a small AI agent fleet. Python 3.12, pydantic v2, strict mypy, Qdrant + TEI + Ollama for inference. See [README.md](README.md) and [docs/Musubi/00-index/index.md](docs/Musubi/00-index/index.md).
 
 ## Required reads in order
 
 1. [AGENTS.md](AGENTS.md) — the full contract for non-Claude agents.
 2. [docs/AGENT-PROCESS.md](docs/AGENT-PROCESS.md) — multi-agent concurrency model.
-3. [docs/architecture/00-index/agent-guardrails.md](docs/architecture/00-index/agent-guardrails.md) — authoritative rules expansion.
-4. [docs/architecture/00-index/conventions.md](docs/architecture/00-index/conventions.md) — style guide.
+3. [docs/Musubi/00-index/agent-guardrails.md](docs/Musubi/00-index/agent-guardrails.md) — authoritative rules expansion.
+4. [docs/Musubi/00-index/conventions.md](docs/Musubi/00-index/conventions.md) — style guide.
 
 If `.agent-context.local.md` exists at the repo root, read it for operator-specific hosts / credentials / placeholder map. It's gitignored and on-machine only.
 
@@ -109,7 +109,7 @@ Prefer Claude Code or Codex for single-slice implementation work; use the approp
 
 ## When you're stuck
 
-1. Drop a file at `docs/architecture/_inbox/questions/<slice-id>-<slug>.md`: goal, expectation, observation, options.
+1. Drop a file at `docs/Musubi/_inbox/questions/<slice-id>-<slug>.md`: goal, expectation, observation, options.
 2. Flip slice + Issue to `blocked` (Dual-update rule).
 3. Comment the Issue with the link to your question.
 4. Pick another slice.
@@ -118,6 +118,6 @@ Prefer Claude Code or Codex for single-slice implementation work; use the approp
 
 - `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/*` — agent configuration. Changes affect every agent; operator-only.
 - `.claude/agents/*`, `.claude/skills/*`, `.agents/skills/*` — agent/skill definitions. Operator-only unless your slice is explicitly about agent tooling.
-- `docs/architecture/00-index/agent-guardrails.md`, `agent-handoff.md`, `definition-of-done.md`, `conventions.md` — meta-rules. Changes require operator authorization.
+- `docs/Musubi/00-index/agent-guardrails.md`, `agent-handoff.md`, `definition-of-done.md`, `conventions.md` — meta-rules. Changes require operator authorization.
 
 Everything else: stay in `owns_paths`, test-first, dual-update the state, make check green, hand off.
