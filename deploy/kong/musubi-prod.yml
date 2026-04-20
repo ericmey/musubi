@@ -1,0 +1,79 @@
+_format_version: "3.0"
+_transform: true
+
+services:
+  - name: musubi-core
+    url: http://<musubi-ip>:8100
+    tags: [musubi-prod]
+    retries: 2
+    connect_timeout: 2000
+    write_timeout: 30000
+    read_timeout: 30000
+    routes:
+      - name: musubi-api-v1
+        hosts: ["<musubi-host>"]
+        paths: ["/v1"]
+        protocols: [https]
+        strip_path: false
+        tags: [musubi-prod]
+      - name: musubi-healthz
+        hosts: ["<musubi-host>"]
+        paths: ["/healthz"]
+        protocols: [https]
+        strip_path: false
+        tags: [musubi-prod]
+    plugins:
+      - name: openid-connect
+        tags: [musubi-prod]
+        config:
+          issuer: "https://auth.<homelab-domain>/.well-known/openid-configuration"
+          auth_methods: ["bearer"]
+          audience: ["musubi-api"]
+          scopes_required: ["musubi:access"]
+          upstream_access_token_header: "Authorization"
+      - name: rate-limiting
+        tags: [musubi-prod]
+        config:
+          minute: 300
+          hour: 5000
+          policy: local
+      - name: cors
+        tags: [musubi-prod]
+        config:
+          origins: ["https://claude.ai", "http://localhost:*"]
+          credentials: true
+      - name: file-log
+        tags: [musubi-prod]
+        config:
+          path: /var/log/kong/musubi-api.log
+          reopen: true
+
+  - name: musubi-mcp
+    url: http://<musubi-ip>:8200
+    tags: [musubi-prod]
+    retries: 2
+    connect_timeout: 2000
+    write_timeout: 30000
+    read_timeout: 30000
+    routes:
+      - name: musubi-mcp-http
+        hosts: ["<musubi-host>"]
+        paths: ["/mcp"]
+        protocols: [https]
+        strip_path: false
+        tags: [musubi-prod]
+    plugins:
+      - name: openid-connect
+        tags: [musubi-prod]
+        config:
+          issuer: "https://auth.<homelab-domain>/.well-known/openid-configuration"
+          auth_methods: ["bearer"]
+          audience: ["musubi-mcp"]
+          scopes_required: ["mcp:access"]
+          upstream_access_token_header: "Authorization"
+      - name: rate-limiting
+        tags: [musubi-prod]
+        config:
+          minute: 120
+          hour: 2000
+          policy: local

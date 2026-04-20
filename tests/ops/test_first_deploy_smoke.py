@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = ROOT / "deploy" / "runbooks" / "first-deploy.md"
+RUNBOOKS_SPEC = ROOT / "docs" / "architecture" / "09-operations" / "runbooks.md"
 SYSTEMD = ROOT / "deploy" / "systemd"
 SMOKE = ROOT / "deploy" / "smoke"
 KONG = ROOT / "deploy" / "kong" / "musubi-prod.yml"
@@ -36,6 +36,14 @@ RUNBOOK_SECTIONS = (
     "Smoke verify",
     "Rollback procedure",
     "Go-live checklist",
+)
+ALERT_RUNBOOK_SECTIONS = (
+    "Qdrant down",
+    "Core 5xx high",
+    "Vault fs full",
+    "GPU OOM",
+    "Loop detected",
+    "Backup failure 24h",
 )
 
 
@@ -68,9 +76,9 @@ def _runbook_step_blocks() -> list[str]:
 
 
 class _MockMusubi(http.server.BaseHTTPRequestHandler):
-    server: "_MockServer"
+    server: _MockServer
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: object) -> None:
         return
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
@@ -89,7 +97,7 @@ class _MockMusubi(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/v1/ops/health":
             self._json(200, {"status": "ok"})
@@ -122,10 +130,10 @@ class _MockMusubi(http.server.BaseHTTPRequestHandler):
                     (
                         "# HELP musubi_http_requests_total HTTP requests",
                         "# TYPE musubi_http_requests_total counter",
-                        "musubi_http_requests_total{method=\"GET\"} 1",
+                        'musubi_http_requests_total{method="GET"} 1',
                         "# HELP musubi_component_healthy Component readiness",
                         "# TYPE musubi_component_healthy gauge",
-                        "musubi_component_healthy{component=\"qdrant\"} 1",
+                        'musubi_component_healthy{component="qdrant"} 1',
                     )
                 )
                 + "\n",
@@ -133,7 +141,7 @@ class _MockMusubi(http.server.BaseHTTPRequestHandler):
             return
         self._json(404, {"error": {"code": "NOT_FOUND"}})
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         path = urlparse(self.path).path
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
@@ -200,7 +208,11 @@ def _mock_musubi(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        host, port = server.server_address
+        address = server.server_address
+        assert isinstance(address, tuple)
+        host, port = address[:2]
+        assert isinstance(host, str)
+        assert isinstance(port, int)
         yield f"http://{host}:{port}"
     finally:
         server.shutdown()
@@ -361,3 +373,35 @@ def test_kong_routes_cover_every_v1_endpoint_family() -> None:
 
     for family in expected:
         assert any(family == path or family.startswith(path.rstrip("/") + "/") for path in actual)
+
+
+def test_every_alert_has_a_runbook_section() -> None:
+    text = _read(RUNBOOKS_SPEC)
+    for heading in ALERT_RUNBOOK_SECTIONS:
+        assert f"## {heading}" in text
+
+
+def test_runbooks_reference_real_files_and_commands() -> None:
+    text = _read(RUNBOOKS_SPEC)
+    assert "deploy/runbooks/first-deploy.md" in text
+    assert RUNBOOK.exists()
+    assert "docker compose" in text
+    assert "ansible-playbook" in _read(RUNBOOK)
+    assert "deploy/smoke/verify.sh" in _read(RUNBOOK)
+
+
+def test_each_runbook_lists_success_criteria() -> None:
+    first_deploy = _read(RUNBOOK)
+    assert first_deploy.count("**Expected output:**") == len(RUNBOOK_SECTIONS)
+    runbooks = _read(RUNBOOKS_SPEC)
+    for heading in ALERT_RUNBOOK_SECTIONS:
+        section = runbooks.split(f"## {heading}", 1)[1].split("\n## ", 1)[0]
+        lower = section.lower()
+        assert "if" in lower or "confirm" in lower or "verify" in lower
+
+
+def test_quarterly_game_day_drills_cycle_through_runbooks() -> None:
+    text = _read(RUNBOOKS_SPEC)
+    assert "## Quarterly game-day drills" in text
+    for drill in ("Qdrant down", "Restore from snapshot", "Backup failure 24h", "First deploy"):
+        assert drill in text
