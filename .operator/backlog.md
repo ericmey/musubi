@@ -30,31 +30,19 @@ Automates the per-slice post-merge ritual: merge, pull v2, flip slice frontmatte
 
 ---
 
-## Next up
 
 ### `scripts/render-prompt.py`
 
-**Priority: medium-high.** Compose `claimable.py brief <slice-id>` output + `prompts/slice-start.md.template` into a fully-formed agent session prompt.
+Automates prompt composition for the operator by templating slice details directly into a ready-to-paste markdown block. Eliminates typos and misaligned spec paths in agent briefs.
 
-**CLI:**
+**Motivation:** brief writing was the highest-drift operator task. Templating + slot-filling closes the loop.
 
-```bash
-python3 .operator/scripts/render-prompt.py start \
-  --agent codex-gpt5 \
-  --clone-path ~/Projects/musubi-codex \
-  --slice slice-retrieval-fast
+**Status:** v1 shipped 2026-04-19 (PR #122).
 
-# → single markdown block, ready to paste to agent session
-```
 
-Reads slot values from:
-- Slice frontmatter + `claimable.py` output (Issue number, owns/forbidden/specs/depends).
-- Operator-provided args (agent name, id, clone path).
-- Runtime inference (parallel agents from in-progress slice states).
+## Next up
 
-**Motivation:** brief writing has been my highest-drift operator task. Templating + slot-filling closes the loop.
 
-**Estimate:** ~150 lines on top of claimable.py's library functions.
 
 ### `scripts/board.py`
 
