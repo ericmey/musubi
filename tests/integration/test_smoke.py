@@ -43,11 +43,55 @@ pytestmark = pytest.mark.integration
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="bullet 5: capture passes end-to-end through bootstrap; retrieve doesn't surface row within 10s on cold-cache CI (Qdrant local-mode indexing latency). Bullets 6/7/9 PASS the same bootstrap path. Issue #133 tracks the unskip."
-)
-async def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
-    pass
+async def test_capture_then_retrieve_roundtrip(api_client: Any, live_stack: StackHandle) -> None:
+    """Capture → promote (provisional→matured) → retrieve.
+
+    Root cause of the historical flake (Issue #133): episodic captures
+    land in state ``provisional`` and the retrieve fast-path filters to
+    state ∈ {matured, promoted}. No amount of waiting surfaces the row;
+    it's never eligible until the lifecycle worker promotes it. The
+    smoke test explicitly transitions the row via the canonical
+    ``POST /v1/lifecycle/transition`` primitive so bullet 5 exercises
+    the full capture→promote→retrieve path without coupling to
+    out-of-band worker timing. A short retry loop absorbs Qdrant
+    local-mode indexing latency after promotion."""
+    namespace = "eric/integration-test/episodic"
+    content = f"smoke-capture-{uuid.uuid4().hex[:8]}"
+
+    captured = await api_client.memories.capture(namespace=namespace, content=content, importance=5)
+    object_id = captured.get("object_id") if isinstance(captured, dict) else captured.object_id
+    assert object_id
+
+    async with httpx.AsyncClient(
+        base_url=live_stack.api_url,
+        headers={"Authorization": f"Bearer {live_stack.operator_token}"},
+        timeout=10.0,
+    ) as client:
+        transition_resp = await client.post(
+            "/lifecycle/transition",
+            json={
+                "object_id": object_id,
+                "to_state": "matured",
+                "actor": "integration-test",
+                "reason": "smoke-test-retrieve-roundtrip",
+            },
+        )
+        transition_resp.raise_for_status()
+
+    start = time.monotonic()
+    rows: list[dict[str, Any]] = []
+    for _ in range(10):
+        results = await api_client.retrieve(
+            namespace=namespace, query_text=content, mode="fast", limit=5
+        )
+        rows = results.get("results", []) if isinstance(results, dict) else []
+        if any(r.get("object_id") == object_id for r in rows):
+            return
+        await asyncio.sleep(1.0)
+    pytest.fail(
+        f"promoted object_id {object_id} missing from retrieval results "
+        f"after {time.monotonic() - start:.1f}s: {rows}"
+    )
 
 
 # --------------------------------------------------------------------------
