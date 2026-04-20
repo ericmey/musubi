@@ -4,7 +4,7 @@ section: 07-interfaces
 tags: [adapter, browser, interfaces, openclaw, section/interfaces, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-04-19
 up: "[[07-interfaces/index]]"
 reviewed: false
 ---
@@ -12,7 +12,9 @@ reviewed: false
 
 Integrates Musubi into the OpenClaw browser extension. Captures web-browsing context as episodic memories, surfaces retrieval results inline in web pages, and sends/receives thoughts across the user's other presences.
 
-**Independent project.** Repo: `musubi-openclaw-adapter`. Embedded into the OpenClaw extension's background service worker (TypeScript) + a small Python side-car for any heavy lifting (optional).
+**Implementation lives in a sibling repo:** `github.com/ericmey/openclaw-musubi` (TypeScript browser extension). Per [[13-decisions/0022-extension-ecosystem-naming]] (ADR-0022), non-Python integrations live in external `<system>-musubi` repos so that their toolchain (pnpm, tsc, vitest) and host-system release cadence (Chrome Web Store, Firefox Add-ons) don't mix with Musubi's Python monorepo.
+
+This spec describes the **contract** the extension implements against Musubi's canonical API. The contract lives with Musubi (here); the implementation lives in `openclaw-musubi`. TypeScript types are generated from `openapi.yaml` (in this repo) via `openapi-typescript`, giving the extension compile-time safety against the canonical API without hand-maintaining a parallel type file. Optional Python side-car for heavy lifting (e.g., full-page extraction) is out of initial scope; if needed, it would ship as a future `packages/musubi-openclaw-sidecar/` workspace subpackage in this repo.
 
 ## What OpenClaw is
 
