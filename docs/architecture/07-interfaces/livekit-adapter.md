@@ -4,7 +4,7 @@ section: 07-interfaces
 tags: [adapter, interfaces, livekit, section/interfaces, status/complete, type/spec, voice]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-04-19
 up: "[[07-interfaces/index]]"
 reviewed: false
 ---
@@ -12,7 +12,10 @@ reviewed: false
 
 Integrates Musubi into LiveKit voice agent workers. Implements the Slow Thinker / Fast Talker dual-agent pattern so voice retrieval is both fast (for speech generation) and deep (for planning).
 
-**Independent project.** Repo: `musubi-livekit-adapter`. Embedded into the LiveKit agent worker as a Python package; not a standalone service.
+**Layout note (ADR-0015 / ADR-0016):** the adapter ships in-monorepo as
+the sub-package `src/musubi/adapters/livekit/`, importable as
+`musubi.adapters.livekit`. Embedded into the LiveKit agent worker as a
+Python package; not a standalone service.
 
 ## The dual-agent pattern
 
@@ -196,7 +199,7 @@ Voice transcripts can be sensitive. Configurable per-adapter:
 
 ## Test contract
 
-**Module under test:** `musubi-livekit-adapter/src/*`
+**Module under test:** `src/musubi/adapters/livekit/*.py`
 
 Pattern:
 
