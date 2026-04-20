@@ -3,10 +3,10 @@ title: "Slice: Episodic plane — finish first cut"
 slice_id: slice-plane-episodic-followup
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-2-0-flash
 phase: "4 Planes"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-plane-episodic]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > Close the 18 in-scope Test Contract bullets deferred by `slice-plane-episodic`'s first cut: add `patch()`, `delete()`, access-count bump on read, four plane-boundary guards, three transition-behavior tests, one concurrency test, and two Hypothesis properties.
 
-**Phase:** 4 Planes · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 4 Planes · **Status:** `in-progress` · **Owner:** `gemini-2-0-flash`
 
 ## Specs to implement
 
@@ -144,3 +144,7 @@ Agents append one entry per work session. Format:
 ## PR links
 
 - _(none yet)_
+
+### 2026-04-19 23:40 — gemini-2-0-flash — claim
+
+- Claimed slice via Issue #37. Draft PR #94.
