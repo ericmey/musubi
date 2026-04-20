@@ -3,11 +3,11 @@ title: "Slice: Cross-plane orchestration"
 slice_id: slice-retrieval-orchestration
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-3-1-pro-nyla
 phase: "4 Planes"
-tags: [section/slices, status/ready, type/slice]
-updated: 2026-04-17
+tags: [section/slices, status/in-progress, type/slice]
+updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-retrieval-blended]]", "[[_slices/slice-plane-artifact]]"]
 blocks: []
@@ -17,7 +17,7 @@ blocks: []
 
 > Compound queries: issue subqueries across planes, fuse programmatically. Pipeline-as-code.
 
-**Phase:** 4 Planes · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 4 Planes · **Status:** `in-progress` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Specs to implement
 
@@ -67,6 +67,10 @@ Plus slice-specific:
 
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
+
+### 2026-04-19 21:00 — gemini-3-1-pro-nyla — claim
+
+- Claimed slice via `pick-slice` skill. Issue #30, PR #87 (draft).
 
 ### 2026-04-17 — generator — slice created
 
