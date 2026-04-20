@@ -6,7 +6,7 @@ type: slice
 status: blocked
 owner: unassigned
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice, packaging, distribution]
+tags: [section/slices, status/blocked, type/slice, packaging, distribution]
 updated: 2026-04-19
 reviewed: false
 depends-on: []
