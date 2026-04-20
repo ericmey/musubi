@@ -354,12 +354,6 @@ async def test_writelog_entry_purged_after_1h(write_log: WriteLog) -> None:
     assert count == 1
 
 
-
-
-
-
-
-
 @pytest.mark.skip(reason="Large file handling deferred to slice-plane-artifact integration")
 def test_large_file_body_chunked_as_artifact() -> None:
     pass

@@ -72,9 +72,10 @@ class RateLimiter:
     def __init__(self) -> None:
         self._buckets: dict[tuple[str, str], _BucketState] = {}
         self._lock = threading.Lock()
-        
+
         try:
             from musubi.config import get_settings
+
             settings = get_settings()
             self._capture_rate = getattr(settings, "rate_limit_capture", 10.0)
             self._retrieve_rate = getattr(settings, "rate_limit_retrieve", 20.0)
