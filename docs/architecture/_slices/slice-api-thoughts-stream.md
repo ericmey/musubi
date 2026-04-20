@@ -3,12 +3,12 @@ title: "Slice: Thoughts stream (SSE)"
 slice_id: slice-api-thoughts-stream
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-3-1-pro-nyla
 phase: "7 Adapters"
-tags: [section/slices, status/in-review, type/slice, api, sse, thoughts, realtime]
+tags: [section/slices, status/done, type/slice, api, sse, thoughts, realtime]
 updated: 2026-04-20
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-plane-thoughts]]", "[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-v0-write]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Real-time thought delivery over SSE. Unblocks the OpenClaw extension (and every future consumer) from tight polling on `POST /thoughts/check`. Same transport pattern as `/retrieve/stream`; same auth model as existing thoughts endpoints.
 
-**Phase:** 7 Adapters · **Status:** `in-review` · **Owner:** `gemini-3-1-pro-nyla`
+**Phase:** 7 Adapters · **Status:** `done` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Why this slice exists (2026-04-19 context)
 
