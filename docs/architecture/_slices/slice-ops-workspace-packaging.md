@@ -3,7 +3,7 @@ title: "Slice: Workspace packaging — restructure into per-component wheels"
 slice_id: slice-ops-workspace-packaging
 section: _slices
 type: slice
-status: ready
+status: blocked
 owner: unassigned
 phase: "8 Ops"
 tags: [section/slices, status/ready, type/slice, packaging, distribution]
@@ -18,9 +18,9 @@ stubbed-by: "[[13-decisions/0022-extension-ecosystem-naming]]"
 
 > Restructure Musubi into a uv workspace publishing multiple wheels from the same repo. Enables external consumers (LiveKit workers, future MCP stdio, downstream Python agents) to `pip install musubi-<component>` and pull only what they need.
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `blocked` · **Owner:** `unassigned`
 
-> **Note: this slice is queued, not urgent.** Claim it when a real consumer needs thin installs. Current triggers: (1) a LiveKit worker dev wants `uv add musubi-livekit` without pulling the full server stack, (2) the SDK needs independent PyPI publishing for external agents, (3) `mcp-musubi` stdio plugin work starts and needs a shared package namespace. Until one of these materialises, the current single-wheel layout works fine.
+> **Note: this slice is blocked on demand, not on dependencies.** Claim it when a real consumer needs thin installs. Current triggers: (1) a LiveKit worker dev wants `uv add musubi-livekit` without pulling the full server stack, (2) the SDK needs independent PyPI publishing for external agents, (3) `mcp-musubi` stdio plugin work starts and needs a shared package namespace. Until one of these materialises, the current single-wheel layout works fine. Status `blocked` keeps it off the claimable board (it would conflict with `slice-ops-integration-harness` on `pyproject.toml` + `Makefile` otherwise).
 
 ## Specs to implement
 
@@ -29,11 +29,10 @@ stubbed-by: "[[13-decisions/0022-extension-ecosystem-naming]]"
 
 ## Owned paths (you MAY write here)
 
-- `pyproject.toml` (repo root; demoted to workspace-root, publishes nothing)
 - `packages/` (new top-level directory containing subpackage projects)
-- `Makefile` (update targets to run across workspace)
-- `.github/workflows/` (add per-package build+publish workflows)
-- `uv.lock` (regenerates under workspace layout)
+- `.github/workflows/packaging.yml` (add per-package build+publish workflow)
+
+> Note: restructure-time edits to `pyproject.toml`, `Makefile`, and `uv.lock` are implicitly owned by this slice at claim time (the implementing agent adds them to owned paths when flipping to `in-progress`). They're NOT pre-registered here because `slice-ops-integration-harness` also touches `Makefile` today — whichever slice is active first touches them; the other extends.
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
