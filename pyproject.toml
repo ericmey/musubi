@@ -39,6 +39,7 @@ dev = [
     # Vault tooling (docs/architecture/_tools/*.py) reads YAML frontmatter.
     "pyyaml>=6",
     "types-PyYAML",
+    "jinja2>=3",
 ]
 
 [build-system]
