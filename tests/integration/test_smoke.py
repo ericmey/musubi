@@ -14,6 +14,12 @@ which closed the cross-slice ticket
 
 Bullets 8 (SSE), 10/11 (synthesis worker triggers), 13/14 (perf
 budgets) remain skipped against their own follow-ups.
+
+Tests are ``async def`` so pytest-asyncio (auto mode per
+pyproject) manages one event loop per test — the api_client
+fixture's httpx pool binds cleanly to that loop and tears down
+with the test instead of leaving a stale pool behind a closed
+asyncio.run loop.
 """
 
 from __future__ import annotations
@@ -32,37 +38,25 @@ from tests.integration.conftest import StackHandle
 pytestmark = pytest.mark.integration
 
 
-# Helper — shared async test runner so every bullet doesn't repeat
-# the asyncio.run boilerplate.
-def _run(coro: Any) -> Any:
-    return asyncio.run(coro)
-
-
 # --------------------------------------------------------------------------
 # Bullet 5 — capture_then_retrieve_roundtrip
 # --------------------------------------------------------------------------
 
 
-def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
+async def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
     namespace = "eric/integration-test/episodic"
     content = f"smoke-test-capture-{uuid.uuid4().hex[:8]}"
 
-    async def _flow() -> dict[str, Any]:
-        captured = await api_client.memories.capture(
-            namespace=namespace, content=content, importance=5
-        )
-        # Wait briefly for index propagation; Qdrant local index is
-        # eventual.
-        await asyncio.sleep(1.0)
-        results = await api_client.retrieve(
-            namespace=namespace, query_text=content, mode="fast", limit=5
-        )
-        return {"captured": captured, "results": results}
+    captured = await api_client.memories.capture(namespace=namespace, content=content, importance=5)
+    # Wait briefly for index propagation; Qdrant local index is eventual.
+    await asyncio.sleep(1.0)
+    results = await api_client.retrieve(
+        namespace=namespace, query_text=content, mode="fast", limit=5
+    )
 
-    out = _run(_flow())
-    assert out["captured"]["object_id"]
-    rows = out["results"].get("results", [])
-    assert any(r.get("object_id") == out["captured"]["object_id"] for r in rows), (
+    assert captured["object_id"]
+    rows = results.get("results", [])
+    assert any(r.get("object_id") == captured["object_id"] for r in rows), (
         f"newly-captured object_id missing from retrieval results: {rows}"
     )
 
@@ -72,23 +66,16 @@ def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_capture_dedup_against_existing(api_client: Any) -> None:
+async def test_capture_dedup_against_existing(api_client: Any) -> None:
     """Capture the same content twice; the second hit should fold into
     the first via the dedup pipeline (reinforcement_count == 2)."""
     namespace = "eric/integration-test/episodic"
     content = f"dedup-fixture-{uuid.uuid4().hex[:8]}"
 
-    async def _flow() -> tuple[dict[str, Any], dict[str, Any]]:
-        first = await api_client.memories.capture(
-            namespace=namespace, content=content, importance=5
-        )
-        await asyncio.sleep(1.0)
-        second = await api_client.memories.capture(
-            namespace=namespace, content=content, importance=5
-        )
-        return first, second
+    first = await api_client.memories.capture(namespace=namespace, content=content, importance=5)
+    await asyncio.sleep(1.0)
+    second = await api_client.memories.capture(namespace=namespace, content=content, importance=5)
 
-    first, second = _run(_flow())
     # Either the second call returns the same object_id (merged) or it
     # surfaces a `dedup` field; the spec lets the implementation pick.
     if second.get("object_id") == first.get("object_id"):
@@ -104,27 +91,24 @@ def test_capture_dedup_against_existing(api_client: Any) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_thought_send_check_read_history(api_client: Any) -> None:
+async def test_thought_send_check_read_history(api_client: Any) -> None:
     namespace = "eric/integration-test/thought"
 
-    async def _flow() -> dict[str, Any]:
-        ack = await api_client.thoughts.send(
-            namespace=namespace,
-            from_presence="integration-test/sender",
-            to_presence="integration-test/receiver",
-            content="smoke-test-thought",
-            channel="default",
-            importance=5,
-        )
-        inbox = await api_client.thoughts.check(
-            namespace=namespace, presence="integration-test/receiver"
-        )
-        return {"ack": ack, "inbox": inbox}
+    ack = await api_client.thoughts.send(
+        namespace=namespace,
+        from_presence="integration-test/sender",
+        to_presence="integration-test/receiver",
+        content="smoke-test-thought",
+        channel="default",
+        importance=5,
+    )
+    inbox = await api_client.thoughts.check(
+        namespace=namespace, presence="integration-test/receiver"
+    )
 
-    out = _run(_flow())
-    assert out["ack"]["object_id"]
-    items = out["inbox"].get("items", [])
-    assert any(it.get("object_id") == out["ack"]["object_id"] for it in items), (
+    assert ack["object_id"]
+    items = inbox.get("items", [])
+    assert any(it.get("object_id") == ack["object_id"] for it in items), (
         f"sent thought missing from inbox: {items}"
     )
 
@@ -146,7 +130,7 @@ def test_thought_stream_delivers_live() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
+async def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
     """The SDK's curated namespace is read-only (`get`); the create
     surface lives at the API layer (POST /v1/curated-knowledge) and
     is exercised here via raw httpx + the operator token."""
@@ -157,39 +141,36 @@ def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
         "slice-ops-integration-harness Test Contract bullet 9."
     )
 
-    async def _flow() -> dict[str, Any]:
-        async with httpx.AsyncClient(
-            base_url=live_stack.api_url,
-            headers={"Authorization": f"Bearer {live_stack.operator_token}"},
-            timeout=30.0,
-        ) as client:
-            create_resp = await client.post(
-                "/curated-knowledge",
-                json={
-                    "namespace": namespace,
-                    "title": title,
-                    "body": body,
-                    "source": "integration-test",
-                    "tags": ["integration", "smoke"],
-                },
-            )
-            create_resp.raise_for_status()
-            created = create_resp.json()
-            await asyncio.sleep(1.0)
-            retrieve_resp = await client.post(
-                "/retrieve",
-                json={
-                    "namespace": namespace,
-                    "query_text": title,
-                    "mode": "fast",
-                    "limit": 5,
-                },
-            )
-            retrieve_resp.raise_for_status()
-            return {"created": created, "results": retrieve_resp.json()}
+    async with httpx.AsyncClient(
+        base_url=live_stack.api_url,
+        headers={"Authorization": f"Bearer {live_stack.operator_token}"},
+        timeout=30.0,
+    ) as client:
+        create_resp = await client.post(
+            "/curated-knowledge",
+            json={
+                "namespace": namespace,
+                "title": title,
+                "body": body,
+                "source": "integration-test",
+                "tags": ["integration", "smoke"],
+            },
+        )
+        create_resp.raise_for_status()
+        created = create_resp.json()
+        await asyncio.sleep(1.0)
+        retrieve_resp = await client.post(
+            "/retrieve",
+            json={
+                "namespace": namespace,
+                "query_text": title,
+                "mode": "fast",
+                "limit": 5,
+            },
+        )
+        retrieve_resp.raise_for_status()
 
-    out = _run(_flow())
-    assert out["created"]["object_id"]
+    assert created["object_id"]
 
 
 # --------------------------------------------------------------------------
@@ -216,42 +197,39 @@ def test_concept_synthesis_flow_ollama_offline() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_artifact_upload_multipart_then_retrieve_blob(
+async def test_artifact_upload_multipart_then_retrieve_blob(
     live_stack: StackHandle,
 ) -> None:
     """Multipart upload → GET blob → bytes match."""
     namespace = "eric/integration-test/artifact"
     payload = b"WEBVTT\n\n00:00 --> 00:02\nSmoke test transcript fixture."
 
-    async def _flow() -> dict[str, Any]:
-        async with httpx.AsyncClient(
-            base_url=live_stack.api_url,
-            headers={"Authorization": f"Bearer {live_stack.operator_token}"},
-            timeout=30.0,
-        ) as client:
-            upload_resp = await client.post(
-                "/artifacts",
-                data={
-                    "namespace": namespace,
-                    "title": f"smoke-{uuid.uuid4().hex[:6]}.vtt",
-                    "content_type": "text/vtt",
-                    "source_system": "integration-test",
-                    "source_ref": uuid.uuid4().hex,
-                },
-                files={"file": ("smoke.vtt", payload, "text/vtt")},
-            )
-            upload_resp.raise_for_status()
-            uploaded = upload_resp.json()
-            blob_resp = await client.get(
-                f"/artifacts/{uploaded['object_id']}/blob",
-                params={"namespace": namespace},
-            )
-            blob_resp.raise_for_status()
-            return {"uploaded": uploaded, "blob_bytes": blob_resp.content}
+    async with httpx.AsyncClient(
+        base_url=live_stack.api_url,
+        headers={"Authorization": f"Bearer {live_stack.operator_token}"},
+        timeout=30.0,
+    ) as client:
+        upload_resp = await client.post(
+            "/artifacts",
+            data={
+                "namespace": namespace,
+                "title": f"smoke-{uuid.uuid4().hex[:6]}.vtt",
+                "content_type": "text/vtt",
+                "source_system": "integration-test",
+                "source_ref": uuid.uuid4().hex,
+            },
+            files={"file": ("smoke.vtt", payload, "text/vtt")},
+        )
+        upload_resp.raise_for_status()
+        uploaded = upload_resp.json()
+        blob_resp = await client.get(
+            f"/artifacts/{uploaded['object_id']}/blob",
+            params={"namespace": namespace},
+        )
+        blob_resp.raise_for_status()
 
-    out = _run(_flow())
-    assert out["uploaded"]["object_id"]
-    assert out["blob_bytes"] == payload
+    assert uploaded["object_id"]
+    assert blob_resp.content == payload
 
 
 # --------------------------------------------------------------------------
@@ -267,23 +245,22 @@ def _strict_perf_budgets() -> bool:
     not _strict_perf_budgets(),
     reason="perf budgets are CPU-stack-unrealistic; set MUSUBI_TEST_PERF_BUDGETS=strict on a GPU reference host (operator's nightly runner) to enforce",
 )
-def test_retrieve_deep_under_5s_on_10k_corpus(api_client: Any, live_stack: StackHandle) -> None:
+async def test_retrieve_deep_under_5s_on_10k_corpus(
+    api_client: Any, live_stack: StackHandle
+) -> None:
     """Bullet 13 — deep-mode retrieve against the pre-loaded 10k
     corpus completes under the spec's 5s p95 budget. Strict-mode only;
     the harness pre-loads via the seed script when MUSUBI_TEST_PRELOAD_CORPUS=1."""
     namespace = "eric/_shared/episodic"
 
-    async def _flow() -> float:
-        start = time.monotonic()
-        await api_client.retrieve(
-            namespace=namespace,
-            query_text="how do I configure cuda for inference",
-            mode="deep",
-            limit=15,
-        )
-        return time.monotonic() - start
-
-    elapsed = _run(_flow())
+    start = time.monotonic()
+    await api_client.retrieve(
+        namespace=namespace,
+        query_text="how do I configure cuda for inference",
+        mode="deep",
+        limit=15,
+    )
+    elapsed = time.monotonic() - start
     assert elapsed < 5.0, f"deep retrieve took {elapsed:.2f}s (budget 5s)"
 
 
@@ -291,19 +268,16 @@ def test_retrieve_deep_under_5s_on_10k_corpus(api_client: Any, live_stack: Stack
     not _strict_perf_budgets(),
     reason="perf budgets are CPU-stack-unrealistic; set MUSUBI_TEST_PERF_BUDGETS=strict on a GPU reference host",
 )
-def test_retrieve_fast_under_200ms_on_10k_corpus(api_client: Any) -> None:
+async def test_retrieve_fast_under_200ms_on_10k_corpus(api_client: Any) -> None:
     """Bullet 14 — fast-mode retrieve under 200ms p95."""
     namespace = "eric/_shared/episodic"
 
-    async def _flow() -> float:
-        start = time.monotonic()
-        await api_client.retrieve(
-            namespace=namespace,
-            query_text="lifecycle promotion threshold",
-            mode="fast",
-            limit=5,
-        )
-        return time.monotonic() - start
-
-    elapsed = _run(_flow())
+    start = time.monotonic()
+    await api_client.retrieve(
+        namespace=namespace,
+        query_text="lifecycle promotion threshold",
+        mode="fast",
+        limit=5,
+    )
+    elapsed = time.monotonic() - start
     assert elapsed < 0.2, f"fast retrieve took {elapsed * 1000:.0f}ms (budget 200ms)"
