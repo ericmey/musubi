@@ -27,7 +27,7 @@ Qdrant **1.15.x** (April 2026 stable). Key features we depend on:
 
 ```yaml
 qdrant:
-  image: qdrant/qdrant:v1.15.0
+  image: qdrant/qdrant:v1.17.1
   ports:
     - "127.0.0.1:6333:6333"   # REST
     - "127.0.0.1:6334:6334"   # gRPC

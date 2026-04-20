@@ -61,6 +61,8 @@ SORT file.name ASC
 - [[13-decisions/0013-api-spec-authoring]] — How the canonical API spec is authored.
 - [[13-decisions/0014-kong-over-caddy]] — Kong API Gateway on a dedicated VM replaces Caddy on the Musubi host.
 - [[13-decisions/0015-monorepo-supersedes-multi-repo]] — Single monorepo for core + SDK + adapters; supersedes 0011's repo split.
+- [[13-decisions/0023-qdrant-version-bump-to-1-17]] — Qdrant pin moves from 1.15 to 1.17.1 to match the pre-staged host install.
+- [[13-decisions/0024-kong-deferred-for-musubi-v1]] — Kong integration deferred for v1; first deploy is VLAN-internal only. 0014 remains the forward target.
 - [[13-decisions/sources]] — Public sources that informed these decisions.
 - [[13-decisions/template-weights-change]] — Template ADR for retrieval scoring weight changes.
 
