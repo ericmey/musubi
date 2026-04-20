@@ -3,11 +3,11 @@ title: "Slice: Thoughts stream (SSE)"
 slice_id: slice-api-thoughts-stream
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: gemini-3-1-pro-nyla
 phase: "7 Adapters"
-tags: [section/slices, status/ready, type/slice, api, sse, thoughts, realtime]
-updated: 2026-04-19
+tags: [section/slices, status/in-review, type/slice, api, sse, thoughts, realtime]
+updated: 2026-04-20
 reviewed: false
 depends-on: ["[[_slices/slice-plane-thoughts]]", "[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-v0-write]]"]
 blocks: []
@@ -17,7 +17,7 @@ blocks: []
 
 > Real-time thought delivery over SSE. Unblocks the OpenClaw extension (and every future consumer) from tight polling on `POST /thoughts/check`. Same transport pattern as `/retrieve/stream`; same auth model as existing thoughts endpoints.
 
-**Phase:** 7 Adapters · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 7 Adapters · **Status:** `in-review` · **Owner:** `gemini-3-1-pro-nyla`
 
 ## Why this slice exists (2026-04-19 context)
 
@@ -271,6 +271,34 @@ Plus slice-specific:
 
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
+
+### 2026-04-20 01:00 — gemini-3-1-pro-nyla — claim
+
+- Claimed slice via `pick-slice` skill. Issue #102, PR #106 (draft).
+
+### 2026-04-20 04:00 — gemini-3-1-pro-nyla — WIP handoff
+
+- Landed the broker (`src/musubi/api/events.py`), the write-side publish hook in `writes_thoughts.py`, and the first cut of the read endpoint + event generator in `routers/thoughts.py`.
+- Blocked on tests: ASGITransport + infinite-SSE interaction caused `test_stream_emits_ping_every_30s` (and several others) to hang indefinitely on `selector.select()` even after removing the earlier `monkeypatch.setattr(asyncio, "wait_for", ...)` anti-pattern. Multiple generator restructures didn't resolve.
+- Handing off branch as-is for operator rescue.
+
+### 2026-04-20 04:30 — operator — test + endpoint rescue, handoff to in-review
+
+- Diagnosed the hang: ASGITransport's streaming-response semantics under asyncio don't reliably flush headers + body chunks for an infinite-producer endpoint. Not a Nyla bug; a transport limitation at unit level.
+- Rewrote test strategy into three layers:
+  - HTTP tests that need only response headers/status (403, 503, content-type via source inspection) — pass cleanly through ASGITransport (no streaming body consumed).
+  - Broker-direct tests (fanout, filter, backpressure, cross-namespace) — unit-level, no HTTP, sub-millisecond.
+  - Generator-direct tests (ping emission, client-disconnect cleanup) — drive `_thoughts_event_generator` via a `_FakeRequest` shim with `asyncio.wait_for` guards.
+  - Replay + graceful-shutdown + hypothesis bullets skipped-with-reason pointing at `slice-ops-integration-harness` (#108) — live Qdrant range queries + real Starlette shutdown hook are out-of-scope at unit level.
+- Endpoint changes:
+  - Swapped `sse_starlette.EventSourceResponse` → FastAPI `StreamingResponse` with manual SSE byte-framing (`_sse_frame` helper). Removed a layer that deadlocked inside ASGITransport.
+  - Cleaned up dead code in the generator (unused `_ping_loop` / `_sub_loop` / `_check_disconnect` from an earlier restructure).
+- Broker bug fix: the publish filter treated `"all"` as a subscriber-side wildcard (`"all" in sub.includes` delivered everything). Spec says `include` is a set of `to_presence` literals; `"all"` is one of them, not a wildcard. Changed to `if to_presence in sub.includes`. A client that keeps the default (`{presence, "all"}`) still receives broadcasts; a client that explicitly narrows opts out. Matches spec intent and passes the two filter tests that were previously asserting broken behaviour.
+- Removed WIP scratch files Nyla pushed during debugging (`run_manual.py`, `run_manual2.py`, `run_test.py`, `run_fastapi_test.py`, `test_manual.py`, `test_ping_issue.py`).
+- Results: 15 passing, 6 skipped (all spec-compliant), 0 failed, 0.4s. `make check` green (844 passed, 228 skipped). `make tc-coverage SLICE=slice-api-thoughts-stream` reports Closure Rule satisfied.
+- Slice `status: in-progress` → `in-review`. Nyla retains `owner:` credit — she delivered the broker + publish-hook + first endpoint cut; operator only rescued the test strategy + broker filter bug.
+
+spec-update: docs/architecture/07-interfaces/canonical-api.md
 
 ### 2026-04-19 — operator — slice carved
 
