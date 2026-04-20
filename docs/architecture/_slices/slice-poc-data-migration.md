@@ -3,12 +3,12 @@ title: "Slice: POC → v1 data migration"
 slice_id: slice-poc-data-migration
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-3-1-pro-nyla
 phase: "11 Migration"
-tags: [section/slices, status/in-review, type/slice, migration, phase-2]
-updated: 2026-04-19
-reviewed: false
+tags: [section/slices, status/done, type/slice, migration, phase-2]
+updated: 2026-04-20
+reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-thoughts]]"]
 blocks: []
 ---
