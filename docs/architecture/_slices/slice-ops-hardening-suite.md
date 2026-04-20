@@ -168,6 +168,24 @@ Plus slice-specific:
 - Consolidation slice per tonight's hidden-pile audit. Five small Phase 2 ops concerns bundled into one coherent "harden v1" pass.
 - Implementing agent may split into smaller PRs if scope grows beyond ~800 LOC; operator preference is single-agent-ownership across the five gaps for coherence.
 
+
+### 2026-04-20 00:15 — gemini-2-0-flash — claim
+
+- Claimed slice via Issue #110. Draft PR #125.
+- Out of scope deferrals:
+  - test_storage_growth_rate_projection_matches_observed
+  - test_retrieve_p95_stays_under_400ms_at_150rps
+  - test_capture_p95_stays_under_300ms_at_50rps
+  - test_synthesis_completes_under_1h_on_50_candidates
+  - test_gpu_vram_alert_fires_at_9500mb
+  - test_maturation_sets_matured_after_ttl_and_scores_importance
+  - test_maturation_skips_already_matured
+  - test_query_hybrid_returns_scored_results_in_descending_order
+  - test_forward_compat_reads_schema_version_0_point
+  - test_perf_create_under_100ms_p95_on_reference_host
+  - test_perf_dedup_query_under_30ms_p95
+
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet; SDK may need a `hard=True` parameter on delete calls — open cross-slice to slice-sdk-py if required)_
@@ -176,6 +194,3 @@ Plus slice-specific:
 
 - _(none yet)_
 
-### 2026-04-20 00:15 — gemini-2-0-flash — claim
-
-- Claimed slice via Issue #110. Draft PR #125.
