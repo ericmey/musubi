@@ -49,7 +49,7 @@ None of these is big enough to justify its own slice, but together they're "all 
 - `tests/ops/test_cleanup.py`                     (new)
 - `tests/api/test_rate_limits.py`                 (new)
 - `tests/vault/test_watcher_boot_scan.py`         (new)
-- `deploy/systemd/` or `deploy/cron/`             (new — scheduled retention + cleanup runs)
+- `deploy/systemd/maintenance/`                   (new — scheduled retention + cleanup timer + service units; sibling-scoped under systemd/ to avoid conflict with slice-ops-first-deploy's top-level service units)
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
@@ -157,7 +157,7 @@ Plus slice-specific:
 - [ ] All 5 gaps addressed per their §subsection above.
 - [ ] Test Contract passing (18 bullets).
 - [ ] Branch coverage ≥ 85% on `src/musubi/ops/` + `src/musubi/api/rate_limit.py` + boot-scan code.
-- [ ] Operator runbooks: `deploy/systemd/` units + README documenting how to schedule retention + cleanup workers.
+- [ ] Operator runbooks: `deploy/systemd/maintenance/` units + README documenting how to schedule retention + cleanup workers.
 - [ ] Metrics emit correctly (verified via `/ops/metrics` scrape in integration test).
 - [ ] Slice frontmatter flipped. Issue dual-update at claim.
 
