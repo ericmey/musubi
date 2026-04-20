@@ -1,0 +1,43 @@
+{
+  "title": "Musubi · Vault",
+  "uid": "musubi-vault",
+  "schemaVersion": 39,
+  "tags": ["musubi"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Vault events per minute (by kind)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum by (kind) (rate(musubi_vault_events_total[1m]))", "legendFormat": "{{kind}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Vault sync latency p95 (vault event → qdrant update)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum by (le) (rate(musubi_vault_sync_latency_ms_bucket[5m])))" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Echo filter rate",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "rate(musubi_vault_echo_filtered_total[1m])" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Reconcile diff count (over time)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "musubi_vault_reconcile_diff_count" }
+      ]
+    }
+  ]
+}

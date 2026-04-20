@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +33,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from musubi.observability import (
-    Counter,
-    Gauge,
-    Histogram,
     Registry,
     StructuredJsonFormatter,
     check_component_health,
@@ -46,7 +42,6 @@ from musubi.observability import (
     request_id_var,
 )
 
-
 # ---------------------------------------------------------------------------
 # Registry primitives — unit tests for the in-process metrics layer
 # ---------------------------------------------------------------------------
@@ -54,7 +49,9 @@ from musubi.observability import (
 
 def test_counter_increments_and_renders_text_format() -> None:
     reg = Registry()
-    c = reg.counter("musubi_capture_total", "captures by namespace + plane", labelnames=["namespace", "plane"])
+    c = reg.counter(
+        "musubi_capture_total", "captures by namespace + plane", labelnames=["namespace", "plane"]
+    )
     c.labels(namespace="eric/x/episodic", plane="episodic").inc()
     c.labels(namespace="eric/x/episodic", plane="episodic").inc()
     c.labels(namespace="eric/y/episodic", plane="episodic").inc()
@@ -133,10 +130,7 @@ def test_every_endpoint_emits_request_counter() -> None:
     client.get("/v1/probe-ok")
     client.get("/v1/probe-ok")
     text = render_text_format(reg)
-    assert (
-        'musubi_http_requests_total{endpoint="/v1/probe-ok",method="GET",status="200"} 2'
-        in text
-    )
+    assert 'musubi_http_requests_total{endpoint="/v1/probe-ok",method="GET",status="200"} 2' in text
 
 
 def test_every_endpoint_emits_latency_histogram() -> None:
@@ -145,10 +139,7 @@ def test_every_endpoint_emits_latency_histogram() -> None:
     client = TestClient(app, raise_server_exceptions=False)
     client.get("/v1/probe-ok")
     text = render_text_format(reg)
-    assert (
-        'musubi_http_request_duration_ms_count{endpoint="/v1/probe-ok",method="GET"} 1'
-        in text
-    )
+    assert 'musubi_http_request_duration_ms_count{endpoint="/v1/probe-ok",method="GET"} 1' in text
 
 
 def test_errors_increment_errors_total() -> None:
@@ -218,12 +209,16 @@ def test_log_line_never_contains_raw_token() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="deferred to slice-sdk-py-otel-spans: opentelemetry-api opt-in per spec; cross-slice ticket _inbox/cross-slice/slice-sdk-py-otel-spans.md")
+@pytest.mark.skip(
+    reason="deferred to slice-sdk-py-otel-spans: opentelemetry-api opt-in per spec; cross-slice ticket _inbox/cross-slice/slice-sdk-py-otel-spans.md"
+)
 def test_otel_span_covers_retrieve_orchestration() -> None:
     """Bullet 6 — placeholder."""
 
 
-@pytest.mark.skip(reason="deferred to slice-ops-observability-slice-lifecycle-job-emit: lifecycle ledger is forbidden_paths for this slice; cross-slice ticket tracks the worker-side emit")
+@pytest.mark.skip(
+    reason="deferred to slice-ops-observability-slice-lifecycle-job-emit: lifecycle ledger is forbidden_paths for this slice; cross-slice ticket tracks the worker-side emit"
+)
 def test_lifecycle_job_start_end_emitted_to_events_table() -> None:
     """Bullet 7 — placeholder."""
 
@@ -233,7 +228,9 @@ def test_lifecycle_job_start_end_emitted_to_events_table() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="out-of-scope in slice work log: needs live Grafana to load dashboard JSON; deferred to musubi-contract-tests per ADR-0011")
+@pytest.mark.skip(
+    reason="out-of-scope in slice work log: needs live Grafana to load dashboard JSON; deferred to musubi-contract-tests per ADR-0011"
+)
 def test_dashboard_json_loads_in_grafana() -> None:
     """Bullet 8 — placeholder."""
 
@@ -244,9 +241,7 @@ def test_dashboard_json_loads_in_grafana() -> None:
 
 
 def test_check_component_health_marks_reachable_service_healthy() -> None:
-    transport = httpx.MockTransport(
-        lambda r: httpx.Response(200, json={"status": "ok"})
-    )
+    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"status": "ok"}))
     component = check_component_health(
         name="tei-dense",
         url="http://tei-dense.local/health",
@@ -271,9 +266,7 @@ def test_check_component_health_marks_unreachable_service_unhealthy() -> None:
 
 
 def test_check_component_health_marks_5xx_unhealthy() -> None:
-    transport = httpx.MockTransport(
-        lambda r: httpx.Response(503, json={"error": "down"})
-    )
+    transport = httpx.MockTransport(lambda r: httpx.Response(503, json={"error": "down"}))
     component = check_component_health(
         name="tei-sparse",
         url="http://tei-sparse.local/health",
@@ -288,30 +281,22 @@ def test_check_component_health_marks_5xx_unhealthy() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_ops_metrics_returns_prometheus_text_format() -> None:
+def test_ops_metrics_returns_prometheus_text_format(obs_app: TestClient) -> None:
     """The router's /ops/metrics serves the live registry in text format."""
     from musubi.observability import default_registry
 
     default_registry().counter("musubi_test_probe_total", "test probe").inc()
-    from musubi.api.app import create_app
-
-    app = create_app()
-    client = TestClient(app)
-    resp = client.get("/v1/ops/metrics")
+    resp = obs_app.get("/v1/ops/metrics")
     assert resp.status_code == 200
     assert "text/plain" in resp.headers["content-type"]
     assert "musubi_test_probe_total" in resp.text
 
 
-def test_ops_status_populates_real_components_per_aoi_review() -> None:
+def test_ops_status_populates_real_components_per_aoi_review(obs_app: TestClient) -> None:
     """The router's /ops/status populates ComponentStatus for every
     declared dependency — the v0.1-review ask from Aoi (per-plane health
     granularity) gets exercised here."""
-    from musubi.api.app import create_app
-
-    app = create_app()
-    client = TestClient(app)
-    resp = client.get("/v1/ops/status")
+    resp = obs_app.get("/v1/ops/status")
     assert resp.status_code == 200
     body = resp.json()
     components = body["components"]
@@ -385,9 +370,9 @@ def test_metrics_middleware_skips_metrics_path_to_avoid_self_probe() -> None:
     client = TestClient(app)
     client.get("/v1/ops/metrics")
     text = render_text_format(reg)
-    assert (
-        'musubi_http_requests_total{endpoint="/v1/ops/metrics"' not in text
-    ), "metrics path must self-skip"
+    assert 'musubi_http_requests_total{endpoint="/v1/ops/metrics"' not in text, (
+        "metrics path must self-skip"
+    )
 
 
 def test_install_metrics_middleware_returns_app() -> None:
@@ -409,8 +394,13 @@ def test_render_text_format_handles_empty_registry() -> None:
 def test_structured_formatter_includes_extra_fields() -> None:
     formatter = StructuredJsonFormatter()
     record = logging.LogRecord(
-        name="musubi.test", level=logging.INFO, pathname=__file__, lineno=0,
-        msg="captured", args=(), exc_info=None,
+        name="musubi.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=0,
+        msg="captured",
+        args=(),
+        exc_info=None,
     )
     record.namespace = "eric/x/episodic"
     record.object_id = "k" * 27

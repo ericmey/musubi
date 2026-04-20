@@ -1,0 +1,141 @@
+# Prometheus alert rules for Musubi.
+# Per docs/architecture/09-operations/alerts.md.
+#
+# Two severities:
+#   - "push" (urgent, ntfy/Pushover) — broken NOW.
+#   - "email" (informational, next-morning).
+#
+# Every push alert MUST have a runbook annotation. Tested by
+# tests/observability/test_alerts.py.
+
+groups:
+  - name: musubi-push
+    rules:
+      - alert: core_5xx_high
+        expr: rate(musubi_5xx_total[5m]) / rate(musubi_http_requests_total[5m]) > 0.01
+        for: 5m
+        labels:
+          severity: push
+        annotations:
+          summary: "Musubi Core 5xx rate above 1% for 5m"
+          runbook: "https://docs.musubi.internal/09-operations/runbooks/#core_5xx_high"
+
+      - alert: qdrant_down
+        expr: up{job="qdrant"} == 0
+        for: 2m
+        labels:
+          severity: push
+        annotations:
+          summary: "Qdrant unreachable for 2m"
+          runbook: "https://docs.musubi.internal/09-operations/runbooks/#qdrant-down"
+
+      - alert: vault_fs_full
+        expr: node_filesystem_avail_bytes{mountpoint="/var/lib/musubi"} / node_filesystem_size_bytes{mountpoint="/var/lib/musubi"} < 0.10
+        for: 5m
+        labels:
+          severity: push
+        annotations:
+          summary: "Vault filesystem under 10% free"
+          runbook: "https://docs.musubi.internal/09-operations/runbooks/#vault_fs_full"
+
+      - alert: backup_failure_24h
+        expr: time() - musubi_backup_last_success_timestamp > 86400
+        for: 24h
+        labels:
+          severity: push
+        annotations:
+          summary: "No successful Qdrant snapshot in 24h"
+          runbook: "https://docs.musubi.internal/09-operations/runbooks/#backup_failure_24h"
+
+      - alert: gpu_oom
+        expr: increase(container_oom_events_total[10m]) > 0
+        for: 1m
+        labels:
+          severity: push
+        annotations:
+          summary: "Container OOMKilled — likely GPU memory exhaustion"
+          runbook: "https://docs.musubi.internal/09-operations/runbooks/#gpu_oom"
+
+      - alert: loop_detected
+        expr: rate(musubi_vault_echo_filtered_total[1m]) * 60 > 100
+        for: 2m
+        labels:
+          severity: push
+        annotations:
+          summary: "Vault echo filter catching > 100/min — likely sync loop"
+          runbook: "https://docs.musubi.internal/09-operations/runbooks/#loop_detected"
+
+      - alert: token_signing_key_missing
+        expr: musubi_jwt_signing_key_present == 0
+        for: 1m
+        labels:
+          severity: push
+        annotations:
+          summary: "JWT signing key file missing — all auth fails"
+          runbook: "https://docs.musubi.internal/09-operations/runbooks/#token_signing_key_missing"
+
+  - name: musubi-email
+    rules:
+      - alert: lifecycle_job_failing
+        expr: increase(musubi_lifecycle_job_errors_total[1h]) >= 3
+        for: 5m
+        labels:
+          severity: email
+        annotations:
+          summary: "Lifecycle job has errored 3+ times in the last hour"
+
+      - alert: synthesis_skipped_many_clusters
+        expr: rate(musubi_lifecycle_synthesis_skipped_total[1h]) / rate(musubi_lifecycle_synthesis_attempted_total[1h]) > 0.20
+        for: 1h
+        labels:
+          severity: email
+        annotations:
+          summary: "More than 20% of synthesis clusters skipped due to LLM errors"
+
+      - alert: promotion_stale
+        expr: time() - musubi_lifecycle_last_promotion_timestamp > 172800
+        for: 1h
+        labels:
+          severity: email
+        annotations:
+          summary: "No concept promotions in 48h"
+
+      - alert: contradiction_unresolved_7d
+        expr: max(musubi_contradiction_age_seconds) > 604800
+        for: 1h
+        labels:
+          severity: email
+        annotations:
+          summary: "A contradiction has been unresolved for 7+ days"
+
+      - alert: high_provisional_backlog
+        expr: musubi_episodic_provisional_count{age_bucket="7d"} > 500
+        for: 6h
+        labels:
+          severity: email
+        annotations:
+          summary: "Provisional memory backlog over 500 entries older than 7 days"
+
+      - alert: eval_regression
+        expr: musubi_eval_ndcg10_delta < -0.05
+        for: 1h
+        labels:
+          severity: email
+        annotations:
+          summary: "Nightly eval dropped NDCG@10 by more than 5%"
+
+      - alert: disk_growth_anomaly
+        expr: deriv(node_filesystem_size_bytes{mountpoint="/var/lib/musubi"}[7d]) > 2 * deriv(node_filesystem_size_bytes{mountpoint="/var/lib/musubi"}[28d])
+        for: 6h
+        labels:
+          severity: email
+        annotations:
+          summary: "Vault disk growth this week exceeds 2x recent baseline"
+
+      - alert: snapshot_retention_purge_failed
+        expr: musubi_backup_retention_purge_failures_total > 0
+        for: 1h
+        labels:
+          severity: email
+        annotations:
+          summary: "Backup retention cron failed to delete old snapshots"

@@ -1,0 +1,51 @@
+{
+  "title": "Musubi · Lifecycle",
+  "uid": "musubi-lifecycle",
+  "schemaVersion": 39,
+  "tags": ["musubi"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Job runtimes (stacked by job)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum by (job) (rate(musubi_lifecycle_job_duration_seconds_sum[5m]) / rate(musubi_lifecycle_job_duration_seconds_count[5m]))", "legendFormat": "{{job}}" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Job error rate",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum by (job) (rate(musubi_lifecycle_job_errors_total[5m]))", "legendFormat": "{{job}}" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Promotion queue length",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "musubi_lifecycle_promotion_queue_length" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Concept attempts over time",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "sum by (result) (rate(musubi_promotion_total[5m]))", "legendFormat": "{{result}}" }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Contradictions unresolved (current)",
+      "datasource": { "uid": "prometheus", "type": "prometheus" },
+      "targets": [
+        { "expr": "musubi_contradictions_unresolved_count" }
+      ]
+    }
+  ]
+}

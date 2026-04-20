@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -26,9 +27,9 @@ _ALERTMANAGER_FILE = _DEPLOY / "prometheus" / "alertmanager.yml"
 _OVERVIEW_DASHBOARD = _DEPLOY / "grafana" / "dashboards" / "musubi-overview.json"
 
 
-def _load_alert_rules() -> list[dict[str, object]]:
+def _load_alert_rules() -> list[dict[str, Any]]:
     cfg = yaml.safe_load(_ALERTS_FILE.read_text())
-    rules: list[dict[str, object]] = []
+    rules: list[dict[str, Any]] = []
     for group in cfg.get("groups", []):
         for rule in group.get("rules", []):
             if "alert" in rule:
@@ -38,16 +39,11 @@ def _load_alert_rules() -> list[dict[str, object]]:
 
 def test_every_push_alert_has_linked_runbook() -> None:
     """Bullet 1 — every alert with severity=push has a runbook URL."""
-    push_alerts = [
-        r for r in _load_alert_rules()
-        if r.get("labels", {}).get("severity") == "push"
-    ]
+    push_alerts = [r for r in _load_alert_rules() if r.get("labels", {}).get("severity") == "push"]
     assert push_alerts, "expected at least one push-severity alert"
     for rule in push_alerts:
         annotations = rule.get("annotations", {})
-        assert "runbook" in annotations, (
-            f"push alert {rule['alert']!r} has no runbook annotation"
-        )
+        assert "runbook" in annotations, f"push alert {rule['alert']!r} has no runbook annotation"
         assert annotations["runbook"].startswith("http"), (
             f"push alert {rule['alert']!r} runbook is not a URL"
         )
@@ -70,7 +66,9 @@ def test_alertmanager_config_loads_without_error() -> None:
     assert "email" in receiver_names
 
 
-@pytest.mark.skip(reason="out-of-scope in slice work log: chaos-drill timing requires live Prometheus + Alertmanager loop; deferred to musubi-contract-tests per ADR-0011")
+@pytest.mark.skip(
+    reason="out-of-scope in slice work log: chaos-drill timing requires live Prometheus + Alertmanager loop; deferred to musubi-contract-tests per ADR-0011"
+)
 def test_chaos_drill_qdrant_down_fires_within_3m() -> None:
     """Bullet 4 — placeholder."""
 
@@ -78,9 +76,7 @@ def test_chaos_drill_qdrant_down_fires_within_3m() -> None:
 def test_backup_failure_alert_fires_after_24h_gap() -> None:
     """Bullet 5 — surface form: the rule exists with the documented
     24h ``for:`` window. Live firing is the chaos-drill bullet's job."""
-    backup = next(
-        (r for r in _load_alert_rules() if r["alert"] == "backup_failure_24h"), None
-    )
+    backup = next((r for r in _load_alert_rules() if r["alert"] == "backup_failure_24h"), None)
     assert backup is not None, "backup_failure_24h alert is missing"
     assert backup.get("for") == "24h"
 
@@ -107,18 +103,13 @@ def test_every_alert_has_summary_annotation() -> None:
     """Alertmanager templates expect a ``summary`` annotation; verify
     every alert ships one."""
     for rule in _load_alert_rules():
-        assert "summary" in rule.get("annotations", {}), (
-            f"alert {rule['alert']!r} missing summary"
-        )
+        assert "summary" in rule.get("annotations", {}), f"alert {rule['alert']!r} missing summary"
 
 
 def test_alertmanager_routes_push_severity_to_ntfy() -> None:
     cfg = yaml.safe_load(_ALERTMANAGER_FILE.read_text())
     routes = cfg["route"].get("routes", [])
-    push_routes = [
-        r for r in routes
-        if any('severity="push"' in m for m in r.get("matchers", []))
-    ]
+    push_routes = [r for r in routes if any('severity="push"' in m for m in r.get("matchers", []))]
     assert push_routes, "no push-routing rule found in alertmanager config"
     assert push_routes[0]["receiver"] == "ntfy"
 
@@ -127,8 +118,7 @@ def test_alertmanager_routes_email_severity_to_email() -> None:
     cfg = yaml.safe_load(_ALERTMANAGER_FILE.read_text())
     routes = cfg["route"].get("routes", [])
     email_routes = [
-        r for r in routes
-        if any('severity="email"' in m for m in r.get("matchers", []))
+        r for r in routes if any('severity="email"' in m for m in r.get("matchers", []))
     ]
     assert email_routes, "no email-routing rule found in alertmanager config"
     assert email_routes[0]["receiver"] == "email"
