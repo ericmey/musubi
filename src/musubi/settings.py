@@ -107,6 +107,15 @@ class Settings(BaseSettings):
         default=False,
         description="Permit non-TLS downstream calls. Strictly dev-only.",
     )
+    musubi_skip_bootstrap: bool = Field(
+        default=False,
+        description=(
+            "Skip the production app bootstrap (slice-api-app-bootstrap) on "
+            "create_app(). Set to True in unit-test fixtures that override "
+            "FastAPI dependencies AFTER create_app returns; production "
+            "deployments leave this as False so plane factories wire on boot."
+        ),
+    )
 
     # ------------------------------------------------------------------
     # MCP adapter (client-side config for the MCP server process only;

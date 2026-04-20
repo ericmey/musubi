@@ -68,6 +68,11 @@ def api_settings(tmp_path: Path) -> Settings:
             "log_dir": tmp_path / "logs",
             "jwt_signing_key": SecretStr("a-very-long-test-signing-key-for-hs256-tokens-32+bytes"),
             "oauth_authority": AnyHttpUrl(_TEST_ISSUER),
+            # Skip the production bootstrap (slice-api-app-bootstrap) —
+            # unit tests install dependency_overrides AFTER create_app
+            # returns, and the bootstrap would otherwise try to reach
+            # the real Qdrant/TEI on every test app construction.
+            "musubi_skip_bootstrap": True,
         }
     )
 

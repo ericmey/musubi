@@ -21,10 +21,12 @@ from functools import lru_cache
 from qdrant_client import QdrantClient
 
 from musubi.config import get_settings
+from musubi.embedding import Embedder
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
 from musubi.planes.curated import CuratedPlane
 from musubi.planes.episodic import EpisodicPlane
+from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
 
 
@@ -76,11 +78,42 @@ def get_artifact_plane() -> ArtifactPlane:
     )
 
 
+def get_thoughts_plane() -> ThoughtsPlane:
+    raise NotImplementedError(
+        "ThoughtsPlane is not configured. Override via app.dependency_overrides in tests, "
+        "or wire production deps via slice-api-app-bootstrap."
+    )
+
+
+def get_embedder() -> Embedder:
+    raise NotImplementedError(
+        "Embedder is not configured. Override via app.dependency_overrides in tests, "
+        "or wire production deps via slice-api-app-bootstrap."
+    )
+
+
+def get_lifecycle_service() -> object:
+    """Per-process lifecycle handle for the /v1/lifecycle/* endpoints.
+
+    The lifecycle worker runs out-of-band (slice-lifecycle-*); the API
+    just needs a queryable handle for status surfacing. The bootstrap
+    supplies a uniform dict-shaped handle.
+    """
+    raise NotImplementedError(
+        "lifecycle service is not configured. Override via "
+        "app.dependency_overrides in tests, or wire production deps via "
+        "slice-api-app-bootstrap."
+    )
+
+
 __all__ = [
     "get_artifact_plane",
     "get_concept_plane",
     "get_curated_plane",
+    "get_embedder",
     "get_episodic_plane",
+    "get_lifecycle_service",
     "get_qdrant_client",
     "get_settings_dep",
+    "get_thoughts_plane",
 ]

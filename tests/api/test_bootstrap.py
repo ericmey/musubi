@@ -41,7 +41,6 @@ from musubi.planes.episodic import EpisodicPlane
 from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
 
-
 # ---------------------------------------------------------------------------
 # Fixtures — settings + a mock-everything QdrantClient/TEI patch chain so the
 # bootstrap can exercise its full happy path without touching the network.
@@ -64,15 +63,16 @@ def settings(api_settings: Settings) -> Settings:
 
 @pytest.fixture
 def patch_qdrant_ok() -> Iterator[Any]:
-    """Replace the QdrantClient constructor with a stub whose
-    ``get_collections()`` returns a non-empty list — bootstrap's
-    health-gated init reads this to confirm Qdrant is reachable."""
-    with patch("musubi.api.bootstrap.QdrantClient") as mock_cls:
-        instance = mock_cls.return_value
-        instance.get_collections.return_value = type(
-            "Collections", (), {"collections": []}
-        )()
-        yield mock_cls
+    """Replace BOTH dep probes with happy-path doubles so the
+    bootstrap completes without touching the network. Yields the
+    QdrantClient mock for tests that need to introspect it."""
+    with (
+        patch("musubi.api.bootstrap.QdrantClient") as mock_qd_cls,
+        patch("musubi.api.bootstrap._probe_tei", return_value=None),
+    ):
+        instance = mock_qd_cls.return_value
+        instance.get_collections.return_value = type("Collections", (), {"collections": []})()
+        yield mock_qd_cls
 
 
 @pytest.fixture
@@ -87,8 +87,13 @@ def patch_qdrant_unreachable() -> Iterator[Any]:
 
 @pytest.fixture
 def patch_qdrant_recovers() -> Iterator[Any]:
-    """First call raises, second succeeds — retry path."""
-    with patch("musubi.api.bootstrap.QdrantClient") as mock_cls:
+    """First Qdrant probe raises, second succeeds — retry path. TEI
+    probe is patched happy throughout so this fixture isolates the
+    Qdrant retry behaviour."""
+    with (
+        patch("musubi.api.bootstrap.QdrantClient") as mock_cls,
+        patch("musubi.api.bootstrap._probe_tei", return_value=None),
+    ):
         instance = mock_cls.return_value
         instance.get_collections.side_effect = [
             ConnectionError("qdrant transient"),
@@ -203,11 +208,11 @@ def test_bootstrap_fails_loudly_when_tei_unreachable(
 ) -> None:
     """Bullet 7 — TEI unreachable on every retry → BootstrapError
     naming TEI."""
-    with patch("musubi.api.bootstrap._probe_tei", side_effect=ConnectionError("tei down")):
-        with pytest.raises(BootstrapError, match="tei"):
-            bootstrap_production_app(
-                app, settings, retry_attempts=2, retry_backoff_s=0.0
-            )
+    with (
+        patch("musubi.api.bootstrap._probe_tei", side_effect=ConnectionError("tei down")),
+        pytest.raises(BootstrapError, match="tei"),
+    ):
+        bootstrap_production_app(app, settings, retry_attempts=2, retry_backoff_s=0.0)
 
 
 def test_bootstrap_retry_succeeds_on_second_attempt(
@@ -224,17 +229,19 @@ def test_bootstrap_retry_succeeds_on_second_attempt(
 # ---------------------------------------------------------------------------
 
 
-def test_create_app_calls_bootstrap_by_default(
-    settings: Settings, patch_qdrant_ok: Any
-) -> None:
+def test_create_app_calls_bootstrap_by_default(settings: Settings, patch_qdrant_ok: Any) -> None:
     """Bullet 9 — create_app(settings=production_settings) invokes
     bootstrap_production_app on the way up. Verified by asserting
-    the resulting app has plane factories overridden."""
+    the resulting app has plane factories overridden.
+
+    The shared ``settings`` fixture inherits ``musubi_skip_bootstrap=True``
+    from the api_settings fixture (so the broader unit suite skips
+    the bootstrap); override it back to False here to exercise the
+    production-default path."""
     from musubi.api.app import create_app
 
-    # musubi_skip_bootstrap defaults to False, so create_app should
-    # call the bootstrap on its way up.
-    app = create_app(settings=settings)
+    prod_settings = settings.model_copy(update={"musubi_skip_bootstrap": False})
+    app = create_app(settings=prod_settings)
     assert get_episodic_plane in app.dependency_overrides
 
 
@@ -271,9 +278,7 @@ def test_create_app_skips_bootstrap_when_overrides_already_installed(
 # ---------------------------------------------------------------------------
 
 
-def test_existing_unit_test_fixtures_still_work_unchanged(
-    client: Any, valid_token: str
-) -> None:
+def test_existing_unit_test_fixtures_still_work_unchanged(client: Any, valid_token: str) -> None:
     """Bullet 12 — the existing api_factory + client fixtures (in
     tests/api/conftest.py) pre-install dependency_overrides that
     win over the bootstrap's; an existing api/test_* still passes
@@ -299,12 +304,11 @@ def test_bootstrap_error_carries_dep_name() -> None:
     assert "qdrant" in str(err)
 
 
-def test_should_bootstrap_returns_true_on_clean_app(
-    app: FastAPI, settings: Settings
-) -> None:
+def test_should_bootstrap_returns_true_on_clean_app(app: FastAPI, settings: Settings) -> None:
     from musubi.api.bootstrap import _should_bootstrap
 
-    assert _should_bootstrap(app, settings) is True
+    prod_settings = settings.model_copy(update={"musubi_skip_bootstrap": False})
+    assert _should_bootstrap(app, prod_settings) is True
 
 
 def test_should_bootstrap_returns_false_when_skip_flag_set(
