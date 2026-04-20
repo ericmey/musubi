@@ -85,6 +85,13 @@ Agents append one entry per work session. Format:
 - `blocks`: removed `slice-ops-backup` (spurious — backup was done independently this session).
 - Brief path I gave VS Code said `08-deployment/observability.md`; actual spec path is `09-operations/observability.md` + `09-operations/alerts.md`. Slice file's `## Specs to implement` wikilinks were already correct; brief was wrong — noted for future render-prompt.py script (claimable.py reads specs from the slice file, so this class of error would have been auto-caught in an automated brief).
 
+### 2026-04-19 — vscode-cc-sonnet47 — take
+
+- Claimed atomically via `gh issue edit 19 --add-assignee @me` + label flip `status:ready → status:in-progress` (dual-update before writes; post-#93 frontmatter-vs-label drift is a hard `✗`).
+- Branch `slice/slice-ops-observability` off `v2` at 66d5066 (post-reconcile).
+- Caught the spec-path + owns_paths drift in the pre-claim verify pass and waited for the operator's reconcile (option a per the canonical handoff playbook). 9th drift-fix tonight; render-prompt.py automation will eliminate this class.
+- Same agent that landed slice-sdk-py + slice-adapter-livekit; the StatusResponse / ComponentStatus shape the wiring needs to populate is fresh context from those slices.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
