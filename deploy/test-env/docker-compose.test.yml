@@ -131,12 +131,16 @@ services:
       retries: 30
       start_period: 30s
 
-  # Side-car that pulls the test model on first boot. Exits 0 when
-  # done; the harness waits on this before running concept-synthesis
-  # bullets.
+  # Side-car that pulls the test model on first boot. One-shot —
+  # exits 0 after pull completes. Lives behind the `pull` profile
+  # so `docker compose up -d --wait` (which trips on one-shot
+  # containers' clean exit) doesn't see it; the workflow / Makefile
+  # runs `docker compose run --rm ollama-pull` separately after
+  # the main stack is up.
   ollama-pull:
     image: ollama/ollama:0.4.0
     container_name: musubi-test-ollama-pull
+    profiles: ["pull"]
     depends_on:
       ollama:
         condition: service_healthy
