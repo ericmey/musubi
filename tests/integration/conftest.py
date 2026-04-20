@@ -245,7 +245,15 @@ def live_stack(request: pytest.FixtureRequest) -> Iterator[StackHandle]:
 
 @pytest.fixture
 def api_client(live_stack: StackHandle) -> Iterator[Any]:
-    """Per-test :class:`AsyncMusubiClient`. Closed on test exit."""
+    """Per-test :class:`AsyncMusubiClient`. Closed on test exit.
+
+    Tests run via ``asyncio.run(...)`` create + tear down their own
+    event loop per call, so the loop is already closed when this
+    finalizer runs. We allocate a fresh loop just for the close to
+    avoid the ``RuntimeError: Event loop is closed`` chain that
+    surfaces otherwise."""
+    import asyncio
+
     from musubi.sdk import AsyncMusubiClient
 
     client = AsyncMusubiClient(
@@ -255,12 +263,8 @@ def api_client(live_stack: StackHandle) -> Iterator[Any]:
     try:
         yield client
     finally:
-        # The async client requires `await close()`; tests doing
-        # async work close it explicitly. This finalizer is a safety
-        # net for tests that don't.
-        import asyncio
-
+        loop = asyncio.new_event_loop()
         try:
-            asyncio.get_event_loop().run_until_complete(client.close())
-        except RuntimeError:
-            asyncio.new_event_loop().run_until_complete(client.close())
+            loop.run_until_complete(client.close())
+        finally:
+            loop.close()
