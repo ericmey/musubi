@@ -4,7 +4,8 @@ section: 07-interfaces
 tags: [adapter, interfaces, mcp, section/interfaces, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+implements: src/musubi/adapters/mcp/
+updated: 2026-04-19
 up: "[[07-interfaces/index]]"
 reviewed: false
 ---
@@ -12,7 +13,7 @@ reviewed: false
 
 Maps Musubi to the Model Context Protocol. Coding agents (Claude Code, Cursor, others) speak MCP; this adapter exposes Musubi's capabilities as MCP tools.
 
-**Independent project.** Repo: `musubi-mcp-adapter`. Ships as a container + stdio binary. Pins a minimum `musubi-client` version.
+Integrated as a module in the monorepo at `src/musubi/adapters/mcp/` (import path `musubi.adapters.mcp`). Ships as a container + stdio binary. Uses the `musubi.sdk` client.
 
 ## MCP spec version
 
@@ -201,7 +202,7 @@ tool_denylist: [memory_reflect]
 
 Allow/denylist lets the operator customize per deployment.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi-mcp-adapter/src/*`
 
