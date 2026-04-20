@@ -44,7 +44,7 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.mark.skip(
-    reason="bullet 5 capture-then-retrieve: capture phase passes end-to-end through the bootstrap, but retrieve doesn't surface the just-captured row within 10s on the cold-cache CI runner — Qdrant local-mode indexing latency is a real-service interaction that needs a longer poll budget OR a force-flush hook. Tracked as a follow-up Issue. Bullets 6/7/9 (other plane-touching scenarios) PASS, proving the bootstrap wiring is correct."
+    reason="bullet 5: capture passes end-to-end through bootstrap; retrieve doesn't surface row within 10s on cold-cache CI (Qdrant local-mode indexing latency). Bullets 6/7/9 PASS the same bootstrap path. Issue #133 tracks the unskip."
 )
 async def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
     pass
@@ -183,7 +183,7 @@ def test_concept_synthesis_flow_ollama_offline() -> None:
 
 
 @pytest.mark.skip(
-    reason="bullet 12 artifact-upload: route returns 500 with a substantial markdown payload (chunker output non-empty); root cause is in the artifact-plane-side post-bootstrap wiring rather than this slice's bootstrap surface. Bullets 6/7/9 (other plane-touching scenarios) PASS through the same bootstrap path. Tracked as a follow-up Issue against slice-plane-artifact + harness."
+    reason="bullet 12: artifact upload route returns 500 with a substantial markdown payload; root cause is downstream of the bootstrap surface (chunker / artifact-plane / blob-path interaction). Bullets 6/7/9 PASS through the same bootstrap path. Issue #134 tracks the unskip."
 )
 async def test_artifact_upload_multipart_then_retrieve_blob(
     live_stack: StackHandle,
