@@ -43,7 +43,10 @@ _COMPOSE_FILE = _REPO_ROOT / "deploy" / "test-env" / "docker-compose.test.yml"
 _ENV_FILE = _REPO_ROOT / "deploy" / "test-env" / ".env.test"
 
 _DEFAULT_API_PORT = 8100
-_BOOT_TIMEOUT_S = 300.0
+# 600s gives first-cold-cache CI runs enough headroom for TEI model
+# downloads (each ~150-450MB on CPU; sparse loaded at ~284s on the
+# stock GHA runner before its healthcheck could tick "Healthy").
+_BOOT_TIMEOUT_S = 600.0
 _BOOT_POLL_INTERVAL_S = 1.0
 
 
