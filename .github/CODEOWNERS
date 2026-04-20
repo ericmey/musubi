@@ -18,7 +18,7 @@
 /src/musubi/types/                  @ericmey
 
 # Architecture vault (in-repo). Edits should come with explicit reasoning.
-/docs/architecture/                 @ericmey
+/docs/Musubi/                 @ericmey
 
 # Agent configuration — changes affect every coding agent on the project.
 /.claude/                           @ericmey

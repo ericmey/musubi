@@ -1,6 +1,6 @@
 """Test contract for slice-api-thoughts-stream.
 
-Implements the 21 bullets from docs/architecture/_slices/slice-api-thoughts-stream.md.
+Implements the 21 bullets from docs/Musubi/_slices/slice-api-thoughts-stream.md.
 
 Conventions:
 - Broker-level behaviour (fanout, filter, backpressure) is tested against

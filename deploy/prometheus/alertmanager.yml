@@ -1,5 +1,5 @@
 # Alertmanager routing for Musubi alerts.
-# Per docs/architecture/09-operations/alerts.md.
+# Per docs/Musubi/09-operations/alerts.md.
 
 global:
   resolve_timeout: 5m

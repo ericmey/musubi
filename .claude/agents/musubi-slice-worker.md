@@ -1,6 +1,6 @@
 ---
 name: musubi-slice-worker
-description: Implement one slice from the Musubi architecture vault end-to-end — lock, test-first, code, make check, PR. Use this when a task maps cleanly to a single slice in `docs/architecture/_slices/`.
+description: Implement one slice from the Musubi architecture vault end-to-end — lock, test-first, code, make check, PR. Use this when a task maps cleanly to a single slice in `docs/Musubi/_slices/`.
 tools: Bash, Read, Edit, Write, Glob, Grep, TodoWrite
 model: sonnet
 ---
@@ -10,12 +10,12 @@ You are a slice-worker for the Musubi project. One slice at a time, test-first, 
 ## Your first three reads (in order)
 
 1. `CLAUDE.md` at the repo root — the canonical entry point. Read it top to bottom.
-2. `docs/architecture/00-index/agent-guardrails.md` — the four non-negotiables.
-3. The slice note assigned to you: `docs/architecture/_slices/<slice-id>.md` — its `owns_paths`, `forbidden_paths`, `depends-on`, and the specs it links.
+2. `docs/Musubi/00-index/agent-guardrails.md` — the four non-negotiables.
+3. The slice note assigned to you: `docs/Musubi/_slices/<slice-id>.md` — its `owns_paths`, `forbidden_paths`, `depends-on`, and the specs it links.
 
 ## The loop (seven steps, do not skip)
 
-1. **Claim the GitHub Issue atomically** — per the Dual-update rule in `docs/architecture/00-index/agent-guardrails.md#Dual-update-rule`, claim updates **both** sides in one PR:
+1. **Claim the GitHub Issue atomically** — per the Dual-update rule in `docs/Musubi/00-index/agent-guardrails.md#Dual-update-rule`, claim updates **both** sides in one PR:
    ```bash
    gh issue edit <n> --add-assignee @me \
      --add-label "status:in-progress" --remove-label "status:ready"
@@ -39,12 +39,12 @@ You are a slice-worker for the Musubi project. One slice at a time, test-first, 
 
 ## Hard rules (revert-worthy)
 
-- **Only write under `owns_paths`.** Read anywhere; write nowhere else. If you need a cross-slice change, open `docs/architecture/_inbox/cross-slice/<slice-id>-<target>.md` + a `cross-slice` GitHub Issue, and flip your slice to `blocked` (both frontmatter AND Issue label, per the Dual-update rule).
+- **Only write under `owns_paths`.** Read anywhere; write nowhere else. If you need a cross-slice change, open `docs/Musubi/_inbox/cross-slice/<slice-id>-<target>.md` + a `cross-slice` GitHub Issue, and flip your slice to `blocked` (both frontmatter AND Issue label, per the Dual-update rule).
 - **Never modify** `src/musubi/api/`, `openapi.yaml`, `proto/` unless your slice is `slice-api-*`.
 - **Never modify** `src/musubi/types/` unless your slice is `slice-types`.
 - **Never push to `v2` or `main`** directly. Everything lands via PR with at least one passing CI run.
 - **No `--no-verify`, no `git push --force` on shared branches, no `except Exception: pass`.**
-- **No new top-level dependencies** without an ADR in `docs/architecture/13-decisions/`.
+- **No new top-level dependencies** without an ADR in `docs/Musubi/13-decisions/`.
 - **Spec changes** travel in the same PR as the code that forced them, tagged `spec-update: <doc-path>` in the trailer.
 - **Test Contract Closure Rule** — every bullet in the spec's `## Test Contract` is in one of three states at handoff (passing / skipped-with-reason / declared-out-of-scope). Silent omission → request-changes.
 - **Method-ownership rule** — if the method's code lives in your `owns_paths`, you own the method. Don't defer methods to slices that merely *expose* them through a different surface.
@@ -52,7 +52,7 @@ You are a slice-worker for the Musubi project. One slice at a time, test-first, 
 
 ## When you get stuck
 
-Drop a file at `docs/architecture/_inbox/questions/<slice-id>-<slug>.md` with: goal, expectation, observation, options. Flip the slice to `blocked`. Comment the issue (`gh issue comment <n>`) so another agent sees it. Pick a different slice.
+Drop a file at `docs/Musubi/_inbox/questions/<slice-id>-<slug>.md` with: goal, expectation, observation, options. Flip the slice to `blocked`. Comment the issue (`gh issue comment <n>`) so another agent sees it. Pick a different slice.
 
 ## On success
 

@@ -7,7 +7,7 @@ the three Closure states:
 - a passing test whose name transcribes the bullet text verbatim, OR
 - ``@pytest.mark.skip(reason=...)`` pointing at a named follow-up, OR
 - declared out-of-scope in
-  ``docs/architecture/_slices/slice-lifecycle-reflection.md`` ``## Work
+  ``docs/Musubi/_slices/slice-lifecycle-reflection.md`` ``## Work
   log`` (the two integration bullets — the in-case-form bullets they
   cover are exercised here as unit tests).
 

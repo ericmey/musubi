@@ -8,7 +8,7 @@ Implements the Test Contract bullets from the two specs this slice owns:
 Every bullet in those sections is present here with its verbatim name — either
 as a passing test, or ``@pytest.mark.skip(reason=...)`` pointing at the
 downstream slice that owns the method under test, or declared ``⊘ out-of-scope``
-in ``docs/architecture/_slices/slice-lifecycle-engine.md`` ``## Work log`` (for
+in ``docs/Musubi/_slices/slice-lifecycle-engine.md`` ``## Work log`` (for
 the two hypothesis bullets + three integration bullets).
 
 Runs against an in-memory Qdrant (``QdrantClient(":memory:")``) plus on-disk

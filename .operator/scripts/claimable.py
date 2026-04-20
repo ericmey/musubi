@@ -4,7 +4,7 @@
 Operator-only tool (not consumed by slice-worker agents during slice work).
 Purpose: eliminate brief-vs-reality mismatches when authoring agent prompts.
 
-Reads every `docs/architecture/_slices/slice-*.md`, cross-references with
+Reads every `docs/Musubi/_slices/slice-*.md`, cross-references with
 GitHub Issues (via `gh`), and outputs a mechanical view of what's
 actually claimable right now. Replaces the hand-authored slice references
 in agent briefs that have been caught as wrong three times in the last
@@ -193,7 +193,7 @@ def load_slices() -> dict[str, Slice]:
             if candidate.exists():
                 specs.append(str(candidate.relative_to(REPO_ROOT)))
             else:
-                specs.append(f"docs/architecture/{link}.md (MISSING)")
+                specs.append(f"docs/Musubi/{link}.md (MISSING)")
 
         slices[sid] = Slice(
             id=sid,

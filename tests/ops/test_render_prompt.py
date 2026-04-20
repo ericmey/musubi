@@ -63,7 +63,7 @@ def test_render_start_slice_produces_expected_shape(
             ["src/foo.py"],
             ["src/bar.py"],
             ["slice-dep"],
-            REPO_ROOT / "docs/architecture/_slices/slice-foo.md",
+            REPO_ROOT / "docs/Musubi/_slices/slice-foo.md",
         ),
         "slice-dep": MockSlice("done", [], [], [], [], Path("")),
     }
@@ -113,7 +113,7 @@ def test_render_includes_parallel_agents_section_when_any_in_progress(
             ["src/foo.py"],
             [],
             [],
-            REPO_ROOT / "docs/architecture/_slices/slice-foo.md",
+            REPO_ROOT / "docs/Musubi/_slices/slice-foo.md",
         )
     }
     mock_li.return_value = {"slice-foo": MockIssue(42)}
@@ -140,7 +140,7 @@ def test_render_omits_parallel_agents_section_when_none(
             ["src/foo.py"],
             [],
             [],
-            REPO_ROOT / "docs/architecture/_slices/slice-foo.md",
+            REPO_ROOT / "docs/Musubi/_slices/slice-foo.md",
         )
     }
     mock_li.return_value = {"slice-foo": MockIssue(42)}
@@ -166,7 +166,7 @@ def test_dry_run_shows_slot_values(
             ["src/foo.py"],
             [],
             [],
-            REPO_ROOT / "docs/architecture/_slices/slice-foo.md",
+            REPO_ROOT / "docs/Musubi/_slices/slice-foo.md",
         )
     }
     mock_li.return_value = {"slice-foo": MockIssue(42)}
@@ -193,7 +193,7 @@ def test_json_output_produces_valid_json(
             ["src/foo.py"],
             [],
             [],
-            REPO_ROOT / "docs/architecture/_slices/slice-foo.md",
+            REPO_ROOT / "docs/Musubi/_slices/slice-foo.md",
         )
     }
     mock_li.return_value = {"slice-foo": MockIssue(42)}
@@ -216,7 +216,7 @@ def test_template_file_missing_emits_actionable_error(mock_li: Any, mock_ls: Any
             ["src/foo.py"],
             [],
             [],
-            REPO_ROOT / "docs/architecture/_slices/slice-foo.md",
+            REPO_ROOT / "docs/Musubi/_slices/slice-foo.md",
         )
     }
     mock_li.return_value = {"slice-foo": MockIssue(42)}

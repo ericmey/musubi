@@ -29,7 +29,7 @@ Branch + draft PR immediately (first line of body is "Closes #<N>."):
     gh pr create --draft --base v2 --title "<type>(<scope>): <slice-id>" \
       --body "Closes #<N>.
 
-Draft — work in progress per docs/architecture/_slices/<slice-id>.md."
+Draft — work in progress per docs/Musubi/_slices/<slice-id>.md."
 
 Test-first. First implementation commit is the test file — every bullet from the spec's ## Test contract as a pytest function with the verbatim name.
 
@@ -49,7 +49,7 @@ Run the five handoff checks before flipping to ready-for-review (see {{entrypoin
 
 Your path will be <owns-path-of-new-slice>; verify no overlap with the list above.
 
-When stuck, drop docs/architecture/_inbox/questions/<slice-id>-<slug>.md (full frontmatter: title, section, type, status, tags, updated), flip slice + Issue to blocked, comment the Issue with the link, stop.
+When stuck, drop docs/Musubi/_inbox/questions/<slice-id>-<slug>.md (full frontmatter: title, section, type, status, tags, updated), flip slice + Issue to blocked, comment the Issue with the link, stop.
 
 {{optional_closing_remark}}
 ```

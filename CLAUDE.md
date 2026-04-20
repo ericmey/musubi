@@ -6,7 +6,7 @@ This file is the canonical working agreement. Other agent tools read their own s
 
 ## What Musubi is
 
-Musubi (結び) is a three-plane shared memory server for a small AI agent fleet. It is a standalone Python service with a canonical HTTP/gRPC API. Every downstream interface (MCP, LiveKit, OpenClaw) is an adapter that depends on the Musubi SDK. All of those components — core, SDK, adapters, the architecture vault, deployment, and CI — live in this single repo (see [ADR 0015](docs/architecture/13-decisions/0015-monorepo-supersedes-multi-repo.md) and [ADR 0016](docs/architecture/13-decisions/0016-vault-in-monorepo.md)).
+Musubi (結び) is a three-plane shared memory server for a small AI agent fleet. It is a standalone Python service with a canonical HTTP/gRPC API. Every downstream interface (MCP, LiveKit, OpenClaw) is an adapter that depends on the Musubi SDK. All of those components — core, SDK, adapters, the architecture vault, deployment, and CI — live in this single repo (see [ADR 0015](docs/Musubi/13-decisions/0015-monorepo-supersedes-multi-repo.md) and [ADR 0016](docs/Musubi/13-decisions/0016-vault-in-monorepo.md)).
 
 ## The repo at a glance
 
@@ -35,16 +35,16 @@ Musubi (結び) is a three-plane shared memory server for a small AI agent fleet
 
 ## The non-negotiables (4 rules)
 
-1. **Stay inside your slice.** Every planned unit of work has an explicit slice note at `docs/architecture/_slices/<slice-id>.md` with `owns_paths` and `forbidden_paths`. You may read anywhere; you may write only to `owns_paths`.
+1. **Stay inside your slice.** Every planned unit of work has an explicit slice note at `docs/Musubi/_slices/<slice-id>.md` with `owns_paths` and `forbidden_paths`. You may read anywhere; you may write only to `owns_paths`.
 2. **The canonical API is frozen per version.** If your slice is not `slice-api-*`, you do not modify `src/musubi/api/`, `openapi.yaml`, or `proto/`. Additive changes require an ADR; breaking changes bump the version.
 3. **Tests first.** Every spec has a **Test Contract** section. Your first commit in a slice is the test file realising it. The PR is not mergeable until those tests pass and branch coverage ≥ 85 % on owned files (90 % for `planes/**` / `retrieve/**`).
 4. **Do not silently rebase the spec.** If your implementation forces a spec change, update the spec file in the same PR and tag the commit `spec-update: <doc-path>`.
 
-Full text: [docs/architecture/00-index/agent-guardrails.md](docs/architecture/00-index/agent-guardrails.md).
+Full text: [docs/Musubi/00-index/agent-guardrails.md](docs/Musubi/00-index/agent-guardrails.md).
 
 ## Your first 30 minutes
 
-1. **Read the big three** (in order): this file, [docs/AGENT-PROCESS.md](docs/AGENT-PROCESS.md), [docs/architecture/00-index/agent-guardrails.md](docs/architecture/00-index/agent-guardrails.md).
+1. **Read the big three** (in order): this file, [docs/AGENT-PROCESS.md](docs/AGENT-PROCESS.md), [docs/Musubi/00-index/agent-guardrails.md](docs/Musubi/00-index/agent-guardrails.md).
 2. **Check for local operator context.** If `.agent-context.local.md` exists at the repo root, read it for operator-specific hosts / credentials pointers. If it does not, ask the operator to create one from the template — do not proceed with anything that touches infrastructure (SSH, Ansible, model pulls) without it.
 3. **Pick up work.** Either:
    - **You were assigned a GitHub Issue** → use that slice. Run the `pick-slice` skill (Claude Code users) or follow the manual steps in [docs/AGENT-PROCESS.md §5](docs/AGENT-PROCESS.md#5-how-to-claim-a-slice-step-by-step).
@@ -78,16 +78,16 @@ make agent-check       # vault frontmatter + slice DAG + spec hygiene (future; t
 
 - `src/musubi/<module>/` — your slice's owned code.
 - `tests/<module>/` — tests mirror source paths 1-for-1. `src/musubi/retrieve/scoring.py` → `tests/retrieve/test_scoring.py`.
-- `docs/architecture/<NN-section>/<topic>.md` — the spec your slice implements. Edit it (same PR, `spec-update:` trailer) only if your implementation forced a change.
-- `docs/architecture/_slices/<your-slice-id>.md` — your work log and status.
-- `docs/architecture/_inbox/locks/<your-slice-id>.lock` — secondary presence signal.
+- `docs/Musubi/<NN-section>/<topic>.md` — the spec your slice implements. Edit it (same PR, `spec-update:` trailer) only if your implementation forced a change.
+- `docs/Musubi/_slices/<your-slice-id>.md` — your work log and status.
+- `docs/Musubi/_inbox/locks/<your-slice-id>.lock` — secondary presence signal.
 
 ## Paths you may NOT touch without authorization
 
 - `src/musubi/api/`, `openapi.yaml`, `proto/` — canonical API surface. Frozen per version.
 - `src/musubi/types/` — shared types. Only `slice-types` writes here.
-- Any file owned by another active slice (check `docs/architecture/_slices/` + GitHub Issues with `status:in-progress`).
-- `docs/architecture/00-index/conventions.md`, `agent-guardrails.md`, `agent-handoff.md`, `definition-of-done.md` — meta-rules. Changes require a human.
+- Any file owned by another active slice (check `docs/Musubi/_slices/` + GitHub Issues with `status:in-progress`).
+- `docs/Musubi/00-index/conventions.md`, `agent-guardrails.md`, `agent-handoff.md`, `definition-of-done.md` — meta-rules. Changes require a human.
 - `.claude/`, `AGENTS.md`, `GEMINI.md`, `.cursor/rules/` — agent configuration. Changes affect every agent and need explicit operator sign-off.
 
 ## Style (enforced by linters)
@@ -101,7 +101,7 @@ make agent-check       # vault frontmatter + slice DAG + spec hygiene (future; t
 - **Import discipline:** `sdk/*` imports `types/*` only. `adapters/*` imports `sdk+types` only. `api/*` is the only module allowed to compose `planes/*` + `retrieve/*` + `lifecycle/*`. Enforced by lint in a future pass; enforced by review until then.
 - **Comments explain *why*, not *what*.**
 
-See [docs/architecture/00-index/conventions.md](docs/architecture/00-index/conventions.md) for the full style guide.
+See [docs/Musubi/00-index/conventions.md](docs/Musubi/00-index/conventions.md) for the full style guide.
 
 ## Multi-agent coordination
 
@@ -127,7 +127,7 @@ Not all agents are equivalent. Rough guide (details in [docs/AGENT-PROCESS.md §
 ## When you get stuck
 
 1. Don't guess. Don't "just make it work."
-2. Drop a file at `docs/architecture/_inbox/questions/<slice-id>-<slug>.md` with: what you're trying to do, what you expected, what you observed, what options you see.
+2. Drop a file at `docs/Musubi/_inbox/questions/<slice-id>-<slug>.md` with: what you're trying to do, what you expected, what you observed, what options you see.
 3. Flip your slice to `blocked` (frontmatter + Issue label).
 4. Pick up another slice.
 
@@ -173,13 +173,13 @@ Additional handoff-readiness rules:
 | Need to… | Look at |
 |---|---|
 | Understand the multi-agent flow | [docs/AGENT-PROCESS.md](docs/AGENT-PROCESS.md) |
-| See the whole architecture visually | [docs/architecture/00-index/architecture.canvas](docs/architecture/00-index/architecture.canvas) |
-| Pick a slice | [docs/architecture/_slices/slice-dag.canvas](docs/architecture/_slices/slice-dag.canvas) or [docs/architecture/_slices/](docs/architecture/_slices/) |
-| Know what "done" means | [docs/architecture/00-index/definition-of-done.md](docs/architecture/00-index/definition-of-done.md) |
-| Coordinate with another agent | [docs/architecture/00-index/agent-handoff.md](docs/architecture/00-index/agent-handoff.md) |
-| Find a test fixture | [docs/architecture/_slices/test-fixtures.md](docs/architecture/_slices/test-fixtures.md) |
-| Understand a term | [docs/architecture/00-index/glossary.md](docs/architecture/00-index/glossary.md) |
-| See existing decisions | [docs/architecture/13-decisions/](docs/architecture/13-decisions/) |
+| See the whole architecture visually | [docs/Musubi/00-index/architecture.canvas](docs/Musubi/00-index/architecture.canvas) |
+| Pick a slice | [docs/Musubi/_slices/slice-dag.canvas](docs/Musubi/_slices/slice-dag.canvas) or [docs/Musubi/_slices/](docs/Musubi/_slices/) |
+| Know what "done" means | [docs/Musubi/00-index/definition-of-done.md](docs/Musubi/00-index/definition-of-done.md) |
+| Coordinate with another agent | [docs/Musubi/00-index/agent-handoff.md](docs/Musubi/00-index/agent-handoff.md) |
+| Find a test fixture | [docs/Musubi/_slices/test-fixtures.md](docs/Musubi/_slices/test-fixtures.md) |
+| Understand a term | [docs/Musubi/00-index/glossary.md](docs/Musubi/00-index/glossary.md) |
+| See existing decisions | [docs/Musubi/13-decisions/](docs/Musubi/13-decisions/) |
 | Operator-only hosts / credentials | `.agent-context.local.md` at repo root (not in git) |
 
 ## A minimal first-PR checklist

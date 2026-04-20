@@ -1,5 +1,5 @@
 # Loki single-binary config for the Musubi single-host deployment.
-# Per docs/architecture/09-operations/observability.md § Logs.
+# Per docs/Musubi/09-operations/observability.md § Logs.
 #
 # Co-resident with Grafana on the musubi host. Receives structured-JSON
 # log lines from journald via promtail; keeps 30 days of retention to

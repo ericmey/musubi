@@ -107,7 +107,7 @@ def test_corruption_check_fails_on_tampered_snapshot(tmp_path: Path) -> None:
 
 
 def test_every_asset_has_canonical_owner_documented() -> None:
-    matrix = ROOT / "docs" / "architecture" / "09-operations" / "asset-matrix.md"
+    matrix = ROOT / "docs" / "Musubi" / "09-operations" / "asset-matrix.md"
     table_lines = [
         line
         for line in matrix.read_text().splitlines()

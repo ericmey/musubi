@@ -1,6 +1,6 @@
 ---
 name: spec-check
-description: Run the Musubi vault hygiene gates — frontmatter, slice DAG, Test Contract presence, broken wikilinks, stale status. Use before opening a PR that touches `docs/architecture/` or as a quick health check of the vault.
+description: Run the Musubi vault hygiene gates — frontmatter, slice DAG, Test Contract presence, broken wikilinks, stale status. Use before opening a PR that touches `docs/Musubi/` or as a quick health check of the vault.
 ---
 
 # Skill: spec-check
@@ -9,7 +9,7 @@ Run every vault-hygiene check Musubi ships and produce a one-screen report. Desi
 
 ## When to invoke
 
-- Before opening a PR that touches `docs/architecture/`.
+- Before opening a PR that touches `docs/Musubi/`.
 - When the user says: "check the vault", "anything stale?", `/spec-check`.
 - After pulling an upstream change that touched specs, to sanity-check your working copy.
 - **Before handoff, to generate the Test Contract coverage matrix** that the PR template requires. Run `make tc-coverage SLICE=<slice-id>` and paste the output into the PR description. Anything marked `✗ missing` blocks merge — either write the test, add `@pytest.mark.skip(reason=...)`, or declare out-of-scope in the slice's work log, then re-run.
@@ -45,7 +45,7 @@ Print to stdout (agent-readable) in a table:
 ```bash
 echo "=== slice status counts ==="
 for s in in-progress in-review blocked ready done; do
-  n=$(grep -l "^status: $s" docs/architecture/_slices/slice-*.md 2>/dev/null | wc -l | tr -d ' ')
+  n=$(grep -l "^status: $s" docs/Musubi/_slices/slice-*.md 2>/dev/null | wc -l | tr -d ' ')
   printf "  %-12s %s\n" "$s" "$n"
 done
 ```
@@ -59,7 +59,7 @@ Flag anything surprising:
 ### 3. Lock file sanity
 
 ```bash
-ls docs/architecture/_inbox/locks/ 2>/dev/null
+ls docs/Musubi/_inbox/locks/ 2>/dev/null
 ```
 
 Every lock file must map to:
@@ -71,7 +71,7 @@ Orphan locks (file exists, no matching Issue or frontmatter) → suggest `git rm
 
 ### 4. Wikilink health (lightweight)
 
-Walk every `.md` file in `docs/architecture/` and grep for `[[...]]` references. For each, check:
+Walk every `.md` file in `docs/Musubi/` and grep for `[[...]]` references. For each, check:
 
 - Target file exists (allow optional `#section` suffix).
 - Anchor resolves to a heading (skip if target has no `.md`).
@@ -81,7 +81,7 @@ Output just the broken ones. Do NOT auto-fix — the user reviews the list and d
 ```bash
 python3 - <<'PY'
 import pathlib, re, sys
-root = pathlib.Path("docs/architecture")
+root = pathlib.Path("docs/Musubi")
 pattern = re.compile(r"\[\[([^\]|#]+)")
 errors = []
 md_files = {p.relative_to(root).with_suffix("") for p in root.rglob("*.md")}

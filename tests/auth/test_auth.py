@@ -1,4 +1,4 @@
-"""Test Contract for ``docs/architecture/10-security/auth.md``."""
+"""Test Contract for ``docs/Musubi/10-security/auth.md``."""
 
 from __future__ import annotations
 

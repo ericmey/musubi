@@ -8,7 +8,7 @@ in order of precedence:
    ``MUSUBI_DOTENV`` (useful for tests).
 
 Rules, enforced by this module and the agent guardrails
-(`docs/architecture/00-index/agent-guardrails.md#Prohibited patterns`):
+(`docs/Musubi/00-index/agent-guardrails.md#Prohibited patterns`):
 
 - No other module reads ``os.environ``. Import ``get_settings()`` instead.
 - Secrets are ``SecretStr``; their full value never appears in ``__repr__``
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     """Runtime configuration for Musubi Core.
 
     Fields correspond 1:1 to the ``/etc/musubi/.env`` sample in
-    `docs/architecture/08-deployment/compose-stack.md` §Env.
+    `docs/Musubi/08-deployment/compose-stack.md` §Env.
 
     The ``env_file`` is chosen dynamically by :func:`musubi.config.get_settings`
     (reads ``MUSUBI_DOTENV`` — the sole allowed env read outside this module —

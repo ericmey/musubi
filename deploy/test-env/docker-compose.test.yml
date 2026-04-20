@@ -1,7 +1,7 @@
 # Integration-test compose stack for Musubi.
 # Spins up the dependencies the harness exercises against.
 #
-# Per docs/architecture/_slices/slice-ops-integration-harness.md §
+# Per docs/Musubi/_slices/slice-ops-integration-harness.md §
 # Implementation notes: real services, not mocks. CPU-only image
 # variants chosen so the stack runs on a stock GitHub Actions runner
 # without GPU; perf bullets (#13, #14) skip when GPU is not available

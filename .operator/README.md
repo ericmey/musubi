@@ -49,7 +49,7 @@ python3 .operator/scripts/claimable.py brief slice-lifecycle-promotion
 python3 .operator/scripts/claimable.py verify slice-retrieval-fast
 ```
 
-Reads `docs/architecture/_slices/slice-*.md` + `gh issue list --label slice`. Cross-references to produce a single source of truth for:
+Reads `docs/Musubi/_slices/slice-*.md` + `gh issue list --label slice`. Cross-references to produce a single source of truth for:
 
 - What's claimable right now (strict: deps all `status: done` on v2 or their Issue is CLOSED).
 - Issue number for each slice (parsed from GitHub Issue titles matching `slice: slice-xxx`).
@@ -89,5 +89,5 @@ Each script is operator-side, idempotent, safe to re-run. None modify vault cont
 ## Not to be confused with
 
 - `.agent-brief.*.local.md` files at repo root — those are the **filled** briefs (gitignored, copied into each agent session). The `.operator/prompts/` templates are what filled briefs are derived from.
-- `docs/architecture/_tools/` — vault-hygiene tooling consumed by agents during a slice (`make agent-check`, `make tc-coverage`). Different audience, different concern.
+- `docs/Musubi/_tools/` — vault-hygiene tooling consumed by agents during a slice (`make agent-check`, `make tc-coverage`). Different audience, different concern.
 - `~/Projects/musubi-orchestrator-brief.md` — the "next project" design for a real orchestrator agent. This directory is the manual-precursor: the mechanical operations the future orchestrator will automate.
