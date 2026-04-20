@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[06-ingestion/index]]"
 reviewed: false
+implements: "tests/test_embedding.py"
 ---
 # Embedding Strategy
 
@@ -150,7 +151,7 @@ Guardrails for swapping embedding models:
 3. **Bundled sparse** — if a new dense model also emits good sparse vectors (like BGE-M3 itself), we may consolidate to one model and free VRAM.
 4. **Eval parity** — the new model must match or exceed current NDCG@10 on our golden set.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/embedding/` (client + cache + batching)
 

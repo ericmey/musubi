@@ -1,5 +1,5 @@
 ---
-title: "Cross-slice: EpisodicMemory.topics field name vs linked_to_topics"
+title: "Reconcile `topics` (spec) vs `linked_to_topics` (model) on `EpisodicMemory`"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-lifecycle-maturation

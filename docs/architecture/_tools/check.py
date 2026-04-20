@@ -156,17 +156,29 @@ def check_vault(rep: Report) -> None:
             title_only = h1[2:].strip().strip('"')
             if title_only != str(fm.get("title")).strip().strip('"'):
                 rep.warn(rel, f"H1 '{title_only}' != frontmatter title '{fm.get('title')}'")
-        # Section field matches parent folder (for foldered notes)
+        # Section field matches parent folder (for foldered notes).
+        #
+        # Accepted forms:
+        #   - immediate parent name (e.g. `04-data-model` for files under
+        #     `04-data-model/*.md`)
+        #   - full relative path from the vault root (e.g. `_inbox/cross-slice`
+        #     for `_inbox/cross-slice/foo.md`). The full-path form is the
+        #     convention used by files under `_inbox/` subfolders and by
+        #     `07-interfaces/openapi/README.md` — it disambiguates sub-sections
+        #     that share a base name across the tree.
         parent = p.parent.name
+        parent_path = str(p.parent.relative_to(VAULT))
+        section_val = fm.get("section")
         if (
             "/" in rel
             and parent
             and parent != "_inbox"
-            and fm.get("section")
-            and fm["section"] != parent
+            and section_val
+            and section_val != parent
+            and section_val != parent_path
             and not parent.startswith("_")
         ):
-            rep.warn(rel, f"section '{fm.get('section')}' != folder '{parent}'")
+            rep.warn(rel, f"section '{section_val}' != folder '{parent}'")
         # Tags include canonical namespaces
         tags = fm.get("tags") or []
         if isinstance(tags, str):
@@ -220,7 +232,16 @@ def check_slices(rep: Report) -> None:
             if b_sid not in slices:
                 rep.err(str(s["path"].relative_to(VAULT)), f"blocks target missing: {b_sid}")
 
-    # 2. owns_paths uniqueness — scope to the ## Owned paths section only
+    # 2. owns_paths uniqueness — scope to the ## Owned paths section only.
+    #
+    # The purpose of ``owns_paths`` is coordination during *active* work:
+    # two in-flight slices claiming the same file is a merge-conflict
+    # hazard. Once a slice reaches ``done``, its claim is a historical
+    # record of what that slice built — overlapping with another
+    # ``done`` slice's claim is expected (parent + ``<parent>-followup``
+    # pairs, or sibling slices that each extended a shared area at
+    # different times like ``slice-api-v0-read`` + ``slice-api-v0-write``).
+    # Only warn when at least one claimant is still active.
     claims: dict[str, str] = {}
     for sid, s in slices.items():
         body = s["path"].read_text()
@@ -233,11 +254,18 @@ def check_slices(rep: Report) -> None:
             if path in claims and claims[path] != sid:
                 status_cur = s["fm"].get("status")
                 status_prev = slices[claims[path]]["fm"].get("status")
-                msg = f"owns_paths conflict: '{path}' also claimed by '{claims[path]}'"
-                if status_cur == "done" or status_prev == "done":
-                    rep.warn(str(s["path"].relative_to(VAULT)), msg)
+                other_sid = claims[path]
+                both_done = status_cur == "done" and status_prev == "done"
+                if both_done:
+                    # Historical overlap — two shipped slices that both
+                    # legitimately touched this path. Not a signal.
+                    pass
                 else:
-                    rep.err(str(s["path"].relative_to(VAULT)), msg)
+                    msg = f"owns_paths conflict: '{path}' also claimed by '{other_sid}'"
+                    if status_cur == "done" or status_prev == "done":
+                        rep.warn(str(s["path"].relative_to(VAULT)), msg)
+                    else:
+                        rep.err(str(s["path"].relative_to(VAULT)), msg)
             claims[path] = sid
 
     # 3. status transitions
@@ -362,8 +390,15 @@ def check_issues(rep: Report) -> None:
             )
 
     # 2. Every Issue labeled `slice` has a matching slice file.
+    #
+    # Skip closed Issues — the slice file could have been renamed or retired,
+    # and the closed Issue is historical record (not a live claim). The
+    # warning only fires for OPEN Issues whose slice files vanished, which is
+    # the case we actually want to catch.
     for sid, issue in by_slice.items():
         if sid not in slice_fms:
+            if issue.get("state") == "CLOSED":
+                continue
             rep.warn(
                 f"gh-issue#{issue['number']}",
                 f"Issue 'slice: {sid}' has no matching slice file — either slice was "

@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: "docs/architecture/04-data-model/"
 ---
 # Relationships
 
@@ -102,7 +103,7 @@ A surprising number of graph-shaped questions can be answered with payload filte
 
 If we need richer traversal later (e.g., "shortest path from this memory to its influenced curated"), we'll revisit graph DBs. See [[13-decisions/0004-no-knowledge-graph-v1]] for the reasoning.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/types/*` validators + `musubi/lifecycle/transitions.py`
 

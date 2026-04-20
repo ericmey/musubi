@@ -214,7 +214,7 @@ Given:
 
 the pipeline returns byte-identical results. Tests rely on this. RNG is banned; any randomness in upstream libs (Qdrant has none; TEI is deterministic for fixed weights) is either seeded or caught via an allow-list.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/retrieval/orchestration.py`
 

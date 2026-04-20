@@ -1,5 +1,5 @@
 ---
-title: Agent Rules — Deployment
+title: "Agent Rules — Deployment (08)"
 section: 08-deployment
 type: index
 status: complete

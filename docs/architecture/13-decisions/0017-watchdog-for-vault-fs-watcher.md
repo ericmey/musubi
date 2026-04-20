@@ -1,5 +1,5 @@
 ---
-title: "ADR 0017: Use watchdog for vault filesystem watcher"
+title: "ADR 0017: Use `watchdog` for vault filesystem watcher"
 section: 13-decisions
 type: adr
 status: accepted

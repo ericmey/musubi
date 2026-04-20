@@ -1,15 +1,20 @@
 ---
-title: "Cross-slice: EpisodicPlane.batch_create for single-TEI / single-Qdrant batch upsert"
+title: "Add `EpisodicPlane.batch_create` for true batch ingestion"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-ingestion-capture
 target_slice: slice-plane-episodic
-status: open
+status: tracked
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
-tags: [section/inbox-cross-slice, type/cross-slice, status/open]
-updated: 2026-04-19
+tracked_by: "https://github.com/ericmey/musubi/issues/141"
+tags: [section/inbox-cross-slice, type/cross-slice, status/tracked]
+updated: 2026-04-20
 ---
+
+> **Tracked as GH Issue #141** — https://github.com/ericmey/musubi/issues/141
+> The ticket body below is preserved for audit; new discussion happens on the Issue.
+
 
 # Add `EpisodicPlane.batch_create` for true batch ingestion
 

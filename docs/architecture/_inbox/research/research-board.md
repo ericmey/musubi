@@ -1,6 +1,6 @@
 ---
 title: Research Pipeline
-section: _inbox
+section: _inbox/research
 type: kanban
 status: living-document
 kanban-plugin: basic

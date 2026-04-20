@@ -1,5 +1,5 @@
 ---
-title: Current State
+title: "02 — Current State"
 section: 02-current-state
 tags: [current-state, gap-analysis, section/current-state, status/complete, type/gap-analysis]
 type: gap-analysis

@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-18
 reviewed: true
 depends-on: []
-blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-ingestion-capture]]", "[[_slices/slice-lifecycle-engine]]", "[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-thoughts]]", "[[_slices/slice-qdrant-layout]]", "[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-rerank]]", "[[_slices/slice-retrieval-scoring]]", "[[_slices/slice-vault-sync]]"]
+blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-v0-write]]", "[[_slices/slice-ingestion-capture]]", "[[_slices/slice-lifecycle-engine]]", "[[_slices/slice-plane-artifact]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-thoughts]]", "[[_slices/slice-poc-data-migration]]", "[[_slices/slice-qdrant-layout]]", "[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-rerank]]", "[[_slices/slice-retrieval-scoring]]", "[[_slices/slice-types-followup]]", "[[_slices/slice-vault-sync]]"]
 ---
 # Slice: Shared pydantic types
 

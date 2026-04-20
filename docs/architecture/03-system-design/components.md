@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[03-system-design/index]]"
 reviewed: false
+implements: "docs/architecture/03-system-design/"
 ---
 # Components
 
@@ -141,3 +142,7 @@ Adapters **never** import `musubi/` package modules. They depend only on the SDK
 - **Kong** as a reverse proxy (TLS, simple config). Listens on `:443` and proxies to Core on `:8100`.
 - **Git** for vault versioning (nightly auto-commit job).
 - No other external dependencies. Specifically: no Kafka, no Redis, no Postgres, no Nginx.
+
+## Test Contract
+
+This is an architecture-overview spec — no single code path or test file owns it end-to-end. Verification is distributed across the per-component slices listed in the sibling specs under this section, each of which carries its own `## Test Contract` section bound to an owning slice.

@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: "docs/architecture/04-data-model/"
 ---
 # Temporal Model
 
@@ -105,7 +106,7 @@ So supersession ⇒ "correct me"; validity change ⇒ "the world moved on". Dist
 
 Internal storage is always UTC. Display is the viewer's timezone (configured per-presence in their adapter). Never persist local-time strings.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/time/`, validators in `musubi/types/*`
 

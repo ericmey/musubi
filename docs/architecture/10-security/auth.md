@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[10-security/index]]"
 reviewed: false
+implements: "docs/architecture/10-security/"
 ---
 # Auth
 
@@ -273,7 +274,7 @@ Every auth decision is logged:
 
 Denials have `event: auth.deny` + `reason: ...`. 30-day retention; operator-only read.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/auth/*`, `musubi-auth/`
 

@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-19
 up: "[[08-deployment/index]]"
 reviewed: false
+implements: "tests/test_embedding.py"
 ---
 # GPU Inference Topology
 
@@ -241,7 +242,7 @@ None of these is needed for v1 scope. Documented for the roadmap.
 
 All emitted to the local metrics collector ([[09-operations/observability]]).
 
-## Test contract
+## Test Contract
 
 **Module under test:** this topology (integration, not a code module per se)
 

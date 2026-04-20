@@ -1,5 +1,5 @@
 ---
-title: Agent Rules — Retrieval
+title: "Agent Rules — Retrieval (05)"
 section: 05-retrieval
 type: index
 status: complete

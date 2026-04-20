@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-17
 reviewed: true
 depends-on: ["[[_slices/slice-retrieval-deep]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-artifact]]"]
-blocks: ["[[_slices/slice-retrieval-orchestration]]"]
+blocks: ["[[_slices/slice-retrieval-blended-followup]]", "[[_slices/slice-retrieval-orchestration]]"]
 ---
 
 # Slice: Blended multi-plane retrieval

@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[06-ingestion/index]]"
 reviewed: false
+implements: ["src/musubi/lifecycle/demotion.py", "src/musubi/lifecycle/promotion.py", "tests/lifecycle/test_demotion.py", "tests/lifecycle/test_promotion.py"]
 ---
 # Promotion
 
@@ -208,7 +209,7 @@ If we promoted the wrong concept (bad synthesis), manual rollback:
 
 Rollback is purely metadata + file-move. The audit log keeps the full history.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/lifecycle/promotion.py` + `musubi/vault/writer.py`
 

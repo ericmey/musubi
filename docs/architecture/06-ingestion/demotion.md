@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[06-ingestion/index]]"
 reviewed: false
+implements: ["src/musubi/lifecycle/demotion.py", "src/musubi/lifecycle/promotion.py", "tests/lifecycle/test_demotion.py", "tests/lifecycle/test_promotion.py"]
 ---
 # Demotion
 
@@ -138,7 +139,7 @@ All four must hold. Any one being false protects the memory.
 
 When we re-embed (see [[11-migration/re-embedding]]), `last_reinforced_at` and `updated_epoch` might not reflect real reinforcement. We pause demotion for 14 days after any re-embed migration via a flag `DEMOTION_PAUSED_UNTIL`.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/lifecycle/demotion.py`
 

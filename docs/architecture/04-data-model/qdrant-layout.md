@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: "src/musubi/store/"
 ---
 # Qdrant Layout
 
@@ -290,7 +291,7 @@ We lean toward **B** (shared collections), with per-tenant auth tokens at the AP
 
 See [[10-security/auth]] and [[13-decisions/0008-no-relational-store]].
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/store/collections.py`, `musubi/store/indexes.py`
 

@@ -9,6 +9,7 @@ provisioned_at: 2026-04-17
 updated: 2026-04-18
 up: "[[08-deployment/index]]"
 reviewed: true
+implements: "docs/architecture/08-deployment/"
 ---
 # Host Profile
 
@@ -190,3 +191,7 @@ Captured from operational work on 2026-04-18. The future Ansible role that event
 - [x] Pull the LLM and embedding model weights used by Musubi (Qwen2.5-7B Q4 into Ollama; BGE-M3 + SPLADE-v3 + BGE-reranker-v2-m3 into local HF cache) — done 2026-04-18.
 
 Each of these is a candidate for future `_slices/slice-ops-*` or `slice-musubi-*` work.
+
+## Test Contract
+
+Realized by **[[_slices/slice-ops-ansible]]** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.

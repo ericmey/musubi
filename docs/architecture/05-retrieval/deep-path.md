@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[05-retrieval/index]]"
 reviewed: false
+implements: ["src/musubi/retrieve/deep.py", "tests/retrieve/test_deep.py"]
 ---
 # Deep Path
 
@@ -139,7 +140,7 @@ No 5xx on deep path unless everything's down.
 - `retrieval.deep.lineage_hydrate_ms` histogram
 - `retrieval.deep.degraded` counter with `reason=` label
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/retrieval/deep.py` (glue over `orchestration.py`)
 

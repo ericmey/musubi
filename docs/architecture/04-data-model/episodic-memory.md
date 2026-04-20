@@ -7,6 +7,7 @@ status: draft
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: ["src/musubi/planes/episodic/", "src/musubi/store/specs.py", "src/musubi/types/base.py", "src/musubi/types/concept.py", "src/musubi/types/episodic.py", "src/musubi/types/lifecycle_event.py", "src/musubi/types/thought.py", "tests/planes/test_episodic.py", "tests/types/"]
 ---
 # Episodic Memory
 
@@ -129,7 +130,7 @@ See [[07-interfaces/canonical-api]]. Relevant endpoints:
 
 The `content` field is capped at 32KB. Long exchanges should be ingested as artifacts and cited via `supported_by`.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/planes/episodic/`
 

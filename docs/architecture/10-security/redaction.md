@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[10-security/index]]"
 reviewed: false
+implements: "docs/architecture/10-security/"
 ---
 # Redaction
 
@@ -133,7 +134,7 @@ Redaction is pattern-based and will sometimes over-redact — e.g., a 16-digit t
 
 User can disable categories that cause too many false positives on their workload.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/redaction/*`
 

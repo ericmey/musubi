@@ -1,5 +1,5 @@
 ---
-title: "Cross-slice: SynthesizedConcept missing topics field"
+title: "Add `topics: list[str]` to `SynthesizedConcept`"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-lifecycle-promotion

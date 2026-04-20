@@ -1,5 +1,5 @@
 ---
-title: Vault Tools
+title: "`_tools/` — validation and notifications"
 section: _tools
 type: index
 status: complete

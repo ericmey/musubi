@@ -1,5 +1,5 @@
 ---
-title: Retrieval
+title: "05 — Retrieval"
 section: 05-retrieval
 tags: [retrieval, scoring, search, section/retrieval, status/complete, type/spec]
 type: spec

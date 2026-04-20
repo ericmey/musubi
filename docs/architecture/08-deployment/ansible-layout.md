@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-18
 up: "[[08-deployment/index]]"
 reviewed: false
+implements: "docs/architecture/08-deployment/"
 ---
 # Ansible Layout
 
@@ -272,7 +273,7 @@ ansible-playbook playbooks/musubi.yml --check --diff
 
 The line is strict. If something falls between (e.g., vault path) Ansible creates the dir, Compose mounts it.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi-infra/`
 

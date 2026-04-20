@@ -1,5 +1,5 @@
 ---
-title: Data Model
+title: "04 — Data Model"
 section: 04-data-model
 tags: [data-model, schema, section/data-model, status/complete, type/spec]
 type: spec

@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]"]
-blocks: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-ingestion-capture]]", "[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-retrieval-fast]]"]
+blocks: ["[[_slices/slice-api-app-bootstrap]]", "[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-v0-write]]", "[[_slices/slice-ingestion-capture]]", "[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-plane-concept]]", "[[_slices/slice-plane-episodic-followup]]", "[[_slices/slice-poc-data-migration]]", "[[_slices/slice-retrieval-fast]]"]
 ---
 # Slice: Episodic plane
 

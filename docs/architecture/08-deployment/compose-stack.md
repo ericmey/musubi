@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-18
 up: "[[08-deployment/index]]"
 reviewed: false
+implements: "docs/architecture/08-deployment/"
 ---
 # Compose Stack
 
@@ -310,7 +311,7 @@ services:
 
 Digest pins elided for brevity; Ansible fills them from `inventory/group_vars/all.yml`.
 
-## Test contract
+## Test Contract
 
 **Module under test:** `/etc/musubi/docker-compose.yml`
 

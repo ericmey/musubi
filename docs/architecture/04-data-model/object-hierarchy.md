@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
+implements: "docs/architecture/04-data-model/"
 ---
 # Object Hierarchy
 
@@ -189,3 +190,7 @@ Every pydantic model in `musubi/types/` must have:
 - `test_<Model>_timestamps_validated` — invalid epoch/datetime combos fail validation.
 - `test_<Model>_namespace_regex_enforced` — malformed namespaces rejected.
 - `test_<Model>_forward_compat_older_schema_reads_ok` — a payload with `schema_version: 1` still parses when `schema_version: 2` is current.
+
+## Test Contract
+
+Realized by **[[_slices/slice-types]]** (status: done) — see that slice's `## Test Contract` section for the canonical bullet list and the test-file pointers that verify each bullet.

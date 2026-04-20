@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[07-interfaces/index]]"
 reviewed: false
+implements: ["src/musubi/api/", "tests/api/"]
 ---
 # Contract Tests
 
@@ -407,3 +408,10 @@ Cross-cutting:
 7. `test_all_error_shapes_are_consistent_across_endpoints`
 8. `test_no_test_leaks_data_between_runs`
 9. `test_suite_version_tagged_against_api_major`
+
+## Test Contract
+
+Realized by the following slices (all status: done) — each carries its own `## Test Contract` section with the canonical bullet list:
+
+- [[_slices/slice-api-v0-read]]
+- [[_slices/slice-api-v0-write]]

@@ -48,21 +48,21 @@ check:
 # --------------------------------------------------------------------------
 
 agent-check:
-	@python3 docs/architecture/_tools/check.py all
+	@uv run python3 docs/architecture/_tools/check.py all
 
 vault-check: agent-check
 
 slice-check:
-	@python3 docs/architecture/_tools/check.py slices
+	@uv run python3 docs/architecture/_tools/check.py slices
 
 spec-check:
-	@python3 docs/architecture/_tools/check.py specs
+	@uv run python3 docs/architecture/_tools/check.py specs
 
 issue-check:
-	@python3 docs/architecture/_tools/check.py issues
+	@uv run python3 docs/architecture/_tools/check.py issues
 
 wikilink-check:
-	@python3 docs/architecture/_tools/check.py wikilinks
+	@uv run python3 docs/architecture/_tools/check.py wikilinks
 
 # Mechanical audit of the Test Contract Closure Rule for one slice.
 # Reads the slice file, finds the specs it implements, parses each spec's
@@ -74,7 +74,7 @@ tc-coverage:
 	@if [ -z "$(SLICE)" ]; then \
 	  echo "usage: make tc-coverage SLICE=<slice-id>"; exit 2; \
 	fi
-	@python3 docs/architecture/_tools/tc_coverage.py $(SLICE)
+	@uv run python3 docs/architecture/_tools/tc_coverage.py $(SLICE)
 
 # --------------------------------------------------------------------------
 # Integration suite — boots the docker-compose dependency stack at

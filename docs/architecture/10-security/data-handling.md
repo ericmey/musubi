@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[10-security/index]]"
 reviewed: false
+implements: "docs/architecture/10-security/"
 ---
 # Data Handling
 
@@ -145,7 +146,7 @@ If a token or secret leaks:
 4. If a namespace was accessed improperly, audit via lifecycle events + access log.
 5. If LUKS/root is compromised, full re-provision + restore from off-site backup.
 
-## Test contract
+## Test Contract
 
 **Module under test:** data handling policies + export
 

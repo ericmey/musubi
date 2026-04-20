@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-config]]", "[[_slices/slice-auth]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-plane-artifact]]"]
-blocks: ["[[_slices/slice-api-v0-write]]", "[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-openclaw]]", "[[_slices/slice-sdk-py]]"]
+blocks: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-openclaw]]", "[[_slices/slice-api-app-bootstrap]]", "[[_slices/slice-api-thoughts-stream]]", "[[_slices/slice-api-v0-write]]", "[[_slices/slice-sdk-py]]"]
 ---
 
 # Slice: Canonical API v0.1 — read surface

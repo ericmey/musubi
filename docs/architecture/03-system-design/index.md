@@ -1,5 +1,5 @@
 ---
-title: System Design
+title: "03 — System Design"
 section: 03-system-design
 tags: [architecture, components, section/system-design, status/complete, type/spec]
 type: spec

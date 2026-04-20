@@ -7,6 +7,7 @@ status: complete
 updated: 2026-04-17
 up: "[[06-ingestion/index]]"
 reviewed: false
+implements: ["tests/lifecycle/__init__.py", "tests/lifecycle/test_lifecycle.py"]
 ---
 # Lifecycle Engine
 
@@ -223,7 +224,7 @@ def test_scheduler_misfires_handled():
     assert scheduler.runs_count("maturation_episodic") == 4
 ```
 
-## Test contract
+## Test Contract
 
 **Module under test:** `musubi/lifecycle/worker.py`, `musubi/lifecycle/locks.py`, `musubi/lifecycle/transitions.py`
 

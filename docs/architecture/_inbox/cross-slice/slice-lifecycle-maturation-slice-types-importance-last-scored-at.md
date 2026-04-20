@@ -1,5 +1,5 @@
 ---
-title: "Cross-slice: EpisodicMemory missing importance_last_scored_at field"
+title: "Add `importance_last_scored_at: datetime | None` to `EpisodicMemory`"
 section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-lifecycle-maturation

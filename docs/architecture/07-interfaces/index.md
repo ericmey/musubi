@@ -1,5 +1,5 @@
 ---
-title: Interfaces
+title: "07 — Interfaces"
 section: 07-interfaces
 tags: [adapters, api, interfaces, sdk, section/interfaces, status/complete, type/spec]
 type: spec
