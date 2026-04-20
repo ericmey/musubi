@@ -3,10 +3,10 @@ title: "Slice: Metrics / logs / traces"
 slice_id: slice-ops-observability
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: vscode-cc-sonnet47
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-04-19
 reviewed: false
 depends-on: ["[[_slices/slice-ops-compose]]"]
@@ -17,7 +17,7 @@ blocks: []
 
 > Structured logs (Loki), metrics (Prometheus), traces (Tempo). Alert rules and dashboards ship in repo.
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
