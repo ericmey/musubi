@@ -4,7 +4,8 @@ section: 05-retrieval
 tags: [orchestration, pipeline, retrieval, section/retrieval, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+implements: src/musubi/retrieve/orchestration.py
+updated: 2026-04-19
 up: "[[05-retrieval/index]]"
 reviewed: false
 ---
