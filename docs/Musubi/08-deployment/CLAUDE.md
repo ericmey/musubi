@@ -38,7 +38,7 @@ Local rules for `deploy/ansible/`, `deploy/docker/`, `docker-compose.yml`, `Kong
 
 | Container        | Image                       | Role                      | GPU |
 |------------------|-----------------------------|---------------------------|-----|
-| `qdrant`         | `qdrant/qdrant:1.15+`       | vector DB                 | no  |
+| `qdrant`         | `qdrant/qdrant:1.17+`       | vector DB                 | no  |
 | `tei-dense`      | `ghcr.io/huggingface/text-embeddings-inference:*` | BGE-M3 dense | yes |
 | `tei-sparse`     | `ghcr.io/huggingface/text-embeddings-inference:*` | SPLADE++ sparse | yes |
 | `tei-rerank`     | `ghcr.io/huggingface/text-embeddings-inference:*` | BGE-reranker | yes |

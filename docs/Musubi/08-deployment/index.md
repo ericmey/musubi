@@ -89,7 +89,7 @@ Kong (VLAN-wide gateway on `<kong-gateway>`) fronts Musubi. The Musubi host expo
 
 | Component | Pin |
 |---|---|
-| Qdrant | `qdrant/qdrant:v1.15.0` |
+| Qdrant | `qdrant/qdrant:v1.17.1` (per [[13-decisions/0023-qdrant-version-bump-to-1-17]]) |
 | TEI dense | `ghcr.io/huggingface/text-embeddings-inference:1.5-cuda` |
 | TEI sparse | same image, different model |
 | TEI reranker | same image |
