@@ -3,12 +3,12 @@ title: "Slice: Capture endpoint"
 slice_id: slice-ingestion-capture
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: vscode-cc-sonnet47
 phase: "1 Schema"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-plane-episodic]]", "[[_slices/slice-api-v0-write]]"]
 blocks: ["[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-livekit]]"]
 ---
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-adapter-mcp]]", "[[_slices/slice-adapter-livekit]]"]
 
 > Sync write path. Dedup at ingestion similarity threshold. Provisional state; async enrichment downstream.
 
-**Phase:** 1 Schema · **Status:** `in-review` · **Owner:** `vscode-cc-sonnet47`
+**Phase:** 1 Schema · **Status:** `done` · **Owner:** `vscode-cc-sonnet47`
 
 ## Specs to implement
 
