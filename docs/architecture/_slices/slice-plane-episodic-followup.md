@@ -137,6 +137,22 @@ Agents append one entry per work session. Format:
 - Paths reconciled to post-ADR-0015 monorepo layout (`src/musubi/planes/episodic/`, not `musubi/planes/episodic/`).
 - Canonical commit IS `feat(...)` for this slice (unlike the blended-followup which was test-only) — `handoff-audit.py` checks will apply normally.
 
+
+### 2026-04-19 23:40 — gemini-2-0-flash — claim
+
+- Claimed slice via Issue #37. Draft PR #94.
+
+### 2026-04-20 — gemini-2-0-flash — implementation
+
+- Out of scope deferrals:
+  - test_maturation_sets_matured_after_ttl_and_scores_importance
+  - test_maturation_skips_already_matured
+  - test_query_hybrid_returns_scored_results_in_descending_order
+  - test_forward_compat_reads_schema_version_0_point
+  - test_perf_create_under_100ms_p95_on_reference_host
+  - test_perf_dedup_query_under_30ms_p95
+- Achieved 94% branch coverage.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
@@ -145,6 +161,3 @@ Agents append one entry per work session. Format:
 
 - _(none yet)_
 
-### 2026-04-19 23:40 — gemini-2-0-flash — claim
-
-- Claimed slice via Issue #37. Draft PR #94.
