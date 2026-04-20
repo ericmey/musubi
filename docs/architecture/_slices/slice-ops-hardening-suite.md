@@ -3,12 +3,12 @@ title: "Slice: Ops hardening suite — storage/cleanup/gpu/rate-limits/vault-syn
 slice_id: slice-ops-hardening-suite
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: gemini-2-0-flash
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice, ops, hardening, phase-2]
-updated: 2026-04-19
-reviewed: false
+tags: [section/slices, status/done, type/slice, ops, hardening, phase-2]
+updated: 2026-04-20
+reviewed: true
 depends-on: ["[[_slices/slice-ops-observability]]", "[[_slices/slice-ops-integration-harness]]"]
 blocks: []
 ---
@@ -17,7 +17,7 @@ blocks: []
 
 > Consolidates five small-but-necessary Phase 2 hardening gaps into one slice: hard-delete plumbing, storage retention/cleanup, GPU live-host fixtures, API rate-limit enforcement, and vault-sync watcher boot-scan. Each gap was deferred from a done slice via a skipped bullet or was identified in tonight's hidden-pile audit. None individually justifies its own slice; together they form a coherent "make v1 actually safe to run" pass.
 
-**Phase:** 8 Ops · **Status:** `in-review` · **Owner:** `gemini-2-0-flash`
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `gemini-2-0-flash`
 
 ## Why this slice exists
 
