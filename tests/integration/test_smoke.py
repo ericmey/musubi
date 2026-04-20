@@ -48,16 +48,23 @@ async def test_capture_then_retrieve_roundtrip(api_client: Any) -> None:
     content = f"smoke-test-capture-{uuid.uuid4().hex[:8]}"
 
     captured = await api_client.memories.capture(namespace=namespace, content=content, importance=5)
-    # Wait briefly for index propagation; Qdrant local index is eventual.
-    await asyncio.sleep(1.0)
-    results = await api_client.retrieve(
-        namespace=namespace, query_text=content, mode="fast", limit=5
-    )
-
     assert captured["object_id"]
-    rows = results.get("results", [])
-    assert any(r.get("object_id") == captured["object_id"] for r in rows), (
-        f"newly-captured object_id missing from retrieval results: {rows}"
+
+    # Qdrant indexes are eventual; poll the retrieve up to ~10s rather
+    # than a single fixed sleep so first-cold-cache CI runs aren't
+    # flaky on indexing latency.
+    deadline = asyncio.get_event_loop().time() + 10.0
+    rows: list[dict[str, Any]] = []
+    while asyncio.get_event_loop().time() < deadline:
+        results = await api_client.retrieve(
+            namespace=namespace, query_text=content, mode="fast", limit=5
+        )
+        rows = results.get("results", [])
+        if any(r.get("object_id") == captured["object_id"] for r in rows):
+            return
+        await asyncio.sleep(0.5)
+    pytest.fail(
+        f"newly-captured object_id missing from retrieval results within 10s: {rows}"
     )
 
 

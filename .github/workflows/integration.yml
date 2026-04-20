@@ -42,7 +42,7 @@ jobs:
         # runs for flake characterization (DoD evidence path).
         run: ${{ github.event_name == 'schedule' && fromJSON('[1, 2, 3]') || fromJSON('[1]') }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: astral-sh/setup-uv@v3
         with:
@@ -52,7 +52,7 @@ jobs:
         run: uv sync --extra dev
 
       - name: Cache HuggingFace + Ollama models
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cache/huggingface
@@ -98,7 +98,7 @@ jobs:
 
       - name: Upload test log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: integration-log-run-${{ matrix.run }}
           path: integration.log
