@@ -137,6 +137,13 @@ Tests use `api_client` and assert end-to-end behaviour.
 - ~19 deferred bullets across done slices cite this harness as their blocker. Each consumer slice owns its own unskip commit after this lands.
 - Scope: harness + 14 bullet-level smoke scenarios. Perf/load/chaos are future siblings, not this slice.
 
+### 2026-04-19 — vscode-cc-sonnet47 — take
+
+- Claimed atomically via `gh issue edit 108 --add-assignee @me` + label flip `status:ready → status:in-progress` (dual-update before writes).
+- Branch `slice/slice-ops-integration-harness` off `v2`.
+- Same agent that landed slice-ops-compose, slice-sdk-py (FakeMusubiClient pattern), slice-adapter-livekit (fixture wiring), slice-ops-observability (cross-cutting instrumentation) — those four are the composition target this harness exercises end-to-end.
+- **Pre-flight constraint surfaced + resolved with operator before going deep:** Docker is not installed on this agent's dev machine. Operator confirmed CI-as-first-verification is acceptable for this slice. Approach: split the 14 Test Contract bullets — bullets 1-4 (harness-shape) verified locally via mocked-subprocess pattern; bullets 5-14 (real-services smoke) verified by initial CI run via PR-trigger path-filter on `.github/workflows/integration.yml`; flake-characterization evidence comes from the post-merge nightly cron's matrix-of-3.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
