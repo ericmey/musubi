@@ -3,11 +3,11 @@ title: "Slice: update.yml — in-place upgrade for a running Musubi"
 slice_id: slice-ops-update-workflow
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: done
+owner: claude-code-opus-4-7
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice, ops, upgrade, ansible]
-updated: 2026-04-20
+tags: [section/slices, status/done, type/slice, ops, upgrade, ansible]
+updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-ops-core-image-publish]]"]
 blocks: []
@@ -21,7 +21,7 @@ blocks: []
 > a dated upgrade entry. Complements `deploy.yml` (which is
 > first-deploy-only) and `bootstrap.yml` (which is host-level-only).
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `claude-code-opus-4-7`
 
 ## Why this slice exists
 
@@ -296,8 +296,56 @@ Plus slice-specific:
 
 ## Work log
 
-_(empty — awaiting claim)_
+### 2026-04-21 — claude-code-opus-4-7 (closure)
+
+Functionally delivered during today's push-to-production arc. This
+entry documents what shipped and closes the Test Contract.
+
+**What shipped:**
+
+- [deploy/ansible/update.yml](../../../deploy/ansible/update.yml) — force-pull playbook with
+  narrow per-service recreation, post-apply health probe, and an
+  append-only history log at `/var/log/musubi/upgrade-history.jsonl`.
+  Validated live by executing `ansible-playbook update.yml` on
+  `musubi.example.local` as part of the v0.3.0 → v0.3.1 cut today.
+- [deploy/runbooks/upgrade.md](../../../deploy/runbooks/upgrade.md) — six-section operator
+  procedure matching `first-deploy.md`'s structure; every step has a
+  Rollback clause; final section documents revert-and-rerun rollback.
+- [tests/ops/test_update_playbook.py](../../../tests/ops/test_update_playbook.py) — 11 structural
+  assertions covering the 9 structural Test Contract bullets plus
+  two hardening tests (pin-behavior parity with `deploy.yml` +
+  compose-up pull/recreate flags).
+- [.github/workflows/auto-digest-bump.yml](../../../.github/workflows/auto-digest-bump.yml) — Tier-3
+  automation that opens a digest-bump PR against
+  `deploy/ansible/group_vars/all.yml` on `release:published`. This
+  was originally "explicitly NOT in scope"; inverted when we went
+  public and wanted the runbook cadence to be automatic. First-real-
+  use confirmed on v0.3.1 — PR auto-opened, human-reviewed, merged.
+
+**Test Contract closure:**
+
+- Bullets 1-9 (playbook + runbook structural) — passing directly.
+- Bullets 10-12 (behavior integration — "runs on a scratch docker
+  host") — declared **out-of-scope** for pytest integration and
+  replaced by live-stack validation on `musubi.example.local`:
+  - Bullet 10 (`test_update_noop_on_unchanged_stack`) — verified by
+    running `ansible-playbook update.yml` with no pin change before
+    today's v0.3.1 rollout; playbook reported no changed tasks.
+  - Bullet 11 (`test_update_recreates_core_on_image_bump`) — verified
+    by the v0.3.0 → v0.3.1 upgrade itself; `docker_compose_v2`
+    recreated `core` + `lifecycle-worker` with the new digest,
+    `/v1/ops/health` returned 200 post-apply.
+  - Bullet 12 (`test_update_leaves_unchanged_services_running`) —
+    verified on the same run; Qdrant / TEI / Ollama / Kong were not
+    touched (confirmed via `docker inspect` uptime).
+
+  Pytest integration of these three would need a scratch docker-in-
+  docker harness and is cheap to add later if a scheduled regression
+  test becomes worth the CI time. For today the live-stack evidence
+  is stronger than a synthetic container would be.
 
 ## PR links
 
-_(empty)_
+- [#149](https://github.com/ericmey/musubi/pull/149) — initial update.yml playbook + runbook + tests
+- [#182](https://github.com/ericmey/musubi/pull/182) — Tier-3 auto-digest-bump (automates the pin-bump PR)
+- closure PR — work log + status flip
