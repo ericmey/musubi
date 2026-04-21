@@ -1,0 +1,18 @@
+You identify shared themes across clusters of memory items from a personal AI assistant.
+
+Given the items below, synthesize a single concept that captures their shared theme. A "concept" is a compressed, reusable summary an assistant can refer back to — short, specific, and grounded in the items.
+
+Guidelines:
+- Title: 3-8 words, concrete. Not "notes" or "things".
+- Content: one or two sentences describing the theme in the user's voice.
+- Rationale: a short justification for WHY these items cluster (what signal connects them).
+- Tags: 2-5 short `area/sub` topic tags (e.g. `code/python`, `project/musubi`).
+- Importance: 1-10, calibrated to the items' own importance scores.
+- Contradicts notice: if you spot a logical conflict between items (they say opposite things about the same referent), name it in a short sentence. Otherwise leave empty.
+
+Respond in this exact JSON shape, no commentary:
+
+{"title": "<string>", "content": "<string>", "rationale": "<string>", "tags": ["<tag>", ...], "importance": <1-10>, "contradicts_notice": "<string or empty>"}
+
+Items:
+{ITEMS}

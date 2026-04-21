@@ -19,6 +19,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
 from musubi.lifecycle import LifecycleEventSink
+from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.observability import default_registry
 from musubi.planes.concept import ConceptPlane
 from musubi.store.names import collection_for_plane
@@ -449,3 +450,132 @@ async def synthesis_run(
         contradictions_detected=contradictions_detected,
         cursor_advanced_to=max_epoch,
     )
+
+
+# ---------------------------------------------------------------------------
+# Scheduler integration
+# ---------------------------------------------------------------------------
+
+
+def _discover_episodic_namespaces(client: QdrantClient, *, page_size: int = 1000) -> list[str]:
+    """Enumerate `<tenant>/<presence>` prefixes currently present in the
+    episodic collection.
+
+    The synthesis sweep runs per-namespace; discovery at tick time keeps
+    the runner from needing a re-deploy when a new user / presence shows
+    up. Paginates until Qdrant returns ``offset=None`` so a new
+    namespace whose records don't fall in the first page can't be
+    silently dropped. ``page_size`` tunes memory pressure, not the
+    ceiling of namespaces discoverable.
+    """
+    discovered: set[str] = set()
+    offset: Any = None
+    while True:
+        try:
+            records, offset = client.scroll(
+                collection_name=collection_for_plane("episodic"),
+                limit=page_size,
+                offset=offset,
+                with_payload=["namespace"],
+                with_vectors=False,
+            )
+        except Exception:
+            logger.exception("synthesis-ns-discovery-failed")
+            return []
+        for rec in records:
+            if not rec.payload:
+                continue
+            full = rec.payload.get("namespace")
+            if not isinstance(full, str):
+                continue
+            # Per-plane suffix convention: `<tenant>/<presence>/<plane>`.
+            # Strip the trailing `/episodic` to get the synthesis-run form.
+            if full.endswith("/episodic"):
+                discovered.add(full[: -len("/episodic")])
+        if offset is None:
+            break
+    return sorted(discovered)
+
+
+def build_synthesis_jobs(
+    *,
+    client: QdrantClient,
+    sink: LifecycleEventSink,
+    ollama: SynthesisOllamaClient,
+    embedder: Embedder,
+    cursor: SynthesisCursor,
+    lock_dir: Path,
+    config: SynthesisConfig | None = None,
+) -> list[Job]:
+    """Return the one-element Job list matching
+    :func:`musubi.lifecycle.scheduler.build_default_jobs`'s
+    ``synthesis`` entry (daily at 03:00 UTC).
+
+    The wrapped runner discovers namespaces via
+    :func:`_discover_episodic_namespaces` each tick and calls
+    :func:`synthesis_run` once per namespace. A file lock on
+    ``lock_dir/synthesis.lock`` serialises against any other worker
+    attempting the same sweep.
+    """
+    import asyncio as _asyncio
+
+    lock_path = lock_dir / "synthesis.lock"
+
+    async def _run_all() -> None:
+        namespaces = _discover_episodic_namespaces(client)
+        if not namespaces:
+            logger.info("synthesis-no-namespaces-found")
+            return
+        for ns in namespaces:
+            try:
+                report = await synthesis_run(
+                    client=client,
+                    sink=sink,
+                    ollama=ollama,
+                    embedder=embedder,
+                    cursor=cursor,
+                    namespace=ns,
+                    config=config,
+                )
+                logger.info(
+                    "synthesis-done ns=%s selected=%d clusters=%d created=%d reinforced=%d contradictions=%d",
+                    ns,
+                    report.memories_selected,
+                    report.clusters_formed,
+                    report.concepts_created,
+                    report.concepts_reinforced,
+                    report.contradictions_detected,
+                )
+            except Exception:
+                logger.exception("synthesis-failed ns=%s", ns)
+
+    def _runner() -> None:
+        with file_lock(lock_path) as acquired:
+            if not acquired:
+                logger.info("lifecycle-job=synthesis lock-held; skipping run")
+                return
+            _asyncio.run(_run_all())
+
+    return [
+        Job(
+            name="synthesis",
+            trigger_kind="cron",
+            trigger_kwargs={"hour": 3, "minute": 0},
+            func=_runner,
+            grace_time_s=3600,
+        ),
+    ]
+
+
+__all__ = [
+    "ContradictionInput",
+    "ContradictionOutput",
+    "SynthesisConfig",
+    "SynthesisCursor",
+    "SynthesisInput",
+    "SynthesisOllamaClient",
+    "SynthesisOutput",
+    "SynthesisReport",
+    "build_synthesis_jobs",
+    "synthesis_run",
+]

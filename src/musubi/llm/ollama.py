@@ -40,6 +40,12 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from musubi.lifecycle.maturation import OllamaImportance, OllamaTopic
+from musubi.lifecycle.synthesis import (
+    ContradictionInput,
+    ContradictionOutput,
+    SynthesisInput,
+    SynthesisOutput,
+)
 from musubi.types.common import KSUID, validate_ksuid
 
 log = logging.getLogger(__name__)
@@ -48,6 +54,8 @@ _DEFAULT_TIMEOUT_S = 120.0
 
 _IMPORTANCE_PROMPT_V = "v1"
 _TOPICS_PROMPT_V = "v1"
+_SYNTHESIS_PROMPT_V = "v1"
+_CONTRADICTION_PROMPT_V = "v1"
 
 
 class _ImportanceItem(BaseModel):
@@ -66,6 +74,20 @@ class _TopicItem(BaseModel):
 
 class _TopicResponse(BaseModel):
     items: list[_TopicItem]
+
+
+class _SynthesisResponse(BaseModel):
+    title: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    rationale: str = ""
+    tags: list[str] = Field(default_factory=list)
+    importance: int = Field(ge=1, le=10)
+    contradicts_notice: str = ""
+
+
+class _ContradictionResponse(BaseModel):
+    verdict: str = Field(pattern=r"^(consistent|contradictory)$")
+    reason: str = ""
 
 
 def _load_prompt(name: str, version: str) -> str:
@@ -183,6 +205,62 @@ class HttpxOllamaClient:
                 continue
             out[key] = list(row.topics)
         return out
+
+    # ------------------------------------------------------------------
+    # SynthesisOllamaClient Protocol
+    # ------------------------------------------------------------------
+
+    async def synthesize_cluster(self, cluster: SynthesisInput) -> SynthesisOutput | None:
+        """Ask the LLM to condense a memory cluster into one concept.
+
+        Returns ``None`` on outage or parse failure; the synthesis
+        sweep's caller treats that as "skip this cluster, try next run".
+        """
+        if not cluster.memories:
+            return None
+        rendered = "\n".join(
+            f"- id={m.object_id} importance={m.importance} tags={m.tags}\n"
+            f"  content: {_one_line(m.content)}"
+            for m in cluster.memories
+        )
+        prompt = _load_prompt("synthesis", _SYNTHESIS_PROMPT_V).replace("{ITEMS}", rendered)
+        raw = await self._chat(prompt, kind="synthesis")
+        if raw is None:
+            return None
+        try:
+            parsed = _SynthesisResponse.model_validate_json(raw)
+        except ValidationError as exc:
+            self._write_debug("synthesis", raw, reason=str(exc))
+            log.warning("ollama-synthesis-validate-failed err=%s", exc)
+            return None
+        return SynthesisOutput(
+            title=parsed.title,
+            content=parsed.content,
+            rationale=parsed.rationale,
+            tags=list(parsed.tags),
+            importance=parsed.importance,
+            contradicts_notice=parsed.contradicts_notice,
+        )
+
+    async def check_contradiction(self, pair: ContradictionInput) -> ContradictionOutput | None:
+        """Decide whether two concepts conflict logically."""
+        prompt = (
+            _load_prompt("contradiction", _CONTRADICTION_PROMPT_V)
+            .replace("{A_TITLE}", pair.concept_a.title)
+            .replace("{A_CONTENT}", _one_line(pair.concept_a.content))
+            .replace("{B_TITLE}", pair.concept_b.title)
+            .replace("{B_CONTENT}", _one_line(pair.concept_b.content))
+        )
+        raw = await self._chat(prompt, kind="contradiction")
+        if raw is None:
+            return None
+        try:
+            parsed = _ContradictionResponse.model_validate_json(raw)
+        except ValidationError as exc:
+            self._write_debug("contradiction", raw, reason=str(exc))
+            log.warning("ollama-contradiction-validate-failed err=%s", exc)
+            return None
+        return ContradictionOutput(verdict=parsed.verdict, reason=parsed.reason)
 
     # ------------------------------------------------------------------
     # Internals
