@@ -95,6 +95,84 @@ def test_workflow_requests_packages_write_permission() -> None:
     perms = _job().get("permissions") or {}
     assert perms.get("packages") == "write", "missing packages:write permission"
     assert perms.get("contents") in ("read", "write"), "missing contents permission"
+    # id-token:write is required for cosign keyless signing via GitHub
+    # OIDC. Without it, the sign step silently tries to open a browser
+    # for oauth — which of course fails in CI.
+    assert perms.get("id-token") == "write", (
+        "missing id-token:write — cosign keyless signing needs GitHub OIDC"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Supply-chain hardening (Tier 1)
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_signs_image_via_cosign_keyless() -> None:
+    """Every published digest MUST be cosign-signed so pullers can later
+    verify against this repo's workflow identity."""
+    steps = _job_steps()
+    installer = [s for s in steps if "sigstore/cosign-installer" in str(s.get("uses", ""))]
+    assert installer, "missing sigstore/cosign-installer step"
+
+    # The sign step either uses an action or `run:`s cosign directly.
+    sign_step = None
+    for s in steps:
+        run = str(s.get("run", ""))
+        if "cosign sign" in run and "--yes" in run:
+            sign_step = s
+            break
+    assert sign_step, "no cosign sign step found"
+    # Must sign by digest, not by tag (tags are mutable).
+    assert "@${{ steps.build.outputs.digest }}" in str(sign_step.get("run", "")), (
+        "cosign sign must target the image by digest, not tag"
+    )
+
+
+def test_workflow_generates_sbom() -> None:
+    steps = _job_steps()
+    sbom = [s for s in steps if "anchore/sbom-action" in str(s.get("uses", ""))]
+    assert sbom, "missing anchore/sbom-action step (SBOM generation)"
+    with_block = sbom[0].get("with") or {}
+    assert "cyclonedx" in str(with_block.get("format", "")).lower(), (
+        "SBOM format should be CycloneDX (the cross-tool standard)"
+    )
+
+
+def test_workflow_attaches_sbom_as_cosign_attestation() -> None:
+    steps = _job_steps()
+    for s in steps:
+        run = str(s.get("run", ""))
+        if "cosign attest" in run and "cyclonedx" in run:
+            # Also must target by digest.
+            assert "@${{ steps.build.outputs.digest }}" in run
+            return
+    raise AssertionError("no cosign attest step for the CycloneDX SBOM")
+
+
+def test_workflow_trivy_scans_for_critical_cves_and_fails_on_finding() -> None:
+    steps = _job_steps()
+    trivy = [s for s in steps if "aquasecurity/trivy-action" in str(s.get("uses", ""))]
+    assert trivy, "missing aquasecurity/trivy-action step"
+    w = trivy[0].get("with") or {}
+    # Must scan the published digest, not a mutable tag.
+    assert "@${{ steps.build.outputs.digest }}" in str(w.get("image-ref", "")), (
+        "Trivy must scan the image by digest"
+    )
+    # Must fail the job on findings.
+    assert str(w.get("exit-code")) == "1", "Trivy exit-code must be 1 to gate the build"
+    severity = str(w.get("severity", "")).upper()
+    assert "CRITICAL" in severity, "Trivy severity must include CRITICAL"
+
+
+def test_workflow_uploads_trivy_sarif_to_code_scanning() -> None:
+    """Findings must reach the Security tab even when the scan failed,
+    otherwise operators can't see what broke."""
+    steps = _job_steps()
+    upload = [s for s in steps if "github/codeql-action/upload-sarif" in str(s.get("uses", ""))]
+    assert upload, "missing upload-sarif step"
+    # Must run even on prior-step failure.
+    assert str(upload[0].get("if", "")).strip() == "always()"
 
 
 def test_workflow_logs_into_ghcr() -> None:
