@@ -3,10 +3,10 @@ title: "Slice: Wire real reflection jobs into the lifecycle runner"
 slice_id: slice-lifecycle-reflection-builder
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: claude-code-opus-4-7
 phase: "6 Lifecycle"
-tags: [section/slices, status/in-review, type/slice, lifecycle, reflection, runner]
+tags: [section/slices, status/done, type/slice, lifecycle, reflection, runner]
 updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-reflection]]", "[[_slices/slice-vault-sync]]"]
