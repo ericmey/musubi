@@ -36,7 +36,7 @@ the commit / tag you want to ship.
 
 ```bash
 gh run view --workflow publish-core-image.yml --log \
-  | grep -A 1 '"digest"' | head
+ | grep -A 1 '"digest"' | head
 # or — easier — open the run's summary page and copy the fenced
 # block labelled "Pin in deploy/ansible/group_vars/all.yml as:".
 ```
@@ -58,8 +58,8 @@ gh run view --workflow publish-core-image.yml --log \
 cd ~/Projects/musubi
 git checkout -b ops/core-image-bump-$(date +%Y%m%d)
 sed -i '' \
-  -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:<paste digest here>"|' \
-  deploy/ansible/group_vars/all.yml
+ -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:<paste digest here>"|' \
+ deploy/ansible/group_vars/all.yml
 git add deploy/ansible/group_vars/all.yml
 git commit -m "ops: bump musubi_core_image to @sha256:<first 12 chars>"
 git push -u origin "$(git branch --show-current)"
@@ -83,11 +83,11 @@ has changed yet.
 ```bash
 # After the PR is approved and merged:
 gh pr merge <number> --squash
-ssh yua
+ssh <ansible-host>
 cd ~/musubi
 git pull --ff-only
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
-  deploy/ansible/deploy.yml --ask-vault-pass
+ deploy/ansible/deploy.yml --ask-vault-pass
 ```
 
 (When [[_slices/slice-ops-update-workflow]] lands, swap the last line
@@ -112,10 +112,10 @@ failed healthcheck after this step means production is degraded.
 **Command:**
 
 ```bash
-# From the operator's workstation (or yua):
+# From the operator's workstation (or the control host):
 curl -sS http://musubi.example.local:8100/v1/ops/status | jq .
 ssh ericmey@musubi.example.local \
-  'sudo docker inspect musubi-core-1 --format "{{.Image}}"'
+ 'sudo docker inspect musubi-core-1 --format "{{.Image}}"'
 ```
 
 **Expected output:**
@@ -142,7 +142,7 @@ git -C ~/musubi revert --no-edit <bump-commit-sha>
 git -C ~/musubi push origin v2
 # Re-run deploy with the older digest:
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
-  deploy/ansible/deploy.yml --ask-vault-pass
+ deploy/ansible/deploy.yml --ask-vault-pass
 ```
 
 **Expected output:** `docker_compose_v2` recreates `core` with the

@@ -54,33 +54,33 @@ See [[02-current-state/index]] for detail.
 ## What's in flight (2026-04-20)
 
 - First end-to-end smoke test against the live deploy
-  (`deploy/smoke/verify.sh` → capture → retrieve round-trip). Queued.
+ (`deploy/smoke/verify.sh` → capture → retrieve round-trip). Queued.
 - POC → v1 data migration execution (`slice-poc-data-migration`) against
-  the now-live target.
+ the now-live target.
 - Harden / automate the operator-only steps that happened manually during
-  tonight's first deploy (see [[_slices/slice-ops-first-deploy|first-deploy
-  slice]]'s post-mortem section for the list).
+ tonight's first deploy (see [[_slices/slice-ops-first-deploy|first-deploy
+ slice]]'s post-mortem section for the list).
 
 ## Next up
 
 1. Smoke-test the live deploy, wire failures (if any) as ordinary slices.
 2. Publish Musubi Core to GHCR + pin external image digests, replacing the
-   `docker save | ssh | docker load` transfer the first deploy used.
+ `docker save | ssh | docker load` transfer the first deploy used.
 3. Automate the HF-cache rsync step in `bootstrap.yml` so a fresh host
-   matches the current one without manual intervention.
+ matches the current one without manual intervention.
 4. Resolve the `[R]` findings in [[_inbox/operator-notes]] (Ollama model
-   drift — closed in tonight's deploy; health-URL contradiction — still
-   open, `health.yml` probes Qdrant/Ollama on localhost but compose makes
-   them bridge-only).
+ drift — closed in tonight's deploy; health-URL contradiction — still
+ open, `health.yml` probes Qdrant/Ollama on localhost but compose makes
+ them bridge-only).
 
 ## Recently completed
 
 - **2026-04-20** — First real deploy of Musubi stack on `musubi.example.local`.
-  All six services healthy. See [[00-index/work-log]] for the full entry.
+ All six services healthy. See [[00-index/work-log]] for the full entry.
 - **2026-04-20** — ADR 0023 (Qdrant 1.15 → 1.17 pin bump) + ADR 0024 (Kong
-  deferred for v1) + runbook reconciliation.
+ deferred for v1) + runbook reconciliation.
 - **2026-04-20** — `docs/architecture/` → `docs/Musubi/` vault rename
-  landed atomically with history preserved.
+ landed atomically with history preserved.
 
 ## Blockers
 

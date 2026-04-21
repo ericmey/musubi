@@ -196,14 +196,14 @@ Operator procedure. Structure mirrors `first-deploy.md`:
    confirm a `qdrant`/`tei`/`ollama` version bump is in `group_vars`.
 2. **Bump the pin** — commit `musubi_core_image` (or other image) to
    the new `@sha256:<digest>` in `group_vars/all.yml`; push; pull on
-   yua. (A future PR could automate this via Dependabot/Renovate.)
-3. **Dry-run** — `ansible-playbook update.yml --check --diff` from yua
+   the control host. (A future PR could automate this via Dependabot/Renovate.)
+3. **Dry-run** — `ansible-playbook update.yml --check --diff` from the control host
    against musubi. Expected output: the compose-up task shows the
    image change + which containers will recreate.
 4. **Apply** — `ansible-playbook update.yml` without `--check`.
 5. **Verify** — `deploy/smoke/verify.sh` round-trip; `/var/log/musubi/
    upgrade-history.jsonl` has a new entry.
-6. **Rollback** — revert the `group_vars` commit; push; pull on yua;
+6. **Rollback** — revert the `group_vars` commit; push; pull on the control host;
    re-run `update.yml`. Operator decision: a dedicated `--rollback`
    flag is out of scope for this slice (keep the revert-and-rerun
    pattern until a real rollback story is needed).

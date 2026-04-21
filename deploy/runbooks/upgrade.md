@@ -17,13 +17,13 @@ The `deploy/ansible/update.yml` playbook drives every step below.
 **Command:**
 
 ```bash
-# On yua:
+# On the control host:
 cd ~/musubi
 git pull --ff-only
 
 # Confirm the compose render will succeed with the current vars:
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
-  deploy/ansible/update.yml --check --ask-vault-pass
+ deploy/ansible/update.yml --check --ask-vault-pass
 ```
 
 **Expected output:**
@@ -52,8 +52,8 @@ gh run list --workflow publish-core-image.yml --limit 3
 # Open a bump PR:
 git checkout -b ops/core-image-bump-$(date +%Y%m%d)
 sed -i '' \
-  -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:<paste>"|' \
-  deploy/ansible/group_vars/all.yml
+ -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:<paste>"|' \
+ deploy/ansible/group_vars/all.yml
 git commit -am "ops: bump musubi_core_image to @sha256:<first 12 chars>"
 gh pr create --base v2 --title "ops: bump musubi_core_image"
 ```
@@ -74,17 +74,17 @@ Single-line diff in `group_vars/all.yml`. PR greens on CI.
 
 ```bash
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
-  deploy/ansible/update.yml \
-  --check --diff --ask-vault-pass
+ deploy/ansible/update.yml \
+ --check --diff --ask-vault-pass
 ```
 
 **Expected output:**
 
 - The compose-template task shows the old → new `image:` line.
 - The `docker_compose_v2` task reports it will recreate the listed
-  services (defaults to `[core]`).
+ services (defaults to `[core]`).
 - Zero changes to any service you did NOT name — if Qdrant or
-  TEI shows as "recreate", stop and investigate.
+ TEI shows as "recreate", stop and investigate.
 
 **Destructive:** no.
 
@@ -98,19 +98,19 @@ ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
 
 ```bash
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
-  deploy/ansible/update.yml --ask-vault-pass
+ deploy/ansible/update.yml --ask-vault-pass
 # Or for a multi-service bump:
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
-  deploy/ansible/update.yml \
-  -e changed_services='["core","tei-dense"]' --ask-vault-pass
+ deploy/ansible/update.yml \
+ -e changed_services='["core","tei-dense"]' --ask-vault-pass
 ```
 
 **Expected output:**
 
 - `policy=always` pull task reports "changed" for services whose
-  digest moved, "ok" for the rest.
+ digest moved, "ok" for the rest.
 - `recreate` task finishes with `changed=1` (for the single-service
-  default) and every listed service ends `healthy`.
+ default) and every listed service ends `healthy`.
 - The `probe-core-health` task returns 200 within one retry.
 
 **Destructive:** yes — recreates the named containers. Accept ~10s of
@@ -125,19 +125,19 @@ ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
 **Command:**
 
 ```bash
-# From the operator's workstation (or yua):
+# From the operator's workstation (or the control host):
 curl -sS http://musubi.example.local:8100/v1/ops/status | jq .
 
 # Inspect the upgrade log:
 ssh ericmey@musubi.example.local \
-  'sudo tail -1 /var/log/musubi/upgrade-history.jsonl | jq .'
+ 'sudo tail -1 /var/log/musubi/upgrade-history.jsonl | jq .'
 ```
 
 **Expected output:**
 
 - `status` is `ok` and every component is `healthy: true`.
 - The last `upgrade-history.jsonl` entry is this run (matching
-  timestamp, listed services, current `core_image`).
+ timestamp, listed services, current `core_image`).
 
 **Destructive:** no.
 
@@ -156,7 +156,7 @@ upgrade, run in reverse: revert the `group_vars` commit, push, re-run
 **Command:**
 
 ```bash
-# On yua — find the commit to revert:
+# On the ansible control host — find the commit to revert:
 git -C ~/musubi log -p -- deploy/ansible/group_vars/all.yml | head -40
 
 # Revert:
@@ -165,7 +165,7 @@ git -C ~/musubi push origin v2
 
 # Re-run update.yml:
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
-  deploy/ansible/update.yml --ask-vault-pass
+ deploy/ansible/update.yml --ask-vault-pass
 ```
 
 **Expected output:**

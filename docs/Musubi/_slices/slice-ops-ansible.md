@@ -25,22 +25,22 @@ blocks: ["[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-compose]]", "[[_sl
 
 ## Owned paths (you MAY write here)
 
-  - `deploy/ansible/`
+ - `deploy/ansible/`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-  - `musubi/`
+ - `musubi/`
 
 ## Depends on
 
-  - _(no upstream slices)_
+ - _(no upstream slices)_
 
 Start this slice only after every upstream slice has `status: done`.
 
 ## Unblocks
 
-  - [[_slices/slice-ops-observability]]
-  - [[_slices/slice-ops-backup]]
+ - [[_slices/slice-ops-observability]]
+ - [[_slices/slice-ops-backup]]
 
 ## Definition of Done
 
