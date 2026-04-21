@@ -140,6 +140,34 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  # Prometheus — scrapes musubi-core's /v1/ops/metrics every 15s and
+  # retains timeseries for 30 days on disk. Host-local only (bound to
+  # 127.0.0.1) — remote operators reach it via SSH tunnel:
+  #
+  #     ssh -L 9090:localhost:9090 musubi.mey.house
+  #
+  # External exposure would need Kong + auth, which is deferred per ADR
+  # 0024. The scrape config at /etc/musubi/prometheus.yml is read-only
+  # inside the container; SIGHUP reloads without a restart
+  # (`docker compose kill -s HUP prometheus`).
+  prometheus:
+    image: {{ musubi_prometheus_image }}
+    volumes:
+      - /etc/musubi/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /var/lib/musubi/prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.listen-address=:9090"
+      - "--web.enable-lifecycle"
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      core:
+        condition: service_started
+    restart: unless-stopped
+
   ollama:
     image: {{ musubi_ollama_image }}
     environment:

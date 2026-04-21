@@ -27,6 +27,50 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 
 ## Entries
 
+### 2026-04-21 — Prometheus scraping musubi.mey.house (P1 observability)
+
+`musubi.mey.house` now runs a Prometheus container alongside the main
+stack. Scrape targets (verified via `/api/v1/query?query=up`, all
+returning `1`):
+
+| Job           | Target               | Exposing                            |
+|---------------|----------------------|-------------------------------------|
+| musubi-core   | `core:8100/v1/ops/metrics` | HTTP request counts/duration/5xx (real, live) |
+| tei-dense     | `tei-dense:80/metrics`     | batch latency, queue depth, GPU util |
+| tei-sparse    | `tei-sparse:80/metrics`    | same                                 |
+| tei-reranker  | `tei-reranker:80/metrics`  | same                                 |
+| prometheus    | `localhost:9090/metrics`   | self-scrape                          |
+
+Reachable via SSH tunnel: `ssh -L 9090:localhost:9090 musubi.mey.house`,
+then http://localhost:9090. Bound 127.0.0.1-only — Kong deferral per
+ADR 0024 means no external exposure tonight.
+
+Deviations from [[09-operations/observability]]:
+
+- Spec claims `musubi-core:9100`. Reality: `core:8100/v1/ops/metrics`.
+  (`9100` was the old slice-ops-observability plan; the actual endpoint
+  landed on `core:8100` when the router was written.)
+- Spec names `musubi_capture_total`, `musubi_retrieve_total`, lifecycle
+  counters, etc. Code emits `musubi_http_requests_total`,
+  `musubi_http_request_duration_ms`, `musubi_5xx_total`. The per-domain
+  counters are aspirational — wiring them is its own piece of work.
+- Spec calls for Grafana + Alertmanager. Tonight ships Prometheus only.
+  Grafana + alerts are a separate slice when notification channels
+  (email? ntfy?) are decided.
+
+**Not yet scraped (documented in the config):**
+
+- Qdrant `/metrics` returns 401 — requires the `api-key` header. Needs a
+  secret-file wiring that isn't in scope tonight.
+- Ollama has no native Prometheus exporter; leave as-is.
+- Lifecycle worker emits metrics via `default_registry()` but doesn't
+  serve HTTP — scraping it needs an embedded HTTP endpoint in the
+  worker entrypoint. Follow-up.
+- Node-exporter for host-level (CPU/mem/disk/GPU) metrics not deployed
+  yet.
+
+13 structural tests in [`tests/ops/test_prometheus.py`](../../../tests/ops/test_prometheus.py).
+
 ### 2026-04-21 — Host-local backup scheduler live (P1 from the first-deploy punchlist)
 
 `musubi.mey.house` now backs itself up every six hours without Ansible.

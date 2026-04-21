@@ -466,14 +466,20 @@ _DEPLOY = _REPO_ROOT / "deploy"
 
 
 def test_prometheus_config_loads() -> None:
-    """deploy/prometheus/prometheus.yml parses as YAML + has scrape_configs."""
+    """deploy/prometheus/prometheus.yml parses as YAML + has scrape_configs.
+
+    Qdrant is intentionally NOT scraped yet — its /metrics requires
+    the `api-key` header and the secret-file wiring is a follow-up
+    (see work-log 2026-04-21 entry). The active targets are
+    musubi-core + the three TEI services + prometheus self-scrape.
+    """
     import yaml
 
     cfg = yaml.safe_load((_DEPLOY / "prometheus" / "prometheus.yml").read_text())
     assert "scrape_configs" in cfg
     job_names = {j["job_name"] for j in cfg["scrape_configs"]}
     assert "musubi-core" in job_names
-    assert "qdrant" in job_names
+    assert "tei-dense" in job_names
 
 
 def test_loki_config_loads() -> None:

@@ -151,6 +151,7 @@ def test_compose_file_renders_to_valid_yaml() -> None:
         "{{ musubi_qdrant_image }}",
         "{{ musubi_tei_image }}",
         "{{ musubi_ollama_image }}",
+        "{{ musubi_prometheus_image }}",
     ):
         rendered = rendered.replace(token, "example/image:sha256-placeholder")
     rendered = rendered.replace("{{ musubi_core_port }}", "8100")
