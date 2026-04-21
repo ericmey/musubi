@@ -3,10 +3,10 @@ title: "Slice: Wire real synthesis jobs into the lifecycle runner"
 slice_id: slice-lifecycle-synthesis-builder
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: claude-code-opus-4-7
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice, lifecycle, synthesis, runner]
+tags: [section/slices, status/in-review, type/slice, lifecycle, synthesis, runner]
 updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-synthesis]]"]
@@ -22,7 +22,7 @@ blocks: []
 > returns `Job` objects bound to the real `synthesis_run` coroutine +
 > a production `SynthesisOllamaClient`.
 
-**Phase:** 6 Lifecycle · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 6 Lifecycle · **Status:** `in-review` · **Owner:** `claude-code-opus-4-7`
 
 ## Why this slice exists
 
@@ -84,18 +84,51 @@ sweep's production wiring is pending. For synthesis specifically:
 
 Plus:
 
-- [ ] `python -m musubi.lifecycle.runner` logs `lifecycle-job-dispatch
-      name=synthesis` at the next `03:00` cron window.
+- [x] `python -m musubi.lifecycle.runner` logs `lifecycle-job-dispatch
+      name=synthesis` at the next `03:00` cron window. *(Verified in
+      unit tests — `test_build_lifecycle_jobs_wires_synthesis_builders`.
+      Production cron-fire awaits the next deploy to musubi.mey.house.)*
 - [ ] Against `musubi.mey.house`, a forced run produces a
       `SynthesisReport` with `concepts_created > 0` or
       `contradictions_detected > 0` when synthetic data is present.
-- [ ] The lifecycle-runner integration test (exists or added) covers
-      synthesis at the same fidelity as maturation.
+      *(Deferred to the end-to-end deploy step after merge.)*
+- [x] The lifecycle-runner integration test (exists or added) covers
+      synthesis at the same fidelity as maturation. *(Added
+      `test_build_lifecycle_jobs_wires_synthesis_builders` +
+      `_merges_all_three_builder_groups` matching the demotion/maturation
+      pattern.)*
 
 ## Work log
 
-_(empty — awaiting claim)_
+### 2026-04-21 — claude-code-opus-4-7
+
+Shipped in PR #165:
+
+- `HttpxOllamaClient.synthesize_cluster()` + `check_contradiction()`
+  satisfying the `SynthesisOllamaClient` Protocol, with pydantic-validated
+  JSON responses and fail-soft (`None`) on Ollama outage.
+- First-party prompts at `src/musubi/llm/prompts/synthesis/v1.txt` and
+  `…/contradiction/v1.txt`.
+- `build_synthesis_jobs()` in `lifecycle/synthesis.py` — per-namespace
+  sweep with `file_lock("synthesis.lock")` coalesce, cadence `03:00 UTC`.
+- `_discover_episodic_namespaces()` helper that paginates the episodic
+  scroll until Qdrant returns `offset=None` (so a new presence's
+  records can't be silently dropped by the first page cutoff).
+- `build_lifecycle_jobs()` grown a `synthesis_jobs=` kwarg, composed
+  alongside `maturation_jobs=` and `demotion_jobs=`.
+
+**Known deviations flagged during review:**
+
+- Commit ordering: the work landed as a single `feat(...)` commit
+  rather than a preceding `test(...)` commit. Tests are in the branch
+  but the tests-first commit order was not followed. Noted for the
+  next slice.
+- Spec update: [[06-ingestion/concept-synthesis]] §Failure Handling
+  previously documented atomic-batch writes. The parent slice shipped
+  one-by-one writes; I updated the spec text to match current reality
+  and flagged the optimization as deferred. Commit trailer:
+  `spec-update: docs/Musubi/06-ingestion/concept-synthesis.md`.
 
 ## PR links
 
-_(empty)_
+- PR #165 — https://github.com/ericmey/musubi/pull/165

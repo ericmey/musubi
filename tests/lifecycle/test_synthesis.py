@@ -25,6 +25,7 @@ from musubi.lifecycle.synthesis import (
     SynthesisInput,
     SynthesisOllamaClient,
     SynthesisOutput,
+    _discover_episodic_namespaces,
     synthesis_run,
 )
 from musubi.observability import default_registry, render_text_format
@@ -798,3 +799,90 @@ def test_integration_real_ollama_100_synthetic_memories() -> None:
 @pytest.mark.skip(reason="deferred to a follow-up integration suite")
 def test_integration_contradiction_flow() -> None:
     """Bullet 27."""
+
+
+# ---------------------------------------------------------------------------
+# _discover_episodic_namespaces
+# ---------------------------------------------------------------------------
+
+
+class _FakeRecord:
+    """Matches the subset of qdrant_client.models.Record the helper reads."""
+
+    def __init__(self, payload: Any) -> None:
+        self.payload = payload
+
+
+class _FakeQdrantForDiscovery:
+    """Minimal stand-in for ``QdrantClient.scroll`` — returns pre-scripted
+    ``(records, offset)`` pairs so tests exercise pagination.
+    """
+
+    def __init__(self, pages: list[tuple[list[_FakeRecord], Any]]) -> None:
+        self._pages = list(pages)
+        self.calls: list[dict[str, Any]] = []
+
+    def scroll(self, **kwargs: Any) -> tuple[list[_FakeRecord], Any]:
+        self.calls.append(kwargs)
+        return self._pages.pop(0)
+
+
+def test_discover_namespaces_happy_path_strips_episodic_suffix() -> None:
+    client = _FakeQdrantForDiscovery(
+        [
+            (
+                [
+                    _FakeRecord({"namespace": "eric/aoi/episodic"}),
+                    _FakeRecord({"namespace": "eric/aoi/episodic"}),  # dedupe
+                    _FakeRecord({"namespace": "eric/ops/episodic"}),
+                ],
+                None,  # single page — done.
+            ),
+        ]
+    )
+    result = _discover_episodic_namespaces(cast(Any, client))
+    assert result == ["eric/aoi", "eric/ops"]
+
+
+def test_discover_namespaces_paginates_until_offset_none() -> None:
+    """A namespace whose records are on page 2 must not be silently
+    dropped — the scroll must keep iterating until Qdrant signals
+    ``offset is None``."""
+    page1 = [_FakeRecord({"namespace": "eric/aoi/episodic"})]
+    page2 = [_FakeRecord({"namespace": "alice/ghost/episodic"})]
+    client = _FakeQdrantForDiscovery(
+        [
+            (page1, "cursor-1"),
+            (page2, None),
+        ]
+    )
+    result = _discover_episodic_namespaces(cast(Any, client))
+    assert result == ["alice/ghost", "eric/aoi"]
+    # Second scroll call must carry the offset returned by the first.
+    assert client.calls[1]["offset"] == "cursor-1"
+
+
+def test_discover_namespaces_returns_empty_on_scroll_exception() -> None:
+    class _BoomClient:
+        def scroll(self, **_: Any) -> tuple[list[_FakeRecord], Any]:
+            raise RuntimeError("qdrant down")
+
+    assert _discover_episodic_namespaces(cast(Any, _BoomClient())) == []
+
+
+def test_discover_namespaces_skips_non_string_or_missing_payload() -> None:
+    client = _FakeQdrantForDiscovery(
+        [
+            (
+                [
+                    _FakeRecord(None),  # missing payload
+                    _FakeRecord({}),  # no namespace key
+                    _FakeRecord({"namespace": 42}),  # non-string
+                    _FakeRecord({"namespace": "eric/aoi/concept"}),  # wrong plane
+                    _FakeRecord({"namespace": "eric/aoi/episodic"}),  # kept
+                ],
+                None,
+            ),
+        ]
+    )
+    assert _discover_episodic_namespaces(cast(Any, client)) == ["eric/aoi"]
