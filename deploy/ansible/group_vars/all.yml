@@ -22,11 +22,12 @@ musubi_data_dirs:
   - /var/lib/musubi/backups
 
 musubi_core_port: 8100
-# Musubi Core image. For now this is built locally (see repo `Dockerfile`) and
-# transferred to the target via `docker save | ssh | docker load`. When a
-# GHCR publish workflow lands, flip this to `ghcr.io/ericmey/musubi-core:<tag>`
-# and pin by digest.
-musubi_core_image: "musubi-core:dev"
+# Musubi Core image. Pinned by immutable digest from the v0.3.0 signed
+# publish run (2026-04-21). Produced by `.github/workflows/publish-core-image.yml`;
+# verified cosign-signed + SBOM-attested + Trivy-CRITICAL-scanned.
+# Bump this after every release — the release note on the GitHub tag carries
+# the new digest line ready to paste.
+musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:8e3554303d948406d79cd39c7c1b1edc1f5497894eeb2466307a83a38336f015"
 musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
 # compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),
