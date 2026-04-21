@@ -457,36 +457,43 @@ async def synthesis_run(
 # ---------------------------------------------------------------------------
 
 
-def _discover_episodic_namespaces(client: QdrantClient, *, limit: int = 2000) -> list[str]:
+def _discover_episodic_namespaces(client: QdrantClient, *, page_size: int = 1000) -> list[str]:
     """Enumerate `<tenant>/<presence>` prefixes currently present in the
     episodic collection.
 
     The synthesis sweep runs per-namespace; discovery at tick time keeps
     the runner from needing a re-deploy when a new user / presence shows
-    up. ``limit`` caps the scroll — at homelab scale we're nowhere near
-    2k distinct namespaces.
+    up. Paginates until Qdrant returns ``offset=None`` so a new
+    namespace whose records don't fall in the first page can't be
+    silently dropped. ``page_size`` tunes memory pressure, not the
+    ceiling of namespaces discoverable.
     """
     discovered: set[str] = set()
-    try:
-        records, _ = client.scroll(
-            collection_name=collection_for_plane("episodic"),
-            limit=limit,
-            with_payload=["namespace"],
-            with_vectors=False,
-        )
-    except Exception:
-        logger.exception("synthesis-ns-discovery-failed")
-        return []
-    for rec in records:
-        if not rec.payload:
-            continue
-        full = rec.payload.get("namespace")
-        if not isinstance(full, str):
-            continue
-        # Per-plane suffix convention: `<tenant>/<presence>/<plane>`.
-        # Strip the trailing `/episodic` to get the synthesis-run form.
-        if full.endswith("/episodic"):
-            discovered.add(full[: -len("/episodic")])
+    offset: Any = None
+    while True:
+        try:
+            records, offset = client.scroll(
+                collection_name=collection_for_plane("episodic"),
+                limit=page_size,
+                offset=offset,
+                with_payload=["namespace"],
+                with_vectors=False,
+            )
+        except Exception:
+            logger.exception("synthesis-ns-discovery-failed")
+            return []
+        for rec in records:
+            if not rec.payload:
+                continue
+            full = rec.payload.get("namespace")
+            if not isinstance(full, str):
+                continue
+            # Per-plane suffix convention: `<tenant>/<presence>/<plane>`.
+            # Strip the trailing `/episodic` to get the synthesis-run form.
+            if full.endswith("/episodic"):
+                discovered.add(full[: -len("/episodic")])
+        if offset is None:
+            break
     return sorted(discovered)
 
 

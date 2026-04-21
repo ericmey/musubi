@@ -196,7 +196,7 @@ We test both.
 |---|---|
 | LLM down (Ollama) | Entire synthesis run skipped; cursor NOT advanced; logged with retry; next run picks up where we left off. |
 | LLM returns invalid JSON for a cluster | That cluster skipped; cursor advances past it (we tried); re-evaluated next run if new memories push the cluster above threshold. |
-| Qdrant write fails | Entire synthesis run atomic — we collect all concepts, then write in one batch; on batch failure, no partial state. Retry on next run. |
+| Qdrant write fails | Current behavior: concepts write one-at-a-time per cluster. A mid-run Qdrant failure leaves earlier clusters persisted; the cursor still advances for memories consumed before the failure, so re-run is safe but not atomic. Batch-atomic write is a deferred optimization to be filed as a follow-up slice. |
 | Contradiction detection LLM fails | Concepts written WITHOUT contradiction links; a separate daily "contradiction-rerun" job re-evaluates. |
 
 ## Cost
@@ -204,7 +204,7 @@ We test both.
 Per run, typical household-scale:
 
 - ~500 memories → ~30 clusters → ~30 LLM calls for generation + ~60 for contradiction pairs = 90 LLM calls × ~2s = ~3 minutes of Qwen2.5-7B Q4 inference.
-- ~1 Qdrant batch write.
+- ~30 Qdrant writes (one per cluster). A batched-write optimization is deferred.
 
 Well within an hour's window. Scales linearly with cluster count.
 

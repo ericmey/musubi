@@ -38,7 +38,7 @@ import signal
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from musubi.lifecycle.scheduler import Job
 
@@ -337,8 +337,6 @@ async def _main_async() -> None:
     )
     # HttpxOllamaClient satisfies both OllamaClient (maturation) and
     # SynthesisOllamaClient structurally — cast for the stricter Protocol.
-    from typing import cast
-
     syn_jobs = build_synthesis_jobs(
         client=qdrant,
         sink=sink,
