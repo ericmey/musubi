@@ -469,6 +469,100 @@ def check_issues(rep: Report) -> None:
                 )
 
 
+# GitHub only auto-closes on "Closes/Fixes/Resolves #N" — see
+# https://docs.github.com/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue
+_CLOSE_KEYWORD_RE = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*#(\d+)\b",
+    re.IGNORECASE,
+)
+
+
+def check_pr_closing_slices(rep: Report) -> None:
+    """Catch the post-merge vault-check race at PR time.
+
+    When a PR carries ``Closes #N`` for a ``slice``-labelled Issue, the
+    merge will auto-close the Issue. Post-merge, ``check_issues``
+    requires the slice frontmatter to be ``done``/``retired``. That
+    transition can't happen at merge-time without a human/agent step,
+    and without this check the only signal is a red Vault check on the
+    main branch AFTER the merge has shipped.
+
+    Rule: if ``$PR_BODY`` contains a close-keyword referencing an Issue
+    labelled ``slice``, that slice's frontmatter must be ``status: done``
+    (or ``status: retired`` for slices superseded by an ADR). Pairs with
+    the ACCEPTABLE exception at line ~458 which already permits
+    ``slice=done + issue_label=status:in-review``.
+
+    Runs only on pull_request events (keyed on ``$PR_BODY``). Push
+    events skip this check silently.
+    """
+    pr_body = os.environ.get("PR_BODY")
+    if not pr_body:
+        return
+
+    # GitHub itself ignores Closes-keywords inside code blocks / inline code
+    # when deciding what to auto-close; mirror that so docs PRs that mention
+    # `Closes #N` inside a code example don't trip the check. The two
+    # regexes are re-used from the wikilink scanner below.
+    stripped = _FENCED_CODE_RE.sub("", pr_body)
+    stripped = _INLINE_CODE_RE.sub("", stripped)
+
+    matches = _CLOSE_KEYWORD_RE.findall(stripped)
+    if not matches:
+        return
+
+    issues = _fetch_slice_issues()
+    if issues is None:
+        rep.warn(
+            "pr-check",
+            "gh CLI unavailable — skipping PR-closing-slice check",
+        )
+        return
+    by_number = {str(i["number"]): i for i in issues}
+
+    # Build slice-id → frontmatter map (subset of what check_slices does,
+    # kept local to avoid re-reading the whole tree).
+    sroot = VAULT / "_slices"
+    slice_fms: dict[str, dict] = {}
+    for p in sroot.glob("slice-*.md"):
+        fm, _ = read_frontmatter(p)
+        # Filter to true slice notes, matching check_slices' behaviour.
+        # A `slice-*.md` file without `type: slice` is a template or
+        # README-style note and should not be indexed as a slice.
+        if fm.get("type") != "slice":
+            continue
+        sid = fm.get("slice_id") or p.stem
+        slice_fms[sid] = fm
+
+    for issue_number in matches:
+        issue = by_number.get(issue_number)
+        if issue is None:
+            # PR closes a non-slice issue — not this check's concern.
+            continue
+        # Recover the slice-id from the Issue title convention "slice: <id>".
+        title = str(issue.get("title", ""))
+        if not title.startswith("slice: "):
+            continue
+        sid = title[len("slice: ") :].strip()
+        fm = slice_fms.get(sid)
+        if fm is None:
+            rep.err(
+                "pr-check",
+                f"PR closes Issue #{issue_number} ('slice: {sid}') but no slice file "
+                f"at _slices/{sid}.md",
+            )
+            continue
+        vault_status = str(fm.get("status", ""))
+        if vault_status not in ("done", "retired"):
+            rep.err(
+                f"_slices/{sid}.md",
+                f"PR body has 'Closes #{issue_number}' which will auto-close the "
+                f"slice's tracking Issue on merge; post-merge the Vault check "
+                f"requires frontmatter status='done' (or 'retired') but this PR "
+                f"still has status='{vault_status}'. Flip to 'done' in this PR.",
+            )
+
+
 # ---------- Check: wikilinks --------------------------------------------------
 
 # Wikilink targets may be .md (notes), .canvas (Obsidian Canvas), or .base
@@ -617,7 +711,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "command",
-        choices=["vault", "slices", "specs", "issues", "wikilinks", "all"],
+        choices=["vault", "slices", "specs", "issues", "wikilinks", "pr", "all"],
         default="all",
         nargs="?",
     )
@@ -635,6 +729,8 @@ def main() -> int:
         check_issues(rep)
     if args.command in ("wikilinks", "all"):
         check_wikilinks(rep)
+    if args.command in ("pr", "all"):
+        check_pr_closing_slices(rep)
 
     if args.json:
         print(
