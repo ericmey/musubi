@@ -3,10 +3,10 @@ title: "Slice: Wire real demotion jobs into the lifecycle runner"
 slice_id: slice-lifecycle-demotion-builder
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: done
+owner: claude-code-opus-4-7
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice, lifecycle, demotion, runner]
+tags: [section/slices, status/done, type/slice, lifecycle, demotion, runner]
 updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-promotion]]"]
