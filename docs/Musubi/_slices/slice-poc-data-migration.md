@@ -21,17 +21,17 @@ blocks: []
 
 ## Why this slice exists
 
-Musubi v1 ships with a clean-slate Qdrant schema per the per-plane data-model specs in `docs/Musubi/04-data-model/` + `src/musubi/store/specs.py`. Eric's POC is currently running on `nyla.mey.house` (10.0.20.25) with its own memory store. Before v1 is operationally useful as a memory system for Eric's agent fleet, the POC's accumulated memory has to migrate into the v1 layout on `musubi.mey.house`.
+Musubi v1 ships with a clean-slate Qdrant schema per the per-plane data-model specs in `docs/Musubi/04-data-model/` + `src/musubi/store/specs.py`. Eric's POC is currently running on `control.example.local` (10.0.0.25) with its own memory store. Before v1 is operationally useful as a memory system for Eric's agent fleet, the POC's accumulated memory has to migrate into the v1 layout on `musubi.example.local`.
 
 ## Source: confirmed
 
-**Source host:** `nyla.mey.house` (10.0.20.25 — bare-metal Ubuntu server).
+**Source host:** `control.example.local` (10.0.0.25 — bare-metal Ubuntu server).
 
 **Source is a running POC service** on that host. The "Nyla" coding agent (Gemini 3.1 Pro) runs on the same machine, which means it can introspect the live POC directly: `ps`, `systemctl`, config files, whatever storage backend the POC uses (Qdrant collections, SQLite, JSONL on disk — TBD at claim time).
 
 **Routing:** this slice is best claimed by the **Nyla coding agent**. Any other agent would need Eric to proxy the POC source data over the network.
 
-**Format: discover at claim time.** First substantive commit on the branch is a **discovery commit**: Nyla walks the running POC on `nyla.mey.house`, identifies the storage shape (inspecting the running process, its config, its open file descriptors, and whatever HTTP / gRPC / socket it exposes), writes findings into this slice file's work log via `docs(slice): POC discovery on nyla.mey.house`, and lands a `spec-update:` trailer to `11-migration/phase-1-schema.md` with the confirmed source shape. Only AFTER discovery does the migration script start.
+**Format: discover at claim time.** First substantive commit on the branch is a **discovery commit**: Nyla walks the running POC on `control.example.local`, identifies the storage shape (inspecting the running process, its config, its open file descriptors, and whatever HTTP / gRPC / socket it exposes), writes findings into this slice file's work log via `docs(slice): POC discovery on control.example.local`, and lands a `spec-update:` trailer to `11-migration/phase-1-schema.md` with the confirmed source shape. Only AFTER discovery does the migration script start.
 
 **Discovery surfaces (unknowns at carve time):**
 - Which planes have POC data (episodic, curated, concept, artifact, thoughts — any subset).
@@ -65,14 +65,14 @@ Design notes below assume the most likely case — Qdrant-on-nyla to Qdrant-on-m
 
 ## Unblocks
 
-- **First real deploy** — `musubi.mey.house` becomes useful for Eric's daily agent use once his POC memories land.
+- **First real deploy** — `musubi.example.local` becomes useful for Eric's daily agent use once his POC memories land.
 - **Acceptance testing** — "does v1 actually share memory better than POC?" can't be answered with an empty v1.
 
 ## Design notes (working assumptions — confirm at claim time)
 
 **Assumed shape: Qdrant-to-Qdrant migration.**
 
-1. **Connect to POC source** (Qdrant instance) + **target** (v1 Qdrant on musubi.mey.house).
+1. **Connect to POC source** (Qdrant instance) + **target** (v1 Qdrant on musubi.example.local).
 2. **Enumerate source collections.** Expected names: `musubi_episodic_v0`, `musubi_curated_v0`, etc.; adjust if different.
 3. **For each source row:**
    a. Parse payload into v0 schema.
@@ -127,9 +127,9 @@ Plus slice-specific:
 - Encountered a limitation: `MusubiClient` does not have a backdoor for `created_at` or custom fields (rejected by `CaptureRequest`). Since modifying the `api` or `sdk` paths is forbidden, I opened `_inbox/cross-slice/migrator-needs-created-at-override.md` and skipped the `test_migrator_preserves_created_at_on_target` test until the cross-slice API/SDK changes land.
 - PR #128 is ready for review.
 
-### 2026-04-20 01:30 — gemini-3-1-pro-nyla — POC discovery on nyla.mey.house
+### 2026-04-20 01:30 — gemini-3-1-pro-nyla — POC discovery on control.example.local
 
-- Looked into `nyla.mey.house` local instance. OpenClaw memory exists at `~/.openclaw/memory/` but that's just its client-side cache.
+- Looked into `control.example.local` local instance. OpenClaw memory exists at `~/.openclaw/memory/` but that's just its client-side cache.
 - Found the actual Musubi POC at `~/.openclaw/musubi/` running via an MCP `FastMCP` server (`musubi/server.py`).
 - The storage backend is **Qdrant**, running in a Docker container on port 6333 (`musubi-qdrant`).
 - Volume: small (167 memories, 57 thoughts).
@@ -137,17 +137,17 @@ Plus slice-specific:
   - `musubi_memories` (payload: `content`, `type`, `agent`, `tags`, `context`, `created_at`, `access_count`)
   - `musubi_thoughts` (payload: `content`, `from_presence`, `to_presence`, `read`, `read_by`, `created_at`)
 - IDs are standard UUID v4 strings, not ULIDs or KSUIDs.
-- Migration will just read from localhost:6333, map payloads, generate deterministic KSUIDs from UUIDs or created_at epochs, and write to `musubi.mey.house` via the SDK.
+- Migration will just read from localhost:6333, map payloads, generate deterministic KSUIDs from UUIDs or created_at epochs, and write to `musubi.example.local` via the SDK.
 
 ### 2026-04-20 01:25 — gemini-3-1-pro-nyla — claim
 
-- Claimed slice #109. Proceeding with discovery phase to inspect the local `nyla.mey.house` environment to ascertain the actual POC storage backend.
+- Claimed slice #109. Proceeding with discovery phase to inspect the local `control.example.local` environment to ascertain the actual POC storage backend.
 
 ### 2026-04-19 — operator — slice carved
 
 - Phase 2 critical path per tonight's roadmap discussion with Eric.
 - **Implementing agent MUST confirm POC source shape with operator at claim time** — see ⚠ operator-decision block above. The slice file's design notes are working assumptions, not confirmed.
-- Targets the first-real-deploy moment on `musubi.mey.house`; v1 isn't operationally useful without migrated data.
+- Targets the first-real-deploy moment on `musubi.example.local`; v1 isn't operationally useful without migrated data.
 
 ## Cross-slice tickets opened by this slice
 

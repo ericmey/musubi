@@ -95,7 +95,7 @@ Every push alert has a linked runbook in [[09-operations/runbooks]]:
 # alertmanager template snippet
 annotations:
   summary: "Qdrant is not responding"
-  runbook: "https://docs.musubi.internal/09-operations/runbooks/#qdrant-down"
+  runbook: "https://docs.musubi.example.local/09-operations/runbooks/#qdrant-down"
 ```
 
 If an alert doesn't have a runbook, it doesn't fire. Period.
@@ -151,7 +151,7 @@ receivers:
   - name: email
     email_configs:
       - to: eric@example.com
-        from: alertmanager@musubi.internal
+        from: alertmanager@musubi.example.local
         smarthost: smtp.example.com:587
 ```
 

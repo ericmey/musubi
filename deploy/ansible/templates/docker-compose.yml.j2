@@ -144,7 +144,7 @@ services:
   # retains timeseries for 30 days on disk. Host-local only (bound to
   # 127.0.0.1) — remote operators reach it via SSH tunnel:
   #
-  #     ssh -L 9090:localhost:9090 musubi.mey.house
+  #     ssh -L 9090:localhost:9090 musubi.example.local
   #
   # External exposure would need Kong + auth, which is deferred per ADR
   # 0024. The scrape config at /etc/musubi/prometheus.yml is read-only

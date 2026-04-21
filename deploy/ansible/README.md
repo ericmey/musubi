@@ -8,37 +8,37 @@ the control-host setup below.
 ## Control-host model
 
 Playbooks are run from an ansible control host. In this environment that's
-`yua` (`10.0.20.53`) alongside the homelab fleet's own `~/ansible/` repo. The
+the ansible control host alongside the homelab fleet's own `~/ansible/` repo. The
 control host:
 
 - Clones this repo to `~/musubi` (fresh `git pull` before each deploy).
 - Keeps Musubi-specific secrets + inventory overrides under
-  `~/.musubi-secrets/` (gitignored directory, 700-perm).
+ `~/.musubi-secrets/` (gitignored directory, 700-perm).
 - Reuses `~/ansible/.vault_pass` as the ansible-vault password file so the
-  Musubi vault and the homelab fleet vault share one secret-management story.
+ Musubi vault and the homelab fleet vault share one secret-management story.
 
 Running playbooks from this repo's working tree on a developer laptop is
 possible for `--syntax-check` and `--check --diff` dry-runs, but the
-operational path is always yua → playbook → musubi workload host.
+operational path is always the ansible control host → playbook → musubi workload host.
 
 ## Layout
 
-| Path                              | Role                                                           |
+| Path | Role |
 |-----------------------------------|----------------------------------------------------------------|
-| `inventory.yml`                   | Parametrised inventory — Jinja vars for hostnames, IPs, users. |
-| `group_vars/all.yml`              | Defaults: filesystem paths, image pins, health URLs, Ollama model. |
-| `bootstrap.yml`                   | Fresh Ubuntu 24.04 → Docker + NVIDIA + users + dirs + firewall. |
-| `deploy.yml`                      | Compose stack bring-up (pull images, start, health gate).      |
-| `config.yml`                      | Refresh `.env.production`, restart stack on config change.     |
-| `health.yml`                      | Ad-hoc host + Docker + Musubi + Core + Ollama checks.          |
-| `vault.example.yml`               | Template for `~/.musubi-secrets/vault.yml`.                    |
-| `setup-control-host.sh`           | One-shot bootstrap: creates `~/.musubi-secrets/` + seeds files. |
-| `requirements.yml`                | Ansible Galaxy collection deps.                                |
+| `inventory.yml` | Parametrised inventory — Jinja vars for hostnames, IPs, users. |
+| `group_vars/all.yml` | Defaults: filesystem paths, image pins, health URLs, Ollama model. |
+| `bootstrap.yml` | Fresh Ubuntu 24.04 → Docker + NVIDIA + users + dirs + firewall. |
+| `deploy.yml` | Compose stack bring-up (pull images, start, health gate). |
+| `config.yml` | Refresh `.env.production`, restart stack on config change. |
+| `health.yml` | Ad-hoc host + Docker + Musubi + Core + Ollama checks. |
+| `vault.example.yml` | Template for `~/.musubi-secrets/vault.yml`. |
+| `setup-control-host.sh` | One-shot bootstrap: creates `~/.musubi-secrets/` + seeds files. |
+| `requirements.yml` | Ansible Galaxy collection deps. |
 
-## First-time control-host bootstrap (on yua)
+## First-time control-host bootstrap (on the ansible control host)
 
 ```bash
-ssh yua
+ssh <ansible-host>
 git clone git@github.com:ericmey/musubi.git ~/musubi
 cd ~/musubi
 ansible-galaxy collection install -r deploy/ansible/requirements.yml
@@ -52,26 +52,26 @@ existing files are preserved.
 After it prints the next-steps banner:
 
 1. Edit `~/.musubi-secrets/inventory-vars.yml` — fill in `musubi_host`,
-   `musubi_ip`, `operator_ssh_user` (and Kong vars if/when Kong is
-   re-enabled per [ADR 0024](../../docs/Musubi/13-decisions/0024-kong-deferred-for-musubi-v1.md)).
+ `musubi_ip`, `operator_ssh_user` (and Kong vars if/when Kong is
+ re-enabled per [ADR 0024](../../docs/Musubi/13-decisions/0024-kong-deferred-for-musubi-v1.md)).
 2. Edit `~/.musubi-secrets/vault.yml` with real secret values (see
-   `vault.example.yml` for the key list).
+ `vault.example.yml` for the key list).
 3. Encrypt it:
-   ```bash
-   ansible-vault encrypt ~/.musubi-secrets/vault.yml
-   ```
+ ```bash
+ ansible-vault encrypt ~/.musubi-secrets/vault.yml
+ ```
 
-## Per-deploy workflow (on yua)
+## Per-deploy workflow (on the ansible control host)
 
 ```bash
 cd ~/musubi && git pull --ff-only
 
 ANSIBLE_VAULT_PASSWORD_FILE=~/ansible/.vault_pass \
-  ansible-playbook \
-  -i deploy/ansible/inventory.yml \
-  -e @~/.musubi-secrets/inventory-vars.yml \
-  -e @~/.musubi-secrets/vault.yml \
-  deploy/ansible/<playbook>.yml
+ ansible-playbook \
+ -i deploy/ansible/inventory.yml \
+ -e @~/.musubi-secrets/inventory-vars.yml \
+ -e @~/.musubi-secrets/vault.yml \
+ deploy/ansible/<playbook>.yml
 ```
 
 Where `<playbook>` is one of `bootstrap`, `config`, `deploy`, `health`.
@@ -92,26 +92,26 @@ ansible-playbook -i deploy/ansible/inventory.yml --syntax-check deploy/ansible/b
 
 # health.yml without vault, targeting a resolved musubi_host:
 ansible-playbook \
-  -i deploy/ansible/inventory.yml \
-  -e musubi_host=musubi.mey.house -e musubi_ip=10.0.20.45 \
-  -e ansible_become=false \
-  --check --diff \
-  deploy/ansible/health.yml
+ -i deploy/ansible/inventory.yml \
+ -e musubi_host=musubi.example.local -e musubi_ip=10.0.0.45 \
+ -e ansible_become=false \
+ --check --diff \
+ deploy/ansible/health.yml
 ```
 
 The real `bootstrap.yml`, `config.yml`, and `deploy.yml` need the encrypted
-vault — they must run from yua.
+vault — they must run from the ansible control host.
 
 ## Why this split
 
 - **Repo = single source of truth.** Playbook edits go through PR review.
 - **Secrets live outside any git clone.** `~/.musubi-secrets/` survives
-  `rm -rf ~/musubi && git clone` and can't be accidentally `git add`ed.
+ `rm -rf ~/musubi && git clone` and can't be accidentally `git add`ed.
 - **One vault password across the homelab.** Reusing `~/ansible/.vault_pass`
-  keeps a single ansible-vault story, not two.
+ keeps a single ansible-vault story, not two.
 - **The committed inventory is a valid template**, not a file that has to
-  be hand-patched before use. Running it unparameterised fails fast with a
-  clear Jinja undefined-variable error.
+ be hand-patched before use. Running it unparameterised fails fast with a
+ clear Jinja undefined-variable error.
 
 ## Boundaries
 

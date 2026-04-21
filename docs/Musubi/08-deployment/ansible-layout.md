@@ -30,24 +30,24 @@ We don't use Terraform, Kubernetes, or Helm. The host is fixed; the containers a
 
 ```
 musubi-infra/
-  inventory/
-    hosts.yml                  # host list (one entry for v1)
-    group_vars/
-      all.yml                  # defaults
-      musubi.yml               # musubi-specific overrides
-  roles/
-    base/                      # user, timezone, apt upgrade, ufw, logrotate
-    nvidia/                    # driver install + nvidia-container-toolkit
-    docker/                    # Docker CE + compose plugin
-    musubi-fs/                 # /var/lib/musubi layout + permissions
-    musubi-stack/              # compose.yml render + systemd unit
-    backup/                    # cron entries for snapshot + git push
-  playbooks/
-    musubi.yml                 # full bring-up
-    update.yml                 # pulls compose image digests, restarts
-    rotate.yml                 # log + snapshot retention
-  .vault.yml                   # encrypted secrets (git-crypt or ansible-vault)
-  requirements.yml             # collection deps (community.docker, etc.)
+ inventory/
+ hosts.yml # host list (one entry for v1)
+ group_vars/
+ all.yml # defaults
+ musubi.yml # musubi-specific overrides
+ roles/
+ base/ # user, timezone, apt upgrade, ufw, logrotate
+ nvidia/ # driver install + nvidia-container-toolkit
+ docker/ # Docker CE + compose plugin
+ musubi-fs/ # /var/lib/musubi layout + permissions
+ musubi-stack/ # compose.yml render + systemd unit
+ backup/ # cron entries for snapshot + git push
+ playbooks/
+ musubi.yml # full bring-up
+ update.yml # pulls compose image digests, restarts
+ rotate.yml # log + snapshot retention
+ .vault.yml # encrypted secrets (git-crypt or ansible-vault)
+ requirements.yml # collection deps (community.docker, etc.)
 ```
 
 ## Inventory
@@ -55,15 +55,15 @@ musubi-infra/
 ```yaml
 # inventory/hosts.yml
 all:
-  children:
-    musubi:
-      hosts:
-        musubi-1:
-          ansible_host: 192.168.1.42
-          ansible_user: eric
-          ansible_become: true
-          musubi_hostname: musubi.internal.example.com
-          musubi_cert_mode: selfsigned   # or 'letsencrypt'
+ children:
+ musubi:
+ hosts:
+ musubi-1:
+ ansible_host: 192.168.1.42
+ ansible_user: eric
+ ansible_become: true
+ musubi_hostname: musubi.example.local.example.com
+ musubi_cert_mode: selfsigned # or 'letsencrypt'
 ```
 
 Variables per host keep it clear: change the host, re-run playbook. Secrets live outside this file.
@@ -75,28 +75,28 @@ Variables per host keep it clear: change the host, re-run playbook. Secrets live
 ```yaml
 # roles/base/tasks/main.yml
 - name: Create musubi user
-  ansible.builtin.user:
-    name: musubi
-    groups: docker
-    system: yes
-    shell: /sbin/nologin
+ ansible.builtin.user:
+ name: musubi
+ groups: docker
+ system: yes
+ shell: /sbin/nologin
 
 - name: Install unattended-upgrades
-  ansible.builtin.apt:
-    name: unattended-upgrades
-    state: present
+ ansible.builtin.apt:
+ name: unattended-upgrades
+ state: present
 
 - name: Configure ufw
-  community.general.ufw:
-    rule: "{{ item.rule }}"
-    port: "{{ item.port }}"
-  loop:
-    - {rule: allow, port: 22}
-    - {rule: allow, port: 443}
+ community.general.ufw:
+ rule: "{{ item.rule }}"
+ port: "{{ item.port }}"
+ loop:
+ - {rule: allow, port: 22}
+ - {rule: allow, port: 443}
 
 - name: Enable ufw
-  community.general.ufw:
-    state: enabled
+ community.general.ufw:
+ state: enabled
 ```
 
 ### `nvidia`
@@ -106,19 +106,19 @@ Installs `nvidia-driver-560` via apt + `nvidia-container-toolkit` so Docker can 
 ```yaml
 # roles/nvidia/tasks/main.yml
 - name: Install NVIDIA driver
-  ansible.builtin.apt:
-    name: nvidia-driver-560-server
-    state: present
-  register: driver
-  notify: reboot if driver changed
+ ansible.builtin.apt:
+ name: nvidia-driver-560-server
+ state: present
+ register: driver
+ notify: reboot if driver changed
 
 - name: Install nvidia-container-toolkit
-  ansible.builtin.apt:
-    name: nvidia-container-toolkit
-    state: present
+ ansible.builtin.apt:
+ name: nvidia-container-toolkit
+ state: present
 
 - name: Configure Docker to use NVIDIA runtime
-  ansible.builtin.shell: nvidia-ctk runtime configure --runtime=docker
+ ansible.builtin.shell: nvidia-ctk runtime configure --runtime=docker
 ```
 
 Driver changes trigger a reboot (handler), otherwise CUDA visibility is flaky.
@@ -148,39 +148,39 @@ The core role:
 ```yaml
 # roles/musubi-stack/tasks/main.yml
 - name: Render docker-compose.yml
-  ansible.builtin.template:
-    src: docker-compose.yml.j2
-    dest: /etc/musubi/docker-compose.yml
-    owner: root
-    group: root
-    mode: "0644"
+ ansible.builtin.template:
+ src: docker-compose.yml.j2
+ dest: /etc/musubi/docker-compose.yml
+ owner: root
+ group: root
+ mode: "0644"
 
 - name: Seed .env
-  ansible.builtin.template:
-    src: env.j2
-    dest: /etc/musubi/.env
-    owner: root
-    group: docker
-    mode: "0640"
-  no_log: true
+ ansible.builtin.template:
+ src: env.j2
+ dest: /etc/musubi/.env
+ owner: root
+ group: docker
+ mode: "0640"
+ no_log: true
 
 - name: Pre-pull images
-  community.docker.docker_image:
-    name: "{{ item }}"
-    source: pull
-  loop: "{{ musubi_images }}"
+ community.docker.docker_image:
+ name: "{{ item }}"
+ source: pull
+ loop: "{{ musubi_images }}"
 
 - name: Install systemd unit
-  ansible.builtin.template:
-    src: musubi.service.j2
-    dest: /etc/systemd/system/musubi.service
-  notify: systemd daemon-reload
+ ansible.builtin.template:
+ src: musubi.service.j2
+ dest: /etc/systemd/system/musubi.service
+ notify: systemd daemon-reload
 
 - name: Enable musubi service
-  ansible.builtin.systemd:
-    name: musubi
-    enabled: yes
-    state: started
+ ansible.builtin.systemd:
+ name: musubi
+ enabled: yes
+ state: started
 ```
 
 ### Gateway (lives elsewhere)
@@ -211,15 +211,15 @@ Full detail: [[09-operations/backup-restore]].
 
 ```yaml
 - name: Provision Musubi host
-  hosts: musubi
-  become: true
-  roles:
-    - base
-    - nvidia
-    - docker
-    - musubi-fs
-    - musubi-stack
-    - backup
+ hosts: musubi
+ become: true
+ roles:
+ - base
+ - nvidia
+ - docker
+ - musubi-fs
+ - musubi-stack
+ - backup
 ```
 
 ### `playbooks/update.yml`
@@ -228,18 +228,18 @@ Pulls new image digests (respecting `compose.override.yml` pins) and recreates c
 
 ```yaml
 - name: Update Musubi stack
-  hosts: musubi
-  become: true
-  tasks:
-    - name: Pull new images
-      community.docker.docker_compose_v2_pull:
-        project_src: /etc/musubi
+ hosts: musubi
+ become: true
+ tasks:
+ - name: Pull new images
+ community.docker.docker_compose_v2_pull:
+ project_src: /etc/musubi
 
-    - name: Recreate changed services
-      community.docker.docker_compose_v2:
-        project_src: /etc/musubi
-        state: present
-        recreate: smart    # only changed containers
+ - name: Recreate changed services
+ community.docker.docker_compose_v2:
+ project_src: /etc/musubi
+ state: present
+ recreate: smart # only changed containers
 ```
 
 ### `playbooks/rotate.yml`

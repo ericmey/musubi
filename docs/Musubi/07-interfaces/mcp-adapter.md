@@ -191,7 +191,7 @@ Logs include the MCP `request_id` and forward to Musubi Core as `X-Request-Id`.
 
 ```yaml
 # musubi-mcp-adapter.yaml
-musubi_url: https://musubi.internal.example.com/v1
+musubi_url: https://musubi.example.local.example.com/v1
 oauth:
   authority: https://auth.internal.example.com
   client_id: musubi-mcp

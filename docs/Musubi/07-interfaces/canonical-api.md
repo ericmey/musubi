@@ -18,7 +18,7 @@ This document describes the **shape** of the API; the generated OpenAPI/proto fi
 ## Base URL
 
 ```
-https://musubi.internal.<tld>/v1/
+https://musubi.example.local.<tld>/v1/
 ```
 
 HTTPS is mandatory. TLS via Kong reverse-proxy in front of Uvicorn. Local dev uses Kong with a self-signed cert.

@@ -68,7 +68,7 @@ All done:
 - `test_artifact_upload_multipart_then_retrieve_blob` (bullet 12)
 
 Also unblocks:
-- **First real deploy on musubi.mey.house** — can't deploy a server that 500s on first request.
+- **First real deploy on musubi.example.local** — can't deploy a server that 500s on first request.
 - **POC → v1 migration** — migrator writes via the API; can't write to a non-functional API.
 - **OpenClaw v0.1 integration** — same reason.
 

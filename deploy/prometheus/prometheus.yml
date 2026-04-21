@@ -24,7 +24,7 @@ global:
   scrape_timeout: 10s
   external_labels:
     cluster: musubi
-    host: musubi.mey.house
+    host: musubi.example.local
 
 scrape_configs:
   # Musubi Core — HTTP API metrics (request counts, latency histograms,

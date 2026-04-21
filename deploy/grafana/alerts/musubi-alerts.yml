@@ -18,7 +18,7 @@ groups:
           severity: push
         annotations:
           summary: "Musubi Core 5xx rate above 1% for 5m"
-          runbook: "https://docs.musubi.internal/09-operations/runbooks/#core_5xx_high"
+          runbook: "https://docs.musubi.example.local/09-operations/runbooks/#core_5xx_high"
 
       - alert: qdrant_down
         expr: up{job="qdrant"} == 0
@@ -27,7 +27,7 @@ groups:
           severity: push
         annotations:
           summary: "Qdrant unreachable for 2m"
-          runbook: "https://docs.musubi.internal/09-operations/runbooks/#qdrant-down"
+          runbook: "https://docs.musubi.example.local/09-operations/runbooks/#qdrant-down"
 
       - alert: vault_fs_full
         expr: node_filesystem_avail_bytes{mountpoint="/var/lib/musubi"} / node_filesystem_size_bytes{mountpoint="/var/lib/musubi"} < 0.10
@@ -36,7 +36,7 @@ groups:
           severity: push
         annotations:
           summary: "Vault filesystem under 10% free"
-          runbook: "https://docs.musubi.internal/09-operations/runbooks/#vault_fs_full"
+          runbook: "https://docs.musubi.example.local/09-operations/runbooks/#vault_fs_full"
 
       - alert: backup_failure_24h
         expr: time() - musubi_backup_last_success_timestamp > 86400
@@ -45,7 +45,7 @@ groups:
           severity: push
         annotations:
           summary: "No successful Qdrant snapshot in 24h"
-          runbook: "https://docs.musubi.internal/09-operations/runbooks/#backup_failure_24h"
+          runbook: "https://docs.musubi.example.local/09-operations/runbooks/#backup_failure_24h"
 
       - alert: gpu_oom
         expr: increase(container_oom_events_total[10m]) > 0
@@ -54,7 +54,7 @@ groups:
           severity: push
         annotations:
           summary: "Container OOMKilled — likely GPU memory exhaustion"
-          runbook: "https://docs.musubi.internal/09-operations/runbooks/#gpu_oom"
+          runbook: "https://docs.musubi.example.local/09-operations/runbooks/#gpu_oom"
 
       - alert: loop_detected
         expr: rate(musubi_vault_echo_filtered_total[1m]) * 60 > 100
@@ -63,7 +63,7 @@ groups:
           severity: push
         annotations:
           summary: "Vault echo filter catching > 100/min — likely sync loop"
-          runbook: "https://docs.musubi.internal/09-operations/runbooks/#loop_detected"
+          runbook: "https://docs.musubi.example.local/09-operations/runbooks/#loop_detected"
 
       - alert: token_signing_key_missing
         expr: musubi_jwt_signing_key_present == 0
@@ -72,7 +72,7 @@ groups:
           severity: push
         annotations:
           summary: "JWT signing key file missing — all auth fails"
-          runbook: "https://docs.musubi.internal/09-operations/runbooks/#token_signing_key_missing"
+          runbook: "https://docs.musubi.example.local/09-operations/runbooks/#token_signing_key_missing"
 
   - name: musubi-email
     rules:

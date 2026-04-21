@@ -2,7 +2,7 @@
 """Migrates legacy POC Qdrant data to Musubi v1 via the SDK.
 
 Reads from localhost:6333 (the POC Qdrant container) and writes to
-musubi.mey.house via the Musubi v1 SDK. Supports dry-run and resumption.
+musubi.example.local via the Musubi v1 SDK. Supports dry-run and resumption.
 """
 
 from __future__ import annotations
@@ -271,7 +271,7 @@ def main() -> None:
 
     source_host = os.getenv("SOURCE_QDRANT_HOST", "127.0.0.1")
     source_port = int(os.getenv("SOURCE_QDRANT_PORT", "6333"))
-    target_url = os.getenv("MUSUBI_URL", "https://musubi.internal.example.com/v1")
+    target_url = os.getenv("MUSUBI_URL", "https://musubi.example.local.example.com/v1")
     target_token = os.getenv("MUSUBI_TOKEN", "dummy")
 
     try:

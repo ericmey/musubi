@@ -61,7 +61,7 @@ New repo `musubi-contract-tests`. See [[07-interfaces/contract-tests]]. Each ada
 
 ### Kong
 
-Add Kong in front for TLS + rate limits. See [[08-deployment/kong]]. Before this phase, adapters talked directly to `localhost:8100`; now they go through `https://musubi.internal.example.com`.
+Add Kong in front for TLS + rate limits. See [[08-deployment/kong]]. Before this phase, adapters talked directly to `localhost:8100`; now they go through `https://musubi.example.local.example.com`.
 
 ## Done signal
 
@@ -87,7 +87,7 @@ If the SDK is broken, adapters can temporarily call HTTP directly.
 
 # MCP via HTTP:
 curl -H "Authorization: Bearer $T" -d '{...}' \
-  https://musubi.internal.example.com/v1/memories
+  https://musubi.example.local.example.com/v1/memories
 
 # LiveKit (in a test harness):
 # Start voice session → speak → Slow Thinker prefetches → Fast Talker replies with context.
@@ -96,7 +96,7 @@ curl -H "Authorization: Bearer $T" -d '{...}' \
 # Highlight text → "Remember this" → memory appears in retrieval.
 
 # Contract suite:
-pytest --contract=canonical --musubi-url=https://musubi.internal.example.com/v1
+pytest --contract=canonical --musubi-url=https://musubi.example.local.example.com/v1
 ```
 
 ## Estimate

@@ -154,7 +154,7 @@
         rule: allow
         port: "{{ musubi_core_port }}"
         proto: tcp
-        from_ip: "{{ musubi_vlan_cidr | default('10.0.20.0/24') }}"
+        from_ip: "{{ musubi_vlan_cidr | default('10.0.0.0/24') }}"
         comment: "VLAN-internal access — remove when Kong fronts Musubi (ADR 0024)"
       when: musubi_kong_ip | default('') | length == 0
 

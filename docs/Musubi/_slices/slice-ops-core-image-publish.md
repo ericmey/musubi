@@ -16,7 +16,7 @@ blocks: ["[[_slices/slice-ops-update-workflow]]"]
 # Slice: Publish musubi-core to GHCR via CI
 
 > Replace the one-time `docker save | ssh | docker load` transfer that
-> brought Musubi Core onto `musubi.mey.house` with a GitHub Actions
+> brought Musubi Core onto `musubi.example.local` with a GitHub Actions
 > workflow that builds and publishes `ghcr.io/ericmey/musubi-core` on
 > every tag (and optionally on every merge to `v2`), so any host can
 > `docker pull` the image by digest.
@@ -27,7 +27,7 @@ blocks: ["[[_slices/slice-ops-update-workflow]]"]
 
 The first deploy on 2026-04-20 built the Musubi Core image locally on
 Eric's Mac (`docker buildx build --platform linux/amd64`), then
-transferred it to `musubi.mey.house` via a `docker save | ssh | docker
+transferred it to `musubi.example.local` via a `docker save | ssh | docker
 load` pipe. That worked for the single-host first-deploy but creates three
 problems as soon as we leave that narrow path:
 
@@ -102,7 +102,7 @@ trailer (see Cross-slice tickets below). -->
 - [[_slices/slice-ops-update-workflow]] — needs a real registry source
   to pull from; it can't upgrade an image that only lives on one Mac.
 - **Fresh-host provisioning.** Once the image is on GHCR, a new
-  `musubi.mey.house` replacement host can run `bootstrap.yml` +
+  `musubi.example.local` replacement host can run `bootstrap.yml` +
   `deploy.yml` end-to-end without any manual image transfer.
 - **Rollback on-deploy.** A digest pin means the runbook's "rollback"
   step can be "pin the prior digest and re-run deploy.yml" — currently
@@ -199,7 +199,7 @@ Plus slice-specific:
       `ghcr.io/ericmey/musubi-core` with the expected tag + digest.
 - [ ] `group_vars/all.yml` flipped from the local-build tag to a
       digest-pinned GHCR reference.
-- [ ] `ansible-playbook deploy.yml` run against `musubi.mey.house`
+- [ ] `ansible-playbook deploy.yml` run against `musubi.example.local`
       pulls from GHCR successfully (no `docker save | ssh` needed).
       Recorded in `[[00-index/work-log]]`.
 - [ ] Runbook updated to reflect the new pre-deploy image-publish

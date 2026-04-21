@@ -30,6 +30,6 @@ receivers:
   - name: email
     email_configs:
       - to: eric@example.com
-        from: alertmanager@musubi.internal
+        from: alertmanager@musubi.example.local
         smarthost: smtp.example.com:587
         require_tls: true

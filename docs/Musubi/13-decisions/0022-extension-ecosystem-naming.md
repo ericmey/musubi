@@ -48,7 +48,7 @@ where `<system>` names the host system the component targets.
 
 | Component | Language | Source location | Install into consumer |
 |---|---|---|---|
-| Musubi server | Python | `src/musubi/` → future `packages/musubi-server/` | Operator deploys on `musubi.mey.house` |
+| Musubi server | Python | `src/musubi/` → future `packages/musubi-server/` | Operator deploys on `musubi.example.local` |
 | Musubi Python SDK | Python | `src/musubi/sdk/` → future `packages/musubi-client/` | `pip install musubi-client` |
 | MCP server (remote HTTP + SSE) | Python | `src/musubi/adapters/mcp/` → future `packages/musubi-mcp/` | Deploys with Musubi; Kong-fronts it |
 | MCP local stdio plugin *(if ever built)* | Python | `packages/musubi-mcp-stdio/` *(future subpackage)* | `pip install musubi-mcp-stdio` on agent host |

@@ -13,7 +13,7 @@ implements: "tests/test_embedding.py"
 
 How 10 GB of VRAM hosts BGE-M3, SPLADE++ V3, BGE-reranker-v2-m3, and a Qwen 3 4B LLM simultaneously — without OOMs.
 
-**Host:** `musubi.mey.house` — bare-metal Ubuntu 24.04, RTX 3080 10 GB, dedicated to Musubi. See [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]] for the phase-gated LLM placement decision behind the model choice below.
+**Host:** `musubi.example.local` — bare-metal Ubuntu 24.04, RTX 3080 10 GB, dedicated to Musubi. See [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]] for the phase-gated LLM placement decision behind the model choice below.
 
 ## The constraint
 
@@ -32,7 +32,7 @@ Workable. Leaves ~0.7-1.2 GB headroom. Tight enough that growth (larger TEI batc
 
 ## Phase 2 triggers (summary)
 
-Move Qwen off musubi — either to `photo-club.mey.house` (5070 Ti 16 GB) over the VLAN, or upgrade musubi's GPU — if any of:
+Move Qwen off musubi — either to `photo.example.local` (5070 Ti 16 GB) over the VLAN, or upgrade musubi's GPU — if any of:
 
 - VRAM OOM / model-eviction events >1 per week
 - Sweep wall-time exceeds schedule window (hourly >15 min, daily >2 hours)

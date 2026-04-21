@@ -27,53 +27,53 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 
 ## Entries
 
-### 2026-04-21 — Prometheus scraping musubi.mey.house (P1 observability)
+### 2026-04-21 — Prometheus scraping musubi.example.local (P1 observability)
 
-`musubi.mey.house` now runs a Prometheus container alongside the main
+`musubi.example.local` now runs a Prometheus container alongside the main
 stack. Scrape targets (verified via `/api/v1/query?query=up`, all
 returning `1`):
 
-| Job           | Target               | Exposing                            |
+| Job | Target | Exposing |
 |---------------|----------------------|-------------------------------------|
-| musubi-core   | `core:8100/v1/ops/metrics` | HTTP request counts/duration/5xx (real, live) |
-| tei-dense     | `tei-dense:80/metrics`     | batch latency, queue depth, GPU util |
-| tei-sparse    | `tei-sparse:80/metrics`    | same                                 |
-| tei-reranker  | `tei-reranker:80/metrics`  | same                                 |
-| prometheus    | `localhost:9090/metrics`   | self-scrape                          |
+| musubi-core | `core:8100/v1/ops/metrics` | HTTP request counts/duration/5xx (real, live) |
+| tei-dense | `tei-dense:80/metrics` | batch latency, queue depth, GPU util |
+| tei-sparse | `tei-sparse:80/metrics` | same |
+| tei-reranker | `tei-reranker:80/metrics` | same |
+| prometheus | `localhost:9090/metrics` | self-scrape |
 
-Reachable via SSH tunnel: `ssh -L 9090:localhost:9090 musubi.mey.house`,
+Reachable via SSH tunnel: `ssh -L 9090:localhost:9090 musubi.example.local`,
 then http://localhost:9090. Bound 127.0.0.1-only — Kong deferral per
 ADR 0024 means no external exposure tonight.
 
 Deviations from [[09-operations/observability]]:
 
 - Spec claims `musubi-core:9100`. Reality: `core:8100/v1/ops/metrics`.
-  (`9100` was the old slice-ops-observability plan; the actual endpoint
-  landed on `core:8100` when the router was written.)
+ (`9100` was the old slice-ops-observability plan; the actual endpoint
+ landed on `core:8100` when the router was written.)
 - Spec names `musubi_capture_total`, `musubi_retrieve_total`, lifecycle
-  counters, etc. Code emits `musubi_http_requests_total`,
-  `musubi_http_request_duration_ms`, `musubi_5xx_total`. The per-domain
-  counters are aspirational — wiring them is its own piece of work.
+ counters, etc. Code emits `musubi_http_requests_total`,
+ `musubi_http_request_duration_ms`, `musubi_5xx_total`. The per-domain
+ counters are aspirational — wiring them is its own piece of work.
 - Spec calls for Grafana + Alertmanager. Tonight ships Prometheus only.
-  Grafana + alerts are a separate slice when notification channels
-  (email? ntfy?) are decided.
+ Grafana + alerts are a separate slice when notification channels
+ (email? ntfy?) are decided.
 
 **Not yet scraped (documented in the config):**
 
 - Qdrant `/metrics` returns 401 — requires the `api-key` header. Needs a
-  secret-file wiring that isn't in scope tonight.
+ secret-file wiring that isn't in scope tonight.
 - Ollama has no native Prometheus exporter; leave as-is.
 - Lifecycle worker emits metrics via `default_registry()` but doesn't
-  serve HTTP — scraping it needs an embedded HTTP endpoint in the
-  worker entrypoint. Follow-up.
+ serve HTTP — scraping it needs an embedded HTTP endpoint in the
+ worker entrypoint. Follow-up.
 - Node-exporter for host-level (CPU/mem/disk/GPU) metrics not deployed
-  yet.
+ yet.
 
 13 structural tests in [`tests/ops/test_prometheus.py`](../../../tests/ops/test_prometheus.py).
 
 ### 2026-04-21 — Host-local backup scheduler live (P1 from the first-deploy punchlist)
 
-`musubi.mey.house` now backs itself up every six hours without Ansible.
+`musubi.example.local` now backs itself up every six hours without Ansible.
 [`deploy/backup/musubi-backup.sh`](../../../deploy/backup/musubi-backup.sh) + a
 systemd timer snapshot all seven Qdrant collections (`musubi_artifact`,
 `musubi_artifact_chunks`, `musubi_concept`, `musubi_curated`,
@@ -89,24 +89,24 @@ ansible path targets `127.0.0.1:6333` (which doesn't exist in the
 compose era — Qdrant is only on the `musubi_default` bridge) and
 `/mnt/snapshots/` (which doesn't exist on the current host — the VG has
 0 VFree and snapshot-capable mount was never provisioned). Also: if
-yua is down for maintenance, the backup path shouldn't go down with
+the ansible control host is down for maintenance, the backup path shouldn't go down with
 it. The ansible playbook remains as the canonical drill procedure and
 the future offsite-push path when restic + B2 creds land.
 
 **Deployment gotchas surfaced while wiring this:**
 
 - Qdrant writes snapshots to `/qdrant/snapshots` inside the container,
-  **not** `/qdrant/storage/snapshots`. Default `snapshots_path: ./snapshots`
-  is relative to the working dir (`/qdrant`), not the storage dir.
-  Without a bind mount, snapshots are ephemeral container storage.
-  Added `/var/lib/musubi/qdrant-snapshots:/qdrant/snapshots` to the
-  compose template.
+ **not** `/qdrant/storage/snapshots`. Default `snapshots_path: ./snapshots`
+ is relative to the working dir (`/qdrant`), not the storage dir.
+ Without a bind mount, snapshots are ephemeral container storage.
+ Added `/var/lib/musubi/qdrant-snapshots:/qdrant/snapshots` to the
+ compose template.
 - Collection names in-store drifted from the spec's plan —
-  `musubi_artifact` (not `musubi_artifact_heads`), plus
-  `musubi_lifecycle_events` which was declared in `store/` but not in
-  any spec section's canonical list. The backup driver queries
-  `/collections` at run time and iterates whatever's there, so future
-  collection renames no-op against the script.
+ `musubi_artifact` (not `musubi_artifact_heads`), plus
+ `musubi_lifecycle_events` which was declared in `store/` but not in
+ any spec section's canonical list. The backup driver queries
+ `/collections` at run time and iterates whatever's there, so future
+ collection renames no-op against the script.
 
 **Still on the P1 punchlist:** Prometheus / observability scrape.
 **Still on the P2 punchlist:** offsite backup tier (restic → B2) waiting
@@ -127,39 +127,39 @@ placeholder-lambdas until follow-up slices land real builders.
 **What landed:**
 
 - [`src/musubi/lifecycle/runner.py`](../../src/musubi/lifecycle/runner.py) —
-  tick-driven asyncio scheduler. Design rationale in
-  [[13-decisions/0025-lifecycle-runner-without-apscheduler]] (no
-  APScheduler dependency — rebuild that later when we need
-  persisted-jobstore semantics).
+ tick-driven asyncio scheduler. Design rationale in
+ [[13-decisions/0025-lifecycle-runner-without-apscheduler]] (no
+ APScheduler dependency — rebuild that later when we need
+ persisted-jobstore semantics).
 - [`src/musubi/llm/ollama.py`](../../src/musubi/llm/ollama.py) —
-  httpx-backed `OllamaClient` satisfying the `OllamaClient` Protocol on
-  [[06-ingestion/maturation]]. Returns `None` on outage (sweep falls
-  back to captured values); validates response via pydantic. 17 unit
-  tests, all using `pytest-httpx` — no live Ollama needed for CI.
+ httpx-backed `OllamaClient` satisfying the `OllamaClient` Protocol on
+ [[06-ingestion/maturation]]. Returns `None` on outage (sweep falls
+ back to captured values); validates response via pydantic. 17 unit
+ tests, all using `pytest-httpx` — no live Ollama needed for CI.
 - Prompts: `src/musubi/llm/prompts/{importance,topics}/v1.txt` —
-  frozen per the rule in `docs/Musubi/06-ingestion/CLAUDE.md`.
+ frozen per the rule in `docs/Musubi/06-ingestion/CLAUDE.md`.
 - [`src/musubi/lifecycle/maturation.py`](../../src/musubi/lifecycle/maturation.py) —
-  `default_ollama_client()` now returns the real client instead of the
-  loud stub.
+ `default_ollama_client()` now returns the real client instead of the
+ loud stub.
 - [`deploy/ansible/templates/docker-compose.yml.j2`](../../../deploy/ansible/templates/docker-compose.yml.j2) —
-  added `lifecycle-worker` service using the core image with a new
-  entrypoint. Inherited HEALTHCHECK disabled (worker doesn't serve HTTP).
+ added `lifecycle-worker` service using the core image with a new
+ entrypoint. Inherited HEALTHCHECK disabled (worker doesn't serve HTTP).
 
-**Verification on `musubi.mey.house` (2026-04-21):**
+**Verification on `musubi.example.local` (2026-04-21):**
 
 1. Rebuilt `musubi-core:dev`, transferred via `docker save | ssh docker load`.
 2. Edited `/etc/musubi/docker-compose.yml` in place to add the
-   `lifecycle-worker` block (Ansible is the source-of-truth but the vault
-   pass lives on yua; in-place edit was the pragmatic path).
+ `lifecycle-worker` block (Ansible is the source-of-truth but the vault
+ pass lives on the ansible control host; in-place edit was the pragmatic path).
 3. `docker compose up -d --force-recreate core lifecycle-worker` — both
-   came up clean; compose stack still reports all healthy.
+ came up clean; compose stack still reports all healthy.
 4. Worker logs show `lifecycle-runner-starting jobs=[...] tick_seconds=60`
-   and `concept_maturation` firing at its documented `03:30` cron window.
+ and `concept_maturation` firing at its documented `03:30` cron window.
 5. Forced one manual `episodic_maturation_sweep` via
-   `docker compose exec lifecycle-worker python -c "…"`:
-   `SweepReport(selected=3, transitioned=3, enriched=2, failed=0)`.
+ `docker compose exec lifecycle-worker python -c "…"`:
+ `SweepReport(selected=3, transitioned=3, enriched=2, failed=0)`.
 6. `/v1/retrieve {query_text: "first deploy smoke", namespace: "eric/ops/episodic"}`
-   returns the three matured captures. **Round-trip closed.**
+ returns the three matured captures. **Round-trip closed.**
 
 **What the LLM did:** Qwen-3:4B on the local Ollama returned valid JSON
 matching the pydantic schemas on both prompts. Two of three captures
@@ -169,28 +169,28 @@ the third was a timestamp-only capture — topics correctly empty.
 **Open items for the punchlist:**
 
 - P1 Observability: stand up Prometheus; scrape `core:/v1/ops/metrics` and
-  `lifecycle-worker` (when the metrics exporter slice lands).
+ `lifecycle-worker` (when the metrics exporter slice lands).
 - P1 Qdrant backup cron: `deploy/backup/` scripts exist but aren't
-  scheduled.
+ scheduled.
 - P2 [[_slices/slice-ops-core-image-publish]]: CI-published GHCR image
-  + digest-pinned `group_vars`.
+ + digest-pinned `group_vars`.
 - P2 [[_slices/slice-ops-update-workflow]]: `deploy/ansible/update.yml`
-  with `policy: always` pulls.
+ with `policy: always` pulls.
 - P3 Real builders for the non-maturation sweeps (synthesis, promotion,
-  demotion, reflection, vault_reconcile).
+ demotion, reflection, vault_reconcile).
 
-### 2026-04-20 — Musubi stack live on `musubi.mey.house` (first real deploy)
+### 2026-04-20 — Musubi stack live on `musubi.example.local` (first real deploy)
 
 The six-container Musubi compose stack came up end-to-end against the real
 target host for the first time. All services report `healthy`:
 
 ```
-musubi-core-1           healthy   /v1/ops/health → {"status":"ok","version":"v0"}
-musubi-ollama-1         healthy   qwen3:4b loaded (per [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]])
-musubi-qdrant-1         healthy   v1.17.1, api-key-auth on
-musubi-tei-dense-1      healthy   BGE-M3
-musubi-tei-reranker-1   healthy   BGE-reranker-v2-m3
-musubi-tei-sparse-1     healthy   SPLADE v3
+musubi-core-1 healthy /v1/ops/health → {"status":"ok","version":"v0"}
+musubi-ollama-1 healthy qwen3:4b loaded (per [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]])
+musubi-qdrant-1 healthy v1.17.1, api-key-auth on
+musubi-tei-dense-1 healthy BGE-M3
+musubi-tei-reranker-1 healthy BGE-reranker-v2-m3
+musubi-tei-sparse-1 healthy SPLADE v3
 ```
 
 GPU: 3.3 / 10 GiB VRAM used; room for query-time batching.
@@ -201,70 +201,70 @@ Every one of these was a spec-vs-reality gap that `slice-ops-first-deploy`
 could not have caught because it shipped without ever running against a real
 host. Each fix landed via PR tonight:
 
-- **#146** `chore(ansible): parametrise inventory + yua control-host workflow` —
-  replaced `<placeholder>` literals in `deploy/ansible/inventory.yml` with
-  `{{ jinja_vars }}`, added `deploy/ansible/setup-control-host.sh` to seed
-  `~/.musubi-secrets/` on yua. Musubi playbooks are now run from yua alongside
-  the homelab fleet ansible; vault password is shared (`~/ansible/.vault_pass`).
+- **#146** `chore(ansible): parametrise inventory + the ansible control host control-host workflow` —
+ replaced `<placeholder>` literals in `deploy/ansible/inventory.yml` with
+ `{{ jinja_vars }}`, added `deploy/ansible/setup-control-host.sh` to seed
+ `~/.musubi-secrets/` on the ansible control host. Musubi playbooks are now run from the ansible control host alongside
+ the homelab fleet ansible; vault password is shared (`~/ansible/.vault_pass`).
 - **#147** `chore(ansible): bootstrap.yml adds Docker + NVIDIA apt repos` —
-  `bootstrap.yml` was missing the Docker-CE and NVIDIA container-toolkit apt
-  repo setup; first `apt install` failed immediately. Driver install pattern
-  changed from the rotted `nvidia-driver-560-server` pin to
-  `ubuntu-drivers autoinstall` guarded by an `nvidia-smi` probe (so the
-  pre-staged 580.126.20 isn't downgraded).
+ `bootstrap.yml` was missing the Docker-CE and NVIDIA container-toolkit apt
+ repo setup; first `apt install` failed immediately. Driver install pattern
+ changed from the rotted `nvidia-driver-560-server` pin to
+ `ubuntu-drivers autoinstall` guarded by an `nvidia-smi` probe (so the
+ pre-staged 580.126.20 isn't downgraded).
 - **#148** `feat(ops): musubi-core Dockerfile + compose/env template fixes` —
-  wrote the missing Musubi Core `Dockerfile` (was only referenced as
-  `ghcr.io/example/musubi-core:<digest>` — no such image existed). Rewrote
-  the `.env.production.j2` template against the real `settings.py` field
-  set (it was ~half-missing). Corrected TEI image tag from `1.5-cuda`
-  (doesn't exist on GHCR) to `86-1.2.0` (Ampere compute-8.6 variant). Dropped
-  `--pooling rerank` from the reranker service (rerankers are auto-detected
-  in TEI 1.x; only `cls / mean / splade` are valid pooling values). Decoupled
-  the Ollama healthcheck from model-pull state (the old check deadlocked
-  against `core.depends_on`). Moved every healthcheck off `curl` (not
-  installed in the minimal Qdrant / Ollama / TEI images) to either `bash
-  /dev/tcp` or the service's own CLI. Set `MUSUBI_ALLOW_PLAINTEXT=true` so
-  Core talks HTTP to in-bridge Qdrant (TLS inside the compose network is
-  orthogonal; Kong-deferred per ADR 0024 means Core isn't externally
-  exposed either).
+ wrote the missing Musubi Core `Dockerfile` (was only referenced as
+ `ghcr.io/example/musubi-core:<digest>` — no such image existed). Rewrote
+ the `.env.production.j2` template against the real `settings.py` field
+ set (it was ~half-missing). Corrected TEI image tag from `1.5-cuda`
+ (doesn't exist on GHCR) to `86-1.2.0` (Ampere compute-8.6 variant). Dropped
+ `--pooling rerank` from the reranker service (rerankers are auto-detected
+ in TEI 1.x; only `cls / mean / splade` are valid pooling values). Decoupled
+ the Ollama healthcheck from model-pull state (the old check deadlocked
+ against `core.depends_on`). Moved every healthcheck off `curl` (not
+ installed in the minimal Qdrant / Ollama / TEI images) to either `bash
+ /dev/tcp` or the service's own CLI. Set `MUSUBI_ALLOW_PLAINTEXT=true` so
+ Core talks HTTP to in-bridge Qdrant (TLS inside the compose network is
+ orthogonal; Kong-deferred per ADR 0024 means Core isn't externally
+ exposed either).
 
 ### One-time operator steps that happened outside the playbooks
 
-- `ericmey`'s Mac pubkey added to `yua`'s `authorized_keys` (via Proxmox
-  console — the prior laptop's key didn't follow).
-- `yua`'s `id_ed25519_yua` registered as a read-only GitHub deploy key on
-  `ericmey/musubi` so yua can `git clone` the repo.
+- `ericmey`'s Mac pubkey added to the control host's `authorized_keys` (via Proxmox
+ console — the prior laptop's key didn't follow).
+- the control host's SSH key registered as a read-only GitHub deploy key on
+ `ericmey/musubi` so the ansible control host can `git clone` the repo.
 - Native `qdrant.service` / `ollama.service` / `open-webui.service` stopped,
-  disabled, and purged (binaries, data dirs, service users). Design call per
-  discussion: `bootstrap.yml` assumes a greenfield host going forward; the
-  native services were pre-staging artefacts only.
+ disabled, and purged (binaries, data dirs, service users). Design call per
+ discussion: `bootstrap.yml` assumes a greenfield host going forward; the
+ native services were pre-staging artefacts only.
 - HF cache at `/home/ericmey/musubi-hf-cache/hub/` rsynced into
-  `/var/lib/musubi/tei-models/` so SPLADE v3 loads from cache (it's gated on
-  HuggingFace; download would 401). Automating this is a follow-up (the
-  current `bootstrap.yml` doesn't do it).
+ `/var/lib/musubi/tei-models/` so SPLADE v3 loads from cache (it's gated on
+ HuggingFace; download would 401). Automating this is a follow-up (the
+ current `bootstrap.yml` doesn't do it).
 
 ### Vault changes
 
 - [[08-deployment/host-profile|host-profile.md]] § *Actually deployed state*
-  updated from pre-Compose snapshot (2026-04-18) to post-Compose reality.
+ updated from pre-Compose snapshot (2026-04-18) to post-Compose reality.
 - [[_slices/slice-ops-first-deploy|slice-ops-first-deploy.md]] work-log
-  appended with the execution record and the bugs-found ledger.
+ appended with the execution record and the bugs-found ledger.
 - [[12-roadmap/status|status.md]] v1 progress table updated; Phase 8 Ops
-  rolls over to *first deploy complete*.
+ rolls over to *first deploy complete*.
 
 ### Downstream unblocked
 
 - **First capture → retrieve round-trip** is now testable end-to-end
-  (`deploy/smoke/verify.sh` against `http://10.0.20.45:8100`). Queued for
-  the next session.
+ (`deploy/smoke/verify.sh` against `http://10.0.0.45:8100`). Queued for
+ the next session.
 - **POC → v1 data migration** (`slice-poc-data-migration`) now has a live
-  target Musubi it can push into.
+ target Musubi it can push into.
 - **OpenClaw / LiveKit / MCP adapters** have a real endpoint to integration-
-  test against.
+ test against.
 
 ### 2026-04-20 — slice-poc-data-migration completed via SDK
 
-The POC data migration script `poc-to-v1.py` successfully completed discovery and implementation against `nyla.mey.house`. Connected to the local POC Qdrant source via port 6333, mapped and transformed the `musubi_memories` and `musubi_thoughts` rows with deterministic KSUIDs. 
+The POC data migration script `poc-to-v1.py` successfully completed discovery and implementation against `control.example.local`. Connected to the local POC Qdrant source via port 6333, mapped and transformed the `musubi_memories` and `musubi_thoughts` rows with deterministic KSUIDs. 
 
 During implementation, it was verified that the `MusubiClient.memories.capture` endpoint does not support backdating `created_at`, so `[[_inbox/cross-slice/migrator-needs-created-at-override]]` was opened for the SDK and API teams to implement an override.
 
@@ -458,12 +458,12 @@ add new ones if context evolves.
 When a spec describes infrastructure that has come online, add these fields to
 its frontmatter (in addition to `status:`):
 
-| Field               | When to use                                                              |
+| Field | When to use |
 |---------------------|--------------------------------------------------------------------------|
-| `deployment_status` | `planned` → `provisioned` → `operational` → `retired`                     |
-| `provisioned_at`    | Date the physical/virtual resource came online.                           |
-| `operational_at`    | Date the service began serving production traffic (after config + test).  |
-| `retired_at`        | Date the resource was decommissioned.                                     |
+| `deployment_status` | `planned` → `provisioned` → `operational` → `retired` |
+| `provisioned_at` | Date the physical/virtual resource came online. |
+| `operational_at` | Date the service began serving production traffic (after config + test). |
+| `retired_at` | Date the resource was decommissioned. |
 
 These are optional — use on notes where the spec vs. reality distinction
 matters (host profile, adapter deployments, etc.). Don't bother on purely

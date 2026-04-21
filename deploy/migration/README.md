@@ -5,7 +5,7 @@ This documents the procedure for migrating legacy Node.js POC data into Musubi v
 ## Prerequisites
 
 1.  **Stop the POC:** Ensure nothing is writing to the old POC database.
-2.  **Start Musubi v1:** The v1 system must be running on `musubi.mey.house`.
+2.  **Start Musubi v1:** The v1 system must be running on `musubi.example.local`.
 3.  **Authentication:** Obtain an operator-scoped token for Musubi v1.
 4.  **BACKUP:** You MUST backup the target Musubi v1 Qdrant database before proceeding.
     ```bash
@@ -14,12 +14,12 @@ This documents the procedure for migrating legacy Node.js POC data into Musubi v
 
 ## Execution
 
-1.  Navigate to the `deploy/migration` directory on `nyla.mey.house`.
+1.  Navigate to the `deploy/migration` directory on `control.example.local`.
 2.  Configure your environment variables:
     ```bash
     export SOURCE_QDRANT_HOST="127.0.0.1"
     export SOURCE_QDRANT_PORT="6333"
-    export MUSUBI_URL="https://musubi.mey.house/v1"
+    export MUSUBI_URL="https://musubi.example.local/v1"
     export MUSUBI_TOKEN="<your-operator-token>"
     ```
 3.  Run a **dry run** to validate schemas and review expected changes:

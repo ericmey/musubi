@@ -80,7 +80,7 @@ Each component is additive; none of them changes application behavior. Remove on
 ansible-playbook playbooks/musubi.yml
 
 # Run the smoke suite:
-pytest --contract=smoke --musubi-url=https://musubi.internal.example.com/v1
+pytest --contract=smoke --musubi-url=https://musubi.example.local.example.com/v1
 
 # Run a chaos probe:
 docker stop musubi-qdrant-1

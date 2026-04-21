@@ -26,22 +26,22 @@ blocks: ["[[_slices/slice-ops-first-deploy]]"]
 
 ## Owned paths (you MAY write here)
 
-  - `deploy/backup/`
-  - `musubi/ops/backup.py`
+ - `deploy/backup/`
+ - `musubi/ops/backup.py`
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-  - `musubi/planes/`
+ - `musubi/planes/`
 
 ## Depends on
 
-  - [[_slices/slice-ops-ansible]]
+ - [[_slices/slice-ops-ansible]]
 
 Start this slice only after every upstream slice has `status: done`.
 
 ## Unblocks
 
-  - _(no downstream slices)_
+ - _(no downstream slices)_
 
 ## Definition of Done
 

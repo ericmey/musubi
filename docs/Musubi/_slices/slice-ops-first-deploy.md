@@ -15,7 +15,7 @@ blocks: ["[[_slices/slice-ops-core-image-publish]]"]
 
 # Slice: First-deploy runbook + validation
 
-> Authors the step-by-step first-deploy procedure for `musubi.mey.house`, the systemd units + Kong config stitching the shipped Ansible/compose/backup/observability work together, and the post-deploy smoke + verify scripts. Ships the operator runbook; operator (Eric) executes the deploy with the runbook open.
+> Authors the step-by-step first-deploy procedure for `musubi.example.local`, the systemd units + Kong config stitching the shipped Ansible/compose/backup/observability work together, and the post-deploy smoke + verify scripts. Ships the operator runbook; operator (Eric) executes the deploy with the runbook open.
 
 **Phase:** 8 Ops · **Status:** `done` · **Owner:** `codex-gpt5`
 
@@ -28,7 +28,7 @@ The four foundational ops slices are shipped:
 - `slice-ops-backup` — backup/restore scripts
 - `slice-ops-observability` — metrics + logs + traces instrumentation + dashboards
 
-What's missing: **the authored procedure that binds them into a single "go live on musubi.mey.house" sequence.** Without this slice, the operator (Eric) has to stitch ansible + compose + DNS + Kong + certs + systemd + smoke-verify from memory each time. The first real deploy needs a deterministic, ordered, resumable runbook.
+What's missing: **the authored procedure that binds them into a single "go live on musubi.example.local" sequence.** Without this slice, the operator (Eric) has to stitch ansible + compose + DNS + Kong + certs + systemd + smoke-verify from memory each time. The first real deploy needs a deterministic, ordered, resumable runbook.
 
 This slice does NOT execute the deploy — Eric does that. This slice ships the **runbook + scripts + systemd units + verification harness** so Eric can pull the trigger with confidence.
 
@@ -40,30 +40,30 @@ This slice does NOT execute the deploy — Eric does that. This slice ships the 
 
 ## Owned paths (you MAY write here)
 
-- `deploy/runbooks/first-deploy.md`                  (new — the authored step-by-step procedure)
-- `deploy/systemd/`                                  (new — unit files for api, lifecycle-worker, vault-sync)
-- `deploy/smoke/`                                    (new — post-deploy verification scripts)
-- `deploy/kong/`                                     (parent done in ops-compose — extend with route stubs for prod)
-- `tests/ops/test_first_deploy_smoke.py`             (new — unit tests for smoke scripts)
-- `docs/Musubi/09-operations/runbooks.md`      (parent done — add first-deploy cross-link)
+- `deploy/runbooks/first-deploy.md` (new — the authored step-by-step procedure)
+- `deploy/systemd/` (new — unit files for api, lifecycle-worker, vault-sync)
+- `deploy/smoke/` (new — post-deploy verification scripts)
+- `deploy/kong/` (parent done in ops-compose — extend with route stubs for prod)
+- `tests/ops/test_first_deploy_smoke.py` (new — unit tests for smoke scripts)
+- `docs/Musubi/09-operations/runbooks.md` (parent done — add first-deploy cross-link)
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
-- `src/musubi/`                   (no code changes; this is deploy orchestration)
-- `docs/Musubi/07-interfaces/`  (API contract)
+- `src/musubi/` (no code changes; this is deploy orchestration)
+- `docs/Musubi/07-interfaces/` (API contract)
 - `openapi.yaml`, `proto/`
-- `.github/workflows/`            (CI is not deploy; separate concern)
+- `.github/workflows/` (CI is not deploy; separate concern)
 
 ## Depends on
 
-- [[_slices/slice-ops-ansible]]          (done — playbooks authored)
-- [[_slices/slice-ops-compose]]          (done — compose stack authored)
-- [[_slices/slice-ops-backup]]           (done — backup strategy authored)
-- [[_slices/slice-ops-observability]]    (done — health-probe endpoints wired)
+- [[_slices/slice-ops-ansible]] (done — playbooks authored)
+- [[_slices/slice-ops-compose]] (done — compose stack authored)
+- [[_slices/slice-ops-backup]] (done — backup strategy authored)
+- [[_slices/slice-ops-observability]] (done — health-probe endpoints wired)
 
 ## Unblocks
 
-- **First real deploy to `musubi.mey.house`** — Eric executes the runbook; this slice ships the procedure.
+- **First real deploy to `musubi.example.local`** — Eric executes the runbook; this slice ships the procedure.
 - **POC → v1 migration execution** — migration (#109) needs a running target Musubi; this slice makes v1 runnable.
 - **OpenClaw v0.1 integration test** — Aoi's client needs a real Musubi endpoint to hit; this slice gets one running.
 - **All Phase 2 activities** — perf baselines, load tests, chaos scenarios — all need a running deployed instance.
@@ -74,8 +74,8 @@ This slice does NOT execute the deploy — Eric does that. This slice ships the 
 
 Step-by-step operator procedure. Structure:
 
-1. **Pre-flight** — DNS A record for musubi.mey.house pointing at 10.0.20.45; operator has SSH access; ansible control node at 10.0.20.53 (yua) has the musubi repo cloned; secrets materialized per `.env.example`.
-2. **Snapshot target host** — ZFS snapshot / system-image backup of musubi.mey.house before first boot.
+1. **Pre-flight** — DNS A record for musubi.example.local pointing at 10.0.0.45; operator has SSH access; ansible control node at 10.0.0.53 (the control host) has the musubi repo cloned; secrets materialized per `.env.example`.
+2. **Snapshot target host** — ZFS snapshot / system-image backup of musubi.example.local before first boot.
 3. **Run ansible playbook** — `ansible-playbook deploy/ansible/site.yml -i inventory/prod.yml`. Expected output. Failure modes + recovery.
 4. **Bring up compose stack** — `docker compose -f docker-compose.yml up -d`. Health-gate on Qdrant + TEI + Ollama ready.
 5. **Install systemd units** — `deploy/systemd/*.service` placed at /etc/systemd/system/; enable + start.
@@ -127,7 +127,7 @@ Plus slice-specific:
 
 - [ ] `deploy/runbooks/first-deploy.md` is complete + reviewable in one sitting (<2k lines).
 - [ ] Every numbered step in the runbook has command, expected output, failure-mode guidance.
-- [ ] Systemd units install cleanly on a Ubuntu 24.04 VM (dry-run test — a VM on harem-001 is fine; doesn't need the real box).
+- [ ] Systemd units install cleanly on a Ubuntu 24.04 VM (dry-run test — a VM on workload-001 is fine; doesn't need the real box).
 - [ ] Smoke scripts unit-tested via `tests/ops/test_first_deploy_smoke.py` against mocked Musubi responses.
 - [ ] Kong config is declarative (decK) + example-documented per endpoint family.
 - [ ] Rollback procedure is documented + tested against the VM dry-run target.
@@ -136,7 +136,7 @@ Plus slice-specific:
 
 **Explicitly NOT in scope** (and Codex should NOT do these — these are Eric's operator work):
 
-- Executing the actual first deploy on `musubi.mey.house`.
+- Executing the actual first deploy on `musubi.example.local`.
 - Registering the OAuth client with whatever identity provider Eric chooses.
 - Obtaining real TLS certificates.
 - Configuring the DNS A record.
@@ -225,8 +225,8 @@ The playbooks shipped in PR #121 were not executed end-to-end against a real
 host at merge time. Tonight's deploy session did that; several real bugs
 surfaced and were fixed in follow-up PRs. All fixes are on `v2`.
 
-**Outcome:** full Musubi compose stack is live on `musubi.mey.house`. All six
-services healthy. `curl http://10.0.20.45:8100/v1/ops/health →
+**Outcome:** full Musubi compose stack is live on `musubi.example.local`. All six
+services healthy. `curl http://10.0.0.45:8100/v1/ops/health →
 {"status":"ok","version":"v0"}`. See [[00-index/work-log]] 2026-04-20 entry
 for the full ledger.
 
@@ -234,40 +234,40 @@ for the full ledger.
 no end-to-end run had ever happened):**
 
 1. [PR #146] Inventory hard-coded `<placeholder>` literals; replaced with
-   `{{ jinja_vars }}` + added `setup-control-host.sh` for yua.
+ `{{ jinja_vars }}` + added `setup-control-host.sh` for the control host.
 2. [PR #147] `bootstrap.yml` couldn't install `docker-ce` without first
-   adding Docker's apt repo. Same for `nvidia-container-toolkit`. The pinned
-   `nvidia-driver-560-server` would have downgraded the 580.126.20 on the
-   target host. Added pre-tasks for both repos + an idempotent driver probe.
+ adding Docker's apt repo. Same for `nvidia-container-toolkit`. The pinned
+ `nvidia-driver-560-server` would have downgraded the 580.126.20 on the
+ target host. Added pre-tasks for both repos + an idempotent driver probe.
 3. [PR #148] Musubi Core had no `Dockerfile` in the repo (compose referenced
-   `ghcr.io/example/musubi-core@sha256:<core-digest>` — no such image). Wrote
-   the Dockerfile. Rewrote `.env.production.j2` to match `settings.py` (was
-   ~half missing + wrong field names). TEI image tag `1.5-cuda` doesn't
-   exist on GHCR → correct form is `86-1.2.0` (Ampere compute-8.6). TEI
-   `--pooling rerank` not a valid value; rerankers auto-detect. All health-
-   checks moved off `curl` to `bash /dev/tcp` / `ollama list` (minimal
-   images have no curl). Ollama healthcheck decoupled from model-pull state
-   (would deadlock otherwise). `MUSUBI_ALLOW_PLAINTEXT=true` set so Core
-   can talk plain HTTP to in-bridge Qdrant.
+ `ghcr.io/example/musubi-core@sha256:<core-digest>` — no such image). Wrote
+ the Dockerfile. Rewrote `.env.production.j2` to match `settings.py` (was
+ ~half missing + wrong field names). TEI image tag `1.5-cuda` doesn't
+ exist on GHCR → correct form is `86-1.2.0` (Ampere compute-8.6). TEI
+ `--pooling rerank` not a valid value; rerankers auto-detect. All health-
+ checks moved off `curl` to `bash /dev/tcp` / `ollama list` (minimal
+ images have no curl). Ollama healthcheck decoupled from model-pull state
+ (would deadlock otherwise). `MUSUBI_ALLOW_PLAINTEXT=true` set so Core
+ can talk plain HTTP to in-bridge Qdrant.
 
 **Operator-only one-time steps** (outside the playbooks; captured in
 `.agent-context.local.md` so they reproduce):
 
 - Native Qdrant / Ollama / Open WebUI purged before first run.
 - HF cache rsynced into `/var/lib/musubi/tei-models/` so SPLADE v3 loads
-  from local cache (HF-gated; would 401).
-- yua's deploy key added to `ericmey/musubi` on GitHub.
+ from local cache (HF-gated; would 401).
+- the control host's deploy key added to `ericmey/musubi` on GitHub.
 
 **What the slice's Test Contract did NOT catch** (follow-up for the
 post-incident review):
 
 - Structural tests of the runbook/systemd/smoke/Kong files passed in CI
-  but no test actually ran `ansible-playbook` against a real (or
-  containerised-real) target. That's why the repo-missing, env-template-
-  wrong, TEI-tag-invalid, curl-missing problems all landed as production
-  bugs instead of CI failures. A `tests/ops/test_compose_boots.py` that
-  stands the stack up in a nested VM or on a self-hosted runner would have
-  caught most of these.
+ but no test actually ran `ansible-playbook` against a real (or
+ containerised-real) target. That's why the repo-missing, env-template-
+ wrong, TEI-tag-invalid, curl-missing problems all landed as production
+ bugs instead of CI failures. A `tests/ops/test_compose_boots.py` that
+ stands the stack up in a nested VM or on a self-hosted runner would have
+ caught most of these.
 
 ## PR links
 

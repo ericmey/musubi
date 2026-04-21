@@ -5,16 +5,16 @@ This directory contains two complementary backup paths for the Musubi host.
 ## 1. Host-local scheduled backups (live today)
 
 [`musubi-backup.sh`](musubi-backup.sh) runs under [`systemd/musubi-backup.timer`](systemd/musubi-backup.timer)
-every six hours on `musubi.mey.house`. It is self-contained — no Ansible,
+every six hours on `musubi.example.local`. It is self-contained — no Ansible,
 no secondary host, no vault password at run time. Recovery does not depend
-on yua being up.
+on the ansible control host being up.
 
 Install + enable (one-shot, from the host):
 
 ```bash
 sudo install -m 0755 deploy/backup/musubi-backup.sh /usr/local/bin/musubi-backup
 sudo install -m 0644 deploy/backup/systemd/musubi-backup.service /etc/systemd/system/
-sudo install -m 0644 deploy/backup/systemd/musubi-backup.timer   /etc/systemd/system/
+sudo install -m 0644 deploy/backup/systemd/musubi-backup.timer /etc/systemd/system/
 sudo install -d -o root -g root -m 0755 /var/lib/musubi/backups
 sudo systemctl daemon-reload
 sudo systemctl enable --now musubi-backup.timer
@@ -31,9 +31,9 @@ Per-run layout (`/var/lib/musubi/backups/<TIMESTAMP>/`):
 
 ```
 qdrant/<collection>.snapshot + SHA256SUMS
-sqlite/work.sqlite                (lifecycle ledger)
-artifact-blobs/                   (content-addressed rsync)
-manifest.json                     (status, epoch, collection list)
+sqlite/work.sqlite (lifecycle ledger)
+artifact-blobs/ (content-addressed rsync)
+manifest.json (status, epoch, collection list)
 ```
 
 Retention: 14 days, pruned only after a green run so we never lose the
@@ -46,7 +46,7 @@ last-known-good backup to a half-failed next one.
 sudo sha256sum -c /var/lib/musubi/backups/<TIMESTAMP>/qdrant/SHA256SUMS
 
 # Manifest says green
-sudo jq .status /var/lib/musubi/backups/<TIMESTAMP>/manifest.json   # → 0
+sudo jq .status /var/lib/musubi/backups/<TIMESTAMP>/manifest.json # → 0
 ```
 
 A `status` of `0` means every store backed up; `2` means at least one

@@ -87,8 +87,8 @@ Plus:
 - [x] `python -m musubi.lifecycle.runner` logs `lifecycle-job-dispatch
       name=synthesis` at the next `03:00` cron window. *(Verified in
       unit tests — `test_build_lifecycle_jobs_wires_synthesis_builders`.
-      Production cron-fire awaits the next deploy to musubi.mey.house.)*
-- [ ] Against `musubi.mey.house`, a forced run produces a
+      Production cron-fire awaits the next deploy to musubi.example.local.)*
+- [ ] Against `musubi.example.local`, a forced run produces a
       `SynthesisReport` with `concepts_created > 0` or
       `contradictions_detected > 0` when synthetic data is present.
       *(Deferred to the end-to-end deploy step after merge.)*

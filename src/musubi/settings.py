@@ -125,7 +125,7 @@ class Settings(BaseSettings):
         default=AnyHttpUrl("http://localhost:8100/v1"),
         description="URL of the Musubi API the MCP server should call. "
         "Defaults to localhost when the MCP server runs on the same host "
-        "as Musubi Core (the typical `mcp.musubi.mey.house` deployment).",
+        "as Musubi Core (the typical `mcp.musubi.example.local` deployment).",
     )
     musubi_token: SecretStr = Field(
         default=SecretStr(""),

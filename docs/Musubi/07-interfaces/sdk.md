@@ -43,7 +43,7 @@ monorepo's release; SDK-only changes still bump that release.
 from musubi.sdk import MusubiClient
 
 client = MusubiClient(
-    base_url="https://musubi.internal.example.com/v1",
+    base_url="https://musubi.example.local.example.com/v1",
     token="eyJhbGc...",
     timeout=30,                         # seconds, overall; per-call timeouts override
     retry=RetryPolicy.default(),
