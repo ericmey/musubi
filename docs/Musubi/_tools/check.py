@@ -489,8 +489,9 @@ def check_pr_closing_slices(rep: Report) -> None:
 
     Rule: if ``$PR_BODY`` contains a close-keyword referencing an Issue
     labelled ``slice``, that slice's frontmatter must be ``status: done``
-    in this PR. Pairs with the ACCEPTABLE exception at line ~458 which
-    already permits ``slice=done + issue_label=status:in-review``.
+    (or ``status: retired`` for slices superseded by an ADR). Pairs with
+    the ACCEPTABLE exception at line ~458 which already permits
+    ``slice=done + issue_label=status:in-review``.
 
     Runs only on pull_request events (keyed on ``$PR_BODY``). Push
     events skip this check silently.
@@ -525,6 +526,11 @@ def check_pr_closing_slices(rep: Report) -> None:
     slice_fms: dict[str, dict] = {}
     for p in sroot.glob("slice-*.md"):
         fm, _ = read_frontmatter(p)
+        # Filter to true slice notes, matching check_slices' behaviour.
+        # A `slice-*.md` file without `type: slice` is a template or
+        # README-style note and should not be indexed as a slice.
+        if fm.get("type") != "slice":
+            continue
         sid = fm.get("slice_id") or p.stem
         slice_fms[sid] = fm
 

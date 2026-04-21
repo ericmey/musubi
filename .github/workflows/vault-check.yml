@@ -48,7 +48,9 @@ jobs:
           # `check_pr_closing_slices` keys on this to enforce that a PR
           # closing a slice's tracking Issue already has `status: done`
           # in the slice frontmatter — otherwise the push-event vault
-          # check would fail only AFTER merge (too late). `||` leaves
-          # the var empty on push events, and the check silently skips.
+          # check would fail only AFTER merge (too late). On push events
+          # `github.event.pull_request` is null, so the expression
+          # evaluates to empty string, PR_BODY is empty, and the check
+          # silently skips.
           PR_BODY: ${{ github.event.pull_request.body }}
         run: python3 docs/Musubi/_tools/check.py all
