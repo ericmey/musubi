@@ -28,8 +28,7 @@ def _chat_body(content: str) -> dict[str, object]:
 
 def _items(n: int) -> list[dict[str, object]]:
     return [
-        {"id": f"id-{i}", "topic": f"topic-{i}", "summary": f"summary line {i}"}
-        for i in range(n)
+        {"id": f"id-{i}", "topic": f"topic-{i}", "summary": f"summary line {i}"} for i in range(n)
     ]
 
 

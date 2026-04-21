@@ -209,14 +209,14 @@ def build_lifecycle_jobs(
     demotion_jobs: Iterable[Job] | None = None,
     synthesis_jobs: Iterable[Job] | None = None,
     promotion_jobs: Iterable[Job] | None = None,
+    reflection_jobs: Iterable[Job] | None = None,
 ) -> list[Job]:
     """Compose the full job list the production worker drives.
 
     Real job builders replace the placeholder-lambdas emitted by
     :func:`build_default_jobs` for every name they cover. Any job
     name the builders haven't claimed keeps the placeholder (which
-    log-skips). Reflection / vault_reconcile still use placeholders
-    until their builder slices land.
+    log-skips). Only ``vault_reconcile`` still uses a placeholder.
 
     Injection points keep unit tests deterministic — a test can
     pass a stub Job without wiring a QdrantClient / Ollama / etc.
@@ -224,7 +224,13 @@ def build_lifecycle_jobs(
     from musubi.lifecycle.scheduler import build_default_jobs
 
     real_jobs: list[Job] = []
-    for group in (maturation_jobs, demotion_jobs, synthesis_jobs, promotion_jobs):
+    for group in (
+        maturation_jobs,
+        demotion_jobs,
+        synthesis_jobs,
+        promotion_jobs,
+        reflection_jobs,
+    ):
         if group is not None:
             real_jobs.extend(group)
 
@@ -268,7 +274,11 @@ async def _main_async() -> None:
     from musubi.config import get_settings
     from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
     from musubi.lifecycle.demotion import DemotionDeps, build_demotion_jobs
-    from musubi.lifecycle.emitters import ThoughtsPlaneEmitter
+    from musubi.lifecycle.emitters import (
+        ReflectionThoughtsEmitter,
+        ReflectionVaultWriter,
+        ThoughtsPlaneEmitter,
+    )
     from musubi.lifecycle.events import LifecycleEventSink
     from musubi.lifecycle.maturation import (
         MaturationCursor,
@@ -276,12 +286,14 @@ async def _main_async() -> None:
         default_ollama_client,
     )
     from musubi.lifecycle.promotion import PromotionDeps, build_promotion_jobs
+    from musubi.lifecycle.reflection import build_reflection_jobs
     from musubi.lifecycle.synthesis import (
         SynthesisCursor,
         SynthesisOllamaClient,
         build_synthesis_jobs,
     )
     from musubi.llm.promotion_client import HttpxPromotionClient
+    from musubi.llm.reflection_client import HttpxReflectionClient
     from musubi.planes.concept.plane import ConceptPlane
     from musubi.planes.curated.plane import CuratedPlane
     from musubi.planes.episodic.plane import EpisodicPlane
@@ -377,11 +389,40 @@ async def _main_async() -> None:
         ),
         lock_dir=lock_dir,
     )
+    # Reflection needs its own shaped adapters (async `write_reflection`,
+    # kw-only `emit`) — see `lifecycle/emitters.py`.
+    reflection_vault = ReflectionVaultWriter(
+        vault_root=settings.vault_path,
+        write_log=vault_writer.write_log,
+    )
+    reflection_thoughts = ReflectionThoughtsEmitter(
+        thoughts=thoughts_plane,
+        from_presence="lifecycle-worker",
+    )
+    reflection_llm = HttpxReflectionClient(
+        base_url=str(settings.ollama_url),
+        model=settings.llm_model,
+    )
+    # Homelab default: one reflection namespace for the whole deploy.
+    # A future namespace-discovery pass (like synthesis) can per-namespace
+    # this when we grow multiple presences.
+    reflection_namespace = "lifecycle-worker/ops/curated"
+    ref_jobs = build_reflection_jobs(
+        qdrant=qdrant,
+        sink=sink,
+        curated_plane=curated_plane,
+        vault=reflection_vault,
+        thoughts=reflection_thoughts,
+        llm=reflection_llm,
+        namespace=reflection_namespace,
+        lock_dir=lock_dir,
+    )
     jobs = build_lifecycle_jobs(
         maturation_jobs=mat_jobs,
         demotion_jobs=dem_jobs,
         synthesis_jobs=syn_jobs,
         promotion_jobs=prom_jobs,
+        reflection_jobs=ref_jobs,
     )
 
     runner = LifecycleRunner(jobs=jobs)
