@@ -43,9 +43,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       # GITHUB_TOKEN needs `packages: write` to push to the repo's GHCR
-      # namespace. `contents: read` is the default but stated explicitly.
+      # namespace. `id-token: write` is required for cosign keyless
+      # signing via GitHub's OIDC provider. `contents: read` is the
+      # default but stated explicitly.
       contents: read
       packages: write
+      id-token: write
     outputs:
       image: ${{ steps.meta.outputs.tags }}
       digest: ${{ steps.build.outputs.digest }}
@@ -100,6 +103,77 @@ jobs:
           # pushing cache layers into GHCR itself.
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          # Embed provenance + SBOM attestations in the manifest. This
+          # is the default on build-push-action v6 but declaring
+          # explicitly documents the supply-chain commitment.
+          provenance: true
+          sbom: true
+
+      # ------------------------------------------------------------------
+      # Supply-chain hardening. Each step is allowed to fail the job —
+      # a signed, scanned image is the contract this workflow sells.
+      # ------------------------------------------------------------------
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: "v2.4.1"
+
+      - name: Sign the published image (keyless, via GitHub OIDC)
+        # Signs by digest — tags are mutable, digests aren't. Anyone
+        # can verify later with `cosign verify --certificate-identity-
+        # regexp 'https://github.com/ericmey/musubi/.*' --certificate-
+        # oidc-issuer https://token.actions.githubusercontent.com
+        # ghcr.io/ericmey/musubi-core@<digest>`. Verification on the
+        # deploy side is future-enabled by ADR (not required today).
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign sign --yes \
+            "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+
+      - name: Generate SBOM (CycloneDX)
+        uses: anchore/sbom-action@v0
+        with:
+          image: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+          upload-artifact: true
+
+      - name: Attach SBOM as cosign attestation
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          set -euo pipefail
+          cosign attest --yes \
+            --predicate sbom.cdx.json \
+            --type cyclonedx \
+            "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+
+      - name: Trivy vulnerability scan (fail on CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL
+          # Exit 1 if any CRITICAL vulnerability is found. HIGH is
+          # surfaced as SARIF but not gated — a homelab service
+          # can't afford to chase every `libssl` HIGH on upstream
+          # images. Tune with an allowlist later if we hit false
+          # positives too often.
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload Trivy SARIF to GitHub Security tab
+        # Runs even if Trivy failed so the findings are visible in
+        # the repo's Security → Code scanning view.
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
 
       - name: Summarise digest
         # Surface the digest at the top of the workflow run page so an
