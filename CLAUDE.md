@@ -148,6 +148,7 @@ Additional handoff-readiness rules:
 - **Symmetric coverage.** If a class, module, or function docstring promises features X *and* Y, both need tests. "Defensive branch" is only a valid coverage-gap justification for validation / exception paths — never for a feature promised in the docstring.
 - **ADR-punted dependencies must fail loud, not silently no-op.** If you defer wiring a real dependency (e.g. production scheduler, LLM client) behind an ADR, the production path must `raise NotImplementedError` or emit at `ERROR`/`CRITICAL` with an explicit "THIS DOES NOT TICK / IS STUBBED" message. An `info` log is not a safety gate.
 - **Keep PR body and code in sync.** If the design evolved during implementation, rewrite the design note in the PR description before marking ready-for-review. Reviewers shouldn't have to reconcile stale intent against actual behaviour.
+- **Slice-closing PRs must flip `status: done` inside the PR.** GitHub auto-closes the tracking Issue on merge; post-merge the Vault check workflow requires the slice frontmatter to be `done` (or `retired`). If the PR body has `Closes #<slice-issue>` but the slice is still `in-review`, the push-event Vault check fails on `main` after the merge has already shipped. Flip slice frontmatter to `done`, sync the `status/done` tag, and drop the presence lock in the closing PR itself. The `pr` subcommand of `check.py` (driven by the `PR_BODY` env var on `pull_request` events) catches this at review time.
 
 ## When you ship
 
