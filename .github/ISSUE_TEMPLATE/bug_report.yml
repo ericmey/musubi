@@ -1,0 +1,87 @@
+name: 🐛 Bug report
+description: Something is broken or misbehaving in Musubi core, the SDK, an adapter, or the deployment.
+title: "bug: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report. Please fill in what you can — a clear, reproducible bug gets fixed much faster than a vague one.
+
+        **Security-related bugs do NOT go here.** If you've found a vulnerability, use [GitHub's private vulnerability reporting](https://github.com/ericmey/musubi/security/advisories/new) instead. See [SECURITY.md](https://github.com/ericmey/musubi/blob/main/SECURITY.md).
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing the bug.
+      placeholder: "Maturation sweep fails with ValidationError on items missing `updated_epoch`."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: Minimal steps. A code snippet or command is ideal.
+      placeholder: |
+        1. Start a fresh stack via `ansible-playbook deploy/ansible/deploy.yml`.
+        2. POST an episodic capture that omits `topics`.
+        3. Wait for the next maturation tick (hourly at :13 UTC).
+        4. Check `docker logs musubi-lifecycle-worker-1` — see the ValidationError.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead? Paste the stack trace or error message if there is one.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Musubi version
+      description: "`docker exec musubi-core-1 python -c 'import musubi; print(musubi.__version__)'` or your git SHA."
+      placeholder: "v0.3.0 / commit <sha>"
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, Qdrant / TEI / Ollama versions if relevant, GPU / CPU-only, Docker / Compose / Ansible deploy.
+      placeholder: |
+        - OS: Ubuntu 24.04
+        - Python: 3.12.7
+        - Deploy: Docker Compose via deploy/ansible/deploy.yml
+        - GPU: RTX 3080 (CUDA 12.4) / or CPU-only
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant log lines — from `docker logs`, the ansible playbook, or wherever. Redact any secrets first.
+      render: shell
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and haven't found a duplicate.
+          required: true
+        - label: This is not a security vulnerability (if it is, I'll use the private reporting channel instead).
+          required: true
