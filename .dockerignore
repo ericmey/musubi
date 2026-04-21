@@ -1,0 +1,46 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Python dev caches
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.hypothesis
+.coverage
+htmlcov
+
+# Virtualenv + uv runtime caches (rebuilt inside the image)
+.venv
+.uv-cache
+
+# IDE / editor state
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+
+# Test + dev-only directories not needed in the runtime image
+tests
+docs
+deploy
+.github
+.claude
+.agents
+.cursor
+.operator
+.agent-context.local.md
+.agent-context.local/
+.agent-brief*.local.md
+.env.example
+
+# Files that would bloat the build context
+*.log
+*.md
+!README.md

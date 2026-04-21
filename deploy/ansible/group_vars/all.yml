@@ -16,12 +16,21 @@ musubi_data_dirs:
   - /var/lib/musubi/qdrant-storage
   - /var/lib/musubi/tei-models
   - /var/lib/musubi/ollama-models
+  - /var/lib/musubi/lifecycle
 
 musubi_core_port: 8100
-musubi_core_image: "ghcr.io/example/musubi-core@sha256:<core-digest>"
-musubi_qdrant_image: "qdrant/qdrant@sha256:<qdrant-digest>"
-musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference@sha256:<tei-digest>"
-musubi_ollama_image: "ollama/ollama@sha256:<ollama-digest>"
+# Musubi Core image. For now this is built locally (see repo `Dockerfile`) and
+# transferred to the target via `docker save | ssh | docker load`. When a
+# GHCR publish workflow lands, flip this to `ghcr.io/ericmey/musubi-core:<tag>`
+# and pin by digest.
+musubi_core_image: "musubi-core:dev"
+musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
+# TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
+# compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),
+# `hopper-*` (H100/H200), `cpu-*` (no GPU). See
+# https://github.com/huggingface/text-embeddings-inference for the full list.
+musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference:86-1.2.0"
+musubi_ollama_image: "ollama/ollama:latest"
 musubi_ollama_model: "qwen3:4b"
 
 musubi_required_packages:
