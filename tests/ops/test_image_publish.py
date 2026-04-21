@@ -151,18 +151,35 @@ def test_workflow_attaches_sbom_as_cosign_attestation() -> None:
 
 
 def test_workflow_trivy_scans_for_critical_cves_and_fails_on_finding() -> None:
+    """At least one Trivy step must fail the build on CRITICAL findings.
+    Workflow may have a table-format pre-scan for log visibility (exit-code
+    0) AND the SARIF gate (exit-code 1); only the gate matters here."""
     steps = _job_steps()
-    trivy = [s for s in steps if "aquasecurity/trivy-action" in str(s.get("uses", ""))]
-    assert trivy, "missing aquasecurity/trivy-action step"
-    w = trivy[0].get("with") or {}
-    # Must scan the published digest, not a mutable tag.
-    assert "@${{ steps.build.outputs.digest }}" in str(w.get("image-ref", "")), (
-        "Trivy must scan the image by digest"
+    trivy_steps = [s for s in steps if "aquasecurity/trivy-action" in str(s.get("uses", ""))]
+    assert trivy_steps, "missing aquasecurity/trivy-action step"
+
+    gate = None
+    for s in trivy_steps:
+        w = s.get("with") or {}
+        if str(w.get("exit-code")) == "1":
+            gate = w
+            break
+    assert gate is not None, (
+        "no Trivy step with exit-code: 1 — at least one step must gate the build"
     )
-    # Must fail the job on findings.
-    assert str(w.get("exit-code")) == "1", "Trivy exit-code must be 1 to gate the build"
-    severity = str(w.get("severity", "")).upper()
-    assert "CRITICAL" in severity, "Trivy severity must include CRITICAL"
+    assert "@${{ steps.build.outputs.digest }}" in str(gate.get("image-ref", "")), (
+        "Trivy gate must scan the image by digest"
+    )
+    severity = str(gate.get("severity", "")).upper()
+    assert "CRITICAL" in severity, "Trivy gate severity must include CRITICAL"
+
+
+def test_workflow_grants_security_events_write_for_sarif_upload() -> None:
+    """`upload-sarif@v3` requires security-events:write on the job token."""
+    perms = _job().get("permissions") or {}
+    assert perms.get("security-events") == "write", (
+        "missing security-events:write — upload-sarif fails without it"
+    )
 
 
 def test_workflow_uploads_trivy_sarif_to_code_scanning() -> None:
