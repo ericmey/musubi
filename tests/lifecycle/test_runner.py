@@ -231,3 +231,59 @@ def test_build_lifecycle_jobs_without_maturation_keeps_placeholders() -> None:
     all_jobs = build_lifecycle_jobs()
     names = {j.name for j in all_jobs}
     assert names == {j.name for j in build_default_jobs()}
+
+
+def test_build_lifecycle_jobs_wires_demotion_builders() -> None:
+    """demotion_episodic + demotion_concept come from the real builder
+    when passed; other sweeps fall back to placeholders."""
+    dem_stubs = [
+        Job(
+            name="demotion_episodic",
+            trigger_kind="cron",
+            trigger_kwargs={"day_of_week": "sun", "hour": 3, "minute": 45},
+            func=lambda: None,
+            grace_time_s=3600,
+        ),
+        Job(
+            name="demotion_concept",
+            trigger_kind="cron",
+            trigger_kwargs={"hour": 5, "minute": 0},
+            func=lambda: None,
+            grace_time_s=3600,
+        ),
+    ]
+    jobs = build_lifecycle_jobs(demotion_jobs=dem_stubs)
+    by_name = {j.name: j for j in jobs}
+    # The demotion slots carry the real stubs.
+    assert by_name["demotion_episodic"] is dem_stubs[0]
+    assert by_name["demotion_concept"] is dem_stubs[1]
+    # Other names stay as the default placeholders.
+    assert by_name["synthesis"].func.__name__ == "_run"
+    # Full documented set is still present.
+    documented = {j.name for j in build_default_jobs()}
+    assert documented.issubset(by_name.keys())
+
+
+def test_build_lifecycle_jobs_merges_maturation_and_demotion() -> None:
+    """Both real builder groups get composed together with placeholders
+    for everything else."""
+    mat_stub = Job(
+        name="maturation_episodic",
+        trigger_kind="cron",
+        trigger_kwargs={"minute": 13},
+        func=lambda: None,
+        grace_time_s=900,
+    )
+    dem_stub = Job(
+        name="demotion_concept",
+        trigger_kind="cron",
+        trigger_kwargs={"hour": 5, "minute": 0},
+        func=lambda: None,
+        grace_time_s=3600,
+    )
+    jobs = build_lifecycle_jobs(maturation_jobs=[mat_stub], demotion_jobs=[dem_stub])
+    by_name = {j.name: j for j in jobs}
+    assert by_name["maturation_episodic"] is mat_stub
+    assert by_name["demotion_concept"] is dem_stub
+    # A name from neither real group stays placeholder.
+    assert by_name["synthesis"].func.__name__ == "_run"

@@ -203,25 +203,58 @@ def _utc_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
-def build_lifecycle_jobs(*, maturation_jobs: Iterable[Job] | None = None) -> list[Job]:
+def build_lifecycle_jobs(
+    *,
+    maturation_jobs: Iterable[Job] | None = None,
+    demotion_jobs: Iterable[Job] | None = None,
+) -> list[Job]:
     """Compose the full job list the production worker drives.
 
-    Maturation jobs come from :func:`build_maturation_jobs` — real
-    sweep implementations wrapped in file locks. Everything else
-    (synthesis, promotion, demotion_*, reflection, vault_reconcile)
-    falls back to the placeholder lambdas from
-    :func:`build_default_jobs`; follow-up slices will provide real
-    builders for each.
+    Real job builders replace the placeholder-lambdas emitted by
+    :func:`build_default_jobs` for every name they cover. Any job
+    name the builders haven't claimed keeps the placeholder (which
+    log-skips). Synthesis / promotion / reflection / vault_reconcile
+    still use placeholders until their builder slices land.
 
-    ``maturation_jobs`` is injectable so unit tests can pass a
-    deterministic stub without wiring a QdrantClient / Ollama / etc.
+    Injection points keep unit tests deterministic — a test can
+    pass a stub Job without wiring a QdrantClient / Ollama / etc.
     """
     from musubi.lifecycle.scheduler import build_default_jobs
 
-    mat_list = list(maturation_jobs) if maturation_jobs is not None else []
-    mat_names = {j.name for j in mat_list}
-    placeholders = [j for j in build_default_jobs() if j.name not in mat_names]
-    return mat_list + placeholders
+    real_jobs: list[Job] = []
+    for group in (maturation_jobs, demotion_jobs):
+        if group is not None:
+            real_jobs.extend(group)
+
+    real_names = {j.name for j in real_jobs}
+    placeholders = [j for j in build_default_jobs() if j.name not in real_names]
+    return real_jobs + placeholders
+
+
+class _TEICompositeEmbedder:
+    """Embedder Protocol impl backed by three TEI clients.
+
+    Duplicated from :mod:`musubi.api.bootstrap` deliberately — the
+    lifecycle worker boots without touching the API dependency tree,
+    and pulling `api/` into this module would break the
+    "lifecycle doesn't import api" layer rule. The class itself is
+    20 lines of glue; promote to a shared home only when a third
+    caller needs it.
+    """
+
+    def __init__(self, *, dense: Any, sparse: Any, reranker: Any) -> None:
+        self._dense = dense
+        self._sparse = sparse
+        self._reranker = reranker
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        return await self._dense.embed_dense(texts)  # type: ignore[no-any-return]
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        return await self._sparse.embed_sparse(texts)  # type: ignore[no-any-return]
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return await self._reranker.rerank(query, candidates)  # type: ignore[no-any-return]
 
 
 async def _main_async() -> None:
@@ -231,12 +264,18 @@ async def _main_async() -> None:
     from qdrant_client import QdrantClient
 
     from musubi.config import get_settings
+    from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
+    from musubi.lifecycle.demotion import DemotionDeps, build_demotion_jobs
+    from musubi.lifecycle.emitters import ThoughtsPlaneEmitter
     from musubi.lifecycle.events import LifecycleEventSink
     from musubi.lifecycle.maturation import (
         MaturationCursor,
         build_maturation_jobs,
         default_ollama_client,
     )
+    from musubi.planes.concept.plane import ConceptPlane
+    from musubi.planes.episodic.plane import EpisodicPlane
+    from musubi.planes.thoughts.plane import ThoughtsPlane
 
     logging.basicConfig(
         level=logging.INFO,
@@ -254,7 +293,22 @@ async def _main_async() -> None:
     cursor = MaturationCursor(db_path=settings.lifecycle_sqlite_path)
     ollama = default_ollama_client()
 
+    embedder = _TEICompositeEmbedder(
+        dense=TEIDenseClient(base_url=str(settings.tei_dense_url)),
+        sparse=TEISparseClient(base_url=str(settings.tei_sparse_url)),
+        reranker=TEIRerankerClient(base_url=str(settings.tei_reranker_url)),
+    )
+
+    episodic_plane = EpisodicPlane(client=qdrant, embedder=embedder)
+    concept_plane = ConceptPlane(client=qdrant, embedder=embedder)
+    thoughts_plane = ThoughtsPlane(client=qdrant, embedder=embedder)
+    thought_emitter = ThoughtsPlaneEmitter(
+        thoughts=thoughts_plane,
+        from_presence="lifecycle-worker",
+    )
+
     lock_dir = Path(settings.lifecycle_sqlite_path).parent / "locks"
+
     mat_jobs = build_maturation_jobs(
         client=qdrant,
         sink=sink,
@@ -262,7 +316,17 @@ async def _main_async() -> None:
         cursor=cursor,
         lock_dir=lock_dir,
     )
-    jobs = build_lifecycle_jobs(maturation_jobs=mat_jobs)
+    dem_jobs = build_demotion_jobs(
+        deps=DemotionDeps(
+            qdrant=qdrant,
+            episodic_plane=episodic_plane,
+            concept_plane=concept_plane,
+            events=sink,
+            thoughts=thought_emitter,
+        ),
+        lock_dir=lock_dir,
+    )
+    jobs = build_lifecycle_jobs(maturation_jobs=mat_jobs, demotion_jobs=dem_jobs)
 
     runner = LifecycleRunner(jobs=jobs)
     runner.install_signal_handlers()
