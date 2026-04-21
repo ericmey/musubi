@@ -3,7 +3,7 @@ title: "Slice: LiveKit adapter end-to-end tests against live Musubi"
 slice_id: slice-adapter-livekit-e2e
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: claude-code-opus-4-7
 phase: "7 Adapters"
 tags: [section/slices, status/in-progress, type/slice, livekit, adapter, integration]
@@ -21,7 +21,7 @@ blocks: []
 > harness. The harness landed with [[_slices/slice-ops-integration-harness]];
 > this slice closes the integration gap.
 
-**Phase:** 7 Adapters · **Status:** `in-progress` · **Owner:** `claude-code-opus-4-7`
+**Phase:** 7 Adapters · **Status:** `in-review` · **Owner:** `claude-code-opus-4-7`
 
 ## Why this slice exists
 
@@ -102,6 +102,16 @@ bullet 5: test_e2e_session_end_emits_retrievable_thought
 
 Slice spec drafted. Existing integration harness (`tests/integration/conftest.py::live_stack`) already provides a docker-compose Musubi + real Qdrant + real TEI/Ollama — the new test file reuses it directly. Synthetic LiveKit event generators in `_livekit_fixtures.py` emit the four adapter entrypoints with realistic payloads.
 
+### 2026-04-21 — claude-code-opus-4-7 (handoff)
+
+Tests landed at [tests/integration/test_livekit_e2e.py](../../tests/integration/test_livekit_e2e.py) + [tests/integration/_livekit_fixtures.py](../../tests/integration/_livekit_fixtures.py). All five bullets implemented 1-to-1. Local gates: `ruff check`, `mypy --strict`, `make check` (unit + coverage), `make agent-check` — all green (warnings only: two pre-existing "depends-on not reverse-linked as blocks" on target slices I can't edit from this slice's owns_paths).
+
+**Spec adjustment.** Bullet 3 originally said *"ContextCache short-circuits duplicate captures"* — incorrect: the `ContextCache` in the adapter is a retrieve cache, not a capture gate. Revised bullet asserts the end-to-end semantic that actually holds: Musubi's capture pipeline collapses two identical captures into one persisted row, via either merge or dedup-signal response. Commit trailer: `spec-update: docs/Musubi/_slices/slice-adapter-livekit-e2e.md`.
+
+**Out-of-band finding.** `make tc-coverage SLICE=<id>` points at `docs/architecture/_slices/` but the vault lives at `docs/Musubi/_slices/` — tool path bug in [docs/Musubi/_tools/tc_coverage.py:45](../_tools/tc_coverage.py) (`VAULT = ROOT / "docs" / "architecture"`). Not in this slice's owned_paths; flagging here so the next slice with `_tools/**` ownership can fix. Closure-Rule audit performed manually: all 5 bullets are in the passing state (one test per bullet), none skipped, none out-of-scope.
+
+**Not in scope.** A real LiveKit SFU. The WebRTC edge belongs to `livekit-agents` upstream; the `LiveKitAdapter → Musubi` edge is ours and is what these tests cover.
+
 ## PR links
 
-- _(to be added after push)_
+- https://github.com/ericmey/musubi/pull/184 — initial test contract + handoff
