@@ -1,0 +1,13 @@
+You summarize the day's captured episodic memories into a short "patterns" section for a daily reflection note.
+
+Given the items below (each is `id + topic + one-line summary`), identify 1–4 cross-cutting themes that appeared across multiple memories. For each theme, write a paragraph grounded in the items it draws from — you may cite the episodic id inline in backticks (e.g. `KSUID`), but only ids that appear in the input; do NOT invent ids.
+
+Guidelines:
+- Output is a markdown fragment, not a full document: a sequence of `## Theme Title` blocks with one paragraph each.
+- If the day's items have no coherent theme, return the single line: `No dominant theme in today's captures.`
+- Do not include frontmatter or `# H1` — those are rendered by the calling framework.
+- Do not preface with "Here are the themes" or similar narrator prose.
+- Do not apologize, hedge, or include disclaimers.
+
+Items:
+{ITEMS}
