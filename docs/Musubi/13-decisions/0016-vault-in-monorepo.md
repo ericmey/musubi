@@ -25,7 +25,7 @@ superseded-by: ""
 
 The situation changed quickly:
 
-- V2 development is about to spin up **multiple concurrent coding agents** (Claude Code, Claude Cowork, Codex, and occasionally Grok / Gemini) working on different slices.
+- The rebuild was about to spin up **multiple concurrent coding agents** (Claude Code, Claude Cowork, Codex, and occasionally Grok / Gemini) working on different slices.
 - Every agent, regardless of provider, needs to read the same specs, follow the same guardrails, and update the same slice-state notes to pick up work safely.
 - Keeping the vault in a sibling directory (`~/Vaults/musubi/` outside the code repo) meant each agent needed two clones, cross-repo references, and its own "how to find the vault" onboarding.
 - PRs that correct a spec alongside code (the `spec-update:` trailer convention from [[CLAUDE]]) had to touch two repos with no atomic landing point.

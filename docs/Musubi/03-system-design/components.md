@@ -113,8 +113,8 @@ See [[08-deployment/gpu-inference-topology]] for the VRAM budget and load policy
 
 ## Object Store
 
-- **V1**: plain filesystem at `/srv/musubi/artifacts/`. Content-addressed subdirs: `/sha256[:2]/sha256[2:]/`.
-- **Post-V1 (when multi-host)**: MinIO with S3 API. Drop-in replacement via the `musubi/store/` abstraction.
+- **Today (single-host)**: plain filesystem at `/srv/musubi/artifacts/`. Content-addressed subdirs: `/sha256[:2]/sha256[2:]/`.
+- **Future (when multi-host)**: MinIO with S3 API. Drop-in replacement via the `musubi/store/` abstraction.
 
 ## Adapter projects (separate repos)
 
