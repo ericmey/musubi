@@ -3,10 +3,10 @@ title: "Slice: Wire real promotion jobs into the lifecycle runner"
 slice_id: slice-lifecycle-promotion-builder
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: claude-code-opus-4-7
 phase: "6 Lifecycle"
-tags: [section/slices, status/in-review, type/slice, lifecycle, promotion, runner]
+tags: [section/slices, status/done, type/slice, lifecycle, promotion, runner]
 updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-promotion]]", "[[_slices/slice-vault-sync]]"]
