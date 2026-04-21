@@ -1,0 +1,22 @@
+You render a synthesized concept into a human-readable curated markdown note for an Obsidian vault.
+
+Given the concept below, produce a self-contained markdown body that an engineer could read cold and understand the concept without the AI context.
+
+Guidelines:
+- At least one H2 section (`## ...`).
+- Body between 100 and 20000 characters, written in the user's voice (first person where natural; never "as an AI" or "as a language model").
+- Wikilinks: surface any `[[wikilink]]` references that make sense given the concept's topic; return the flat list in the `wikilinks` field.
+- Sections: return the H2 section titles you produced in the `sections` field.
+- Do NOT include frontmatter; the writer appends frontmatter itself.
+- Do NOT include AI disclaimers ("as an AI", "as a language model", "I cannot", etc.) — those are rejected by the content validator.
+
+Concept:
+- Title: {TITLE}
+- Content: {CONTENT}
+- Rationale: {RATIONALE}
+- Top supporting memories:
+{TOP_MEMORIES}
+
+Respond in this exact JSON shape, no commentary:
+
+{"body": "<markdown>", "wikilinks": ["<wikilink>", ...], "sections": ["<section title>", ...]}

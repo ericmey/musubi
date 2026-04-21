@@ -3,10 +3,10 @@ title: "Slice: Wire real promotion jobs into the lifecycle runner"
 slice_id: slice-lifecycle-promotion-builder
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: claude-code-opus-4-7
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice, lifecycle, promotion, runner]
+tags: [section/slices, status/in-review, type/slice, lifecycle, promotion, runner]
 updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-promotion]]", "[[_slices/slice-vault-sync]]"]
@@ -20,7 +20,7 @@ blocks: []
 > that composes `run_promotion_sweep` against live `PromotionLLM`,
 > `VaultWriter`, and `ThoughtEmitter` implementations.
 
-**Phase:** 6 Lifecycle · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 6 Lifecycle · **Status:** `in-review` · **Owner:** `claude-code-opus-4-7`
 
 ## Why this slice exists
 
@@ -84,8 +84,25 @@ Plus:
 
 ## Work log
 
-_(empty — awaiting claim)_
+### 2026-04-21 — claude-code-opus-4-7
+
+- `src/musubi/llm/prompts/promotion-render/v1.txt` + `src/musubi/llm/promotion_client.py`:
+  `HttpxPromotionClient` satisfying `PromotionLLM`. Raises on failure (no `None`-return) so the
+  sweep's existing try/except records a specific rejection reason.
+- `src/musubi/lifecycle/promotion.py`: added `build_promotion_jobs()` helper wired to
+  `run_promotion_sweep` behind `file_lock("promotion.lock")` at cron `04:00` UTC.
+- `src/musubi/lifecycle/runner.py`: `build_lifecycle_jobs()` grew a `promotion_jobs=` kwarg;
+  `_main_async()` composes the real `VaultWriter` (from `src/musubi/vault/writer.py`) + the
+  `HttpxPromotionClient` + the shared `ThoughtsPlaneEmitter` into the production
+  `PromotionDeps`.
+- `tests/llm/test_promotion_client.py` (new): 8 tests covering happy path, network / 5xx,
+  invalid envelope, and every validation branch (no H2, AI-disclaimer, body too short).
+- `tests/lifecycle/test_runner.py`: two new wiring tests
+  (`_wires_promotion_builders`, `_merges_all_four_builder_groups`).
+
+**Local verification:** `make check` → 1134 passed / 231 skipped. Commits follow
+tests-first ordering this time (per reviewer feedback on #165).
 
 ## PR links
 
-_(empty)_
+- PR — to be opened after local push.
