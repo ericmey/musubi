@@ -173,6 +173,13 @@ jobs:
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL
+          # `limit-severities-for-sarif` forces trivy-action to apply
+          # the `severity:` filter when emitting SARIF. Without it the
+          # action generates a SARIF report containing findings of ALL
+          # severities, and `exit-code: 1` then fires on any non-empty
+          # report — turning a CRITICAL-only gate into a de-facto
+          # HIGH+CRITICAL gate.
+          limit-severities-for-sarif: "true"
           # Exit 1 if any CRITICAL vulnerability is found. HIGH is
           # surfaced in the prior table step for visibility but NOT
           # gated — a homelab service can't afford to chase every
