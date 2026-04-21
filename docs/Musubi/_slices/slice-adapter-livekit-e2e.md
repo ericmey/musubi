@@ -3,10 +3,10 @@ title: "Slice: LiveKit adapter end-to-end tests against live Musubi"
 slice_id: slice-adapter-livekit-e2e
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: claude-code-opus-4-7
 phase: "7 Adapters"
-tags: [section/slices, status/in-review, type/slice, livekit, adapter, integration]
+tags: [section/slices, status/done, type/slice, livekit, adapter, integration]
 updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-ops-integration-harness]]"]
@@ -21,7 +21,7 @@ blocks: []
 > harness. The harness landed with [[_slices/slice-ops-integration-harness]];
 > this slice closes the integration gap.
 
-**Phase:** 7 Adapters · **Status:** `in-review` · **Owner:** `claude-code-opus-4-7`
+**Phase:** 7 Adapters · **Status:** `done` · **Owner:** `claude-code-opus-4-7`
 
 ## Why this slice exists
 
