@@ -54,12 +54,14 @@ from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import wraps
+from pathlib import Path
 from typing import Any, Protocol
 
 from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
 from musubi.lifecycle.events import LifecycleEventSink
+from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.observability import default_registry
 from musubi.planes.curated import CuratedPlane
 from musubi.types.common import KSUID, Namespace, generate_ksuid, utc_now
@@ -868,12 +870,79 @@ def _sha256(text: str) -> str:
 _ = (UTC, Any)
 
 
+# ---------------------------------------------------------------------------
+# Scheduler integration
+# ---------------------------------------------------------------------------
+
+
+def build_reflection_jobs(
+    *,
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+    curated_plane: CuratedPlane,
+    vault: VaultWriter,
+    thoughts: ThoughtEmitter,
+    llm: ReflectionLLM,
+    namespace: Namespace,
+    lock_dir: Path,
+    config: ReflectionConfig | None = None,
+) -> list[Job]:
+    """Return the one-element Job list matching
+    :func:`musubi.lifecycle.scheduler.build_default_jobs`'s
+    ``reflection_digest`` entry (daily at 06:00 UTC).
+
+    File lock ``lock_dir/reflection.lock`` serialises against any other
+    worker attempting the same digest.
+    """
+    import asyncio as _asyncio
+
+    lock_path = lock_dir / "reflection.lock"
+
+    async def _run_once() -> None:
+        try:
+            result = await run_reflection_sweep(
+                qdrant=qdrant,
+                sink=sink,
+                curated_plane=curated_plane,
+                vault=vault,
+                thoughts=thoughts,
+                llm=llm,
+                namespace=namespace,
+                config=config,
+            )
+            log.info(
+                "reflection-done path=%s sections=%s",
+                result.path,
+                result.sections,
+            )
+        except Exception:
+            log.exception("reflection-failed")
+
+    def _runner() -> None:
+        with file_lock(lock_path) as acquired:
+            if not acquired:
+                log.info("lifecycle-job=reflection_digest lock-held; skipping run")
+                return
+            _asyncio.run(_run_once())
+
+    return [
+        Job(
+            name="reflection_digest",
+            trigger_kind="cron",
+            trigger_kwargs={"hour": 6, "minute": 0},
+            func=_runner,
+            grace_time_s=3600,
+        ),
+    ]
+
+
 __all__ = [
     "ReflectionConfig",
     "ReflectionLLM",
     "ReflectionResult",
     "ThoughtEmitter",
     "VaultWriter",
+    "build_reflection_jobs",
     "default_reflection_llm",
     "default_thought_emitter",
     "default_vault_writer",

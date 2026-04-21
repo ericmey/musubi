@@ -3,10 +3,10 @@ title: "Slice: Wire real reflection jobs into the lifecycle runner"
 slice_id: slice-lifecycle-reflection-builder
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-review
+owner: claude-code-opus-4-7
 phase: "6 Lifecycle"
-tags: [section/slices, status/ready, type/slice, lifecycle, reflection, runner]
+tags: [section/slices, status/in-review, type/slice, lifecycle, reflection, runner]
 updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-lifecycle-reflection]]", "[[_slices/slice-vault-sync]]"]
@@ -78,8 +78,34 @@ Plus:
 
 ## Work log
 
-_(empty — awaiting claim)_
+### 2026-04-21 — claude-code-opus-4-7
+
+Landed on the same day as the other P3 builders. Completes the four-
+builder P3 pass; only `vault_reconcile` remains on its placeholder.
+
+- `src/musubi/llm/prompts/reflection/v1.txt` + `src/musubi/llm/reflection_client.py`:
+  `HttpxReflectionClient` satisfying `ReflectionLLM`. Returns `None` on outage
+  (matches the maturation/synthesis pattern) — the sweep substitutes the
+  documented skip notice.
+- `src/musubi/lifecycle/emitters.py` (additive): new `ReflectionVaultWriter`
+  (async `write_reflection` wrapping the sync vault writer + WriteLog for
+  echo-filter) and `ReflectionThoughtsEmitter` (adapts the reflection
+  sweep's kw-only `emit(namespace, channel, content, importance)` over
+  `ThoughtsPlane.send`).
+- `src/musubi/lifecycle/reflection.py`: added `build_reflection_jobs()`
+  wired to `run_reflection_sweep` behind `file_lock("reflection.lock")`
+  at cron `06:00` UTC.
+- `src/musubi/lifecycle/runner.py`: `build_lifecycle_jobs()` grew a
+  `reflection_jobs=` kwarg; `_main_async()` composes the real
+  `HttpxReflectionClient` + `ReflectionVaultWriter` + `ReflectionThoughtsEmitter`.
+- `tests/llm/test_reflection_client.py` (new): 7 tests covering happy
+  path, empty-items short-circuit, 4 failure modes.
+- `tests/lifecycle/test_runner.py`: two new wiring tests
+  (`_wires_reflection_builders`, `_merges_all_five_builder_groups`).
+
+**Local verification:** `make check` → 1143 passed / 231 skipped. Tests-first
+commit ordering respected.
 
 ## PR links
 
-_(empty)_
+- PR — to be opened after push.
