@@ -219,6 +219,59 @@ Those are operator actions with the runbook open.
 
 - _(none yet; may open one to slice-api-rate-limits for Kong rate-limit plugin config if the in-app enforcement shape demands it)_
 
+### 2026-04-20 — operator + aoi — first real deploy executed
+
+The playbooks shipped in PR #121 were not executed end-to-end against a real
+host at merge time. Tonight's deploy session did that; several real bugs
+surfaced and were fixed in follow-up PRs. All fixes are on `v2`.
+
+**Outcome:** full Musubi compose stack is live on `musubi.example.local`. All six
+services healthy. `curl http://10.0.0.45:8100/v1/ops/health →
+{"status":"ok","version":"v0"}`. See [[00-index/work-log]] 2026-04-20 entry
+for the full ledger.
+
+**Bugs surfaced + fixed (not originally in this slice's Test Contract because
+no end-to-end run had ever happened):**
+
+1. [PR #146] Inventory hard-coded `<placeholder>` literals; replaced with
+   `{{ jinja_vars }}` + added `setup-control-host.sh` for yua.
+2. [PR #147] `bootstrap.yml` couldn't install `docker-ce` without first
+   adding Docker's apt repo. Same for `nvidia-container-toolkit`. The pinned
+   `nvidia-driver-560-server` would have downgraded the 580.126.20 on the
+   target host. Added pre-tasks for both repos + an idempotent driver probe.
+3. [PR #148] Musubi Core had no `Dockerfile` in the repo (compose referenced
+   `ghcr.io/example/musubi-core@sha256:<core-digest>` — no such image). Wrote
+   the Dockerfile. Rewrote `.env.production.j2` to match `settings.py` (was
+   ~half missing + wrong field names). TEI image tag `1.5-cuda` doesn't
+   exist on GHCR → correct form is `86-1.2.0` (Ampere compute-8.6). TEI
+   `--pooling rerank` not a valid value; rerankers auto-detect. All health-
+   checks moved off `curl` to `bash /dev/tcp` / `ollama list` (minimal
+   images have no curl). Ollama healthcheck decoupled from model-pull state
+   (would deadlock otherwise). `MUSUBI_ALLOW_PLAINTEXT=true` set so Core
+   can talk plain HTTP to in-bridge Qdrant.
+
+**Operator-only one-time steps** (outside the playbooks; captured in
+`.agent-context.local.md` so they reproduce):
+
+- Native Qdrant / Ollama / Open WebUI purged before first run.
+- HF cache rsynced into `/var/lib/musubi/tei-models/` so SPLADE v3 loads
+  from local cache (HF-gated; would 401).
+- yua's deploy key added to `ericmey/musubi` on GitHub.
+
+**What the slice's Test Contract did NOT catch** (follow-up for the
+post-incident review):
+
+- Structural tests of the runbook/systemd/smoke/Kong files passed in CI
+  but no test actually ran `ansible-playbook` against a real (or
+  containerised-real) target. That's why the repo-missing, env-template-
+  wrong, TEI-tag-invalid, curl-missing problems all landed as production
+  bugs instead of CI failures. A `tests/ops/test_compose_boots.py` that
+  stands the stack up in a nested VM or on a self-hosted runner would have
+  caught most of these.
+
 ## PR links
 
-- [PR #121](https://github.com/ericmey/musubi/pull/121)
+- [PR #121](https://github.com/ericmey/musubi/pull/121) — original slice.
+- [PR #146](https://github.com/ericmey/musubi/pull/146) — inventory parametrisation + control-host setup.
+- [PR #147](https://github.com/ericmey/musubi/pull/147) — bootstrap apt repo fixes.
+- [PR #148](https://github.com/ericmey/musubi/pull/148) — musubi-core Dockerfile + compose/env fixes (the deploy-unblocker).

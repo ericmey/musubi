@@ -4,7 +4,7 @@ section: 00-index
 type: index
 status: living-document
 tags: [section/index, status/living-document, type/index]
-updated: 2026-04-18
+updated: 2026-04-20
 up: "[[00-index/index]]"
 reviewed: true
 ---
@@ -26,6 +26,89 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 *vault-visible* events.
 
 ## Entries
+
+### 2026-04-20 — Musubi stack live on `musubi.example.local` (first real deploy)
+
+The six-container Musubi compose stack came up end-to-end against the real
+target host for the first time. All services report `healthy`:
+
+```
+musubi-core-1           healthy   /v1/ops/health → {"status":"ok","version":"v0"}
+musubi-ollama-1         healthy   qwen3:4b loaded (per [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]])
+musubi-qdrant-1         healthy   v1.17.1, api-key-auth on
+musubi-tei-dense-1      healthy   BGE-M3
+musubi-tei-reranker-1   healthy   BGE-reranker-v2-m3
+musubi-tei-sparse-1     healthy   SPLADE v3
+```
+
+GPU: 3.3 / 10 GiB VRAM used; room for query-time batching.
+
+### Getting there surfaced a chain of real bugs in the playbooks
+
+Every one of these was a spec-vs-reality gap that `slice-ops-first-deploy`
+could not have caught because it shipped without ever running against a real
+host. Each fix landed via PR tonight:
+
+- **#146** `chore(ansible): parametrise inventory + yua control-host workflow` —
+  replaced `<placeholder>` literals in `deploy/ansible/inventory.yml` with
+  `{{ jinja_vars }}`, added `deploy/ansible/setup-control-host.sh` to seed
+  `~/.musubi-secrets/` on yua. Musubi playbooks are now run from yua alongside
+  the homelab fleet ansible; vault password is shared (`~/ansible/.vault_pass`).
+- **#147** `chore(ansible): bootstrap.yml adds Docker + NVIDIA apt repos` —
+  `bootstrap.yml` was missing the Docker-CE and NVIDIA container-toolkit apt
+  repo setup; first `apt install` failed immediately. Driver install pattern
+  changed from the rotted `nvidia-driver-560-server` pin to
+  `ubuntu-drivers autoinstall` guarded by an `nvidia-smi` probe (so the
+  pre-staged 580.126.20 isn't downgraded).
+- **#148** `feat(ops): musubi-core Dockerfile + compose/env template fixes` —
+  wrote the missing Musubi Core `Dockerfile` (was only referenced as
+  `ghcr.io/example/musubi-core:<digest>` — no such image existed). Rewrote
+  the `.env.production.j2` template against the real `settings.py` field
+  set (it was ~half-missing). Corrected TEI image tag from `1.5-cuda`
+  (doesn't exist on GHCR) to `86-1.2.0` (Ampere compute-8.6 variant). Dropped
+  `--pooling rerank` from the reranker service (rerankers are auto-detected
+  in TEI 1.x; only `cls / mean / splade` are valid pooling values). Decoupled
+  the Ollama healthcheck from model-pull state (the old check deadlocked
+  against `core.depends_on`). Moved every healthcheck off `curl` (not
+  installed in the minimal Qdrant / Ollama / TEI images) to either `bash
+  /dev/tcp` or the service's own CLI. Set `MUSUBI_ALLOW_PLAINTEXT=true` so
+  Core talks HTTP to in-bridge Qdrant (TLS inside the compose network is
+  orthogonal; Kong-deferred per ADR 0024 means Core isn't externally
+  exposed either).
+
+### One-time operator steps that happened outside the playbooks
+
+- `ericmey`'s Mac pubkey added to `yua`'s `authorized_keys` (via Proxmox
+  console — the prior laptop's key didn't follow).
+- `yua`'s `id_ed25519_yua` registered as a read-only GitHub deploy key on
+  `ericmey/musubi` so yua can `git clone` the repo.
+- Native `qdrant.service` / `ollama.service` / `open-webui.service` stopped,
+  disabled, and purged (binaries, data dirs, service users). Design call per
+  discussion: `bootstrap.yml` assumes a greenfield host going forward; the
+  native services were pre-staging artefacts only.
+- HF cache at `/home/ericmey/musubi-hf-cache/hub/` rsynced into
+  `/var/lib/musubi/tei-models/` so SPLADE v3 loads from cache (it's gated on
+  HuggingFace; download would 401). Automating this is a follow-up (the
+  current `bootstrap.yml` doesn't do it).
+
+### Vault changes
+
+- [[08-deployment/host-profile|host-profile.md]] § *Actually deployed state*
+  updated from pre-Compose snapshot (2026-04-18) to post-Compose reality.
+- [[_slices/slice-ops-first-deploy|slice-ops-first-deploy.md]] work-log
+  appended with the execution record and the bugs-found ledger.
+- [[12-roadmap/status|status.md]] v1 progress table updated; Phase 8 Ops
+  rolls over to *first deploy complete*.
+
+### Downstream unblocked
+
+- **First capture → retrieve round-trip** is now testable end-to-end
+  (`deploy/smoke/verify.sh` against `http://10.0.0.45:8100`). Queued for
+  the next session.
+- **POC → v1 data migration** (`slice-poc-data-migration`) now has a live
+  target Musubi it can push into.
+- **OpenClaw / LiveKit / MCP adapters** have a real endpoint to integration-
+  test against.
 
 ### 2026-04-20 — slice-poc-data-migration completed via SDK
 
