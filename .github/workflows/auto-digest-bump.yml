@@ -1,0 +1,198 @@
+name: Auto digest bump
+
+# Tier-3 automation of the manual step that shipped v0.3.0: after a
+# release is published and the signed image lands on GHCR, this
+# workflow opens (or keeps updated) a PR titled
+# `chore(deploy): pin musubi-core to <tag> signed digest` that edits
+# `deploy/ansible/group_vars/all.yml::musubi_core_image` to the new
+# `@sha256:<digest>`.
+#
+# The operator still reviews and merges the PR — this workflow does
+# not touch the live deploy. Ansible's `update.yml` is invoked
+# manually from the control host after merge.
+#
+# Why release-trigger (not tag-trigger): waiting for `release:published`
+# means release-please has already filled in the GitHub Release body,
+# so the digest (which publish-core-image appended there) is available
+# via the API. It also means we only run for real releases, not
+# arbitrary tags someone might push.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to pin (e.g. v0.3.1). Defaults to the latest published release."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: auto-digest-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Resolve tag + digest
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # 1. Determine the tag: event-provided on release, input on dispatch, latest fallback.
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            TAG="${{ github.event.release.tag_name }}"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name')
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag: ${TAG}"
+
+          # 2. Resolve the tag to a content digest via GHCR's anonymous registry API.
+          # The package is public, so no auth needed. Ask for both the v2 manifest
+          # AND the OCI index content type — GHCR serves whichever matches.
+          REGISTRY="ghcr.io"
+          IMAGE="ericmey/musubi-core"
+          TOKEN=$(curl -sf "https://${REGISTRY}/token?service=${REGISTRY}&scope=repository:${IMAGE}:pull" \
+                  | python3 -c 'import sys,json; print(json.load(sys.stdin)["token"])')
+
+          DIGEST=$(curl -sf \
+            -H "Authorization: Bearer ${TOKEN}" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+            -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            -D - \
+            "https://${REGISTRY}/v2/${IMAGE}/manifests/${TAG}" \
+            | tr -d '\r' | awk '/^docker-content-digest:/ {print $2}')
+
+          if [[ -z "${DIGEST}" ]]; then
+            echo "::error::could not resolve a digest for ${REGISTRY}/${IMAGE}:${TAG}"
+            exit 1
+          fi
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Resolved digest: ${DIGEST}"
+
+      - name: Patch group_vars
+        id: patch
+        run: |
+          set -euo pipefail
+          FILE="deploy/ansible/group_vars/all.yml"
+          NEW="ghcr.io/ericmey/musubi-core@${{ steps.resolve.outputs.digest }}"
+
+          # Replace the line regardless of what was there before. The file
+          # uses double-quoted strings for this field.
+          python3 - <<PY
+          import re, pathlib
+          p = pathlib.Path("$FILE")
+          text = p.read_text()
+          new = '"${NEW}"'
+          updated = re.sub(
+              r'(musubi_core_image:\s*)(["\x27])[^"\x27]+\2',
+              rf'\g<1>{new}',
+              text,
+              count=1,
+          )
+          if updated == text:
+              raise SystemExit("musubi_core_image line not found in " + str(p))
+          p.write_text(updated)
+          PY
+
+          if git diff --quiet "$FILE"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already pinned to ${NEW}; nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Patched ${FILE}."
+          fi
+
+      - name: Open or update PR
+        if: steps.patch.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          set -euo pipefail
+          BRANCH="chore/auto-pin-${TAG}"
+          TITLE="chore(deploy): pin musubi-core to ${TAG} signed digest"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git switch -c "${BRANCH}"
+          git add deploy/ansible/group_vars/all.yml
+          git commit -m "${TITLE}
+
+          Automated by .github/workflows/auto-digest-bump.yml in response
+          to the ${TAG} release. The image has been cosign-signed,
+          SBOM-attested, and Trivy-scanned by publish-core-image.yml —
+          verify before deploy:
+
+              cosign verify \\
+                --certificate-identity-regexp 'https://github.com/ericmey/musubi/.*' \\
+                --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+                ghcr.io/ericmey/musubi-core@${DIGEST}
+
+          No tracking Issue: auto-generated release digest pin."
+
+          git push -u origin "${BRANCH}" --force
+
+          # Create or update the PR. Detect existing by branch head.
+          EXISTING=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number' || true)
+          BODY=$(cat <<EOF
+          ${TITLE}
+
+          Automated by \`.github/workflows/auto-digest-bump.yml\` in response to the [${TAG}](https://github.com/${{ github.repository }}/releases/tag/${TAG}) release.
+
+          ## Supply-chain attestations
+          - cosign keyless signature via GitHub OIDC
+          - CycloneDX SBOM attached as a cosign attestation
+          - Trivy vulnerability scan — 0 CRITICAL (gate in \`publish-core-image.yml\`)
+
+          ## Verify before deploy
+
+          \`\`\`bash
+          cosign verify \\
+            --certificate-identity-regexp 'https://github.com/ericmey/musubi/.*' \\
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
+            ghcr.io/ericmey/musubi-core@${DIGEST}
+          \`\`\`
+
+          ## After merge
+
+          \`\`\`bash
+          # From the ansible control host:
+          cd ~/musubi
+          git pull origin main
+          ANSIBLE_VAULT_PASSWORD_FILE=~/ansible/.vault_pass \\
+            ansible-playbook \\
+              -i deploy/ansible/inventory.yml \\
+              -e @~/.musubi-secrets/inventory-vars.yml \\
+              -e @~/.musubi-secrets/vault.yml \\
+              -e 'changed_services=["core","lifecycle-worker"]' \\
+              deploy/ansible/update.yml
+          \`\`\`
+
+          No tracking Issue: auto-generated release digest pin.
+          EOF
+          )
+          if [[ -n "${EXISTING}" ]]; then
+            echo "Updating existing PR #${EXISTING}"
+            gh pr edit "${EXISTING}" --title "${TITLE}" --body "${BODY}"
+          else
+            echo "Opening new PR"
+            gh pr create --base main --head "${BRANCH}" --title "${TITLE}" --body "${BODY}"
+          fi
