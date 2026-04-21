@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.1](https://github.com/ericmey/musubi/compare/v0.3.0...v0.3.1) (2026-04-21)
+
+
+### Bug Fixes
+
+* **ansible:** restore inventory.yml indentation ([#178](https://github.com/ericmey/musubi/issues/178)) ([0cdb065](https://github.com/ericmey/musubi/commit/0cdb0652c05a8e2dd131bfbdbc67835b311cca81))
+* **lifecycle:** stop registering demotion jobs from build_maturation_jobs ([#181](https://github.com/ericmey/musubi/issues/181)) ([da0f2e9](https://github.com/ericmey/musubi/commit/da0f2e91e9a0be33e629b1df9f92952d711acdb6))
+
+
+### CI / Ops
+
+* **ops:** Tier 3 — auto-bump the group_vars digest pin on every release ([#182](https://github.com/ericmey/musubi/issues/182)) ([d6f8a91](https://github.com/ericmey/musubi/commit/d6f8a91ec31245e01911a9e8e4ac3f911404984f))
+
 ## [0.3.0](https://github.com/ericmey/musubi/compare/v0.2.0...v0.3.0) (2026-04-21)
 
 
