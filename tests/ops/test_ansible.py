@@ -102,6 +102,7 @@ def test_playbook_syntax() -> None:
 def test_playbook_idempotent_on_clean_vm() -> None:
     idempotent_modules = {
         "ansible.builtin.apt",
+        "ansible.builtin.apt_repository",
         "ansible.builtin.copy",
         "ansible.builtin.file",
         "ansible.builtin.get_url",

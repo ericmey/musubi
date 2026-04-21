@@ -3,11 +3,81 @@
   hosts: musubi
   become: true
   pre_tasks:
+    # ---- Prereqs for adding third-party apt sources ---------------------
+    - name: Install prerequisites for adding third-party apt repos
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    # ---- Docker CE apt repo ---------------------------------------------
+    - name: Install Docker's official GPG key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+        force: false
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [arch={{ 'arm64' if ansible_architecture == 'aarch64' else 'amd64' }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+        filename: docker
+        update_cache: false
+
+    # ---- NVIDIA Container Toolkit apt repo ------------------------------
+    - name: Install NVIDIA container toolkit GPG key
+      ansible.builtin.get_url:
+        url: https://nvidia.github.io/libnvidia-container/gpgkey
+        dest: /etc/apt/keyrings/nvidia-container-toolkit.asc
+        mode: "0644"
+        force: false
+
+    - name: Add NVIDIA container toolkit apt source
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+        content: |
+          deb [signed-by=/etc/apt/keyrings/nvidia-container-toolkit.asc] https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Refresh apt cache after adding third-party repos
+      ansible.builtin.apt:
+        update_cache: true
+
+    # ---- NVIDIA driver (skip if one is already present) ----------------
+    # Pre-staged hosts may already have a GPU driver. Don't downgrade or
+    # double-install — check first, and only let ubuntu-drivers autoinstall
+    # take over on a genuinely bare host.
+    - name: Probe for an existing NVIDIA driver
+      ansible.builtin.command: nvidia-smi --query-gpu=driver_version --format=csv,noheader
+      register: nvidia_driver_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false  # read-only probe; must run even in --check mode
+
+    - name: Install NVIDIA driver via ubuntu-drivers (bare hosts only)
+      ansible.builtin.command: ubuntu-drivers autoinstall
+      when: nvidia_driver_probe.rc != 0 or nvidia_driver_probe.stdout | trim == ''
+      register: ubuntu_drivers_result
+      changed_when: "'already installed' not in (ubuntu_drivers_result.stdout | default(''))"
+
+    # ---- Main package install (Docker, NVIDIA toolkit, etc.) -----------
     - name: Install required apt packages
       ansible.builtin.apt:
         name: "{{ musubi_required_packages }}"
         state: present
-        update_cache: true
+        update_cache: false
 
     - name: Ensure Docker service is enabled
       ansible.builtin.systemd_service:
@@ -77,6 +147,16 @@
         proto: tcp
         from_ip: "{{ musubi_kong_ip }}"
         comment: "Kong upstream only"
+      when: musubi_kong_ip | default('') | length > 0
+
+    - name: Allow Musubi Core from the musubi VLAN (when Kong is not yet the gateway)
+      community.general.ufw:
+        rule: allow
+        port: "{{ musubi_core_port }}"
+        proto: tcp
+        from_ip: "{{ musubi_vlan_cidr | default('10.0.0.0/24') }}"
+        comment: "VLAN-internal access — remove when Kong fronts Musubi (ADR 0024)"
+      when: musubi_kong_ip | default('') | length == 0
 
     - name: Enable UFW
       community.general.ufw:
