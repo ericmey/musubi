@@ -194,9 +194,16 @@ jobs:
           scanners: vuln
 
       - name: Upload Trivy SARIF to GitHub Security tab
-        # Runs even if Trivy failed so the findings are visible in
-        # the repo's Security → Code scanning view.
+        # Runs even if Trivy failed so the findings are visible in the
+        # repo's Security → Code scanning view when available.
+        #
+        # `continue-on-error: true` tolerates the "Code scanning is not
+        # enabled" failure on private repos without a GitHub Advanced
+        # Security subscription. The CRITICAL gate in the prior step
+        # still blocks bad images from shipping; this upload is a
+        # visibility nice-to-have, not a security gate.
         if: always()
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-results.sarif
