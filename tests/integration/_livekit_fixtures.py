@@ -19,10 +19,11 @@ def progressive_segments(final_utterance: str, chunk_size: int = 3) -> list[str]
     """Break a completed utterance into cumulative interim segments.
 
     Mirrors how LiveKit emits ``transcript_segment_received`` events:
-    each event carries the full transcript-so-far, not a delta. A
-    4-word final utterance yields ``["word1", "word1 word2", ...,
-    final]`` — so the SlowThinker sees N cancel-restart ticks before
-    the final turn.
+    each event carries the full transcript-so-far, not a delta. With
+    the default ``chunk_size=3`` a 7-word final utterance yields
+    ``["w1 w2 w3", "w1 w2 w3 w4 w5 w6", "w1…w7"]`` — so the
+    SlowThinker sees one cancel-restart tick per chunk boundary plus
+    a final full-utterance tick.
     """
     words = final_utterance.split()
     if not words:

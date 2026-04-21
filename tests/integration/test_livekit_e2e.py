@@ -75,10 +75,11 @@ async def _await_slow_thinker(adapter: LiveKitAdapter) -> None:
     test body's assertions don't race with an in-flight retrieve."""
     task = adapter.slow_thinker._task
     if task is not None and not task.done():
-        # SlowThinker swallows its own retrieve failures; we only await
-        # here to drain the detached task before teardown, not to
-        # validate its result.
-        with contextlib.suppress(TimeoutError, asyncio.CancelledError, Exception):
+        # Only suppress the two "expected-quiet" outcomes: the wait
+        # timed out (10s slack — SlowThinker should have settled), or
+        # a newer segment cancelled it. Any other exception is a real
+        # regression in the adapter / SDK and must surface.
+        with contextlib.suppress(TimeoutError, asyncio.CancelledError):
             await asyncio.wait_for(task, timeout=10.0)
 
 
@@ -148,8 +149,12 @@ async def test_e2e_redaction_strips_email_before_capture(api_client: Any) -> Non
     original = api_client.memories.capture
 
     async def capture_and_record(**kwargs: Any) -> Any:
+        # Record only after the real call succeeds — `maybe_capture_fact`
+        # swallows `MusubiError`, so a record-before-await pattern could
+        # green the test even when the server rejected the write.
+        resp = await original(**kwargs)
         calls.append(kwargs)
-        return await original(**kwargs)
+        return resp
 
     api_client.memories.capture = capture_and_record
     try:
@@ -157,7 +162,9 @@ async def test_e2e_redaction_strips_email_before_capture(api_client: Any) -> Non
     finally:
         api_client.memories.capture = original
 
-    assert len(calls) == 1, "maybe_capture_fact should have fired once"
+    assert len(calls) == 1, (
+        "maybe_capture_fact should have fired once (and the server must have accepted it)"
+    )
     captured_content = calls[0]["content"]
     assert "alex.example@example.com" not in captured_content
     assert "[REDACTED]" in captured_content
@@ -198,7 +205,11 @@ async def test_e2e_capture_side_dedup_collapses_duplicate_facts(api_client: Any)
     api_client.memories.capture = capture_and_record
     try:
         await adapter.maybe_capture_fact(utterance)
-        await asyncio.sleep(0.5)
+        # 1.0s matches the smoke-test pattern in
+        # test_capture_dedup_against_existing — enough slack for
+        # Qdrant local-mode indexing to make the first row visible
+        # to the second capture's dedup lookup.
+        await asyncio.sleep(1.0)
         await adapter.maybe_capture_fact(utterance)
     finally:
         api_client.memories.capture = original
@@ -230,8 +241,9 @@ async def test_e2e_filler_phrase_does_not_capture(api_client: Any) -> None:
     original = api_client.memories.capture
 
     async def capture_and_record(**kwargs: Any) -> Any:
+        resp = await original(**kwargs)
         calls.append(kwargs)
-        return await original(**kwargs)
+        return resp
 
     api_client.memories.capture = capture_and_record
     try:

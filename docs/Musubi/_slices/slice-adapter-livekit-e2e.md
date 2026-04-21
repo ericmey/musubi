@@ -6,7 +6,7 @@ type: slice
 status: in-review
 owner: claude-code-opus-4-7
 phase: "7 Adapters"
-tags: [section/slices, status/in-progress, type/slice, livekit, adapter, integration]
+tags: [section/slices, status/in-review, type/slice, livekit, adapter, integration]
 updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-adapter-livekit]]", "[[_slices/slice-ops-integration-harness]]"]
