@@ -34,8 +34,11 @@ musubi_required_packages:
   - gnupg
   - logrotate
   - nvidia-container-toolkit
-  - nvidia-driver-560-server
   - unattended-upgrades
+# NVIDIA GPU driver is NOT pinned here — a specific `nvidia-driver-NNN-server`
+# package name rots quickly (and will downgrade a pre-staged newer driver).
+# bootstrap.yml instead probes for an existing driver via `nvidia-smi`, and
+# runs `ubuntu-drivers autoinstall` only on hosts that don't have one yet.
 
 musubi_health_urls:
   core: "http://127.0.0.1:8100/v1/ops/health"
