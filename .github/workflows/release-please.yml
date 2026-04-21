@@ -1,10 +1,10 @@
 name: Release Please
 
 # Automates version bumping + changelog + tag cutting from conventional
-# commits on v2. The workflow opens (or keeps updated) a single
+# commits on main. The workflow opens (or keeps updated) a single
 # "release PR" titled `chore(release): vX.Y.Z`. Merging it:
 #
-# 1. Commits the version bump + CHANGELOG.md onto v2.
+# 1. Commits the version bump + CHANGELOG.md onto main.
 # 2. Creates the `vX.Y.Z` git tag.
 # 3. Creates a GitHub Release.
 #
@@ -19,7 +19,7 @@ name: Release Please
 
 on:
   push:
-    branches: [v2]
+    branches: [main]
   # Manual trigger in case the automation drifts and an operator
   # needs to force a release PR update.
   workflow_dispatch:

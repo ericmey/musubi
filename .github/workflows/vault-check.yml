@@ -2,13 +2,13 @@ name: Vault check
 
 on:
   push:
-    branches: [main, v2]
+    branches: [main]
     paths:
       - "docs/Musubi/**"
       - "docs/AGENT-PROCESS.md"
       - ".github/workflows/vault-check.yml"
   pull_request:
-    branches: [main, v2]
+    branches: [main]
     paths:
       - "docs/Musubi/**"
       - "docs/AGENT-PROCESS.md"

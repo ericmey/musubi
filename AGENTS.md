@@ -99,7 +99,7 @@ gh issue comment <n> --body "Blocked on <reason + cross-slice ticket link>"
 
 1. **Pick a slice.** `gh issue list --label "slice,status:ready"` — Issues with that pair are claimable today (all `depends-on` slices done or first-cut-merged enough to depend on). Don't invent a different process.
 2. **Claim atomically** (Dual-update rule above, §Claim). Re-read the Issue immediately after — if you see multiple assignees, step down and pick a different slice.
-3. **Branch:** `git switch -c slice/<slice-id>` off `v2`. Push immediately with `-u`.
+3. **Branch:** `git switch -c slice/<slice-id>` off `main`. Push immediately with `-u`.
 4. **Open a Draft PR** with `Closes #<n>` in the body. Do this before writing any code — it makes work-in-progress visible so other agents don't start the same slice.
 5. **Write the test file.** First commit: `test(<scope>): initial test contract for <slice-id>`. Every Test Contract bullet appears as a function (closure rule §1); items deferred to later slices appear as `@pytest.mark.skip(reason="deferred to slice-…")` with a named follow-up. Tests should fail — that's expected at this stage.
 6. **Implement.** Respect `forbidden_paths`. Every mutation at a module boundary returns `Result[T, E]` — not raised exceptions. No `except Exception: pass`. No silent `time.sleep()`. No `os.environ` reads outside `src/musubi/config.py`. Use `batch_update_points` on Qdrant, never loop `set_payload`.

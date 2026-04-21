@@ -7,7 +7,7 @@ silently publishing nothing.
 
 Scope:
 
-- Triggers: tag push `v*`, branch push `v2`, `workflow_dispatch`.
+- Triggers: tag push `v*`, branch push `main`, `workflow_dispatch`.
 - Permissions: `packages: write` (the GHCR push) + `contents: read`.
 - One job named `publish-core-image`.
 - Uses `docker/login-action` → GHCR, `docker/build-push-action` with
@@ -71,7 +71,7 @@ def test_workflow_has_publish_core_image_job() -> None:
     assert job.get("runs-on") == "ubuntu-latest"
 
 
-def test_workflow_triggers_include_tags_v2_and_dispatch() -> None:
+def test_workflow_triggers_include_tags_main_and_dispatch() -> None:
     # YAML quirk: `on:` parses to the boolean `True` under safe_load
     # because `on` is an alias for true in YAML 1.1. Look it up
     # defensively so we don't trip on that.
@@ -86,7 +86,7 @@ def test_workflow_triggers_include_tags_v2_and_dispatch() -> None:
     assert any(pat.startswith("v") for pat in tags), "no v* tag trigger"
 
     branches = push.get("branches") or []
-    assert "v2" in branches, "no v2 branch trigger"
+    assert "main" in branches, "no main branch trigger"
 
     assert "workflow_dispatch" in on_block, "no workflow_dispatch trigger"
 
@@ -236,7 +236,7 @@ def test_workflow_does_not_mutate_group_vars() -> None:
     forbidden = (
         "sed -i",  # in-place edit
         "git commit",
-        "git push origin v2",
+        "git push origin main",
         "peter-evans/create-pull-request",
         "stefanzweifel/git-auto-commit-action",
     )

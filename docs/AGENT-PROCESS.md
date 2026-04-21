@@ -48,7 +48,7 @@ Earlier iterations of this project used file-based locks under `docs/Musubi/_inb
                                  ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ 4. Done                                                                   │
-│    PR: merged into v2 (or main post-V2-cutover)                           │
+│    PR: merged into main                            │
 │    Issue: auto-closed by "Closes #<n>"                                    │
 │    Slice frontmatter: status: done                                        │
 │    Work-log: final entry noting merge + which downstream slices unblocked │
@@ -91,8 +91,8 @@ The agent you use is your choice as the operator. The rules above apply regardle
 This is the flow every agent follows. Claude Code users can invoke the `pick-slice` skill (`.claude/skills/pick-slice/`) which automates it. Other agents run the commands manually.
 
 ```bash
-# 1. From the repo root, on a fresh v2 checkout
-git switch v2 && git pull --ff-only
+# 1. From the repo root, on a fresh main checkout
+git switch main && git pull --ff-only
 
 # 2. See what's available
 gh issue list --label "slice,status:ready" --state open
@@ -112,7 +112,7 @@ git commit --allow-empty -m "chore(slice): take <slice-id>
 
 Claims docs/Musubi/_slices/<slice-id>.md. See issue #<n>."
 git push -u origin slice/<slice-id>
-gh pr create --draft --base v2 \
+gh pr create --draft --base main \
   --title "feat(<scope>): <slice-id>" \
   --body "Closes #<n>."
 
@@ -147,11 +147,11 @@ Rule: the same agent that made the last code commit does not self-approve. If yo
 
 ## 8. Branch + merge strategy
 
-- `v2` is the active development branch (will become `main` after V2 is feature-complete — see [docs/Musubi/13-decisions/0016-vault-in-monorepo.md](architecture/13-decisions/0016-vault-in-monorepo.md)).
+- `main` is the active development branch (is the default branch — see [docs/Musubi/13-decisions/0016-vault-in-monorepo.md](architecture/13-decisions/0016-vault-in-monorepo.md)).
 - Feature branches are `slice/<slice-id>` — one slice per branch, no bundling.
-- PRs merge into `v2` with **squash merge** so the branch history reads one slice = one commit on `v2`.
-- `v2` is branch-protected once this first push lands: require PR, require CI passing (`CI` workflow + `Vault check` workflow), require CODEOWNERS approval for the locked paths.
-- Force-push to `v2` is forbidden. Direct commits to `v2` are forbidden.
+- PRs merge into `main` with **squash merge** so the branch history reads one slice = one commit on `main`.
+- `main` is branch-protected once this first push lands: require PR, require CI passing (`CI` workflow + `Vault check` workflow), require CODEOWNERS approval for the locked paths.
+- Force-push to `main` is forbidden. Direct commits to `main` are forbidden.
 
 ## 9. Commit style
 
@@ -208,11 +208,11 @@ Simultaneous edits to `docs/Musubi/00-index/work-log.md` or a slice note are the
 
 - Not a replacement for the vault's `agent-guardrails.md` — that file owns the four non-negotiable engineering rules.
 - Not a skill or agent definition — those live in `.claude/skills/` and `.claude/agents/`.
-- Not a branching model reference — `v2` is the active branch; feature branches are per-slice; everything else is governed by GitHub branch protection. If you need more: [GitHub docs on branch protection](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/about-protected-branches).
+- Not a branching model reference — `main` is the active branch; feature branches are per-slice; everything else is governed by GitHub branch protection. If you need more: [GitHub docs on branch protection](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/about-protected-branches).
 
 ## 12. TL;DR for a new agent
 
-1. Clone: `git clone git@github.com:ericmey/musubi.git && cd musubi && git switch v2`.
+1. Clone: `git clone git@github.com:ericmey/musubi.git && cd musubi && git switch main`.
 2. Read `CLAUDE.md`, this file, and `docs/Musubi/00-index/agent-guardrails.md`.
 3. `gh issue list --label "slice,status:ready"` to see what's available.
 4. Claim one. Branch. Draft PR. Tests first. Implement. `make check`. Mark ready.
