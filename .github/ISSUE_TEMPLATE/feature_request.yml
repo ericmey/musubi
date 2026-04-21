@@ -1,0 +1,66 @@
+name: 💡 Feature request
+description: Suggest a new capability for Musubi core, the SDK, an adapter, or the deployment tooling.
+title: "feat: <short description>"
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Musubi is a personal project with a deliberate scope. Feature requests are welcome but won't automatically be accepted — the bar is: the idea fits the three-plane / lifecycle-engine architecture, and either you or someone else is willing to write the slice spec and the implementation.
+
+        For open-ended "what if…" ideas, please start a [Discussion](https://github.com/ericmey/musubi/discussions) instead.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or motivation
+      description: What are you trying to do? What's stopping you today?
+      placeholder: "When running multiple adapters (MCP + LiveKit) on the same deploy, I can't tell which presence originated a thought from the thought's payload alone."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: A concrete sketch of what you'd like to see. API shape, schema change, configuration knob, etc.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches and why you didn't pick them.
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Which module(s) would this touch? Would it be additive or a breaking change? Does it need a new slice spec?
+      placeholder: |
+        - Adds a `source_adapter` field to `Thought`.
+        - Touches `src/musubi/types/thought.py`, `src/musubi/planes/thoughts/plane.py`, the canonical OpenAPI.
+        - Breaking schema change — requires a version bump + ADR.
+
+  - type: dropdown
+    id: willing_to_implement
+    attributes:
+      label: Implementation willingness
+      description: Would you be open to writing the slice yourself, or are you asking someone else to pick it up?
+      options:
+        - "Yes, I'd like to implement this."
+        - "Maybe — depends on complexity / feedback."
+        - "No, I'm only proposing the idea."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and discussions for a similar request.
+          required: true
+        - label: I've read [CONTRIBUTING.md](https://github.com/ericmey/musubi/blob/main/CONTRIBUTING.md) and understand that outside features require alignment before implementation.
+          required: true
