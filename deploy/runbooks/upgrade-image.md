@@ -24,6 +24,20 @@ gh run list --workflow publish-core-image.yml --limit 1
 **Expected output:** the most recent run is `completed / success` for
 the commit / tag you want to ship.
 
+**Recovery — image not published yet:** if the target commit has no
+matching `publish-core-image.yml` run (rare — tag-triggered publish
+runs automatically, but a tag that was pushed before the workflow
+existed, or a branch-HEAD build, needs a manual kick), trigger a build
+via `workflow_dispatch`:
+
+```bash
+gh workflow run publish-core-image.yml --ref <tag-or-branch>
+gh run watch $(gh run list --workflow publish-core-image.yml \
+  --limit 1 --json databaseId --jq '.[0].databaseId')
+```
+
+Then return to the step above and capture the digest.
+
 **Destructive:** no.
 
 **Rollback:** not applicable (this is a check).
@@ -90,11 +104,11 @@ ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
  deploy/ansible/deploy.yml --ask-vault-pass
 ```
 
-(When [[_slices/slice-ops-update-workflow]] lands, swap the last line
-for `ansible-playbook deploy/ansible/update.yml --ask-vault-pass`.
-`update.yml` force-pulls the new digest and recreates only the
-changed containers, which is what we want for an image bump — see
-that slice's spec for the rationale.)
+For a narrower surface on an image-only bump, use
+`deploy/ansible/update.yml` instead of `deploy.yml` — it force-pulls
+the new digest and recreates only the changed containers (defaults
+to `[core, lifecycle-worker]`), skipping host-level bootstrap tasks.
+See `deploy/runbooks/upgrade.md` for the operator procedure.
 
 **Expected output:** `deploy.yml` reports one changed task (the
 `docker_compose_v2` task that recreates `core`). Everything else

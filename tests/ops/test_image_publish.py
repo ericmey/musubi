@@ -283,6 +283,28 @@ def test_upgrade_image_runbook_exists_and_has_six_sections() -> None:
     )
 
 
+def test_upgrade_image_runbook_mentions_workflow_dispatch_as_recovery() -> None:
+    """Test Contract bullet 11 — the runbook must document
+    `workflow_dispatch` as the recovery path when a publish run is
+    missing for the target commit (rare, but the only escape hatch
+    when the release-triggered build didn't fire, e.g. a branch-HEAD
+    build or a tag pushed before the workflow existed)."""
+    text = RUNBOOK.read_text()
+    assert "workflow_dispatch" in text, (
+        "upgrade-image runbook should mention workflow_dispatch as the "
+        "recovery path for a missing publish run"
+    )
+    # Tighten — the recovery guidance must be under step 1 (confirming
+    # the image is published), not buried elsewhere.
+    step_1_end = text.find("## 2")
+    assert step_1_end > 0, "could not locate step 2 boundary"
+    step_1_body = text[:step_1_end]
+    assert "workflow_dispatch" in step_1_body, (
+        "workflow_dispatch recovery guidance must live in step 1 where "
+        "the operator first discovers the missing run"
+    )
+
+
 def test_upgrade_image_runbook_every_step_has_rollback() -> None:
     text = RUNBOOK.read_text()
     # Split on "## " numbered sections.

@@ -3,11 +3,11 @@ title: "Slice: Publish musubi-core to GHCR via CI"
 slice_id: slice-ops-core-image-publish
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: done
+owner: claude-code-opus-4-7
 phase: "8 Ops"
-tags: [section/slices, status/ready, type/slice, ops, ci, image, ghcr]
-updated: 2026-04-20
+tags: [section/slices, status/done, type/slice, ops, ci, image, ghcr]
+updated: 2026-04-21
 reviewed: false
 depends-on: ["[[_slices/slice-ops-first-deploy]]"]
 blocks: ["[[_slices/slice-ops-update-workflow]]"]
@@ -21,7 +21,7 @@ blocks: ["[[_slices/slice-ops-update-workflow]]"]
 > every tag (and optionally on every merge to `v2`), so any host can
 > `docker pull` the image by digest.
 
-**Phase:** 8 Ops · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `claude-code-opus-4-7`
 
 ## Why this slice exists
 
@@ -253,8 +253,59 @@ Plus slice-specific:
 
 ## Work log
 
-_(empty — awaiting claim)_
+### 2026-04-21 — claude-code-opus-4-7 (closure)
+
+Functionally delivered over the course of today's push-to-production
+arc; vault hygiene caught that the frontmatter was never flipped.
+This entry closes the gap.
+
+**What shipped:**
+
+- [.github/workflows/publish-core-image.yml](../../../.github/workflows/publish-core-image.yml) — builds and
+  publishes `ghcr.io/ericmey/musubi-core` on every `v*` tag and on
+  merges to `main`. Tier-1 supply-chain hardening (cosign keyless
+  signature, CycloneDX SBOM via `anchore/sbom-action`, Trivy SARIF
+  upload to Code Scanning with a CRITICAL-severity gate) landed with
+  it — broader than this slice's original contract declared, but
+  complementary.
+- [deploy/ansible/group_vars/all.yml](../../../deploy/ansible/group_vars/all.yml) — `musubi_core_image`
+  pinned to a real GHCR digest. Validated via two release cuts
+  (`v0.3.0`, `v0.3.1`) shipping signed images pulled by Ansible on
+  `musubi.example.local` with no `docker save | ssh | docker load`
+  fallback needed.
+- [deploy/runbooks/upgrade-image.md](../../../deploy/runbooks/upgrade-image.md) — operator procedure,
+  six sections, every step has a Rollback clause.
+- [tests/ops/test_image_publish.py](../../../tests/ops/test_image_publish.py) — 19 structural
+  assertions covering all 11 Test Contract bullets plus the 8
+  supply-chain tests for cosign / SBOM / Trivy.
+
+**Test Contract closure:**
+
+- Bullets 1-7, 9, 10, 12 — passing directly.
+- Bullet 8 (`test_group_vars_musubi_core_image_is_ghcr_digest_pinned`) —
+  merged into bullet 9's implementation via the `_IMAGE_RE` regex
+  that accepts `ghcr.io/ericmey/musubi-core@sha256:<64-hex>`; the
+  current pin is digest-form so the regex exercises the digest path.
+- Bullet 11 (`test_first_deploy_runbook_mentions_workflow_dispatch_as_recovery`) —
+  added in the closure PR; the runbook now documents the
+  `workflow_dispatch` escape hatch in step 1 for when a publish run
+  is missing for the target commit.
+
+**Scope delta:**
+
+- Grew to include cosign + SBOM + Trivy (original spec's
+  "NOT in scope: signing"). That exclusion was inverted when
+  supply-chain hygiene became a public-repo requirement earlier today.
+  spec-update trailer covers the change.
+- Also ships: auto-digest-bump ([#182](https://github.com/ericmey/musubi/pull/182)) — a
+  Tier-3 workflow that opens the digest-bump PR automatically after
+  `release:published`. Originally scoped as "explicitly NOT in scope"
+  of this slice; landed under slice-ops-update-workflow's umbrella
+  since it triggers the update path.
 
 ## PR links
 
-_(empty)_
+- [#145](https://github.com/ericmey/musubi/pull/145) — initial workflow + group_vars pin
+- [#166](https://github.com/ericmey/musubi/pull/166) / [#167](https://github.com/ericmey/musubi/pull/167) / [#170](https://github.com/ericmey/musubi/pull/170) — Tier-1 supply-chain hardening
+- [#182](https://github.com/ericmey/musubi/pull/182) — Tier-3 auto-digest-bump (also closes slice-ops-update-workflow)
+- closure PR — bullet 11 test + runbook workflow_dispatch recovery note
