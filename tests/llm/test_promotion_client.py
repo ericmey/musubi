@@ -108,9 +108,7 @@ async def test_render_raises_on_network_failure(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_exception(httpx.ConnectError("boom"))
     client = _client()
     with pytest.raises(httpx.ConnectError):
-        await client.render_curated_markdown(
-            title="T", content="C", rationale="R", top_memories=[]
-        )
+        await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
 
 
 async def test_render_raises_on_http_500(httpx_mock: HTTPXMock) -> None:
@@ -122,9 +120,7 @@ async def test_render_raises_on_http_500(httpx_mock: HTTPXMock) -> None:
     )
     client = _client()
     with pytest.raises(httpx.HTTPStatusError):
-        await client.render_curated_markdown(
-            title="T", content="C", rationale="R", top_memories=[]
-        )
+        await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
 
 
 async def test_render_raises_on_invalid_envelope(httpx_mock: HTTPXMock) -> None:
@@ -135,14 +131,14 @@ async def test_render_raises_on_invalid_envelope(httpx_mock: HTTPXMock) -> None:
     )
     client = _client()
     with pytest.raises(ValueError, match="envelope"):
-        await client.render_curated_markdown(
-            title="T", content="C", rationale="R", top_memories=[]
-        )
+        await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
 
 
 async def test_render_raises_when_body_has_no_h2(httpx_mock: HTTPXMock) -> None:
     bad = dict(_valid_payload())
-    bad["body"] = "Just a paragraph, no heading at all, but long enough to pass the 100 char minimum check easily so pydantic's length clears."
+    bad["body"] = (
+        "Just a paragraph, no heading at all, but long enough to pass the 100 char minimum check easily so pydantic's length clears."
+    )
     httpx_mock.add_response(
         url=f"{_BASE_URL}/api/chat",
         method="POST",
@@ -150,9 +146,7 @@ async def test_render_raises_when_body_has_no_h2(httpx_mock: HTTPXMock) -> None:
     )
     client = _client()
     with pytest.raises(ValueError):
-        await client.render_curated_markdown(
-            title="T", content="C", rationale="R", top_memories=[]
-        )
+        await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
 
 
 async def test_render_raises_on_ai_disclaimer(httpx_mock: HTTPXMock) -> None:
@@ -168,9 +162,7 @@ async def test_render_raises_on_ai_disclaimer(httpx_mock: HTTPXMock) -> None:
     )
     client = _client()
     with pytest.raises(ValueError):
-        await client.render_curated_markdown(
-            title="T", content="C", rationale="R", top_memories=[]
-        )
+        await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
 
 
 async def test_render_raises_on_body_too_short(httpx_mock: HTTPXMock) -> None:
@@ -183,6 +175,4 @@ async def test_render_raises_on_body_too_short(httpx_mock: HTTPXMock) -> None:
     )
     client = _client()
     with pytest.raises(ValueError):
-        await client.render_curated_markdown(
-            title="T", content="C", rationale="R", top_memories=[]
-        )
+        await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])

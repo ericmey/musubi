@@ -334,3 +334,66 @@ def test_build_lifecycle_jobs_merges_maturation_and_demotion() -> None:
     assert by_name["demotion_concept"] is dem_stub
     # A name from neither real group stays placeholder.
     assert by_name["synthesis"].func.__name__ == "_run"
+
+
+def test_build_lifecycle_jobs_wires_promotion_builders() -> None:
+    """A stub promotion Job replaces the default placeholder; other
+    slots keep their placeholders."""
+    prom_stub = Job(
+        name="promotion",
+        trigger_kind="cron",
+        trigger_kwargs={"hour": 4, "minute": 0},
+        func=lambda: None,
+        grace_time_s=3600,
+    )
+    jobs = build_lifecycle_jobs(promotion_jobs=[prom_stub])
+    by_name = {j.name: j for j in jobs}
+    assert by_name["promotion"] is prom_stub
+    # Other names stay placeholder.
+    assert by_name["synthesis"].func.__name__ == "_run"
+    assert by_name["reflection_digest"].func.__name__ == "_run"
+
+
+def test_build_lifecycle_jobs_merges_all_four_builder_groups() -> None:
+    """Maturation + demotion + synthesis + promotion stubs all compose."""
+    mat = Job(
+        name="maturation_episodic",
+        trigger_kind="cron",
+        trigger_kwargs={"minute": 13},
+        func=lambda: None,
+        grace_time_s=900,
+    )
+    dem = Job(
+        name="demotion_concept",
+        trigger_kind="cron",
+        trigger_kwargs={"hour": 5, "minute": 0},
+        func=lambda: None,
+        grace_time_s=3600,
+    )
+    syn = Job(
+        name="synthesis",
+        trigger_kind="cron",
+        trigger_kwargs={"hour": 3, "minute": 0},
+        func=lambda: None,
+        grace_time_s=3600,
+    )
+    prom = Job(
+        name="promotion",
+        trigger_kind="cron",
+        trigger_kwargs={"hour": 4, "minute": 0},
+        func=lambda: None,
+        grace_time_s=3600,
+    )
+    jobs = build_lifecycle_jobs(
+        maturation_jobs=[mat],
+        demotion_jobs=[dem],
+        synthesis_jobs=[syn],
+        promotion_jobs=[prom],
+    )
+    by_name = {j.name: j for j in jobs}
+    assert by_name["maturation_episodic"] is mat
+    assert by_name["demotion_concept"] is dem
+    assert by_name["synthesis"] is syn
+    assert by_name["promotion"] is prom
+    # reflection_digest still placeholder.
+    assert by_name["reflection_digest"].func.__name__ == "_run"

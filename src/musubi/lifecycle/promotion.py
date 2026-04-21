@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field, model_validator
 from qdrant_client import QdrantClient, models
 
 from musubi.lifecycle.events import LifecycleEventSink
+from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.observability import default_registry
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
@@ -366,3 +367,65 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
         "Concept Promoted",
     )
+
+
+# ---------------------------------------------------------------------------
+# Scheduler integration
+# ---------------------------------------------------------------------------
+
+
+def build_promotion_jobs(
+    *,
+    deps: PromotionDeps,
+    lock_dir: Path,
+    batch_size: int = 1,
+) -> list[Job]:
+    """Return the one-element Job list matching
+    :func:`musubi.lifecycle.scheduler.build_default_jobs`'s ``promotion``
+    entry (daily at 04:00 UTC).
+
+    ``lock_dir/promotion.lock`` serialises the sweep against any other
+    worker attempting the same promotion pass. ``batch_size`` defaults
+    to 1 — we'd rather promote slowly and give the human reviewer time
+    to notice than fire-hose a queue on first deploy.
+    """
+    import asyncio as _asyncio
+
+    lock_path = lock_dir / "promotion.lock"
+
+    async def _run_all() -> None:
+        try:
+            count = await run_promotion_sweep(deps, batch_size=batch_size)
+            log.info("promotion-done promoted=%d", count)
+        except Exception:
+            log.exception("promotion-failed")
+
+    def _runner() -> None:
+        with file_lock(lock_path) as acquired:
+            if not acquired:
+                log.info("lifecycle-job=promotion lock-held; skipping run")
+                return
+            _asyncio.run(_run_all())
+
+    return [
+        Job(
+            name="promotion",
+            trigger_kind="cron",
+            trigger_kwargs={"hour": 4, "minute": 0},
+            func=_runner,
+            grace_time_s=3600,
+        ),
+    ]
+
+
+__all__ = [
+    "PromotionDeps",
+    "PromotionLLM",
+    "PromotionRender",
+    "ThoughtEmitter",
+    "VaultWriter",
+    "build_promotion_jobs",
+    "compute_path",
+    "run_promotion_sweep",
+    "slugify",
+]
