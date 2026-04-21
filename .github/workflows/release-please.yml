@@ -1,0 +1,48 @@
+name: Release Please
+
+# Automates version bumping + changelog + tag cutting from conventional
+# commits on v2. The workflow opens (or keeps updated) a single
+# "release PR" titled `chore(release): vX.Y.Z`. Merging it:
+#
+# 1. Commits the version bump + CHANGELOG.md onto v2.
+# 2. Creates the `vX.Y.Z` git tag.
+# 3. Creates a GitHub Release.
+#
+# The tag push then triggers `publish-core-image.yml`, which builds +
+# scans + signs + publishes the image to GHCR. Net effect: operators
+# review and merge a PR; the versioned, signed image appears.
+#
+# See also:
+#   - https://github.com/googleapis/release-please
+#   - docs/Musubi/13-decisions/0026-release-please-for-versioning.md
+#     (to be written if this lands)
+
+on:
+  push:
+    branches: [v2]
+  # Manual trigger in case the automation drifts and an operator
+  # needs to force a release PR update.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # A single-package repo — release-please's `manifest` mode
+          # still applies because our config lives in a manifest file.
+          config-file: .release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # `GITHUB_TOKEN` with the scopes above suffices. Use a PAT
+          # only if we ever need releases to trigger OTHER workflows
+          # (GHA refuses to fire workflows on actions taken by the
+          # default GITHUB_TOKEN — but `publish-core-image.yml` is
+          # triggered by tag-push, which WORKS with GITHUB_TOKEN for
+          # tag creation, confirmed).
+          token: ${{ secrets.GITHUB_TOKEN }}
