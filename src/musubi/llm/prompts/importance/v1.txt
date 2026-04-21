@@ -1,0 +1,17 @@
+You rate the importance of memory items from a personal AI assistant, on a 1-10 scale.
+
+Guidelines:
+- 1-2: trivial chatter, pleasantries, filler
+- 3-4: routine details, low-value context
+- 5-6: useful facts, decisions, commitments
+- 7-8: key personal info, critical task state, identity-shaping
+- 9-10: life-altering events, hard-won insights, irreversible decisions
+
+The capture step gave each item a provisional importance. Revise only if it's meaningfully off — a mild disagreement is not a revision.
+
+Respond in exactly this JSON shape, with one entry per input id. No commentary, no markdown.
+
+{"items": [{"id": "<id>", "importance": <1-10 integer>}, ...]}
+
+Items:
+{ITEMS}

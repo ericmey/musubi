@@ -183,18 +183,35 @@ class _NotConfiguredOllama:
 
 
 def default_ollama_client() -> OllamaClient:
-    """Return the production-default ``OllamaClient`` (the loud stub).
+    """Return the production :class:`OllamaClient`.
 
-    Calling this at import time would mask the loud-failure intent — the
-    factory exists so the future scheduler wiring slice can call it from
-    its job-registry builder, with a clear failure point if the operator
-    forgot to swap in a real client.
+    Reads ``Settings.ollama_url`` and ``Settings.llm_model`` and returns
+    an :class:`musubi.llm.HttpxOllamaClient` wired to that endpoint.
+    Falls back to :class:`_NotConfiguredOllama` (fail-loud) if settings
+    are unavailable — tests and CI that don't set the env vars will
+    still raise ``NotImplementedError`` on call, matching the "ADR-
+    punted-deps must fail loud" rule for deployments that forgot to
+    configure the LLM.
     """
-    # Reference get_settings() so consumers see the integration surface,
-    # even though the stub itself doesn't read any field. The future real
-    # client will read settings.ollama_url here.
-    _ = get_settings  # keep the import live
-    return _NotConfiguredOllama()
+    # Lazy import — :mod:`musubi.llm.ollama` imports this module for the
+    # Protocol definition, and an eager import would cycle.
+    from musubi.llm.ollama import HttpxOllamaClient
+
+    try:
+        settings = get_settings()
+    except Exception:
+        return _NotConfiguredOllama()
+
+    debug_dir: Path | None = None
+    maturation_debug = getattr(settings, "maturation_debug_dir", None)
+    if maturation_debug is not None:
+        debug_dir = Path(str(maturation_debug))
+
+    return HttpxOllamaClient(
+        base_url=str(settings.ollama_url).rstrip("/"),
+        model=settings.llm_model,
+        debug_dir=debug_dir,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -160,8 +160,12 @@ def test_compose_file_renders_to_valid_yaml() -> None:
     assert compose["services"]["ollama"]["environment"]["OLLAMA_KEEP_ALIVE"] == "24h"
     assert compose["services"]["ollama"]["environment"]["OLLAMA_MAX_LOADED_MODELS"] == "1"
     assert compose["services"]["tei-dense"]["volumes"] == ["tei-models:/data"]
+    # Qdrant gets two bind mounts: persistent storage + the snapshot path
+    # that `deploy/backup/musubi-backup.sh` reads from. Without the second
+    # mount, Qdrant snapshots are ephemeral container storage.
     assert compose["services"]["qdrant"]["volumes"] == [
-        "/var/lib/musubi/qdrant-storage:/qdrant/storage"
+        "/var/lib/musubi/qdrant-storage:/qdrant/storage",
+        "/var/lib/musubi/qdrant-snapshots:/qdrant/snapshots",
     ]
 
 

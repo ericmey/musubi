@@ -4,7 +4,7 @@ section: 00-index
 type: index
 status: living-document
 tags: [section/index, status/living-document, type/index]
-updated: 2026-04-20
+updated: 2026-04-21
 up: "[[00-index/index]]"
 reviewed: true
 ---
@@ -26,6 +26,114 @@ What it is **not:** a commit log. Code commits live in git. This log is for
 *vault-visible* events.
 
 ## Entries
+
+### 2026-04-21 — Host-local backup scheduler live (P1 from the first-deploy punchlist)
+
+`musubi.mey.house` now backs itself up every six hours without Ansible.
+[`deploy/backup/musubi-backup.sh`](../../../deploy/backup/musubi-backup.sh) + a
+systemd timer snapshot all seven Qdrant collections (`musubi_artifact`,
+`musubi_artifact_chunks`, `musubi_concept`, `musubi_curated`,
+`musubi_episodic`, `musubi_lifecycle_events`, `musubi_thought`), copy
+`/var/lib/musubi/lifecycle/work.sqlite` via `sqlite3 .backup`, mirror
+`/var/lib/musubi/artifact-blobs`, and write a manifest + SHA256SUMS under
+`/var/lib/musubi/backups/<TIMESTAMP>/`. Retention is 14 days, pruned
+only after a green run. First real run: ~10 MB of snapshots, clean
+status=0. 18 structural tests in [`tests/ops/test_backup_scheduler.py`](../../../tests/ops/test_backup_scheduler.py).
+
+**Why host-local rather than extending `deploy/backup/backup.yml`:** the
+ansible path targets `127.0.0.1:6333` (which doesn't exist in the
+compose era — Qdrant is only on the `musubi_default` bridge) and
+`/mnt/snapshots/` (which doesn't exist on the current host — the VG has
+0 VFree and snapshot-capable mount was never provisioned). Also: if
+yua is down for maintenance, the backup path shouldn't go down with
+it. The ansible playbook remains as the canonical drill procedure and
+the future offsite-push path when restic + B2 creds land.
+
+**Deployment gotchas surfaced while wiring this:**
+
+- Qdrant writes snapshots to `/qdrant/snapshots` inside the container,
+  **not** `/qdrant/storage/snapshots`. Default `snapshots_path: ./snapshots`
+  is relative to the working dir (`/qdrant`), not the storage dir.
+  Without a bind mount, snapshots are ephemeral container storage.
+  Added `/var/lib/musubi/qdrant-snapshots:/qdrant/snapshots` to the
+  compose template.
+- Collection names in-store drifted from the spec's plan —
+  `musubi_artifact` (not `musubi_artifact_heads`), plus
+  `musubi_lifecycle_events` which was declared in `store/` but not in
+  any spec section's canonical list. The backup driver queries
+  `/collections` at run time and iterates whatever's there, so future
+  collection renames no-op against the script.
+
+**Still on the P1 punchlist:** Prometheus / observability scrape.
+**Still on the P2 punchlist:** offsite backup tier (restic → B2) waiting
+on the secrets vault; issues #150/#151 for GHCR image publish + update
+workflow.
+
+### 2026-04-21 — Lifecycle worker live; capture → retrieve round-trip closed
+
+The final first-deploy functional gap — captures stuck in `state: provisional`
+with no runner to mature them — is closed. A new
+`musubi-lifecycle-worker-1` container runs `python -m musubi.lifecycle.runner`
+and drives the documented cron schedule from
+[[06-ingestion/lifecycle-engine]]. Maturation jobs are wired to real
+implementations via `build_maturation_jobs()`; the remaining sweeps
+(synthesis / promotion / demotion / reflection / vault_reconcile) stay
+placeholder-lambdas until follow-up slices land real builders.
+
+**What landed:**
+
+- [`src/musubi/lifecycle/runner.py`](../../src/musubi/lifecycle/runner.py) —
+  tick-driven asyncio scheduler. Design rationale in
+  [[13-decisions/0025-lifecycle-runner-without-apscheduler]] (no
+  APScheduler dependency — rebuild that later when we need
+  persisted-jobstore semantics).
+- [`src/musubi/llm/ollama.py`](../../src/musubi/llm/ollama.py) —
+  httpx-backed `OllamaClient` satisfying the `OllamaClient` Protocol on
+  [[06-ingestion/maturation]]. Returns `None` on outage (sweep falls
+  back to captured values); validates response via pydantic. 17 unit
+  tests, all using `pytest-httpx` — no live Ollama needed for CI.
+- Prompts: `src/musubi/llm/prompts/{importance,topics}/v1.txt` —
+  frozen per the rule in `docs/Musubi/06-ingestion/CLAUDE.md`.
+- [`src/musubi/lifecycle/maturation.py`](../../src/musubi/lifecycle/maturation.py) —
+  `default_ollama_client()` now returns the real client instead of the
+  loud stub.
+- [`deploy/ansible/templates/docker-compose.yml.j2`](../../../deploy/ansible/templates/docker-compose.yml.j2) —
+  added `lifecycle-worker` service using the core image with a new
+  entrypoint. Inherited HEALTHCHECK disabled (worker doesn't serve HTTP).
+
+**Verification on `musubi.mey.house` (2026-04-21):**
+
+1. Rebuilt `musubi-core:dev`, transferred via `docker save | ssh docker load`.
+2. Edited `/etc/musubi/docker-compose.yml` in place to add the
+   `lifecycle-worker` block (Ansible is the source-of-truth but the vault
+   pass lives on yua; in-place edit was the pragmatic path).
+3. `docker compose up -d --force-recreate core lifecycle-worker` — both
+   came up clean; compose stack still reports all healthy.
+4. Worker logs show `lifecycle-runner-starting jobs=[...] tick_seconds=60`
+   and `concept_maturation` firing at its documented `03:30` cron window.
+5. Forced one manual `episodic_maturation_sweep` via
+   `docker compose exec lifecycle-worker python -c "…"`:
+   `SweepReport(selected=3, transitioned=3, enriched=2, failed=0)`.
+6. `/v1/retrieve {query_text: "first deploy smoke", namespace: "eric/ops/episodic"}`
+   returns the three matured captures. **Round-trip closed.**
+
+**What the LLM did:** Qwen-3:4B on the local Ollama returned valid JSON
+matching the pydantic schemas on both prompts. Two of three captures
+received inferred topics (`testing/smoke`, `project/musubi` + `deployment/first-deploy`);
+the third was a timestamp-only capture — topics correctly empty.
+
+**Open items for the punchlist:**
+
+- P1 Observability: stand up Prometheus; scrape `core:/v1/ops/metrics` and
+  `lifecycle-worker` (when the metrics exporter slice lands).
+- P1 Qdrant backup cron: `deploy/backup/` scripts exist but aren't
+  scheduled.
+- P2 [[_slices/slice-ops-core-image-publish]]: CI-published GHCR image
+  + digest-pinned `group_vars`.
+- P2 [[_slices/slice-ops-update-workflow]]: `deploy/ansible/update.yml`
+  with `policy: always` pulls.
+- P3 Real builders for the non-maturation sweeps (synthesis, promotion,
+  demotion, reflection, vault_reconcile).
 
 ### 2026-04-20 — Musubi stack live on `musubi.mey.house` (first real deploy)
 

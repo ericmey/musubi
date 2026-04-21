@@ -1,0 +1,25 @@
+[Unit]
+Description=Musubi canonical-store backup (Qdrant snapshots, SQLite, artifact blobs)
+Documentation=file:///usr/local/share/musubi/deploy/backup/README.md
+# Require Docker so `docker compose exec` works. We don't require the
+# compose stack itself — if Musubi is down, an empty backup is still better
+# than a crashed service (operator investigates the absence).
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+# Hardening: only the paths the script actually writes to.
+ReadWritePaths=/var/lib/musubi/backups /var/lib/musubi/lifecycle /var/lock
+ReadOnlyPaths=/etc/musubi /var/lib/musubi/qdrant-storage /var/lib/musubi/qdrant-snapshots /var/lib/musubi/artifact-blobs
+ProtectHome=true
+ProtectSystem=strict
+NoNewPrivileges=true
+# Timeout: backups shouldn't exceed ~10 min at our scale; cap at 30 min so
+# a hung snapshot doesn't block the next run forever.
+TimeoutStartSec=1800
+ExecStart=/usr/local/bin/musubi-backup
+StandardOutput=journal
+StandardError=journal
