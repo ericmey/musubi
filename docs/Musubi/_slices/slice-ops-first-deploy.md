@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice, ops, deploy, phase-2]
 updated: 2026-04-20
 reviewed: true
 depends-on: ["[[_slices/slice-ops-ansible]]", "[[_slices/slice-ops-compose]]", "[[_slices/slice-ops-backup]]", "[[_slices/slice-ops-observability]]"]
-blocks: []
+blocks: ["[[_slices/slice-ops-core-image-publish]]"]
 ---
 
 # Slice: First-deploy runbook + validation

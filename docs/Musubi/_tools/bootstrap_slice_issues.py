@@ -35,7 +35,7 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[3]
-SLICE_DIR = ROOT / "docs" / "architecture" / "_slices"
+SLICE_DIR = ROOT / "docs" / "Musubi" / "_slices"
 
 # Mapping from the slice's `phase: "1 Schema"` form to the label name.
 PHASE_TO_LABEL = {
