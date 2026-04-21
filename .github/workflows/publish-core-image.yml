@@ -44,11 +44,13 @@ jobs:
     permissions:
       # GITHUB_TOKEN needs `packages: write` to push to the repo's GHCR
       # namespace. `id-token: write` is required for cosign keyless
-      # signing via GitHub's OIDC provider. `contents: read` is the
-      # default but stated explicitly.
+      # signing via GitHub's OIDC provider. `security-events: write`
+      # is required by `github/codeql-action/upload-sarif@v3` to post
+      # Trivy findings to the Security → Code scanning tab.
       contents: read
       packages: write
       id-token: write
+      security-events: write
     outputs:
       image: ${{ steps.meta.outputs.tags }}
       digest: ${{ steps.build.outputs.digest }}
@@ -151,7 +153,20 @@ jobs:
             --type cyclonedx \
             "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
 
-      - name: Trivy vulnerability scan (fail on CRITICAL)
+      - name: Trivy vulnerability scan (table — always visible in logs)
+        # Human-readable pass first so operators can see what CRITICAL
+        # / HIGH findings exist without downloading the SARIF artefact.
+        # `exit-code: 0` → this step never fails; gating is below.
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          ignore-unfixed: true
+          scanners: vuln
+
+      - name: Trivy vulnerability scan (SARIF — CRITICAL gate)
         uses: aquasecurity/trivy-action@0.35.0
         with:
           image-ref: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
@@ -159,12 +174,13 @@ jobs:
           output: trivy-results.sarif
           severity: CRITICAL
           # Exit 1 if any CRITICAL vulnerability is found. HIGH is
-          # surfaced as SARIF but not gated — a homelab service
-          # can't afford to chase every `libssl` HIGH on upstream
-          # images. Tune with an allowlist later if we hit false
-          # positives too often.
+          # surfaced in the prior table step for visibility but NOT
+          # gated — a homelab service can't afford to chase every
+          # libssl HIGH on upstream images. Tune via `.trivyignore`
+          # if we hit false positives too often.
           exit-code: "1"
           ignore-unfixed: true
+          scanners: vuln
 
       - name: Upload Trivy SARIF to GitHub Security tab
         # Runs even if Trivy failed so the findings are visible in
