@@ -16,7 +16,31 @@
         project_src: "{{ musubi_config_dir }}"
         policy: missing
 
-    - name: Start Musubi stack without moving digest pins
+    - name: Start inference + storage services (everything except core) and wait for healthy
+      community.docker.docker_compose_v2:
+        project_src: "{{ musubi_config_dir }}"
+        state: present
+        pull: missing
+        remove_orphans: true
+        wait: true
+        wait_timeout: 300
+        services:
+          - qdrant
+          - tei-dense
+          - tei-sparse
+          - tei-reranker
+          - ollama
+
+    - name: Ensure the LLM model is pulled into Ollama
+      # Idempotent: `ollama pull` no-ops if the model is already present.
+      # Runs after inference services are up (compose healthchecks guarantee
+      # ollama HTTP is responsive) but before Core starts.
+      ansible.builtin.command:
+        cmd: docker compose -f {{ musubi_config_dir }}/docker-compose.yml exec -T ollama ollama pull {{ musubi_ollama_model }}
+      register: ollama_pull
+      changed_when: "'pulling' in (ollama_pull.stdout | default(''))"
+
+    - name: Start Musubi Core now that inference is up
       community.docker.docker_compose_v2:
         project_src: "{{ musubi_config_dir }}"
         state: present
@@ -33,4 +57,8 @@
       ansible.builtin.uri:
         url: "{{ musubi_health_urls.core }}"
         status_code: 200
+      retries: 12
+      delay: 5
+      register: core_health
+      until: core_health.status == 200
       changed_when: false

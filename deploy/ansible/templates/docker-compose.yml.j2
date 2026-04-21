@@ -1,3 +1,5 @@
+# Managed by deploy/ansible/ — do not edit on the host.
+# Rendered by `deploy/ansible/bootstrap.yml` (and refreshed by `deploy.yml`).
 services:
   core:
     image: {{ musubi_core_image }}
@@ -8,6 +10,8 @@ services:
     volumes:
       - /var/lib/musubi/vault:/var/lib/musubi/vault
       - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
+      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
+      - /var/log/musubi:/var/log/musubi
     depends_on:
       qdrant:
         condition: service_healthy
@@ -17,16 +21,24 @@ services:
         condition: service_healthy
       ollama:
         condition: service_healthy
+    restart: unless-stopped
 
   qdrant:
     image: {{ musubi_qdrant_image }}
+    environment:
+      # Qdrant reads its API key from config OR env. Env wins. Keeps the
+      # value out of the mounted config and in the ansible-vault instead.
+      QDRANT__SERVICE__API_KEY: "{{ vault_qdrant_api_key }}"
     volumes:
       - /var/lib/musubi/qdrant-storage:/qdrant/storage
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
-      interval: 30s
+      # Qdrant image has no curl/wget. Use bash /dev/tcp for liveness.
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/6333"]
+      interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 10s
+    restart: unless-stopped
 
   tei-dense:
     image: {{ musubi_tei_image }}
@@ -39,10 +51,15 @@ services:
           devices:
             - capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      interval: 30s
+      # TEI image is minimal (no curl/wget/nc). Use bash's /dev/tcp pseudo-
+      # device to verify port 80 is accepting connections. Liveness-only;
+      # model-load errors show up in docker logs if they happen.
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
 
   tei-sparse:
     image: {{ musubi_tei_image }}
@@ -55,14 +72,22 @@ services:
           devices:
             - capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      interval: 30s
+      # TEI image is minimal (no curl/wget/nc). Use bash's /dev/tcp pseudo-
+      # device to verify port 80 is accepting connections. Liveness-only;
+      # model-load errors show up in docker logs if they happen.
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
 
   tei-reranker:
     image: {{ musubi_tei_image }}
-    command: --model-id BAAI/bge-reranker-v2-m3 --pooling rerank
+    # Reranker models are cross-encoders; TEI auto-detects from the model
+    # config and runs them as rerankers. No `--pooling` flag — the value
+    # `rerank` doesn't exist in TEI 1.x (only cls / mean / splade).
+    command: --model-id BAAI/bge-reranker-v2-m3
     volumes:
       - tei-models:/data
     deploy:
@@ -71,10 +96,15 @@ services:
           devices:
             - capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:80/health"]
-      interval: 30s
+      # TEI image is minimal (no curl/wget/nc). Use bash's /dev/tcp pseudo-
+      # device to verify port 80 is accepting connections. Liveness-only;
+      # model-load errors show up in docker logs if they happen.
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
 
   ollama:
     image: {{ musubi_ollama_image }}
@@ -89,11 +119,20 @@ services:
         reservations:
           devices:
             - capabilities: [gpu]
+    # `ollama` CLI talks to the local daemon over HTTP — same effect as
+    # `curl /api/tags` but works without curl (the official image is minimal).
+    # Model presence is orthogonal — `deploy.yml` runs `ollama pull` as a
+    # separate idempotent step after this service is healthy. Coupling model-
+    # pull state into the healthcheck would deadlock the pull (which needs
+    # HTTP up) against `core`'s `depends_on: service_healthy` (which needs
+    # the model present). Keep them independent.
     healthcheck:
-      test: ["CMD-SHELL", "ollama list | grep {{ musubi_ollama_model }}"]
-      interval: 30s
-      timeout: 10s
-      retries: 10
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
 
 volumes:
   tei-models:
