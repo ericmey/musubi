@@ -208,14 +208,15 @@ def build_lifecycle_jobs(
     maturation_jobs: Iterable[Job] | None = None,
     demotion_jobs: Iterable[Job] | None = None,
     synthesis_jobs: Iterable[Job] | None = None,
+    promotion_jobs: Iterable[Job] | None = None,
 ) -> list[Job]:
     """Compose the full job list the production worker drives.
 
     Real job builders replace the placeholder-lambdas emitted by
     :func:`build_default_jobs` for every name they cover. Any job
     name the builders haven't claimed keeps the placeholder (which
-    log-skips). Promotion / reflection / vault_reconcile still use
-    placeholders until their builder slices land.
+    log-skips). Reflection / vault_reconcile still use placeholders
+    until their builder slices land.
 
     Injection points keep unit tests deterministic — a test can
     pass a stub Job without wiring a QdrantClient / Ollama / etc.
@@ -223,7 +224,7 @@ def build_lifecycle_jobs(
     from musubi.lifecycle.scheduler import build_default_jobs
 
     real_jobs: list[Job] = []
-    for group in (maturation_jobs, demotion_jobs, synthesis_jobs):
+    for group in (maturation_jobs, demotion_jobs, synthesis_jobs, promotion_jobs):
         if group is not None:
             real_jobs.extend(group)
 
@@ -274,14 +275,19 @@ async def _main_async() -> None:
         build_maturation_jobs,
         default_ollama_client,
     )
+    from musubi.lifecycle.promotion import PromotionDeps, build_promotion_jobs
     from musubi.lifecycle.synthesis import (
         SynthesisCursor,
         SynthesisOllamaClient,
         build_synthesis_jobs,
     )
+    from musubi.llm.promotion_client import HttpxPromotionClient
     from musubi.planes.concept.plane import ConceptPlane
+    from musubi.planes.curated.plane import CuratedPlane
     from musubi.planes.episodic.plane import EpisodicPlane
     from musubi.planes.thoughts.plane import ThoughtsPlane
+    from musubi.vault.writelog import WriteLog
+    from musubi.vault.writer import VaultWriter as _VaultWriter
 
     logging.basicConfig(
         level=logging.INFO,
@@ -345,10 +351,37 @@ async def _main_async() -> None:
         cursor=synth_cursor,
         lock_dir=lock_dir,
     )
+
+    # Promotion needs the real VaultWriter + a first-party HttpxPromotionClient.
+    # We reuse the lifecycle sqlite dir as the write-log home so the vault
+    # watcher (if running in the same deploy) shares the echo-filter state.
+    write_log_db = Path(settings.lifecycle_sqlite_path).parent / "vault-writelog.db"
+    vault_writer = _VaultWriter(
+        vault_root=settings.vault_path,
+        write_log=WriteLog(db_path=write_log_db),
+    )
+    promotion_llm = HttpxPromotionClient(
+        base_url=str(settings.ollama_url),
+        model=settings.llm_model,
+    )
+    curated_plane = CuratedPlane(client=qdrant, embedder=embedder)
+    prom_jobs = build_promotion_jobs(
+        deps=PromotionDeps(
+            qdrant=qdrant,
+            concept_plane=concept_plane,
+            curated_plane=curated_plane,
+            events=sink,
+            llm=promotion_llm,
+            vault_writer=vault_writer,
+            thoughts=thought_emitter,
+        ),
+        lock_dir=lock_dir,
+    )
     jobs = build_lifecycle_jobs(
         maturation_jobs=mat_jobs,
         demotion_jobs=dem_jobs,
         synthesis_jobs=syn_jobs,
+        promotion_jobs=prom_jobs,
     )
 
     runner = LifecycleRunner(jobs=jobs)
