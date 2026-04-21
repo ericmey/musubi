@@ -71,15 +71,18 @@ async def status(
         overall = "degraded"
         return StatusResponse(status=overall, components=components)
 
-    for name, base_url in (
-        ("tei-dense", str(settings.tei_dense_url)),
-        ("tei-sparse", str(settings.tei_sparse_url)),
-        ("tei-reranker", str(settings.tei_reranker_url)),
-        ("ollama", str(settings.ollama_url)),
+    # Per-service liveness paths. TEI exposes `/health`; Ollama doesn't —
+    # it returns 404 on `/health` and 200 on `/api/tags` (empty model list
+    # when no model is loaded, which still proves the daemon is up).
+    for name, base_url, probe_path in (
+        ("tei-dense", str(settings.tei_dense_url), "/health"),
+        ("tei-sparse", str(settings.tei_sparse_url), "/health"),
+        ("tei-reranker", str(settings.tei_reranker_url), "/health"),
+        ("ollama", str(settings.ollama_url), "/api/tags"),
     ):
         components[name] = check_component_health(
             name=name,
-            url=base_url.rstrip("/") + "/health",
+            url=base_url.rstrip("/") + probe_path,
         )
 
     overall = "ok" if all(c.healthy for c in components.values()) else "degraded"
