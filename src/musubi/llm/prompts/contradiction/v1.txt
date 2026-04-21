@@ -1,0 +1,17 @@
+You decide whether two synthesized concepts are consistent or contradictory.
+
+Two concepts contradict when they assert opposite truth values about the same referent (e.g. "X is Y" vs "X is not Y"). Concepts that simply cover different topics, or that refine one another, are consistent — reserve "contradictory" for real logical conflict.
+
+If contradictory, briefly explain WHICH claims clash.
+
+Respond in this exact JSON shape, no commentary:
+
+{"verdict": "<consistent|contradictory>", "reason": "<string>"}
+
+Concept A:
+title: {A_TITLE}
+content: {A_CONTENT}
+
+Concept B:
+title: {B_TITLE}
+content: {B_CONTENT}

@@ -264,6 +264,53 @@ def test_build_lifecycle_jobs_wires_demotion_builders() -> None:
     assert documented.issubset(by_name.keys())
 
 
+def test_build_lifecycle_jobs_wires_synthesis_builders() -> None:
+    """A stub synthesis Job replaces the default placeholder; other
+    slots keep their placeholders."""
+    syn_stub = Job(
+        name="synthesis",
+        trigger_kind="cron",
+        trigger_kwargs={"hour": 3, "minute": 0},
+        func=lambda: None,
+        grace_time_s=3600,
+    )
+    jobs = build_lifecycle_jobs(synthesis_jobs=[syn_stub])
+    by_name = {j.name: j for j in jobs}
+    assert by_name["synthesis"] is syn_stub
+    # Other names stay placeholder.
+    assert by_name["promotion"].func.__name__ == "_run"
+
+
+def test_build_lifecycle_jobs_merges_all_three_builder_groups() -> None:
+    """Maturation + demotion + synthesis stubs all compose together."""
+    mat = Job(
+        name="maturation_episodic",
+        trigger_kind="cron",
+        trigger_kwargs={"minute": 13},
+        func=lambda: None,
+        grace_time_s=900,
+    )
+    dem = Job(
+        name="demotion_concept",
+        trigger_kind="cron",
+        trigger_kwargs={"hour": 5, "minute": 0},
+        func=lambda: None,
+        grace_time_s=3600,
+    )
+    syn = Job(
+        name="synthesis",
+        trigger_kind="cron",
+        trigger_kwargs={"hour": 3, "minute": 0},
+        func=lambda: None,
+        grace_time_s=3600,
+    )
+    jobs = build_lifecycle_jobs(maturation_jobs=[mat], demotion_jobs=[dem], synthesis_jobs=[syn])
+    by_name = {j.name: j for j in jobs}
+    assert by_name["maturation_episodic"] is mat
+    assert by_name["demotion_concept"] is dem
+    assert by_name["synthesis"] is syn
+
+
 def test_build_lifecycle_jobs_merges_maturation_and_demotion() -> None:
     """Both real builder groups get composed together with placeholders
     for everything else."""

@@ -301,6 +301,153 @@ async def test_infer_topics_drops_invalid_ksuids(httpx_mock: HTTPXMock) -> None:
 
 
 # ---------------------------------------------------------------------------
+# SynthesisOllamaClient Protocol
+# ---------------------------------------------------------------------------
+
+
+def _synth_input(n: int = 3) -> object:
+    """Build a SynthesisInput with ``n`` stub EpisodicMemory items."""
+    from datetime import timedelta
+
+    from musubi.lifecycle.synthesis import SynthesisInput
+    from musubi.types.common import utc_now
+    from musubi.types.episodic import EpisodicMemory
+
+    now = utc_now()
+    memories = [
+        EpisodicMemory(
+            namespace="eric/ops/episodic",
+            content=f"memory {i} about shared theme",
+            importance=5,
+            tags=["smoke"],
+            event_at=now - timedelta(minutes=i),
+        )
+        for i in range(n)
+    ]
+    return SynthesisInput(memories=memories)
+
+
+async def test_synthesize_cluster_happy_path(httpx_mock: HTTPXMock) -> None:
+    from musubi.lifecycle.synthesis import SynthesisOutput
+
+    cluster = _synth_input(3)
+    httpx_mock.add_response(
+        url=f"{_BASE_URL}/api/chat",
+        method="POST",
+        json=_chat_body(
+            {
+                "title": "Smoke-test theme",
+                "content": "A cluster about smoke-testing the stack.",
+                "rationale": "All three items mention the smoke suite.",
+                "tags": ["testing/smoke", "ops/deployment"],
+                "importance": 6,
+                "contradicts_notice": "",
+            }
+        ),
+    )
+    result = await _client().synthesize_cluster(cluster)  # type: ignore[arg-type]
+    assert isinstance(result, SynthesisOutput)
+    assert result.title == "Smoke-test theme"
+    assert result.importance == 6
+    assert "testing/smoke" in result.tags
+
+
+async def test_synthesize_cluster_returns_none_on_outage(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_exception(httpx.ConnectError("ollama down"))
+    result = await _client().synthesize_cluster(_synth_input(3))  # type: ignore[arg-type]
+    assert result is None
+
+
+async def test_synthesize_cluster_returns_none_on_validation_failure(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url=f"{_BASE_URL}/api/chat",
+        method="POST",
+        # importance=15 violates the ge=1/le=10 pydantic validator.
+        json=_chat_body(
+            {
+                "title": "x",
+                "content": "y",
+                "rationale": "",
+                "tags": [],
+                "importance": 15,
+                "contradicts_notice": "",
+            }
+        ),
+    )
+    result = await _client().synthesize_cluster(_synth_input(3))  # type: ignore[arg-type]
+    assert result is None
+
+
+async def test_synthesize_cluster_returns_none_on_empty_cluster() -> None:
+    from musubi.lifecycle.synthesis import SynthesisInput
+
+    result = await _client().synthesize_cluster(SynthesisInput(memories=[]))
+    assert result is None
+
+
+async def test_check_contradiction_happy_path(httpx_mock: HTTPXMock) -> None:
+
+    from musubi.lifecycle.synthesis import (
+        ContradictionInput,
+        ContradictionOutput,
+    )
+    from musubi.types.concept import SynthesizedConcept
+
+    concept_a = SynthesizedConcept(
+        namespace="eric/ops/concept",
+        title="Prefers dark mode",
+        content="The user strongly prefers dark mode.",
+        synthesis_rationale="Multiple memories show dark-mode preference.",
+        merged_from=[generate_ksuid(), generate_ksuid(), generate_ksuid()],
+    )
+    concept_b = SynthesizedConcept(
+        namespace="eric/ops/concept",
+        title="Prefers light mode",
+        content="The user strongly prefers light mode.",
+        synthesis_rationale="Multiple memories show light-mode preference.",
+        merged_from=[generate_ksuid(), generate_ksuid(), generate_ksuid()],
+    )
+    httpx_mock.add_response(
+        url=f"{_BASE_URL}/api/chat",
+        method="POST",
+        json=_chat_body({"verdict": "contradictory", "reason": "Opposite claims about theme."}),
+    )
+    result = await _client().check_contradiction(
+        ContradictionInput(concept_a=concept_a, concept_b=concept_b)
+    )
+    assert isinstance(result, ContradictionOutput)
+    assert result.verdict == "contradictory"
+
+
+async def test_check_contradiction_rejects_unknown_verdict(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Verdict must be one of the two enumerated values."""
+
+    from musubi.lifecycle.synthesis import ContradictionInput
+    from musubi.types.concept import SynthesizedConcept
+
+    concept = SynthesizedConcept(
+        namespace="eric/ops/concept",
+        title="x",
+        content="y",
+        synthesis_rationale="stub",
+        merged_from=[generate_ksuid(), generate_ksuid(), generate_ksuid()],
+    )
+    httpx_mock.add_response(
+        url=f"{_BASE_URL}/api/chat",
+        method="POST",
+        json=_chat_body({"verdict": "unclear", "reason": "hmm"}),
+    )
+    result = await _client().check_contradiction(
+        ContradictionInput(concept_a=concept, concept_b=concept)
+    )
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
 # Prompt files are loadable and non-empty
 # ---------------------------------------------------------------------------
 

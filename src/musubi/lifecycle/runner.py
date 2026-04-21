@@ -207,14 +207,15 @@ def build_lifecycle_jobs(
     *,
     maturation_jobs: Iterable[Job] | None = None,
     demotion_jobs: Iterable[Job] | None = None,
+    synthesis_jobs: Iterable[Job] | None = None,
 ) -> list[Job]:
     """Compose the full job list the production worker drives.
 
     Real job builders replace the placeholder-lambdas emitted by
     :func:`build_default_jobs` for every name they cover. Any job
     name the builders haven't claimed keeps the placeholder (which
-    log-skips). Synthesis / promotion / reflection / vault_reconcile
-    still use placeholders until their builder slices land.
+    log-skips). Promotion / reflection / vault_reconcile still use
+    placeholders until their builder slices land.
 
     Injection points keep unit tests deterministic — a test can
     pass a stub Job without wiring a QdrantClient / Ollama / etc.
@@ -222,7 +223,7 @@ def build_lifecycle_jobs(
     from musubi.lifecycle.scheduler import build_default_jobs
 
     real_jobs: list[Job] = []
-    for group in (maturation_jobs, demotion_jobs):
+    for group in (maturation_jobs, demotion_jobs, synthesis_jobs):
         if group is not None:
             real_jobs.extend(group)
 
@@ -273,6 +274,11 @@ async def _main_async() -> None:
         build_maturation_jobs,
         default_ollama_client,
     )
+    from musubi.lifecycle.synthesis import (
+        SynthesisCursor,
+        SynthesisOllamaClient,
+        build_synthesis_jobs,
+    )
     from musubi.planes.concept.plane import ConceptPlane
     from musubi.planes.episodic.plane import EpisodicPlane
     from musubi.planes.thoughts.plane import ThoughtsPlane
@@ -291,6 +297,9 @@ async def _main_async() -> None:
     )
     sink = LifecycleEventSink(db_path=settings.lifecycle_sqlite_path)
     cursor = MaturationCursor(db_path=settings.lifecycle_sqlite_path)
+    synth_cursor = SynthesisCursor(db_path=settings.lifecycle_sqlite_path)
+    # One HttpxOllamaClient satisfies both the maturation + synthesis
+    # Protocols — see src/musubi/llm/ollama.py.
     ollama = default_ollama_client()
 
     embedder = _TEICompositeEmbedder(
@@ -326,7 +335,23 @@ async def _main_async() -> None:
         ),
         lock_dir=lock_dir,
     )
-    jobs = build_lifecycle_jobs(maturation_jobs=mat_jobs, demotion_jobs=dem_jobs)
+    # HttpxOllamaClient satisfies both OllamaClient (maturation) and
+    # SynthesisOllamaClient structurally — cast for the stricter Protocol.
+    from typing import cast
+
+    syn_jobs = build_synthesis_jobs(
+        client=qdrant,
+        sink=sink,
+        ollama=cast(SynthesisOllamaClient, ollama),
+        embedder=embedder,
+        cursor=synth_cursor,
+        lock_dir=lock_dir,
+    )
+    jobs = build_lifecycle_jobs(
+        maturation_jobs=mat_jobs,
+        demotion_jobs=dem_jobs,
+        synthesis_jobs=syn_jobs,
+    )
 
     runner = LifecycleRunner(jobs=jobs)
     runner.install_signal_handlers()
