@@ -499,7 +499,14 @@ def check_pr_closing_slices(rep: Report) -> None:
     if not pr_body:
         return
 
-    matches = _CLOSE_KEYWORD_RE.findall(pr_body)
+    # GitHub itself ignores Closes-keywords inside code blocks / inline code
+    # when deciding what to auto-close; mirror that so docs PRs that mention
+    # `Closes #N` inside a code example don't trip the check. The two
+    # regexes are re-used from the wikilink scanner below.
+    stripped = _FENCED_CODE_RE.sub("", pr_body)
+    stripped = _INLINE_CODE_RE.sub("", stripped)
+
+    matches = _CLOSE_KEYWORD_RE.findall(stripped)
     if not matches:
         return
 
