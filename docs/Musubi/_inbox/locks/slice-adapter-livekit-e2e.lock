@@ -1,0 +1,11 @@
+owner: claude-code-opus-4-7
+agent: Claude Code (Opus 4.7)
+started: 2026-04-21
+issue: https://github.com/ericmey/musubi/issues/183
+pr: https://github.com/ericmey/musubi/pull/184
+branch: slice/adapter-livekit-e2e
+note: |
+  LiveKit adapter end-to-end tests against the live docker-compose stack.
+  Pure tests slice — no src/ changes. Owned paths:
+    tests/integration/test_livekit_e2e.py
+    tests/integration/_livekit_fixtures.py
