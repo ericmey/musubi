@@ -19,6 +19,7 @@ PLAYBOOKS = {
     "deploy": ANSIBLE / "deploy.yml",
     "config": ANSIBLE / "config.yml",
     "health": ANSIBLE / "health.yml",
+    "update": ANSIBLE / "update.yml",
 }
 GROUP_VARS = ANSIBLE / "group_vars" / "all.yml"
 VAULT_EXAMPLE = ANSIBLE / "vault.example.yml"
@@ -151,6 +152,7 @@ def test_compose_file_renders_to_valid_yaml() -> None:
         "{{ musubi_qdrant_image }}",
         "{{ musubi_tei_image }}",
         "{{ musubi_ollama_image }}",
+        "{{ musubi_prometheus_image }}",
     ):
         rendered = rendered.replace(token, "example/image:sha256-placeholder")
     rendered = rendered.replace("{{ musubi_core_port }}", "8100")
@@ -160,8 +162,12 @@ def test_compose_file_renders_to_valid_yaml() -> None:
     assert compose["services"]["ollama"]["environment"]["OLLAMA_KEEP_ALIVE"] == "24h"
     assert compose["services"]["ollama"]["environment"]["OLLAMA_MAX_LOADED_MODELS"] == "1"
     assert compose["services"]["tei-dense"]["volumes"] == ["tei-models:/data"]
+    # Qdrant gets two bind mounts: persistent storage + the snapshot path
+    # that `deploy/backup/musubi-backup.sh` reads from. Without the second
+    # mount, Qdrant snapshots are ephemeral container storage.
     assert compose["services"]["qdrant"]["volumes"] == [
-        "/var/lib/musubi/qdrant-storage:/qdrant/storage"
+        "/var/lib/musubi/qdrant-storage:/qdrant/storage",
+        "/var/lib/musubi/qdrant-snapshots:/qdrant/snapshots",
     ]
 
 

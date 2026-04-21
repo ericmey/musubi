@@ -1,0 +1,18 @@
+[Unit]
+Description=Run musubi-backup every six hours
+Documentation=file:///usr/local/share/musubi/deploy/backup/README.md
+
+[Timer]
+# Six-hour cadence. Qdrant RPO in 09-operations/backup-restore.md is 6h;
+# this satisfies it with zero headroom, which is the design target — the
+# sqlite + artifact-blob steps are cheap enough to piggy-back.
+OnCalendar=00/6:17:00 UTC
+# Randomized delay so fleet-wide timers don't slam the disk at the same
+# instant. One host today, but preserve the pattern.
+RandomizedDelaySec=300
+# If the host was off when the timer fired, run on next boot.
+Persistent=true
+Unit=musubi-backup.service
+
+[Install]
+WantedBy=timers.target

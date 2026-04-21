@@ -23,6 +23,34 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Lifecycle worker. Shares the core image — same code, different entrypoint.
+  # Drives the documented cron schedule (maturation hourly at :13, provisional
+  # TTL hourly at :17, synthesis/promotion/demotion/reflection nightly,
+  # vault reconcile every 6h — see docs/Musubi/06-ingestion/lifecycle-engine.md
+  # §Job registry). Maturation jobs are real; other jobs are placeholders
+  # until their builder helpers land (follow-up slices).
+  lifecycle-worker:
+    image: {{ musubi_core_image }}
+    env_file:
+      - .env.production
+    command: ["python", "-m", "musubi.lifecycle.runner"]
+    volumes:
+      - /var/lib/musubi/vault:/var/lib/musubi/vault
+      - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
+      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
+      - /var/log/musubi:/var/log/musubi
+    # The core image ships a HEALTHCHECK against :8100. The worker doesn't
+    # serve HTTP, so inherit would always report unhealthy. Disable and rely
+    # on `restart: unless-stopped` + log surveillance instead.
+    healthcheck:
+      disable: true
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    restart: unless-stopped
+
   qdrant:
     image: {{ musubi_qdrant_image }}
     environment:
@@ -31,6 +59,12 @@ services:
       QDRANT__SERVICE__API_KEY: "{{ vault_qdrant_api_key }}"
     volumes:
       - /var/lib/musubi/qdrant-storage:/qdrant/storage
+      # Snapshots live in /qdrant/snapshots inside the container (default
+      # in Qdrant's bundled config.yaml). Without this bind mount, snapshots
+      # are ephemeral container storage — a container restart discards them.
+      # The backup driver at `deploy/backup/musubi-backup.sh` reads from
+      # the host side of this mount.
+      - /var/lib/musubi/qdrant-snapshots:/qdrant/snapshots
     healthcheck:
       # Qdrant image has no curl/wget. Use bash /dev/tcp for liveness.
       test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/6333"]
@@ -104,6 +138,34 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
+    restart: unless-stopped
+
+  # Prometheus — scrapes musubi-core's /v1/ops/metrics every 15s and
+  # retains timeseries for 30 days on disk. Host-local only (bound to
+  # 127.0.0.1) — remote operators reach it via SSH tunnel:
+  #
+  #     ssh -L 9090:localhost:9090 musubi.mey.house
+  #
+  # External exposure would need Kong + auth, which is deferred per ADR
+  # 0024. The scrape config at /etc/musubi/prometheus.yml is read-only
+  # inside the container; SIGHUP reloads without a restart
+  # (`docker compose kill -s HUP prometheus`).
+  prometheus:
+    image: {{ musubi_prometheus_image }}
+    volumes:
+      - /etc/musubi/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /var/lib/musubi/prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.listen-address=:9090"
+      - "--web.enable-lifecycle"
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      core:
+        condition: service_started
     restart: unless-stopped
 
   ollama:
