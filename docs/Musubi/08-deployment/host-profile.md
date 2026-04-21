@@ -6,7 +6,7 @@ type: spec
 status: complete
 deployment_status: provisioned
 provisioned_at: 2026-04-17
-updated: 2026-04-18
+updated: 2026-04-20
 up: "[[08-deployment/index]]"
 reviewed: true
 implements: "docs/Musubi/08-deployment/"
@@ -164,9 +164,35 @@ Monitored continuously; alerts at 75% on any dimension. See [[09-operations/aler
 
 ## Actual deployed state
 
-The point-in-time snapshot of what's actually running on the reference host — services, ports, model weights cached, config knobs applied, and which gap-list items are partially done — is maintained in `.agent-context.local.md` at the repo root under § *Realised deployment state (2026-04-18)*. That file is gitignored because it names concrete internal IPs / hostnames.
+The point-in-time snapshot of what's actually running on the reference host — services, ports, model weights cached, config knobs applied — is maintained in `.agent-context.local.md` at the repo root under § *Realised deployment state*. That file is gitignored because it names concrete internal IPs / hostnames.
 
-Public-safe summary: Qdrant + Ollama + Open WebUI are running natively on the host (pre-Compose, pre-Ansible for Musubi); LLM + embedding weights are pre-staged in the user's home directory for the eventual `tei-models` Docker volume; Musubi Core itself is not yet built. See the gap list below for the checklist.
+**Public-safe summary (as of 2026-04-20, first real deploy):** the full Musubi
+compose stack is running. Six services healthy:
+
+| Container              | Image                                              | Role                       |
+|------------------------|----------------------------------------------------|----------------------------|
+| `musubi-core-1`        | `musubi-core:dev` (locally built — see repo `Dockerfile`) | FastAPI API + lifecycle orchestration |
+| `musubi-qdrant-1`      | `qdrant/qdrant:v1.17.1`                            | Vector DB, api-key-auth on |
+| `musubi-tei-dense-1`   | `ghcr.io/huggingface/text-embeddings-inference:86-1.2.0` | BGE-M3 dense embeddings |
+| `musubi-tei-sparse-1`  | same                                               | SPLADE v3 sparse embeddings |
+| `musubi-tei-reranker-1`| same                                               | BGE-reranker-v2-m3 cross-encoder |
+| `musubi-ollama-1`      | `ollama/ollama:latest`                             | Qwen 3 4B LLM              |
+
+Health: `curl http://<musubi-ip>:8100/v1/ops/health → {"status":"ok","version":"v0"}`.
+GPU usage at rest: ~3.3 GiB of 10 GiB VRAM.
+
+The native Qdrant / Ollama / Open WebUI installs that occupied the host before
+the first compose deploy were stopped, disabled, and purged (binaries,
+`/etc/qdrant/`, `/var/lib/{qdrant,open-webui}`, `/usr/share/ollama/`, service
+users). The `bootstrap.yml` playbook assumes a greenfield host; pre-existing
+services are a one-time artefact of this specific migration and not a pattern
+to codify.
+
+The HF cache under `/home/ericmey/musubi-hf-cache/hub/` (BGE-M3, SPLADE v3,
+BGE-reranker-v2-m3) was rsynced into `/var/lib/musubi/tei-models/` before the
+compose stack came up. That preserved ~6.9 GB of downloads (SPLADE v3 is
+gated on HuggingFace and would 401 otherwise). Automating this rsync in
+`bootstrap.yml` is a tracked follow-up (see [[00-index/work-log]] 2026-04-20).
 
 ## Known deployment gotchas
 
@@ -181,14 +207,28 @@ Captured from operational work on 2026-04-18. The future Ansible role that event
 
 ## Gap list before this spec is "realized"
 
-- [ ] Add 16 GB RAM (currently 15 GB of 32 GB target).
+- [ ] Add 16 GB RAM (currently 15 GB of 32 GB target; compose stack runs
+      comfortably within this for now but the 32 GB spec target stands).
 - [ ] Add 4 TB SATA SSD for snapshots + artifact-blob mount.
 - [ ] Replace ad-hoc Samba share with Syncthing for the vault.
-- [ ] Lift native Qdrant / Ollama installs into the Ansible-managed Docker Compose layout (per [[08-deployment/compose-stack]]).
-- [ ] Create Musubi system user `musubi` with the ownership model described above.
-- [ ] Decide on Kong route(s) under `<homelab-domain>` (internal) or `<external-domain>` (external) for Musubi Core, Ollama, and Open WebUI.
-- [ ] Wire up the TEI model cache: either bind-mount the operator's local HF cache dir into the `tei-models` Docker volume, or rsync its contents in when the volume is first created. (Weights are already on disk — see `.agent-context.local.md` — just not yet attached to the not-yet-existing `tei-dense` / `tei-sparse` / `tei-reranker` containers.)
-- [x] Pull the LLM and embedding model weights used by Musubi (Qwen2.5-7B Q4 into Ollama; BGE-M3 + SPLADE-v3 + BGE-reranker-v2-m3 into local HF cache) — done 2026-04-18.
+- [x] Lift native Qdrant / Ollama installs into the Ansible-managed Docker
+      Compose layout (per [[08-deployment/compose-stack]]) — done 2026-04-20.
+      Native services purged; compose stack is the only inference path.
+- [x] Create Musubi system user `musubi` with the ownership model described
+      above — done 2026-04-20 via `bootstrap.yml` (uid 999, gid 985).
+- [ ] Decide on Kong route(s) under `<homelab-domain>` (internal) or
+      `<external-domain>` (external) for Musubi Core. **Deferred** per
+      [[13-decisions/0024-kong-deferred-for-musubi-v1]]; Musubi is
+      VLAN-internal only today.
+- [x] Wire up the TEI model cache — done 2026-04-20. One-time rsync from
+      `~ericmey/musubi-hf-cache/hub/` into `/var/lib/musubi/tei-models/`.
+      Automating this in `bootstrap.yml` is a follow-up.
+- [x] Pull the LLM and embedding model weights used by Musubi — done
+      2026-04-18 for BGE-M3 / SPLADE v3 / BGE-reranker-v2-m3; done 2026-04-20
+      for Qwen 3 4B (auto-pulled by `deploy.yml`'s `ollama pull` step).
+      The pre-staged Qwen 2.5 7B was discarded when the native Ollama was
+      purged — the spec and deploy now agree on Qwen 3 4B per
+      [[13-decisions/0019-qwen-on-musubi-gpu-phase-1]].
 
 Each of these is a candidate for future `_slices/slice-ops-*` or `slice-musubi-*` work.
 
