@@ -1,5 +1,9 @@
 ---
-operator_ssh_user: "<operator-user>"
+# operator_ssh_user: ssh user used to reach the Musubi workload host.
+# Override via -e @~/.musubi-secrets/inventory-vars.yml if it differs from the
+# default here. Required at runtime; must resolve to a non-placeholder string.
+operator_ssh_user: "ericmey"
+
 musubi_service_user: musubi
 musubi_service_group: musubi
 
