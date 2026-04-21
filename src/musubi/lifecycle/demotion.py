@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol, cast
 
 from qdrant_client import QdrantClient, models
 
 from musubi.lifecycle.events import LifecycleEventSink
+from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.types.common import epoch_of, utc_now
@@ -215,3 +217,77 @@ async def reinstate(deps: DemotionDeps, namespace: str, object_id: str, reason: 
     raise LookupError(
         f"Object {object_id} not found in episodic or concept planes for namespace {namespace}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Scheduler integration
+# ---------------------------------------------------------------------------
+
+
+def build_demotion_jobs(
+    *,
+    deps: DemotionDeps,
+    lock_dir: Path,
+    batch_size: int = 100,
+) -> list[Job]:
+    """Return :class:`Job` objects for the demotion sweeps registered in
+    :func:`musubi.lifecycle.scheduler.build_default_jobs`.
+
+    Two jobs today — ``demotion_episodic`` (weekly Sun 03:45 UTC) and
+    ``demotion_concept`` (daily 05:00 UTC). ``demotion_artifact`` stays
+    opt-in per-namespace and is not scheduled globally.
+
+    The wrapper grabs a file lock per job so two workers on the same
+    host can't double-execute, then runs the sweep via ``asyncio.run``
+    — matching the shape the runner's ``asyncio.to_thread`` dispatch
+    expects.
+    """
+    import asyncio as _asyncio
+
+    def _wrap(name: str, run_coro_factory: Any) -> Job:
+        lock_path = lock_dir / f"{name}.lock"
+
+        def _runner() -> None:
+            with file_lock(lock_path) as acquired:
+                if not acquired:
+                    log.info("lifecycle-job=%s lock-held; skipping run", name)
+                    return
+                _asyncio.run(run_coro_factory())
+
+        if name == "demotion_episodic":
+            kwargs: dict[str, Any] = {"day_of_week": "sun", "hour": 3, "minute": 45}
+            grace = 3600
+        elif name == "demotion_concept":
+            kwargs = {"hour": 5, "minute": 0}
+            grace = 3600
+        else:  # pragma: no cover — both names enumerated above
+            raise ValueError(f"unknown demotion job name: {name}")
+        return Job(
+            name=name,
+            trigger_kind="cron",
+            trigger_kwargs=kwargs,
+            func=_runner,
+            grace_time_s=grace,
+        )
+
+    return [
+        _wrap(
+            "demotion_episodic",
+            lambda: demotion_episodic(deps, batch_size=batch_size),
+        ),
+        _wrap(
+            "demotion_concept",
+            lambda: demotion_concept(deps, batch_size=batch_size),
+        ),
+    ]
+
+
+__all__ = [
+    "DemotionDeps",
+    "ThoughtEmitter",
+    "build_demotion_jobs",
+    "demotion_artifact",
+    "demotion_concept",
+    "demotion_episodic",
+    "reinstate",
+]
