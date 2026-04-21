@@ -11,6 +11,17 @@
         group: "{{ musubi_service_group }}"
         mode: "0640"
 
+    - name: Copy Prometheus scrape config
+      # Prometheus mounts this file read-only at
+      # /etc/prometheus/prometheus.yml. A `SIGHUP` to the container
+      # reloads it without downtime.
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../prometheus/prometheus.yml"
+        dest: "{{ musubi_config_dir }}/prometheus.yml"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0644"
+
     - name: Pull missing pinned images
       community.docker.docker_compose_v2_pull:
         project_src: "{{ musubi_config_dir }}"

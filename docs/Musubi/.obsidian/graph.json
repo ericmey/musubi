@@ -1,22 +1,121 @@
 {
-  "collapse-filter": true,
+  "collapse-filter": false,
   "search": "",
-  "showTags": false,
+  "showTags": true,
   "showAttachments": false,
   "hideUnresolved": false,
   "showOrphans": true,
-  "collapse-color-groups": true,
-  "colorGroups": [],
-  "collapse-display": true,
-  "showArrow": false,
+  "collapse-color-groups": false,
+  "colorGroups": [
+    {
+      "query": "tag:#status/research-needed",
+      "color": {
+        "a": 1,
+        "rgb": 14701138
+      }
+    },
+    {
+      "query": "tag:#status/stub",
+      "color": {
+        "a": 1,
+        "rgb": 14773775
+      }
+    },
+    {
+      "query": "tag:#status/draft",
+      "color": {
+        "a": 1,
+        "rgb": 16306798
+      }
+    },
+    {
+      "query": "tag:#status/complete",
+      "color": {
+        "a": 1,
+        "rgb": 5431419
+      }
+    },
+    {
+      "query": "tag:#status/accepted",
+      "color": {
+        "a": 1,
+        "rgb": 4361651
+      }
+    },
+    {
+      "query": "tag:#status/proposed",
+      "color": {
+        "a": 1,
+        "rgb": 14264666
+      }
+    },
+    {
+      "query": "tag:#status/superseded",
+      "color": {
+        "a": 1,
+        "rgb": 8355711
+      }
+    },
+    {
+      "query": "tag:#status/living-document",
+      "color": {
+        "a": 1,
+        "rgb": 4764114
+      }
+    },
+    {
+      "query": "tag:#type/adr",
+      "color": {
+        "a": 1,
+        "rgb": 8302495
+      }
+    },
+    {
+      "query": "tag:#type/index",
+      "color": {
+        "a": 1,
+        "rgb": 5294200
+      }
+    },
+    {
+      "query": "tag:#type/runbook",
+      "color": {
+        "a": 1,
+        "rgb": 15629916
+      }
+    },
+    {
+      "query": "tag:#type/kanban",
+      "color": {
+        "a": 1,
+        "rgb": 8806632
+      }
+    },
+    {
+      "query": "tag:#type/research-question",
+      "color": {
+        "a": 1,
+        "rgb": 12865684
+      }
+    },
+    {
+      "query": "tag:#type/migration-phase",
+      "color": {
+        "a": 1,
+        "rgb": 11771606
+      }
+    }
+  ],
+  "collapse-display": false,
+  "showArrow": true,
   "textFadeMultiplier": 0,
-  "nodeSizeMultiplier": 1,
+  "nodeSizeMultiplier": 1.2,
   "lineSizeMultiplier": 1,
-  "collapse-forces": true,
-  "centerStrength": 0.518713248970312,
+  "collapse-forces": false,
+  "centerStrength": 0.42,
   "repelStrength": 10,
-  "linkStrength": 1,
-  "linkDistance": 250,
-  "scale": 1,
-  "close": false
+  "linkStrength": 0.85,
+  "linkDistance": 230,
+  "scale": 0.146729285987958,
+  "close": true
 }

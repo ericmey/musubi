@@ -1,0 +1,145 @@
+name: Publish Musubi Core image
+
+# Publishes ghcr.io/ericmey/musubi-core, replacing the one-shot
+# `docker save | ssh | docker load` transfer used for the first
+# deploy. See [[_slices/slice-ops-core-image-publish]] and
+# `deploy/runbooks/upgrade-image.md`.
+#
+# Triggers (rationale in the slice spec):
+#
+#   push tag `v*`   — authoritative release. Publishes `:v<version>`
+#                     + `@sha256:<digest>`. The digest becomes the
+#                     value operators paste into group_vars/all.yml.
+#   push branch v2  — bleeding-edge. Publishes `:v2` (floating) and
+#                     captures the digest as a build artefact.
+#   workflow_dispatch — manual one-off (operator chooses tags).
+#
+# The workflow NEVER writes to `group_vars/all.yml`. The digest bump
+# is a separate, human-reviewed PR per the slice spec — keeps the
+# "publish" and "deploy" decisions distinct.
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - v2
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Override tag (default: branch name for branch pushes, tag for tag pushes)"
+        required: false
+        default: ""
+
+concurrency:
+  # Coalesce runs on the same ref so a fast sequence of pushes doesn't
+  # queue up redundant publishes.
+  group: publish-core-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish-core-image:
+    name: Build and publish musubi-core
+    runs-on: ubuntu-latest
+    permissions:
+      # GITHUB_TOKEN needs `packages: write` to push to the repo's GHCR
+      # namespace. `contents: read` is the default but stated explicitly.
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        # Needed for reliable cross-build to linux/amd64 from the GHA
+        # linux/amd64 runner itself. Cheap insurance against future
+        # multi-arch additions.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive image tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/ericmey/musubi-core
+          tags: |
+            # `v<version>` tag push → `:v<version>` + `:latest`
+            type=semver,pattern={{version}},prefix=v,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # `v2` branch push → `:v2` floating
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/v2' }}
+            # manual dispatch with explicit tag input
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/ericmey/musubi
+            org.opencontainers.image.description=Musubi Core — three-plane shared memory server
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # GHA cache so subsequent builds reuse layers without
+          # pushing cache layers into GHCR itself.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summarise digest
+        # Surface the digest at the top of the workflow run page so an
+        # operator can copy it into `group_vars/all.yml` without hunting
+        # through step logs.
+        run: |
+          echo "### Published ghcr.io/ericmey/musubi-core" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Tags:**" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Digest:**" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pin in \`deploy/ansible/group_vars/all.yml\` as:" >> "$GITHUB_STEP_SUMMARY"
+          echo '```yaml' >> "$GITHUB_STEP_SUMMARY"
+          echo "musubi_core_image: \"ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach digest as release asset
+        # Only on tag pushes — branch pushes don't create releases.
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          body: |
+            Published `ghcr.io/ericmey/musubi-core` for this release.
+
+            **Tags:** `${{ steps.meta.outputs.tags }}`
+
+            **Digest:** `${{ steps.build.outputs.digest }}`
+
+            Pin in `deploy/ansible/group_vars/all.yml`:
+
+            ```yaml
+            musubi_core_image: "ghcr.io/ericmey/musubi-core@${{ steps.build.outputs.digest }}"
+            ```
+          append_body: true
+          fail_on_unmatched_files: false

@@ -14,9 +14,12 @@ musubi_data_dirs:
   - /var/lib/musubi/vault
   - /var/lib/musubi/artifact-blobs
   - /var/lib/musubi/qdrant-storage
+  - /var/lib/musubi/qdrant-snapshots
   - /var/lib/musubi/tei-models
   - /var/lib/musubi/ollama-models
   - /var/lib/musubi/lifecycle
+  - /var/lib/musubi/prometheus-data
+  - /var/lib/musubi/backups
 
 musubi_core_port: 8100
 # Musubi Core image. For now this is built locally (see repo `Dockerfile`) and
@@ -32,6 +35,9 @@ musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference:86-1.2.0"
 musubi_ollama_image: "ollama/ollama:latest"
 musubi_ollama_model: "qwen3:4b"
+# Prometheus: pinned to an LTS-ish minor so the scrape-config syntax
+# (see deploy/prometheus/prometheus.yml) doesn't drift under us.
+musubi_prometheus_image: "prom/prometheus:v2.54.1"
 
 musubi_required_packages:
   - ca-certificates

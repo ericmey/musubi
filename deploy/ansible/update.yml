@@ -1,0 +1,102 @@
+---
+# In-place upgrade for a running Musubi stack.
+#
+# Companion to `deploy.yml` (first-deploy / full bring-up) and
+# `bootstrap.yml` (host-level package install). `update.yml` assumes
+# both have already run; it force-pulls whichever container images
+# are referenced in the rendered compose, recreates only the services
+# the operator names, runs a post-apply health probe, and appends an
+# upgrade-history entry.
+#
+# Why `policy: always` and not `missing` (deploy.yml's default):
+# `missing` is "fetch only if the image isn't already on the host".
+# That's right for first-deploy but wrong for upgrade — after a
+# `musubi_core_image` bump, the old image IS on the host, and
+# `missing` would no-op, leaving the running container on the
+# previous digest forever. `always` forces Docker to re-check the
+# registry; unchanged digests remain no-ops.
+#
+# Per-service recreate (`changed_services`) defaults to `[core]` — it
+# is by far the most frequently-updated service. Override when an
+# image bump touches another service:
+#
+#     ansible-playbook update.yml \
+#         -e changed_services='["core","tei-dense"]'
+
+- name: Update a running Musubi stack
+  hosts: musubi
+  become: true
+  vars:
+    changed_services: ["core"]
+  tasks:
+    - name: Re-render docker-compose anchor (may have new services / mounts / env refs)
+      ansible.builtin.template:
+        src: templates/docker-compose.yml.j2
+        dest: "{{ musubi_config_dir }}/docker-compose.yml"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Refresh Prometheus scrape config (may have new targets)
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../prometheus/prometheus.yml"
+        dest: "{{ musubi_config_dir }}/prometheus.yml"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0644"
+
+    - name: Force-pull any image references (policy=always)
+      # Distinct from deploy.yml, which uses policy=missing. Without
+      # `always` a `musubi_core_image` bump of the floating `:v2` tag
+      # would no-op because the old digest-backed image is already
+      # present locally.
+      community.docker.docker_compose_v2_pull:
+        project_src: "{{ musubi_config_dir }}"
+        policy: always
+
+    - name: Recreate only the services the operator named (default [core])
+      # `pull: never` — the pull task above already handled it.
+      # `recreate: always` — force a new container even if compose
+      # thinks nothing changed at the declarative level (belt-and-
+      # braces for digest-level bumps).
+      community.docker.docker_compose_v2:
+        project_src: "{{ musubi_config_dir }}"
+        state: present
+        pull: never
+        recreate: always
+        wait: true
+        wait_timeout: 300
+        services: "{{ changed_services }}"
+
+    - name: Probe Core health post-update
+      ansible.builtin.uri:
+        url: "{{ musubi_health_urls.core }}"
+        status_code: 200
+      retries: 12
+      delay: 5
+      register: core_health
+      until: core_health.status == 200
+      changed_when: false
+
+    - name: Ensure upgrade-history log directory exists
+      ansible.builtin.file:
+        path: /var/log/musubi
+        state: directory
+        owner: "{{ musubi_service_user }}"
+        group: "{{ musubi_service_group }}"
+        mode: "0750"
+
+    - name: Append an upgrade-history entry
+      # JSON-Lines so `jq` works without a wrapper array. Operators tail
+      # this during drift investigations.
+      ansible.builtin.lineinfile:
+        path: /var/log/musubi/upgrade-history.jsonl
+        create: true
+        owner: "{{ musubi_service_user }}"
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+        line: >-
+          {"ts":"{{ lookup('pipe', 'date -Iseconds') }}",
+          "services":{{ changed_services | to_json }},
+          "core_image":"{{ musubi_core_image }}",
+          "triggered_by":"{{ lookup('env', 'USER') | default('ansible', true) }}"}

@@ -1,51 +1,70 @@
 # Prometheus scrape config for the single-host Musubi deployment.
-# Per docs/Musubi/09-operations/observability.md § Metrics.
+# See [[09-operations/observability]] for the broader strategy.
 #
-# All scrape targets are co-resident on the musubi host (compose stack
-# from slice-ops-compose). Storage is local TSDB with a 30-day
-# retention; one host, one tenant, no remote_write. v1 scope.
+# Rendered into `/etc/musubi/prometheus.yml` on the host by
+# `deploy/ansible/deploy.yml`, then mounted read-only at
+# `/etc/prometheus/prometheus.yml` inside the prometheus container. A
+# SIGHUP reloads without a restart:
+#
+#     docker compose -f /etc/musubi/docker-compose.yml kill -s HUP prometheus
+#
+# Every `target` below is a compose service name — resolution happens on
+# the `musubi_default` bridge. External targets (host node-exporter when
+# that lands, etc.) use `host.docker.internal` or a fixed IP.
+#
+# Not yet scraped (reason in parens):
+#   - qdrant (its /metrics requires the api-key header; secret-file wiring
+#     belongs to a follow-up slice).
+#   - alertmanager + rule_files (no Alertmanager deployed yet; cutting
+#     a separate slice once notification channels are decided).
+#   - node-exporter (no host-level exporter deployed yet).
 
 global:
   scrape_interval: 15s
-  evaluation_interval: 15s
+  scrape_timeout: 10s
   external_labels:
     cluster: musubi
-    host: musubi-1
-
-rule_files:
-  - "/etc/prometheus/alerts/musubi-alerts.yml"
-
-alerting:
-  alertmanagers:
-    - static_configs:
-        - targets: ["alertmanager:9093"]
+    host: musubi.example.local
 
 scrape_configs:
+  # Musubi Core — HTTP API metrics (request counts, latency histograms,
+  # 5xx totals) exposed via prometheus_client on the /v1/ops/metrics
+  # endpoint.
   - job_name: musubi-core
     metrics_path: /v1/ops/metrics
     static_configs:
-      - targets: ["musubi-core:8100"]
+      - targets: ["core:8100"]
+        labels:
+          service: core
 
-  - job_name: qdrant
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["qdrant:6333"]
-
+  # TEI — each embedder/reranker exposes its own /metrics on port 80
+  # (batch latency, queue depth, GPU utilisation).
   - job_name: tei-dense
     metrics_path: /metrics
     static_configs:
-      - targets: ["tei-dense:8080"]
+      - targets: ["tei-dense:80"]
+        labels:
+          service: tei-dense
+          model: bge-m3
 
   - job_name: tei-sparse
     metrics_path: /metrics
     static_configs:
-      - targets: ["tei-sparse:8080"]
+      - targets: ["tei-sparse:80"]
+        labels:
+          service: tei-sparse
+          model: splade-v3
 
   - job_name: tei-reranker
     metrics_path: /metrics
     static_configs:
-      - targets: ["tei-reranker:8080"]
+      - targets: ["tei-reranker:80"]
+        labels:
+          service: tei-reranker
+          model: bge-reranker-v2-m3
 
-  - job_name: node-exporter
+  # Prometheus scrapes itself — cheap, handy for debugging "are scrapes
+  # landing at all?" without standing up a separate probe.
+  - job_name: prometheus
     static_configs:
-      - targets: ["node-exporter:9100"]
+      - targets: ["localhost:9090"]
