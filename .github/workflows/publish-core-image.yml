@@ -10,7 +10,7 @@ name: Publish Musubi Core image
 #   push tag `v*`   — authoritative release. Publishes `:v<version>`
 #                     + `@sha256:<digest>`. The digest becomes the
 #                     value operators paste into group_vars/all.yml.
-#   push branch v2  — bleeding-edge. Publishes `:v2` (floating) and
+#   push branch main — bleeding-edge. Publishes `:main` (floating) and
 #                     captures the digest as a build artefact.
 #   workflow_dispatch — manual one-off (operator chooses tags).
 #
@@ -23,7 +23,7 @@ on:
     tags:
       - "v*"
     branches:
-      - v2
+      - main
   workflow_dispatch:
     inputs:
       tag:
@@ -87,8 +87,8 @@ jobs:
           tags: |
             # `v<version>` tag push → `:v<version>` + `:latest`
             type=semver,pattern={{version}},prefix=v,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
-            # `v2` branch push → `:v2` floating
-            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/v2' }}
+            # `main` branch push → `:main` floating
+            type=ref,event=branch,enable=${{ github.ref == 'refs/heads/main' }}
             # manual dispatch with explicit tag input
             type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}
           labels: |

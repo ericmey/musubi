@@ -111,7 +111,7 @@ Multiple coding agents work on this repo concurrently. The rules are in [docs/AG
 - **One slice per branch**, branch named `slice/<slice-id>`.
 - **Draft PR from the moment you start** so other agents see work-in-progress.
 - **You don't self-approve.** A different agent (or human) reviews before merge.
-- **Force-push to `v2` or `main` is forbidden.** Direct commits to `v2`/`main` are forbidden. Merge via PR only.
+- **Force-push to `main` is forbidden.** Direct commits to `main` are forbidden. Merge via PR only.
 
 ## Agent selection (routing)
 

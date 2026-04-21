@@ -72,7 +72,7 @@ Owns paths, specs, Test Contract: see the slice note."
 ### 4. Branch + draft PR
 
 ```bash
-git switch v2
+git switch main
 git pull --ff-only
 git switch -c slice/<slice-id>
 # Initial empty commit so the PR can open before any file changes.
@@ -81,7 +81,7 @@ git commit --allow-empty -m "chore(slice): take <slice-id>
 Claims docs/Musubi/_slices/<slice-id>.md. See issue #<n>."
 git push -u origin slice/<slice-id>
 gh pr create --draft \
-  --base v2 \
+  --base main \
   --title "feat(<scope>): <slice-id>" \
   --body "Closes #<n>. Draft — work in progress per docs/Musubi/_slices/<slice-id>.md."
 ```
