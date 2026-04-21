@@ -46,11 +46,15 @@ jobs:
       # namespace. `id-token: write` is required for cosign keyless
       # signing via GitHub's OIDC provider. `security-events: write`
       # is required by `github/codeql-action/upload-sarif@v3` to post
-      # Trivy findings to the Security → Code scanning tab.
+      # Trivy findings to the Security → Code scanning tab. `actions:
+      # read` lets upload-sarif hit the workflow-runs API for
+      # fingerprinting — without it the step fails with "Resource not
+      # accessible by integration" even when SARIF itself is valid.
       contents: read
       packages: write
       id-token: write
       security-events: write
+      actions: read
     outputs:
       image: ${{ steps.meta.outputs.tags }}
       digest: ${{ steps.build.outputs.digest }}
