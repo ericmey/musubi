@@ -6,24 +6,24 @@
 # running from the ansible control host) or (b) -e key=value flags. If a variable is unset, the
 # playbook fails fast — no placeholder string ever reaches SSH.
 #
-# To bootstrap a control host , run the
+# To bootstrap a control host, run the
 # deploy/ansible/setup-control-host.sh script; it seeds the secrets dir and
 # tells you what to fill in.
 all:
- children:
- ansible_control:
- hosts:
- ansible-controller:
- ansible_host: "{{ ansible_control_host | default('localhost') }}"
- ansible_user: "{{ operator_ssh_user }}"
- ansible_connection: "{{ ansible_control_connection | default('local') }}"
- musubi:
- hosts:
- musubi-workload:
- ansible_host: "{{ musubi_host }}"
- ansible_user: "{{ operator_ssh_user }}"
- ansible_become: true
- musubi_hostname: "{{ musubi_host }}"
- musubi_core_bind: "{{ musubi_ip }}"
- musubi_kong_gateway: "{{ kong_gateway | default('') }}"
- musubi_kong_ip: "{{ kong_ip | default('') }}"
+  children:
+    ansible_control:
+      hosts:
+        ansible-controller:
+          ansible_host: "{{ ansible_control_host | default('localhost') }}"
+          ansible_user: "{{ operator_ssh_user }}"
+          ansible_connection: "{{ ansible_control_connection | default('local') }}"
+    musubi:
+      hosts:
+        musubi-workload:
+          ansible_host: "{{ musubi_host }}"
+          ansible_user: "{{ operator_ssh_user }}"
+          ansible_become: true
+          musubi_hostname: "{{ musubi_host }}"
+          musubi_core_bind: "{{ musubi_ip }}"
+          musubi_kong_gateway: "{{ kong_gateway | default('') }}"
+          musubi_kong_ip: "{{ kong_ip | default('') }}"
