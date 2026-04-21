@@ -984,9 +984,10 @@ def test_build_maturation_jobs_registers_documented_names(
     sink: LifecycleEventSink,
     cursor: MaturationCursor,
 ) -> None:
-    """The five Job names this module owns line up with the lifecycle
-    scheduler's default-job registry exactly. Drift here would silently
-    keep the placeholder lambdas in production."""
+    """The Job names this module owns line up with the lifecycle
+    scheduler's default-job registry. Demotion moved to the dedicated
+    `demotion.py` module after slice-lifecycle-demotion-builder landed;
+    maturation retains the three sweeps that still live here."""
     from musubi.lifecycle.maturation import build_maturation_jobs
 
     jobs = build_maturation_jobs(
@@ -1001,9 +1002,7 @@ def test_build_maturation_jobs_registers_documented_names(
     assert names == {
         "maturation_episodic",
         "provisional_ttl",
-        "demotion_episodic",
         "concept_maturation",
-        "demotion_concept",
     }
     for job in jobs:
         assert callable(job.func)

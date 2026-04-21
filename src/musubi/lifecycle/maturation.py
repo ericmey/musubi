@@ -966,10 +966,19 @@ def build_maturation_jobs(
     config: MaturationConfig | None = None,
 ) -> list[Job]:
     """Return :class:`Job` objects matching the lifecycle-scheduler default
-    job names (``maturation_episodic``, ``provisional_ttl``,
-    ``demotion_episodic``, ``concept_maturation``, ``demotion_concept``).
+    job names that maturation *owns*: ``maturation_episodic``,
+    ``provisional_ttl``, and ``concept_maturation``.
 
-    The lifecycle worker registers them via ``build_scheduler(jobs=...)``.
+    Demotion used to live here (``demotion_episodic``, ``demotion_concept``)
+    as helper sweeps that predated the dedicated demotion slice. They've
+    since moved to :mod:`musubi.lifecycle.demotion`, which owns the real
+    demotion path with ``DemotionDeps`` (including the thoughts emitter
+    for "concept X demoted" ops notifications). This builder no longer
+    schedules them — see :func:`musubi.lifecycle.demotion.build_demotion_jobs`
+    for the canonical wiring. The legacy sweep functions remain in this
+    module for tests and any caller that still imports them directly,
+    but they are not on the cron anymore.
+
     Each job acquires the documented file lock before running so two
     workers on the same host can't double-execute (covered by spec
     bullet 20).
@@ -996,12 +1005,8 @@ def build_maturation_jobs(
             kwargs, grace = {"minute": 13}, 900
         elif name == "provisional_ttl":
             kwargs, grace = {"minute": 17}, 600
-        elif name == "demotion_episodic":
-            kwargs, grace = {"day_of_week": "sun", "hour": 3, "minute": 45}, 3600
         elif name == "concept_maturation":
             kwargs, grace = {"hour": 3, "minute": 30}, 3600
-        elif name == "demotion_concept":
-            kwargs, grace = {"hour": 5, "minute": 0}, 3600
         else:  # pragma: no cover — every name in the registry above is enumerated
             raise ValueError(f"unknown maturation job name: {name}")
         return Job(
@@ -1024,16 +1029,8 @@ def build_maturation_jobs(
             lambda: provisional_ttl_sweep(client=client, sink=sink, config=cfg),
         ),
         _wrap(
-            "demotion_episodic",
-            lambda: episodic_demotion_sweep(client=client, sink=sink, config=cfg),
-        ),
-        _wrap(
             "concept_maturation",
             lambda: concept_maturation_sweep(client=client, sink=sink, config=cfg),
-        ),
-        _wrap(
-            "demotion_concept",
-            lambda: concept_demotion_sweep(client=client, sink=sink, config=cfg),
         ),
     ]
 
