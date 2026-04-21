@@ -19,6 +19,7 @@ PLAYBOOKS = {
     "deploy": ANSIBLE / "deploy.yml",
     "config": ANSIBLE / "config.yml",
     "health": ANSIBLE / "health.yml",
+    "update": ANSIBLE / "update.yml",
 }
 GROUP_VARS = ANSIBLE / "group_vars" / "all.yml"
 VAULT_EXAMPLE = ANSIBLE / "vault.example.yml"
