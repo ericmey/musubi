@@ -91,7 +91,7 @@ Chunks are not first-class `MusubiObject`s — they're indexed content owned by 
 
 Two artifacts with the same content (identical sha256) share the blob and can have independent `object_id`s (e.g., ingested under different namespaces or with different metadata). Metadata is deduplicated by object_id.
 
-Post-V1 (when multi-host): swap filesystem for MinIO without changing API surface.
+Future (when multi-host): swap filesystem for MinIO without changing the API surface.
 
 **Qdrant:** collection `musubi_artifact_chunks` stores chunk embeddings.
 

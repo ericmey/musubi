@@ -122,7 +122,7 @@ deploy/                     ansible, prometheus, grafana, docker-compose templat
 - ✅ Homelab deployment wired, containers healthy
 
 Not yet:
-- ⏳ Fleet orchestration (V2 runs single-node today; multi-node is post-v1.0)
+- ⏳ Fleet orchestration — single-node today; multi-node HA is a post-1.0 design space and will require a real ADR
 - ⏳ Auto-deploy pipeline
 - ⏳ OpenClaw adapter integration tests
 

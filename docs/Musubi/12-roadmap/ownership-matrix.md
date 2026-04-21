@@ -18,7 +18,7 @@ Musubi is a **single-repo monorepo** per [[13-decisions/0015-monorepo-supersedes
 
 | Repo | Primary owner | Backup | Access | Contents |
 |---|---|---|---|---|
-| `github.com/ericmey/musubi` | Eric | — | private | Everything: Core, SDK, MCP/Obsidian/CLI adapters, contract tests, compose + Ansible under `deploy/`, *and* the Obsidian architecture vault under `docs/Musubi/`. `v2` branch is the rebuild; `main` still holds the v1 POC until V2 cutover. |
+| `github.com/ericmey/musubi` | Eric | — | public | Everything: Core, SDK, MCP/Obsidian/CLI adapters, contract tests, compose + Ansible under `deploy/`, *and* the Obsidian architecture vault under `docs/Musubi/`. `main` carries current development; the original POC is archived on the `alpha-archive` branch for history. |
 
 If a second contributor joins, the "backup" column fills in. For now, Eric holds all bus factor.
 

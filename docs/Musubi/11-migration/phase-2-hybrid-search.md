@@ -59,7 +59,7 @@ musubi-cli backfill --collection musubi_episodic_v2 --batch-size 64
 
 Processes in batches. Skips points already backfilled (tracked via a `backfill_cursor` in `lifecycle-work.sqlite`).
 
-At v1 POC scale (few thousand memories), backfill completes in < 1 hour.
+At POC-era scale (few thousand memories), backfill completes in < 1 hour.
 
 ### Retrieve path
 
