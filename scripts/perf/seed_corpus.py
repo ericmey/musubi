@@ -1,0 +1,417 @@
+#!/usr/bin/env python3
+"""Seed a Musubi instance with a deterministic synthetic corpus for
+perf testing.
+
+Philosophy
+----------
+Perf runs need to be **reproducible across runs**. That means the
+corpus seeded before Gate 2 (load) must be bit-identical to the corpus
+seeded before Gate 4 (reliability), so latency deltas between runs
+reflect code/hardware changes, not corpus drift. We drive everything
+from a single ``--seed`` argument — the random selection, the length
+distribution, the topic tagging, the timestamp spread. Same seed =
+same corpus.
+
+Philosophy (the other part)
+---------------------------
+We deliberately do **not** hit an external LLM (Ollama, OASST) for
+generation. That keeps the seed step self-contained and deterministic
+— no "but the model version changed" variance. The pool of seed
+fragments is intentionally mundane household-conversation-shaped text;
+the point is exercising dense/sparse embedding + rerank latency, not
+producing human-realistic corpora.
+
+Targets
+-------
+Seeds all five planes via Musubi's canonical API:
+
+  * episodic   — ``POST /v1/memories``
+  * curated    — ``POST /v1/curated-knowledge`` (via operator token)
+  * concept    — ``POST /v1/concepts`` (operator-scoped)
+  * artifact   — ``POST /v1/artifacts`` (multipart)
+  * thought    — ``POST /v1/thoughts/send``
+
+Namespaces are pinned under ``perf-test/<plane>`` so live data at
+``eric/*`` is never touched.
+
+Usage
+-----
+  MUSUBI_V2_BASE_URL=https://musubi.mey.house/v1 \\
+  MUSUBI_V2_TOKEN=mbi_perf_... \\
+  python3 scripts/perf/seed_corpus.py \\
+      --size 10000 --seed 42 --namespace-prefix perf-test
+
+Size is per-plane; ``--size 10000`` creates 10k episodic + 10k curated
++ 10k concept + 10k artifact + 10k thought. Use ``--planes`` to limit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import logging
+import os
+import random
+import sys
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+
+try:
+    import httpx
+except ImportError:
+    sys.stderr.write("seed_corpus.py requires httpx. Install: pip install httpx\n")
+    sys.exit(2)
+
+log = logging.getLogger("musubi.perf.seed")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+)
+
+PLANES = ("episodic", "curated", "concept", "artifact", "thought")
+
+# Intentionally mundane fragments — household + ops + meta mix. The
+# pool is small on purpose: seeded random sampling over a small pool
+# gives realistic duplication + reinforcement patterns (the same fact
+# mentioned in two episodic captures) which exercises dedup + scoring.
+_FRAGMENTS: tuple[str, ...] = (
+    "Remember the dentist appointment on Tuesday afternoon.",
+    "Eric prefers coffee black, no sugar.",
+    "Aoi mentioned the deploy finished cleanly.",
+    "Nyla is running a background sweep on household memory.",
+    "Party agent handles delegation to the other voice agents.",
+    "OpenClaw sidecar is responsible for capture mirroring.",
+    "The LiveKit stack routes SIP into voice tools.",
+    "Kong is the gateway that fronts musubi.mey.house for external traffic.",
+    "Qdrant holds every plane's vector embeddings behind named collections.",
+    "TEI serves BGE-M3 dense + SPLADE sparse embeddings on the RTX 3080.",
+    "BGE-reranker-v2-m3 does the cross-encoder rerank pass on hybrid retrieve.",
+    "Ollama runs Qwen2.5-7B Q4 for importance scoring and fact extraction.",
+    "Musubi's lifecycle engine sweeps maturation every five minutes.",
+    "Concept synthesis kicks off when episodic cluster size crosses threshold.",
+    "Promotion moves a concept into the curated plane after reinforcement.",
+    "Demotion archives episodic rows past the provisional TTL.",
+    "Reflection runs weekly and looks for contradiction patterns.",
+    "The auto-digest-bump workflow opens a PR on every release:published.",
+    "cosign keyless signs the core image via GitHub OIDC.",
+    "CycloneDX SBOM is attached to the image via anchore/sbom-action.",
+    "Trivy scans each published image and uploads SARIF to Code Scanning.",
+    "Slice-adapter-livekit shipped end-to-end tests against docker-compose Musubi.",
+    "The thought stream SSE consumer honors six consumer-expectation rules.",
+    "Presence resolution maps OpenClaw agent ids to Musubi presences.",
+    "Bearer tokens scope per-namespace read/write on the canonical API.",
+    "The curated plane is read-mostly; vault sync is the writer.",
+    "Episodic memories land provisional and mature to a stable state.",
+    "Retrieve fast-mode returns in under 200ms on reference hardware.",
+    "Retrieve deep-mode budgets five seconds for the full hybrid path.",
+    "Thoughts flow presence-to-presence with optional channel routing.",
+    "A vault sync pulls curated markdown into the episodic/concept chunker.",
+    "The observability stack emits structured JSON one field per concept.",
+    "Hybrid retrieve blends dense + sparse + lexical + recency + importance.",
+    "Namespace scope errors surface as 403 with a typed error envelope.",
+    "Rate limits follow the token-bucket pattern with operator multiplier.",
+    "Idempotency keys dedupe retried writes so the same capture is one row.",
+    "Artifact plane stores content-addressed blobs plus chunk embeddings.",
+    "Migration slice ETLs the alpha POC into the new canonical layout.",
+    "The release-please workflow cuts semver releases from conventional commits.",
+    "Every plane carries bitemporal event_at plus ingested_at timestamps.",
+    "Lineage fields supersedes and superseded_by chain mutations explicitly.",
+    "KSUID object ids live in payload; Qdrant point ids stay UUID.",
+    "Schema version is stamped on every payload for forward-read compatibility.",
+    "Operator notes flag anything sensitive that shouldn't land in git.",
+    "The scheduler channel carries time-boxed reminders between agents.",
+    "musubi_recall hits deep-mode retrieve across every plane by default.",
+    "musubi_remember captures at importance seven, above the passive baseline.",
+    "musubi_think delivers a presence-to-presence thought inline from voice.",
+    "A voice call triggers bursty retrieve+capture for a couple minutes.",
+    "Soak tests catch leaks that 15-minute load runs miss entirely.",
+    "Spike tests mimic a LiveKit session landing on top of background load.",
+)
+
+_TOPICS: tuple[str, ...] = (
+    "household",
+    "deploy",
+    "ops",
+    "voice",
+    "memory",
+    "retrieval",
+    "lifecycle",
+    "security",
+    "observability",
+    "migration",
+    "scheduler",
+    "presence",
+)
+
+
+@dataclass(frozen=True)
+class SeedConfig:
+    base_url: str
+    token: str
+    size: int
+    seed: int
+    namespace_prefix: str
+    planes: tuple[str, ...]
+    # How far back to spread timestamps. 90 days gives maturation a
+    # realistic age distribution (some provisional, some matured).
+    timespan_days: int = 90
+    # Per-request timeout. Generous — the seed runs once per corpus,
+    # we care about completing, not latency.
+    request_timeout_s: float = 30.0
+
+
+def parse_args() -> SeedConfig:
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--size", type=int, required=True, help="rows per plane")
+    p.add_argument("--seed", type=int, default=42, help="deterministic RNG seed")
+    p.add_argument(
+        "--namespace-prefix",
+        default="perf-test",
+        help="namespace root for all seeded data; kept off 'eric/*' on purpose",
+    )
+    p.add_argument(
+        "--planes",
+        default=",".join(PLANES),
+        help=f"comma-separated subset of {PLANES}",
+    )
+    p.add_argument("--timespan-days", type=int, default=90)
+    args = p.parse_args()
+
+    base_url = os.environ.get("MUSUBI_V2_BASE_URL")
+    token = os.environ.get("MUSUBI_V2_TOKEN")
+    if not base_url or not token:
+        sys.stderr.write(
+            "error: MUSUBI_V2_BASE_URL and MUSUBI_V2_TOKEN must be set.\n"
+            "       The token must scope write access on "
+            f"{args.namespace_prefix}/* — never on eric/*.\n"
+        )
+        sys.exit(2)
+
+    planes = tuple(p.strip() for p in args.planes.split(",") if p.strip())
+    bad = [p for p in planes if p not in PLANES]
+    if bad:
+        sys.stderr.write(f"error: unknown plane(s): {bad}\n")
+        sys.exit(2)
+
+    return SeedConfig(
+        base_url=base_url.rstrip("/"),
+        token=token,
+        size=args.size,
+        seed=args.seed,
+        namespace_prefix=args.namespace_prefix.rstrip("/"),
+        planes=planes,
+        timespan_days=args.timespan_days,
+    )
+
+
+def make_content(rng: random.Random) -> str:
+    """Pick 1-4 fragments and join them. Seeded sampling from a small
+    pool produces realistic duplication and reinforcement patterns."""
+    k = rng.randint(1, 4)
+    return " ".join(rng.sample(_FRAGMENTS, k=k))
+
+
+def make_timestamp(rng: random.Random, timespan_days: int) -> datetime:
+    """Uniform spread across ``timespan_days`` ending at now. Late-
+    skew would be more realistic but makes maturation test results
+    uniform (all rows mature/not-mature together); uniform spread
+    keeps the mix deterministic and testable."""
+    seconds = rng.randint(0, timespan_days * 86400)
+    return datetime.now(UTC) - timedelta(seconds=seconds)
+
+
+def make_idempotency_key(namespace: str, content: str, timestamp: datetime) -> str:
+    """Deterministic idempotency key. Re-running the seed against the
+    same Musubi should NOT create duplicates — Musubi's capture pipeline
+    dedups on this key."""
+    h = hashlib.sha256()
+    h.update(namespace.encode())
+    h.update(content.encode())
+    h.update(timestamp.isoformat().encode())
+    return f"perf-seed:{h.hexdigest()[:24]}"
+
+
+def seed_episodic(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
+    """POST /v1/memories. Repeated calls with the same idempotency key
+    fold into a single row, so the seed is safe to retry."""
+    ns = f"{cfg.namespace_prefix}/episodic"
+    ok = 0
+    for i in range(cfg.size):
+        content = make_content(rng)
+        ts = make_timestamp(rng, cfg.timespan_days)
+        body = {
+            "namespace": ns,
+            "content": content,
+            "tags": rng.sample(_TOPICS, k=rng.randint(1, 3)),
+            "topics": rng.sample(_TOPICS, k=rng.randint(0, 2)),
+            "importance": rng.randint(1, 9),
+        }
+        try:
+            r = client.post(
+                "/memories",
+                json=body,
+                headers={"Idempotency-Key": make_idempotency_key(ns, content, ts)},
+            )
+            r.raise_for_status()
+            ok += 1
+        except httpx.HTTPError as exc:
+            log.warning("episodic %d failed: %s", i, exc)
+        if i and i % 500 == 0:
+            log.info("episodic: %d / %d", i, cfg.size)
+    return ok
+
+
+def seed_thought(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
+    ns = f"{cfg.namespace_prefix}/thought"
+    ok = 0
+    for i in range(cfg.size):
+        body = {
+            "namespace": ns,
+            "from_presence": f"{cfg.namespace_prefix}/seeder",
+            "to_presence": f"{cfg.namespace_prefix}/receiver-{i % 4}",
+            "content": make_content(rng),
+            "channel": rng.choice(("default", "scheduler", "ops")),
+            "importance": rng.randint(1, 9),
+        }
+        try:
+            r = client.post("/thoughts/send", json=body)
+            r.raise_for_status()
+            ok += 1
+        except httpx.HTTPError as exc:
+            log.warning("thought %d failed: %s", i, exc)
+        if i and i % 500 == 0:
+            log.info("thought: %d / %d", i, cfg.size)
+    return ok
+
+
+def seed_curated(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
+    """POST /v1/curated-knowledge. Requires operator scope + body_hash.
+    Vault sync is the normal writer — seeding here is a deliberate
+    bypass for perf-testing corpus construction only."""
+    ns = f"{cfg.namespace_prefix}/curated"
+    ok = 0
+    for i in range(cfg.size):
+        content = make_content(rng)
+        body_hash = hashlib.sha256(content.encode()).hexdigest()
+        body = {
+            "namespace": ns,
+            "title": f"perf-seeded-{i:06d}",
+            "content": content,
+            "vault_path": f"{cfg.namespace_prefix}/curated/{i:06d}.md",
+            "body_hash": body_hash,
+            "tags": rng.sample(_TOPICS, k=rng.randint(1, 3)),
+        }
+        try:
+            r = client.post("/curated-knowledge", json=body)
+            r.raise_for_status()
+            ok += 1
+        except httpx.HTTPError as exc:
+            log.warning("curated %d failed: %s", i, exc)
+        if i and i % 500 == 0:
+            log.info("curated: %d / %d", i, cfg.size)
+    return ok
+
+
+def seed_concept(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
+    """POST /v1/concepts. Concepts are normally emitted by the
+    synthesis lifecycle job; seeding bypasses it to give retrieve
+    something to rerank against."""
+    ns = f"{cfg.namespace_prefix}/concept"
+    ok = 0
+    for i in range(cfg.size):
+        body = {
+            "namespace": ns,
+            "content": make_content(rng),
+            "tags": rng.sample(_TOPICS, k=rng.randint(1, 3)),
+            "importance": rng.randint(1, 9),
+        }
+        try:
+            r = client.post("/concepts", json=body)
+            r.raise_for_status()
+            ok += 1
+        except httpx.HTTPError as exc:
+            log.warning("concept %d failed: %s", i, exc)
+        if i and i % 500 == 0:
+            log.info("concept: %d / %d", i, cfg.size)
+    return ok
+
+
+def seed_artifact(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
+    """POST /v1/artifacts — multipart. Smaller volume by default would
+    be sensible; artifacts are heavier. Kept at --size for symmetry;
+    tune via --planes if you want to skip."""
+    ns = f"{cfg.namespace_prefix}/artifact"
+    ok = 0
+    for i in range(cfg.size):
+        # Multi-section markdown so the chunker has work to do.
+        content = (
+            f"# perf-seeded-{i:06d}\n\n"
+            f"## Section A\n\n{make_content(rng)}\n\n"
+            f"## Section B\n\n{make_content(rng)}\n\n"
+            f"## Section C\n\n{make_content(rng)}\n"
+        ).encode()
+        data = {
+            "namespace": ns,
+            "title": f"perf-seeded-{i:06d}.md",
+            "content_type": "text/markdown",
+            "source_system": "perf-seed",
+            "chunker": "markdown-headings-v1",
+        }
+        files = {"file": (f"perf-seeded-{i:06d}.md", content, "text/markdown")}
+        try:
+            r = client.post("/artifacts", data=data, files=files)
+            r.raise_for_status()
+            ok += 1
+        except httpx.HTTPError as exc:
+            log.warning("artifact %d failed: %s", i, exc)
+        if i and i % 250 == 0:
+            log.info("artifact: %d / %d", i, cfg.size)
+    return ok
+
+
+_SEEDERS = {
+    "episodic": seed_episodic,
+    "curated": seed_curated,
+    "concept": seed_concept,
+    "artifact": seed_artifact,
+    "thought": seed_thought,
+}
+
+
+def main() -> int:
+    cfg = parse_args()
+    log.info(
+        "seeding: size=%d seed=%d planes=%s namespace_prefix=%s target=%s",
+        cfg.size,
+        cfg.seed,
+        cfg.planes,
+        cfg.namespace_prefix,
+        cfg.base_url,
+    )
+
+    started = time.monotonic()
+    totals: dict[str, int] = {}
+
+    with httpx.Client(
+        base_url=cfg.base_url,
+        headers={
+            "Authorization": f"Bearer {cfg.token}",
+            "User-Agent": "musubi-perf-seed/1",
+        },
+        timeout=cfg.request_timeout_s,
+    ) as client:
+        for plane in cfg.planes:
+            # Per-plane RNG fork so runs with --planes=episodic,thought
+            # produce the same episodic+thought content as a full run.
+            rng = random.Random(f"{cfg.seed}:{plane}")
+            log.info("=== plane=%s ===", plane)
+            totals[plane] = _SEEDERS[plane](client, cfg, rng)
+
+    elapsed = time.monotonic() - started
+    log.info("done in %.1fs. totals: %s", elapsed, totals)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

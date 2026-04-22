@@ -3,7 +3,8 @@
 
 .PHONY: install fmt lint typecheck test test-cov check clean \
         agent-check spec-check slice-check vault-check issue-check wikilink-check \
-        tc-coverage test-integration test-integration-up test-integration-down
+        tc-coverage test-integration test-integration-up test-integration-down \
+        perf-seed perf-baseline perf-load perf-spike
 
 # --------------------------------------------------------------------------
 # Code gates — ruff format + lint are scoped to the whole repo (matching
@@ -96,6 +97,55 @@ test-integration:
 	  exit 2; \
 	fi
 	uv run pytest tests/integration/ -m integration -ra --strict-markers --no-cov
+
+# --------------------------------------------------------------------------
+# Perf harness — scripts/perf/. Every perf target expects these env vars:
+#
+#   MUSUBI_V2_BASE_URL=https://musubi.mey.house/v1
+#   MUSUBI_V2_TOKEN=mbi_perf_...       # scoped to perf-test/* — NEVER eric/*
+#
+# Outputs land under ~/perf-runs/$(LABEL)/. See scripts/perf/README.md for
+# the full harness + safety notes.
+# --------------------------------------------------------------------------
+
+PERF_K6 ?= k6
+PERF_LABEL ?= run-$(shell date -u +%Y%m%dT%H%M%SZ)
+PERF_SIZE ?= 10000
+PERF_SEED ?= 42
+
+perf-seed:  ## Seed Musubi with a deterministic synthetic corpus (SIZE=10000, SEED=42)
+	@if [ -z "$$MUSUBI_V2_BASE_URL" ] || [ -z "$$MUSUBI_V2_TOKEN" ]; then \
+	  echo "error: set MUSUBI_V2_BASE_URL + MUSUBI_V2_TOKEN (scoped to perf-test/*)"; \
+	  exit 2; \
+	fi
+	uv run python3 scripts/perf/seed_corpus.py --size $(PERF_SIZE) --seed $(PERF_SEED)
+
+perf-baseline:  ## Rebaseline (single caller per endpoint). LABEL=<tag> for output dir
+	@mkdir -p $$HOME/perf-runs/$(PERF_LABEL)
+	scripts/perf/telemetry.sh start $(PERF_LABEL)
+	@trap 'scripts/perf/telemetry.sh stop' EXIT; \
+	  $(PERF_K6) run --summary-export=$$HOME/perf-runs/$(PERF_LABEL)/k6-summary.json \
+	    scripts/perf/k6/baseline.js
+	scripts/perf/telemetry.sh stop || true
+	scripts/perf/telemetry.sh summarize $(PERF_LABEL)
+
+perf-load:  ## Sustained mixed workload (10 VU, 15 min). LABEL=<tag> for output dir
+	@mkdir -p $$HOME/perf-runs/$(PERF_LABEL)
+	scripts/perf/telemetry.sh start $(PERF_LABEL)
+	@trap 'scripts/perf/telemetry.sh stop' EXIT; \
+	  $(PERF_K6) run --summary-export=$$HOME/perf-runs/$(PERF_LABEL)/k6-summary.json \
+	    scripts/perf/k6/load.js
+	scripts/perf/telemetry.sh stop || true
+	scripts/perf/telemetry.sh summarize $(PERF_LABEL)
+
+perf-spike:  ## Background+burst+recovery (voice-call shape). LABEL=<tag> for output dir
+	@mkdir -p $$HOME/perf-runs/$(PERF_LABEL)
+	scripts/perf/telemetry.sh start $(PERF_LABEL)
+	@trap 'scripts/perf/telemetry.sh stop' EXIT; \
+	  $(PERF_K6) run --summary-export=$$HOME/perf-runs/$(PERF_LABEL)/k6-summary.json \
+	    scripts/perf/k6/spike.js
+	scripts/perf/telemetry.sh stop || true
+	scripts/perf/telemetry.sh summarize $(PERF_LABEL)
 
 clean:
 	rm -rf .pytest_cache .mypy_cache .ruff_cache build dist *.egg-info
