@@ -29,6 +29,21 @@ RUN_ROOT="${PERF_RUN_ROOT:-$HOME/perf-runs}"
 SAMPLE_INTERVAL_S="${SAMPLE_INTERVAL_S:-5}"
 PID_FILE="/tmp/musubi-perf-telemetry.pid"
 
+# If REMOTE_HOST is set, docker stats + nvidia-smi are collected over
+# SSH on that host — the common case when the perf driver (k6, seed
+# script) runs on a workstation but Musubi's containers + GPU live on
+# a different machine. Without REMOTE_HOST the sampler degrades to
+# local-only sampling (useful on a single-box dev setup).
+#
+# Usage:
+#   REMOTE_HOST=eric@musubi.mey.house scripts/perf/telemetry.sh start <label>
+#
+# SSH is expected to be key-based and non-interactive. We fail fast
+# on connection errors during `start` so you notice at setup-time
+# instead of discovering an empty jsonl after the run.
+REMOTE_HOST="${REMOTE_HOST:-}"
+SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5}"
+
 # -------- helpers -------------------------------------------------
 
 log() { printf '[telemetry %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*" >&2; }
@@ -51,32 +66,31 @@ cmd_start() {
     die "telemetry already running as pid $(cat "$PID_FILE"). 'stop' it first."
   fi
 
-  log "starting telemetry → $dir (sample every ${SAMPLE_INTERVAL_S}s)"
+  if [[ -n "$REMOTE_HOST" ]]; then
+    # Fail fast if SSH isn't set up — a silent failure here turns
+    # into an empty jsonl file three hours later.
+    # shellcheck disable=SC2086
+    if ! ssh $SSH_OPTS "$REMOTE_HOST" "echo ok" >/dev/null 2>&1; then
+      die "REMOTE_HOST=$REMOTE_HOST is unreachable via ssh (check keys / BatchMode)."
+    fi
+    log "starting telemetry → $dir (remote=$REMOTE_HOST, every ${SAMPLE_INTERVAL_S}s)"
+  else
+    log "starting telemetry → $dir (local, every ${SAMPLE_INTERVAL_S}s)"
+    log "WARNING: REMOTE_HOST is unset — sampling THIS host. Set REMOTE_HOST=user@musubi-host"
+    log "         if Musubi's containers + GPU live on a different machine."
+  fi
 
   # Launch the sampler subshell. It traps SIGTERM so `stop` can
-  # flush cleanly. `exec` replaces shell, keeping PID stable for
-  # the stop command.
+  # flush cleanly.
   (
     trap 'log "telemetry sampler stopping"; exit 0' TERM INT
     while :; do
       ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-      # Docker stats — JSON per container, one line per container per sample.
-      if command -v docker >/dev/null 2>&1; then
-        docker stats --no-stream --format '{{json .}}' 2>/dev/null \
-          | jq -c --arg ts "$ts" '. + {ts: $ts}' \
-          >> "$dir/docker-stats.jsonl" || true
-      fi
-
-      # GPU — skip silently if nvidia-smi isn't installed (dev machines).
-      if command -v nvidia-smi >/dev/null 2>&1; then
-        nvidia-smi --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu \
-                   --format=csv,noheader,nounits 2>/dev/null \
-          | awk -v ts="$ts" 'BEGIN{FS=", "}{
-              printf "{\"ts\":\"%s\",\"name\":\"%s\",\"gpu_util\":%s,\"mem_util\":%s,\"mem_used_mib\":%s,\"mem_free_mib\":%s,\"temp_c\":%s}\n",
-                ts, $2, $3, $4, $5, $6, $7
-            }' \
-          >> "$dir/nvidia-smi.jsonl" || true
+      if [[ -n "$REMOTE_HOST" ]]; then
+        _sample_remote "$ts" "$dir"
+      else
+        _sample_local "$ts" "$dir"
       fi
 
       sleep "$SAMPLE_INTERVAL_S"
@@ -85,6 +99,55 @@ cmd_start() {
 
   echo $! > "$PID_FILE"
   log "started as pid $(cat "$PID_FILE")"
+}
+
+# -------- samplers ------------------------------------------------
+
+_sample_local() {
+  local ts="$1" dir="$2"
+
+  if command -v docker >/dev/null 2>&1; then
+    docker stats --no-stream --format '{{json .}}' 2>/dev/null \
+      | jq -c --arg ts "$ts" '. + {ts: $ts}' \
+      >> "$dir/docker-stats.jsonl" || true
+  fi
+
+  if command -v nvidia-smi >/dev/null 2>&1; then
+    nvidia-smi --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu \
+               --format=csv,noheader,nounits 2>/dev/null \
+      | awk -v ts="$ts" 'BEGIN{FS=", "}{
+          printf "{\"ts\":\"%s\",\"name\":\"%s\",\"gpu_util\":%s,\"mem_util\":%s,\"mem_used_mib\":%s,\"mem_free_mib\":%s,\"temp_c\":%s}\n",
+            ts, $2, $3, $4, $5, $6, $7
+        }' \
+      >> "$dir/nvidia-smi.jsonl" || true
+  fi
+}
+
+_sample_remote() {
+  local ts="$1" dir="$2"
+
+  # Docker stats over SSH. `--format` curlies would need escaping
+  # through two shells; we use the template directly and trust that
+  # our SSH target isn't interpolating it (no jinja here, plain ssh).
+  # shellcheck disable=SC2086
+  ssh $SSH_OPTS "$REMOTE_HOST" \
+    "docker stats --no-stream --format '{{json .}}' 2>/dev/null" 2>/dev/null \
+    | jq -c --arg ts "$ts" '. + {ts: $ts}' \
+    >> "$dir/docker-stats.jsonl" || true
+
+  # GPU — server-side `command -v nvidia-smi` gate so a non-GPU
+  # host doesn't fail noisily; we just end up with an empty jsonl.
+  # shellcheck disable=SC2086
+  ssh $SSH_OPTS "$REMOTE_HOST" '
+    command -v nvidia-smi >/dev/null 2>&1 && \
+    nvidia-smi --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu \
+               --format=csv,noheader,nounits 2>/dev/null
+  ' 2>/dev/null \
+    | awk -v ts="$ts" 'BEGIN{FS=", "}NF>=7{
+        printf "{\"ts\":\"%s\",\"name\":\"%s\",\"gpu_util\":%s,\"mem_util\":%s,\"mem_used_mib\":%s,\"mem_free_mib\":%s,\"temp_c\":%s}\n",
+          ts, $2, $3, $4, $5, $6, $7
+      }' \
+    >> "$dir/nvidia-smi.jsonl" || true
 }
 
 cmd_stop() {
