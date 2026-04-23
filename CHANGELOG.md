@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.4.0](https://github.com/ericmey/musubi/compare/v0.3.1...v0.4.0) (2026-04-23)
+
+
+### Features
+
+* **api,sdk:** operator-gated created_at override on capture (closes [#140](https://github.com/ericmey/musubi/issues/140)) ([#203](https://github.com/ericmey/musubi/issues/203)) ([a668560](https://github.com/ericmey/musubi/commit/a668560e2b09b8485f8079ba1f6b3d2d94f1ae7d))
+* **ops:** perf-testing harness + manual-recovery runbook (Gate 0) ([#191](https://github.com/ericmey/musubi/issues/191)) ([0976622](https://github.com/ericmey/musubi/commit/0976622f8b30890185015bcc39841f9c893c6c96))
+* **plane:** batch_create + longer-wins merge strategy (closes [#141](https://github.com/ericmey/musubi/issues/141), [#142](https://github.com/ericmey/musubi/issues/142)) ([#204](https://github.com/ericmey/musubi/issues/204)) ([eeaae56](https://github.com/ericmey/musubi/commit/eeaae5681e323c302c6846b12c5713e759957ffb))
+
+
+### Bug Fixes
+
+* **api:** map pydantic ValidationError to 422 (closes [#192](https://github.com/ericmey/musubi/issues/192)) ([#201](https://github.com/ericmey/musubi/issues/201)) ([6196283](https://github.com/ericmey/musubi/commit/6196283be49ac7b39f9ed8d6d325a62f73fbfccb))
+* **api:** wire POST /v1/retrieve to the real orchestration pipeline ([#197](https://github.com/ericmey/musubi/issues/197)) ([9f80644](https://github.com/ericmey/musubi/commit/9f8064491aba851f2850d846a2b530b2ddfdece3))
+* **embedding:** reuse a pooled httpx.AsyncClient per TEI client ([#198](https://github.com/ericmey/musubi/issues/198)) ([5a24e28](https://github.com/ericmey/musubi/commit/5a24e280906db65b26d73e17c6332466e6e72dbc))
+* **ops:** perf harness — idempotent seed + remote telemetry + 429 backoff ([#194](https://github.com/ericmey/musubi/issues/194)) ([85cf5be](https://github.com/ericmey/musubi/commit/85cf5be506ef41d41cff889594f722bf3789c745))
+* **ops:** perf-harness round 3 — fixes found during live Gate 1 run ([#196](https://github.com/ericmey/musubi/issues/196)) ([1031104](https://github.com/ericmey/musubi/commit/1031104d0e838d6a02a704597bc752d017448451))
+* **ops:** repair backup/restore playbook (closes [#190](https://github.com/ericmey/musubi/issues/190)) ([#202](https://github.com/ericmey/musubi/issues/202)) ([63e0765](https://github.com/ericmey/musubi/commit/63e0765c6df0adc3c9d4ab89a70f475a69b8ee84))
+
+
+### Documentation
+
+* scrub internal V1/V2 framing from user-facing docs ([#189](https://github.com/ericmey/musubi/issues/189)) ([cc97fc1](https://github.com/ericmey/musubi/commit/cc97fc199b99073b260a7a897919c2711fab604e))
+
+
+### CI / Ops
+
+* **vault:** catch merge-time status drift at PR time ([#186](https://github.com/ericmey/musubi/issues/186)) ([e8ae852](https://github.com/ericmey/musubi/commit/e8ae8524dd77f9aa07fc3d4c38ba979787728883))
+
 ## [0.3.1](https://github.com/ericmey/musubi/compare/v0.3.0...v0.3.1) (2026-04-21)
 
 
