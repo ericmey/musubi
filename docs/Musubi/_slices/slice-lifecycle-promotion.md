@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-lifecycle-synthesis]]", "[[_slices/slice-plane-curated]]", "[[_slices/slice-vault-sync]]"]
-blocks: []
+blocks: ["[[_slices/slice-lifecycle-promotion-builder]]", "[[_slices/slice-lifecycle-demotion-builder]]"]
 ---
 
 # Slice: Promotion / demotion

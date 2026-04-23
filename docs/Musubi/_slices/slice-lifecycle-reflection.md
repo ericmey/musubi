@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-lifecycle-engine]]", "[[_slices/slice-plane-curated]]"]
-blocks: []
+blocks: ["[[_slices/slice-lifecycle-reflection-builder]]"]
 ---
 
 # Slice: Reflection job

@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-lifecycle-engine]]", "[[_slices/slice-lifecycle-maturation]]", "[[_slices/slice-plane-concept]]"]
-blocks: ["[[_slices/slice-lifecycle-promotion]]"]
+blocks: ["[[_slices/slice-lifecycle-promotion]]", "[[_slices/slice-lifecycle-synthesis-builder]]"]
 ---
 
 # Slice: Concept synthesis job
