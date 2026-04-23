@@ -7,10 +7,10 @@ status: done
 owner: vscode-cc-sonnet47
 phase: "8 Ops"
 tags: [section/slices, status/done, type/slice, integration, testing, phase-2]
-updated: 2026-04-20
+updated: 2026-04-23
 reviewed: true
 depends-on: ["[[_slices/slice-ops-compose]]"]
-blocks: ["[[_slices/slice-ops-hardening-suite]]"]
+blocks: ["[[_slices/slice-ops-hardening-suite]]", "[[_slices/slice-adapter-livekit-e2e]]"]
 ---
 
 # Slice: Integration test harness
