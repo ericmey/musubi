@@ -73,27 +73,10 @@ def test_sqlite_backup_completes_under_5s_at_v1_scale(tmp_path: Path) -> None:
         assert conn.execute("select count(*) from lifecycle_events").fetchone() == (1,)
 
 
-def test_drill_playbook_restores_to_working_musubi() -> None:
-    drill_text = DRILL_PLAYBOOK.read_text()
-
-    assert "bootstrap.yml" in drill_text
-    assert "restore.yml" in drill_text
-    assert "musubi-cli index rebuild --collection musubi_curated --source" in drill_text
-    assert "musubi-cli artifacts rechunk --all" in drill_text
-
-
-def test_restore_drill_smoke_suite_passes_within_5min() -> None:
-    drill = _load_yaml(DRILL_PLAYBOOK)
-    smoke_tasks = [
-        task
-        for play in drill
-        for task in play.get("tasks", [])
-        if task.get("name") == "Run restore smoke suite"
-    ]
-
-    assert smoke_tasks
-    assert smoke_tasks[0]["async"] == 300
-    assert "musubi-contract-smoke" in smoke_tasks[0]["ansible.builtin.command"]
+# Drill-playbook structural assertions and restore.yml CLI/path
+# assertions moved to tests/ops/test_restore_playbook.py as part of
+# #190 — the old `musubi-cli` commands and `musubi-contract-smoke`
+# binary don't exist, so the assertions were locking in broken behaviour.
 
 
 def test_corruption_check_fails_on_tampered_snapshot(tmp_path: Path) -> None:
@@ -139,17 +122,7 @@ def test_restore_drills_run_quarterly() -> None:
     assert module.RESTORE_DRILL_CADENCE_DAYS <= 92
 
 
-def test_curated_rebuild_from_vault_produces_matching_qdrant_count() -> None:
-    restore_text = RESTORE_PLAYBOOK.read_text()
-
-    assert "musubi-cli index rebuild --collection musubi_curated --source" in restore_text
-    assert "musubi-cli index count --collection musubi_curated" in restore_text
-    assert "changed_when: false" in restore_text
-
-
-def test_artifact_rechunk_produces_same_chunk_count_as_snapshot() -> None:
-    restore_text = RESTORE_PLAYBOOK.read_text()
-
-    assert "musubi-cli artifacts rechunk --all" in restore_text
-    assert "musubi-cli artifacts chunk-count --source qdrant" in restore_text
-    assert "musubi-cli artifacts chunk-count --source filesystem" in restore_text
+# Curated rebuild / artifact rechunk assertions removed in #190 — those
+# paths called a non-existent `musubi-cli` binary. Qdrant snapshot
+# recovery restores the indexes directly, so no rebuild step is needed.
+# See tests/ops/test_restore_playbook.py for the new structural checks.

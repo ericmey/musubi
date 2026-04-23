@@ -1,26 +1,69 @@
 ---
-- name: Restore drill bootstrap
-  ansible.builtin.import_playbook: ../ansible/bootstrap.yml
+# Restore drill — exercises restore.yml end-to-end and verifies the
+# stack is serving afterwards.
+#
+# By DEFAULT this does NOT re-run bootstrap.yml. Bootstrap is
+# destructive (reinstalls system packages, creates the musubi user,
+# etc.) and running it against an already-bootstrapped host would
+# rebuild the host from scratch. That's the correct behaviour for a
+# scratch-VM drill but the wrong behaviour for a "does restore.yml
+# still work" drill run on the live box.
+#
+# Two modes:
+#
+#   # Safe mode (default). Runs only restore + validation on an
+#   # already-bootstrapped host. Use this against musubi.mey.house.
+#   ansible-playbook deploy/backup/drill.yml \
+#     -e backup_timestamp=20260422T180001Z
+#
+#   # Fresh-host mode. Runs bootstrap too. Intended for a scratch VM
+#   # where you want to prove the full bring-up + restore loop works.
+#   ansible-playbook deploy/backup/drill.yml \
+#     -e drill_fresh_host=true \
+#     -e backup_timestamp=20260422T180001Z
 
-- name: Restore drill data
+- name: Optional bootstrap (fresh-host drills only)
+  hosts: musubi
+  become: true
+  gather_facts: false
+  vars:
+    drill_fresh_host: false
+  tasks:
+    - name: Include bootstrap playbook when drill_fresh_host=true
+      ansible.builtin.import_playbook: ../ansible/bootstrap.yml
+      when: drill_fresh_host | bool
+
+- name: Restore drill — data
   ansible.builtin.import_playbook: restore.yml
 
 - name: Validate restored Musubi
   hosts: musubi
   become: true
+  vars:
+    musubi_config_dir: /etc/musubi
+    compose_file: "{{ musubi_config_dir }}/docker-compose.yml"
+    env_file: "{{ musubi_config_dir }}/.env.production"
   tasks:
-    - name: Rebuild curated index during drill
-      ansible.builtin.command:
-        cmd: musubi-cli index rebuild --collection musubi_curated --source /var/lib/musubi/vault
-      changed_when: true
+    - name: Probe core health
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8100/v1/ops/health"
+        status_code: 200
 
-    - name: Rechunk artifacts during drill
+    - name: Sanity-check Qdrant collection count (must be non-zero after restore)
       ansible.builtin.command:
-        cmd: musubi-cli artifacts rechunk --all
-      changed_when: true
-
-    - name: Run restore smoke suite
-      ansible.builtin.command: musubi-contract-smoke --target http://127.0.0.1:8100
-      async: 300
-      poll: 10
+        cmd: >-
+          docker compose -f {{ compose_file }} --env-file {{ env_file }}
+          exec -T lifecycle-worker python -c
+          "import os, httpx, sys;
+          r = httpx.get('http://qdrant:6333/collections',
+                       headers={'api-key': os.environ['QDRANT_API_KEY']},
+                       timeout=15.0);
+          names = [c['name'] for c in r.json().get('result', {}).get('collections', [])];
+          print(' '.join(names));
+          sys.exit(0 if names else 1)"
+      register: qdrant_collections
       changed_when: false
+
+    - name: Surface which collections came back online
+      ansible.builtin.debug:
+        msg: "Restored collections: {{ qdrant_collections.stdout }}"
