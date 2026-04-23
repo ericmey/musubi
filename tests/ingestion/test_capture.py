@@ -423,11 +423,11 @@ def test_capture_qdrant_retry_logic_succeeds_on_transient_failure(
     failures = {"count": 0}
     real_create = plane.create
 
-    async def flaky_create(memory: Any) -> Any:
+    async def flaky_create(memory: Any, *, preserve_created_at: bool = False) -> Any:
         if failures["count"] == 0:
             failures["count"] += 1
             raise TimeoutError("transient qdrant blip")
-        return await real_create(memory)
+        return await real_create(memory, preserve_created_at=preserve_created_at)
 
     plane.create = flaky_create  # type: ignore[method-assign]
     svc = CaptureService(plane=plane, sink=sink, idempotency_cache=cache)
@@ -447,7 +447,7 @@ def test_capture_qdrant_permanent_failure_returns_503(
 
     from typing import Any
 
-    async def always_fail(memory: Any) -> Any:
+    async def always_fail(memory: Any, *, preserve_created_at: bool = False) -> Any:
         raise TimeoutError("permanent qdrant outage")
 
     plane.create = always_fail  # type: ignore[method-assign]
