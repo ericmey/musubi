@@ -24,19 +24,27 @@ musubi_data_dirs:
 musubi_core_port: 8100
 # Musubi Core image. Pinned by immutable digest.
 #
-# Current pin: v0.4.0. Rolls up the ValidationError → 422 fix,
-# backup/restore playbook repair, operator-gated `created_at`
-# override, and batch_create + longer-wins merge (with dedup-probe
-# vector preservation). Gates 1 + 2 were clean on the previous
-# digest (post-#198 pooled TEI client, the retrieve hot path is
-# unchanged in v0.4.0) but the full Gate 1-4 perf sweep needs to be
-# re-run on v0.4.0 before declaring pre-prod done.
+# Current pin: v0.5.1. Rolls up #193 (rate-limit settings cleanup),
+# #209 (2-segment namespace + strict-scope crossplane fanout), and
+# #208 (artifact-plane sparse-prefetch skip — the 500 when retrieving
+# across a dense-only collection). Gates 1 + 2 were clean on the
+# previous v0.4.0 digest; the full Gate 1-4 perf sweep needs to be
+# re-run on v0.5.1 before declaring pre-prod done.
 #
 # Produced by `.github/workflows/publish-core-image.yml`; verified
-# cosign-signed + SBOM-attested + Trivy-CRITICAL-scanned. Bump this after
-# every release — the release note on the GitHub tag carries the new
-# digest line ready to paste.
-musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:fcccb7f437ad6529d8db5f96369a5d996ee03da045fb60cb8a9bf1721ec09ed5"
+# cosign-signed + SBOM-attested + Trivy-CRITICAL-scanned.
+#
+# Source of truth for the digest line: the Actions run summary for
+# the relevant `publish-core-image.yml` build, under the fenced
+# "Pin in deploy/ansible/group_vars/all.yml as:" block. The GitHub
+# Release body *also* carries that block — but only when the image
+# publish was triggered by the `v*` tag push, which itself requires
+# release-please to be authenticated with `RELEASE_PLEASE_PAT` (see
+# ADR 0026 addendum 2026-04-23). Until that lands, always pull the
+# digest from the Actions run summary, not from the release page.
+#
+# Bump this after every release via `deploy/runbooks/upgrade-image.md`.
+musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:e76668fcdb836771c60c45cd225febb57bf4190b0289cddfc27dabec146f820b"
 musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
 # compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),
