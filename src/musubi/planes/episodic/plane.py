@@ -92,13 +92,26 @@ class EpisodicPlane:
     # Create
     # ------------------------------------------------------------------
 
-    async def create(self, memory: EpisodicMemory) -> EpisodicMemory:
+    async def create(
+        self,
+        memory: EpisodicMemory,
+        *,
+        preserve_created_at: bool = False,
+    ) -> EpisodicMemory:
         """Write ``memory`` to Qdrant, deduping against the same namespace.
 
         On a dedup hit, merges tags + bumps ``reinforcement_count`` and
         ``version`` on the existing row instead of inserting. Returns the
         final state of the row (original object id on dedup hit, new id on
         fresh insert).
+
+        ``preserve_created_at`` controls whether the incoming
+        ``memory.created_at`` is used verbatim (migration / replay path)
+        or replaced with ``utc_now()``. Default False keeps the historical
+        behaviour: every fresh insert gets a server-assigned ingest
+        timestamp. The migration path (API #140, SDK capture with
+        operator scope + explicit created_at) flips this on so source
+        timestamps round-trip through ingest.
         """
         if len(memory.content.encode("utf-8")) > 32768:
             raise ValueError("content exceeds 32KB limit, please use artifact plane instead")
@@ -110,6 +123,7 @@ class EpisodicPlane:
             raise ValueError("invalid namespace format")
 
         now = utc_now()
+        created_at = memory.created_at if preserve_created_at else now
         text = memory.summary or memory.content
         dense, sparse = await self._embed_both(text)
 
@@ -125,8 +139,8 @@ class EpisodicPlane:
             state="provisional",
             version=1,
             reinforcement_count=0,
-            created_at=now,
-            created_epoch=epoch_of(now),
+            created_at=created_at,
+            created_epoch=epoch_of(created_at),
             updated_at=now,
             updated_epoch=epoch_of(now),
         )

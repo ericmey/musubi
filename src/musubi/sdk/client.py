@@ -24,6 +24,7 @@ import logging
 import time
 import uuid
 from collections.abc import Iterator
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -340,18 +341,30 @@ class _Memories:
         topics: list[str] | None = None,
         importance: int = 5,
         idempotency_key: str | None = None,
+        created_at: datetime | None = None,
     ) -> dict[str, Any]:
+        """Capture an episodic memory.
+
+        ``created_at`` is a migration / replay escape hatch: pass a
+        ``datetime`` to preserve a source-truth timestamp on the row.
+        The server requires the bearer token to carry ``operator`` scope
+        when this field is present; a non-operator token 403s. Omit
+        for normal captures — Musubi stamps created_at at ingest time.
+        """
+        body: dict[str, Any] = {
+            "namespace": namespace,
+            "content": content,
+            "tags": tags or [],
+            "topics": topics or [],
+            "importance": importance,
+        }
+        if created_at is not None:
+            body["created_at"] = created_at.isoformat()
         return self._c._json(
             "POST",
             "/memories",
             operation_name="memories.capture",
-            json_body={
-                "namespace": namespace,
-                "content": content,
-                "tags": tags or [],
-                "topics": topics or [],
-                "importance": importance,
-            },
+            json_body=body,
             idempotency_key=idempotency_key,
         )
 
@@ -388,8 +401,19 @@ class _BatchContext:
         content: str,
         tags: list[str] | None = None,
         importance: int = 5,
+        created_at: datetime | None = None,
     ) -> None:
-        self._items.append({"content": content, "tags": tags or [], "importance": importance})
+        """Queue one row into the batch. ``created_at`` is the migration
+        override; the whole batch is 403'd on flush unless the bearer
+        carries ``operator`` scope when any item sets it."""
+        item: dict[str, Any] = {
+            "content": content,
+            "tags": tags or [],
+            "importance": importance,
+        }
+        if created_at is not None:
+            item["created_at"] = created_at.isoformat()
+        self._items.append(item)
 
     def __enter__(self) -> _BatchContext:
         return self

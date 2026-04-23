@@ -127,6 +127,164 @@ def test_batch_capture_writes_each_row(client: TestClient, valid_token: str) -> 
 
 
 # ---------------------------------------------------------------------------
+# created_at override — operator-gated migration / replay path (#140)
+# ---------------------------------------------------------------------------
+
+
+def test_capture_created_at_override_requires_operator(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    """Non-operator token cannot override created_at — regression guard
+    that the gate is actually in place. Without this, a random consumer
+    could rewrite when an event "happened", which breaks event_at /
+    created_at audit semantics."""
+    r = client.post(
+        "/v1/memories",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "content": "historical-row",
+            "created_at": "2024-06-01T12:00:00Z",
+        },
+    )
+    assert r.status_code == 403
+    body = r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+    assert "operator" in body["error"]["detail"].lower()
+
+
+def test_capture_created_at_override_with_operator_round_trips(
+    client: TestClient,
+    api_settings: object,
+    episodic: EpisodicPlane,
+) -> None:
+    """With operator scope, an override lands on the row and comes back
+    on the GET. This is the migration use case: preserve source-truth
+    timestamps when ingesting historical data."""
+    from tests.api.conftest import mint_token
+
+    namespace = "eric/claude-code/episodic"
+    token = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=["operator", f"{namespace}:rw"],
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    override = "2024-06-01T12:00:00Z"
+    r = client.post(
+        "/v1/memories",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "content": "historical-op-row",
+            "created_at": override,
+        },
+    )
+    assert r.status_code == 202, r.text
+    oid = r.json()["object_id"]
+    got = client.get(
+        f"/v1/memories/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert got.status_code == 200, got.text
+    # Timestamp lands on created_at exactly as supplied.
+    assert got.json()["created_at"].startswith("2024-06-01T12:00:00")
+
+
+def test_capture_without_created_at_is_stamped_now(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    """Omitting created_at must continue to work unchanged — the field
+    is opt-in. Musubi stamps the current time via EpisodicMemory's
+    default factory."""
+    from datetime import UTC, datetime
+
+    before = datetime.now(UTC)
+    r = client.post(
+        "/v1/memories",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={"namespace": "eric/claude-code/episodic", "content": "no-override"},
+    )
+    assert r.status_code == 202
+    oid = r.json()["object_id"]
+    got = client.get(
+        f"/v1/memories/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": "eric/claude-code/episodic"},
+    )
+    assert got.status_code == 200
+    stamp = datetime.fromisoformat(got.json()["created_at"].replace("Z", "+00:00"))
+    assert stamp >= before
+
+
+def test_batch_capture_created_at_override_requires_operator(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    """Any item in a batch carrying created_at triggers the operator
+    check for the whole batch. Keeps semantics simple: mixed batches
+    fail fast rather than partially-succeed."""
+    r = client.post(
+        "/v1/memories/batch",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "items": [
+                {"content": "row-a"},
+                {"content": "row-b", "created_at": "2024-06-01T12:00:00Z"},
+            ],
+        },
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_batch_capture_created_at_override_with_operator_applies_per_item(
+    client: TestClient,
+    api_settings: object,
+) -> None:
+    """Under operator scope, each item's created_at lands independently
+    on its row — the migration path needs per-item control because
+    source rows don't share a single timestamp."""
+    from tests.api.conftest import mint_token
+
+    namespace = "eric/claude-code/episodic"
+    token = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=["operator", f"{namespace}:rw"],
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    r = client.post(
+        "/v1/memories/batch",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "items": [
+                {"content": "batch-op-a", "created_at": "2022-01-01T00:00:00Z"},
+                {"content": "batch-op-b", "created_at": "2023-06-15T12:00:00Z"},
+            ],
+        },
+    )
+    assert r.status_code == 202, r.text
+    oids = r.json()["object_ids"]
+    assert len(oids) == 2
+    a = client.get(
+        f"/v1/memories/{oids[0]}",
+        headers=headers,
+        params={"namespace": namespace},
+    ).json()
+    b = client.get(
+        f"/v1/memories/{oids[1]}",
+        headers=headers,
+        params={"namespace": namespace},
+    ).json()
+    assert a["created_at"].startswith("2022-01-01T00:00:00")
+    assert b["created_at"].startswith("2023-06-15T12:00:00")
+
+
+# ---------------------------------------------------------------------------
 # PATCH — non-state field updates
 # ---------------------------------------------------------------------------
 
