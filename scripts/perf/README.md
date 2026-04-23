@@ -61,7 +61,11 @@ Produces `~/perf-runs/rebaseline-<date>/` with k6 summary + telemetry rollup.
 ### Gate 2 — load
 
 ```bash
+# Default: 10 VUs (3× realistic concurrency — probes the GPU wall)
 make perf-load LABEL=load-$(date +%Y%m%d)
+
+# Realistic-concurrency confirmation (matches 2 browser + 1 voice agents)
+LOAD_VUS=3 make perf-load LABEL=load-3vu-$(date +%Y%m%d)
 ```
 
 ### Gate 3 — spike
@@ -70,14 +74,14 @@ make perf-load LABEL=load-$(date +%Y%m%d)
 make perf-spike LABEL=spike-$(date +%Y%m%d)
 ```
 
-### Gate 4 — soak (use your shell's background job control)
-
-Soak isn't a dedicated scenario — it's `load.js` extended. Run with
-a longer `stages` array:
+### Gate 4 — soak
 
 ```bash
-K6_STAGES_OVERRIDE="2m,12h,30s" make perf-load LABEL=soak-overnight
-# nohup + tail -f ~/perf-runs/soak-overnight/... overnight
+# Default: 3 VUs, 30 min — enough to catch a linear leak at ~1 MiB/min.
+make perf-soak LABEL=soak-$(date +%Y%m%d)
+
+# Longer run (overnight or hunting a slow drift):
+SOAK_DURATION_MINUTES=120 make perf-soak LABEL=soak-long-$(date +%Y%m%d)
 ```
 
 ## What each script does (one-liner)
@@ -88,9 +92,15 @@ K6_STAGES_OVERRIDE="2m,12h,30s" make perf-load LABEL=soak-overnight
   no-op against a populated namespace (dedup + idempotency keys
   collapse duplicate captures).
 - **`k6/baseline.js`** — serial happy-path. Per-endpoint p50/p95/p99.
-- **`k6/load.js`** — 10 VUs, ramp + steady 15 min, weighted mix.
+- **`k6/load.js`** — default 10 VUs, ramp + steady 15 min, weighted mix.
+  Peak concurrency is configurable via `LOAD_VUS` (e.g. `LOAD_VUS=3`
+  for a realistic-load confirmation run).
 - **`k6/spike.js`** — background at 2 RPS, burst to 15 RPS for 20 s,
   recovery window.
+- **`k6/soak.js`** — leak detection at realistic concurrency. Default
+  3 VUs × 30 min; override with `SOAK_VUS` / `SOAK_DURATION_MINUTES`.
+  Fail budgets are the same as load (0.005) — a clean soak should not
+  produce 503s.
 - **`telemetry.sh`** — sidecar sampler. Runs alongside k6 and
   captures container CPU/RSS + GPU utilization + memory at 5s cadence.
   When the driver runs on a different host than Musubi (common), set

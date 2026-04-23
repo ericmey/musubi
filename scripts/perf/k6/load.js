@@ -1,21 +1,33 @@
-// Load: sustained representative workload. 10 concurrent virtual
-// users, each doing a weighted mix of retrieve (60% fast, 20% deep),
-// capture (15%), and thoughts-send (5%). Holds for 13 minutes after a
-// 2-minute ramp.
+// Load: sustained representative workload. Weighted mix of retrieve
+// (60% fast, 20% deep), capture (15%), and thoughts-send (5%).
+// Holds for 13 minutes after a 2-minute ramp.
 //
 // Shape chosen to mimic the pessimistic case from the perf plan:
 // two browser agents doing steady supplement refreshes + capture
-// mirror, plus a voice agent landing intermittent bursts. 10 VUs
-// isn't "real" concurrency — real consumers are ~3 clients — but
-// with HTTP keepalive the server sees the same request-shape
-// distribution and the extra VUs give statistical bite to p99.
+// mirror, plus a voice agent landing intermittent bursts.
+//
+// LOAD_VUS (default 10) controls peak concurrency. 10 VUs is 3× the
+// real 3-client concurrency ceiling and will expose the GPU saturation
+// wall on reference hardware; 3 VUs is a realistic-load confirmation
+// run. Use whichever matches the question you're asking.
 //
 // Run:
 //   MUSUBI_V2_BASE_URL=... MUSUBI_V2_TOKEN=... \
 //     k6 run scripts/perf/k6/load.js
+//
+//   # Realistic-concurrency confirmation:
+//   LOAD_VUS=3 k6 run scripts/perf/k6/load.js
 
 import { sleep } from 'k6';
 import { retrieve, capture, sendThought, ok2xx } from './_shared.js';
+
+// Strict integer parse — parseInt accepts "3.5" or "3x" and silently
+// rounds down, which would let a typo quietly change peak concurrency.
+const _loadVusRaw = __ENV.LOAD_VUS ?? '10';
+const LOAD_VUS = Number(_loadVusRaw);
+if (!Number.isInteger(LOAD_VUS) || LOAD_VUS < 1) {
+  throw new Error('LOAD_VUS must be a positive integer; got ' + _loadVusRaw);
+}
 
 export const options = {
   scenarios: {
@@ -23,9 +35,9 @@ export const options = {
       executor: 'ramping-vus',
       startVUs: 0,
       stages: [
-        { duration: '2m', target: 10 },  // ramp up
-        { duration: '13m', target: 10 }, // steady
-        { duration: '30s', target: 0 },  // ramp down
+        { duration: '2m', target: LOAD_VUS },   // ramp up
+        { duration: '13m', target: LOAD_VUS },  // steady
+        { duration: '30s', target: 0 },         // ramp down
       ],
       exec: 'mixed',
       gracefulRampDown: '30s',

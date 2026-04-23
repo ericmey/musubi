@@ -4,7 +4,7 @@
 .PHONY: install fmt lint typecheck test test-cov check clean \
         agent-check spec-check slice-check vault-check issue-check wikilink-check \
         tc-coverage test-integration test-integration-up test-integration-down \
-        perf-seed perf-baseline perf-load perf-spike
+        perf-seed perf-baseline perf-load perf-spike perf-soak
 
 # --------------------------------------------------------------------------
 # Code gates — ruff format + lint are scoped to the whole repo (matching
@@ -129,7 +129,7 @@ perf-baseline:  ## Rebaseline (single caller per endpoint). LABEL=<tag> for outp
 	scripts/perf/telemetry.sh stop || true
 	scripts/perf/telemetry.sh summarize $(PERF_LABEL)
 
-perf-load:  ## Sustained mixed workload (10 VU, 15 min). LABEL=<tag> for output dir
+perf-load:  ## Sustained mixed workload (default 10 VU, 15 min; override with LOAD_VUS=3 for realistic concurrency). LABEL=<tag> for output dir
 	@mkdir -p $$HOME/perf-runs/$(PERF_LABEL)
 	scripts/perf/telemetry.sh start $(PERF_LABEL)
 	@trap 'scripts/perf/telemetry.sh stop' EXIT; \
@@ -144,6 +144,15 @@ perf-spike:  ## Background+burst+recovery (voice-call shape). LABEL=<tag> for ou
 	@trap 'scripts/perf/telemetry.sh stop' EXIT; \
 	  $(PERF_K6) run --summary-export=$$HOME/perf-runs/$(PERF_LABEL)/k6-summary.json \
 	    scripts/perf/k6/spike.js
+	scripts/perf/telemetry.sh stop || true
+	scripts/perf/telemetry.sh summarize $(PERF_LABEL)
+
+perf-soak:  ## Long-duration leak check (default 3 VU, 30 min; override with SOAK_VUS/SOAK_DURATION_MINUTES). LABEL=<tag> for output dir
+	@mkdir -p $$HOME/perf-runs/$(PERF_LABEL)
+	scripts/perf/telemetry.sh start $(PERF_LABEL)
+	@trap 'scripts/perf/telemetry.sh stop' EXIT; \
+	  $(PERF_K6) run --summary-export=$$HOME/perf-runs/$(PERF_LABEL)/k6-summary.json \
+	    scripts/perf/k6/soak.js
 	scripts/perf/telemetry.sh stop || true
 	scripts/perf/telemetry.sh summarize $(PERF_LABEL)
 
