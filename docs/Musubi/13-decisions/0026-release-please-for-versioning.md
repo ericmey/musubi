@@ -6,7 +6,7 @@ status: accepted
 date: 2026-04-21
 deciders: [Eric]
 tags: [section/decisions, status/accepted, type/adr]
-updated: 2026-04-21
+updated: 2026-04-23
 up: "[[13-decisions/index]]"
 reviewed: false
 supersedes: ""
@@ -56,6 +56,9 @@ Adopt `googleapis/release-please-action@v4` to manage versioning:
   Release.
 - The tag push triggers `publish-core-image.yml`, which
   builds + scans (Trivy) + signs (cosign) + publishes to GHCR.
+  **Requires release-please to authenticate with a PAT (or GitHub
+  App token), not the default `GITHUB_TOKEN`** — see [Addendum
+  2026-04-23](#addendum-2026-04-23-tag-push-requires-a-pat).
 
 End-to-end: **operator merges feature PRs into v2 → approves the
 release PR when the batch is ready → signed versioned image appears
@@ -141,3 +144,40 @@ line.
 - [[_slices/slice-ops-core-image-publish]] (the publish workflow)
 - `.github/workflows/release-please.yml`
 - `.release-please-config.json` + `.release-please-manifest.json`
+
+## Addendum 2026-04-23 — tag push requires a PAT
+
+The original "tag push triggers `publish-core-image.yml`" step
+assumed `GITHUB_TOKEN` would suffice. **It does not.** GitHub's
+anti-recursion guard silently suppresses workflow runs for events
+authored by the default `GITHUB_TOKEN` (see
+[GitHub Actions: triggering a workflow from a workflow](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow)).
+That includes the `vX.Y.Z` tag push release-please creates on merge.
+
+We didn't notice immediately because:
+
+- `publish-core-image.yml` also fires on `push: branches: [main]`,
+  so the release-please merge commit still produces a built +
+  signed image — just tagged `:main` instead of `:vX.Y.Z`.
+- Digest pins don't care about version tags (digests are
+  immutable content addresses), so the ansible deploy continued
+  to work by pasting the digest from the `:main` build.
+
+Observed impact: v0.4.0, v0.5.0, v0.5.1 were all published to GHCR
+without a `:vX.Y.Z` image tag. Only `:main`, `:latest`, and
+`:v0.3.0` (manual tag, pre-release-please) exist on the registry.
+
+**Fix.** Authenticate release-please with a PAT (or GitHub App
+token) that has `repo` + `workflow` scopes, stored as
+`secrets.RELEASE_PLEASE_PAT`. Tag pushes authored by a PAT *do*
+fire downstream workflows. Rotation: bump the secret, confirm the
+next release-please run publishes `:vX.Y.Z`. The workflow falls
+back to `GITHUB_TOKEN` if the secret is missing so release PRs
+continue to open (just without tagged images).
+
+**Why the addendum, not a revision of the Decision section.**
+The original decision ("release-please drives versioning") is
+still right. Only the *mechanism* for cross-workflow triggering
+was incorrectly described. Keeping the original text + an
+addendum preserves the history of why v0.4.0/v0.5.0/v0.5.1 shipped
+without `:vX.Y.Z` tags.

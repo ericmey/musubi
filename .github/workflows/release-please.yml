@@ -33,16 +33,49 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # Surface the fallback loudly. Without RELEASE_PLEASE_PAT, the job
+      # still runs — release PRs open and merge — but tag pushes
+      # authored by GITHUB_TOKEN don't trigger `publish-core-image.yml`,
+      # so no `:vX.Y.Z` image tag lands on GHCR. That's the exact silent
+      # failure this workflow is meant to prevent; if we're about to
+      # silently re-introduce it, say so in the Actions UI.
+      - name: Warn if RELEASE_PLEASE_PAT is unset
+        env:
+          RELEASE_PLEASE_PAT: ${{ secrets.RELEASE_PLEASE_PAT }}
+        if: ${{ env.RELEASE_PLEASE_PAT == '' }}
+        run: |
+          echo "::warning::RELEASE_PLEASE_PAT is unset — falling back to GITHUB_TOKEN. Release PRs will open / merge, but any vX.Y.Z tag this run creates will NOT trigger publish-core-image.yml (anti-recursion guard). No :vX.Y.Z image tag will be published to GHCR. Set the secret to restore version-tagged publishes."
+
       - uses: googleapis/release-please-action@v4
         with:
           # A single-package repo — release-please's `manifest` mode
           # still applies because our config lives in a manifest file.
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
-          # `GITHUB_TOKEN` with the scopes above suffices. Use a PAT
-          # only if we ever need releases to trigger OTHER workflows
-          # (GHA refuses to fire workflows on actions taken by the
-          # default GITHUB_TOKEN — but `publish-core-image.yml` is
-          # triggered by tag-push, which WORKS with GITHUB_TOKEN for
-          # tag creation, confirmed).
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Must be a PAT (or GitHub App token), NOT the default
+          # `GITHUB_TOKEN`. GitHub's anti-recursion guard silently
+          # suppresses workflow runs for events authored by
+          # `GITHUB_TOKEN` — including the `vX.Y.Z` tag push that
+          # release-please creates when its PR merges. With GITHUB_TOKEN,
+          # `publish-core-image.yml` never fires on tag-push, so no
+          # `:vX.Y.Z` image tag is ever published (observed silently for
+          # v0.4.0, v0.5.0, v0.5.1 — deploy digest pins still worked
+          # because digests are immutable, but there were no
+          # version-named image tags on GHCR).
+          #
+          # Required scope: `repo` only. Classic PATs also offer
+          # `workflow`, but that scope permits modifying workflow files
+          # and is NOT needed here — release-please only touches
+          # `pyproject.toml`, `CHANGELOG.md`, and the manifest. Prefer,
+          # in order:
+          #   1. A GitHub App token (cleanest rotation, org-level policy).
+          #   2. A fine-grained PAT scoped to this repo with
+          #      "Contents: read & write" + "Pull requests: read & write".
+          #   3. A classic PAT with just `repo` scope.
+          #
+          # Stored as `secrets.RELEASE_PLEASE_PAT`. If the secret is
+          # missing, the workflow falls back to `GITHUB_TOKEN` so
+          # release PRs still open / merge — but the step above
+          # emits an `::warning::` so the regression doesn't slip
+          # by silently.
+          token: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}

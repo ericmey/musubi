@@ -5,9 +5,15 @@ Use this when you need to move `musubi.example.local` to a newer
 `ghcr.io/ericmey/musubi-core` digest. For a first-deploy-from-scratch,
 see [`first-deploy.md`](first-deploy.md) instead.
 
-Cadence: on demand. Every merge to `v2` publishes a fresh floating
-`:v2` tag + a digest. Every `v*` tag push publishes a versioned tag
-+ digest. The deploy itself is a separate, human-reviewed PR.
+Cadence: on demand. Every merge to `main` publishes a fresh floating
+`:main` tag + a digest. Every `v*` tag push publishes `:vX.Y.Z` +
+digest — *any* `v*` tag push does this, including a manual `git
+push origin v1.2.3` from an operator. The caveat is release-please's
+automated tag push: with the default `GITHUB_TOKEN` it gets silenced
+by GitHub's anti-recursion guard, so release-please's workflow must
+authenticate with `RELEASE_PLEASE_PAT` for its tag pushes to fire
+this build. See the ADR 0026 addendum dated 2026-04-23 for the full
+story. The deploy itself is a separate, human-reviewed PR.
 
 ---
 
