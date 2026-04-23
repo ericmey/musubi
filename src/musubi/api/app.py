@@ -293,12 +293,27 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def _validation_handler(_request: Request, exc: RequestValidationError) -> Response:
+        # 422 Unprocessable Entity is the correct status for a
+        # well-formed request whose body fails semantic validation
+        # (RFC 9110 §15.5.21). We were emitting 400 here originally,
+        # which conflated "malformed" with "semantically invalid".
         return error_response(
-            status_code=400,
+            status_code=422,
             detail=str(exc),
             code="BAD_REQUEST",
             hint="check the request body / query parameters against the OpenAPI spec",
         )
+
+    # NOTE: no global `ValidationError` handler.
+    #
+    # A naked `pydantic.ValidationError` can be raised anywhere — e.g.
+    # when a plane rehydrates a model from Qdrant payload and the
+    # stored data is corrupt. That's a 5xx, not a 422. A global
+    # handler would silently map every such bug to BAD_REQUEST and
+    # hide real server-side breakage. Translation is done at the
+    # specific call sites where we KNOW the input is request-driven
+    # (see `src/musubi/api/routers/writes_episodic.py` for the
+    # capture path).
 
     # Read routers (from slice-api-v0-read)
     app.include_router(ops.router)

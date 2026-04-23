@@ -127,6 +127,164 @@ def test_batch_capture_writes_each_row(client: TestClient, valid_token: str) -> 
 
 
 # ---------------------------------------------------------------------------
+# created_at override — operator-gated migration / replay path (#140)
+# ---------------------------------------------------------------------------
+
+
+def test_capture_created_at_override_requires_operator(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    """Non-operator token cannot override created_at — regression guard
+    that the gate is actually in place. Without this, a random consumer
+    could rewrite when an event "happened", which breaks event_at /
+    created_at audit semantics."""
+    r = client.post(
+        "/v1/memories",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "content": "historical-row",
+            "created_at": "2024-06-01T12:00:00Z",
+        },
+    )
+    assert r.status_code == 403
+    body = r.json()
+    assert body["error"]["code"] == "FORBIDDEN"
+    assert "operator" in body["error"]["detail"].lower()
+
+
+def test_capture_created_at_override_with_operator_round_trips(
+    client: TestClient,
+    api_settings: object,
+    episodic: EpisodicPlane,
+) -> None:
+    """With operator scope, an override lands on the row and comes back
+    on the GET. This is the migration use case: preserve source-truth
+    timestamps when ingesting historical data."""
+    from tests.api.conftest import mint_token
+
+    namespace = "eric/claude-code/episodic"
+    token = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=["operator", f"{namespace}:rw"],
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    override = "2024-06-01T12:00:00Z"
+    r = client.post(
+        "/v1/memories",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "content": "historical-op-row",
+            "created_at": override,
+        },
+    )
+    assert r.status_code == 202, r.text
+    oid = r.json()["object_id"]
+    got = client.get(
+        f"/v1/memories/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert got.status_code == 200, got.text
+    # Timestamp lands on created_at exactly as supplied.
+    assert got.json()["created_at"].startswith("2024-06-01T12:00:00")
+
+
+def test_capture_without_created_at_is_stamped_now(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    """Omitting created_at must continue to work unchanged — the field
+    is opt-in. Musubi stamps the current time via EpisodicMemory's
+    default factory."""
+    from datetime import UTC, datetime
+
+    before = datetime.now(UTC)
+    r = client.post(
+        "/v1/memories",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={"namespace": "eric/claude-code/episodic", "content": "no-override"},
+    )
+    assert r.status_code == 202
+    oid = r.json()["object_id"]
+    got = client.get(
+        f"/v1/memories/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": "eric/claude-code/episodic"},
+    )
+    assert got.status_code == 200
+    stamp = datetime.fromisoformat(got.json()["created_at"].replace("Z", "+00:00"))
+    assert stamp >= before
+
+
+def test_batch_capture_created_at_override_requires_operator(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    """Any item in a batch carrying created_at triggers the operator
+    check for the whole batch. Keeps semantics simple: mixed batches
+    fail fast rather than partially-succeed."""
+    r = client.post(
+        "/v1/memories/batch",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "items": [
+                {"content": "row-a"},
+                {"content": "row-b", "created_at": "2024-06-01T12:00:00Z"},
+            ],
+        },
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "FORBIDDEN"
+
+
+def test_batch_capture_created_at_override_with_operator_applies_per_item(
+    client: TestClient,
+    api_settings: object,
+) -> None:
+    """Under operator scope, each item's created_at lands independently
+    on its row — the migration path needs per-item control because
+    source rows don't share a single timestamp."""
+    from tests.api.conftest import mint_token
+
+    namespace = "eric/claude-code/episodic"
+    token = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=["operator", f"{namespace}:rw"],
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+    r = client.post(
+        "/v1/memories/batch",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "items": [
+                {"content": "batch-op-a", "created_at": "2022-01-01T00:00:00Z"},
+                {"content": "batch-op-b", "created_at": "2023-06-15T12:00:00Z"},
+            ],
+        },
+    )
+    assert r.status_code == 202, r.text
+    oids = r.json()["object_ids"]
+    assert len(oids) == 2
+    a = client.get(
+        f"/v1/memories/{oids[0]}",
+        headers=headers,
+        params={"namespace": namespace},
+    ).json()
+    b = client.get(
+        f"/v1/memories/{oids[1]}",
+        headers=headers,
+        params={"namespace": namespace},
+    ).json()
+    assert a["created_at"].startswith("2022-01-01T00:00:00")
+    assert b["created_at"].startswith("2023-06-15T12:00:00")
+
+
+# ---------------------------------------------------------------------------
 # PATCH — non-state field updates
 # ---------------------------------------------------------------------------
 
@@ -683,19 +841,62 @@ def test_committed_openapi_yaml_includes_write_paths() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_capture_validation_error_returns_400(
+def test_capture_validation_error_returns_422(
     client: TestClient,
     valid_token: str,
 ) -> None:
-    """A validation error (e.g. missing required content) returns the
-    typed BAD_REQUEST envelope."""
+    """A well-formed request whose body fails validation at the
+    FastAPI boundary (e.g. missing required content) returns 422
+    Unprocessable Entity per RFC 9110 §15.5.21, carrying the typed
+    BAD_REQUEST envelope."""
     r = client.post(
         "/v1/memories",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={"namespace": "eric/claude-code/episodic"},  # content missing
     )
-    assert r.status_code == 400
+    assert r.status_code == 422
     assert r.json()["error"]["code"] == "BAD_REQUEST"
+
+
+def test_capture_malformed_namespace_returns_422_not_500(
+    client: TestClient,
+    api_settings: object,
+) -> None:
+    """Regression guard for #192 — a malformed namespace (two segments
+    instead of the required tenant/presence/plane) fails the pydantic
+    AfterValidator that the plane's typed model applies when the
+    handler constructs an ``EpisodicMemory``. That pydantic
+    ``ValidationError`` used to bubble up unhandled as 500 INTERNAL,
+    which was misleading: the client sent invalid data, not the server
+    a bug. Must be 422 with the typed BAD_REQUEST envelope.
+
+    To reach the typed-model construction we need a token whose scope
+    matches the malformed namespace (otherwise the auth scope check
+    fires first, producing 403). The scope matcher accepts any N-part
+    glob, so a 2-segment scope pattern grants a 2-segment namespace —
+    and we land at the plane's AfterValidator, which is what we're
+    actually testing."""
+    from tests.api.conftest import mint_token
+
+    # Scope grants the exact malformed namespace so scope check passes.
+    token = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=["perf-test/episodic:rw"],
+        presence="perf-test/ephemeral",
+    )
+    r = client.post(
+        "/v1/memories",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "namespace": "perf-test/episodic",  # two segments — invalid
+            "content": "whatever",
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "BAD_REQUEST"
+    # The detail should mention the namespace field so callers can
+    # localise the problem.
+    assert "namespace" in r.json()["error"]["detail"].lower()
 
 
 def test_idempotency_key_different_body_returns_conflict(

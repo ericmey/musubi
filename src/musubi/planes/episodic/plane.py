@@ -109,6 +109,7 @@ class EpisodicPlane:
         memory: EpisodicMemory,
         *,
         merge_strategy: MergeStrategy = "longer-wins",
+        preserve_created_at: bool = False,
     ) -> EpisodicMemory:
         """Write ``memory`` to Qdrant, deduping against the same namespace.
 
@@ -123,6 +124,14 @@ class EpisodicPlane:
 
         Returns the final state of the row (original object id on dedup
         hit, new id on fresh insert).
+
+        ``preserve_created_at`` controls whether the incoming
+        ``memory.created_at`` is used verbatim (migration / replay path)
+        or replaced with ``utc_now()``. Default False keeps the historical
+        behaviour: every fresh insert gets a server-assigned ingest
+        timestamp. The migration path (API #140, SDK capture with
+        operator scope + explicit created_at) flips this on so source
+        timestamps round-trip through ingest.
         """
         if len(memory.content.encode("utf-8")) > 32768:
             raise ValueError("content exceeds 32KB limit, please use artifact plane instead")
@@ -134,6 +143,13 @@ class EpisodicPlane:
             raise ValueError("invalid namespace format")
 
         now = utc_now()
+        # Reject a future `created_at` on the preserve path up front. Without
+        # this, `EpisodicMemory.model_validate(...)` below would raise an opaque
+        # "updated_at precedes created_at" when `updated_at=now` lands, which
+        # surfaces as a 500. A direct guard gives the caller a clear message.
+        if preserve_created_at and memory.created_at > now:
+            raise ValueError("created_at cannot be in the future")
+        created_at = memory.created_at if preserve_created_at else now
         text = memory.summary or memory.content
         dense, sparse = await self._embed_both(text)
 
@@ -158,8 +174,8 @@ class EpisodicPlane:
             state="provisional",
             version=1,
             reinforcement_count=0,
-            created_at=now,
-            created_epoch=epoch_of(now),
+            created_at=created_at,
+            created_epoch=epoch_of(created_at),
             updated_at=now,
             updated_epoch=epoch_of(now),
         )

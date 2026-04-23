@@ -1,94 +1,213 @@
 ---
-- name: Restore Musubi canonical stores
+# Restore Musubi canonical state from a host-local backup.
+#
+# Paired with `musubi-backup.sh` (systemd timer, 6h cadence). That
+# script produces:
+#
+#   /var/lib/musubi/backups/<TIMESTAMP>/
+#     qdrant/<collection>.snapshot + SHA256SUMS
+#     sqlite/work.sqlite
+#     artifact-blobs/<blob hashes>
+#     manifest.json
+#
+# This playbook consumes that layout:
+#
+#   1. Stop the core + lifecycle-worker compose services so nothing
+#      writes to the volumes while we swap them.
+#   2. Copy Qdrant snapshot files into the per-collection directory
+#      Qdrant watches (/var/lib/musubi/qdrant-snapshots/<coll>/), then
+#      PUT each one to /collections/<coll>/snapshots/recover via the
+#      Qdrant HTTP API. We shell the HTTP call through the
+#      lifecycle-worker container (same pattern the backup script uses)
+#      so we don't need curl on the host and stay inside the compose
+#      network.
+#   3. Copy the SQLite ledger back into place.
+#   4. Rsync artifact blobs back. Content-addressed so this is nearly
+#      idempotent.
+#   5. Re-start core + lifecycle-worker via docker-compose.
+#
+# Left out on purpose:
+#   - Vault git clone — vault sync is a separate concern (slice-vault-sync).
+#     If the vault needs restoring, the git remote that the vault-sync
+#     pushes to is the source of truth, not this backup tarball.
+#   - Index rebuilds / rechunking — Qdrant snapshots already contain
+#     the indexes, so they come back ready to serve. The old
+#     `musubi-cli index rebuild` step predated the snapshot-API flow.
+#
+# Invocation:
+#
+#   ansible-playbook -i deploy/ansible/inventory.yml \
+#     -e backup_timestamp=20260422T180001Z \
+#     deploy/backup/restore.yml
+#
+# Omitting `backup_timestamp` falls back to the most recent backup dir.
+
+- name: Restore Musubi canonical stores from a host-local backup
   hosts: musubi
   become: true
   vars:
-    restore_timestamp: "{{ backup_timestamp | default('latest') }}"
+    # Where the backup script wrote to and where this restore reads from.
+    backup_root: /var/lib/musubi/backups
+    # Per-host compose config the `musubi` systemd unit points at.
+    musubi_config_dir: /etc/musubi
+    compose_file: "{{ musubi_config_dir }}/docker-compose.yml"
+    env_file: "{{ musubi_config_dir }}/.env.production"
+    # Services whose containers must be stopped before we swap state.
+    # Qdrant itself keeps running — the snapshot-recover API is its
+    # supported live-restore path.
+    restored_services:
+      - core
+      - lifecycle-worker
+    # `latest` resolves to the most recent directory under backup_root
+    # at playbook time; override with `-e backup_timestamp=<id>` to pin.
+    backup_timestamp: latest
+
   tasks:
-    - name: Stop Musubi before restore
-      ansible.builtin.systemd_service:
-        name: musubi
+    - name: Resolve backup directory (latest or pinned)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ "{{ backup_timestamp }}" = "latest" ]; then
+          ls -1 {{ backup_root }} | sort | tail -n 1
+        else
+          echo "{{ backup_timestamp }}"
+        fi
+      register: resolved_backup
+      changed_when: false
+
+    - name: Set backup_dir fact
+      ansible.builtin.set_fact:
+        backup_dir: "{{ backup_root }}/{{ resolved_backup.stdout }}"
+
+    - name: Assert backup directory exists
+      ansible.builtin.stat:
+        path: "{{ backup_dir }}/manifest.json"
+      register: manifest_stat
+      failed_when: not manifest_stat.stat.exists
+
+    - name: Read backup manifest
+      ansible.builtin.slurp:
+        src: "{{ backup_dir }}/manifest.json"
+      register: manifest_blob
+
+    - name: Surface which backup we're restoring from
+      ansible.builtin.debug:
+        msg: "Restoring from {{ backup_dir }} manifest={{ (manifest_blob.content | b64decode) }}"
+
+    # ------------------------------------------------------------------
+    # 1. Stop core + lifecycle-worker (leave qdrant up for snapshot-recover).
+    # ------------------------------------------------------------------
+
+    - name: Stop core + lifecycle-worker before restoring state
+      community.docker.docker_compose_v2:
+        project_src: "{{ musubi_config_dir }}"
+        env_files:
+          - "{{ env_file }}"
+        services: "{{ restored_services }}"
         state: stopped
 
-    - name: Restore vault from git remote
+    # ------------------------------------------------------------------
+    # 2. Qdrant snapshot recovery.
+    # ------------------------------------------------------------------
+
+    - name: Enumerate snapshot files to restore
+      ansible.builtin.find:
+        paths: "{{ backup_dir }}/qdrant"
+        patterns: "*.snapshot"
+        file_type: file
+      register: snapshot_files
+
+    - name: Fail loudly if no snapshots found
+      ansible.builtin.fail:
+        msg: >-
+          No *.snapshot files found under {{ backup_dir }}/qdrant;
+          refusing to restore without Qdrant snapshots. Verify
+          backup_timestamp={{ backup_timestamp }} points at a directory
+          produced by musubi-backup.sh and check the timer status.
+      when: snapshot_files.files | length == 0
+
+    - name: Ensure per-collection Qdrant snapshot directories exist
+      ansible.builtin.file:
+        path: "/var/lib/musubi/qdrant-snapshots/{{ item.path | basename | regex_replace('\\.snapshot$', '') }}"
+        state: directory
+        owner: musubi
+        group: musubi
+        mode: "0750"
+      loop: "{{ snapshot_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Stage each snapshot into Qdrant's per-collection snapshots dir
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "/var/lib/musubi/qdrant-snapshots/{{ item.path | basename | regex_replace('\\.snapshot$', '') }}/{{ item.path | basename }}"
+        remote_src: true
+        mode: "0640"
+      loop: "{{ snapshot_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+
+    - name: Recover each Qdrant collection from its staged snapshot
       ansible.builtin.command:
         cmd: >-
-          git clone {{ vault_musubi_vault_remote }}
-          /var/lib/musubi/vault.restore
+          docker compose -f {{ compose_file }} --env-file {{ env_file }}
+          exec -T lifecycle-worker python -c
+          "import os, sys, httpx;
+          coll = sys.argv[1];
+          snap = sys.argv[2];
+          r = httpx.put(f'http://qdrant:6333/collections/{coll}/snapshots/recover',
+                        headers={'api-key': os.environ['QDRANT_API_KEY']},
+                        json={'location': f'file:///qdrant/snapshots/{coll}/{snap}'},
+                        timeout=300.0);
+          sys.exit(0 if r.status_code == 200 else (print(r.status_code, r.text[:200]) or 1))"
+          {{ item.path | basename | regex_replace('\\.snapshot$', '') }}
+          {{ item.path | basename }}
+      loop: "{{ snapshot_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
       changed_when: true
-      no_log: true
 
-    - name: Swap restored vault into place
-      ansible.builtin.command:
-        cmd: >-
-          rsync -a --delete-after /var/lib/musubi/vault.restore/
-          /var/lib/musubi/vault/
-      changed_when: true
-
-    - name: Restore artifact blobs
-      ansible.posix.synchronize:
-        src: /mnt/snapshots/artifact-blobs/
-        dest: /var/lib/musubi/artifact-blobs/
-        archive: true
-        delete: false
-      delegate_to: "{{ inventory_hostname }}"
+    # ------------------------------------------------------------------
+    # 3. SQLite ledger.
+    # ------------------------------------------------------------------
 
     - name: Restore sqlite lifecycle ledger
       ansible.builtin.copy:
-        src: /mnt/snapshots/sqlite/lifecycle-work-{{ restore_timestamp }}.sqlite
-        dest: /var/lib/musubi/lifecycle-work.sqlite
+        src: "{{ backup_dir }}/sqlite/work.sqlite"
+        dest: /var/lib/musubi/lifecycle/work.sqlite
         remote_src: true
         owner: musubi
         group: musubi
         mode: "0640"
 
-    - name: Restore lifecycle cursor files
+    # ------------------------------------------------------------------
+    # 4. Artifact blobs.
+    # ------------------------------------------------------------------
+
+    - name: Restore artifact blobs (content-addressed, idempotent)
       ansible.posix.synchronize:
-        src: /mnt/snapshots/cursors/
-        dest: /var/lib/musubi/
+        src: "{{ backup_dir }}/artifact-blobs/"
+        dest: /var/lib/musubi/artifact-blobs/
         archive: true
         delete: false
       delegate_to: "{{ inventory_hostname }}"
 
-    - name: Start Musubi with restored filesystem stores
-      ansible.builtin.systemd_service:
-        name: musubi
+    # ------------------------------------------------------------------
+    # 5. Bring core + lifecycle-worker back up.
+    # ------------------------------------------------------------------
+
+    - name: Restart core + lifecycle-worker with restored state
+      community.docker.docker_compose_v2:
+        project_src: "{{ musubi_config_dir }}"
+        env_files:
+          - "{{ env_file }}"
+        services: "{{ restored_services }}"
         state: started
 
-    - name: Recover Qdrant collections from snapshot files
-      ansible.builtin.command:
-        cmd: musubi-cli qdrant recover-from-snapshot --name {{ restore_timestamp }}
-      changed_when: true
-
-    - name: Rebuild curated Qdrant index from vault
-      ansible.builtin.command:
-        cmd: musubi-cli index rebuild --collection musubi_curated --source /var/lib/musubi/vault
-      changed_when: true
-
-    - name: Count curated Qdrant records after rebuild
-      ansible.builtin.command:
-        cmd: musubi-cli index count --collection musubi_curated
-      changed_when: false
-      register: curated_qdrant_count
-
-    - name: Rechunk artifact blobs after restore
-      ansible.builtin.command:
-        cmd: musubi-cli artifacts rechunk --all
-      changed_when: true
-
-    - name: Count artifact chunks in Qdrant
-      ansible.builtin.command:
-        cmd: musubi-cli artifacts chunk-count --source qdrant
-      changed_when: false
-      register: qdrant_chunk_count
-
-    - name: Count artifact chunks from filesystem source
-      ansible.builtin.command:
-        cmd: musubi-cli artifacts chunk-count --source filesystem
-      changed_when: false
-      register: filesystem_chunk_count
-
-    - name: Assert restored artifact chunks match source count
-      ansible.builtin.assert:
-        that:
-          - qdrant_chunk_count.stdout == filesystem_chunk_count.stdout
+    - name: Wait for core /v1/ops/health to return 200
+      ansible.builtin.uri:
+        url: "{{ musubi_health_urls.core }}"
+        status_code: 200
+      register: health
+      retries: 30
+      delay: 5
+      until: health.status == 200
