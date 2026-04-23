@@ -24,16 +24,19 @@ musubi_data_dirs:
 musubi_core_port: 8100
 # Musubi Core image. Pinned by immutable digest.
 #
-# Current pin: post-#198 (TEI connection pooling fix). This is the digest
-# validated end-to-end through Gates 1-4 on 2026-04-23 against the live
-# musubi.mey.house box — baseline + load at 3 VUs + spike + 30-minute soak
-# all clean, no memory drift.
+# Current pin: v0.4.0. Rolls up the ValidationError → 422 fix,
+# backup/restore playbook repair, operator-gated `created_at`
+# override, and batch_create + longer-wins merge (with dedup-probe
+# vector preservation). Gates 1 + 2 were clean on the previous
+# digest (post-#198 pooled TEI client, the retrieve hot path is
+# unchanged in v0.4.0) but the full Gate 1-4 perf sweep needs to be
+# re-run on v0.4.0 before declaring pre-prod done.
 #
 # Produced by `.github/workflows/publish-core-image.yml`; verified
 # cosign-signed + SBOM-attested + Trivy-CRITICAL-scanned. Bump this after
 # every release — the release note on the GitHub tag carries the new
 # digest line ready to paste.
-musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:4c51335e27e4bae2afb5645e4ac20df35708dbed5b62126818a7efa00450602f"
+musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:fcccb7f437ad6529d8db5f96369a5d996ee03da045fb60cb8a9bf1721ec09ed5"
 musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
 # compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),

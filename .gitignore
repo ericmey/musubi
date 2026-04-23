@@ -75,3 +75,4 @@ id_ed25519
 id_ecdsa
 *.pfx
 *.p12
+.claude/scheduled_tasks.lock
