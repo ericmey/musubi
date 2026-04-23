@@ -31,15 +31,18 @@ Seeds all five planes via Musubi's canonical API:
   * artifact   — ``POST /v1/artifacts`` (multipart)
   * thought    — ``POST /v1/thoughts/send``
 
-Namespaces are pinned under ``perf-test/<plane>`` so live data at
-``eric/*`` is never touched.
+Namespaces are pinned under ``<tenant>/<presence>/<plane>`` (the
+canonical three-segment format), defaulting to
+``perf-test/harness/<plane>`` so live data at ``eric/*`` is never
+touched. The tenant + presence are taken from ``--namespace-prefix``
+which must be exactly two segments.
 
 Usage
 -----
-  MUSUBI_V2_BASE_URL=https://musubi.mey.house/v1 \\
+  MUSUBI_V2_BASE_URL=http://musubi.mey.house:8100/v1 \\
   MUSUBI_V2_TOKEN=mbi_perf_... \\
   python3 scripts/perf/seed_corpus.py \\
-      --size 10000 --seed 42 --namespace-prefix perf-test
+      --size 10000 --seed 42 --namespace-prefix perf-test/harness
 
 Size is per-plane; ``--size 10000`` creates 10k episodic + 10k curated
 + 10k concept + 10k artifact + 10k thought. Use ``--planes`` to limit.
@@ -175,8 +178,12 @@ def parse_args() -> SeedConfig:
     p.add_argument("--seed", type=int, default=42, help="deterministic RNG seed")
     p.add_argument(
         "--namespace-prefix",
-        default="perf-test",
-        help="namespace root for all seeded data; kept off 'eric/*' on purpose",
+        default="perf-test/harness",
+        help=(
+            "tenant/presence prefix for all seeded data; the plane is "
+            "appended automatically to produce the canonical three-segment "
+            "namespace. Kept off 'eric/*' on purpose."
+        ),
     )
     p.add_argument(
         "--planes",
@@ -202,12 +209,22 @@ def parse_args() -> SeedConfig:
         sys.stderr.write(f"error: unknown plane(s): {bad}\n")
         sys.exit(2)
 
+    # Server rejects anything other than exactly `<tenant>/<presence>/<plane>`
+    # — fail loudly here instead of eating 500s mid-run.
+    prefix = args.namespace_prefix.strip("/")
+    if prefix.count("/") != 1 or not all(prefix.split("/")):
+        sys.stderr.write(
+            f"error: --namespace-prefix must be 'tenant/presence' (got {prefix!r}).\n"
+            "       The plane is appended automatically.\n"
+        )
+        sys.exit(2)
+
     return SeedConfig(
         base_url=base_url.rstrip("/"),
         token=token,
         size=args.size,
         seed=args.seed,
-        namespace_prefix=args.namespace_prefix.rstrip("/"),
+        namespace_prefix=prefix,
         planes=planes,
         timespan_days=args.timespan_days,
     )
@@ -267,7 +284,9 @@ def _sleep_for_429(resp: httpx.Response, attempt: int, rng: random.Random) -> fl
         # 0.25s, 0.5s, 1s, 2s, 4s, 8s + 0-25% jitter.
         wait_s = BASE_BACKOFF_S * (2**attempt)
         wait_s += wait_s * rng.random() * 0.25
-    wait_s = min(wait_s, MAX_BACKOFF_S)
+    # Clamp below too — a misbehaving proxy returning a negative
+    # Retry-After would otherwise crash time.sleep().
+    wait_s = max(0.0, min(wait_s, MAX_BACKOFF_S))
     time.sleep(wait_s)
     return wait_s
 
@@ -337,6 +356,8 @@ def seed_episodic(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> 
             ok += 1
         elif r is not None:
             log.warning("episodic %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("episodic %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 500 == 0:
             log.info("episodic: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
@@ -360,6 +381,8 @@ def seed_thought(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
             ok += 1
         elif r is not None:
             log.warning("thought %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("thought %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 500 == 0:
             log.info("thought: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
@@ -392,6 +415,8 @@ def seed_curated(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
             ok += 1
         elif r is not None:
             log.warning("curated %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("curated %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 500 == 0:
             log.info("curated: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
@@ -427,6 +452,8 @@ def seed_concept(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
             ok += 1
         elif r is not None:
             log.warning("concept %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("concept %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 500 == 0:
             log.info("concept: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
@@ -464,6 +491,8 @@ def seed_artifact(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> 
             ok += 1
         elif r is not None:
             log.warning("artifact %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("artifact %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 250 == 0:
             log.info("artifact: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok

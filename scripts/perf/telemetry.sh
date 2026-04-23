@@ -42,7 +42,12 @@ PID_FILE="/tmp/musubi-perf-telemetry.pid"
 # on connection errors during `start` so you notice at setup-time
 # instead of discovering an empty jsonl after the run.
 REMOTE_HOST="${REMOTE_HOST:-}"
-SSH_OPTS="${SSH_OPTS:--o BatchMode=yes -o ConnectTimeout=5}"
+# Use an array so arguments with spaces (e.g. identity paths) survive
+# expansion. If the caller wants to override, they can set SSH_OPTS
+# as a string of additional flags — we append those safely via
+# word-splitting on $SSH_OPTS only, never on SSH_OPTS_DEFAULT[@].
+SSH_OPTS_DEFAULT=(-o BatchMode=yes -o ConnectTimeout=5)
+SSH_OPTS="${SSH_OPTS:-}"
 
 # -------- helpers -------------------------------------------------
 
@@ -70,7 +75,7 @@ cmd_start() {
     # Fail fast if SSH isn't set up — a silent failure here turns
     # into an empty jsonl file three hours later.
     # shellcheck disable=SC2086
-    if ! ssh $SSH_OPTS "$REMOTE_HOST" "echo ok" >/dev/null 2>&1; then
+    if ! ssh "${SSH_OPTS_DEFAULT[@]}" $SSH_OPTS "$REMOTE_HOST" "echo ok" >/dev/null 2>&1; then
       die "REMOTE_HOST=$REMOTE_HOST is unreachable via ssh (check keys / BatchMode)."
     fi
     log "starting telemetry → $dir (remote=$REMOTE_HOST, every ${SAMPLE_INTERVAL_S}s)"
@@ -130,7 +135,7 @@ _sample_remote() {
   # through two shells; we use the template directly and trust that
   # our SSH target isn't interpolating it (no jinja here, plain ssh).
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS "$REMOTE_HOST" \
+  ssh "${SSH_OPTS_DEFAULT[@]}" $SSH_OPTS "$REMOTE_HOST" \
     "docker stats --no-stream --format '{{json .}}' 2>/dev/null" 2>/dev/null \
     | jq -c --arg ts "$ts" '. + {ts: $ts}' \
     >> "$dir/docker-stats.jsonl" || true
@@ -138,7 +143,7 @@ _sample_remote() {
   # GPU — server-side `command -v nvidia-smi` gate so a non-GPU
   # host doesn't fail noisily; we just end up with an empty jsonl.
   # shellcheck disable=SC2086
-  ssh $SSH_OPTS "$REMOTE_HOST" '
+  ssh "${SSH_OPTS_DEFAULT[@]}" $SSH_OPTS "$REMOTE_HOST" '
     command -v nvidia-smi >/dev/null 2>&1 && \
     nvidia-smi --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.used,memory.free,temperature.gpu \
                --format=csv,noheader,nounits 2>/dev/null

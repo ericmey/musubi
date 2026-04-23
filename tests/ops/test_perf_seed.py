@@ -69,7 +69,10 @@ def test_make_timestamp_never_exceeds_anchor() -> None:
 
 def test_idempotency_key_is_stable() -> None:
     seed = _load()
-    ns = "perf-test/episodic"
+    # Canonical namespace format is tenant/presence/plane — use a valid
+    # shape even in a hashing-only test so the fixture matches what
+    # real requests will carry.
+    ns = "perf-test/harness/episodic"
     content = "Eric prefers coffee black, no sugar."
     ts = datetime(2026, 3, 1, 12, 0, 0, tzinfo=UTC)
     k1 = seed.make_idempotency_key(ns, content, ts)
@@ -81,11 +84,11 @@ def test_idempotency_key_is_stable() -> None:
 def test_idempotency_key_changes_with_any_input() -> None:
     seed = _load()
     ts = datetime(2026, 3, 1, 12, 0, 0, tzinfo=UTC)
-    k_base = seed.make_idempotency_key("ns/a", "content", ts)
-    assert k_base != seed.make_idempotency_key("ns/b", "content", ts)
-    assert k_base != seed.make_idempotency_key("ns/a", "other content", ts)
+    k_base = seed.make_idempotency_key("t/p/a", "content", ts)
+    assert k_base != seed.make_idempotency_key("t/p/b", "content", ts)
+    assert k_base != seed.make_idempotency_key("t/p/a", "other content", ts)
     assert k_base != seed.make_idempotency_key(
-        "ns/a", "content", datetime(2026, 3, 2, 12, 0, 0, tzinfo=UTC)
+        "t/p/a", "content", datetime(2026, 3, 2, 12, 0, 0, tzinfo=UTC)
     )
 
 
@@ -188,3 +191,48 @@ def test_post_with_backoff_returns_none_on_transport_error(monkeypatch: Any) -> 
 
     got = seed.post_with_backoff(client, "/memories", rng=random.Random(0), json_body={})
     assert got is None
+
+
+def test_sleep_for_429_clamps_negative_retry_after(monkeypatch: Any) -> None:
+    """A misbehaving proxy could return a negative Retry-After. We must
+    clamp to 0.0 before sleeping — time.sleep(-1) raises ValueError."""
+    seed = _load()
+    sleeps: list[float] = []
+    monkeypatch.setattr(seed.time, "sleep", lambda s: sleeps.append(s))
+    resp = MagicMock()
+    resp.headers = {"Retry-After": "-5"}
+    slept = seed._sleep_for_429(resp, attempt=0, rng=random.Random(0))
+    assert slept == 0.0
+    assert sleeps == [0.0]
+
+
+def test_parse_args_rejects_wrong_segment_prefix(monkeypatch: Any) -> None:
+    """--namespace-prefix must be exactly tenant/presence — a 1-segment
+    or 3-segment value will produce invalid server-side namespaces, so
+    we fail fast at parse time."""
+    seed = _load()
+    monkeypatch.setenv("MUSUBI_V2_BASE_URL", "http://localhost:8100/v1")
+    monkeypatch.setenv("MUSUBI_V2_TOKEN", "x")
+
+    for bad in ("perf-test", "perf-test/harness/extra", "//", ""):
+        monkeypatch.setattr(
+            "sys.argv", ["seed_corpus.py", "--size", "1", "--namespace-prefix", bad]
+        )
+        try:
+            seed.parse_args()
+        except SystemExit as exc:
+            assert exc.code == 2
+        else:
+            raise AssertionError(f"expected SystemExit for prefix {bad!r}")
+
+
+def test_parse_args_accepts_valid_two_segment_prefix(monkeypatch: Any) -> None:
+    seed = _load()
+    monkeypatch.setenv("MUSUBI_V2_BASE_URL", "http://localhost:8100/v1")
+    monkeypatch.setenv("MUSUBI_V2_TOKEN", "x")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["seed_corpus.py", "--size", "1", "--namespace-prefix", "perf-test/harness"],
+    )
+    cfg = seed.parse_args()
+    assert cfg.namespace_prefix == "perf-test/harness"
