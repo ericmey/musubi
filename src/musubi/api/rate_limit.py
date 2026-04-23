@@ -73,18 +73,6 @@ class RateLimiter:
         self._buckets: dict[tuple[str, str], _BucketState] = {}
         self._lock = threading.Lock()
 
-        try:
-            from musubi.config import get_settings
-
-            settings = get_settings()
-            self._capture_rate = getattr(settings, "rate_limit_capture", 10.0)
-            self._retrieve_rate = getattr(settings, "rate_limit_retrieve", 20.0)
-            self._thought_rate = getattr(settings, "rate_limit_thought", 5.0)
-        except Exception:
-            self._capture_rate = 10.0
-            self._retrieve_rate = 20.0
-            self._thought_rate = 5.0
-
     @staticmethod
     def token_key(bearer: str | None) -> str:
         """Hash the bearer to a stable per-token key. Avoids storing the
