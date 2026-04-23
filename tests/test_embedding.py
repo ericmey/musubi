@@ -586,3 +586,81 @@ async def test_tei_dense_client_handles_httpx_connect_error(
     client = TEIDenseClient(base_url="http://tei-dense")
     with pytest.raises(EmbeddingError):
         await client.embed_dense(["x"])
+
+
+# ---------------------------------------------------------------------------
+# Connection pooling — regression guard for the "fresh AsyncClient per call"
+# anti-pattern that showed up as 10.94% failure rate under Gate 2 load.
+# Each client must own one long-lived httpx.AsyncClient and reuse it across
+# calls so HTTP/1.1 keepalive actually kicks in.
+# ---------------------------------------------------------------------------
+
+
+async def test_tei_dense_client_reuses_single_async_client(
+    httpx_mock: HTTPXMock,
+) -> None:
+    for _ in range(3):
+        httpx_mock.add_response(
+            url="http://tei-dense/embed",
+            method="POST",
+            json=[[0.0] * DENSE_SIZE],
+        )
+    client = TEIDenseClient(base_url="http://tei-dense")
+    first = client._client
+    for _ in range(3):
+        await client.embed_dense(["x"])
+    # Same AsyncClient instance across calls → keepalive + pooling in play.
+    assert client._client is first
+
+
+async def test_tei_sparse_client_reuses_single_async_client(
+    httpx_mock: HTTPXMock,
+) -> None:
+    for _ in range(3):
+        httpx_mock.add_response(
+            url="http://tei-sparse/embed_sparse",
+            method="POST",
+            json=[[{"index": 0, "value": 1.0}]],
+        )
+    client = TEISparseClient(base_url="http://tei-sparse")
+    first = client._client
+    for _ in range(3):
+        await client.embed_sparse(["x"])
+    assert client._client is first
+
+
+async def test_tei_reranker_client_reuses_single_async_client(
+    httpx_mock: HTTPXMock,
+) -> None:
+    for _ in range(3):
+        httpx_mock.add_response(
+            url="http://tei-reranker/rerank",
+            method="POST",
+            json=[{"index": 0, "score": 0.9}],
+        )
+    client = TEIRerankerClient(base_url="http://tei-reranker")
+    first = client._client
+    for _ in range(3):
+        await client.rerank("q", ["c"])
+    assert client._client is first
+
+
+async def test_tei_dense_client_aclose_closes_pool() -> None:
+    """aclose() must actually close the underlying httpx pool so process
+    shutdown drains cleanly + tests don't leak ResourceWarnings."""
+    client = TEIDenseClient(base_url="http://tei-dense")
+    assert not client._client.is_closed
+    await client.aclose()
+    assert client._client.is_closed
+
+
+async def test_tei_sparse_client_aclose_closes_pool() -> None:
+    client = TEISparseClient(base_url="http://tei-sparse")
+    await client.aclose()
+    assert client._client.is_closed
+
+
+async def test_tei_reranker_client_aclose_closes_pool() -> None:
+    client = TEIRerankerClient(base_url="http://tei-reranker")
+    await client.aclose()
+    assert client._client.is_closed
