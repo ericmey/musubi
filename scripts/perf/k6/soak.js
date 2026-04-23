@@ -34,14 +34,19 @@
 import { sleep } from 'k6';
 import { retrieve, capture, sendThought, ok2xx } from './_shared.js';
 
-const SOAK_VUS = parseInt(__ENV.SOAK_VUS || '3', 10);
-const SOAK_DURATION_MINUTES = parseInt(__ENV.SOAK_DURATION_MINUTES || '30', 10);
-if (!Number.isFinite(SOAK_VUS) || SOAK_VUS < 1) {
-  throw new Error('SOAK_VUS must be a positive integer; got ' + __ENV.SOAK_VUS);
+// Strict integer parse — parseInt accepts "3.5" / "30m" / "30x" and
+// silently rounds down, which would let a typo quietly change the run.
+function _positiveIntEnv(name, fallback) {
+  const raw = __ENV[name] ?? fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(name + ' must be a positive integer; got ' + raw);
+  }
+  return value;
 }
-if (!Number.isFinite(SOAK_DURATION_MINUTES) || SOAK_DURATION_MINUTES < 1) {
-  throw new Error('SOAK_DURATION_MINUTES must be a positive integer; got ' + __ENV.SOAK_DURATION_MINUTES);
-}
+
+const SOAK_VUS = _positiveIntEnv('SOAK_VUS', '3');
+const SOAK_DURATION_MINUTES = _positiveIntEnv('SOAK_DURATION_MINUTES', '30');
 
 export const options = {
   scenarios: {
@@ -64,9 +69,10 @@ export const options = {
     'http_req_duration{endpoint:retrieve_deep}': ['p(95)<6000'],
     'http_req_duration{endpoint:capture}': ['p(95)<1500'],
     'http_req_duration{endpoint:thoughts_send}': ['p(99)<800'],
-    // Stricter failure rate — the soak shouldn't be producing 503s.
-    // If it does the leak / saturation is already showing.
-    'http_req_failed': ['rate<0.01'],
+    // Same failure budget as the baseline / load gates (0.005). A soak
+    // running clean should not be producing 503s — if it does, the leak
+    // or saturation is already showing.
+    'http_req_failed': ['rate<0.005'],
   },
 };
 

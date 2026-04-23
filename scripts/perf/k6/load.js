@@ -21,9 +21,12 @@
 import { sleep } from 'k6';
 import { retrieve, capture, sendThought, ok2xx } from './_shared.js';
 
-const LOAD_VUS = parseInt(__ENV.LOAD_VUS || '10', 10);
-if (!Number.isFinite(LOAD_VUS) || LOAD_VUS < 1) {
-  throw new Error('LOAD_VUS must be a positive integer; got ' + __ENV.LOAD_VUS);
+// Strict integer parse — parseInt accepts "3.5" or "3x" and silently
+// rounds down, which would let a typo quietly change peak concurrency.
+const _loadVusRaw = __ENV.LOAD_VUS ?? '10';
+const LOAD_VUS = Number(_loadVusRaw);
+if (!Number.isInteger(LOAD_VUS) || LOAD_VUS < 1) {
+  throw new Error('LOAD_VUS must be a positive integer; got ' + _loadVusRaw);
 }
 
 export const options = {
