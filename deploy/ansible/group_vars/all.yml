@@ -24,14 +24,13 @@ musubi_data_dirs:
 musubi_core_port: 8100
 # Musubi Core image. Pinned by immutable digest.
 #
-# Current pin: v0.4.0 release (#187). Rolls up #201 (ValidationError
-# → 422), #202 (backup/restore playbook repair), #203 (operator-gated
-# created_at override), and #204 (batch_create + longer-wins merge +
-# dedup-probe vector preservation). Not yet re-validated through
-# Gates 1-4 on the live box — the previous digest (post-#198,
-# sha256:4c51335e) was Gate-1/Gate-2 clean on 2026-04-23, and the
-# new code on top is behavior-preserving for the retrieve hot path.
-# Re-run Gates 1-4 after deploy before declaring pre-prod done.
+# Current pin: v0.4.0. Rolls up the ValidationError → 422 fix,
+# backup/restore playbook repair, operator-gated `created_at`
+# override, and batch_create + longer-wins merge (with dedup-probe
+# vector preservation). Gates 1 + 2 were clean on the previous
+# digest (post-#198 pooled TEI client, the retrieve hot path is
+# unchanged in v0.4.0) but the full Gate 1-4 perf sweep needs to be
+# re-run on v0.4.0 before declaring pre-prod done.
 #
 # Produced by `.github/workflows/publish-core-image.yml`; verified
 # cosign-signed + SBOM-attested + Trivy-CRITICAL-scanned. Bump this after
