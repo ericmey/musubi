@@ -13,7 +13,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
 from musubi.embedding.base import Embedder
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, collection_has_sparse
 from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
 
 HYBRID_PREFETCH_LIMIT = 50
@@ -113,12 +113,18 @@ async def hybrid_search(
             )
         )
 
+    # Dense-only collections (e.g. musubi_artifact) don't declare a sparse
+    # vector channel; querying sparse_splade_v1 against them makes Qdrant
+    # reject the request with 400 "Not existing vector name" (see #208).
+    dense_enabled = dense_weight > 0.0
+    sparse_enabled = sparse_weight > 0.0 and collection_has_sparse(collection)
+
     encoding = await _encode_query(
         embedder,
         query=query,
         cache=cache,
-        dense_enabled=dense_weight > 0.0,
-        sparse_enabled=sparse_weight > 0.0,
+        dense_enabled=dense_enabled,
+        sparse_enabled=sparse_enabled,
         sparse_timeout_s=sparse_timeout_s,
     )
     if isinstance(encoding, Err):
@@ -135,8 +141,8 @@ async def hybrid_search(
     prefetch = _build_prefetch(
         encoding.value,
         limit=resolved_prefetch_limit,
-        dense_enabled=dense_weight > 0.0,
-        sparse_enabled=sparse_weight > 0.0,
+        dense_enabled=dense_enabled,
+        sparse_enabled=sparse_enabled,
     )
     if not prefetch:
         return Err(

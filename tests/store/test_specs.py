@@ -8,7 +8,7 @@ from musubi.store import (
     REGISTRY,
     UNIVERSAL_INDEXES,
 )
-from musubi.store.specs import all_indexes_for
+from musubi.store.specs import all_indexes_for, collection_has_sparse
 
 
 class TestRegistry:
@@ -70,6 +70,24 @@ class TestIndexRegistry:
             if spec.schema == "bool"
         }
         assert bool_fields_curated == {"musubi_managed"}
+
+
+class TestCollectionHasSparse:
+    def test_dense_only_collections_return_false(self) -> None:
+        assert collection_has_sparse("musubi_artifact") is False
+        assert collection_has_sparse("musubi_lifecycle_events") is False
+
+    def test_hybrid_collections_return_true(self) -> None:
+        assert collection_has_sparse("musubi_episodic") is True
+        assert collection_has_sparse("musubi_curated") is True
+        assert collection_has_sparse("musubi_concept") is True
+        assert collection_has_sparse("musubi_artifact_chunks") is True
+        assert collection_has_sparse("musubi_thought") is True
+
+    def test_unknown_collection_defaults_true(self) -> None:
+        # Unknown names should fail loudly at the Qdrant boundary rather
+        # than silently degrade to dense-only — see docstring on helper.
+        assert collection_has_sparse("musubi_typo") is True
 
 
 class TestImmutability:

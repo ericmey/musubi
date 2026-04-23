@@ -70,6 +70,28 @@ REGISTRY: Final[tuple[CollectionSpec, ...]] = (
 )
 
 
+_REGISTRY_BY_NAME: Final[dict[str, CollectionSpec]] = {spec.name: spec for spec in REGISTRY}
+
+
+def collection_has_sparse(collection: str) -> bool:
+    """Return True iff ``collection`` declares a sparse vector channel.
+
+    Retrieve orchestration consults this so hybrid queries against
+    dense-only collections (e.g. ``musubi_artifact``, which indexes
+    metadata only) skip the sparse prefetch leg instead of sending
+    Qdrant a query for a vector name the collection doesn't have
+    (which Qdrant rejects with 400 "Not existing vector name" —
+    surfaced upstream as a 500 before this helper landed; see #208).
+    Unknown collection names are treated as sparse-capable; the
+    retrieve path would fail the query anyway if the collection
+    doesn't exist, and we'd rather not silently-degrade on a typo.
+    """
+    spec = _REGISTRY_BY_NAME.get(collection)
+    if spec is None:
+        return True
+    return spec.has_sparse
+
+
 # --------------------------------------------------------------------------
 # Universal payload indexes — applied to every collection
 # --------------------------------------------------------------------------
