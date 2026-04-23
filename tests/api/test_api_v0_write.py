@@ -841,19 +841,62 @@ def test_committed_openapi_yaml_includes_write_paths() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_capture_validation_error_returns_400(
+def test_capture_validation_error_returns_422(
     client: TestClient,
     valid_token: str,
 ) -> None:
-    """A validation error (e.g. missing required content) returns the
-    typed BAD_REQUEST envelope."""
+    """A well-formed request whose body fails validation at the
+    FastAPI boundary (e.g. missing required content) returns 422
+    Unprocessable Entity per RFC 9110 §15.5.21, carrying the typed
+    BAD_REQUEST envelope."""
     r = client.post(
         "/v1/memories",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={"namespace": "eric/claude-code/episodic"},  # content missing
     )
-    assert r.status_code == 400
+    assert r.status_code == 422
     assert r.json()["error"]["code"] == "BAD_REQUEST"
+
+
+def test_capture_malformed_namespace_returns_422_not_500(
+    client: TestClient,
+    api_settings: object,
+) -> None:
+    """Regression guard for #192 — a malformed namespace (two segments
+    instead of the required tenant/presence/plane) fails the pydantic
+    AfterValidator that the plane's typed model applies when the
+    handler constructs an ``EpisodicMemory``. That pydantic
+    ``ValidationError`` used to bubble up unhandled as 500 INTERNAL,
+    which was misleading: the client sent invalid data, not the server
+    a bug. Must be 422 with the typed BAD_REQUEST envelope.
+
+    To reach the typed-model construction we need a token whose scope
+    matches the malformed namespace (otherwise the auth scope check
+    fires first, producing 403). The scope matcher accepts any N-part
+    glob, so a 2-segment scope pattern grants a 2-segment namespace —
+    and we land at the plane's AfterValidator, which is what we're
+    actually testing."""
+    from tests.api.conftest import mint_token
+
+    # Scope grants the exact malformed namespace so scope check passes.
+    token = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=["perf-test/episodic:rw"],
+        presence="perf-test/ephemeral",
+    )
+    r = client.post(
+        "/v1/memories",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "namespace": "perf-test/episodic",  # two segments — invalid
+            "content": "whatever",
+        },
+    )
+    assert r.status_code == 422, r.text
+    assert r.json()["error"]["code"] == "BAD_REQUEST"
+    # The detail should mention the namespace field so callers can
+    # localise the problem.
+    assert "namespace" in r.json()["error"]["detail"].lower()
 
 
 def test_idempotency_key_different_body_returns_conflict(

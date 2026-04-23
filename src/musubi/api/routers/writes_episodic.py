@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from qdrant_client import QdrantClient, models
 
 from musubi.api.auth import require_auth
@@ -17,6 +17,26 @@ from musubi.planes.episodic import EpisodicPlane
 from musubi.settings import Settings
 from musubi.types.common import Err, Ok
 from musubi.types.episodic import EpisodicMemory
+
+
+def _build_episodic(**kwargs: object) -> EpisodicMemory:
+    """Construct an :class:`EpisodicMemory` from request-supplied values.
+
+    A direct ``EpisodicMemory(**kwargs)`` call raises
+    :class:`pydantic.ValidationError` on a bad namespace / importance /
+    tags value. Since this is request-driven data we translate that to
+    a 422 BAD_REQUEST — the same status FastAPI emits when the body
+    itself fails schema validation. See the note in ``app.py`` about why
+    we don't install a global handler for ``ValidationError``."""
+    try:
+        return EpisodicMemory(**kwargs)  # type: ignore[arg-type]
+    except ValidationError as exc:
+        raise APIError(
+            status_code=422,
+            code="BAD_REQUEST",
+            detail=str(exc),
+            hint="check the request body against the OpenAPI spec",
+        ) from exc
 
 
 def _check_body_scope(request: Request, namespace: str, settings: Settings) -> None:
@@ -166,10 +186,8 @@ async def capture(
         _require_operator_for_created_at(request)
         memory_kwargs["created_at"] = body.created_at
         preserve_created_at = True
-    saved = await plane.create(
-        EpisodicMemory(**memory_kwargs),  # type: ignore[arg-type]
-        preserve_created_at=preserve_created_at,
-    )
+    memory = _build_episodic(**memory_kwargs)
+    saved = await plane.create(memory, preserve_created_at=preserve_created_at)
     response = CaptureResponse(object_id=saved.object_id, state=saved.state)
     request.state.idempotency_response = response.model_dump()
     return response
@@ -208,10 +226,8 @@ async def batch_capture(
         if item.created_at is not None:
             memory_kwargs["created_at"] = item.created_at
             preserve = True
-        saved = await plane.create(
-            EpisodicMemory(**memory_kwargs),  # type: ignore[arg-type]
-            preserve_created_at=preserve,
-        )
+        memory = _build_episodic(**memory_kwargs)
+        saved = await plane.create(memory, preserve_created_at=preserve)
         out.append(saved.object_id)
     return BatchCaptureResponse(object_ids=out)
 
