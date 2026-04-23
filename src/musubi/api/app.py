@@ -33,7 +33,6 @@ from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
-from pydantic import ValidationError
 
 from musubi.api.errors import APIError, api_error_handler, error_response
 from musubi.api.idempotency import IdempotencyCache, get_idempotency_cache
@@ -305,20 +304,16 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
             hint="check the request body / query parameters against the OpenAPI spec",
         )
 
-    @app.exception_handler(ValidationError)
-    async def _pydantic_validation_handler(_request: Request, exc: ValidationError) -> Response:
-        # Handles pydantic ValidationErrors raised *inside* handlers,
-        # typically when we construct a typed model (e.g. EpisodicMemory)
-        # from a body whose nested field fails a pydantic AfterValidator —
-        # most commonly the namespace regex. Without this, such errors
-        # bubble up as 500 INTERNAL, which is misleading: the client
-        # sent invalid data, not the server a bug.
-        return error_response(
-            status_code=422,
-            detail=str(exc),
-            code="BAD_REQUEST",
-            hint="check the field values against the OpenAPI spec / type constraints",
-        )
+    # NOTE: no global `ValidationError` handler.
+    #
+    # A naked `pydantic.ValidationError` can be raised anywhere — e.g.
+    # when a plane rehydrates a model from Qdrant payload and the
+    # stored data is corrupt. That's a 5xx, not a 422. A global
+    # handler would silently map every such bug to BAD_REQUEST and
+    # hide real server-side breakage. Translation is done at the
+    # specific call sites where we KNOW the input is request-driven
+    # (see `src/musubi/api/routers/writes_episodic.py` for the
+    # capture path).
 
     # Read routers (from slice-api-v0-read)
     app.include_router(ops.router)
