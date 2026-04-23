@@ -39,10 +39,23 @@ jobs:
           # still applies because our config lives in a manifest file.
           config-file: .release-please-config.json
           manifest-file: .release-please-manifest.json
-          # `GITHUB_TOKEN` with the scopes above suffices. Use a PAT
-          # only if we ever need releases to trigger OTHER workflows
-          # (GHA refuses to fire workflows on actions taken by the
-          # default GITHUB_TOKEN — but `publish-core-image.yml` is
-          # triggered by tag-push, which WORKS with GITHUB_TOKEN for
-          # tag creation, confirmed).
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # Must be a PAT (or GitHub App token), NOT the default
+          # `GITHUB_TOKEN`. GitHub's anti-recursion guard silently
+          # suppresses workflow runs for events authored by
+          # `GITHUB_TOKEN` — including the `vX.Y.Z` tag push that
+          # release-please creates when its PR merges. With GITHUB_TOKEN,
+          # `publish-core-image.yml` never fires on tag-push, so no
+          # `:vX.Y.Z` image tag is ever published (we observed this
+          # silently for v0.4.0, v0.5.0, and v0.5.1 — deploy digest pins
+          # still worked because digests are immutable, but there were
+          # no version-named image tags on GHCR).
+          #
+          # The PAT needs `repo` + `workflow` scopes. Stored as
+          # `secrets.RELEASE_PLEASE_PAT`. Rotation: bump the secret and
+          # confirm the next release-please run tags the image as
+          # `:vX.Y.Z`. If the secret is missing, the workflow falls back
+          # to `GITHUB_TOKEN` so release PRs still open / merge — but
+          # tag-push-triggered builds will silently skip (the known bug
+          # this config guards against). See the stamping rationale in
+          # https://github.com/googleapis/release-please-action#github-actions
+          token: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}

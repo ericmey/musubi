@@ -5,9 +5,10 @@ Use this when you need to move `musubi.example.local` to a newer
 `ghcr.io/ericmey/musubi-core` digest. For a first-deploy-from-scratch,
 see [`first-deploy.md`](first-deploy.md) instead.
 
-Cadence: on demand. Every merge to `v2` publishes a fresh floating
-`:v2` tag + a digest. Every `v*` tag push publishes a versioned tag
-+ digest. The deploy itself is a separate, human-reviewed PR.
+Cadence: on demand. Every merge to `main` publishes a fresh floating
+`:main` tag + a digest. Every `v*` tag push publishes `:vX.Y.Z` +
+digest (requires `RELEASE_PLEASE_PAT` — see ADR 0026 addendum dated
+2026-04-23). The deploy itself is a separate, human-reviewed PR.
 
 ---
 
