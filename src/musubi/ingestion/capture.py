@@ -418,10 +418,11 @@ class CaptureService:
         change, but the happy path now does exactly ONE embed round-trip
         and ONE upsert for the whole batch (spec § Batched capture).
 
-        Dedup-idempotency-cache-checking is still per-row because that
-        lives in :meth:`capture` (sqlite-backed, jti-scoped). Items that
-        hit the cache get their replayed result without touching the
-        plane; the remainder are bulk-embedded and bulk-upserted together.
+        ``batch_capture`` does NOT consult
+        :class:`IngestionIdempotencyCache` — the batch ``CaptureRequest``
+        shape carries no per-item idempotency key. Every item flows
+        through the plane. The single-row :meth:`capture` path is still
+        where jti-scoped, sqlite-backed idempotency replay happens.
         """
         if not items:
             return []

@@ -140,10 +140,13 @@ class EpisodicPlane:
         if len(dense) != 1024:
             raise ValueError(f"vector dimension mismatch: got {len(dense)}, expected 1024")
 
-        existing = self._find_dedup_candidate(memory.namespace, dense)
-        if existing is not None:
+        found = self._find_dedup_candidate(memory.namespace, dense)
+        if found is not None:
+            existing, existing_dense, existing_sparse = found
             return self._reinforce(
                 existing=existing,
+                existing_dense=existing_dense,
+                existing_sparse=existing_sparse,
                 new=memory,
                 dense=dense,
                 sparse=sparse,
@@ -226,15 +229,28 @@ class EpisodicPlane:
         points: list[models.PointStruct] = []
         finalised: list[EpisodicMemory] = []
         for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
-            existing = self._find_dedup_candidate(memory.namespace, dense)
-            if existing is not None:
-                updated = self._reinforce_without_upsert(
+            found = self._find_dedup_candidate(memory.namespace, dense)
+            if found is not None:
+                existing, existing_dense, existing_sparse = found
+                updated, existing_content_won = self._merge_row(
                     existing=existing,
                     new=memory,
                     merge_strategy=merge_strategy,
                     now=now,
                 )
-                points.append(self._make_point(updated, dense=dense, sparse=sparse))
+                # Preserve existing vectors when existing content won
+                # (otherwise we'd overwrite them with the new text's
+                # embeddings — a payload/vector drift bug).
+                if (
+                    existing_content_won
+                    and existing_dense is not None
+                    and existing_sparse is not None
+                ):
+                    points.append(
+                        self._make_point(updated, dense=existing_dense, sparse=existing_sparse)
+                    )
+                else:
+                    points.append(self._make_point(updated, dense=dense, sparse=sparse))
                 finalised.append(updated)
             else:
                 data = memory.model_dump()
@@ -255,21 +271,31 @@ class EpisodicPlane:
         self._client.upsert(collection_name=self._collection, points=points)
         return finalised
 
-    def _reinforce_without_upsert(
+    def _merge_row(
         self,
         *,
         existing: EpisodicMemory,
         new: EpisodicMemory,
         merge_strategy: MergeStrategy,
         now: Any,
-    ) -> EpisodicMemory:
-        """Compute the merged row without writing it — used by
-        ``batch_create`` so all rows land in one terminal upsert."""
+    ) -> tuple[EpisodicMemory, bool]:
+        """Compute the merged row without writing it.
+
+        Returns ``(updated, existing_content_won)``. The boolean tells
+        the caller which text's embeddings should accompany the upsert:
+        if ``existing_content_won`` is True we must preserve the
+        existing point's vectors, otherwise we write with the new
+        text's freshly-computed vectors. Without this bookkeeping the
+        payload and vectors drift out of sync (the bug Copilot caught
+        on the batch path)."""
         merged_tags = sorted(set(existing.tags) | set(new.tags))
+        existing_content_won = False
         if merge_strategy == "longer-wins":
-            kept_content = (
-                existing.content if len(existing.content) > len(new.content) else new.content
-            )
+            if len(existing.content) > len(new.content):
+                kept_content = existing.content
+                existing_content_won = True
+            else:
+                kept_content = new.content
         else:
             kept_content = new.content
         data = existing.model_dump()
@@ -281,7 +307,7 @@ class EpisodicPlane:
             updated_at=now,
             updated_epoch=epoch_of(now),
         )
-        return EpisodicMemory.model_validate(data)
+        return EpisodicMemory.model_validate(data), existing_content_won
 
     def _make_point(
         self,
@@ -306,6 +332,8 @@ class EpisodicPlane:
         self,
         *,
         existing: EpisodicMemory,
+        existing_dense: list[float] | None,
+        existing_sparse: dict[int, float] | None,
         new: EpisodicMemory,
         dense: list[float],
         sparse: dict[int, float],
@@ -313,29 +341,20 @@ class EpisodicPlane:
     ) -> EpisodicMemory:
         """Merge ``new`` into ``existing`` and re-upsert under the same id.
 
-        The kept ``content`` depends on ``merge_strategy``: ``longer-wins``
-        (spec default) keeps ``existing.content`` iff it's strictly longer
-        than ``new.content``; ``replace`` always takes the new text.
-        """
-        merged_tags = sorted(set(existing.tags) | set(new.tags))
-        if merge_strategy == "longer-wins":
-            kept_content = (
-                existing.content if len(existing.content) > len(new.content) else new.content
-            )
-        else:
-            kept_content = new.content
+        ``existing_dense`` / ``existing_sparse`` are the vectors Qdrant
+        already has for the matched point (fetched by the dedup probe).
+        When ``merge_strategy="longer-wins"`` keeps the existing content,
+        we rewrite the payload but retain those existing vectors so the
+        embeddings stay aligned with what the row actually says. When
+        new content wins we swap in the new vectors."""
         now = utc_now()
-        data = existing.model_dump()
-        data.update(
-            content=kept_content,
-            tags=merged_tags,
-            reinforcement_count=existing.reinforcement_count + 1,
-            version=existing.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
+        updated, existing_content_won = self._merge_row(
+            existing=existing, new=new, merge_strategy=merge_strategy, now=now
         )
-        updated = EpisodicMemory.model_validate(data)
-        self._upsert(updated, dense=dense, sparse=sparse)
+        if existing_content_won and existing_dense is not None and existing_sparse is not None:
+            self._upsert(updated, dense=existing_dense, sparse=existing_sparse)
+        else:
+            self._upsert(updated, dense=dense, sparse=sparse)
         return updated
 
     def _upsert(
@@ -359,8 +378,17 @@ class EpisodicPlane:
     # Dedup
     # ------------------------------------------------------------------
 
-    def _find_dedup_candidate(self, namespace: str, dense: list[float]) -> EpisodicMemory | None:
-        """Return the best existing point above the dedup threshold, if any."""
+    def _find_dedup_candidate(
+        self, namespace: str, dense: list[float]
+    ) -> tuple[EpisodicMemory, list[float] | None, dict[int, float] | None] | None:
+        """Return the best existing point above the dedup threshold, if any.
+
+        Returns the rehydrated :class:`EpisodicMemory` plus the point's
+        stored dense and sparse vectors. The vectors let the
+        reinforce path preserve the existing embeddings when
+        ``longer-wins`` keeps the existing content — otherwise the
+        payload and vectors would drift apart on every dedup hit where
+        new text was shorter."""
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
@@ -373,13 +401,26 @@ class EpisodicPlane:
             limit=1,
             score_threshold=self._dedup_threshold,
             with_payload=True,
+            with_vectors=True,
         )
         if not resp.points:
             return None
-        payload = resp.points[0].payload
+        point = resp.points[0]
+        payload = point.payload
         if not payload:
             return None
-        return _memory_from_payload(payload)
+        memory = _memory_from_payload(payload)
+        existing_dense: list[float] | None = None
+        existing_sparse: dict[int, float] | None = None
+        vectors = point.vector
+        if isinstance(vectors, dict):
+            raw_dense = vectors.get(DENSE_VECTOR_NAME)
+            if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
+                existing_dense = raw_dense  # type: ignore[assignment]
+            raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
+            if isinstance(raw_sparse, models.SparseVector):
+                existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))
+        return memory, existing_dense, existing_sparse
 
     # ------------------------------------------------------------------
     # Read

@@ -257,15 +257,23 @@ def test_dedup_keeps_longer_content(plane: EpisodicPlane, ns: str) -> None:
     async def _probe(long_first: bool) -> EpisodicMemory:
         first_text = long_content if long_first else short_content
         second_text = short_content if long_first else long_content
-        first = asyncio.run_coroutine_threadsafe.__self__ if False else None  # noqa: F841 — placate mypy
         existing = await plane.create(EpisodicMemory(namespace=ns, content=first_text))
         # Compute vectors for the second call so we can drive _reinforce
         # directly without needing the FakeEmbedder to produce a dedup
         # hit (it won't).
         dense = (await plane._embedder.embed_dense([second_text]))[0]
         sparse = (await plane._embedder.embed_sparse([second_text]))[0]
+        existing_dense = (await plane._embedder.embed_dense([first_text]))[0]
+        existing_sparse = (await plane._embedder.embed_sparse([first_text]))[0]
         new = EpisodicMemory(namespace=ns, content=second_text)
-        return plane._reinforce(existing=existing, new=new, dense=dense, sparse=sparse)
+        return plane._reinforce(
+            existing=existing,
+            existing_dense=existing_dense,
+            existing_sparse=existing_sparse,
+            new=new,
+            dense=dense,
+            sparse=sparse,
+        )
 
     merged_long_first = asyncio.run(_probe(long_first=True))
     assert merged_long_first.content == long_content, "long-first: longer existing should win"
@@ -285,9 +293,13 @@ def test_reinforce_replace_strategy_preserves_new_content(plane: EpisodicPlane, 
         existing = await plane.create(EpisodicMemory(namespace=ns, content=long_content))
         dense = (await plane._embedder.embed_dense([short_content]))[0]
         sparse = (await plane._embedder.embed_sparse([short_content]))[0]
+        existing_dense = (await plane._embedder.embed_dense([long_content]))[0]
+        existing_sparse = (await plane._embedder.embed_sparse([long_content]))[0]
         new = EpisodicMemory(namespace=ns, content=short_content)
         return plane._reinforce(
             existing=existing,
+            existing_dense=existing_dense,
+            existing_sparse=existing_sparse,
             new=new,
             dense=dense,
             sparse=sparse,
