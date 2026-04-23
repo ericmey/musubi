@@ -3,27 +3,16 @@ from __future__ import annotations
 import time
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 from musubi.api.rate_limit import get_rate_limiter
 
 
-@pytest.fixture(autouse=True)
-def mock_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-
-    class MockSettings:
-        rate_limit_capture = 10.0
-        rate_limit_retrieve = 20.0
-        rate_limit_thought = 5.0
-
-    monkeypatch.setattr("musubi.config.get_settings", lambda: MockSettings())
-
-
 def test_capture_rate_limit_returns_429_on_over_limit(client: TestClient, valid_token: str) -> None:
     limiter = get_rate_limiter()
     limiter.reset_for_test()
-    # capture limit is 10/s => 600/min? Wait, what is the default in the current codebase? 100.
+    # capture bucket is 100/min (see DEFAULT_BUCKETS + ADR 0027).
+    # 105 requests from a non-operator token must trip the cap.
     for _ in range(105):
         resp = client.post(
             "/v1/memories",
