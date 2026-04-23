@@ -38,7 +38,8 @@ from musubi.api.dependencies import (
 )
 from musubi.api.errors import APIError, ErrorCode
 from musubi.api.responses import RetrieveResponse, RetrieveResultRow
-from musubi.auth import AuthRequirement, authenticate_request
+from musubi.auth import authenticate_request
+from musubi.auth.scopes import resolve_namespace_scope
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
@@ -98,8 +99,19 @@ def _resolve_targets(
     shape = _namespace_shape(namespace)
     requested = list(planes) if planes else None
 
+    # Reject empty segments up front so `a/b/` doesn't slip through
+    # as a "3-segment" with trailing empty plane.
+    if any(seg == "" for seg in namespace.split("/")):
+        return ([], f"namespace '{namespace}' has empty segments")
+
     if shape == 3:
         derived_plane = namespace.rsplit("/", 1)[-1]
+        if derived_plane not in _VALID_PLANES:
+            return (
+                [],
+                f"3-segment namespace '{namespace}' names unknown plane "
+                f"'{derived_plane}' (valid: {sorted(_VALID_PLANES)})",
+            )
         if requested is not None and requested != [derived_plane]:
             return (
                 [],
@@ -131,24 +143,28 @@ async def retrieve(
     if shape_err is not None:
         raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
 
-    # Strict scope check: every (namespace, plane) target must be
-    # readable. First denial aborts the whole request — a token
-    # asking for a plane it can't read is almost always a
-    # misconfiguration; surface it loudly per ADR 0028.
+    # Authenticate once — re-verifying the JWT per target would be
+    # O(#planes) token validation overhead for no gain. Then resolve
+    # the scope check strictly against every target from the single
+    # context; first denial aborts the whole request per ADR 0028.
+    auth_result = authenticate_request(
+        request,  # type: ignore[arg-type]
+        None,
+        settings=settings,
+    )
+    if isinstance(auth_result, Err):
+        err = auth_result.error
+        code: ErrorCode = err.code  # type: ignore[assignment]
+        raise APIError(status_code=err.status_code, code=code, detail=err.detail)
+    context = auth_result.value
+
     for target_namespace, _plane in targets:
-        requirement = AuthRequirement(namespace=target_namespace, access="r")
-        result = authenticate_request(
-            request,  # type: ignore[arg-type]
-            requirement,
-            settings=settings,
-        )
-        if isinstance(result, Err):
-            err = result.error
-            code: ErrorCode = err.code  # type: ignore[assignment]
+        scope_result = resolve_namespace_scope(context, namespace=target_namespace, access="r")
+        if isinstance(scope_result, Err):
             raise APIError(
-                status_code=err.status_code,
-                code=code,
-                detail=err.detail,
+                status_code=scope_result.error.status_code,
+                code="FORBIDDEN",
+                detail=scope_result.error.detail,
             )
 
     # Hand orchestration the fully-resolved targets. A 3-segment

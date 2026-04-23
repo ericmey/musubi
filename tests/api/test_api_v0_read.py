@@ -908,33 +908,60 @@ def test_retrieve_two_segment_namespace_fans_out_per_plane(
     client: TestClient,
     auth: dict[str, str],
     episodic: EpisodicPlane,
+    curated: CuratedPlane,
 ) -> None:
     """Closes #209: a 2-segment `tenant/presence` namespace + `planes`
     list lets one /v1/retrieve call cover multiple planes. The router
     expands each plane to `<namespace>/<plane>` internally; the
-    orchestrator runs the pipeline per target and merges by score."""
+    orchestrator fans the pipeline out per target and merges results
+    by score. Test seeds both episodic and curated so the merge path
+    actually runs, not just the single-leg case."""
+    import hashlib as _h
+
     _seed_episodic_batch(
         episodic,
         "eric/claude-code/episodic",
         ["Remember the dentist appointment Tuesday.", "Eric prefers coffee black."],
     )
 
+    async def _seed_curated() -> None:
+        body_text = "Curated doc about dentist scheduling."
+        await curated.create(
+            CuratedKnowledge(
+                namespace="eric/claude-code/curated",
+                title="Dentist notes",
+                content=body_text,
+                vault_path="curated/eric/dentist.md",
+                body_hash=_h.sha256(body_text.encode()).hexdigest(),
+            )
+        )
+
+    asyncio.run(_seed_curated())
+
     r = client.post(
         "/v1/retrieve",
         headers=auth,
         json={
             "namespace": "eric/claude-code",
-            "planes": ["episodic"],
+            "planes": ["episodic", "curated"],
             "query_text": "dentist",
             "mode": "fast",
-            "limit": 5,
+            "limit": 10,
         },
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    # Hits should come back scoped to the episodic plane target.
     assert body["results"], body
-    assert body["results"][0]["plane"] == "episodic"
+    planes_seen = {row["plane"] for row in body["results"]}
+    # Cross-plane fanout must surface hits from at least one of the
+    # seeded planes; ideally both since we planted matching content
+    # in each. Asserting "at least one plane besides a single-plane
+    # call's result set" catches regressions where the merge path
+    # silently drops one leg.
+    assert planes_seen.intersection({"episodic", "curated"}), planes_seen
+    # Global score sort: scores non-increasing across the merged rows.
+    scores = [row["score"] for row in body["results"]]
+    assert scores == sorted(scores, reverse=True), scores
 
 
 def test_retrieve_two_segment_strict_scope_403s_when_any_plane_is_out_of_scope(

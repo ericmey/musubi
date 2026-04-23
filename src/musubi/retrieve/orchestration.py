@@ -129,28 +129,26 @@ async def retrieve(
             now=now,
         )
 
-    # Fan out — one pipeline run per (namespace, plane) target. Each
-    # pipeline enforces its own per-mode timeout; `gather(return_exceptions)`
-    # so a single plane failing doesn't blank the whole cross-plane
-    # response. Consistent with the plugin fanout ADR 0028 was written
-    # against — except the aggregation happens server-side now.
-    sub_queries = [
-        parsed_query.model_copy(
-            update={"namespace": ns, "planes": [plane], "namespace_targets": None}
-        )
-        for ns, plane in targets
-    ]
+    # Fan out — one pipeline run per (namespace, plane) target. Call
+    # `_run_single` directly rather than recursing through `retrieve()`:
+    # the query is already parsed + validated, and re-entering the
+    # top-level would redo target expansion, pydantic validation, and
+    # the single-vs-multi branch logic for each leg. `gather(return_
+    # exceptions=True)` so a single plane failing doesn't blank the
+    # whole cross-plane response (ADR 0028).
     results_per_target = await asyncio.gather(
         *(
-            retrieve(
+            _run_single(
                 client=client,
                 embedder=embedder,
                 reranker=reranker,
-                query=sub,
                 llm=llm,
+                parsed_query=parsed_query,
+                namespace=ns,
+                plane=plane,
                 now=now,
             )
-            for sub in sub_queries
+            for ns, plane in targets
         ),
         return_exceptions=True,
     )
