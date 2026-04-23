@@ -48,6 +48,10 @@ REMOTE_HOST="${REMOTE_HOST:-}"
 # word-splitting on $SSH_OPTS only, never on SSH_OPTS_DEFAULT[@].
 SSH_OPTS_DEFAULT=(-o BatchMode=yes -o ConnectTimeout=5)
 SSH_OPTS="${SSH_OPTS:-}"
+# Optional prefix for remote docker invocation (e.g. "sudo -n" when
+# the SSH user isn't in the docker group but has passwordless sudo).
+# Empty by default — no-op when the user can run docker directly.
+REMOTE_DOCKER_PREFIX="${REMOTE_DOCKER_PREFIX:-}"
 
 # -------- helpers -------------------------------------------------
 
@@ -136,7 +140,7 @@ _sample_remote() {
   # our SSH target isn't interpolating it (no jinja here, plain ssh).
   # shellcheck disable=SC2086
   ssh "${SSH_OPTS_DEFAULT[@]}" $SSH_OPTS "$REMOTE_HOST" \
-    "docker stats --no-stream --format '{{json .}}' 2>/dev/null" 2>/dev/null \
+    "${REMOTE_DOCKER_PREFIX} docker stats --no-stream --format '{{json .}}' 2>/dev/null" 2>/dev/null \
     | jq -c --arg ts "$ts" '. + {ts: $ts}' \
     >> "$dir/docker-stats.jsonl" || true
 

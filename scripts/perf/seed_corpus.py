@@ -23,13 +23,19 @@ producing human-realistic corpora.
 
 Targets
 -------
-Seeds all five planes via Musubi's canonical API:
+Seeds four of the five planes via Musubi's canonical API:
 
   * episodic   — ``POST /v1/memories``
   * curated    — ``POST /v1/curated-knowledge`` (via operator token)
-  * concept    — ``POST /v1/concepts`` (operator-scoped)
   * artifact   — ``POST /v1/artifacts`` (multipart)
   * thought    — ``POST /v1/thoughts/send``
+
+The **concept** plane is intentionally omitted: there is no
+``POST /v1/concepts`` endpoint — concepts are produced only by the
+lifecycle synthesis job against episodic clusters. If you need the
+concept plane populated for a retrieval test, either run the real
+synthesis sweep after seeding episodic, or call the
+debug-synthesis trigger.
 
 Namespaces are pinned under ``<tenant>/<presence>/<plane>`` (the
 canonical three-segment format), defaulting to
@@ -80,7 +86,12 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 
-PLANES = ("episodic", "curated", "concept", "artifact", "thought")
+# Note: concept is intentionally absent. Concepts are produced by the
+# lifecycle synthesis job against episodic clusters — there is no
+# direct POST /v1/concepts endpoint (it returns 405), so seeding them
+# via the HTTP API is impossible. Either run the real synthesis job
+# after seeding episodic, or hit the debug-synthesis trigger.
+PLANES = ("episodic", "curated", "artifact", "thought")
 
 # Intentionally mundane fragments — household + ops + meta mix. The
 # pool is small on purpose: seeded random sampling over a small pool
@@ -422,43 +433,6 @@ def seed_curated(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
     return ok
 
 
-def seed_concept(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
-    """POST /v1/concepts. Concepts are normally emitted by the
-    synthesis lifecycle job; seeding bypasses it to give retrieve
-    something to rerank against."""
-    ns = f"{cfg.namespace_prefix}/concept"
-    ok = 0
-    backoff_rng = random.Random(cfg.seed ^ 0xC0DE)
-    for i in range(cfg.size):
-        content = make_content(rng)
-        # Concept ingest has no intrinsic content hash; we compute one
-        # from (namespace, content, deterministic index) so the
-        # Idempotency-Key is stable across re-runs of the same --seed.
-        ts_proxy = TIMESTAMP_ANCHOR - timedelta(seconds=i)
-        body = {
-            "namespace": ns,
-            "content": content,
-            "tags": rng.sample(_TOPICS, k=rng.randint(1, 3)),
-            "importance": rng.randint(1, 9),
-        }
-        r = post_with_backoff(
-            client,
-            "/concepts",
-            rng=backoff_rng,
-            json_body=body,
-            extra_headers={"Idempotency-Key": make_idempotency_key(ns, content, ts_proxy)},
-        )
-        if r is not None and r.is_success:
-            ok += 1
-        elif r is not None:
-            log.warning("concept %d: %d %s", i, r.status_code, r.text[:160])
-        else:
-            log.warning("concept %d: skipped (transport error or 429 exhaustion)", i)
-        if i and i % 500 == 0:
-            log.info("concept: %d / %d (ok=%d)", i, cfg.size, ok)
-    return ok
-
-
 def seed_artifact(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
     """POST /v1/artifacts — multipart. Smaller volume by default would
     be sensible; artifacts are heavier. Kept at --size for symmetry;
@@ -501,7 +475,6 @@ def seed_artifact(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> 
 _SEEDERS = {
     "episodic": seed_episodic,
     "curated": seed_curated,
-    "concept": seed_concept,
     "artifact": seed_artifact,
     "thought": seed_thought,
 }

@@ -11,12 +11,28 @@ import { check } from 'k6';
 // consistent with production.
 const BASE_URL = __ENV.MUSUBI_V2_BASE_URL;
 const TOKEN = __ENV.MUSUBI_V2_TOKEN;
-const NS_PREFIX = __ENV.MUSUBI_V2_NAMESPACE_PREFIX || 'perf-test';
+// Canonical namespace format is `<tenant>/<presence>/<plane>` — the
+// prefix supplied here MUST be exactly two segments (tenant/presence);
+// the plane is appended by the call sites below. Default matches what
+// `scripts/perf/seed_corpus.py` writes with its default prefix.
+const NS_PREFIX = __ENV.MUSUBI_V2_NAMESPACE_PREFIX || 'perf-test/harness';
 
 if (!BASE_URL || !TOKEN) {
   throw new Error(
     'MUSUBI_V2_BASE_URL and MUSUBI_V2_TOKEN must be set. The token ' +
     'must scope to ' + NS_PREFIX + '/* — never to eric/*.'
+  );
+}
+
+// Fail fast at module load if the prefix is malformed. The server
+// rejects anything other than exactly three segments with an opaque
+// 500, which would otherwise mask the real problem (bad env var)
+// behind a wall of failed requests mid-run.
+const _nsParts = NS_PREFIX.split('/').filter(Boolean);
+if (_nsParts.length !== 2) {
+  throw new Error(
+    'MUSUBI_V2_NAMESPACE_PREFIX must be exactly "tenant/presence" ' +
+    '(two non-empty segments). Got: ' + JSON.stringify(NS_PREFIX)
   );
 }
 
