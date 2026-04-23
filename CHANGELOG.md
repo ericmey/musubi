@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0](https://github.com/ericmey/musubi/compare/v0.4.0...v0.5.0) (2026-04-23)
+
+
+### Features
+
+* **retrieve:** 2-segment namespace + cross-plane fanout, strict scope (closes [#209](https://github.com/ericmey/musubi/issues/209)) ([#210](https://github.com/ericmey/musubi/issues/210)) ([1d9c2e1](https://github.com/ericmey/musubi/commit/1d9c2e1f17330e7e91cd3180aeea44e1ae483224))
+
+
+### Bug Fixes
+
+* **rate-limit:** delete dead settings-backed rate fields (closes [#193](https://github.com/ericmey/musubi/issues/193)) ([#206](https://github.com/ericmey/musubi/issues/206)) ([b8e98d5](https://github.com/ericmey/musubi/commit/b8e98d53c4e37129f6d264c30615518bceeca13f))
+
 ## [0.4.0](https://github.com/ericmey/musubi/compare/v0.3.1...v0.4.0) (2026-04-23)
 
 
