@@ -3,11 +3,11 @@ title: "Slice: Workspace packaging — restructure into per-component wheels"
 slice_id: slice-ops-workspace-packaging
 section: _slices
 type: slice
-status: blocked
+status: retired
 owner: unassigned
 phase: "8 Ops"
-tags: [section/slices, status/blocked, type/slice, packaging, distribution]
-updated: 2026-04-19
+tags: [section/slices, status/retired, type/slice, packaging, distribution]
+updated: 2026-04-23
 reviewed: false
 depends-on: []
 blocks: []
