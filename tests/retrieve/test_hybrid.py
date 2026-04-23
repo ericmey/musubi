@@ -506,6 +506,27 @@ async def test_sparse_only_search_omits_dense_prefetch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dense_only_collection_skips_sparse_prefetch() -> None:
+    # `musubi_artifact` is declared `has_sparse=False` in the registry
+    # (metadata-only collection). Qdrant rejects sparse queries against
+    # it with 400 "Not existing vector name" — regression gate for #208.
+    spy = _SpyQdrantClient()
+    embedder = _CountingEmbedder()
+    result = await hybrid_search(
+        _client(spy),
+        embedder,
+        namespace=NAMESPACE,
+        query="find gpu notes",
+        collection="musubi_artifact",
+    )
+
+    assert isinstance(result, Ok)
+    assert [prefetch.using for prefetch in _prefetches(spy.calls[0])] == [DENSE_VECTOR_NAME]
+    # Don't embed sparse if we're never going to use it.
+    assert embedder.sparse_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_fanout_mismatched_clients_and_collections_returns_typed_error() -> None:
     result = await hybrid_search_many(
         [_client(_SpyQdrantClient())],
