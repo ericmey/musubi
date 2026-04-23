@@ -25,8 +25,10 @@ from musubi.api.dependencies import (
     get_artifact_plane,
     get_concept_plane,
     get_curated_plane,
+    get_embedder,
     get_episodic_plane,
     get_qdrant_client,
+    get_reranker,
     get_settings_dep,
 )
 from musubi.embedding import FakeEmbedder
@@ -121,8 +123,15 @@ def app_factory(
     """Returns the FastAPI app with all DI overrides wired to the
     in-memory test instances."""
     app = create_app(settings=api_settings)
+    # Shared FakeEmbedder — the retrieve router threads it through
+    # orchestration as both embedder and reranker (FakeEmbedder.rerank
+    # satisfies the TEIRerankerClient duck-type). Tests that care about
+    # rerank specifically override get_reranker with a spy.
+    fake = FakeEmbedder()
     app.dependency_overrides[get_settings_dep] = lambda: api_settings
     app.dependency_overrides[get_qdrant_client] = lambda: qdrant
+    app.dependency_overrides[get_embedder] = lambda: fake
+    app.dependency_overrides[get_reranker] = lambda: fake
     app.dependency_overrides[get_episodic_plane] = lambda: episodic
     app.dependency_overrides[get_curated_plane] = lambda: curated
     app.dependency_overrides[get_concept_plane] = lambda: concept
