@@ -16,7 +16,7 @@
 #      writes to the volumes while we swap them.
 #   2. Copy Qdrant snapshot files into the per-collection directory
 #      Qdrant watches (/var/lib/musubi/qdrant-snapshots/<coll>/), then
-#      POST each one to /collections/<coll>/snapshots/recover via the
+#      PUT each one to /collections/<coll>/snapshots/recover via the
 #      Qdrant HTTP API. We shell the HTTP call through the
 #      lifecycle-worker container (same pattern the backup script uses)
 #      so we don't need curl on the host and stay inside the compose
@@ -118,8 +118,23 @@
 
     - name: Fail loudly if no snapshots found
       ansible.builtin.fail:
-        msg: "no *.snapshot files under {{ backup_dir }}/qdrant — cowardly refusing to restore"
+        msg: >-
+          No *.snapshot files found under {{ backup_dir }}/qdrant;
+          refusing to restore without Qdrant snapshots. Verify
+          backup_timestamp={{ backup_timestamp }} points at a directory
+          produced by musubi-backup.sh and check the timer status.
       when: snapshot_files.files | length == 0
+
+    - name: Ensure per-collection Qdrant snapshot directories exist
+      ansible.builtin.file:
+        path: "/var/lib/musubi/qdrant-snapshots/{{ item.path | basename | regex_replace('\\.snapshot$', '') }}"
+        state: directory
+        owner: musubi
+        group: musubi
+        mode: "0750"
+      loop: "{{ snapshot_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
 
     - name: Stage each snapshot into Qdrant's per-collection snapshots dir
       ansible.builtin.copy:
@@ -190,7 +205,7 @@
 
     - name: Wait for core /v1/ops/health to return 200
       ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:8100/v1/ops/health"
+        url: "{{ musubi_health_urls.core }}"
         status_code: 200
       register: health
       retries: 30

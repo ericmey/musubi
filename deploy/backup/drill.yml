@@ -22,16 +22,13 @@
 #     -e drill_fresh_host=true \
 #     -e backup_timestamp=20260422T180001Z
 
-- name: Optional bootstrap (fresh-host drills only)
-  hosts: musubi
-  become: true
-  gather_facts: false
-  vars:
-    drill_fresh_host: false
-  tasks:
-    - name: Include bootstrap playbook when drill_fresh_host=true
-      ansible.builtin.import_playbook: ../ansible/bootstrap.yml
-      when: drill_fresh_host | bool
+# `import_playbook` is a play-level directive, not a task action, so
+# the conditional bootstrap gate must sit at play scope. When
+# drill_fresh_host is false (the default) the import is skipped
+# entirely — no bootstrap play runs.
+- name: Bootstrap (fresh-host drills only)
+  ansible.builtin.import_playbook: ../ansible/bootstrap.yml
+  when: drill_fresh_host | default(false) | bool
 
 - name: Restore drill — data
   ansible.builtin.import_playbook: restore.yml
@@ -46,7 +43,7 @@
   tasks:
     - name: Probe core health
       ansible.builtin.uri:
-        url: "http://{{ ansible_host }}:8100/v1/ops/health"
+        url: "{{ musubi_health_urls.core }}"
         status_code: 200
 
     - name: Sanity-check Qdrant collection count (must be non-zero after restore)

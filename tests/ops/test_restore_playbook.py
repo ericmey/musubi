@@ -165,6 +165,9 @@ def test_drill_yml_bootstrap_is_guarded_by_drill_fresh_host() -> None:
 def test_drill_yml_validates_after_restore() -> None:
     """A drill without a post-restore health check doesn't actually
     exercise anything — it just copies files around. The playbook
-    should hit /v1/ops/health after the restore completes."""
+    should hit core health after the restore completes. We accept
+    either the literal ``/v1/ops/health`` path or the centralised
+    ``musubi_health_urls.core`` variable the rest of the ops
+    playbooks use."""
     text = DRILL_YML.read_text()
-    assert "/v1/ops/health" in text
+    assert "/v1/ops/health" in text or "musubi_health_urls.core" in text
