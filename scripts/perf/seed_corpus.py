@@ -31,15 +31,18 @@ Seeds all five planes via Musubi's canonical API:
   * artifact   — ``POST /v1/artifacts`` (multipart)
   * thought    — ``POST /v1/thoughts/send``
 
-Namespaces are pinned under ``perf-test/<plane>`` so live data at
-``eric/*`` is never touched.
+Namespaces are pinned under ``<tenant>/<presence>/<plane>`` (the
+canonical three-segment format), defaulting to
+``perf-test/harness/<plane>`` so live data at ``eric/*`` is never
+touched. The tenant + presence are taken from ``--namespace-prefix``
+which must be exactly two segments.
 
 Usage
 -----
-  MUSUBI_V2_BASE_URL=https://musubi.mey.house/v1 \\
+  MUSUBI_V2_BASE_URL=http://musubi.mey.house:8100/v1 \\
   MUSUBI_V2_TOKEN=mbi_perf_... \\
   python3 scripts/perf/seed_corpus.py \\
-      --size 10000 --seed 42 --namespace-prefix perf-test
+      --size 10000 --seed 42 --namespace-prefix perf-test/harness
 
 Size is per-plane; ``--size 10000`` creates 10k episodic + 10k curated
 + 10k concept + 10k artifact + 10k thought. Use ``--planes`` to limit.
@@ -62,6 +65,14 @@ try:
 except ImportError:
     sys.stderr.write("seed_corpus.py requires httpx. Install: pip install httpx\n")
     sys.exit(2)
+
+# Fixed anchor — timestamps derive as `TIMESTAMP_ANCHOR - offset_seconds`
+# where offset comes from the seeded RNG. Pinning this to a constant
+# epoch makes the entire corpus — content + timestamps + idempotency
+# keys — bit-identical across runs of the same --seed. That's what
+# makes the seed genuinely idempotent on retry: the server sees the
+# same idempotency key and dedupes into the pre-existing row.
+TIMESTAMP_ANCHOR = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
 
 log = logging.getLogger("musubi.perf.seed")
 logging.basicConfig(
@@ -167,8 +178,12 @@ def parse_args() -> SeedConfig:
     p.add_argument("--seed", type=int, default=42, help="deterministic RNG seed")
     p.add_argument(
         "--namespace-prefix",
-        default="perf-test",
-        help="namespace root for all seeded data; kept off 'eric/*' on purpose",
+        default="perf-test/harness",
+        help=(
+            "tenant/presence prefix for all seeded data; the plane is "
+            "appended automatically to produce the canonical three-segment "
+            "namespace. Kept off 'eric/*' on purpose."
+        ),
     )
     p.add_argument(
         "--planes",
@@ -194,12 +209,22 @@ def parse_args() -> SeedConfig:
         sys.stderr.write(f"error: unknown plane(s): {bad}\n")
         sys.exit(2)
 
+    # Server rejects anything other than exactly `<tenant>/<presence>/<plane>`
+    # — fail loudly here instead of eating 500s mid-run.
+    prefix = args.namespace_prefix.strip("/")
+    if prefix.count("/") != 1 or not all(prefix.split("/")):
+        sys.stderr.write(
+            f"error: --namespace-prefix must be 'tenant/presence' (got {prefix!r}).\n"
+            "       The plane is appended automatically.\n"
+        )
+        sys.exit(2)
+
     return SeedConfig(
         base_url=base_url.rstrip("/"),
         token=token,
         size=args.size,
         seed=args.seed,
-        namespace_prefix=args.namespace_prefix.rstrip("/"),
+        namespace_prefix=prefix,
         planes=planes,
         timespan_days=args.timespan_days,
     )
@@ -213,12 +238,14 @@ def make_content(rng: random.Random) -> str:
 
 
 def make_timestamp(rng: random.Random, timespan_days: int) -> datetime:
-    """Uniform spread across ``timespan_days`` ending at now. Late-
-    skew would be more realistic but makes maturation test results
-    uniform (all rows mature/not-mature together); uniform spread
-    keeps the mix deterministic and testable."""
+    """Uniform spread across ``timespan_days`` ending at the fixed
+    ``TIMESTAMP_ANCHOR``. Using a fixed anchor (not ``datetime.now()``)
+    is what lets the seed script be genuinely idempotent on retry:
+    same --seed produces the same timestamps, hence the same
+    idempotency keys, hence the server dedupes retried writes into
+    the existing rows instead of creating duplicates."""
     seconds = rng.randint(0, timespan_days * 86400)
-    return datetime.now(UTC) - timedelta(seconds=seconds)
+    return TIMESTAMP_ANCHOR - timedelta(seconds=seconds)
 
 
 def make_idempotency_key(namespace: str, content: str, timestamp: datetime) -> str:
@@ -232,11 +259,82 @@ def make_idempotency_key(namespace: str, content: str, timestamp: datetime) -> s
     return f"perf-seed:{h.hexdigest()[:24]}"
 
 
+# Backoff tuning. Musubi's rate-limit middleware returns 429 with a
+# Retry-After header (in seconds) — honor it first. If the header
+# is missing, fall back to exponential backoff anchored at 250ms with
+# jitter, capped at MAX_BACKOFF_S. After MAX_429_RETRIES attempts we
+# give up on the row and move on — a dropped seed row is recoverable
+# by re-running (idempotency keys dedupe against what's already there).
+MAX_429_RETRIES = 6
+BASE_BACKOFF_S = 0.25
+MAX_BACKOFF_S = 30.0
+
+
+def _sleep_for_429(resp: httpx.Response, attempt: int, rng: random.Random) -> float:
+    """Return how long we slept, for observability + tests."""
+    retry_after = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+    if retry_after:
+        try:
+            wait_s = float(retry_after)
+        except ValueError:
+            # Retry-After can be an HTTP date; we don't need that
+            # branch for Musubi (middleware emits integer seconds).
+            wait_s = BASE_BACKOFF_S * (2**attempt)
+    else:
+        # 0.25s, 0.5s, 1s, 2s, 4s, 8s + 0-25% jitter.
+        wait_s = BASE_BACKOFF_S * (2**attempt)
+        wait_s += wait_s * rng.random() * 0.25
+    # Clamp below too — a misbehaving proxy returning a negative
+    # Retry-After would otherwise crash time.sleep().
+    wait_s = max(0.0, min(wait_s, MAX_BACKOFF_S))
+    time.sleep(wait_s)
+    return wait_s
+
+
+def post_with_backoff(
+    client: httpx.Client,
+    path: str,
+    *,
+    rng: random.Random,
+    json_body: dict | None = None,
+    data: dict | None = None,
+    files: dict | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> httpx.Response | None:
+    """POST wrapper that retries 429s with Retry-After / exp-backoff.
+
+    Returns the final ``httpx.Response`` on 2xx/4xx-other, or None if
+    we hit ``MAX_429_RETRIES`` consecutive 429s (caller logs + moves
+    on). Non-429 4xx and 5xx are NOT retried — those are either client
+    bugs or transient server errors that the outer loop's per-row
+    warning surfaces. Keeps the seed simple: dedup makes re-runs
+    the retry mechanism for flaky rows."""
+    for attempt in range(MAX_429_RETRIES):
+        try:
+            r = client.post(
+                path,
+                json=json_body,
+                data=data,
+                files=files,
+                headers=extra_headers,
+            )
+        except httpx.HTTPError as exc:
+            log.warning("POST %s transport error (attempt %d): %s", path, attempt, exc)
+            return None
+        if r.status_code != 429:
+            return r
+        slept = _sleep_for_429(r, attempt, rng)
+        log.info("429 on %s (attempt %d); slept %.2fs", path, attempt, slept)
+    log.warning("POST %s gave up after %d consecutive 429s", path, MAX_429_RETRIES)
+    return None
+
+
 def seed_episodic(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
     """POST /v1/memories. Repeated calls with the same idempotency key
     fold into a single row, so the seed is safe to retry."""
     ns = f"{cfg.namespace_prefix}/episodic"
     ok = 0
+    progress_rng = random.Random(cfg.seed ^ 0xBEEF)  # separate stream for sleeps
     for i in range(cfg.size):
         content = make_content(rng)
         ts = make_timestamp(rng, cfg.timespan_days)
@@ -247,24 +345,28 @@ def seed_episodic(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> 
             "topics": rng.sample(_TOPICS, k=rng.randint(0, 2)),
             "importance": rng.randint(1, 9),
         }
-        try:
-            r = client.post(
-                "/memories",
-                json=body,
-                headers={"Idempotency-Key": make_idempotency_key(ns, content, ts)},
-            )
-            r.raise_for_status()
+        r = post_with_backoff(
+            client,
+            "/memories",
+            rng=progress_rng,
+            json_body=body,
+            extra_headers={"Idempotency-Key": make_idempotency_key(ns, content, ts)},
+        )
+        if r is not None and r.is_success:
             ok += 1
-        except httpx.HTTPError as exc:
-            log.warning("episodic %d failed: %s", i, exc)
+        elif r is not None:
+            log.warning("episodic %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("episodic %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 500 == 0:
-            log.info("episodic: %d / %d", i, cfg.size)
+            log.info("episodic: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
 
 
 def seed_thought(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
     ns = f"{cfg.namespace_prefix}/thought"
     ok = 0
+    backoff_rng = random.Random(cfg.seed ^ 0xF00D)
     for i in range(cfg.size):
         body = {
             "namespace": ns,
@@ -274,23 +376,29 @@ def seed_thought(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
             "channel": rng.choice(("default", "scheduler", "ops")),
             "importance": rng.randint(1, 9),
         }
-        try:
-            r = client.post("/thoughts/send", json=body)
-            r.raise_for_status()
+        r = post_with_backoff(client, "/thoughts/send", rng=backoff_rng, json_body=body)
+        if r is not None and r.is_success:
             ok += 1
-        except httpx.HTTPError as exc:
-            log.warning("thought %d failed: %s", i, exc)
+        elif r is not None:
+            log.warning("thought %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("thought %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 500 == 0:
-            log.info("thought: %d / %d", i, cfg.size)
+            log.info("thought: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
 
 
 def seed_curated(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
     """POST /v1/curated-knowledge. Requires operator scope + body_hash.
     Vault sync is the normal writer — seeding here is a deliberate
-    bypass for perf-testing corpus construction only."""
+    bypass for perf-testing corpus construction only.
+
+    Idempotency-on-retry: the ``body_hash`` is a pure function of
+    ``content``, so re-running the same --seed produces the same hashes
+    and the server dedupes into existing rows."""
     ns = f"{cfg.namespace_prefix}/curated"
     ok = 0
+    backoff_rng = random.Random(cfg.seed ^ 0xCAFE)
     for i in range(cfg.size):
         content = make_content(rng)
         body_hash = hashlib.sha256(content.encode()).hexdigest()
@@ -302,14 +410,15 @@ def seed_curated(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
             "body_hash": body_hash,
             "tags": rng.sample(_TOPICS, k=rng.randint(1, 3)),
         }
-        try:
-            r = client.post("/curated-knowledge", json=body)
-            r.raise_for_status()
+        r = post_with_backoff(client, "/curated-knowledge", rng=backoff_rng, json_body=body)
+        if r is not None and r.is_success:
             ok += 1
-        except httpx.HTTPError as exc:
-            log.warning("curated %d failed: %s", i, exc)
+        elif r is not None:
+            log.warning("curated %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("curated %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 500 == 0:
-            log.info("curated: %d / %d", i, cfg.size)
+            log.info("curated: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
 
 
@@ -319,30 +428,48 @@ def seed_concept(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
     something to rerank against."""
     ns = f"{cfg.namespace_prefix}/concept"
     ok = 0
+    backoff_rng = random.Random(cfg.seed ^ 0xC0DE)
     for i in range(cfg.size):
+        content = make_content(rng)
+        # Concept ingest has no intrinsic content hash; we compute one
+        # from (namespace, content, deterministic index) so the
+        # Idempotency-Key is stable across re-runs of the same --seed.
+        ts_proxy = TIMESTAMP_ANCHOR - timedelta(seconds=i)
         body = {
             "namespace": ns,
-            "content": make_content(rng),
+            "content": content,
             "tags": rng.sample(_TOPICS, k=rng.randint(1, 3)),
             "importance": rng.randint(1, 9),
         }
-        try:
-            r = client.post("/concepts", json=body)
-            r.raise_for_status()
+        r = post_with_backoff(
+            client,
+            "/concepts",
+            rng=backoff_rng,
+            json_body=body,
+            extra_headers={"Idempotency-Key": make_idempotency_key(ns, content, ts_proxy)},
+        )
+        if r is not None and r.is_success:
             ok += 1
-        except httpx.HTTPError as exc:
-            log.warning("concept %d failed: %s", i, exc)
+        elif r is not None:
+            log.warning("concept %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("concept %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 500 == 0:
-            log.info("concept: %d / %d", i, cfg.size)
+            log.info("concept: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
 
 
 def seed_artifact(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
     """POST /v1/artifacts — multipart. Smaller volume by default would
     be sensible; artifacts are heavier. Kept at --size for symmetry;
-    tune via --planes if you want to skip."""
+    tune via --planes if you want to skip.
+
+    Idempotency-on-retry: artifact storage is content-addressed by
+    SHA256 of the blob; same --seed produces the same bytes so the
+    server dedupes on re-run."""
     ns = f"{cfg.namespace_prefix}/artifact"
     ok = 0
+    backoff_rng = random.Random(cfg.seed ^ 0xA57)
     for i in range(cfg.size):
         # Multi-section markdown so the chunker has work to do.
         content = (
@@ -359,14 +486,15 @@ def seed_artifact(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> 
             "chunker": "markdown-headings-v1",
         }
         files = {"file": (f"perf-seeded-{i:06d}.md", content, "text/markdown")}
-        try:
-            r = client.post("/artifacts", data=data, files=files)
-            r.raise_for_status()
+        r = post_with_backoff(client, "/artifacts", rng=backoff_rng, data=data, files=files)
+        if r is not None and r.is_success:
             ok += 1
-        except httpx.HTTPError as exc:
-            log.warning("artifact %d failed: %s", i, exc)
+        elif r is not None:
+            log.warning("artifact %d: %d %s", i, r.status_code, r.text[:160])
+        else:
+            log.warning("artifact %d: skipped (transport error or 429 exhaustion)", i)
         if i and i % 250 == 0:
-            log.info("artifact: %d / %d", i, cfg.size)
+            log.info("artifact: %d / %d (ok=%d)", i, cfg.size, ok)
     return ok
 
 
