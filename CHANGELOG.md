@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/ericmey/musubi/compare/v0.5.0...v0.5.1) (2026-04-23)
+
+
+### Bug Fixes
+
+* **retrieve:** skip sparse prefetch on dense-only collections (closes [#208](https://github.com/ericmey/musubi/issues/208)) ([#212](https://github.com/ericmey/musubi/issues/212)) ([98c658e](https://github.com/ericmey/musubi/commit/98c658e7afe270f70063d9cd3586dd3bdedad3a0))
+
 ## [0.5.0](https://github.com/ericmey/musubi/compare/v0.4.0...v0.5.0) (2026-04-23)
 
 
