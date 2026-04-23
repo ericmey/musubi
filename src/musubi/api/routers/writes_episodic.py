@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from qdrant_client import QdrantClient, models
 
 from musubi.api.auth import require_auth
@@ -15,6 +15,26 @@ from musubi.planes.episodic import EpisodicPlane
 from musubi.settings import Settings
 from musubi.types.common import Err, Ok
 from musubi.types.episodic import EpisodicMemory
+
+
+def _build_episodic(**kwargs: object) -> EpisodicMemory:
+    """Construct an :class:`EpisodicMemory` from request-supplied values.
+
+    A direct ``EpisodicMemory(**kwargs)`` call raises
+    :class:`pydantic.ValidationError` on a bad namespace / importance /
+    tags value. Since this is request-driven data we translate that to
+    a 422 BAD_REQUEST — the same status FastAPI emits when the body
+    itself fails schema validation. See the note in ``app.py`` about why
+    we don't install a global handler for ``ValidationError``."""
+    try:
+        return EpisodicMemory(**kwargs)  # type: ignore[arg-type]
+    except ValidationError as exc:
+        raise APIError(
+            status_code=422,
+            code="BAD_REQUEST",
+            detail=str(exc),
+            hint="check the request body against the OpenAPI spec",
+        ) from exc
 
 
 def _check_body_scope(request: Request, namespace: str, settings: Settings) -> None:
@@ -96,15 +116,14 @@ async def capture(
     settings: Settings = Depends(get_settings_dep),
 ) -> CaptureResponse:
     _check_body_scope(request, body.namespace, settings)
-    saved = await plane.create(
-        EpisodicMemory(
-            namespace=body.namespace,
-            content=body.content,
-            summary=body.summary,
-            tags=body.tags,
-            importance=body.importance,
-        )
+    memory = _build_episodic(
+        namespace=body.namespace,
+        content=body.content,
+        summary=body.summary,
+        tags=body.tags,
+        importance=body.importance,
     )
+    saved = await plane.create(memory)
     response = CaptureResponse(object_id=saved.object_id, state=saved.state)
     request.state.idempotency_response = response.model_dump()
     return response
@@ -125,15 +144,14 @@ async def batch_capture(
     _check_body_scope(request, body.namespace, settings)
     out: list[str] = []
     for item in body.items:
-        saved = await plane.create(
-            EpisodicMemory(
-                namespace=body.namespace,
-                content=item.content,
-                summary=item.summary,
-                tags=item.tags,
-                importance=item.importance,
-            )
+        memory = _build_episodic(
+            namespace=body.namespace,
+            content=item.content,
+            summary=item.summary,
+            tags=item.tags,
+            importance=item.importance,
         )
+        saved = await plane.create(memory)
         out.append(saved.object_id)
     return BatchCaptureResponse(object_ids=out)
 
