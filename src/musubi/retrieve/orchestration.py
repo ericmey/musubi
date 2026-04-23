@@ -29,6 +29,15 @@ from musubi.types.common import Err, LifecycleState, Ok, Result
 logger = logging.getLogger(__name__)
 
 
+class NamespaceTarget(BaseModel):
+    """One concrete (namespace, plane) target produced by the router's
+    shape resolution. 3-segment body → a single target; 2-segment body
+    → one target per plane. Orchestration iterates these."""
+
+    namespace: str = Field(min_length=1)
+    plane: str = Field(min_length=1)
+
+
 class RetrievalQuery(BaseModel):
     namespace: str = Field(min_length=1)
     query_text: str = Field(min_length=1)
@@ -39,6 +48,13 @@ class RetrievalQuery(BaseModel):
     include_archived: bool = False
     presences: list[str] | None = None
     state_filter: list[LifecycleState] | None = None
+    #: Per-plane namespace fanout. When set, each target drives one
+    #: single-plane pipeline run and results are merged by score.
+    #: Set by the router from :func:`retrieve._resolve_targets` — callers
+    #: that use the orchestrator directly can leave it unset and the
+    #: orchestrator derives a default single-plane target from the
+    #: top-level ``namespace``.
+    namespace_targets: list[NamespaceTarget] | None = None
 
 
 class RetrievalResult(BaseModel):
@@ -82,9 +98,123 @@ async def retrieve(
         except ValidationError as e:
             return Err(error=RetrievalError(kind="bad_query", detail=str(e)))
 
-    # Basic auth check handled upstream, here we just dispatch
+    # Basic auth check handled upstream, here we just dispatch.
+    # Expand the query into per-plane pipeline runs when the router
+    # supplied explicit `namespace_targets`; otherwise derive a single
+    # target from the top-level namespace (legacy path — orchestrator
+    # callers that don't go through the HTTP router).
+    if parsed_query.namespace_targets:
+        targets = [(t.namespace, t.plane) for t in parsed_query.namespace_targets]
+    else:
+        derived_plane = (
+            parsed_query.namespace.rsplit("/", 1)[-1]
+            if parsed_query.namespace.count("/") == 2
+            else (parsed_query.planes[0] if parsed_query.planes else "episodic")
+        )
+        targets = [(parsed_query.namespace, derived_plane)]
+
+    # Single-target fast path preserves the current behaviour bit-for-
+    # bit (one pipeline run, one Qdrant query per collection, no merge).
+    # Multi-target path runs the same pipeline per target concurrently
+    # and merges ranked results by score at the end.
+    if len(targets) == 1:
+        return await _run_single(
+            client=client,
+            embedder=embedder,
+            reranker=reranker,
+            llm=llm,
+            parsed_query=parsed_query,
+            namespace=targets[0][0],
+            plane=targets[0][1],
+            now=now,
+        )
+
+    # Fan out — one pipeline run per (namespace, plane) target. Each
+    # pipeline enforces its own per-mode timeout; `gather(return_exceptions)`
+    # so a single plane failing doesn't blank the whole cross-plane
+    # response. Consistent with the plugin fanout ADR 0028 was written
+    # against — except the aggregation happens server-side now.
+    sub_queries = [
+        parsed_query.model_copy(
+            update={"namespace": ns, "planes": [plane], "namespace_targets": None}
+        )
+        for ns, plane in targets
+    ]
+    results_per_target = await asyncio.gather(
+        *(
+            retrieve(
+                client=client,
+                embedder=embedder,
+                reranker=reranker,
+                query=sub,
+                llm=llm,
+                now=now,
+            )
+            for sub in sub_queries
+        ),
+        return_exceptions=True,
+    )
+
+    merged: list[RetrievalResult] = []
+    seen: set[str] = set()
+    transient_any = False
+    internal_err: RetrievalError | None = None
+    for outcome in results_per_target:
+        if isinstance(outcome, Err):
+            # Per-plane failures: transient/timeout degrades per-plane;
+            # an internal error from *any* plane surfaces as a 5xx
+            # because the merged response would silently under-report.
+            if outcome.error.kind == "timeout":
+                transient_any = True
+                continue
+            if outcome.error.kind in ("internal", "bad_query"):
+                internal_err = outcome.error
+                break
+            continue
+        if isinstance(outcome, Ok):
+            for hit in outcome.value:
+                if hit.object_id in seen:
+                    continue
+                seen.add(hit.object_id)
+                merged.append(hit)
+            continue
+        if isinstance(outcome, BaseException):
+            logger.warning("cross-plane retrieve per-plane exception: %r", outcome)
+            internal_err = RetrievalError(kind="internal", detail=str(outcome))
+            break
+
+    if internal_err is not None:
+        return Err(error=internal_err)
+    if not merged and transient_any:
+        return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
+
+    merged.sort(key=lambda r: r.score, reverse=True)
+    return Ok(value=merged[: parsed_query.limit])
+
+
+async def _run_single(
+    *,
+    client: QdrantClient,
+    embedder: Embedder,
+    reranker: TEIRerankerClient | None,
+    llm: DeepRetrievalLLM | None,
+    parsed_query: RetrievalQuery,
+    namespace: str,
+    plane: str,
+    now: float | None,
+) -> Result[list[RetrievalResult], RetrievalError]:
+    """Single-target pipeline dispatch. Extracted from :func:`retrieve`
+    so cross-plane fanout can call it per target without re-parsing
+    the query shape. Behaviour is identical to the pre-fanout code —
+    a single call with ``planes=[plane]`` and the given namespace."""
+
     mode = parsed_query.mode
     warnings: list[str] = []
+    # Force single-plane, single-namespace for this leg. The input
+    # `parsed_query.planes` may carry the full cross-plane list from
+    # the top-level query; we use only the plane this leg owns.
+    legs_planes: list[str] = [plane]
+    target_namespace = namespace
 
     try:
         if mode == "blended":
@@ -96,11 +226,11 @@ async def retrieve(
                 )
 
             blended_query = BlendedRetrievalQuery(
-                namespace=parsed_query.namespace,
+                namespace=target_namespace,
                 query_text=parsed_query.query_text,
                 mode="deep",  # Blended internally runs deep
                 limit=parsed_query.limit,
-                planes=parsed_query.planes,
+                planes=legs_planes,
                 include_lineage=parsed_query.include_lineage,
                 state_filter=parsed_query.state_filter,
                 presences=parsed_query.presences,
@@ -139,11 +269,11 @@ async def retrieve(
                 )
 
             deep_query = DeepRetrievalQuery(
-                namespace=parsed_query.namespace,
+                namespace=target_namespace,
                 query_text=parsed_query.query_text,
                 mode="deep",
                 limit=parsed_query.limit,
-                planes=parsed_query.planes,
+                planes=legs_planes,
                 include_lineage=parsed_query.include_lineage,
                 state_filter=parsed_query.state_filter,
             )
@@ -178,9 +308,9 @@ async def retrieve(
                 run_fast_retrieve(
                     client=client,
                     embedder=embedder,
-                    namespace=parsed_query.namespace,
+                    namespace=target_namespace,
                     query=parsed_query.query_text,
-                    collections=["musubi_" + p for p in parsed_query.planes],
+                    collections=["musubi_" + p for p in legs_planes],
                     limit=parsed_query.limit,
                     now=now,
                     state_filter=cast(Any, states),
@@ -198,7 +328,7 @@ async def retrieve(
                 results.append(
                     RetrievalResult(
                         object_id=hit.object_id,
-                        namespace=parsed_query.namespace,
+                        namespace=target_namespace,
                         plane=str(hit.payload.get("plane", "episodic")),
                         title=hit.payload.get("title"),
                         snippet=hit.snippet,

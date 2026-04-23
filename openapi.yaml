@@ -1,7 +1,8 @@
 openapi: 3.1.0
 info:
   title: Musubi Core API
-  description: The canonical HTTP surface over Musubi Core. Read + write; full v0.1 surface.
+  description: The canonical HTTP surface over Musubi Core. Read + write; full v0.1
+    surface.
   version: 0.1.0
 paths:
   /v1/ops/health:
@@ -9,8 +10,9 @@ paths:
       tags:
       - ops
       summary: Health
-      description: "Liveness probe. Always 200 if the process can serve requests.\nReadiness \u2014 does the process have\
-        \ working dependencies \u2014 is on\n``/v1/ops/status``."
+      description: "Liveness probe. Always 200 if the process can serve requests.\n\
+        Readiness \u2014 does the process have working dependencies \u2014 is on\n\
+        ``/v1/ops/status``."
       operationId: health_v1_ops_health_get
       responses:
         '200':
@@ -24,11 +26,7 @@ paths:
       tags:
       - ops
       summary: Status
-      description: 'Per-component readiness. Tries a cheap operation against each
-
-        dependency (Qdrant collections list; TEI / Ollama health checks land
-
-        in slice-ops-observability).'
+      description: "Per-component readiness \u2014 Qdrant + every TEI service + Ollama."
       operationId: status_v1_ops_status_get
       responses:
         '200':
@@ -42,14 +40,7 @@ paths:
       tags:
       - ops
       summary: Metrics
-      description: 'Prometheus-format metrics passthrough.
-
-
-        The metrics surface ships in slice-ops-observability; this route
-
-        returns an empty body with the correct content type so adapters can
-
-        point Prometheus at it without errors.'
+      description: Prometheus-format metrics from the in-process registry.
       operationId: metrics_v1_ops_metrics_get
       responses:
         '200':
@@ -62,34 +53,40 @@ paths:
       tags:
       - ops
       summary: Trigger Synthesis
-      description: 'Operator-scope debug endpoint that drives one synthesis tick
-        on demand. Test-hook for the integration harness (Issue #119); restricted
-        to operator-scope tokens because the synthesis loop is expensive. Production
-        workers run synthesis on their own tick loop; this endpoint exists so the
-        integration suite can deterministically exercise the path without an embedded
-        worker.'
+      description: 'Drive one synthesis tick on demand.
+
+
+        Test-hook for the integration harness (Issue #119). Restricted to
+
+        operator-scope tokens; the synthesis loop is expensive enough that
+
+        arbitrary callers shouldn''t trigger it. Production workers run
+
+        synthesis on their own tick loop; this endpoint exists so the
+
+        integration suite can deterministically exercise the path without
+
+        an embedded worker.'
       operationId: debug_trigger_synthesis.bucket=default
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              type: object
-              required: [namespace]
-              properties:
-                namespace:
-                  type: string
-                simulate_ollama_offline:
-                  type: boolean
-                  default: false
+              $ref: '#/components/schemas/TriggerSynthesisRequest'
+        required: true
       responses:
         '200':
           description: Successful Response
           content:
             application/json:
-              schema: {}
-        '501':
-          description: Real Ollama client impl unavailable; pass simulate_ollama_offline=true.
+              schema:
+                $ref: '#/components/schemas/TriggerSynthesisResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/memories/{object_id}:
     get:
       tags:
@@ -126,10 +123,12 @@ paths:
       tags:
       - episodic-writes
       summary: Patch Episodic
-      description: "Update non-state metadata on an existing episodic row.\n\nState changes are forbidden on this surface\
-        \ \u2014 they go through\nPOST /v1/lifecycle/transition so the lifecycle ledger records every\nstate mutation. Tags\
-        \ / importance / summary are non-state metadata\nand land via a payload-only ``set_payload`` (analogous to the\nenrichment\
-        \ writes the maturation sweep does \u2014 see\n:mod:`musubi.lifecycle.maturation` for precedent)."
+      description: "Update non-state metadata on an existing episodic row.\n\nState\
+        \ changes are forbidden on this surface \u2014 they go through\nPOST /v1/lifecycle/transition\
+        \ so the lifecycle ledger records every\nstate mutation. Tags / importance\
+        \ / summary are non-state metadata\nand land via a payload-only ``set_payload``\
+        \ (analogous to the\nenrichment writes the maturation sweep does \u2014 see\n\
+        :mod:`musubi.lifecycle.maturation` for precedent)."
       operationId: patch_episodic.bucket=default
       parameters:
       - name: object_id
@@ -167,9 +166,11 @@ paths:
       tags:
       - episodic-writes
       summary: Delete Episodic
-      description: "Soft-delete by default (state \u2192 archived via the canonical\n``transition()`` primitive). ``?hard=true``\
-        \ requires operator\nscope and removes the point from Qdrant entirely.\n\nThe operator-scope check on the hard path\
-        \ reads the\n:class:`AuthContext` that the outer ``require_auth`` dependency has\nalready attached to ``request.state.auth``."
+      description: "Soft-delete by default (state \u2192 archived via the canonical\n\
+        ``transition()`` primitive). ``?hard=true`` requires operator\nscope and removes\
+        \ the point from Qdrant entirely.\n\nThe operator-scope check on the hard\
+        \ path reads the\n:class:`AuthContext` that the outer ``require_auth`` dependency\
+        \ has\nalready attached to ``request.state.auth``."
       operationId: delete_episodic.bucket=default
       parameters:
       - name: object_id
@@ -601,7 +602,8 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ArtifactChunk'
-                title: Response Get Artifact Chunks V1 Artifacts  Object Id  Chunks Get
+                title: Response Get Artifact Chunks V1 Artifacts  Object Id  Chunks
+                  Get
         '422':
           description: Validation Error
           content:
@@ -613,10 +615,12 @@ paths:
       tags:
       - artifact
       summary: Get Artifact Blob
-      description: "Stream the raw bytes of an artifact.\n\nThe artifact plane stores blobs out-of-band (filesystem or S3\
-        \ in\nproduction). For this read-side slice we serve a placeholder body \u2014\nthe production wiring of blob storage\
-        \ lives in slice-plane-artifact's\nfollow-up. The route + auth gate + 404 path are exercised here so\nadapters can\
-        \ call the endpoint."
+      description: "Stream the raw bytes of an artifact.\n\nBytes are served from\
+        \ ``settings.artifact_blob_path/<namespace>/<object_id>``\n\u2014 the same\
+        \ layout the cleanup worker walks (ops/cleanup.py). The\nwrite path lives\
+        \ in ``writes_artifact.upload_artifact``. Content-\naddressed storage (by\
+        \ sha256, S3 backend) is a follow-up; this\nslice is the minimum viable round-trip\
+        \ so adapters can retrieve\nwhat they uploaded."
       operationId: get_artifact_blob_v1_artifacts__object_id__blob_get
       parameters:
       - name: object_id
@@ -710,33 +714,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /v1/thoughts/stream:
-    get:
-      summary: Stream Thoughts
-      operationId: stream_thoughts_bucket_default
-      parameters:
-        - required: true
-          schema:
-            type: string
-          name: namespace
-          in: query
-        - required: false
-          schema:
-            type: string
-          name: include
-          in: query
-        - required: false
-          schema:
-            type: string
-          name: Last-Event-ID
-          in: header
-      responses:
-        '200':
-          description: Successful Response
-        '403':
-          description: Forbidden
-        '503':
-          description: Service Unavailable
   /v1/thoughts/check:
     post:
       tags:
@@ -769,9 +746,7 @@ paths:
       summary: Thought History
       description: 'First-cut: history is a namespace scroll. Semantic search will
 
-        land once slice-retrieval-fast wires its dense path through the API
-
-        in slice-api-v0-write.'
+        land once slice-retrieval-fast wires its dense path through the API.'
       operationId: thought_history_v1_thoughts_history_post
       requestBody:
         content:
@@ -786,6 +761,60 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ThoughtListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/thoughts/stream:
+    get:
+      tags:
+      - thoughts
+      summary: Stream Thoughts
+      description: 'SSE endpoint for real-time thought delivery.
+
+
+        Replay semantics via Last-Event-ID are declared in the spec but deferred to
+
+        the integration harness (needs a real Qdrant with live range queries; mocked
+
+        Qdrant in unit tests doesn''t model lex-sorted epoch-range scrolls). The
+
+        header is accepted and validated but currently the stream begins from the
+
+        live broker queue only. See slice-api-thoughts-stream work log.'
+      operationId: stream_thoughts.bucket=default
+      parameters:
+      - name: namespace
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Namespace
+      - name: include
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Include
+      - name: Last-Event-ID
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last-Event-Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                title: Response Stream Thoughts.Bucket=Default
         '422':
           description: Validation Error
           content:
@@ -890,9 +919,10 @@ paths:
       tags:
       - contradictions
       summary: List Contradictions
-      description: "Concept rows whose ``contradicts`` field is non-empty.\n\nCross-namespace by default (operator scope);\
-        \ namespace-scoped when\n``namespace`` is supplied. The data source is the concept plane\npayload \u2014 concepts\
-        \ mark each other as contradicting during synthesis\n(slice-lifecycle-synthesis)."
+      description: "Concept rows whose ``contradicts`` field is non-empty.\n\nCross-namespace\
+        \ by default (operator scope); namespace-scoped when\n``namespace`` is supplied.\
+        \ The data source is the concept plane\npayload \u2014 concepts mark each\
+        \ other as contradicting during synthesis\n(slice-lifecycle-synthesis)."
       operationId: list_contradictions_v1_contradictions_get
       parameters:
       - name: namespace
@@ -942,8 +972,9 @@ paths:
       tags:
       - namespaces
       summary: Namespace Stats
-      description: "Counts per plane for the given namespace + last activity epoch.\n\nThe ``namespace_path`` arrives URL-encoded\
-        \ (slashes \u2192 ``%2F``) per\nstandard FastAPI ``:path`` handling."
+      description: "Counts per plane for the given namespace + last activity epoch.\n\
+        \nThe ``namespace_path`` arrives URL-encoded (slashes \u2192 ``%2F``) per\n\
+        standard FastAPI ``:path`` handling."
       operationId: namespace_stats_v1_namespaces__namespace_path__stats_get
       parameters:
       - name: namespace_path
@@ -1032,8 +1063,9 @@ paths:
       tags:
       - concept-writes
       summary: Promote Concept
-      description: "Operator-forced promotion. Writes the matured\u2192promoted transition\non the concept with the supplied\
-        \ ``promoted_to`` curated id.\n\nRequires operator scope (read from the auth context attached by the\ninline ``require_auth``\
+      description: "Operator-forced promotion. Writes the matured\u2192promoted transition\n\
+        on the concept with the supplied ``promoted_to`` curated id.\n\nRequires operator\
+        \ scope (read from the auth context attached by the\ninline ``require_auth``\
         \ invocation)."
       operationId: promote_concept.bucket=transition
       parameters:
@@ -1313,7 +1345,8 @@ components:
       - start_offset
       - end_offset
       title: ArtifactChunk
-      description: "One chunk of a source artifact. Not a MusubiObject \u2014 lives inside one."
+      description: "One chunk of a source artifact. Not a MusubiObject \u2014 lives\
+        \ inside one."
     ArtifactCreateResponse:
       properties:
         object_id:
@@ -1355,8 +1388,8 @@ components:
       required:
       - artifact_id
       title: ArtifactRef
-      description: "A pointer into a ``SourceArtifact`` \u2014 whole artifact or a specific chunk.\n\nUsed by ``MemoryObject.supported_by``\
-        \ to cite evidence."
+      description: "A pointer into a ``SourceArtifact`` \u2014 whole artifact or a\
+        \ specific chunk.\n\nUsed by ``MemoryObject.supported_by`` to cite evidence."
     BatchCaptureRequest:
       properties:
         namespace:
@@ -1405,6 +1438,12 @@ components:
           minimum: 1.0
           title: Importance
           default: 5
+        created_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Created At
       type: object
       required:
       - content
@@ -1435,6 +1474,12 @@ components:
           minimum: 1.0
           title: Importance
           default: 5
+        created_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Created At
       type: object
       required:
       - namespace
@@ -1751,9 +1796,10 @@ components:
       - vault_path
       - body_hash
       title: CuratedKnowledge
-      description: "A curated, human-authored knowledge note mirrored from the vault.\n\n``vault_path`` points at the ``.md``\
-        \ file in the vault; ``body_hash`` is the\nsha256 of the rendered markdown body (frontmatter excluded) \u2014 used\
-        \ by the\nwatcher to detect real edits vs. metadata-only churn."
+      description: "A curated, human-authored knowledge note mirrored from the vault.\n\
+        \n``vault_path`` points at the ``.md`` file in the vault; ``body_hash`` is\
+        \ the\nsha256 of the rendered markdown body (frontmatter excluded) \u2014\
+        \ used by the\nwatcher to detect real edits vs. metadata-only churn."
     EpisodicMemory:
       properties:
         object_id:
@@ -1916,16 +1962,29 @@ components:
         source_context:
           type: string
           title: Source Context
-          description: Freeform origin hint, e.g. 'Claude Code session 2026-04-17 14:23'.
+          description: Freeform origin hint, e.g. 'Claude Code session 2026-04-17
+            14:23'.
           default: ''
+        topics:
+          items:
+            type: string
+          type: array
+          title: Topics
+        importance_last_scored_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Importance Last Scored At
       additionalProperties: false
       type: object
       required:
       - namespace
       - content
       title: EpisodicMemory
-      description: "One captured event \u2014 a message, a tool call, a system signal.\n\n``event_at`` is when the thing happened\
-        \ in the world. ``ingested_at`` is when\nMusubi learned about it (typically == ``created_at``)."
+      description: "One captured event \u2014 a message, a tool call, a system signal.\n\
+        \n``event_at`` is when the thing happened in the world. ``ingested_at`` is\
+        \ when\nMusubi learned about it (typically == ``created_at``)."
     HTTPValidationError:
       properties:
         detail:
@@ -2121,8 +2180,9 @@ components:
       additionalProperties: true
       type: object
       title: PatchCuratedRequest
-      description: "Non-state metadata only \u2014 same convention as PATCH /v1/memories.\n\n``extra=\"allow\"`` so the handler\
-        \ can return a typed BAD_REQUEST\nnaming the forbidden field instead of a generic 422."
+      description: "Non-state metadata only \u2014 same convention as PATCH /v1/memories.\n\
+        \n``extra=\"allow\"`` so the handler can return a typed BAD_REQUEST\nnaming\
+        \ the forbidden field instead of a generic 422."
     PatchEpisodicRequest:
       properties:
         tags:
@@ -2371,9 +2431,11 @@ components:
       - size_bytes
       - chunker
       title: SourceArtifact
-      description: "A raw uploaded file (PDF, VTT, markdown dump, etc.).\n\n``state`` tracks the *lifecycle* axis (archived/matured),\
-        \ while\n``artifact_state`` tracks the *indexing* axis (indexing/indexed/failed). The\ntwo are orthogonal \u2014 an\
-        \ artifact is typically ``state=matured`` its whole\nlife and moves only on the indexing axis."
+      description: "A raw uploaded file (PDF, VTT, markdown dump, etc.).\n\n``state``\
+        \ tracks the *lifecycle* axis (archived/matured), while\n``artifact_state``\
+        \ tracks the *indexing* axis (indexing/indexed/failed). The\ntwo are orthogonal\
+        \ \u2014 an artifact is typically ``state=matured`` its whole\nlife and moves\
+        \ only on the indexing axis."
     StatusResponse:
       properties:
         status:
@@ -2556,6 +2618,22 @@ components:
           - type: string
           - type: 'null'
           title: Promotion Rejected Reason
+        topics:
+          items:
+            type: string
+          type: array
+          title: Topics
+        promotion_attempts:
+          type: integer
+          minimum: 0.0
+          title: Promotion Attempts
+          default: 0
+        last_reinforced_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Last Reinforced At
       additionalProperties: false
       type: object
       required:
@@ -2564,10 +2642,12 @@ components:
       - title
       - synthesis_rationale
       title: SynthesizedConcept
-      description: 'A hypothesis bridging episodic evidence and potential curated knowledge.
+      description: 'A hypothesis bridging episodic evidence and potential curated
+        knowledge.
 
 
-        ``merged_from`` (inherited from ``MemoryObject``) lists the EpisodicMemory ids
+        ``merged_from`` (inherited from ``MemoryObject``) lists the EpisodicMemory
+        ids
 
         the concept was synthesised from; ``synthesis_rationale`` is the LLM''s
 
@@ -2754,6 +2834,62 @@ components:
       - to_state
       - version
       title: TransitionResponseBody
+    TriggerSynthesisRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+          description: Tenant-scoped namespace prefix (e.g. 'eric/integration-test').
+            The synthesis loop operates on '<prefix>/episodic' + '<prefix>/concept'.
+        simulate_ollama_offline:
+          type: boolean
+          title: Simulate Ollama Offline
+          description: "Wire a stub Ollama client that always returns None (simulates\
+            \ an unreachable LLM). When false, the endpoint returns 501 \u2014 a real\
+            \ Ollama client impl is future work (there's no production OllamaClient\
+            \ in the codebase yet; the Protocol is satisfied by workers only)."
+          default: false
+      type: object
+      required:
+      - namespace
+      title: TriggerSynthesisRequest
+      description: Debug-endpoint payload for :func:`trigger_synthesis`.
+    TriggerSynthesisResponse:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        memories_selected:
+          type: integer
+          title: Memories Selected
+        clusters_formed:
+          type: integer
+          title: Clusters Formed
+        concepts_created:
+          type: integer
+          title: Concepts Created
+        concepts_reinforced:
+          type: integer
+          title: Concepts Reinforced
+        contradictions_detected:
+          type: integer
+          title: Contradictions Detected
+        cursor_advanced_to:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Cursor Advanced To
+      type: object
+      required:
+      - namespace
+      - memories_selected
+      - clusters_formed
+      - concepts_created
+      - concepts_reinforced
+      - contradictions_detected
+      - cursor_advanced_to
+      title: TriggerSynthesisResponse
+      description: Same shape as ``musubi.lifecycle.synthesis.SynthesisReport``.
     ValidationError:
       properties:
         loc:
