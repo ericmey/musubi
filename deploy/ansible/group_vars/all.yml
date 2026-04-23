@@ -36,7 +36,7 @@ musubi_core_port: 8100
 # cosign-signed + SBOM-attested + Trivy-CRITICAL-scanned. Bump this after
 # every release — the release note on the GitHub tag carries the new
 # digest line ready to paste.
-musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:fcccb7f437ad6529d8db5f96369a5d996ee03da045fb60cb8a9bf1721ec09ed5"
+musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:e76668fcdb836771c60c45cd225febb57bf4190b0289cddfc27dabec146f820b"
 musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
 # compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),
