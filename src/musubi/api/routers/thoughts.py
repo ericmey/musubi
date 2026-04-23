@@ -150,7 +150,18 @@ async def _thoughts_event_generator(
         broker.unsubscribe(sub)
 
 
-@router.get("/stream", operation_id="stream_thoughts.bucket=default")
+@router.get(
+    "/stream",
+    operation_id="stream_thoughts.bucket=default",
+    responses={
+        200: {
+            "description": "Server-sent event stream of delivered thoughts.",
+            "content": {"text/event-stream": {"schema": {"type": "string"}}},
+        },
+        403: {"description": "Caller does not hold read scope for `namespace`."},
+        503: {"description": "Thought broker unavailable."},
+    },
+)
 async def stream_thoughts(
     request: Request,
     namespace: str = Query(...),

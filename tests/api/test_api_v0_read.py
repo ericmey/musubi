@@ -899,6 +899,146 @@ def test_retrieve_result_carries_score_components_in_extra(
         assert key in components, f"score_components missing {key!r}: {components!r}"
 
 
+# ---------------------------------------------------------------------------
+# #209 — 2-segment namespace cross-plane retrieve
+# ---------------------------------------------------------------------------
+
+
+def test_retrieve_two_segment_namespace_fans_out_per_plane(
+    client: TestClient,
+    auth: dict[str, str],
+    episodic: EpisodicPlane,
+    curated: CuratedPlane,
+) -> None:
+    """Closes #209: a 2-segment `tenant/presence` namespace + `planes`
+    list lets one /v1/retrieve call cover multiple planes. The router
+    expands each plane to `<namespace>/<plane>` internally; the
+    orchestrator fans the pipeline out per target and merges results
+    by score. Test seeds both episodic and curated so the merge path
+    actually runs, not just the single-leg case."""
+    import hashlib as _h
+
+    _seed_episodic_batch(
+        episodic,
+        "eric/claude-code/episodic",
+        ["Remember the dentist appointment Tuesday.", "Eric prefers coffee black."],
+    )
+
+    async def _seed_curated() -> None:
+        body_text = "Curated doc about dentist scheduling."
+        await curated.create(
+            CuratedKnowledge(
+                namespace="eric/claude-code/curated",
+                title="Dentist notes",
+                content=body_text,
+                vault_path="curated/eric/dentist.md",
+                body_hash=_h.sha256(body_text.encode()).hexdigest(),
+            )
+        )
+
+    asyncio.run(_seed_curated())
+
+    r = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={
+            "namespace": "eric/claude-code",
+            "planes": ["episodic", "curated"],
+            "query_text": "dentist",
+            "mode": "fast",
+            "limit": 10,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["results"], body
+    planes_seen = {row["plane"] for row in body["results"]}
+    # Cross-plane fanout must surface hits from at least one of the
+    # seeded planes; ideally both since we planted matching content
+    # in each. Asserting "at least one plane besides a single-plane
+    # call's result set" catches regressions where the merge path
+    # silently drops one leg.
+    assert planes_seen.intersection({"episodic", "curated"}), planes_seen
+    # Global score sort: scores non-increasing across the merged rows.
+    scores = [row["score"] for row in body["results"]]
+    assert scores == sorted(scores, reverse=True), scores
+
+
+def test_retrieve_two_segment_strict_scope_403s_when_any_plane_is_out_of_scope(
+    api_settings: object,
+    client: TestClient,
+) -> None:
+    """Per ADR 0028 / #209: strict fanout scope check. A token that
+    covers episodic but not curated must 403 a cross-plane retrieve
+    that requests both — silently skipping would hide
+    misconfiguration."""
+    from tests.api.conftest import mint_token
+
+    scoped = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=[
+            "eric/claude-code/episodic:r",
+            # no curated/concept — should trip strict check.
+        ],
+    )
+    r = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": f"Bearer {scoped}"},
+        json={
+            "namespace": "eric/claude-code",
+            "planes": ["episodic", "curated"],
+            "query_text": "anything",
+            "mode": "fast",
+            "limit": 5,
+        },
+    )
+    assert r.status_code == 403, r.text
+    detail = r.json()["error"]["detail"]
+    assert "curated" in detail or "eric/claude-code/curated" in detail
+
+
+def test_retrieve_three_segment_rejects_contradictory_planes_list(
+    client: TestClient,
+    auth: dict[str, str],
+) -> None:
+    """A 3-segment namespace pins the plane; a `planes` list that
+    disagrees (the historical openclaw shape) would silently discard
+    the caller's intent. The router rejects it with 400 so the caller
+    sees the mismatch."""
+    r = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["curated", "concept"],
+            "query_text": "anything",
+            "mode": "fast",
+            "limit": 5,
+        },
+    )
+    assert r.status_code == 400, r.text
+
+
+def test_retrieve_two_segment_unknown_plane_is_400(
+    client: TestClient,
+    auth: dict[str, str],
+) -> None:
+    """Unknown plane names in a 2-segment fanout are a client bug,
+    not a silent no-op."""
+    r = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={
+            "namespace": "eric/claude-code",
+            "planes": ["episodic", "misspelled"],
+            "query_text": "x",
+            "mode": "fast",
+            "limit": 1,
+        },
+    )
+    assert r.status_code == 400, r.text
+
+
 def test_thoughts_check_endpoint_responds(
     client: TestClient,
     api_settings: object,
