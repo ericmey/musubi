@@ -24,10 +24,14 @@ musubi_data_dirs:
 musubi_core_port: 8100
 # Musubi Core image. Pinned by immutable digest.
 #
-# Current pin: post-#198 (TEI connection pooling fix). This is the digest
-# validated end-to-end through Gates 1-4 on 2026-04-23 against the live
-# musubi.mey.house box — baseline + load at 3 VUs + spike + 30-minute soak
-# all clean, no memory drift.
+# Current pin: v0.4.0 release (#187). Rolls up #201 (ValidationError
+# → 422), #202 (backup/restore playbook repair), #203 (operator-gated
+# created_at override), and #204 (batch_create + longer-wins merge +
+# dedup-probe vector preservation). Not yet re-validated through
+# Gates 1-4 on the live box — the previous digest (post-#198,
+# sha256:4c51335e) was Gate-1/Gate-2 clean on 2026-04-23, and the
+# new code on top is behavior-preserving for the retrieve hot path.
+# Re-run Gates 1-4 after deploy before declaring pre-prod done.
 #
 # Produced by `.github/workflows/publish-core-image.yml`; verified
 # cosign-signed + SBOM-attested + Trivy-CRITICAL-scanned. Bump this after
