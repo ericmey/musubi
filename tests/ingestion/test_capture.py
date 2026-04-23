@@ -48,6 +48,7 @@ from musubi.lifecycle import LifecycleEventSink
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
 from musubi.types.common import Err, Ok
+from musubi.types.episodic import EpisodicMemory
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -236,16 +237,65 @@ def test_dedup_merges_tag_union(service: CaptureService, plane: EpisodicPlane, n
     assert set(fetched.tags) == {"a", "b", "c"}
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-plane-episodic-content-merge-strategy: spec "
-    "calls for 'new content wins iff strictly longer'; the plane's "
-    "current reinforce always replaces with new content. Cross-slice "
-    "ticket "
-    "_inbox/cross-slice/slice-ingestion-capture-slice-plane-episodic-merge-strategy.md "
-    "tracks the plane-side follow-up to add a reinforce strategy parameter."
-)
-def test_dedup_keeps_longer_content() -> None:
-    """Bullet 10 — placeholder."""
+def test_dedup_keeps_longer_content(plane: EpisodicPlane, ns: str) -> None:
+    """Bullet 10 — spec § Step 4: on a dedup hit, keep the longer of
+    existing / new content. A short follow-up must not silently
+    overwrite an earlier detailed capture.
+
+    Closed by #142 — the plane now defaults ``merge_strategy`` to
+    ``longer-wins`` on ``create``.
+
+    Tests at the plane level because FakeEmbedder is content-hash-based:
+    two different texts produce different dense vectors and never meet
+    the dedup threshold, so service-level tests can't exercise the
+    reinforce path with non-identical content. We probe the merge rule
+    directly by feeding ``_reinforce`` two rows with differing content
+    lengths."""
+    long_content = "Eric said the alpha build of the telemetry harness went live at 03:12"
+    short_content = "Eric said the alpha build went live."
+
+    async def _probe(long_first: bool) -> EpisodicMemory:
+        first_text = long_content if long_first else short_content
+        second_text = short_content if long_first else long_content
+        first = asyncio.run_coroutine_threadsafe.__self__ if False else None  # noqa: F841 — placate mypy
+        existing = await plane.create(EpisodicMemory(namespace=ns, content=first_text))
+        # Compute vectors for the second call so we can drive _reinforce
+        # directly without needing the FakeEmbedder to produce a dedup
+        # hit (it won't).
+        dense = (await plane._embedder.embed_dense([second_text]))[0]
+        sparse = (await plane._embedder.embed_sparse([second_text]))[0]
+        new = EpisodicMemory(namespace=ns, content=second_text)
+        return plane._reinforce(existing=existing, new=new, dense=dense, sparse=sparse)
+
+    merged_long_first = asyncio.run(_probe(long_first=True))
+    assert merged_long_first.content == long_content, "long-first: longer existing should win"
+
+    merged_short_first = asyncio.run(_probe(long_first=False))
+    assert merged_short_first.content == long_content, "short-first: longer new should win"
+
+
+def test_reinforce_replace_strategy_preserves_new_content(plane: EpisodicPlane, ns: str) -> None:
+    """Explicit ``merge_strategy=replace`` must keep the new text even
+    when it's shorter — preserves the pre-spec behaviour for callers
+    that genuinely want always-new-wins (migration / replay)."""
+    long_content = "Eric said the alpha build of the telemetry harness went live at 03:12"
+    short_content = "Eric said the alpha build went live."
+
+    async def _run() -> EpisodicMemory:
+        existing = await plane.create(EpisodicMemory(namespace=ns, content=long_content))
+        dense = (await plane._embedder.embed_dense([short_content]))[0]
+        sparse = (await plane._embedder.embed_sparse([short_content]))[0]
+        new = EpisodicMemory(namespace=ns, content=short_content)
+        return plane._reinforce(
+            existing=existing,
+            new=new,
+            dense=dense,
+            sparse=sparse,
+            merge_strategy="replace",
+        )
+
+    merged = asyncio.run(_run())
+    assert merged.content == short_content
 
 
 def test_dedup_disabled_on_curated() -> None:
@@ -423,11 +473,11 @@ def test_capture_qdrant_retry_logic_succeeds_on_transient_failure(
     failures = {"count": 0}
     real_create = plane.create
 
-    async def flaky_create(memory: Any) -> Any:
+    async def flaky_create(memory: Any, **kw: Any) -> Any:
         if failures["count"] == 0:
             failures["count"] += 1
             raise TimeoutError("transient qdrant blip")
-        return await real_create(memory)
+        return await real_create(memory, **kw)
 
     plane.create = flaky_create  # type: ignore[method-assign]
     svc = CaptureService(plane=plane, sink=sink, idempotency_cache=cache)
@@ -447,7 +497,7 @@ def test_capture_qdrant_permanent_failure_returns_503(
 
     from typing import Any
 
-    async def always_fail(memory: Any) -> Any:
+    async def always_fail(memory: Any, **kw: Any) -> Any:
         raise TimeoutError("permanent qdrant outage")
 
     plane.create = always_fail  # type: ignore[method-assign]
@@ -478,25 +528,61 @@ def test_batch_capture_writes_each_row(
         assert len(r.value.object_id) == 27
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-plane-episodic-batch-create: requires a "
-    "new EpisodicPlane.batch_create(memories) method that does ONE TEI "
-    "embed call + ONE Qdrant upsert for the whole batch. Cross-slice "
-    "ticket "
-    "_inbox/cross-slice/slice-ingestion-capture-slice-plane-episodic-batch-create.md "
-    "tracks the plane-side follow-up; today's batch loops one-by-one."
-)
-def test_batch_capture_single_tei_embed_call() -> None:
-    """Bullet 20 — placeholder."""
+def test_batch_capture_single_tei_embed_call(
+    service: CaptureService, ns: str, embedder: FakeEmbedder
+) -> None:
+    """Bullet 20 — a 5-item batch_capture hits TEI exactly ONCE for
+    dense embeddings (and once for sparse), not 5 times. The plane's
+    ``batch_create`` folds all vectors into a single embedder call
+    per modality (#141)."""
+    dense_calls = {"count": 0}
+    sparse_calls = {"count": 0}
+    real_dense = embedder.embed_dense
+    real_sparse = embedder.embed_sparse
+
+    async def counting_dense(texts: list[str]) -> list[list[float]]:
+        dense_calls["count"] += 1
+        return await real_dense(texts)
+
+    async def counting_sparse(texts: list[str]) -> list[dict[int, float]]:
+        sparse_calls["count"] += 1
+        return await real_sparse(texts)
+
+    embedder.embed_dense = counting_dense  # type: ignore[method-assign]
+    embedder.embed_sparse = counting_sparse  # type: ignore[method-assign]
+
+    items = [_req(ns, content=f"batch-tei-{i}") for i in range(5)]
+    results = asyncio.run(service.batch_capture(namespace=ns, items=items))
+
+    assert len(results) == 5 and all(isinstance(r, Ok) for r in results)
+    # One dense call, one sparse call — regardless of N.
+    assert dense_calls["count"] == 1, f"expected 1 dense call, got {dense_calls['count']}"
+    assert sparse_calls["count"] == 1, f"expected 1 sparse call, got {sparse_calls['count']}"
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-plane-episodic-batch-create: same follow-up "
-    "as bullet 20 — a single Qdrant upsert across all batch items "
-    "requires plane.batch_create."
-)
-def test_batch_capture_single_qdrant_upsert() -> None:
-    """Bullet 21 — placeholder."""
+def test_batch_capture_single_qdrant_upsert(
+    service: CaptureService, ns: str, plane: EpisodicPlane
+) -> None:
+    """Bullet 21 — a 5-item batch lands as exactly ONE Qdrant upsert,
+    not 5. ``batch_create`` walks the batch to resolve dedup per-row
+    but accumulates PointStructs and issues a single terminal upsert
+    (#141)."""
+    upsert_calls: list[int] = []
+    real_upsert = plane._client.upsert
+
+    def counting_upsert(*args: object, **kwargs: object) -> object:
+        points = kwargs.get("points", [])
+        upsert_calls.append(len(points) if isinstance(points, list) else 1)
+        return real_upsert(*args, **kwargs)  # type: ignore[arg-type]
+
+    plane._client.upsert = counting_upsert  # type: ignore[method-assign,assignment]
+
+    items = [_req(ns, content=f"batch-upsert-{i}") for i in range(5)]
+    results = asyncio.run(service.batch_capture(namespace=ns, items=items))
+
+    assert len(results) == 5 and all(isinstance(r, Ok) for r in results)
+    assert len(upsert_calls) == 1, f"expected 1 upsert call, got {len(upsert_calls)}"
+    assert upsert_calls[0] == 5, f"expected 5 points in the single upsert, got {upsert_calls[0]}"
 
 
 @pytest.mark.skip(

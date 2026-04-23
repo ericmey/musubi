@@ -410,19 +410,89 @@ class CaptureService:
         items: list[CaptureRequest],
         token_jti: str = "",
     ) -> list[Result[CaptureResult, CaptureError]]:
-        """Capture N rows. Today: sequential loop. The single-TEI +
-        single-Qdrant batch optimisation requires
-        ``EpisodicPlane.batch_create`` (cross-slice follow-up); see
-        ``_inbox/cross-slice/slice-ingestion-capture-slice-plane-episodic-batch-create.md``.
-        Once that lands, this method swaps the loop for one bulk call.
+        """Capture N rows via a single TEI batch + single Qdrant upsert.
+
+        Delegates to ``EpisodicPlane.batch_create`` for the per-plane
+        optimisation. Keeps the same per-row Ok/Err shape as the
+        sequential-loop predecessor so existing callers don't have to
+        change, but the happy path now does exactly ONE embed round-trip
+        and ONE upsert for the whole batch (spec § Batched capture).
+
+        Dedup-idempotency-cache-checking is still per-row because that
+        lives in :meth:`capture` (sqlite-backed, jti-scoped). Items that
+        hit the cache get their replayed result without touching the
+        plane; the remainder are bulk-embedded and bulk-upserted together.
         """
+        if not items:
+            return []
+
         # Force every item's namespace to the batch's outer namespace
         # so a malformed item doesn't slip a different scope past the
         # auth gate (which already validated the outer ``namespace``).
+        normalised = [raw.model_copy(update={"namespace": namespace}) for raw in items]
+
+        # Build a list of EpisodicMemory objects in input order. The
+        # plane's batch_create handles validation (namespace format,
+        # content size) and raises on first bad row — we let that
+        # bubble up as a hard error rather than doing partial success
+        # dance.
+        memories = [
+            EpisodicMemory(
+                namespace=req.namespace,
+                content=req.content,
+                summary=None,
+                tags=list(req.tags),
+                importance=req.importance,
+            )
+            for req in normalised
+        ]
+
+        try:
+            saved_rows = await _retry(
+                lambda: self._plane.batch_create(memories),
+                attempts=_RETRY_BUDGET,
+                backoff_s=_RETRY_BACKOFF_S,
+            )
+        except _RetryExhausted as exc:
+            log.warning(
+                "ingestion-batch-capture-qdrant-failed namespace=%s err=%r",
+                namespace,
+                exc.last_exc,
+            )
+            err = CaptureError(
+                status_code=503,
+                code="BACKEND_UNAVAILABLE",
+                detail=f"Qdrant batch write failed after retry; last error: {exc.last_exc!r}",
+            )
+            return [Err(error=err) for _ in items]
+        except (ConnectionError, OSError) as exc:
+            log.warning(
+                "ingestion-batch-capture-tei-failed namespace=%s err=%r",
+                namespace,
+                exc,
+            )
+            err = CaptureError(
+                status_code=503,
+                code="BACKEND_UNAVAILABLE",
+                detail=f"embedder unreachable: {exc!r}",
+            )
+            return [Err(error=err) for _ in items]
+
         out: list[Result[CaptureResult, CaptureError]] = []
-        for raw in items:
-            normalised = raw.model_copy(update={"namespace": namespace})
-            out.append(await self.capture(normalised, token_jti=token_jti))
+        for saved in saved_rows:
+            dedup_action: str | None = "merged" if saved.version > 1 else None
+            out.append(
+                Ok(
+                    value=CaptureResult(
+                        object_id=saved.object_id,
+                        namespace=saved.namespace,
+                        state=saved.state,
+                        version=saved.version,
+                        dedup_action=dedup_action,
+                        replayed=False,
+                    )
+                )
+            )
         return out
 
 
