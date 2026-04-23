@@ -26,6 +26,7 @@ from musubi.sdk.client import (
     _IDEMPOTENCY_HEADER,
     _MIN_CORE_VERSION,
     _REQUEST_ID_HEADER,
+    _ensure_tz_aware_created_at,
     _is_older,
     _retry_after_from,
 )
@@ -328,7 +329,7 @@ class _AsyncMemories:
             "importance": importance,
         }
         if created_at is not None:
-            body["created_at"] = created_at.isoformat()
+            body["created_at"] = _ensure_tz_aware_created_at(created_at)
         return await self._c._json(
             "POST",
             "/memories",
@@ -381,7 +382,7 @@ class _AsyncBatchContext:
             "importance": importance,
         }
         if created_at is not None:
-            item["created_at"] = created_at.isoformat()
+            item["created_at"] = _ensure_tz_aware_created_at(created_at)
         self._items.append(item)
 
     async def __aenter__(self) -> _AsyncBatchContext:

@@ -123,6 +123,12 @@ class EpisodicPlane:
             raise ValueError("invalid namespace format")
 
         now = utc_now()
+        # Reject a future `created_at` on the preserve path up front. Without
+        # this, `EpisodicMemory.model_validate(...)` below would raise an opaque
+        # "updated_at precedes created_at" when `updated_at=now` lands, which
+        # surfaces as a 500. A direct guard gives the caller a clear message.
+        if preserve_created_at and memory.created_at > now:
+            raise ValueError("created_at cannot be in the future")
         created_at = memory.created_at if preserve_created_at else now
         text = memory.summary or memory.content
         dense, sparse = await self._embed_both(text)

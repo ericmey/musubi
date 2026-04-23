@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from qdrant_client import QdrantClient, models
 
 from musubi.api.auth import require_auth
@@ -40,10 +40,12 @@ def _require_operator_for_created_at(request: Request) -> None:
     it lets the migration path preserve source-truth timestamps when
     ingesting historical data, but it must not be available to
     regular consumers because it would let a token rewrite when an
-    event "happened". The bearer's ``AuthContext`` is already
-    attached by the ``require_auth`` dependency on the route; if the
-    scope list doesn't include ``operator`` we 403 before touching
-    the plane."""
+    event "happened". The bearer's ``AuthContext`` is attached to
+    ``request.state.auth`` by ``_check_body_scope`` (which calls
+    ``authenticate_request``) — the capture handlers don't use the
+    ``require_auth`` dependency because scope is body-derived, not
+    static. If the scope list doesn't include ``operator`` we 403
+    before touching the plane."""
     ctx = getattr(request.state, "auth", None)
     if ctx is None or "operator" not in (ctx.scopes or ()):
         raise APIError(
@@ -59,6 +61,19 @@ def _require_operator_for_created_at(request: Request) -> None:
 router = APIRouter(prefix="/v1/memories", tags=["episodic-writes"])
 
 
+def _require_tz_aware(value: datetime | None) -> datetime | None:
+    """Reject naive datetimes at the request-model layer.
+
+    ``EpisodicMemory`` forbids ``tzinfo=None`` (``ensure_utc`` in
+    types.episodic) — without this validator a naive ISO-8601 string
+    would parse into the request model and then blow up at plane
+    construction as a pydantic ``ValidationError``. Catching it here
+    produces a clean 422 with a targeted message instead."""
+    if value is not None and value.tzinfo is None:
+        raise ValueError("created_at must be timezone-aware (ISO-8601 with offset or 'Z')")
+    return value
+
+
 class CaptureRequest(BaseModel):
     namespace: str
     content: str = Field(min_length=1)
@@ -70,6 +85,11 @@ class CaptureRequest(BaseModel):
     # and Musubi stamps created_at at ingest time via EpisodicMemory's
     # default factory.
     created_at: datetime | None = None
+
+    @field_validator("created_at")
+    @classmethod
+    def _tz_aware_created_at(cls, v: datetime | None) -> datetime | None:
+        return _require_tz_aware(v)
 
 
 class CaptureResponse(BaseModel):
@@ -88,6 +108,11 @@ class CaptureItem(BaseModel):
     # Per-item created_at override — operator scope required (checked
     # once on the outer batch before iterating).
     created_at: datetime | None = None
+
+    @field_validator("created_at")
+    @classmethod
+    def _tz_aware_created_at(cls, v: datetime | None) -> datetime | None:
+        return _require_tz_aware(v)
 
 
 class BatchCaptureRequest(BaseModel):

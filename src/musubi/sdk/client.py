@@ -39,6 +39,23 @@ from musubi.sdk.retry import RetryPolicy
 
 log = logging.getLogger("musubi.sdk")
 
+
+def _ensure_tz_aware_created_at(value: datetime) -> str:
+    """Normalise a caller-supplied ``created_at`` for the wire.
+
+    The server rejects naive datetimes (``tzinfo is None``) because
+    the storage layer requires UTC. Failing fast in the SDK prevents
+    an avoidable round-trip and gives a clearer error than the 4xx
+    the server would return. The returned string is ISO-8601 with
+    offset, suitable for direct JSON serialisation."""
+    if value.tzinfo is None:
+        raise ValueError(
+            "created_at must be timezone-aware; pass e.g. "
+            "datetime.now(tz=timezone.utc), not datetime.utcnow()"
+        )
+    return value.isoformat()
+
+
 _MIN_CORE_VERSION = "0.1.0"
 """SDK's minimum supported Core version. Probe-time check warns or
 raises if the live Core advertises a lower version."""
@@ -359,7 +376,7 @@ class _Memories:
             "importance": importance,
         }
         if created_at is not None:
-            body["created_at"] = created_at.isoformat()
+            body["created_at"] = _ensure_tz_aware_created_at(created_at)
         return self._c._json(
             "POST",
             "/memories",
@@ -412,7 +429,7 @@ class _BatchContext:
             "importance": importance,
         }
         if created_at is not None:
-            item["created_at"] = created_at.isoformat()
+            item["created_at"] = _ensure_tz_aware_created_at(created_at)
         self._items.append(item)
 
     def __enter__(self) -> _BatchContext:
