@@ -43,6 +43,7 @@ from musubi.api.dependencies import (
     get_episodic_plane,
     get_lifecycle_service,
     get_qdrant_client,
+    get_reranker,
     get_thoughts_plane,
 )
 from musubi.embedding import Embedder, TEIDenseClient, TEIRerankerClient, TEISparseClient
@@ -206,6 +207,10 @@ def bootstrap_production_app(
     # bootstrap a second time replaces the dict entries cleanly (idempotent).
     app.dependency_overrides[get_qdrant_client] = lambda: qdrant
     app.dependency_overrides[get_embedder] = lambda: embedder
+    # Orchestration takes a rerank client as its own arg (the composite
+    # embedder also carries one, but passing it separately keeps the
+    # retrieve pipeline's signature honest + tests easier).
+    app.dependency_overrides[get_reranker] = lambda: reranker
     app.dependency_overrides[get_episodic_plane] = lambda: EpisodicPlane(
         client=qdrant, embedder=embedder
     )

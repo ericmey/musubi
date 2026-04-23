@@ -21,7 +21,7 @@ from functools import lru_cache
 from qdrant_client import QdrantClient
 
 from musubi.config import get_settings
-from musubi.embedding import Embedder
+from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
 from musubi.planes.curated import CuratedPlane
@@ -92,6 +92,20 @@ def get_embedder() -> Embedder:
     )
 
 
+def get_reranker() -> TEIRerankerClient:
+    """Cross-encoder reranker used by deep-path retrieval.
+
+    Separate from the composite embedder on purpose: the retrieval
+    orchestration signature takes ``reranker`` as its own argument,
+    and tests need to be able to swap the reranker in isolation
+    (e.g. to assert that deep mode actually called ``.rerank()``).
+    """
+    raise NotImplementedError(
+        "Reranker is not configured. Override via app.dependency_overrides in tests, "
+        "or wire production deps via slice-api-app-bootstrap."
+    )
+
+
 def get_lifecycle_service() -> object:
     """Per-process lifecycle handle for the /v1/lifecycle/* endpoints.
 
@@ -114,6 +128,7 @@ __all__ = [
     "get_episodic_plane",
     "get_lifecycle_service",
     "get_qdrant_client",
+    "get_reranker",
     "get_settings_dep",
     "get_thoughts_plane",
 ]

@@ -2,34 +2,33 @@
 
 POST /v1/retrieve is a read in disguise — body carries the query
 parameters; no state mutation. NDJSON streaming variant
-(POST /v1/retrieve/stream) is deferred to slice-api-v0-write.
+(POST /v1/retrieve/stream) lives in ``writes_retrieve_stream.py``.
 
-The retrieval implementation lives in ``src/musubi/retrieve/`` and is
-owned by the retrieval slices. This router does the minimum: parses the
-query body, gates scope, and routes to either the per-plane ``query``
-methods (first cut) or to the future blended retriever once
-slice-retrieval-orchestration wires it through. The single-plane fast
-path uses ``EpisodicPlane.query`` today; cross-plane blended retrieval
-arrives via slice-retrieval-blended.
+Dispatches to :func:`musubi.retrieve.orchestration.retrieve`, which
+runs the per-mode pipeline (``fast`` → vector + recency + reinforcement
+scoring; ``deep`` → full hybrid + cross-encoder rerank + lineage
+hydration; ``blended`` → hybrid without the reranker). The router
+itself does auth + body validation + error mapping; everything
+interesting happens behind the orchestration boundary.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, Request
 from pydantic import BaseModel
+from qdrant_client import QdrantClient
 
 from musubi.api.dependencies import (
-    get_concept_plane,
-    get_curated_plane,
-    get_episodic_plane,
+    get_embedder,
+    get_qdrant_client,
+    get_reranker,
     get_settings_dep,
 )
 from musubi.api.errors import APIError, ErrorCode
 from musubi.api.responses import RetrieveResponse, RetrieveResultRow
 from musubi.auth import AuthRequirement, authenticate_request
-from musubi.planes.concept import ConceptPlane
-from musubi.planes.curated import CuratedPlane
-from musubi.planes.episodic import EpisodicPlane
+from musubi.embedding import Embedder, TEIRerankerClient
+from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
 from musubi.types.common import Err
 
@@ -45,14 +44,26 @@ class RetrieveQuery(BaseModel):
     include_archived: bool = False
 
 
+# orchestration.RetrievalError.kind → (HTTP status, typed error code).
+# `timeout` maps to BACKEND_UNAVAILABLE because a timeout in orchestration
+# means Qdrant or TEI didn't respond within budget — same shape as any
+# upstream outage from the caller's perspective.
+_KIND_STATUS_MAP: dict[str, tuple[int, ErrorCode]] = {
+    "bad_query": (400, "BAD_REQUEST"),
+    "forbidden": (403, "FORBIDDEN"),
+    "timeout": (503, "BACKEND_UNAVAILABLE"),
+    "internal": (500, "INTERNAL"),
+}
+
+
 @router.post("", response_model=RetrieveResponse)
 async def retrieve(
     request: Request,
     body: RetrieveQuery = Body(...),
     settings: Settings = Depends(get_settings_dep),
-    episodic: EpisodicPlane = Depends(get_episodic_plane),
-    curated: CuratedPlane = Depends(get_curated_plane),
-    concept: ConceptPlane = Depends(get_concept_plane),
+    qdrant: QdrantClient = Depends(get_qdrant_client),
+    embedder: Embedder = Depends(get_embedder),
+    reranker: TEIRerankerClient = Depends(get_reranker),
 ) -> RetrieveResponse:
     requirement = AuthRequirement(namespace=body.namespace, access="r")
     result = authenticate_request(
@@ -69,61 +80,50 @@ async def retrieve(
             detail=err.detail,
         )
 
-    requested_planes = set(body.planes or ["episodic"])
-    rows: list[RetrieveResultRow] = []
-
-    # First cut: dispatch to each requested plane's query() in turn and
-    # interleave the results. Cross-plane scoring/dedup lives in
-    # slice-retrieval-orchestration; this router carries the API surface.
-    plane_namespace_map = {
-        "episodic": ("episodic", body.namespace),
-        "curated": ("curated", body.namespace.rsplit("/", 1)[0] + "/curated"),
-        "concept": ("concept", body.namespace.rsplit("/", 1)[0] + "/concept"),
+    # Build the orchestration query dict. Defaulting `planes` server-side
+    # matches the pre-wiring router behaviour (single-plane episodic by
+    # default) so callers that didn't know about cross-plane retrieval
+    # don't suddenly start pulling from curated/concept too.
+    query_body: dict[str, object] = {
+        "namespace": body.namespace,
+        "query_text": body.query_text,
+        "mode": body.mode,
+        "limit": body.limit,
+        "planes": body.planes or ["episodic"],
+        "include_archived": body.include_archived,
     }
 
-    if "episodic" in requested_planes:
-        for mem in await episodic.query(
-            namespace=body.namespace, query=body.query_text, limit=body.limit
-        ):
-            rows.append(
-                RetrieveResultRow(
-                    object_id=mem.object_id,
-                    score=1.0,
-                    plane="episodic",
-                    content=mem.content,
-                    namespace=mem.namespace,
-                )
+    orchestration_result = await run_orchestration_retrieve(
+        client=qdrant,
+        embedder=embedder,
+        reranker=reranker,
+        query=query_body,
+    )
+
+    if isinstance(orchestration_result, Err):
+        retrieval_err = orchestration_result.error
+        status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
+        raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
+
+    rows: list[RetrieveResultRow] = []
+    for hit in orchestration_result.value:
+        rows.append(
+            RetrieveResultRow(
+                object_id=hit.object_id,
+                score=hit.score,
+                plane=hit.plane,
+                content=hit.snippet,
+                namespace=hit.namespace,
+                # Rich context stays in `extra` so the top-level response
+                # shape (RetrieveResultRow) doesn't break for callers that
+                # only want object_id / score / content.
+                extra={
+                    "score_components": hit.score_components,
+                    "lineage": hit.lineage,
+                    "title": hit.title,
+                },
             )
-    if "curated" in requested_planes:
-        for cur in await curated.query(
-            namespace=plane_namespace_map["curated"][1],
-            query=body.query_text,
-            limit=body.limit,
-        ):
-            rows.append(
-                RetrieveResultRow(
-                    object_id=cur.object_id,
-                    score=1.0,
-                    plane="curated",
-                    content=cur.content,
-                    namespace=cur.namespace,
-                )
-            )
-    if "concept" in requested_planes:
-        for con in await concept.query(
-            namespace=plane_namespace_map["concept"][1],
-            query=body.query_text,
-            limit=body.limit,
-        ):
-            rows.append(
-                RetrieveResultRow(
-                    object_id=con.object_id,
-                    score=1.0,
-                    plane="concept",
-                    content=con.content,
-                    namespace=con.namespace,
-                )
-            )
+        )
 
     return RetrieveResponse(
         results=rows[: body.limit],

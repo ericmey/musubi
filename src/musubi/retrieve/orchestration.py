@@ -238,9 +238,9 @@ def _pack_scored_hits(
                 snippet=_snippet(hit.payload, max_chars=300),
                 score=hit.score,
                 score_components={
-                    "relevance": hit.components.relevance,
-                    "recency": hit.components.recency,
-                    "reinforcement": hit.components.reinforce,
+                    "relevance": hit.score_components.relevance,
+                    "recency": hit.score_components.recency,
+                    "reinforcement": hit.score_components.reinforce,
                 },
                 lineage=_summarize_lineage(hit.payload),
                 payload=hit.payload if include_payload else None,

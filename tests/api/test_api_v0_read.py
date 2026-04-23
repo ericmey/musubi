@@ -749,6 +749,156 @@ def test_retrieve_endpoint_routes_to_plane(
     assert "results" in body
 
 
+def _seed_episodic_batch(episodic: EpisodicPlane, namespace: str, fragments: list[str]) -> None:
+    """Seed + mature a batch of episodic memories so retrieval has
+    enough candidates to exercise rerank."""
+
+    async def _seed() -> None:
+        for content in fragments:
+            saved = await episodic.create(EpisodicMemory(namespace=namespace, content=content))
+            await episodic.transition(
+                namespace=namespace,
+                object_id=saved.object_id,
+                to_state="matured",
+                actor="seed",
+                reason="seed",
+            )
+
+    asyncio.run(_seed())
+
+
+def test_retrieve_fast_returns_real_scores_not_hardcoded_one(
+    client: TestClient,
+    auth: dict[str, str],
+    episodic: EpisodicPlane,
+) -> None:
+    """Regression guard for #195 — the pre-wiring router hardcoded
+    score=1.0 on every row. The real scoring model combines relevance
+    + recency + importance + provenance + reinforcement; scores must
+    vary across hits (and at least one must differ from 1.0) or the
+    orchestration wire-up has regressed to the stub."""
+    namespace = "eric/claude-code/episodic"
+    _seed_episodic_batch(
+        episodic,
+        namespace,
+        [
+            "Remember the dentist appointment Tuesday afternoon.",
+            "Eric prefers coffee black, no sugar.",
+            "Aoi mentioned the deploy finished cleanly.",
+            "Qdrant holds the vector embeddings behind named collections.",
+            "The LiveKit stack routes SIP into voice tools.",
+            "TEI serves BGE-M3 dense and SPLADE sparse embeddings.",
+            "Promotion moves a concept into the curated plane.",
+            "Kong fronts musubi.mey.house for external traffic.",
+        ],
+    )
+
+    r = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={
+            "namespace": namespace,
+            "query_text": "dentist appointment tuesday",
+            "mode": "fast",
+            "limit": 5,
+        },
+    )
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert results, "fast-mode retrieve returned no results"
+
+    scores = [row["score"] for row in results]
+    assert any(s != 1.0 for s in scores), (
+        f"every result had score=1.0 — router is likely still the stub. saw scores={scores!r}"
+    )
+
+
+def test_retrieve_deep_mode_invokes_reranker(
+    client: TestClient,
+    auth: dict[str, str],
+    episodic: EpisodicPlane,
+    app_factory: object,
+) -> None:
+    """Deep-mode retrieval must actually call the cross-encoder
+    reranker — that's the only behaviour that distinguishes deep from
+    fast at the orchestration layer. Spy on the reranker dep; after
+    a deep-mode call its counter must be > 0."""
+    from musubi.api.dependencies import get_reranker
+    from musubi.embedding import FakeEmbedder
+
+    class _SpyReranker:
+        def __init__(self) -> None:
+            self.call_count = 0
+            self._inner = FakeEmbedder()
+
+        async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+            self.call_count += 1
+            return await self._inner.rerank(query, candidates)
+
+    spy = _SpyReranker()
+    app_factory.dependency_overrides[get_reranker] = lambda: spy  # type: ignore[attr-defined]
+
+    namespace = "eric/claude-code/episodic"
+    # Rerank is only invoked when hybrid returns >5 candidates (see
+    # musubi.retrieve.rerank.rerank's short-circuit). Seed enough
+    # distinct rows that hybrid returns more than that bar.
+    _seed_episodic_batch(
+        episodic,
+        namespace,
+        [f"voice pipeline document {i}: LiveKit routes SIP calls" for i in range(12)],
+    )
+
+    r = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={
+            "namespace": namespace,
+            "query_text": "voice pipeline LiveKit",
+            "mode": "deep",
+            "limit": 10,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert spy.call_count >= 1, "deep-mode retrieve did not call the reranker"
+
+
+def test_retrieve_result_carries_score_components_in_extra(
+    client: TestClient,
+    auth: dict[str, str],
+    episodic: EpisodicPlane,
+) -> None:
+    """The scoring model is explainable; callers (eval tools, voice
+    agents debugging recall) need the component breakdown. The
+    response extra dict must carry score_components keyed by the
+    component names the scoring model exports."""
+    namespace = "eric/claude-code/episodic"
+    _seed_episodic_batch(
+        episodic,
+        namespace,
+        ["Remember the dentist appointment Tuesday.", "Eric prefers coffee black."],
+    )
+
+    r = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={
+            "namespace": namespace,
+            "query_text": "dentist appointment",
+            "mode": "fast",
+            "limit": 5,
+        },
+    )
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert results
+    extra = results[0]["extra"]
+    assert "score_components" in extra
+    components = extra["score_components"]
+    # At minimum the three components the scoring-model tests assert.
+    for key in ("relevance", "recency", "reinforcement"):
+        assert key in components, f"score_components missing {key!r}: {components!r}"
+
+
 def test_thoughts_check_endpoint_responds(
     client: TestClient,
     api_settings: object,
