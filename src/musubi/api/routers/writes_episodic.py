@@ -15,7 +15,7 @@ from musubi.auth import AuthRequirement, authenticate_request
 from musubi.lifecycle.transitions import transition
 from musubi.planes.episodic import EpisodicPlane
 from musubi.settings import Settings
-from musubi.types.common import Err, Ok
+from musubi.types.common import Err, Ok, utc_now
 from musubi.types.episodic import EpisodicMemory
 
 
@@ -92,6 +92,23 @@ def _require_tz_aware(value: datetime | None) -> datetime | None:
     if value is not None and value.tzinfo is None:
         raise ValueError("created_at must be timezone-aware (ISO-8601 with offset or 'Z')")
     return value
+
+
+def _reject_future_created_at(value: datetime | None) -> None:
+    """Reject a ``created_at`` that sits in the future at request time.
+
+    The plane also guards this (``plane.create`` raises ``ValueError``
+    on the preserve path), but catching it at the API layer means the
+    client gets a clean 422 instead of relying on a generic 5xx
+    catchall. Both guards exist on purpose — belt-and-braces against
+    somebody calling the plane directly."""
+    if value is not None and value > utc_now():
+        raise APIError(
+            status_code=422,
+            code="BAD_REQUEST",
+            detail="created_at cannot be in the future",
+            hint="supply a past or present timestamp, or omit the field",
+        )
 
 
 class CaptureRequest(BaseModel):
@@ -184,6 +201,7 @@ async def capture(
     preserve_created_at = False
     if body.created_at is not None:
         _require_operator_for_created_at(request)
+        _reject_future_created_at(body.created_at)
         memory_kwargs["created_at"] = body.created_at
         preserve_created_at = True
     memory = _build_episodic(**memory_kwargs)
@@ -213,6 +231,8 @@ async def batch_capture(
     # reason about than per-item partial failures).
     if any(item.created_at is not None for item in body.items):
         _require_operator_for_created_at(request)
+        for item in body.items:
+            _reject_future_created_at(item.created_at)
     out: list[str] = []
     for item in body.items:
         memory_kwargs: dict[str, object] = {

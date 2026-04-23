@@ -843,6 +843,79 @@ def test_async_batch_context_one_call() -> None:
     assert calls[0][0] == "/v1/memories/batch"
 
 
+def test_async_capture_threads_created_at_override_to_body() -> None:
+    """#140 async-parity — when a caller supplies ``created_at`` to
+    ``AsyncMusubiClient.memories.capture``, the SDK serialises it as
+    ISO-8601 on the outbound body. Server-side scope enforcement is
+    orthogonal (verified by the API-layer tests)."""
+    from datetime import UTC, datetime
+
+    captured: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(202, json={"object_id": "a" * 27, "state": "provisional"})
+
+    ts = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
+
+    async def _run() -> None:
+        async with _async_client(handler) as c:
+            await c.memories.capture(
+                namespace="eric/x/episodic",
+                content="historical",
+                created_at=ts,
+            )
+
+    asyncio.run(_run())
+    assert captured and "created_at" in captured[0]
+    assert captured[0]["created_at"].startswith("2024-06-01T12:00:00")
+
+
+def test_async_capture_without_created_at_omits_field() -> None:
+    """Async backwards-compat — default capture() calls must NOT carry
+    a created_at key so the server's operator-scope gate stays dormant."""
+    captured: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(202, json={"object_id": "b" * 27, "state": "provisional"})
+
+    async def _run() -> None:
+        async with _async_client(handler) as c:
+            await c.memories.capture(namespace="eric/x/episodic", content="normal")
+
+    asyncio.run(_run())
+    assert captured and "created_at" not in captured[0]
+
+
+def test_async_batch_context_threads_per_item_created_at() -> None:
+    """Async batch context passes each item's created_at through; items
+    without the override remain bare."""
+    from datetime import UTC, datetime
+
+    captured: list[dict[str, Any]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(json.loads(request.content))
+        return httpx.Response(202, json={"object_ids": ["x" * 27, "y" * 27, "z" * 27]})
+
+    async def _run() -> None:
+        async with (
+            _async_client(handler) as c,
+            c.memories.batch(namespace="eric/x/episodic") as batch,
+        ):
+            batch.capture(content="no-override")
+            batch.capture(content="with-override", created_at=datetime(2023, 1, 1, tzinfo=UTC))
+            batch.capture(content="also-no")
+
+    asyncio.run(_run())
+    items = captured[0]["items"]
+    assert len(items) == 3
+    assert "created_at" not in items[0]
+    assert items[1]["created_at"].startswith("2023-01-01T00:00:00")
+    assert "created_at" not in items[2]
+
+
 def test_async_batch_context_empty_skips_call() -> None:
     calls: list[str] = []
 
