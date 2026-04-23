@@ -7,7 +7,7 @@ status: done
 owner: vscode-cc-sonnet47
 phase: "6 Lifecycle"
 tags: [section/slices, status/done, type/slice]
-updated: 2026-04-19
+updated: 2026-04-23
 reviewed: true
 depends-on: ["[[_slices/slice-sdk-py]]", "[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]"]
 blocks: ["[[_slices/slice-adapter-livekit-e2e]]"]

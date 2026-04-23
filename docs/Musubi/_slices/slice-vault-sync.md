@@ -7,7 +7,7 @@ status: done
 owner: gemini-3-1-pro-nyla
 phase: "5 Vault"
 tags: [section/slices, status/done, type/slice]
-updated: 2026-04-19
+updated: 2026-04-23
 reviewed: true
 depends-on: ["[[_slices/slice-plane-curated]]", "[[_slices/slice-types]]"]
 blocks: ["[[_slices/slice-lifecycle-promotion]]", "[[_slices/slice-lifecycle-reflection]]", "[[_slices/slice-lifecycle-promotion-builder]]", "[[_slices/slice-lifecycle-reflection-builder]]"]
