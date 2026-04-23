@@ -31,7 +31,7 @@ Design notes:
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 from qdrant_client import QdrantClient, models
 
@@ -49,6 +49,18 @@ _POINT_NS = uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000001")
 _DEFAULT_DEDUP_THRESHOLD = 0.92
 _VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured",)
 _VISIBLE_STATES_WITH_DEMOTED: tuple[LifecycleState, ...] = ("matured", "demoted")
+
+# Content-merge strategy on dedup hit.
+#
+#   ``longer-wins`` — keep whichever of existing / new content is
+#   strictly longer. Matches the spec ([[06-ingestion/capture]]
+#   § Step 4): a short follow-up shouldn't silently overwrite a
+#   detailed earlier capture.
+#
+#   ``replace`` — always take the new content. Pre-spec behaviour;
+#   preserved for explicit callers (migration / replay paths that
+#   genuinely want the newest text).
+MergeStrategy = Literal["replace", "longer-wins"]
 
 
 def _point_id(object_id: str) -> str:
@@ -96,14 +108,22 @@ class EpisodicPlane:
         self,
         memory: EpisodicMemory,
         *,
+        merge_strategy: MergeStrategy = "longer-wins",
         preserve_created_at: bool = False,
     ) -> EpisodicMemory:
         """Write ``memory`` to Qdrant, deduping against the same namespace.
 
         On a dedup hit, merges tags + bumps ``reinforcement_count`` and
-        ``version`` on the existing row instead of inserting. Returns the
-        final state of the row (original object id on dedup hit, new id on
-        fresh insert).
+        ``version`` on the existing row instead of inserting. ``content``
+        is kept vs replaced based on ``merge_strategy``:
+
+        - ``longer-wins`` (default, matches spec §06-ingestion/capture):
+          keep whichever of existing / new content is strictly longer.
+        - ``replace``: always take the new content. Explicit opt-in for
+          migration / replay paths that genuinely want the newest text.
+
+        Returns the final state of the row (original object id on dedup
+        hit, new id on fresh insert).
 
         ``preserve_created_at`` controls whether the incoming
         ``memory.created_at`` is used verbatim (migration / replay path)
@@ -136,9 +156,18 @@ class EpisodicPlane:
         if len(dense) != 1024:
             raise ValueError(f"vector dimension mismatch: got {len(dense)}, expected 1024")
 
-        existing = self._find_dedup_candidate(memory.namespace, dense)
-        if existing is not None:
-            return self._reinforce(existing=existing, new=memory, dense=dense, sparse=sparse)
+        found = self._find_dedup_candidate(memory.namespace, dense)
+        if found is not None:
+            existing, existing_dense, existing_sparse = found
+            return self._reinforce(
+                existing=existing,
+                existing_dense=existing_dense,
+                existing_sparse=existing_sparse,
+                new=memory,
+                dense=dense,
+                sparse=sparse,
+                merge_strategy=merge_strategy,
+            )
 
         data = memory.model_dump()
         data.update(
@@ -154,28 +183,194 @@ class EpisodicPlane:
         self._upsert(fresh, dense=dense, sparse=sparse)
         return fresh
 
-    def _reinforce(
+    async def batch_create(
+        self,
+        memories: list[EpisodicMemory],
+        *,
+        merge_strategy: MergeStrategy = "longer-wins",
+    ) -> list[EpisodicMemory]:
+        """Write N memories in one TEI embed call + one Qdrant upsert.
+
+        The per-row ``create`` method does one TEI call + one Qdrant
+        upsert each. Spec ``[[06-ingestion/capture]] § Batched capture``
+        requires the batch path to fold those into a single TEI batch
+        and a single Qdrant upsert. That's the difference this method
+        makes: one round-trip to TEI for all N rows' dense vectors,
+        one for sparse, then one atomic Qdrant upsert at the end.
+
+        Dedup probes are per-row because Qdrant doesn't have a
+        "batch query_points" shape we can use today — but every dedup
+        hit writes via the same single terminal upsert (reinforce
+        updates + fresh inserts land in one call).
+
+        Returns the final row for each input position in input order,
+        same as ``create`` (existing row on dedup hit, fresh row
+        otherwise).
+        """
+        if not memories:
+            return []
+
+        # Per-row validation — same as create(). Fail fast on the whole
+        # batch if any row is malformed; partial success would be harder
+        # to reason about for callers.
+        import re
+
+        ns_pattern = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$")
+        for memory in memories:
+            if len(memory.content.encode("utf-8")) > 32768:
+                raise ValueError(
+                    "content exceeds 32KB limit on batch row "
+                    f"{memory.object_id}; use artifact plane instead"
+                )
+            if memory.event_at > utc_now():
+                raise ValueError(
+                    f"event_at cannot be in the future on batch row {memory.object_id}"
+                )
+            if not ns_pattern.match(memory.namespace):
+                raise ValueError(f"invalid namespace format on batch row {memory.object_id}")
+
+        # Single TEI dense + single TEI sparse over the whole batch.
+        texts = [m.summary or m.content for m in memories]
+        dense_batch = await self._embedder.embed_dense(texts)
+        sparse_batch = await self._embedder.embed_sparse(texts)
+
+        if any(len(v) != 1024 for v in dense_batch):
+            dims = [len(v) for v in dense_batch]
+            raise ValueError(f"dense vector dimension mismatch across batch: {dims}")
+
+        now = utc_now()
+
+        # Walk the batch, decide fresh-insert vs reinforce, collect all
+        # final rows + their vectors, then do a SINGLE terminal upsert.
+        points: list[models.PointStruct] = []
+        finalised: list[EpisodicMemory] = []
+        for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
+            found = self._find_dedup_candidate(memory.namespace, dense)
+            if found is not None:
+                existing, existing_dense, existing_sparse = found
+                updated, existing_content_won = self._merge_row(
+                    existing=existing,
+                    new=memory,
+                    merge_strategy=merge_strategy,
+                    now=now,
+                )
+                # Preserve existing vectors when existing content won
+                # (otherwise we'd overwrite them with the new text's
+                # embeddings — a payload/vector drift bug).
+                if (
+                    existing_content_won
+                    and existing_dense is not None
+                    and existing_sparse is not None
+                ):
+                    points.append(
+                        self._make_point(updated, dense=existing_dense, sparse=existing_sparse)
+                    )
+                else:
+                    points.append(self._make_point(updated, dense=dense, sparse=sparse))
+                finalised.append(updated)
+            else:
+                data = memory.model_dump()
+                data.update(
+                    state="provisional",
+                    version=1,
+                    reinforcement_count=0,
+                    created_at=now,
+                    created_epoch=epoch_of(now),
+                    updated_at=now,
+                    updated_epoch=epoch_of(now),
+                )
+                fresh = EpisodicMemory.model_validate(data)
+                points.append(self._make_point(fresh, dense=dense, sparse=sparse))
+                finalised.append(fresh)
+
+        # Single Qdrant upsert for the whole batch.
+        self._client.upsert(collection_name=self._collection, points=points)
+        return finalised
+
+    def _merge_row(
         self,
         *,
         existing: EpisodicMemory,
         new: EpisodicMemory,
-        dense: list[float],
-        sparse: dict[int, float],
-    ) -> EpisodicMemory:
-        """Merge ``new`` into ``existing`` and re-upsert under the same id."""
+        merge_strategy: MergeStrategy,
+        now: Any,
+    ) -> tuple[EpisodicMemory, bool]:
+        """Compute the merged row without writing it.
+
+        Returns ``(updated, existing_content_won)``. The boolean tells
+        the caller which text's embeddings should accompany the upsert:
+        if ``existing_content_won`` is True we must preserve the
+        existing point's vectors, otherwise we write with the new
+        text's freshly-computed vectors. Without this bookkeeping the
+        payload and vectors drift out of sync (the bug Copilot caught
+        on the batch path)."""
         merged_tags = sorted(set(existing.tags) | set(new.tags))
-        now = utc_now()
+        existing_content_won = False
+        if merge_strategy == "longer-wins":
+            if len(existing.content) > len(new.content):
+                kept_content = existing.content
+                existing_content_won = True
+            else:
+                kept_content = new.content
+        else:
+            kept_content = new.content
         data = existing.model_dump()
         data.update(
-            content=new.content,
+            content=kept_content,
             tags=merged_tags,
             reinforcement_count=existing.reinforcement_count + 1,
             version=existing.version + 1,
             updated_at=now,
             updated_epoch=epoch_of(now),
         )
-        updated = EpisodicMemory.model_validate(data)
-        self._upsert(updated, dense=dense, sparse=sparse)
+        return EpisodicMemory.model_validate(data), existing_content_won
+
+    def _make_point(
+        self,
+        memory: EpisodicMemory,
+        *,
+        dense: list[float],
+        sparse: dict[int, float],
+    ) -> models.PointStruct:
+        """Build a Qdrant PointStruct for ``memory``. Kept out of
+        ``_upsert`` so ``batch_create`` can collect points without
+        calling upsert per row."""
+        return models.PointStruct(
+            id=_point_id(memory.object_id),
+            payload=memory.model_dump(mode="json"),
+            vector={
+                DENSE_VECTOR_NAME: dense,
+                SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
+            },
+        )
+
+    def _reinforce(
+        self,
+        *,
+        existing: EpisodicMemory,
+        existing_dense: list[float] | None,
+        existing_sparse: dict[int, float] | None,
+        new: EpisodicMemory,
+        dense: list[float],
+        sparse: dict[int, float],
+        merge_strategy: MergeStrategy = "longer-wins",
+    ) -> EpisodicMemory:
+        """Merge ``new`` into ``existing`` and re-upsert under the same id.
+
+        ``existing_dense`` / ``existing_sparse`` are the vectors Qdrant
+        already has for the matched point (fetched by the dedup probe).
+        When ``merge_strategy="longer-wins"`` keeps the existing content,
+        we rewrite the payload but retain those existing vectors so the
+        embeddings stay aligned with what the row actually says. When
+        new content wins we swap in the new vectors."""
+        now = utc_now()
+        updated, existing_content_won = self._merge_row(
+            existing=existing, new=new, merge_strategy=merge_strategy, now=now
+        )
+        if existing_content_won and existing_dense is not None and existing_sparse is not None:
+            self._upsert(updated, dense=existing_dense, sparse=existing_sparse)
+        else:
+            self._upsert(updated, dense=dense, sparse=sparse)
         return updated
 
     def _upsert(
@@ -199,8 +394,17 @@ class EpisodicPlane:
     # Dedup
     # ------------------------------------------------------------------
 
-    def _find_dedup_candidate(self, namespace: str, dense: list[float]) -> EpisodicMemory | None:
-        """Return the best existing point above the dedup threshold, if any."""
+    def _find_dedup_candidate(
+        self, namespace: str, dense: list[float]
+    ) -> tuple[EpisodicMemory, list[float] | None, dict[int, float] | None] | None:
+        """Return the best existing point above the dedup threshold, if any.
+
+        Returns the rehydrated :class:`EpisodicMemory` plus the point's
+        stored dense and sparse vectors. The vectors let the
+        reinforce path preserve the existing embeddings when
+        ``longer-wins`` keeps the existing content — otherwise the
+        payload and vectors would drift apart on every dedup hit where
+        new text was shorter."""
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
@@ -213,13 +417,26 @@ class EpisodicPlane:
             limit=1,
             score_threshold=self._dedup_threshold,
             with_payload=True,
+            with_vectors=True,
         )
         if not resp.points:
             return None
-        payload = resp.points[0].payload
+        point = resp.points[0]
+        payload = point.payload
         if not payload:
             return None
-        return _memory_from_payload(payload)
+        memory = _memory_from_payload(payload)
+        existing_dense: list[float] | None = None
+        existing_sparse: dict[int, float] | None = None
+        vectors = point.vector
+        if isinstance(vectors, dict):
+            raw_dense = vectors.get(DENSE_VECTOR_NAME)
+            if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
+                existing_dense = raw_dense  # type: ignore[assignment]
+            raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
+            if isinstance(raw_sparse, models.SparseVector):
+                existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))
+        return memory, existing_dense, existing_sparse
 
     # ------------------------------------------------------------------
     # Read
