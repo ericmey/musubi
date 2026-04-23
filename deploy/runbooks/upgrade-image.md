@@ -7,8 +7,13 @@ see [`first-deploy.md`](first-deploy.md) instead.
 
 Cadence: on demand. Every merge to `main` publishes a fresh floating
 `:main` tag + a digest. Every `v*` tag push publishes `:vX.Y.Z` +
-digest (requires `RELEASE_PLEASE_PAT` — see ADR 0026 addendum dated
-2026-04-23). The deploy itself is a separate, human-reviewed PR.
+digest — *any* `v*` tag push does this, including a manual `git
+push origin v1.2.3` from an operator. The caveat is release-please's
+automated tag push: with the default `GITHUB_TOKEN` it gets silenced
+by GitHub's anti-recursion guard, so release-please's workflow must
+authenticate with `RELEASE_PLEASE_PAT` for its tag pushes to fire
+this build. See the ADR 0026 addendum dated 2026-04-23 for the full
+story. The deploy itself is a separate, human-reviewed PR.
 
 ---
 
