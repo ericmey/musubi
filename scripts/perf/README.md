@@ -19,9 +19,12 @@ scripts/perf/
 
 ## Prerequisites
 
-1. **Operator token scoped to `perf-test/*`** — *never* use `eric/*`.
-   See [.agent-context.local.md](../../.agent-context.local.md) for
-   how to mint a scoped token.
+1. **Operator token scoped to `perf-test/harness/*`** (or whichever
+   two-segment prefix you override to) — *never* use `eric/*`. The
+   scope list must include `operator`, per-plane `<prefix>/<plane>:rw`,
+   and `thoughts:send`. See [.agent-context.local.md](../../.agent-context.local.md)
+   for how to mint a scoped token against the running stack's
+   `JWT_SIGNING_KEY`.
 2. **k6 installed** on whatever host runs the scenarios
    (`brew install k6` on macOS, apt package on Ubuntu).
 3. **jq** (telemetry summarizer uses it).
@@ -33,10 +36,16 @@ scripts/perf/
 ## Env vars every scenario reads
 
 ```bash
-export MUSUBI_V2_BASE_URL=https://musubi.mey.house/v1
-export MUSUBI_V2_TOKEN=mbi_perf_...                # scoped to perf-test/*
-export MUSUBI_V2_NAMESPACE_PREFIX=perf-test        # default; override if isolating
+export MUSUBI_V2_BASE_URL=http://musubi.mey.house:8100/v1
+export MUSUBI_V2_TOKEN=mbi_perf_...                        # scoped to the prefix below
+export MUSUBI_V2_NAMESPACE_PREFIX=perf-test/harness        # tenant/presence — plane is appended
 ```
+
+The prefix must be exactly two segments — the server's namespace
+regex requires `tenant/presence/plane` (three segments total), and
+the seed script + k6 scenarios append the plane automatically. A
+one-segment prefix like `perf-test` will produce invalid namespaces
+and the server rejects them with a 500.
 
 ## Typical run sequence (per the plan)
 
@@ -84,6 +93,12 @@ K6_STAGES_OVERRIDE="2m,12h,30s" make perf-load LABEL=soak-overnight
   recovery window.
 - **`telemetry.sh`** — sidecar sampler. Runs alongside k6 and
   captures container CPU/RSS + GPU utilization + memory at 5s cadence.
+  When the driver runs on a different host than Musubi (common), set
+  `REMOTE_HOST=<user>@<musubi-host>` to sample over SSH. If the SSH
+  user isn't in the host's `docker` group but has passwordless sudo,
+  set `REMOTE_DOCKER_PREFIX="sudo -n"` — without it the remote
+  `docker stats` call fails silently and you end up with an empty
+  jsonl after the run.
 
 ## Output
 

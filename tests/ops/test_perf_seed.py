@@ -226,6 +226,17 @@ def test_parse_args_rejects_wrong_segment_prefix(monkeypatch: Any) -> None:
             raise AssertionError(f"expected SystemExit for prefix {bad!r}")
 
 
+def test_planes_excludes_concept() -> None:
+    """Concept ingest has no HTTP endpoint (synthesis-only); the seeder
+    must not advertise it as a plane so --planes validation stays honest
+    and callers aren't tempted to pass --planes=concept."""
+    seed = _load()
+    assert "concept" not in seed.PLANES
+    assert "concept" not in seed._SEEDERS
+    # Sanity: the four writeable planes are still there.
+    assert set(seed.PLANES) == {"episodic", "curated", "artifact", "thought"}
+
+
 def test_parse_args_accepts_valid_two_segment_prefix(monkeypatch: Any) -> None:
     seed = _load()
     monkeypatch.setenv("MUSUBI_V2_BASE_URL", "http://localhost:8100/v1")
