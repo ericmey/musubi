@@ -282,19 +282,7 @@ async def test_deep_path_one_plane_timeout_degrades() -> None:
     pass
 
 
-@pytest.mark.skip(reason="reflection is tested in reflection slice")
-async def test_reflection_prompts_resolved_via_deep_path() -> None:
-    """Bullet 10 — test_reflection_prompts_resolved_via_deep_path"""
-    pass
-
-
-@pytest.mark.skip(reason="reflection is tested in reflection slice")
-async def test_reflection_results_include_provenance_for_audit() -> None:
-    """Bullet 11 — test_reflection_results_include_provenance_for_audit"""
-    pass
-
-
-@pytest.mark.skip(reason="deferred to a follow-up test-property-retrieval slice")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_deep_path_result_ordering_is_stable_for_fixed_inputs_and_weights() -> None:
     """Bullet 12 — hypothesis: deep path result ordering is stable for fixed inputs and weights"""
     pass

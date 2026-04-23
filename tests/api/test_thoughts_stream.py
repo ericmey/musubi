@@ -420,21 +420,15 @@ async def test_client_disconnect_cleans_up_subscription() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Hypothesis / property (2) — deferred to a future test-property-api slice
+# Hypothesis / property (2) — out-of-scope: post-v1.0 hardening
 # ─────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.skip(
-    reason="deferred to a follow-up test-property-api slice: hypothesis dedup-set "
-    "idempotency property belongs in the property-test suite"
-)
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_dedup_set_idempotent_over_replay() -> None:
     pass
 
 
-@pytest.mark.skip(
-    reason="deferred to a follow-up test-property-api slice: monotonic KSUID order "
-    "property belongs in the property-test suite"
-)
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_ksuid_order_monotonic() -> None:
     pass

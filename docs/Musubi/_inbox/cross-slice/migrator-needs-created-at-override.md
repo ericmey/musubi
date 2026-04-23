@@ -1,11 +1,11 @@
 ---
 title: "Cross-slice: Migrator needs `created_at` override"
 section: _inbox/cross-slice
-tags: [section/inbox-cross-slice, type/cross-slice, status/tracked]
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
 type: cross-slice
-status: tracked
+status: resolved
 tracked_by: "https://github.com/ericmey/musubi/issues/140"
-updated: 2026-04-20
+updated: 2026-04-23
 ---
 
 > **Tracked as GH Issue #140** — https://github.com/ericmey/musubi/issues/140

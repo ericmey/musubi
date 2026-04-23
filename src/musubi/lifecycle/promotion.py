@@ -164,8 +164,11 @@ def namespace_to_dir(namespace: str) -> str:
 
 
 def compute_path(concept: SynthesizedConcept) -> str:
-    # Fallback to linked_to_topics due to missing topics field
-    topics = getattr(concept, "topics", concept.linked_to_topics)
+    # `concept.topics` is always present (default_factory=list); fall back to
+    # `linked_to_topics` only when topics is empty, not defensively via
+    # getattr. Wiring the two into a single semantic "topic hint" list lives
+    # in issue #217.
+    topics = concept.topics or concept.linked_to_topics
     primary_topic = topics[0] if topics else "_misc"
     slug = slugify(concept.title)
     return f"curated/{namespace_to_dir(concept.namespace)}/{primary_topic}/{slug}.md"
@@ -183,7 +186,10 @@ def _is_eligible(concept: SynthesizedConcept, now_epoch: float) -> bool:
     if now_epoch - created_epoch < 48 * 3600:
         return False
 
-    # Check for attempts is deferred because promotion_attempts is missing from SynthesizedConcept
+    # `promotion_attempts >= 3` gate is deferred to issue #217 — the field
+    # exists on SynthesizedConcept but nothing increments it on failure yet,
+    # so a gate check here would never fire in practice. Current behavior:
+    # failed promotions retry indefinitely.
 
     if concept.contradicts:
         return False
@@ -312,7 +318,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         object_id=curated_id,
         namespace=concept.namespace,
         title=concept.title,
-        topics=getattr(concept, "topics", concept.linked_to_topics),
+        topics=concept.topics or concept.linked_to_topics,
         tags=concept.tags,
         importance=concept.importance,
         state="matured",
@@ -338,7 +344,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         summary=concept.summary,
         state="matured",
         importance=concept.importance,
-        topics=getattr(concept, "topics", concept.linked_to_topics),
+        topics=concept.topics or concept.linked_to_topics,
         tags=concept.tags,
         promoted_from=concept.object_id,
         promoted_at=now,

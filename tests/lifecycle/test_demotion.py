@@ -199,7 +199,10 @@ async def test_episodic_demotion_transitions_and_emits_event(deps: DemotionDeps)
 
 
 # Concept
-@pytest.mark.skip(reason="deferred to slice-plane-concept: missing last_reinforced_at")
+@pytest.mark.skip(
+    reason="deferred to issue #218: use last_reinforced_epoch in demotion scroll filter; "
+    "field exists on SynthesizedConcept, demotion currently proxies via updated_epoch"
+)
 def test_concept_demotion_selects_by_last_reinforced() -> None:
     pass
 
@@ -229,23 +232,26 @@ async def test_concept_demotion_emits_ops_thought(deps: DemotionDeps) -> None:
     assert cast(Any, deps.thoughts).calls[0][0] == "ops-alerts"
 
 
-@pytest.mark.skip(reason="deferred to slice-plane-concept: missing last_reinforced_at")
+@pytest.mark.skip(
+    reason="deferred to issue #218: use last_reinforced_epoch in demotion scroll filter; "
+    "field exists on SynthesizedConcept, demotion currently proxies via updated_epoch"
+)
 def test_concept_reinforcement_resets_demotion_clock() -> None:
     pass
 
 
 # Artifact
-@pytest.mark.skip(reason="deferred to slice-ops-storage")
+@pytest.mark.skip(reason="deferred to issue #222: artifact archival policy + slice-ops-storage")
 def test_artifact_archival_off_by_default() -> None:
     pass
 
 
-@pytest.mark.skip(reason="deferred to slice-ops-storage")
+@pytest.mark.skip(reason="deferred to issue #222: artifact archival policy + slice-ops-storage")
 def test_artifact_archival_respects_referenced_by() -> None:
     pass
 
 
-@pytest.mark.skip(reason="deferred to slice-ops-storage")
+@pytest.mark.skip(reason="deferred to issue #222: artifact archival policy + slice-ops-storage")
 def test_artifact_archival_transitions_to_archived_keeps_blob() -> None:
     pass
 
@@ -268,24 +274,16 @@ async def test_reinstate_moves_back_to_matured(deps: DemotionDeps) -> None:
     assert p and p.state == "matured"
 
 
-@pytest.mark.skip(reason="deferred to slice-plane-concept: missing last_reinforced_at")
+@pytest.mark.skip(
+    reason="deferred to issue #218: use last_reinforced_epoch in demotion scroll filter; "
+    "field exists on SynthesizedConcept, demotion currently proxies via updated_epoch"
+)
 def test_reinstate_resets_reinforced_clock() -> None:
     pass
 
 
 @pytest.mark.skip(reason="event emitted via transition method")
 def test_reinstate_emits_event() -> None:
-    pass
-
-
-# Filter
-@pytest.mark.skip(reason="retrieval filters tested in retrieve/test_hybrid.py")
-def test_default_retrieval_excludes_demoted() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="retrieval filters tested in retrieve/test_hybrid.py")
-def test_include_archived_includes_demoted() -> None:
     pass
 
 
@@ -301,12 +299,12 @@ def test_demotion_paused_expired_resumes() -> None:
 
 
 # Property / Integration
-@pytest.mark.skip(reason="deferred to test-property-demotion")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_demotion_is_idempotent_across_runs_with_no_change_in_criteria() -> None:
     pass
 
 
-@pytest.mark.skip(reason="deferred to test-property-demotion")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_no_object_that_transitions_to_demoted_was_accessed_within_the_selection_window() -> (
     None
 ):
