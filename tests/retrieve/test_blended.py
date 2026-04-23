@@ -432,12 +432,12 @@ async def test_cross_tenant_blend_forbidden() -> None:
 
 
 # Property
-@pytest.mark.skip(reason="deferred to a follow-up test-property-retrieval slice")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_blend_result_contains_no_pair_of_lineage_ancestor_and_descendant() -> None:
     """Bullet 18"""
 
 
-@pytest.mark.skip(reason="deferred to a follow-up test-property-retrieval slice")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_content_dedup_is_idempotent() -> None:
     """Bullet 19"""
 

@@ -4,12 +4,12 @@ section: _inbox/cross-slice
 type: cross-slice
 source_slice: slice-ingestion-capture
 target_slice: slice-plane-episodic
-status: tracked
+status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
 tracked_by: "https://github.com/ericmey/musubi/issues/141"
-tags: [section/inbox-cross-slice, type/cross-slice, status/tracked]
-updated: 2026-04-20
+tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
+updated: 2026-04-23
 ---
 
 > **Tracked as GH Issue #141** — https://github.com/ericmey/musubi/issues/141

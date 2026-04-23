@@ -776,12 +776,12 @@ async def test_invalid_json_for_cluster_skipped_not_failed_run(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="deferred to a follow-up test-property-concept slice")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_synthesis_is_idempotent_across_runs_with_no_new_memories() -> None:
     """Bullet 24."""
 
 
-@pytest.mark.skip(reason="deferred to a follow-up test-property-concept slice")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_rerunning_synthesis_with_same_inputs_produces_same_number_of_concepts() -> None:
     """Bullet 25."""
 

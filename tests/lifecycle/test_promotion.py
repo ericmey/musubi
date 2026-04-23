@@ -174,7 +174,8 @@ def test_gate_blocks_on_active_contradiction() -> None:
 
 
 @pytest.mark.skip(
-    reason="deferred to slice-plane-concept: SynthesizedConcept missing promotion_attempts"
+    reason="deferred to issue #217: wire promotion_attempts gate + increment logic; "
+    "field exists on SynthesizedConcept, gate is commented out + nothing increments it"
 )
 def test_gate_blocks_after_3_attempts() -> None:
     pass
@@ -209,9 +210,10 @@ def test_rendering_retry_corrective_prompt() -> None:
 
 
 # Path:
-@pytest.mark.skip(reason="deferred to slice-types: SynthesizedConcept missing topics field")
-# Path:
-@pytest.mark.skip(reason="deferred to slice-types: SynthesizedConcept missing topics field")
+@pytest.mark.skip(
+    reason="deferred to issue #217: drop stale getattr fallback + use concept.topics directly; "
+    "topics field exists on SynthesizedConcept"
+)
 def test_path_derived_from_topic_and_title() -> None:
     pass
 
@@ -455,14 +457,16 @@ async def test_thought_emitted_to_ops_alerts(deps: Any) -> None:
 
 # Failure:
 @pytest.mark.skip(
-    reason="deferred to slice-plane-concept: SynthesizedConcept missing promotion_attempts"
+    reason="deferred to issue #217: wire promotion_attempts gate + increment logic; "
+    "field exists on SynthesizedConcept, gate is commented out + nothing increments it"
 )
 def test_promotion_rejected_after_3_attempts_stops_retrying() -> None:
     pass
 
 
 @pytest.mark.skip(
-    reason="deferred to slice-plane-concept: SynthesizedConcept missing promotion_attempts"
+    reason="deferred to issue #217: wire promotion_attempts gate + increment logic; "
+    "field exists on SynthesizedConcept, gate is commented out + nothing increments it"
 )
 def test_rendering_failure_increments_attempts_not_promotes() -> None:
     pass
@@ -480,18 +484,18 @@ def test_concurrent_promotion_of_same_concept_one_wins() -> None:
 
 
 # Human override:
-@pytest.mark.skip(reason="CLI implementation deferred to separate slice")
+@pytest.mark.skip(reason="deferred to issue #220: operator CLI for promote force / reject")
 def test_cli_force_promote_with_custom_body() -> None:
     pass
 
 
-@pytest.mark.skip(reason="CLI implementation deferred to separate slice")
+@pytest.mark.skip(reason="deferred to issue #220: operator CLI for promote force / reject")
 def test_cli_reject_sets_rejected_fields_and_demotes() -> None:
     pass
 
 
 # Property / Integration:
-@pytest.mark.skip(reason="deferred to test-property-promotion")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_every_successful_promotion_produces_exactly_one_curated_file_and_one_Qdrant_point() -> (
     None
 ):

@@ -601,14 +601,14 @@ async def test_concurrent_dedup_race_resolves_to_single_winner(
     assert "a" in final_mem.tags and "b" in final_mem.tags
 
 
-@pytest.mark.skip(reason="deferred to a follow-up test-property-episodic slice")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_idempotency_re_ingesting_same_content_N_times_produces_1_memory_with_reinforcement_count_N() -> (
     None
 ):
     pass
 
 
-@pytest.mark.skip(reason="deferred to a follow-up test-property-episodic slice")
+@pytest.mark.skip(reason="out-of-scope: hypothesis-based property suite is post-v1.0 hardening")
 def test_hypothesis_lifecycle_monotonicity_state_transitions_never_go_backwards_except_explicit_revive_operation() -> (
     None
 ):

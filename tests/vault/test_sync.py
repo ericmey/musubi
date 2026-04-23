@@ -354,12 +354,12 @@ async def test_writelog_entry_purged_after_1h(write_log: WriteLog) -> None:
     assert count == 1
 
 
-@pytest.mark.skip(reason="Large file handling deferred to slice-plane-artifact integration")
+@pytest.mark.skip(reason="deferred to issue #221: large-file handling at the vault-sync layer")
 def test_large_file_body_chunked_as_artifact() -> None:
     pass
 
 
-@pytest.mark.skip(reason="Large file handling deferred to slice-plane-artifact integration")
+@pytest.mark.skip(reason="deferred to issue #221: large-file handling at the vault-sync layer")
 def test_large_file_curated_embeds_summary() -> None:
     pass
 
@@ -424,12 +424,12 @@ async def test_reconciler_idempotent_on_second_run(
     assert len(plane.created) == 2  # type: ignore
 
 
-@pytest.mark.skip(reason="Rate limits not yet implemented")
+@pytest.mark.skip(reason="deferred to issue #219: vault-sync event rate limits + backpressure")
 def test_event_rate_limit_drops_with_warning() -> None:
     pass
 
 
-@pytest.mark.skip(reason="Rate limits not yet implemented")
+@pytest.mark.skip(reason="deferred to issue #219: vault-sync event rate limits + backpressure")
 def test_indexing_rate_limit_backpressure() -> None:
     pass
 

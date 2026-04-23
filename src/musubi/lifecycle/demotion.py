@@ -110,10 +110,12 @@ async def demotion_episodic(deps: DemotionDeps, batch_size: int = 100) -> int:
 
 async def demotion_concept(deps: DemotionDeps, batch_size: int = 100) -> int:
     """Demote mature concepts that haven't been reinforced recently."""
-    # concept demotion rule:
-    # state == "matured" AND last_reinforced_at < now - 30 days
-    # (Since last_reinforced_at is missing, we use updated_epoch for now, but
-    # the ticket is logged).
+    # Spec intent: demote when `last_reinforced_at < now - 30 days`. The
+    # field exists on SynthesizedConcept — current behavior proxies via
+    # `updated_epoch` (which ticks on *any* write), so the sweep is
+    # too lenient on concepts touched for reasons other than
+    # reinforcement (contradictions, importance re-scores). Fix is
+    # tracked in issue #218.
 
     now = utc_now()
     cutoff_epoch = epoch_of(now) - (DEMOTION_CONCEPT_NO_REINFORCE_DAYS * 24 * 3600)
