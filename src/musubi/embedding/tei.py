@@ -11,6 +11,16 @@ Each client is independent — they talk to separate base URLs and are composed
 by the caller. None of them cache embeddings; batching is the caller's
 concern (see [[06-ingestion/embedding-strategy]]).
 
+Connection reuse contract:
+
+- Each client owns a single long-lived ``httpx.AsyncClient`` with HTTP/1.1
+  keepalive. Bootstrap constructs the TEI clients once per process, so this
+  gives us a warm pool for the lifetime of the worker. Without it, every
+  request pays the full TCP connect + HTTP handshake cost — which shows up
+  as a ~10x slowdown under concurrency because the pool never warms up.
+- :meth:`aclose` must be called at process shutdown for clean teardown.
+  Bootstrap wires this to the FastAPI ``shutdown`` event.
+
 Error handling contract:
 
 - 5xx responses raise :class:`EmbeddingError` with ``status_code`` set.
@@ -34,6 +44,13 @@ _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_BATCH_SIZE = 64
 _DEFAULT_MAX_INPUT_CHARS = 2048
 _DEFAULT_RETRY_BACKOFF = 0.05
+
+# Per-client connection pool. 100 max inflight is generous — Musubi's worst
+# realistic concurrency (voice call + 2 browser agents, each with a few
+# parallel plane queries) tops out around ~15. 20 keepalives is what httpx
+# recommends for a long-lived service-to-service client; it's the size of
+# the idle pool we hold open between bursts.
+_DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
 
 
 def _raise_for_httpx(exc: httpx.HTTPError) -> None:
@@ -61,19 +78,25 @@ def _raise_for_status(response: httpx.Response) -> None:
 
 
 async def _post_json(
+    client: httpx.AsyncClient,
     base_url: str,
     path: str,
     payload: dict[str, Any],
     *,
-    timeout: float,
     retry_backoff: float,
 ) -> Any:
-    """POST ``payload`` as JSON; raise :class:`EmbeddingError` on failure."""
+    """POST ``payload`` as JSON through ``client``; raise :class:`EmbeddingError`
+    on failure.
+
+    The caller owns ``client`` — we reuse it across calls so keepalive +
+    connection pooling actually kick in. Creating a fresh ``AsyncClient``
+    per call (the previous pattern) costs ~50-100ms in TCP handshake under
+    contention; reusing the pooled client is where the speedup lives.
+    """
     url = f"{base_url.rstrip('/')}{path}"
     for attempt in range(2):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload)
         except httpx.HTTPError as exc:
             _raise_for_httpx(exc)
             raise  # pragma: no cover — _raise_for_httpx always raises
@@ -107,6 +130,16 @@ def _truncate(text: str, max_input_chars: int) -> str:
     return text[:max_input_chars]
 
 
+def _build_client(timeout: float, limits: httpx.Limits) -> httpx.AsyncClient:
+    """Factory for the per-instance pooled HTTP client.
+
+    Constructing ``AsyncClient`` does no I/O — the pool is lazy until the
+    first request. So building it in ``__init__`` is safe even when the
+    event loop hasn't started yet (e.g. during FastAPI app bootstrap).
+    """
+    return httpx.AsyncClient(timeout=timeout, limits=limits)
+
+
 class TEIDenseClient:
     """Client for a TEI dense encoder endpoint.
 
@@ -122,12 +155,14 @@ class TEIDenseClient:
         max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE,
         max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
+        limits: httpx.Limits = _DEFAULT_LIMITS,
     ) -> None:
         self._base_url = base_url
         self._timeout = timeout
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
+        self._client = _build_client(timeout, limits)
 
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -135,15 +170,19 @@ class TEIDenseClient:
         out: list[list[float]] = []
         for batch in _chunks(texts, self._max_batch_size):
             data = await _post_json(
+                self._client,
                 self._base_url,
                 "/embed",
                 {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
-                timeout=self._timeout,
                 retry_backoff=self._retry_backoff,
             )
             # TEI returns list[list[float]] in input order.
             out.extend([[float(x) for x in vec] for vec in data])
         return out
+
+    async def aclose(self) -> None:
+        """Close the underlying httpx connection pool. Idempotent."""
+        await self._client.aclose()
 
 
 class TEISparseClient:
@@ -162,12 +201,14 @@ class TEISparseClient:
         max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE,
         max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
+        limits: httpx.Limits = _DEFAULT_LIMITS,
     ) -> None:
         self._base_url = base_url
         self._timeout = timeout
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
+        self._client = _build_client(timeout, limits)
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         if not texts:
@@ -175,10 +216,10 @@ class TEISparseClient:
         out: list[dict[int, float]] = []
         for batch in _chunks(texts, self._max_batch_size):
             data = await _post_json(
+                self._client,
                 self._base_url,
                 "/embed_sparse",
                 {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
-                timeout=self._timeout,
                 retry_backoff=self._retry_backoff,
             )
             # data: list[list[{"index": int, "value": float}]]
@@ -186,6 +227,10 @@ class TEISparseClient:
                 [{int(entry["index"]): float(entry["value"]) for entry in row} for row in data]
             )
         return out
+
+    async def aclose(self) -> None:
+        """Close the underlying httpx connection pool. Idempotent."""
+        await self._client.aclose()
 
 
 class TEIRerankerClient:
@@ -205,23 +250,25 @@ class TEIRerankerClient:
         timeout: float = _DEFAULT_TIMEOUT,
         max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
+        limits: httpx.Limits = _DEFAULT_LIMITS,
     ) -> None:
         self._base_url = base_url
         self._timeout = timeout
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
+        self._client = _build_client(timeout, limits)
 
     async def rerank(self, query: str, candidates: list[str]) -> list[float]:
         if not candidates:
             return []
         data = await _post_json(
+            self._client,
             self._base_url,
             "/rerank",
             {
                 "query": _truncate(query, self._max_input_chars),
                 "texts": [_truncate(candidate, self._max_input_chars) for candidate in candidates],
             },
-            timeout=self._timeout,
             retry_backoff=self._retry_backoff,
         )
         # data: list[{"index": int, "score": float}] — possibly out of order.
@@ -239,6 +286,10 @@ class TEIRerankerClient:
                 status_code=None,
             )
         return scores
+
+    async def aclose(self) -> None:
+        """Close the underlying httpx connection pool. Idempotent."""
+        await self._client.aclose()
 
 
 __all__ = ["TEIDenseClient", "TEIRerankerClient", "TEISparseClient"]

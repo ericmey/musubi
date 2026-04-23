@@ -237,6 +237,20 @@ def bootstrap_production_app(
         "embedder": embedder,
     }
 
+    # Close the TEI clients' pooled httpx.AsyncClient at shutdown so
+    # docker-compose stop / k8s termination drains cleanly (and tests
+    # that use the bootstrap path don't leak ResourceWarnings). Each
+    # aclose is idempotent so re-running bootstrap in the same app
+    # doesn't matter. FastAPI removed add_event_handler at the app
+    # level in favour of lifespan contexts; the same handler on
+    # app.router still works and is how Starlette always exposed it.
+    async def _shutdown_tei_clients() -> None:
+        await dense.aclose()
+        await sparse.aclose()
+        await reranker.aclose()
+
+    app.router.add_event_handler("shutdown", _shutdown_tei_clients)
+
 
 def _should_bootstrap(app: FastAPI, settings: Settings) -> bool:
     """Decide whether ``create_app()`` should call
