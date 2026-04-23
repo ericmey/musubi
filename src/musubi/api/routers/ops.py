@@ -155,6 +155,15 @@ class _NoOpOllamaClient:
     response_model=TriggerSynthesisResponse,
     operation_id="debug_trigger_synthesis.bucket=default",
     dependencies=[Depends(require_operator())],
+    responses={
+        403: {"description": "Caller does not hold operator scope."},
+        501: {
+            "description": (
+                "`simulate_ollama_offline=false` but no production Ollama "
+                "client impl is wired in. See Issue #119 for context."
+            )
+        },
+    },
 )
 async def trigger_synthesis(
     request: TriggerSynthesisRequest,

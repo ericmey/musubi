@@ -122,10 +122,25 @@ def _resolve_targets(
 
     if shape == 2:
         target_planes = requested if requested is not None else ["episodic"]
+        # Dedup in-order: `planes=["episodic", "episodic"]` is either
+        # a typo or a retry shape; either way running the pipeline
+        # twice for the same target wastes work and can skew merge
+        # ordering. Keep first-seen order so the caller's intent is
+        # preserved.
+        seen: set[str] = set()
+        deduped: list[str] = []
         for plane in target_planes:
+            if plane in seen:
+                continue
+            seen.add(plane)
+            deduped.append(plane)
+        for plane in deduped:
             if plane not in _VALID_PLANES:
-                return ([], f"unknown plane '{plane}' in planes list")
-        return ([(f"{namespace}/{plane}", plane) for plane in target_planes], None)
+                return (
+                    [],
+                    f"unknown plane '{plane}' in planes list (valid: {sorted(_VALID_PLANES)})",
+                )
+        return ([(f"{namespace}/{plane}", plane) for plane in deduped], None)
 
     return ([], f"namespace '{namespace}' must be 2- or 3-segment")
 

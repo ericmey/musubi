@@ -153,11 +153,20 @@ async def retrieve(
         return_exceptions=True,
     )
 
-    merged: list[RetrievalResult] = []
-    seen: set[str] = set()
+    # Merge dedup keeps the **highest-scoring** hit per object_id.
+    # First-seen dedup would drop a stronger match purely because it
+    # arrived from a later target in the gather order. Build a
+    # {object_id → best hit} map, then materialise once at the end.
+    best_by_id: dict[str, RetrievalResult] = {}
     transient_any = False
     internal_err: RetrievalError | None = None
     for outcome in results_per_target:
+        # Client disconnect / server shutdown produces CancelledError.
+        # Re-raise so the cancellation propagates up through the
+        # request lifecycle — swallowing it to return a partial
+        # response would be worse than surfacing the abort cleanly.
+        if isinstance(outcome, asyncio.CancelledError):
+            raise outcome
         if isinstance(outcome, Err):
             # Per-plane failures: transient/timeout degrades per-plane;
             # an internal error from *any* plane surfaces as a 5xx
@@ -171,22 +180,21 @@ async def retrieve(
             continue
         if isinstance(outcome, Ok):
             for hit in outcome.value:
-                if hit.object_id in seen:
-                    continue
-                seen.add(hit.object_id)
-                merged.append(hit)
+                current = best_by_id.get(hit.object_id)
+                if current is None or hit.score > current.score:
+                    best_by_id[hit.object_id] = hit
             continue
-        if isinstance(outcome, BaseException):
+        if isinstance(outcome, Exception):
             logger.warning("cross-plane retrieve per-plane exception: %r", outcome)
             internal_err = RetrievalError(kind="internal", detail=str(outcome))
             break
 
     if internal_err is not None:
         return Err(error=internal_err)
-    if not merged and transient_any:
+    if not best_by_id and transient_any:
         return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
 
-    merged.sort(key=lambda r: r.score, reverse=True)
+    merged = sorted(best_by_id.values(), key=lambda r: r.score, reverse=True)
     return Ok(value=merged[: parsed_query.limit])
 
 

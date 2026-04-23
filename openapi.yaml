@@ -81,6 +81,11 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TriggerSynthesisResponse'
+        '403':
+          description: Caller does not hold operator scope.
+        '501':
+          description: '`simulate_ollama_offline=false` but no production Ollama client
+            impl is wired in. See Issue #119 for context.'
         '422':
           description: Validation Error
           content:
@@ -810,11 +815,18 @@ paths:
           title: Last-Event-Id
       responses:
         '200':
-          description: Successful Response
+          description: Server-sent event stream of delivered thoughts.
           content:
             application/json:
               schema:
                 title: Response Stream Thoughts.Bucket=Default
+            text/event-stream:
+              schema:
+                type: string
+        '403':
+          description: Caller does not hold read scope for `namespace`.
+        '503':
+          description: Thought broker unavailable.
         '422':
           description: Validation Error
           content:
