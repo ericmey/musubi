@@ -239,7 +239,18 @@ jobs:
           if [[ -n "${EXISTING}" ]]; then
             echo "Updating existing PR #${EXISTING}"
             gh pr edit "${EXISTING}" --title "${TITLE}" --body "${BODY}"
+            PR_NUMBER="${EXISTING}"
           else
             echo "Opening new PR"
             gh pr create --base main --head "${BRANCH}" --title "${TITLE}" --body "${BODY}"
+            PR_NUMBER=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number')
+          fi
+
+          # Flip on auto-merge so the pin lands the moment required
+          # checks go green. Same "no human gate" policy as
+          # release-please.yml. Idempotent — calling --auto on a PR
+          # that already has auto-merge is a no-op.
+          if [[ -n "${PR_NUMBER}" ]]; then
+            echo "Enabling auto-merge on PR #${PR_NUMBER}"
+            gh pr merge "${PR_NUMBER}" --auto --squash
           fi
