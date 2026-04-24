@@ -73,13 +73,14 @@ memory = client.memories.capture(
     importance=7,
 )
 
-# Retrieve
+# Retrieve — 2-segment cross-plane per ADR-0028
 results = client.retrieve(
     RetrievalQuery(
-        namespace="eric/_shared/blended",
+        namespace="eric/claude-code",
         query_text="...",
         mode="fast",
         limit=5,
+        planes=["curated", "concept", "episodic"],
     )
 )
 
