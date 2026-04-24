@@ -373,8 +373,13 @@ async def test_oversize_markdown_skipped_with_warning(
     eric_dir = vault_root / "eric" / "shared"
     eric_dir.mkdir(parents=True, exist_ok=True)
     file_path = eric_dir / "huge.md"
-    # 1 MB over the limit — cheap to write, clearly over.
-    file_path.write_bytes(b"x" * (_MAX_VAULT_MD_BYTES + 1024 * 1024))
+    # Sparse file 1 MB over the limit — reports the right st_size via
+    # stat(2) without actually allocating/writing the full payload, so
+    # the test stays fast on slow CI filesystems.
+    oversize_bytes = _MAX_VAULT_MD_BYTES + 1024 * 1024
+    with file_path.open("wb") as f:
+        f.seek(oversize_bytes - 1)
+        f.write(b"x")
 
     caplog.set_level(logging.WARNING)
     plane_before = len(cast(Any, watcher.curated_plane).created)
@@ -479,14 +484,138 @@ async def test_reconciler_idempotent_on_second_run(
     assert len(plane.created) == 2  # type: ignore
 
 
-@pytest.mark.skip(reason="deferred to issue #219: vault-sync event rate limits + backpressure")
-def test_event_rate_limit_drops_with_warning() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_event_rate_limit_drops_with_warning(
+    vault_root: Path,
+    write_log: WriteLog,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Token-bucket rate limit drops events past the per-second budget
+    # and emits a structured warning. 1-event/sec bucket lets the
+    # first in, drops the rest.
+    import logging
+
+    w = VaultWatcher(
+        vault_root=vault_root,
+        curated_plane=FakeCuratedPlane(),  # type: ignore
+        write_log=write_log,
+        debounce_sec=0.1,
+        event_rate_per_sec=1.0,
+    )
+    w._loop = asyncio.get_running_loop()
+
+    caplog.set_level(logging.WARNING)
+    eric_dir = vault_root / "eric" / "shared"
+    eric_dir.mkdir(parents=True, exist_ok=True)
+
+    # Burst of 5 distinct-path events; bucket caps at 1 ⇒ 1 accepted,
+    # 4 dropped.
+    for i in range(5):
+        f = eric_dir / f"rate-{i}.md"
+        f.write_text("x", encoding="utf-8")
+        w.enqueue_event(FileCreatedEvent(str(f)))
+    await asyncio.sleep(0.05)
+
+    assert len(w._pending_tasks) == 1, (
+        f"expected 1 task accepted past the rate limit; saw {len(w._pending_tasks)}"
+    )
+    assert w._dropped_events == 4
+    # `record.getMessage()` is the reliable read — `.message` is only
+    # populated after a Formatter runs, which pytest doesn't guarantee.
+    warnings = [r.getMessage() for r in caplog.records if "vault-rate-limit-drop" in r.getMessage()]
+    assert len(warnings) == 4, f"expected 4 drop warnings; saw {warnings}"
 
 
-@pytest.mark.skip(reason="deferred to issue #219: vault-sync event rate limits + backpressure")
-def test_indexing_rate_limit_backpressure() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_indexing_rate_limit_backpressure(
+    vault_root: Path,
+    write_log: WriteLog,
+) -> None:
+    # Indexing semaphore bounds concurrent in-flight _handle_event
+    # calls. When N are in flight, the (N+1)-th awaits until one
+    # completes — blocking backpressure, not dropping.
+    import time
+
+    class _SlowPlane:
+        def __init__(self) -> None:
+            self.created: list[CuratedKnowledge] = []
+            self._active = 0
+            self.peak_concurrent = 0
+
+        async def create(self, memory: CuratedKnowledge) -> CuratedKnowledge:
+            self._active += 1
+            self.peak_concurrent = max(self.peak_concurrent, self._active)
+            # Hold the slot just long enough that the next handler
+            # must actually wait rather than zooming past.
+            await asyncio.sleep(0.05)
+            self._active -= 1
+            self.created.append(memory)
+            return memory
+
+    plane = _SlowPlane()
+    w = VaultWatcher(
+        vault_root=vault_root,
+        curated_plane=plane,  # type: ignore
+        write_log=write_log,
+        debounce_sec=0.01,
+        indexing_concurrency=2,
+    )
+    w._loop = asyncio.get_running_loop()
+
+    eric_dir = vault_root / "eric" / "shared"
+    eric_dir.mkdir(parents=True, exist_ok=True)
+
+    started = time.monotonic()
+    tasks: list[asyncio.Task[None]] = []
+    for i in range(6):
+        ksuid = generate_ksuid()
+        f = eric_dir / f"bp-{i}.md"
+        fm = {
+            "object_id": ksuid,
+            "namespace": "eric/shared/curated",
+            "title": f"T{i}",
+            "created": "2026-04-17T09:00:00Z",
+            "updated": "2026-04-17T09:00:00Z",
+        }
+        f.write_text(dump_frontmatter(fm, f"Body {i}"), encoding="utf-8")
+        tasks.append(asyncio.create_task(w._handle_event(str(f), FileCreatedEvent(str(f)))))
+
+    await asyncio.gather(*tasks)
+    elapsed = time.monotonic() - started
+
+    # All six eventually processed.
+    assert len(plane.created) == 6
+    # At most 2 ran concurrently — the semaphore held the line.
+    assert plane.peak_concurrent <= 2, f"peak concurrency breached: {plane.peak_concurrent}"
+    # 6 items / 2 slots / 50ms each ⇒ at least 3 "waves" ⇒ ~150ms.
+    # Giving generous slack for scheduler jitter.
+    assert elapsed >= 0.12, f"backpressure didn't actually slow things: {elapsed:.3f}s"
+
+
+def test_invalid_event_rate_per_sec_rejected(vault_root: Path, write_log: WriteLog) -> None:
+    # <= 0 would mean the bucket never accumulates a token: every
+    # event dropped forever. Fail loud on ctor so operators see it.
+    for bad in (0, -1.0, 0.0):
+        with pytest.raises(ValueError, match="event_rate_per_sec"):
+            VaultWatcher(
+                vault_root=vault_root,
+                curated_plane=FakeCuratedPlane(),  # type: ignore
+                write_log=write_log,
+                event_rate_per_sec=bad,
+            )
+
+
+def test_invalid_indexing_concurrency_rejected(vault_root: Path, write_log: WriteLog) -> None:
+    # 0 would deadlock the semaphore (acquire never releases); negative
+    # raises from asyncio. Either way, fail loud on ctor.
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="indexing_concurrency"):
+            VaultWatcher(
+                vault_root=vault_root,
+                curated_plane=FakeCuratedPlane(),  # type: ignore
+                write_log=write_log,
+                indexing_concurrency=bad,
+            )
 
 
 @pytest.mark.skip(reason="Property test deferred")

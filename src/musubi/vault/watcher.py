@@ -26,6 +26,56 @@ vault markdown (thousands of pages of text) while still catching
 runaway-plugin rewrites or hand-pasted dumps before they flood TEI
 + Qdrant. See issue #221."""
 
+_DEFAULT_EVENT_RATE_PER_SEC = 10.0
+"""Watcher dispatch rate limit (events accepted per second, token-bucket).
+Empty bucket → drop the event with a structured warning. Keeps the
+event loop healthy against noisy plugins / mass renames. See issue
+#219."""
+
+_DEFAULT_INDEXING_CONCURRENCY = 10
+"""Max concurrent in-flight `_handle_event` calls. Bounded via
+`asyncio.Semaphore` — once this many sweeps are processing, the next
+debounce fire awaits an open slot. Protects TEI + Qdrant from
+parallel-request floods while giving the event loop backpressure.
+See issue #219."""
+
+
+class _TokenBucket:
+    """Simple monotonic-clock token bucket.
+
+    Tokens refill continuously at `rate_per_sec`. `try_consume()` takes
+    one token atomically — returns True when a token was available,
+    False otherwise. Not thread-safe; the Watcher only calls it from
+    the event loop (via `call_soon_threadsafe`).
+
+    Capacity is decoupled from rate: it is clamped to at least 1 token
+    so sub-1/sec rates can still accumulate a token and fire — otherwise
+    every event would be dropped forever.
+    """
+
+    __slots__ = ("_capacity", "_last_refill", "_rate", "_tokens")
+
+    def __init__(self, rate_per_sec: float) -> None:
+        self._rate = max(rate_per_sec, 0.0)
+        self._capacity = max(self._rate, 1.0)
+        self._tokens = self._capacity
+        self._last_refill = 0.0
+
+    def try_consume(self) -> bool:
+        import time
+
+        now = time.monotonic()
+        if self._last_refill == 0.0:
+            self._last_refill = now
+        elapsed = now - self._last_refill
+        if elapsed > 0:
+            self._tokens = min(self._capacity, self._tokens + elapsed * self._rate)
+            self._last_refill = now
+        if self._tokens >= 1.0:
+            self._tokens -= 1.0
+            return True
+        return False
+
 
 class WatcherHandler(FileSystemEventHandler):
     """Bridge between watchdog events and our async sync logic."""
@@ -60,7 +110,14 @@ class VaultWatcher:
         curated_plane: CuratedPlane,
         write_log: WriteLog,
         debounce_sec: float = 2.0,
+        event_rate_per_sec: float = _DEFAULT_EVENT_RATE_PER_SEC,
+        indexing_concurrency: int = _DEFAULT_INDEXING_CONCURRENCY,
     ) -> None:
+        if event_rate_per_sec <= 0:
+            raise ValueError(f"event_rate_per_sec must be > 0, got {event_rate_per_sec!r}")
+        if indexing_concurrency < 1:
+            raise ValueError(f"indexing_concurrency must be >= 1, got {indexing_concurrency!r}")
+
         self.vault_root = vault_root
         self.curated_plane = curated_plane
         self.write_log = write_log
@@ -70,6 +127,11 @@ class VaultWatcher:
         self._pending_tasks: dict[str, asyncio.Task[None]] = {}
         self._observer: Any = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Rate limit + concurrency gate — see module-level docstrings
+        # on the default constants.
+        self._event_bucket = _TokenBucket(event_rate_per_sec)
+        self._indexing_semaphore = asyncio.Semaphore(indexing_concurrency)
+        self._dropped_events = 0
 
     def enqueue_event(self, event: FileSystemEvent) -> None:
         """Schedule processing of a file event with debouncing."""
@@ -95,17 +157,26 @@ class VaultWatcher:
 
         if p.suffix != ".md":
             # Binary/non-markdown files aren't vault content. Emit a
-            # structured warning on every event so operators can see
-            # what landed, then skip processing. Deliberate design:
-            # operators who want a PDF/image/etc. in Musubi use
-            # /v1/artifacts/ instead of drag-dropping into the vault.
-            # See issue #221. (Per-path log dedup could help on spammy
-            # sources but adds cache-invalidation complexity — not
-            # worth the ergonomics win yet.)
+            # structured warning so operators see what landed, then
+            # skip processing. Deliberate: operators who want a
+            # PDF/image/etc. in Musubi use /v1/artifacts/ instead of
+            # drag-dropping into the vault. See issue #221.
             logger.warning(
                 "vault-skip-non-markdown path=%s suffix=%s",
                 str(rel),
                 p.suffix or "(none)",
+            )
+            return
+
+        # Rate-limit gate — drop events when the bucket is empty so
+        # noisy sources (mass rename, bulk paste, plugin rewrite loops)
+        # can't spawn unbounded debounce tasks. See issue #219.
+        if not self._event_bucket.try_consume():
+            self._dropped_events += 1
+            logger.warning(
+                "vault-rate-limit-drop path=%s dropped_total=%d",
+                str(rel),
+                self._dropped_events,
             )
             return
 
@@ -139,6 +210,15 @@ class VaultWatcher:
             self._pending_tasks.pop(path_str, None)
 
     async def _handle_event(self, path_str: str, event: FileSystemEvent) -> None:
+        # Bound in-flight sweeps — when the semaphore is exhausted,
+        # subsequent handlers await here rather than dispatching new
+        # TEI/Qdrant calls. Blocking backpressure beats dropping at
+        # this layer because the debounce step already picked a
+        # canonical event per path. See issue #219.
+        async with self._indexing_semaphore:
+            await self._handle_event_inner(path_str, event)
+
+    async def _handle_event_inner(self, path_str: str, event: FileSystemEvent) -> None:
         logger.info("Handling event %s for %s", event.event_type, path_str)
         path = Path(path_str)
         if event.event_type == "moved" and hasattr(event, "dest_path"):
