@@ -44,6 +44,7 @@ class RetrieveResultRow(BaseModel):
     plane: str
     content: str
     namespace: str
+    title: str | None = None
     extra: dict[str, Any] = {}
 
 

@@ -955,9 +955,7 @@ def test_retrieve_row_surfaces_top_level_title_for_curated(
     top = results[0]
 
     # Top-level title must be the seeded value.
-    assert top["title"] == "LiveKit Restart Runbook", (
-        f"expected top-level title; got {top!r}"
-    )
+    assert top["title"] == "LiveKit Restart Runbook", f"expected top-level title; got {top!r}"
     # And it must NOT double-live in extra — one source of truth.
     assert "title" not in top.get("extra", {}), (
         f"title must not be duplicated in extra; saw {top['extra']!r}"
