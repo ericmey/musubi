@@ -302,15 +302,15 @@ async def test_thought_transition_on_missing_object_raises_lookup(
 # ---------------------------------------------------------------------------
 
 
-async def test_replay_since_returns_thoughts_after_last_event_id(
+async def test_replay_since_returns_all_thoughts_when_anchor_is_before_all(
     plane: ThoughtsPlane, ns: str
 ) -> None:
-    """Only thoughts with ``object_id > last_event_id`` are returned.
-    KSUIDs are time-sortable lex, so "> anchor" is "emitted after the
-    last one the client saw" for any anchor across a second-boundary.
-    (KSUIDs generated in the same second have random suffixes, so this
-    test uses a sentinel anchor lex-smaller than any real KSUID to get
-    deterministic ordering.)"""
+    """With an anchor lex-smaller than every stored thought, every
+    matching thought is replayed in ascending object_id order. Uses
+    the ``"0"*27`` lex-min sentinel for determinism since KSUIDs
+    generated in the same second have random suffixes. The strict
+    ``> anchor`` exclusion is tested separately in
+    ``test_replay_since_strictly_excludes_anchor_and_lex_smaller``."""
     t1 = await plane.send(_make("first", ns, "a", "b"))
     t2 = await plane.send(_make("second", ns, "a", "b"))
     t3 = await plane.send(_make("third", ns, "a", "b"))
@@ -327,6 +327,34 @@ async def test_replay_since_returns_thoughts_after_last_event_id(
     emitted_ids = [t.object_id for t in replayed]
     assert emitted_ids == sorted(emitted_ids), (
         f"replay must emit ascending by object_id; got {emitted_ids}"
+    )
+
+
+async def test_replay_since_strictly_excludes_anchor_and_lex_smaller(
+    plane: ThoughtsPlane, ns: str
+) -> None:
+    """The `object_id > last_event_id` predicate is *strict*: the
+    anchor itself is excluded, and so is anything lex-smaller. Uses
+    the lex-sorted first of three sent thoughts as the anchor so
+    the test is deterministic regardless of within-second KSUID
+    suffix ordering — the other two thoughts are, by construction,
+    lex-greater than the anchor."""
+    sent = [await plane.send(_make(f"msg-{i}", ns, "a", "b")) for i in range(3)]
+    by_lex = sorted(sent, key=lambda t: t.object_id)
+    anchor = by_lex[0].object_id
+
+    replayed, _ = await plane.replay_since(
+        namespace=ns, includes={"b", "all"}, last_event_id=anchor
+    )
+    returned_ids = {t.object_id for t in replayed}
+
+    assert anchor not in returned_ids, (
+        f"anchor's own object_id must be excluded (strict >, not >=); got {returned_ids}"
+    )
+    assert by_lex[1].object_id in returned_ids, f"lex-greater thought missing; got {returned_ids}"
+    assert by_lex[2].object_id in returned_ids, f"lex-greatest thought missing; got {returned_ids}"
+    assert len(returned_ids) == 2, (
+        f"expected exactly the two lex-greater thoughts; got {returned_ids}"
     )
 
 
