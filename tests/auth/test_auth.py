@@ -20,8 +20,6 @@ from musubi.auth.middleware import AuthRequirement, authenticate_request
 from musubi.auth.scopes import (
     ScopeError,
     require_operator_scope,
-    require_thought_check_scope,
-    require_thought_send_scope,
     resolve_blended_query_scope,
     resolve_namespace_scope,
 )
@@ -83,9 +81,7 @@ def _payload(
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
         "jti": "token-123",
-        "scope": scopes
-        if scopes is not None
-        else ["eric/claude-code/episodic:rw", "thoughts:check:claude-code"],
+        "scope": scopes if scopes is not None else ["eric/claude-code/episodic:rw"],
         "presence": presence,
     }
 
@@ -214,25 +210,6 @@ def test_operator_scope_required_for_admin_endpoints() -> None:
     assert isinstance(denied.error, ScopeError)
     assert denied.error.status_code == 403
     assert allowed.is_ok()
-
-
-def test_thought_check_scope_is_presence_specific() -> None:
-    context = AuthContext(
-        subject="eric-claude-code",
-        issuer="https://auth.example.test",
-        audience="musubi",
-        scopes=("thoughts:check:claude-code",),
-        presence="eric/claude-code",
-        token_id="token-123",
-    )
-
-    own_inbox = require_thought_check_scope(context, presence="claude-code")
-    other_inbox = require_thought_check_scope(context, presence="livekit-voice")
-
-    assert own_inbox.is_ok()
-    assert other_inbox.is_err()
-    assert isinstance(other_inbox, Err)
-    assert "livekit-voice" in other_inbox.error.detail
 
 
 def test_blended_query_expands_and_checks_plane_scopes() -> None:
@@ -374,7 +351,7 @@ def test_validate_token_rejects_bad_signature_and_claim_shapes(
         _hs_token(auth_settings, invalid_jti_payload), settings=auth_settings
     )
     scope_string_payload = _payload(scopes=None)
-    scope_string_payload["scope"] = "eric/*/episodic:r thoughts:send"
+    scope_string_payload["scope"] = "eric/*/episodic:r eric/_shared/curated:r"
     scope_string = validate_token(
         _hs_token(auth_settings, scope_string_payload), settings=auth_settings
     )
@@ -387,7 +364,7 @@ def test_validate_token_rejects_bad_signature_and_claim_shapes(
     assert isinstance(invalid_jti, Err)
     assert "JWT ID" in invalid_jti.error.detail
     assert isinstance(scope_string, Ok)
-    assert scope_string.value.scopes == ("eric/*/episodic:r", "thoughts:send")
+    assert scope_string.value.scopes == ("eric/*/episodic:r", "eric/_shared/curated:r")
 
 
 def test_rs256_validation_handles_jwks_failures(
@@ -499,20 +476,10 @@ def test_special_glob_and_invalid_namespace_scopes() -> None:
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=(
-            "thoughts:send",
             "**:r",
             "eric/*/episodic:w",
             "malformed",
-            "thoughts:check:claude-code",
         ),
-        presence="eric/claude-code",
-        token_id="token-123",
-    )
-    no_send_context = AuthContext(
-        subject="eric-claude-code",
-        issuer="https://auth.example.test",
-        audience="musubi",
-        scopes=("eric/claude-code/episodic:r",),
         presence="eric/claude-code",
         token_id="token-123",
     )
@@ -525,8 +492,6 @@ def test_special_glob_and_invalid_namespace_scopes() -> None:
         token_id="token-123",
     )
 
-    send_allowed = require_thought_send_scope(context)
-    send_denied = require_thought_send_scope(no_send_context)
     operator_read = resolve_namespace_scope(context, namespace="any/namespace/here", access="r")
     wildcard_write = resolve_namespace_scope(
         context,
@@ -539,8 +504,6 @@ def test_special_glob_and_invalid_namespace_scopes() -> None:
         access="r",
     )
 
-    assert isinstance(send_allowed, Ok)
-    assert isinstance(send_denied, Err)
     assert isinstance(operator_read, Ok)
     assert operator_read.value.scope_used == "**:r"
     assert isinstance(wildcard_write, Ok)

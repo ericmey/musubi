@@ -52,11 +52,10 @@ JWT, RS256 signed:
   "exp": 1744896000,                   // 1h
   "jti": "abc-123",
   "scope": [
-    "eric/claude-code/episodic:rw",
+    "eric/claude-code:r",
+    "eric/claude-code/*:rw",
     "eric/_shared/curated:r",
-    "eric/_shared/artifact:rw",
-    "thoughts:send",
-    "thoughts:check:claude-code"
+    "eric/_shared/artifact:rw"
   ],
   "presence": "eric/claude-code"
 }
@@ -91,10 +90,16 @@ Access level:
 
 Non-namespace scopes (special):
 
-- `thoughts:send` — may send thoughts.
-- `thoughts:check:<presence>` — may check inbox for the named presence.
-- `thoughts:history:<presence>` — may search history of the named presence.
 - `operator` — admin endpoints.
+
+**Thoughts scopes** — there is **no** separate `thoughts:send` / `thoughts:check:<presence>` / `thoughts:history:<presence>` keyword scope. Every thoughts endpoint (send, check, read, history, stream) checks against the standard namespace-scope form. See [[07-interfaces/canonical-api#scope-by-endpoint]] for the full table; the short version:
+
+- `POST /v1/thoughts/send` → 3-segment `<tenant>/<presence>/thought:w`
+- `POST /v1/thoughts/read` → 3-segment `<tenant>/<presence>/thought:w` (marking read mutates state)
+- `POST /v1/thoughts/check` / `/history` → 3-segment `<tenant>/<presence>/thought:r`
+- `GET /v1/thoughts/stream` → 2-segment `<tenant>/<presence>:r`
+
+A token with `<tenant>/<presence>:r` + `<tenant>/<presence>/*:rw` covers every thoughts flow for that presence.
 
 ## Signing key
 
@@ -132,29 +137,27 @@ clients:
     redirect_uris: ["chrome-extension://<ext-id>/oauth/callback",
                     "http://localhost:<port>/oauth/callback"]
     allowed_scopes:
-      - eric/claude-code/episodic:rw
+      - eric/claude-code:r
+      - eric/claude-code/*:rw
       - eric/_shared/curated:r
-      - thoughts:send
-      - thoughts:check:claude-code
     public: true    # PKCE only, no client secret
 
   - client_id: musubi-livekit
     redirect_uris: ["http://localhost:8200/oauth/callback"]
     allowed_scopes:
-      - eric/livekit-voice/episodic:rw
-      - eric/_shared/blended:r
+      - eric/livekit-voice:r
+      - eric/livekit-voice/*:rw
+      - eric/_shared/curated:r
+      - eric/_shared/concept:r
       - eric/_shared/artifact:rw
-      - thoughts:send
-      - thoughts:check:livekit-voice
     public: true
 
   - client_id: musubi-openclaw
     redirect_uris: ["chrome-extension://<ext-id>/oauth/callback"]
     allowed_scopes:
-      - eric/openclaw/episodic:rw
+      - eric/openclaw:r
+      - eric/openclaw/*:rw
       - eric/_shared/curated:r
-      - thoughts:send
-      - thoughts:check:openclaw
     public: true
 ```
 
@@ -172,8 +175,10 @@ On each request Core:
 6. Per-endpoint scope check:
    - Capture → `<namespace>:w`.
    - Retrieve → `<namespace>:r` (or read any of the planes named in the query).
-   - Thought send → `thoughts:send` + recipient must be a known presence.
-   - Thought check → `thoughts:check:<my_presence>`.
+   - Thought send → `<tenant>/<presence>/thought:w` + recipient must be a known presence.
+   - Thought read (mark as read) → `<tenant>/<presence>/thought:w` (state mutation).
+   - Thought check / history → `<tenant>/<presence>/thought:r`.
+   - Thought stream (SSE) → `<tenant>/<presence>:r` (2-segment).
    - Operator endpoint → `operator`.
 7. If check fails, 403 with structured error.
 
@@ -245,16 +250,16 @@ Authorization: Bearer <token with scope eric/claude-code/episodic:rw>
 }
 ```
 
-## Example: thought inbox check mismatch
+## Example: thought inbox namespace mismatch
 
 ```
 POST /v1/thoughts/check
-Authorization: Bearer <token with presence=claude-code, scope thoughts:check:claude-code>
+Authorization: Bearer <token with presence=eric/claude-code, scope eric/claude-code/thought:r>
 
-{"my_presence": "livekit-voice"}
+{"namespace": "eric/livekit-voice/thought", "presence": "livekit-voice"}
 ```
 
-→ 403. Tokens can only check their own presence's inbox.
+→ 403. The request body's `namespace` is `eric/livekit-voice/thought` but the token's scope only grants `eric/claude-code/thought:r`. The scope matcher compares the requested namespace against the token's scope list verbatim — no implicit presence-of-token check.
 
 ## Auditing
 
@@ -284,11 +289,10 @@ Denials have `event: auth.deny` + `reason: ...`. 30-day retention; operator-only
 4. `test_scope_match_grants_access`
 5. `test_scope_mismatch_returns_403_with_detail`
 6. `test_operator_scope_required_for_admin_endpoints`
-7. `test_thought_check_scope_is_presence_specific`
-8. `test_blended_query_expands_and_checks_plane_scopes`
-9. `test_pkce_flow_end_to_end` (integration)
-10. `test_refresh_token_rotation_issues_new_refresh`
-11. `test_revocation_invalidates_token_within_60s_cache`
-12. `test_signing_key_rotation_dual_verify_period`
-13. `test_every_auth_decision_emits_audit_line`
-14. `test_operator_issued_only_via_cli`
+7. `test_blended_query_expands_and_checks_plane_scopes`
+8. `test_pkce_flow_end_to_end` (integration)
+9. `test_refresh_token_rotation_issues_new_refresh`
+10. `test_revocation_invalidates_token_within_60s_cache`
+11. `test_signing_key_rotation_dual_verify_period`
+12. `test_every_auth_decision_emits_audit_line`
+13. `test_operator_issued_only_via_cli`
