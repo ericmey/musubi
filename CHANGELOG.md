@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/ericmey/musubi/compare/v0.7.0...v0.7.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* **ci:** auto-digest-bump trigger + auth (closes [#247](https://github.com/ericmey/musubi/issues/247)) ([#249](https://github.com/ericmey/musubi/issues/249)) ([8540a3c](https://github.com/ericmey/musubi/commit/8540a3ca7a2bff966841ab848ccd2223d57df025))
+
 ## [0.7.0](https://github.com/ericmey/musubi/compare/v0.6.1...v0.7.0) (2026-04-24)
 
 
