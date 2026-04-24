@@ -4,4 +4,4 @@ See the architecture vault for design. Code is sliced: each public subpackage
 realises one slice from ``_slices/`` in the vault, one Test Contract at a time.
 """
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
