@@ -732,7 +732,7 @@ wheels = [
 
 [[package]]
 name = "musubi"
-version = "0.4.0"
+version = "0.5.1"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
@@ -746,6 +746,7 @@ dependencies = [
     { name = "ruamel-yaml" },
     { name = "svix-ksuid" },
     { name = "tokenizers" },
+    { name = "typer" },
     { name = "watchdog" },
 ]
 
@@ -764,6 +765,9 @@ dev = [
     { name = "ruff" },
     { name = "types-pyyaml" },
 ]
+otel = [
+    { name = "opentelemetry-api" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -779,6 +783,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.2.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11" },
     { name = "opentelemetry-api", marker = "extra == 'dev'", specifier = ">=1.27" },
+    { name = "opentelemetry-api", marker = "extra == 'otel'", specifier = ">=1.27" },
     { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.27" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.4" },
@@ -794,11 +799,12 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.6" },
     { name = "svix-ksuid", specifier = ">=0.6" },
     { name = "tokenizers", specifier = ">=0.20" },
+    { name = "typer", specifier = ">=0.12" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'", specifier = ">=6" },
     { name = "watchdog", specifier = ">=4.0" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["otel", "dev"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest-timeout", specifier = ">=2.4.0" }]

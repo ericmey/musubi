@@ -26,13 +26,19 @@ dependencies = [
 
     "python-multipart>=0.0.9",
     "tokenizers>=0.20",
+    # Operator CLI (`musubi promote force/reject`, future subcommands).
+    # Typer leans on type hints, which fits the rest of the codebase.
+    "typer>=0.12",
 ]
-otel = [
-    "opentelemetry-api>=1.27",
-]
+
+[project.scripts]
+musubi = "musubi.cli.main:app"
 
 
 [project.optional-dependencies]
+otel = [
+    "opentelemetry-api>=1.27",
+]
 dev = [
     "pytest>=8",
     "types-PyYAML>=6",
