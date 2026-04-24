@@ -50,7 +50,10 @@ jobs:
       # read` lets upload-sarif hit the workflow-runs API for
       # fingerprinting — without it the step fails with "Resource not
       # accessible by integration" even when SARIF itself is valid.
-      contents: read
+      # `contents: write` lets softprops/action-gh-release append the
+      # digest + ansible-pin snippet to the release body (it calls the
+      # "Update a release" REST endpoint).
+      contents: write
       packages: write
       id-token: write
       security-events: write
