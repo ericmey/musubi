@@ -394,16 +394,21 @@ async def test_replay_since_caps_results_and_signals_truncation(
     assert truncated is True
 
 
-async def test_replay_since_empty_when_last_event_id_is_most_recent(
+async def test_replay_since_empty_when_anchor_is_lex_largest(
     plane: ThoughtsPlane, ns: str
 ) -> None:
-    """If the client's last-seen id is already the latest thought,
-    replay is empty — the generator skips straight to live-tail."""
+    """If the anchor is lex-equal-or-greater than every stored
+    thought's object_id, replay is empty — the generator skips
+    straight to live-tail. Uses the lex-max sentinel anchor to
+    stay deterministic (KSUIDs generated in the same second have
+    random suffix order, so the caller's ``latest_created`` isn't
+    guaranteed to be ``max_by_lex``)."""
     await plane.send(_make("old", ns, "a", "b"))
-    latest = await plane.send(_make("latest", ns, "a", "b"))
+    await plane.send(_make("latest", ns, "a", "b"))
+    anchor = "z" * 27  # lex-greater than any KSUID (KSUIDs use base62)
 
     replayed, truncated = await plane.replay_since(
-        namespace=ns, includes={"b", "all"}, last_event_id=latest.object_id
+        namespace=ns, includes={"b", "all"}, last_event_id=anchor
     )
     assert replayed == []
     assert truncated is False
