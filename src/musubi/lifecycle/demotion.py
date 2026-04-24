@@ -16,6 +16,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
+from musubi.planes.artifact.plane import ArtifactPlane
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.types.common import epoch_of, utc_now
@@ -43,6 +44,8 @@ class DemotionDeps:
     concept_plane: ConceptPlane
     events: LifecycleEventSink
     thoughts: ThoughtEmitter
+    artifact_plane: ArtifactPlane | None = None
+    artifact_archival_enabled: bool = False
 
 
 async def demotion_episodic(deps: DemotionDeps, batch_size: int = 100) -> int:
@@ -200,10 +203,122 @@ async def demotion_concept(deps: DemotionDeps, batch_size: int = 100) -> int:
 
 
 async def demotion_artifact(deps: DemotionDeps, batch_size: int = 100) -> int:
-    """Archive old, unreferenced, large artifacts.
-    Off by default; opt-in per-namespace.
+    """Archive old, unreferenced artifacts.
+
+    Off by default. Set `DemotionDeps.artifact_archival_enabled = True`
+    (driven by `settings.musubi_artifact_archival_enabled`) to opt in.
+
+    When enabled: scrolls `musubi_artifact` for rows older than
+    `DEMOTION_ARTIFACT_AGE_DAYS` that aren't referenced by any memory
+    (no episodic/curated/concept row carries the artifact's id in its
+    `supported_by`). Transitions those to `state=archived` via
+    `ArtifactPlane.transition`. The blob itself is preserved — archival
+    is a soft-delete, not storage reclamation.
     """
-    return 0
+    if not deps.artifact_archival_enabled or deps.artifact_plane is None:
+        return 0
+
+    now = utc_now()
+    cutoff_epoch = epoch_of(now) - (DEMOTION_ARTIFACT_AGE_DAYS * 24 * 3600)
+
+    # Pre-compute the full set of referenced artifact ids once per sweep.
+    # Nested-list field filters (`supported_by.artifact_id`) aren't
+    # uniformly supported across Qdrant back-ends (notably the in-memory
+    # client), so we scroll every memory-carrying plane and accumulate
+    # the ids in Python. O(m) once, then O(n) membership checks — saves
+    # the O(n*m) per-artifact probe a naive implementation would do.
+    referenced_ids = _collect_referenced_artifact_ids(deps.qdrant)
+
+    from musubi.store.names import collection_for_plane
+
+    coll_name = collection_for_plane("artifact")
+
+    must_conditions: list[Any] = [
+        models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
+        models.FieldCondition(key="created_epoch", range=models.Range(lt=cutoff_epoch)),
+    ]
+
+    offset = None
+    archived_count = 0
+
+    while True:
+        resp = deps.qdrant.scroll(
+            collection_name=coll_name,
+            scroll_filter=models.Filter(must=must_conditions),
+            limit=batch_size,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        points, offset = resp[0], resp[1]
+
+        for point in points:
+            if not point.payload:
+                continue
+
+            object_id_str = point.payload.get("object_id")
+            namespace = point.payload.get("namespace")
+            if not object_id_str or not namespace:
+                continue
+
+            if object_id_str in referenced_ids:
+                continue
+
+            try:
+                _, _event = await deps.artifact_plane.transition(
+                    namespace=cast(Any, namespace),
+                    object_id=cast(Any, object_id_str),
+                    to_state="archived",
+                    actor=_LIFECYCLE_ACTOR,
+                    reason="decay-rule:unreferenced-expired",
+                )
+                archived_count += 1
+            except Exception as e:
+                log.error(
+                    "Failed to archive artifact %s: %s",
+                    object_id_str,
+                    e,
+                    exc_info=True,
+                )
+
+        if not offset:
+            break
+
+    return archived_count
+
+
+def _collect_referenced_artifact_ids(client: QdrantClient) -> set[str]:
+    """Return the set of artifact ids referenced by any live memory.
+
+    Scrolls `musubi_episodic`, `musubi_curated`, `musubi_concept` — the
+    three planes whose payloads carry `supported_by`. Demoted / archived
+    rows still pin their artifacts (we don't reclaim retroactively);
+    per-row state filtering lives at retrieval, not here.
+    """
+    from musubi.store.names import collection_for_plane
+
+    referenced: set[str] = set()
+    for plane_name in ("episodic", "curated", "concept"):
+        coll = collection_for_plane(plane_name)
+        offset: Any = None
+        while True:
+            points, offset = client.scroll(
+                collection_name=coll,
+                limit=500,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in points:
+                if not point.payload:
+                    continue
+                for ref in point.payload.get("supported_by") or []:
+                    artifact_id = ref.get("artifact_id") if isinstance(ref, dict) else None
+                    if artifact_id:
+                        referenced.add(str(artifact_id))
+            if not offset:
+                break
+    return referenced
 
 
 async def reinstate(deps: DemotionDeps, namespace: str, object_id: str, reason: str) -> None:

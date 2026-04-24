@@ -94,6 +94,17 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     musubi_grpc: bool = Field(default=False, description="Expose the gRPC API alongside REST.")
 
+    musubi_artifact_archival_enabled: bool = Field(
+        default=False,
+        description=(
+            "Opt in to the artifact-archival lifecycle sweep. When False (default), "
+            "`demotion_artifact` is a no-op. When True, artifacts older than "
+            "`DEMOTION_ARTIFACT_AGE_DAYS` (180d) and not referenced by any memory "
+            "are transitioned to state=archived. Blob bytes are preserved; "
+            "storage reclamation is a separate follow-up (issue #222)."
+        ),
+    )
+
     # Rate limits — per-bucket, per-minute — live in
     # `src/musubi/api/rate_limit.py::DEFAULT_BUCKETS`. See ADR 0027 for
     # the rationale on why they are not tunable via settings.

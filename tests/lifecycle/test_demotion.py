@@ -16,6 +16,7 @@ from musubi.lifecycle.events import LifecycleEventSink
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.store.bootstrap import bootstrap
+from musubi.types.artifact import SourceArtifact
 from musubi.types.common import epoch_of, generate_ksuid, utc_now
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.episodic import EpisodicMemory
@@ -354,19 +355,159 @@ async def test_concept_reinforcement_resets_demotion_clock(deps: DemotionDeps) -
 
 
 # Artifact
-@pytest.mark.skip(reason="deferred to issue #222: artifact archival policy + slice-ops-storage")
-def test_artifact_archival_off_by_default() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_artifact_archival_off_by_default(
+    qdrant: QdrantClient,
+    episodic_plane: EpisodicPlane,
+    concept_plane: ConceptPlane,
+    events_sink: LifecycleEventSink,
+) -> None:
+    # Omit artifact_plane + leave the toggle False. `demotion_artifact`
+    # must no-op even when the data would otherwise qualify for archival.
+    from musubi.lifecycle.demotion import demotion_artifact
+    from musubi.planes.artifact.plane import ArtifactPlane
+
+    artifact_plane = ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
+    art = await artifact_plane.create(
+        SourceArtifact(
+            namespace="eric/shared/artifact",
+            title="old unreferenced",
+            filename="a.txt",
+            sha256="a" * 64,
+            content_type="text/plain",
+            size_bytes=2_000_000,
+            chunker="none",
+        )
+    )
+
+    # Stale created_epoch so it would qualify if archival were enabled.
+    from musubi.planes.artifact.plane import _point_id as ap_id
+
+    qdrant.set_payload(
+        collection_name="musubi_artifact",
+        payload={"created_epoch": epoch_of(utc_now()) - 200 * 24 * 3600},
+        points=[ap_id(str(art.object_id))],
+    )
+
+    # Default toggles: archival disabled.
+    deps = DemotionDeps(
+        qdrant=qdrant,
+        episodic_plane=episodic_plane,
+        concept_plane=concept_plane,
+        events=events_sink,
+        thoughts=FakeThoughtEmitter(),
+    )
+    count = await demotion_artifact(deps)
+    assert count == 0
+
+    after = await artifact_plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert after is not None and after.state == "matured"
 
 
-@pytest.mark.skip(reason="deferred to issue #222: artifact archival policy + slice-ops-storage")
-def test_artifact_archival_respects_referenced_by() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_artifact_archival_respects_referenced_by(
+    qdrant: QdrantClient,
+    episodic_plane: EpisodicPlane,
+    concept_plane: ConceptPlane,
+    events_sink: LifecycleEventSink,
+) -> None:
+    from musubi.lifecycle.demotion import demotion_artifact
+    from musubi.planes.artifact.plane import ArtifactPlane
+    from musubi.planes.artifact.plane import _point_id as ap_id
+    from musubi.types.common import ArtifactRef, generate_ksuid
+
+    artifact_plane = ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
+    art = await artifact_plane.create(
+        SourceArtifact(
+            namespace="eric/shared/artifact",
+            title="old but referenced",
+            filename="b.txt",
+            sha256="b" * 64,
+            content_type="text/plain",
+            size_bytes=2_000_000,
+            chunker="none",
+        )
+    )
+    qdrant.set_payload(
+        collection_name="musubi_artifact",
+        payload={"created_epoch": epoch_of(utc_now()) - 200 * 24 * 3600},
+        points=[ap_id(str(art.object_id))],
+    )
+
+    # Episodic memory that cites this artifact in supported_by.
+    memory = EpisodicMemory(
+        namespace="eric/shared/episodic",
+        content="cites the artifact",
+        state="matured",
+        supported_by=[ArtifactRef(artifact_id=art.object_id, chunk_id=generate_ksuid())],
+    )
+    await episodic_plane.create(memory)
+
+    deps = DemotionDeps(
+        qdrant=qdrant,
+        episodic_plane=episodic_plane,
+        concept_plane=concept_plane,
+        events=events_sink,
+        thoughts=FakeThoughtEmitter(),
+        artifact_plane=artifact_plane,
+        artifact_archival_enabled=True,
+    )
+    count = await demotion_artifact(deps)
+    assert count == 0
+
+    after = await artifact_plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert after is not None and after.state == "matured"
 
 
-@pytest.mark.skip(reason="deferred to issue #222: artifact archival policy + slice-ops-storage")
-def test_artifact_archival_transitions_to_archived_keeps_blob() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_artifact_archival_transitions_to_archived_keeps_blob(
+    qdrant: QdrantClient,
+    episodic_plane: EpisodicPlane,
+    concept_plane: ConceptPlane,
+    events_sink: LifecycleEventSink,
+) -> None:
+    from musubi.lifecycle.demotion import demotion_artifact
+    from musubi.planes.artifact.plane import ArtifactPlane
+    from musubi.planes.artifact.plane import _point_id as ap_id
+
+    artifact_plane = ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
+    art = await artifact_plane.create(
+        SourceArtifact(
+            namespace="eric/shared/artifact",
+            title="old unreferenced",
+            filename="c.txt",
+            sha256="c" * 64,
+            content_type="text/plain",
+            size_bytes=2_000_000,
+            chunker="none",
+        )
+    )
+    qdrant.set_payload(
+        collection_name="musubi_artifact",
+        payload={"created_epoch": epoch_of(utc_now()) - 200 * 24 * 3600},
+        points=[ap_id(str(art.object_id))],
+    )
+
+    deps = DemotionDeps(
+        qdrant=qdrant,
+        episodic_plane=episodic_plane,
+        concept_plane=concept_plane,
+        events=events_sink,
+        thoughts=FakeThoughtEmitter(),
+        artifact_plane=artifact_plane,
+        artifact_archival_enabled=True,
+    )
+    count = await demotion_artifact(deps)
+    assert count == 1
+
+    after = await artifact_plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert after is not None
+    assert after.state == "archived"
+    # Blob-adjacent metadata is preserved — state transition doesn't touch
+    # the artifact-side fields that describe the blob itself.
+    assert after.sha256 == "c" * 64
+    assert after.filename == "c.txt"
+    assert after.size_bytes == 2_000_000
 
 
 # Reinstatement
