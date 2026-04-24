@@ -175,7 +175,7 @@ Used by Claude Code's session-end "flush these captured observations" flow.
 
 ## Test Contract
 
-**Module under test:** `musubi/planes/episodic/` (capture entry points) + `musubi/api/v1/episodic.py`
+**Module under test:** `src/musubi/planes/episodic/` (capture entry points) + `src/musubi/api/routers/writes_episodic.py` + `src/musubi/api/routers/episodic.py`
 
 Happy path:
 

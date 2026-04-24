@@ -64,7 +64,7 @@ class AsyncMusubiClient:
             transport=transport,
             headers={_BEARER_HEADER: f"Bearer {token}"},
         )
-        self.episodic = _AsyncMemories(self)
+        self.episodic = _AsyncEpisodic(self)
         self.curated = _AsyncCurated(self)
         self.concepts = _AsyncConcepts(self)
         self.artifacts = _AsyncArtifacts(self)
@@ -298,7 +298,7 @@ class AsyncMusubiClient:
 # ---------------------------------------------------------------------------
 
 
-class _AsyncMemories:
+class _AsyncEpisodic:
     def __init__(self, client: AsyncMusubiClient) -> None:
         self._c = client
 

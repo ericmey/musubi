@@ -215,7 +215,7 @@ async def test_e2e_capture_side_dedup_collapses_duplicate_facts(api_client: Any)
         api_client.episodic.capture = original
 
     assert len(responses) == 2, (
-        "adapter should have called memories.capture twice; the server is "
+        "adapter should have called episodic.capture twice; the server is "
         "responsible for dedup, not the adapter"
     )
     first_resp, second_resp = responses

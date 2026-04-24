@@ -245,7 +245,7 @@ async def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
         timeout=30.0,
     ) as client:
         create_resp = await client.post(
-            "/curated-knowledge",
+            "/curated",
             json={
                 "namespace": namespace,
                 "title": title,

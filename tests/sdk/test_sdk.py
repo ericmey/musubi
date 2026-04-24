@@ -1163,7 +1163,7 @@ def test_fake_returns_canned_for_every_method() -> None:
     assert fake.ops.status() == {"status": "ok", "version": "0.1.0"}
     assert fake.probe_version() == "0.1.2"
     # Calls log records every invocation.
-    assert any(call[0] == "memories.capture" for call in fake.calls)
+    assert any(call[0] == "episodic.capture" for call in fake.calls)
 
 
 def test_fake_capture_result_wraps_canned_error() -> None:
@@ -1189,7 +1189,7 @@ def test_fake_batch_context_records_calls() -> None:
     with fake.episodic.batch(namespace="x/y/episodic") as batch:
         batch.capture(content="one")
         batch.capture(content="two", tags=["t"], importance=7)
-    captures = [c for c in fake.calls if c[0] == "memories.batch.capture"]
+    captures = [c for c in fake.calls if c[0] == "episodic.batch.capture"]
     assert len(captures) == 2
 
 
@@ -1213,7 +1213,7 @@ async def test_async_fake_client_accepts_same_args_as_real() -> None:
     res = await fake.episodic.capture(namespace="foo", content="bar")
     assert res["object_id"] == "a" * 27
     assert len(fake.calls) == 1
-    assert fake.calls[0][0] == "memories.capture"
+    assert fake.calls[0][0] == "episodic.capture"
 
 
 @pytest.mark.asyncio
@@ -1290,7 +1290,7 @@ async def test_async_fake_batch_context_records_calls() -> None:
         batch.capture(content="second")
 
     assert len(fake.calls) == 2
-    assert fake.calls[0][0] == "memories.batch.capture"
+    assert fake.calls[0][0] == "episodic.batch.capture"
     assert fake.calls[0][1]["content"] == "first"
     assert fake.calls[1][1]["content"] == "second"
 

@@ -124,7 +124,7 @@ class _FakeEpisodic:
         self._c = client
 
     def capture(self, **kw: Any) -> dict[str, Any]:
-        self._c.calls.append(("memories.capture", kw))
+        self._c.calls.append(("episodic.capture", kw))
         if self._c._capture_error is not None:
             raise self._c._capture_error
         if self._c._capture_returns is None:
@@ -138,7 +138,7 @@ class _FakeEpisodic:
             return SDKResult(err=exc)
 
     def get(self, **kw: Any) -> dict[str, Any]:
-        self._c.calls.append(("memories.get", kw))
+        self._c.calls.append(("episodic.get", kw))
         if self._c._get_memory_returns is None:
             raise NotImplementedError("FakeMusubiClient: get_memory_returns not configured")
         return self._c._get_memory_returns
@@ -153,7 +153,7 @@ class _FakeBatchContext:
         self.results: dict[str, Any] | None = None
 
     def capture(self, **kw: Any) -> None:
-        self._c.calls.append(("memories.batch.capture", kw))
+        self._c.calls.append(("episodic.batch.capture", kw))
 
     def __enter__(self) -> _FakeBatchContext:
         return self
