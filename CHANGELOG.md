@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/ericmey/musubi/compare/v0.8.1...v0.8.2) (2026-04-24)
+
+
+### Bug Fixes
+
+* **docs:** path-prefix the ADR-0028 wikilink in ADR 0030 ([#257](https://github.com/ericmey/musubi/issues/257)) ([baaab32](https://github.com/ericmey/musubi/commit/baaab3259da182315aa645c87c6a7176625e8b5f))
+
 ## [0.8.1](https://github.com/ericmey/musubi/compare/v0.8.0...v0.8.1) (2026-04-24)
 
 
