@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from watchdog.events import (
@@ -354,14 +355,64 @@ async def test_writelog_entry_purged_after_1h(write_log: WriteLog) -> None:
     assert count == 1
 
 
-@pytest.mark.skip(reason="deferred to issue #221: large-file handling at the vault-sync layer")
-def test_large_file_body_chunked_as_artifact() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_oversize_markdown_skipped_with_warning(
+    vault_root: Path,
+    watcher: VaultWatcher,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Over-threshold markdown must NOT flow through the sync pipeline
+    # (would flood TEI + Qdrant). Warn with a structured log line so
+    # operators notice something was dropped.
+    import logging
+
+    from watchdog.events import FileCreatedEvent
+
+    from musubi.vault.watcher import _MAX_VAULT_MD_BYTES
+
+    eric_dir = vault_root / "eric" / "shared"
+    eric_dir.mkdir(parents=True, exist_ok=True)
+    file_path = eric_dir / "huge.md"
+    # 1 MB over the limit — cheap to write, clearly over.
+    file_path.write_bytes(b"x" * (_MAX_VAULT_MD_BYTES + 1024 * 1024))
+
+    caplog.set_level(logging.WARNING)
+    plane_before = len(cast(Any, watcher.curated_plane).created)
+    await watcher._handle_event(str(file_path), FileCreatedEvent(str(file_path)))
+    plane_after = len(cast(Any, watcher.curated_plane).created)
+
+    assert plane_after == plane_before, "oversize file should not flow into the plane"
+    assert any("vault-skip-oversize-markdown" in record.message for record in caplog.records), (
+        f"expected oversize-skip log; saw {[r.message for r in caplog.records]}"
+    )
 
 
-@pytest.mark.skip(reason="deferred to issue #221: large-file handling at the vault-sync layer")
-def test_large_file_curated_embeds_summary() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_binary_extension_skipped_with_warning(
+    vault_root: Path,
+    watcher: VaultWatcher,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Non-markdown files get filtered at enqueue time with a warning so
+    # operators know something they dropped into the vault didn't index.
+    # Exercises the `.suffix != ".md"` branch of VaultWatcher.enqueue_event.
+    import logging
+
+    from watchdog.events import FileCreatedEvent
+
+    eric_dir = vault_root / "eric" / "shared"
+    eric_dir.mkdir(parents=True, exist_ok=True)
+    file_path = eric_dir / "sketch.png"
+    file_path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+
+    caplog.set_level(logging.WARNING)
+    watcher.enqueue_event(FileCreatedEvent(str(file_path)))
+    await asyncio.sleep(0.05)
+
+    assert len(watcher._pending_tasks) == 0, "binary files must not enqueue debounce tasks"
+    assert any("vault-skip-non-markdown" in record.message for record in caplog.records), (
+        f"expected non-markdown-skip log; saw {[r.message for r in caplog.records]}"
+    )
 
 
 @pytest.mark.asyncio
