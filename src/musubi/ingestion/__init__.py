@@ -1,6 +1,6 @@
 """Ingestion service layer.
 
-The HTTP capture endpoint (``POST /v1/memories``, owned by
+The HTTP capture endpoint (``POST /v1/episodic``, owned by
 ``slice-api-v0-write``) is a thin shell that delegates to the
 :class:`musubi.ingestion.capture.CaptureService` shipped here. The
 service owns:

@@ -1,6 +1,6 @@
 """Sync :class:`MusubiClient` wrapping ``httpx.Client``.
 
-Resource namespaces (`memories`, `curated`, `concepts`, `artifacts`,
+Resource namespaces (`episodic`, `curated`, `concepts`, `artifacts`,
 `thoughts`, `lifecycle`, `ops`) hang off the client instance per the
 spec; the top-level ``retrieve`` / ``retrieve_stream`` / ``probe_version``
 methods live directly on the client.
@@ -108,7 +108,7 @@ class MusubiClient:
             headers={_BEARER_HEADER: f"Bearer {token}"},
         )
         # Resource namespaces.
-        self.memories = _Memories(self)
+        self.episodic = _Episodic(self)
         self.curated = _Curated(self)
         self.concepts = _Concepts(self)
         self.artifacts = _Artifacts(self)
@@ -345,7 +345,7 @@ class _RetryableHTTP(Exception):
 # ---------------------------------------------------------------------------
 
 
-class _Memories:
+class _Episodic:
     def __init__(self, client: MusubiClient) -> None:
         self._c = client
 
@@ -379,8 +379,8 @@ class _Memories:
             body["created_at"] = _ensure_tz_aware_created_at(created_at)
         return self._c._json(
             "POST",
-            "/memories",
-            operation_name="memories.capture",
+            "/episodic",
+            operation_name="episodic.capture",
             json_body=body,
             idempotency_key=idempotency_key,
         )
@@ -394,8 +394,8 @@ class _Memories:
     def get(self, *, namespace: str, object_id: str) -> dict[str, Any]:
         return self._c._json(
             "GET",
-            f"/memories/{object_id}",
-            operation_name="memories.get",
+            f"/episodic/{object_id}",
+            operation_name="episodic.get",
             params={"namespace": namespace},
         )
 
@@ -440,8 +440,8 @@ class _BatchContext:
             return
         self.results = self._c._json(
             "POST",
-            "/memories/batch",
-            operation_name="memories.batch.capture",
+            "/episodic/batch",
+            operation_name="episodic.batch.capture",
             json_body={"namespace": self._namespace, "items": self._items},
         )
 
@@ -453,7 +453,7 @@ class _Curated:
     def get(self, *, namespace: str, object_id: str) -> dict[str, Any]:
         return self._c._json(
             "GET",
-            f"/curated-knowledge/{object_id}",
+            f"/curated/{object_id}",
             operation_name="curated.get",
             params={"namespace": namespace},
         )

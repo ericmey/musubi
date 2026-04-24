@@ -278,8 +278,8 @@ def test_session_end_uploads_artifact() -> None:
         )
 
     asyncio.run(_run())
-    captures = [c for c in fake.calls if c[0] == "memories.capture"]
-    # Artifact capture surfaces as one memories-or-artifacts upload call;
+    captures = [c for c in fake.calls if c[0] == "episodic.capture"]
+    # Artifact capture surfaces as one episodic-or-artifacts upload call;
     # in this fake the adapter routes through capture+thought, but the key
     # assertion is that *some* persistence happened on session end.
     sends = [c for c in fake.calls if c[0] == "thoughts.send"]
@@ -411,11 +411,11 @@ def test_capture_disabled_env_flag_skips_all_writes() -> None:
 
     asyncio.run(_run())
     # Retrieval-only calls (Slow Thinker) are read-only and still allowed;
-    # but no writes (memories.capture / thoughts.send / artifact upload).
+    # but no writes (episodic.capture / thoughts.send / artifact upload).
     writes = [
         c
         for c in fake.calls
-        if c[0] in ("memories.capture", "thoughts.send", "memories.batch.capture")
+        if c[0] in ("episodic.capture", "thoughts.send", "episodic.batch.capture")
     ]
     assert writes == []
     assert adapter.upload_history == []
@@ -542,7 +542,7 @@ def test_session_end_emits_summary_thought() -> None:
     assert "sess-thought" in sends[0][1]["content"]
 
 
-def test_heuristic_capture_routed_via_memories_capture() -> None:
+def test_heuristic_capture_routed_via_episodic_capture() -> None:
     fake = _fake()
     adapter = LiveKitAdapter(
         client=fake,
@@ -555,7 +555,7 @@ def test_heuristic_capture_routed_via_memories_capture() -> None:
         await adapter.maybe_capture_fact("remember to push the rebuild")
 
     asyncio.run(_run())
-    captures = [c for c in fake.calls if c[0] == "memories.capture"]
+    captures = [c for c in fake.calls if c[0] == "episodic.capture"]
     assert len(captures) == 1
     assert captures[0][1]["namespace"] == _NS
 
@@ -573,5 +573,5 @@ def test_heuristic_capture_skipped_when_uninteresting() -> None:
         await adapter.maybe_capture_fact("the weather is nice today")
 
     asyncio.run(_run())
-    captures = [c for c in fake.calls if c[0] == "memories.capture"]
+    captures = [c for c in fake.calls if c[0] == "episodic.capture"]
     assert captures == []

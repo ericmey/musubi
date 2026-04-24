@@ -68,9 +68,9 @@ _WRITE_METHODS = frozenset({"POST", "PATCH", "DELETE", "PUT"})
 
 _PATH_TO_BUCKET: tuple[tuple[str, str], ...] = (
     # Order matters — first match wins.
-    ("/v1/memories/batch", "batch-write"),
-    ("/v1/memories", "capture"),
-    ("/v1/curated-knowledge", "capture"),
+    ("/v1/episodic/batch", "batch-write"),
+    ("/v1/episodic", "capture"),
+    ("/v1/curated", "capture"),
     ("/v1/artifacts", "artifact-upload"),
     ("/v1/thoughts/send", "thought"),
     ("/v1/thoughts/read", "default"),

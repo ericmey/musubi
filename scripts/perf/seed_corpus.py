@@ -25,8 +25,8 @@ Targets
 -------
 Seeds four of the five planes via Musubi's canonical API:
 
-  * episodic   — ``POST /v1/memories``
-  * curated    — ``POST /v1/curated-knowledge`` (via operator token)
+  * episodic   — ``POST /v1/episodic``
+  * curated    — ``POST /v1/curated`` (via operator token)
   * artifact   — ``POST /v1/artifacts`` (multipart)
   * thought    — ``POST /v1/thoughts/send``
 
@@ -341,7 +341,7 @@ def post_with_backoff(
 
 
 def seed_episodic(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
-    """POST /v1/memories. Repeated calls with the same idempotency key
+    """POST /v1/episodic. Repeated calls with the same idempotency key
     fold into a single row, so the seed is safe to retry."""
     ns = f"{cfg.namespace_prefix}/episodic"
     ok = 0
@@ -400,7 +400,7 @@ def seed_thought(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
 
 
 def seed_curated(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> int:
-    """POST /v1/curated-knowledge. Requires operator scope + body_hash.
+    """POST /v1/curated. Requires operator scope + body_hash.
     Vault sync is the normal writer — seeding here is a deliberate
     bypass for perf-testing corpus construction only.
 

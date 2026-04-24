@@ -138,7 +138,7 @@ See [[06-ingestion/vault-frontmatter-schema]] for the full spec.
 - **Python classes:** PascalCase. No trailing `Impl`, `Base`, `Manager`, etc. unless the semantic is real.
 - **Qdrant collections:** `musubi_<plane>_<namespace_hash_or_literal>`. Example: `musubi_episodic_default`. Aliases preserve legacy names.
 - **gRPC services:** `<verb>_<noun>` methods within `MusubiService` (e.g., `StoreEpisodic`, `QueryBlended`).
-- **REST routes:** plural nouns, kebab-case. `POST /v1/episodic-memories`, `GET /v1/curated-knowledge/{id}`.
+- **REST routes:** plane-aligned names per [ADR-0029](../13-decisions/0029-plane-aligned-endpoint-paths.md). The plane vocabulary is authoritative: `POST /v1/episodic`, `GET /v1/curated/{id}`, `POST /v1/concepts/{id}/promote`, `POST /v1/artifacts`.
 
 ## IDs
 

@@ -83,7 +83,7 @@ class FakeMusubiClient:
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
         # Resource namespaces.
-        self.memories = _FakeMemories(self)
+        self.episodic = _FakeEpisodic(self)
         self.curated = _FakeCurated(self)
         self.concepts = _FakeConcepts(self)
         self.artifacts = _FakeArtifacts(self)
@@ -119,12 +119,12 @@ class FakeMusubiClient:
         self.close()
 
 
-class _FakeMemories:
+class _FakeEpisodic:
     def __init__(self, client: FakeMusubiClient) -> None:
         self._c = client
 
     def capture(self, **kw: Any) -> dict[str, Any]:
-        self._c.calls.append(("memories.capture", kw))
+        self._c.calls.append(("episodic.capture", kw))
         if self._c._capture_error is not None:
             raise self._c._capture_error
         if self._c._capture_returns is None:
@@ -138,7 +138,7 @@ class _FakeMemories:
             return SDKResult(err=exc)
 
     def get(self, **kw: Any) -> dict[str, Any]:
-        self._c.calls.append(("memories.get", kw))
+        self._c.calls.append(("episodic.get", kw))
         if self._c._get_memory_returns is None:
             raise NotImplementedError("FakeMusubiClient: get_memory_returns not configured")
         return self._c._get_memory_returns
@@ -153,7 +153,7 @@ class _FakeBatchContext:
         self.results: dict[str, Any] | None = None
 
     def capture(self, **kw: Any) -> None:
-        self._c.calls.append(("memories.batch.capture", kw))
+        self._c.calls.append(("episodic.batch.capture", kw))
 
     def __enter__(self) -> _FakeBatchContext:
         return self
@@ -263,7 +263,7 @@ class _AsyncFakeBatchContext:
         self.results = self._sync.results
 
 
-class _AsyncMemoriesFake:
+class _AsyncEpisodicFake:
     def __init__(self, sync_ns: Any) -> None:
         self._ns = sync_ns
 
@@ -350,7 +350,7 @@ class AsyncFakeMusubiClient:
         self._fake = FakeMusubiClient(**kwargs)
         self.calls = self._fake.calls
 
-        self.memories = _AsyncMemoriesFake(self._fake.memories)
+        self.episodic = _AsyncEpisodicFake(self._fake.episodic)
         self.curated = _AsyncCuratedFake(self._fake.curated)
         self.concepts = _AsyncConceptsFake(self._fake.concepts)
         self.artifacts = _AsyncArtifactsFake(self._fake.artifacts)

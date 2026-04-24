@@ -65,11 +65,11 @@ def _client(transport: httpx.MockTransport, *, retry: RetryPolicy | None = None)
 
 
 def test_capture_returns_memory_model() -> None:
-    """Bullet 1 — POST /v1/memories returns a typed model with object_id."""
+    """Bullet 1 — POST /v1/episodic returns a typed model with object_id."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "POST"
-        assert request.url.path == "/v1/memories"
+        assert request.url.path == "/v1/episodic"
         body = json.loads(request.content)
         assert body["namespace"] == "eric/x/episodic"
         return httpx.Response(
@@ -78,7 +78,7 @@ def test_capture_returns_memory_model() -> None:
         )
 
     client = _client(httpx.MockTransport(handler))
-    result = client.memories.capture(namespace="eric/x/episodic", content="hello")
+    result = client.episodic.capture(namespace="eric/x/episodic", content="hello")
     assert result["object_id"] == "k" * 27
     assert result["state"] == "provisional"
 
@@ -150,7 +150,7 @@ def test_capture_threads_created_at_override_to_body() -> None:
 
     client = _client(httpx.MockTransport(handler))
     ts = datetime(2024, 6, 1, 12, 0, 0, tzinfo=UTC)
-    client.memories.capture(
+    client.episodic.capture(
         namespace="eric/x/episodic",
         content="historical",
         created_at=ts,
@@ -169,7 +169,7 @@ def test_capture_without_created_at_omits_field_from_body() -> None:
         return httpx.Response(202, json={"object_id": "z" * 27, "state": "provisional"})
 
     client = _client(httpx.MockTransport(handler))
-    client.memories.capture(namespace="eric/x/episodic", content="normal")
+    client.episodic.capture(namespace="eric/x/episodic", content="normal")
     assert captured and "created_at" not in captured[0]
 
 
@@ -185,7 +185,7 @@ def test_batch_context_threads_per_item_created_at() -> None:
         return httpx.Response(202, json={"object_ids": ["a" * 27, "b" * 27, "c" * 27]})
 
     client = _client(httpx.MockTransport(handler))
-    with client.memories.batch(namespace="eric/x/episodic") as batch:
+    with client.episodic.batch(namespace="eric/x/episodic") as batch:
         batch.capture(content="no-override")
         batch.capture(content="with-override", created_at=datetime(2023, 1, 1, tzinfo=UTC))
         batch.capture(content="also-no")
@@ -199,7 +199,7 @@ def test_batch_context_threads_per_item_created_at() -> None:
 
 def test_batch_context_one_http_call() -> None:
     """Bullet 4 — the batch context manager flushes a SINGLE
-    POST /v1/memories/batch on exit, not N posts."""
+    POST /v1/episodic/batch on exit, not N posts."""
     calls: list[tuple[str, list[dict[str, object]]]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -215,12 +215,12 @@ def test_batch_context_one_http_call() -> None:
         )
 
     client = _client(httpx.MockTransport(handler))
-    with client.memories.batch(namespace="eric/x/episodic") as batch:
+    with client.episodic.batch(namespace="eric/x/episodic") as batch:
         batch.capture(content="one")
         batch.capture(content="two")
         batch.capture(content="three")
     assert len(calls) == 1, f"expected ONE batch call, got {len(calls)}"
-    assert calls[0][0] == "/v1/memories/batch"
+    assert calls[0][0] == "/v1/episodic/batch"
     assert len(calls[0][1]) == 3
 
 
@@ -255,7 +255,7 @@ def test_401_raises_unauthorized() -> None:
     )
     client = _client(transport)
     with pytest.raises(Unauthorized) as exc:
-        client.memories.get(namespace="x/y/episodic", object_id="z" * 27)
+        client.episodic.get(namespace="x/y/episodic", object_id="z" * 27)
     assert exc.value.code == "UNAUTHORIZED"
 
 
@@ -269,7 +269,7 @@ def test_403_raises_forbidden_with_detail() -> None:
     )
     client = _client(transport)
     with pytest.raises(Forbidden) as exc:
-        client.memories.capture(namespace="eric/other/episodic", content="x")
+        client.episodic.capture(namespace="eric/other/episodic", content="x")
     assert "not in token scope" in exc.value.detail
 
 
@@ -287,7 +287,7 @@ def test_503_retries_then_raises_backend_unavailable() -> None:
         retry=RetryPolicy(max_attempts=3, base_backoff=0.0),
     )
     with pytest.raises(BackendUnavailable):
-        client.memories.capture(namespace="eric/x/episodic", content="x")
+        client.episodic.capture(namespace="eric/x/episodic", content="x")
     assert attempts["n"] == 3
 
 
@@ -305,7 +305,7 @@ def test_network_error_retried() -> None:
         retry=RetryPolicy(max_attempts=2, base_backoff=0.0),
     )
     with pytest.raises(NetworkError):
-        client.memories.capture(namespace="eric/x/episodic", content="x")
+        client.episodic.capture(namespace="eric/x/episodic", content="x")
     assert attempts["n"] == 2
 
 
@@ -315,7 +315,7 @@ def test_result_api_mirrors_exception_api() -> None:
     ok_transport = httpx.MockTransport(
         lambda r: httpx.Response(202, json={"object_id": "o" * 27, "state": "provisional"})
     )
-    ok = _client(ok_transport).memories.capture_result(namespace="eric/x/episodic", content="x")
+    ok = _client(ok_transport).episodic.capture_result(namespace="eric/x/episodic", content="x")
     assert isinstance(ok, SDKResult)
     assert ok.is_ok()
     assert ok.ok is not None
@@ -324,7 +324,7 @@ def test_result_api_mirrors_exception_api() -> None:
     err_transport = httpx.MockTransport(
         lambda r: httpx.Response(403, json=_err("FORBIDDEN", 403, "nope"))
     )
-    err = _client(err_transport).memories.capture_result(namespace="eric/x/episodic", content="x")
+    err = _client(err_transport).episodic.capture_result(namespace="eric/x/episodic", content="x")
     assert err.is_err()
     assert err.err is not None
     assert err.err.code == "FORBIDDEN"
@@ -356,7 +356,7 @@ def test_retry_honors_retry_after_header() -> None:
         httpx.MockTransport(handler),
         retry=RetryPolicy(max_attempts=2, base_backoff=0.0),
     )
-    client.memories.capture(namespace="eric/x/episodic", content="x")
+    client.episodic.capture(namespace="eric/x/episodic", content="x")
     # We don't actually wait a full second in the test (retry honours
     # the header up to a cap); verify the policy CONSULTED the header
     # by checking that the retry happened.
@@ -376,7 +376,7 @@ def test_retry_exponential_backoff_respects_max_attempts() -> None:
         retry=RetryPolicy(max_attempts=4, base_backoff=0.0),
     )
     with pytest.raises(BackendUnavailable):
-        client.memories.capture(namespace="eric/x/episodic", content="x")
+        client.episodic.capture(namespace="eric/x/episodic", content="x")
     assert attempts["n"] == 4
 
 
@@ -390,12 +390,12 @@ def test_idempotency_key_auto_generated_on_post() -> None:
         return httpx.Response(202, json={"object_id": "o" * 27, "state": "provisional"})
 
     client = _client(httpx.MockTransport(handler))
-    client.memories.capture(namespace="eric/x/episodic", content="x")
+    client.episodic.capture(namespace="eric/x/episodic", content="x")
     assert seen_keys[0] is not None
     assert len(seen_keys[0]) >= 8
 
     # Caller-supplied wins.
-    client.memories.capture(
+    client.episodic.capture(
         namespace="eric/x/episodic",
         content="y",
         idempotency_key="my-key-123",
@@ -477,13 +477,13 @@ def test_otel_span_emitted_per_call() -> None:
             token="t",
             transport=httpx.MockTransport(lambda r: httpx.Response(204)),
         ) as c:
-            c.memories.capture(namespace="ns", content="x")
+            c.episodic.capture(namespace="ns", content="x")
 
         spans = exporter.get_finished_spans()
         assert len(spans) == 1
-        assert spans[0].name == "musubi.memories.capture"
+        assert spans[0].name == "musubi.episodic.capture"
         assert spans[0].attributes["http.method"] if spans[0].attributes else None == "POST"
-        assert spans[0].attributes and "http://x.test/memories" in str(
+        assert spans[0].attributes and "http://x.test/episodic" in str(
             spans[0].attributes["http.url"]
         )
         assert spans[0].attributes["musubi.namespace"] if spans[0].attributes else None == "ns"
@@ -579,7 +579,7 @@ def test_fake_client_returns_configured_fixtures() -> None:
         capture_returns={"object_id": "p" * 27, "state": "provisional"},
         thoughts_check_returns={"items": []},
     )
-    cap = fake.memories.capture(namespace="x/y/episodic", content="probe")
+    cap = fake.episodic.capture(namespace="x/y/episodic", content="probe")
     assert cap["object_id"] == "p" * 27
     inbox = fake.thoughts.check(namespace="x/y/thought", presence="x/y")
     assert inbox == {"items": []}
@@ -606,28 +606,28 @@ def test_404_raises_not_found() -> None:
     transport = httpx.MockTransport(lambda r: httpx.Response(404, json=_err("NOT_FOUND", 404)))
     client = _client(transport)
     with pytest.raises(NotFound):
-        client.memories.get(namespace="x/y/episodic", object_id="0" * 27)
+        client.episodic.get(namespace="x/y/episodic", object_id="0" * 27)
 
 
 def test_400_raises_bad_request() -> None:
     transport = httpx.MockTransport(lambda r: httpx.Response(400, json=_err("BAD_REQUEST", 400)))
     client = _client(transport)
     with pytest.raises(BadRequest):
-        client.memories.capture(namespace="x/y/episodic", content="")
+        client.episodic.capture(namespace="x/y/episodic", content="")
 
 
 def test_409_raises_conflict() -> None:
     transport = httpx.MockTransport(lambda r: httpx.Response(409, json=_err("CONFLICT", 409)))
     client = _client(transport)
     with pytest.raises(Conflict):
-        client.memories.capture(namespace="x/y/episodic", content="x")
+        client.episodic.capture(namespace="x/y/episodic", content="x")
 
 
 def test_429_raises_rate_limited_after_retry() -> None:
     transport = httpx.MockTransport(lambda r: httpx.Response(429, json=_err("RATE_LIMITED", 429)))
     client = _client(transport, retry=RetryPolicy(max_attempts=1, base_backoff=0.0))
     with pytest.raises(RateLimited):
-        client.memories.capture(namespace="x/y/episodic", content="x")
+        client.episodic.capture(namespace="x/y/episodic", content="x")
 
 
 def test_async_capture_round_trip() -> None:
@@ -642,7 +642,7 @@ def test_async_capture_round_trip() -> None:
             transport=httpx.MockTransport(handler),
         )
         try:
-            return await client.memories.capture(namespace="eric/x/episodic", content="async")
+            return await client.episodic.capture(namespace="eric/x/episodic", content="async")
         finally:
             await client.close()
 
@@ -674,7 +674,7 @@ def test_thoughts_check_routes_to_check_endpoint() -> None:
 
 def test_curated_get_routes_to_curated_endpoint() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path.startswith("/v1/curated-knowledge/")
+        assert request.url.path.startswith("/v1/curated/")
         return httpx.Response(200, json={"object_id": "c" * 27})
 
     client = _client(httpx.MockTransport(handler))
@@ -742,7 +742,7 @@ def test_async_capture_result_returns_sdkresult_on_error() -> None:
 
     async def _run() -> SDKResult[dict[str, Any]]:
         async with _async_client(handler) as c:
-            return await c.memories.capture_result(namespace="eric/other/episodic", content="x")
+            return await c.episodic.capture_result(namespace="eric/other/episodic", content="x")
 
     res = asyncio.run(_run())
     assert res.is_err()
@@ -759,14 +759,14 @@ def test_async_get_routes() -> None:
 
     async def _run() -> None:
         async with _async_client(handler) as c:
-            await c.memories.get(namespace="x/y/episodic", object_id="g" * 27)
+            await c.episodic.get(namespace="x/y/episodic", object_id="g" * 27)
             await c.curated.get(namespace="x/y/curated", object_id="g" * 27)
             await c.concepts.get(namespace="x/y/concept", object_id="g" * 27)
             await c.artifacts.get(namespace="x/y/artifact", object_id="g" * 27)
 
     asyncio.run(_run())
-    assert any(p.startswith("/v1/memories/") for p in seen)
-    assert any(p.startswith("/v1/curated-knowledge/") for p in seen)
+    assert any(p.startswith("/v1/episodic/") for p in seen)
+    assert any(p.startswith("/v1/curated/") for p in seen)
     assert any(p.startswith("/v1/concepts/") for p in seen)
     assert any(p.startswith("/v1/artifacts/") for p in seen)
 
@@ -833,19 +833,19 @@ def test_async_batch_context_one_call() -> None:
     async def _run() -> None:
         async with (
             _async_client(handler) as c,
-            c.memories.batch(namespace="x/y/episodic") as batch,
+            c.episodic.batch(namespace="x/y/episodic") as batch,
         ):
             batch.capture(content="one")
             batch.capture(content="two")
 
     asyncio.run(_run())
     assert len(calls) == 1
-    assert calls[0][0] == "/v1/memories/batch"
+    assert calls[0][0] == "/v1/episodic/batch"
 
 
 def test_async_capture_threads_created_at_override_to_body() -> None:
     """#140 async-parity — when a caller supplies ``created_at`` to
-    ``AsyncMusubiClient.memories.capture``, the SDK serialises it as
+    ``AsyncMusubiClient.episodic.capture``, the SDK serialises it as
     ISO-8601 on the outbound body. Server-side scope enforcement is
     orthogonal (verified by the API-layer tests)."""
     from datetime import UTC, datetime
@@ -860,7 +860,7 @@ def test_async_capture_threads_created_at_override_to_body() -> None:
 
     async def _run() -> None:
         async with _async_client(handler) as c:
-            await c.memories.capture(
+            await c.episodic.capture(
                 namespace="eric/x/episodic",
                 content="historical",
                 created_at=ts,
@@ -882,7 +882,7 @@ def test_async_capture_without_created_at_omits_field() -> None:
 
     async def _run() -> None:
         async with _async_client(handler) as c:
-            await c.memories.capture(namespace="eric/x/episodic", content="normal")
+            await c.episodic.capture(namespace="eric/x/episodic", content="normal")
 
     asyncio.run(_run())
     assert captured and "created_at" not in captured[0]
@@ -902,7 +902,7 @@ def test_async_batch_context_threads_per_item_created_at() -> None:
     async def _run() -> None:
         async with (
             _async_client(handler) as c,
-            c.memories.batch(namespace="eric/x/episodic") as batch,
+            c.episodic.batch(namespace="eric/x/episodic") as batch,
         ):
             batch.capture(content="no-override")
             batch.capture(content="with-override", created_at=datetime(2023, 1, 1, tzinfo=UTC))
@@ -924,7 +924,7 @@ def test_async_batch_context_empty_skips_call() -> None:
         return httpx.Response(202, json={})
 
     async def _run() -> None:
-        async with _async_client(handler) as c, c.memories.batch(namespace="x/y/episodic"):
+        async with _async_client(handler) as c, c.episodic.batch(namespace="x/y/episodic"):
             pass
 
     asyncio.run(_run())
@@ -977,7 +977,7 @@ def test_async_retry_then_success() -> None:
             retry=RetryPolicy(max_attempts=2, base_backoff=0.0),
             transport=httpx.MockTransport(handler),
         ) as c:
-            return await c.memories.capture(namespace="x/y/episodic", content="x")
+            return await c.episodic.capture(namespace="x/y/episodic", content="x")
 
     out = asyncio.run(_run())
     assert out["object_id"] == "o" * 27
@@ -995,7 +995,7 @@ def test_async_503_exhausts_retries() -> None:
             retry=RetryPolicy(max_attempts=2, base_backoff=0.0),
             transport=httpx.MockTransport(handler),
         ) as c:
-            await c.memories.capture(namespace="x/y/episodic", content="x")
+            await c.episodic.capture(namespace="x/y/episodic", content="x")
 
     with pytest.raises(BackendUnavailable):
         asyncio.run(_run())
@@ -1012,7 +1012,7 @@ def test_async_network_error_exhausts_retries() -> None:
             retry=RetryPolicy(max_attempts=2, base_backoff=0.0),
             transport=httpx.MockTransport(handler),
         ) as c:
-            await c.memories.capture(namespace="x/y/episodic", content="x")
+            await c.episodic.capture(namespace="x/y/episodic", content="x")
 
     with pytest.raises(NetworkError):
         asyncio.run(_run())
@@ -1070,8 +1070,8 @@ def test_async_idempotency_caller_supplied_wins() -> None:
 
     async def _run() -> None:
         async with _async_client(handler) as c:
-            await c.memories.capture(namespace="x/y/episodic", content="a")
-            await c.memories.capture(
+            await c.episodic.capture(namespace="x/y/episodic", content="a")
+            await c.episodic.capture(
                 namespace="x/y/episodic", content="b", idempotency_key="caller-key"
             )
 
@@ -1086,7 +1086,7 @@ def test_async_exception_with_unparseable_body() -> None:
 
     async def _run() -> None:
         async with _async_client(handler) as c:
-            await c.memories.capture(namespace="x/y/episodic", content="x")
+            await c.episodic.capture(namespace="x/y/episodic", content="x")
 
     with pytest.raises(MusubiError):
         asyncio.run(_run())
@@ -1102,9 +1102,9 @@ def test_fake_unconfigured_method_raises() -> None:
     with pytest.raises(NotImplementedError):
         fake.retrieve(namespace="x/y/episodic", query_text="x")
     with pytest.raises(NotImplementedError):
-        fake.memories.capture(namespace="x/y/episodic", content="x")
+        fake.episodic.capture(namespace="x/y/episodic", content="x")
     with pytest.raises(NotImplementedError):
-        fake.memories.get(namespace="x/y/episodic", object_id="x" * 27)
+        fake.episodic.get(namespace="x/y/episodic", object_id="x" * 27)
     with pytest.raises(NotImplementedError):
         fake.curated.get(namespace="x/y/curated", object_id="x" * 27)
     with pytest.raises(NotImplementedError):
@@ -1142,8 +1142,8 @@ def test_fake_returns_canned_for_every_method() -> None:
         ops_status_returns={"status": "ok", "version": "0.1.0"},
         probe_version_returns="0.1.2",
     )
-    assert fake.memories.capture(namespace="x", content="y")["object_id"] == "c" * 27
-    assert fake.memories.get(namespace="x", object_id="z" * 27)["object_id"] == "g" * 27
+    assert fake.episodic.capture(namespace="x", content="y")["object_id"] == "c" * 27
+    assert fake.episodic.get(namespace="x", object_id="z" * 27)["object_id"] == "g" * 27
     assert fake.retrieve(namespace="x", query_text="q") == {"results": []}
     rows = list(fake.retrieve_stream(namespace="x", query_text="q"))
     assert rows == [{"object_id": "s" * 27}]
@@ -1163,14 +1163,14 @@ def test_fake_returns_canned_for_every_method() -> None:
     assert fake.ops.status() == {"status": "ok", "version": "0.1.0"}
     assert fake.probe_version() == "0.1.2"
     # Calls log records every invocation.
-    assert any(call[0] == "memories.capture" for call in fake.calls)
+    assert any(call[0] == "episodic.capture" for call in fake.calls)
 
 
 def test_fake_capture_result_wraps_canned_error() -> None:
     fake = FakeMusubiClient(
         capture_error=Forbidden(code="FORBIDDEN", detail="nope", hint="", status_code=403)
     )
-    res = fake.memories.capture_result(namespace="x", content="y")
+    res = fake.episodic.capture_result(namespace="x", content="y")
     assert res.is_err()
     assert res.err is not None
     assert res.err.code == "FORBIDDEN"
@@ -1178,7 +1178,7 @@ def test_fake_capture_result_wraps_canned_error() -> None:
 
 def test_fake_capture_result_wraps_canned_ok() -> None:
     fake = FakeMusubiClient(capture_returns={"object_id": "o" * 27})
-    res = fake.memories.capture_result(namespace="x", content="y")
+    res = fake.episodic.capture_result(namespace="x", content="y")
     assert res.is_ok()
     assert res.ok is not None
     assert res.ok and res.ok["object_id"] == "o" * 27
@@ -1186,10 +1186,10 @@ def test_fake_capture_result_wraps_canned_ok() -> None:
 
 def test_fake_batch_context_records_calls() -> None:
     fake = FakeMusubiClient()
-    with fake.memories.batch(namespace="x/y/episodic") as batch:
+    with fake.episodic.batch(namespace="x/y/episodic") as batch:
         batch.capture(content="one")
         batch.capture(content="two", tags=["t"], importance=7)
-    captures = [c for c in fake.calls if c[0] == "memories.batch.capture"]
+    captures = [c for c in fake.calls if c[0] == "episodic.batch.capture"]
     assert len(captures) == 2
 
 
@@ -1210,10 +1210,10 @@ async def test_async_fake_client_accepts_same_args_as_real() -> None:
         strict_version=True,
         capture_returns={"object_id": "a" * 27},
     )
-    res = await fake.memories.capture(namespace="foo", content="bar")
+    res = await fake.episodic.capture(namespace="foo", content="bar")
     assert res["object_id"] == "a" * 27
     assert len(fake.calls) == 1
-    assert fake.calls[0][0] == "memories.capture"
+    assert fake.calls[0][0] == "episodic.capture"
 
 
 @pytest.mark.asyncio
@@ -1236,7 +1236,7 @@ async def test_async_fake_returns_canned_for_every_method() -> None:
         probe_version_returns="1.2.3",
     )
 
-    assert (await fake.memories.get(namespace="n", object_id="id"))["object_id"] == "m1"
+    assert (await fake.episodic.get(namespace="n", object_id="id"))["object_id"] == "m1"
     assert (await fake.retrieve(namespace="n", query_text="q"))["results"] == []
 
     streamed = [x async for x in fake.retrieve_stream(namespace="n", query_text="q")]
@@ -1265,7 +1265,7 @@ async def test_async_fake_capture_result_wraps_canned_error() -> None:
     fake = AsyncFakeMusubiClient(
         capture_error=BadRequest(code="BAD", detail="err", status_code=400)
     )
-    res = await fake.memories.capture_result(namespace="n", content="c")
+    res = await fake.episodic.capture_result(namespace="n", content="c")
     assert res.is_err()
     assert res.err and res.err.code == "BAD"
 
@@ -1275,7 +1275,7 @@ async def test_async_fake_capture_result_wraps_canned_ok() -> None:
     from musubi.sdk.testing import AsyncFakeMusubiClient
 
     fake = AsyncFakeMusubiClient(capture_returns={"object_id": "o" * 27})
-    res = await fake.memories.capture_result(namespace="n", content="c")
+    res = await fake.episodic.capture_result(namespace="n", content="c")
     assert res.is_ok()
     assert res.ok and res.ok["object_id"] == "o" * 27
 
@@ -1285,12 +1285,12 @@ async def test_async_fake_batch_context_records_calls() -> None:
     from musubi.sdk.testing import AsyncFakeMusubiClient
 
     fake = AsyncFakeMusubiClient()
-    async with fake.memories.batch(namespace="n") as batch:
+    async with fake.episodic.batch(namespace="n") as batch:
         batch.capture(content="first")
         batch.capture(content="second")
 
     assert len(fake.calls) == 2
-    assert fake.calls[0][0] == "memories.batch.capture"
+    assert fake.calls[0][0] == "episodic.batch.capture"
     assert fake.calls[0][1]["content"] == "first"
     assert fake.calls[1][1]["content"] == "second"
 

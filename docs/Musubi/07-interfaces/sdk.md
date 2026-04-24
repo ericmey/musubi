@@ -65,7 +65,7 @@ The async variant uses `httpx.AsyncClient`; sync uses `httpx.Client`. Shared `mo
 
 ```python
 # Capture
-memory = client.memories.capture(
+memory = client.episodic.capture(
     namespace="eric/claude-code/episodic",
     content="...",
     tags=["cuda"],
@@ -97,7 +97,7 @@ client.thoughts.read(my_presence="livekit-voice", ids=[t.object_id for t in unre
 
 ### Resource modules
 
-- `client.memories` — capture, get, batch, archive
+- `client.episodic` — capture, get, batch, archive
 - `client.curated` — get, patch-metadata, list
 - `client.concepts` — get, reinforce, promote, reject, list
 - `client.artifacts` — upload, get, blob, chunks, archive
@@ -124,7 +124,7 @@ from musubi.sdk.exceptions import (
 )
 
 try:
-    client.memories.capture(...)
+    client.episodic.capture(...)
 except Forbidden as e:
     logger.warning("namespace %s out of scope", e.detail.namespace)
 except BackendUnavailable:
@@ -139,7 +139,7 @@ Errors carry structured `detail` fields matching the API's error schema. No bare
 The SDK also offers a Result-oriented surface for adapters that prefer typed errors over exceptions:
 
 ```python
-res = client.memories.capture_result(...)
+res = client.episodic.capture_result(...)
 if res.is_err():
     log.warning("capture failed: %s", res.err.code)
     return
@@ -178,11 +178,11 @@ If the adapter sets `X-Request-Id` in the caller's context, the SDK propagates i
 Pack multiple operations that the API supports in batch form:
 
 ```python
-with client.memories.batch() as batch:
+with client.episodic.batch() as batch:
     batch.capture(...)
     batch.capture(...)
     batch.capture(...)
-# on exit, one POST /v1/memories/batch call; results attached to local references
+# on exit, one POST /v1/episodic/batch call; results attached to local references
 ```
 
 ## Streaming retrieval

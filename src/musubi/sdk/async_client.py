@@ -1,7 +1,7 @@
 """Async :class:`AsyncMusubiClient` wrapping ``httpx.AsyncClient``.
 
 Mirrors :mod:`musubi.sdk.client` function-for-function over an async
-transport. Resource namespaces (``memories``, ``curated``, ``concepts``,
+transport. Resource namespaces (``episodic``, ``curated``, ``concepts``,
 ``artifacts``, ``thoughts``, ``lifecycle``, ``ops``) hang off the client
 instance per the spec; ``retrieve`` / ``retrieve_stream`` /
 ``probe_version`` live directly on the client. Caller is expected to use
@@ -64,7 +64,7 @@ class AsyncMusubiClient:
             transport=transport,
             headers={_BEARER_HEADER: f"Bearer {token}"},
         )
-        self.memories = _AsyncMemories(self)
+        self.episodic = _AsyncEpisodic(self)
         self.curated = _AsyncCurated(self)
         self.concepts = _AsyncConcepts(self)
         self.artifacts = _AsyncArtifacts(self)
@@ -298,7 +298,7 @@ class AsyncMusubiClient:
 # ---------------------------------------------------------------------------
 
 
-class _AsyncMemories:
+class _AsyncEpisodic:
     def __init__(self, client: AsyncMusubiClient) -> None:
         self._c = client
 
@@ -332,8 +332,8 @@ class _AsyncMemories:
             body["created_at"] = _ensure_tz_aware_created_at(created_at)
         return await self._c._json(
             "POST",
-            "/memories",
-            operation_name="memories.capture",
+            "/episodic",
+            operation_name="episodic.capture",
             json_body=body,
             idempotency_key=idempotency_key,
         )
@@ -347,8 +347,8 @@ class _AsyncMemories:
     async def get(self, *, namespace: str, object_id: str) -> dict[str, Any]:
         return await self._c._json(
             "GET",
-            f"/memories/{object_id}",
-            operation_name="memories.get",
+            f"/episodic/{object_id}",
+            operation_name="episodic.get",
             params={"namespace": namespace},
         )
 
@@ -393,8 +393,8 @@ class _AsyncBatchContext:
             return
         self.results = await self._c._json(
             "POST",
-            "/memories/batch",
-            operation_name="memories.batch.capture",
+            "/episodic/batch",
+            operation_name="episodic.batch.capture",
             json_body={"namespace": self._namespace, "items": self._items},
         )
 
@@ -406,7 +406,7 @@ class _AsyncCurated:
     async def get(self, *, namespace: str, object_id: str) -> dict[str, Any]:
         return await self._c._json(
             "GET",
-            f"/curated-knowledge/{object_id}",
+            f"/curated/{object_id}",
             operation_name="curated.get",
             params={"namespace": namespace},
         )

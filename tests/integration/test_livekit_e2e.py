@@ -98,14 +98,14 @@ async def test_e2e_full_turn_persists_episodic_and_thought(api_client: Any) -> N
     utterance = f"{SAMPLE_INTERESTING_FACT} ({session_id})"
 
     capture_responses: list[dict[str, Any]] = []
-    original = api_client.memories.capture
+    original = api_client.episodic.capture
 
     async def capture_and_record(**kwargs: Any) -> Any:
         resp = await original(**kwargs)
         capture_responses.append(resp)
         return resp
 
-    api_client.memories.capture = capture_and_record
+    api_client.episodic.capture = capture_and_record
     try:
         for seg in progressive_segments(utterance):
             await adapter.on_transcript_segment(seg)
@@ -114,7 +114,7 @@ async def test_e2e_full_turn_persists_episodic_and_thought(api_client: Any) -> N
         await adapter.on_session_end(session_id=session_id, vtt_transcript=minimal_vtt(utterance))
         await _await_slow_thinker(adapter)
     finally:
-        api_client.memories.capture = original
+        api_client.episodic.capture = original
 
     # Episodic half: at least one capture ack with a real object_id.
     # Includes both the heuristic fact capture and the session-end
@@ -146,7 +146,7 @@ async def test_e2e_redaction_strips_email_before_capture(api_client: Any) -> Non
     utterance = f"Please remember this ({marker}) — {SAMPLE_EMAIL_LEAK}"
 
     calls: list[dict[str, Any]] = []
-    original = api_client.memories.capture
+    original = api_client.episodic.capture
 
     async def capture_and_record(**kwargs: Any) -> Any:
         # Record only after the real call succeeds — `maybe_capture_fact`
@@ -156,11 +156,11 @@ async def test_e2e_redaction_strips_email_before_capture(api_client: Any) -> Non
         calls.append(kwargs)
         return resp
 
-    api_client.memories.capture = capture_and_record
+    api_client.episodic.capture = capture_and_record
     try:
         await adapter.maybe_capture_fact(utterance)
     finally:
-        api_client.memories.capture = original
+        api_client.episodic.capture = original
 
     assert len(calls) == 1, (
         "maybe_capture_fact should have fired once (and the server must have accepted it)"
@@ -195,14 +195,14 @@ async def test_e2e_capture_side_dedup_collapses_duplicate_facts(api_client: Any)
     # both the real server response and the call count without the
     # AsyncMock gymnastics.
     responses: list[dict[str, Any]] = []
-    original = api_client.memories.capture
+    original = api_client.episodic.capture
 
     async def capture_and_record(**kwargs: Any) -> Any:
         resp = await original(**kwargs)
         responses.append(resp)
         return resp
 
-    api_client.memories.capture = capture_and_record
+    api_client.episodic.capture = capture_and_record
     try:
         await adapter.maybe_capture_fact(utterance)
         # 1.0s matches the smoke-test pattern in
@@ -212,10 +212,10 @@ async def test_e2e_capture_side_dedup_collapses_duplicate_facts(api_client: Any)
         await asyncio.sleep(1.0)
         await adapter.maybe_capture_fact(utterance)
     finally:
-        api_client.memories.capture = original
+        api_client.episodic.capture = original
 
     assert len(responses) == 2, (
-        "adapter should have called memories.capture twice; the server is "
+        "adapter should have called episodic.capture twice; the server is "
         "responsible for dedup, not the adapter"
     )
     first_resp, second_resp = responses
@@ -238,18 +238,18 @@ async def test_e2e_filler_phrase_does_not_capture(api_client: Any) -> None:
     still holds once the adapter is talking to a real SDK."""
     adapter = _adapter(api_client)
     calls: list[dict[str, Any]] = []
-    original = api_client.memories.capture
+    original = api_client.episodic.capture
 
     async def capture_and_record(**kwargs: Any) -> Any:
         resp = await original(**kwargs)
         calls.append(kwargs)
         return resp
 
-    api_client.memories.capture = capture_and_record
+    api_client.episodic.capture = capture_and_record
     try:
         await adapter.maybe_capture_fact(SAMPLE_FILLER_PHRASE)
     finally:
-        api_client.memories.capture = original
+        api_client.episodic.capture = original
 
     assert len(calls) == 0, (
         f"filler utterance should not trigger a capture; got "

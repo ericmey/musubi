@@ -227,7 +227,7 @@ Each adapter stores its token differently:
 ## Example: unauthorized capture
 
 ```
-POST /v1/memories
+POST /v1/episodic
 Authorization: Bearer <token with scope eric/claude-code/episodic:rw>
 
 {"namespace": "eric/livekit-voice/episodic", "content": "..."}
@@ -266,7 +266,7 @@ Every auth decision is logged:
   "event": "auth.allow",
   "request_id": "...",
   "sub": "eric-claude-code",
-  "endpoint": "POST /v1/memories",
+  "endpoint": "POST /v1/episodic",
   "namespace": "eric/claude-code/episodic",
   "scope_used": "eric/claude-code/episodic:rw"
 }

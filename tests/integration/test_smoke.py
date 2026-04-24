@@ -58,7 +58,7 @@ async def test_capture_then_retrieve_roundtrip(api_client: Any, live_stack: Stac
     namespace = "eric/integration-test/episodic"
     content = f"smoke-capture-{uuid.uuid4().hex[:8]}"
 
-    captured = await api_client.memories.capture(namespace=namespace, content=content, importance=5)
+    captured = await api_client.episodic.capture(namespace=namespace, content=content, importance=5)
     object_id = captured.get("object_id") if isinstance(captured, dict) else captured.object_id
     assert object_id
 
@@ -105,9 +105,9 @@ async def test_capture_dedup_against_existing(api_client: Any) -> None:
     namespace = "eric/integration-test/episodic"
     content = f"dedup-fixture-{uuid.uuid4().hex[:8]}"
 
-    first = await api_client.memories.capture(namespace=namespace, content=content, importance=5)
+    first = await api_client.episodic.capture(namespace=namespace, content=content, importance=5)
     await asyncio.sleep(1.0)
-    second = await api_client.memories.capture(namespace=namespace, content=content, importance=5)
+    second = await api_client.episodic.capture(namespace=namespace, content=content, importance=5)
 
     # Either the second call returns the same object_id (merged) or it
     # surfaces a `dedup` field; the spec lets the implementation pick.
@@ -224,7 +224,7 @@ async def test_thought_stream_delivers_live(api_client: Any, live_stack: StackHa
 
 async def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
     """The SDK's curated namespace is read-only (`get`); the create
-    surface lives at the API layer (POST /v1/curated-knowledge) and
+    surface lives at the API layer (POST /v1/curated) and
     is exercised here via raw httpx + the operator token."""
     import hashlib
 
@@ -245,7 +245,7 @@ async def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
         timeout=30.0,
     ) as client:
         create_resp = await client.post(
-            "/curated-knowledge",
+            "/curated",
             json={
                 "namespace": namespace,
                 "title": title,

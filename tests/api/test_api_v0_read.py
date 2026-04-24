@@ -48,8 +48,8 @@ def test_openapi_generated_matches_pydantic(client: TestClient) -> None:
     assert "openapi" in doc and doc["openapi"].startswith("3.")
     paths = set(doc["paths"].keys())
     # Spot-check that documented read paths are routable.
-    assert "/v1/memories/{object_id}" in paths
-    assert "/v1/curated-knowledge/{object_id}" in paths
+    assert "/v1/episodic/{object_id}" in paths
+    assert "/v1/curated/{object_id}" in paths
     assert "/v1/concepts/{object_id}" in paths
     assert "/v1/artifacts/{object_id}" in paths
     assert "/v1/retrieve" in paths
@@ -65,8 +65,8 @@ def test_all_documented_endpoints_routable(client: TestClient) -> None:
     We check the routability of GET endpoints; auth-rejected paths return
     401 which is also "routable" (the route exists; auth gate fired)."""
     cases = [
-        "/v1/memories/0000000000000000000000000000",
-        "/v1/curated-knowledge/0000000000000000000000000000",
+        "/v1/episodic/0000000000000000000000000000",
+        "/v1/curated/0000000000000000000000000000",
         "/v1/concepts/0000000000000000000000000000",
         "/v1/artifacts/0000000000000000000000000000",
         "/v1/contradictions",
@@ -91,7 +91,7 @@ def test_error_shape_consistent_across_endpoints(
     ``{"error": {"code": ..., "detail": ..., "hint": ...}}`` shape per
     the spec § Response shapes."""
     # 401 — no auth.
-    r = client.get("/v1/memories/aaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    r = client.get("/v1/episodic/aaaaaaaaaaaaaaaaaaaaaaaaaaa")
     assert r.status_code == 401
     body = r.json()
     assert "error" in body
@@ -100,7 +100,7 @@ def test_error_shape_consistent_across_endpoints(
     assert "detail" in body["error"]
     # 404 — valid auth + namespace, missing object.
     r = client.get(
-        "/v1/memories/0000000000000000000000000000",
+        "/v1/episodic/0000000000000000000000000000",
         headers=auth,
         params={"namespace": "eric/claude-code/episodic"},
     )
@@ -119,8 +119,8 @@ def test_missing_token_returns_401(client: TestClient) -> None:
     """Bullet 4 — every authenticated endpoint returns 401 + UNAUTHORIZED
     when the bearer header is absent."""
     paths = [
-        "/v1/memories/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "/v1/curated-knowledge/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "/v1/episodic/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "/v1/curated/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "/v1/concepts/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "/v1/artifacts/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
     ]
@@ -138,7 +138,7 @@ def test_out_of_scope_returns_403(
     namespace returns 403 FORBIDDEN, not 200 / 404."""
     headers = {"Authorization": f"Bearer {out_of_scope_token}"}
     r = client.get(
-        "/v1/memories/aaaaaaaaaaaaaaaaaaaaaaaaaaa?namespace=eric/claude-code/episodic",
+        "/v1/episodic/aaaaaaaaaaaaaaaaaaaaaaaaaaa?namespace=eric/claude-code/episodic",
         headers=headers,
     )
     assert r.status_code == 403
@@ -288,7 +288,7 @@ def test_cursor_roundtrip_exhausts_list(
         params: dict[str, str | int] = {"namespace": namespace, "limit": 2}
         if cursor is not None:
             params["cursor"] = cursor
-        r = client.get("/v1/memories", headers=auth, params=params)
+        r = client.get("/v1/episodic", headers=auth, params=params)
         assert r.status_code == 200
         body = r.json()
         for row in body["items"]:
@@ -316,7 +316,7 @@ def test_cursor_opaque_to_client(
             )
 
     asyncio.run(_seed())
-    r = client.get("/v1/memories", headers=auth, params={"namespace": namespace, "limit": 1})
+    r = client.get("/v1/episodic", headers=auth, params={"namespace": namespace, "limit": 1})
     assert r.status_code == 200
     cursor = r.json().get("next_cursor")
     if cursor is not None:
@@ -493,7 +493,7 @@ def test_list_concepts_returns_empty_page(client: TestClient, auth: dict[str, st
 
 def test_list_curated_returns_empty_page(client: TestClient, auth: dict[str, str]) -> None:
     r = client.get(
-        "/v1/curated-knowledge",
+        "/v1/curated",
         headers=auth,
         params={"namespace": "eric/claude-code/curated"},
     )
@@ -582,7 +582,7 @@ def test_correlation_id_passthrough_when_provided(client: TestClient) -> None:
 def test_invalid_cursor_returns_empty_or_400(client: TestClient, auth: dict[str, str]) -> None:
     """Malformed cursor strings should not crash the endpoint."""
     r = client.get(
-        "/v1/memories",
+        "/v1/episodic",
         headers=auth,
         params={"namespace": "eric/claude-code/episodic", "cursor": "not-a-cursor"},
     )
@@ -638,7 +638,7 @@ def test_get_episodic_by_id_routes_to_plane(
         return saved.object_id
 
     oid = asyncio.run(_seed())
-    r = client.get(f"/v1/memories/{oid}", headers=auth, params={"namespace": namespace})
+    r = client.get(f"/v1/episodic/{oid}", headers=auth, params={"namespace": namespace})
     assert r.status_code == 200
     body = r.json()
     assert body["object_id"] == oid
@@ -676,7 +676,7 @@ def test_get_curated_by_id_routes_to_plane(
         return saved.object_id
 
     oid = asyncio.run(_seed())
-    r = client.get(f"/v1/curated-knowledge/{oid}", headers=headers, params={"namespace": namespace})
+    r = client.get(f"/v1/curated/{oid}", headers=headers, params={"namespace": namespace})
     assert r.status_code == 200
     assert r.json()["object_id"] == oid
 
@@ -1159,7 +1159,7 @@ def test_thoughts_check_endpoint_responds(
 
 def test_invalid_token_returns_401(client: TestClient) -> None:
     r = client.get(
-        "/v1/memories/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "/v1/episodic/aaaaaaaaaaaaaaaaaaaaaaaaaaa",
         headers={"Authorization": "Bearer not-a-real-token"},
     )
     assert r.status_code == 401
@@ -1182,7 +1182,7 @@ def test_committed_openapi_yaml_includes_read_paths() -> None:
     doc = yaml.safe_load(openapi_path.read_text())
     paths = set(doc["paths"].keys())
     assert "/v1/ops/health" in paths
-    assert "/v1/memories/{object_id}" in paths
+    assert "/v1/episodic/{object_id}" in paths
     assert "/v1/retrieve" in paths
 
 

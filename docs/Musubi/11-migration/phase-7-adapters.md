@@ -24,7 +24,7 @@ Musubi Core is pure FastAPI; MCP, LiveKit, OpenClaw are independent repos consum
 
 Pull the existing FastMCP tools into FastAPI routes:
 
-- `POST /v1/memories` → capture (was `memory_store` tool).
+- `POST /v1/episodic` → capture (was `memory_store` tool).
 - `POST /v1/retrieve` → retrieve (was `memory_recall` tool).
 - `POST /v1/thoughts/send|check|read` → thoughts.
 - Full endpoint list: [[07-interfaces/canonical-api]].
@@ -87,7 +87,7 @@ If the SDK is broken, adapters can temporarily call HTTP directly.
 
 # MCP via HTTP:
 curl -H "Authorization: Bearer $T" -d '{...}' \
-  https://musubi.example.local.example.com/v1/memories
+  https://musubi.example.local.example.com/v1/episodic
 
 # LiveKit (in a test harness):
 # Start voice session → speak → Slow Thinker prefetches → Fast Talker replies with context.

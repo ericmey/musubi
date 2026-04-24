@@ -654,13 +654,13 @@ def test_concurrent_promotion_of_same_concept_one_wins() -> None:
 # The spec's "--body" variant (operator writes markdown directly
 # without using an existing curated row) is out of scope for the
 # initial CLI cut: operators who need the body-override path create
-# the curated row via `POST /v1/curated-knowledge` first, then pass
+# the curated row via `POST /v1/curated` first, then pass
 # the resulting id to `musubi promote force --curated-id=`. A
 # future one-shot command is a follow-up.
 @pytest.mark.skip(
     reason="covered by tests/cli/test_cli_promote.py (issue #220). Body-override "
     "shorthand is a post-v1.0 enhancement; operators use "
-    "POST /v1/curated-knowledge + promote force --curated-id instead."
+    "POST /v1/curated + promote force --curated-id instead."
 )
 def test_cli_force_promote_with_custom_body() -> None:
     pass

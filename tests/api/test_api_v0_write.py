@@ -40,7 +40,7 @@ def test_capture_happy_returns_object_id(
     client: TestClient,
     valid_token: str,
 ) -> None:
-    """Spec contract-tests § Capture: POST /v1/memories returns 202 with
+    """Spec contract-tests § Capture: POST /v1/episodic returns 202 with
     the new object_id; the row is fetchable by GET."""
     headers = {"Authorization": f"Bearer {valid_token}"}
     namespace = "eric/claude-code/episodic"
@@ -50,13 +50,13 @@ def test_capture_happy_returns_object_id(
         "tags": ["contract-test"],
         "importance": 5,
     }
-    r = client.post("/v1/memories", headers=headers, json=body)
+    r = client.post("/v1/episodic", headers=headers, json=body)
     assert r.status_code == 202
     object_id = r.json()["object_id"]
     assert isinstance(object_id, str) and len(object_id) == 27
     # Fetchable by id.
     got = client.get(
-        f"/v1/memories/{object_id}",
+        f"/v1/episodic/{object_id}",
         headers=headers,
         params={"namespace": namespace},
     )
@@ -78,10 +78,10 @@ def test_capture_dedup_returns_same_id(
         "tags": ["a"],
         "importance": 5,
     }
-    r1 = client.post("/v1/memories", headers=headers, json=body)
+    r1 = client.post("/v1/episodic", headers=headers, json=body)
     body2 = dict(body)
     body2["tags"] = ["b"]
-    r2 = client.post("/v1/memories", headers=headers, json=body2)
+    r2 = client.post("/v1/episodic", headers=headers, json=body2)
     assert r1.status_code == 202
     assert r2.status_code == 202
     # Same object id; tags merged on the underlying row.
@@ -97,14 +97,14 @@ def test_capture_rejects_out_of_scope_namespace(
         "namespace": "eric/claude-code/episodic",
         "content": "should-not-write",
     }
-    r = client.post("/v1/memories", headers=headers, json=body)
+    r = client.post("/v1/episodic", headers=headers, json=body)
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "FORBIDDEN"
 
 
 def test_capture_missing_token_returns_401(client: TestClient) -> None:
     r = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         json={"namespace": "eric/claude-code/episodic", "content": "x"},
     )
     assert r.status_code == 401
@@ -118,7 +118,7 @@ def test_batch_capture_writes_each_row(client: TestClient, valid_token: str) -> 
         "namespace": namespace,
         "items": [{"content": f"batch-row-{i}-uniq", "importance": 5} for i in range(3)],
     }
-    r = client.post("/v1/memories/batch", headers=headers, json=body)
+    r = client.post("/v1/episodic/batch", headers=headers, json=body)
     assert r.status_code == 202
     out = r.json()
     assert len(out["object_ids"]) == 3
@@ -140,7 +140,7 @@ def test_capture_created_at_override_requires_operator(
     could rewrite when an event "happened", which breaks event_at /
     created_at audit semantics."""
     r = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
             "namespace": "eric/claude-code/episodic",
@@ -172,7 +172,7 @@ def test_capture_created_at_override_with_operator_round_trips(
     headers = {"Authorization": f"Bearer {token}"}
     override = "2024-06-01T12:00:00Z"
     r = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers=headers,
         json={
             "namespace": namespace,
@@ -183,7 +183,7 @@ def test_capture_created_at_override_with_operator_round_trips(
     assert r.status_code == 202, r.text
     oid = r.json()["object_id"]
     got = client.get(
-        f"/v1/memories/{oid}",
+        f"/v1/episodic/{oid}",
         headers=headers,
         params={"namespace": namespace},
     )
@@ -203,14 +203,14 @@ def test_capture_without_created_at_is_stamped_now(
 
     before = datetime.now(UTC)
     r = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={"namespace": "eric/claude-code/episodic", "content": "no-override"},
     )
     assert r.status_code == 202
     oid = r.json()["object_id"]
     got = client.get(
-        f"/v1/memories/{oid}",
+        f"/v1/episodic/{oid}",
         headers={"Authorization": f"Bearer {valid_token}"},
         params={"namespace": "eric/claude-code/episodic"},
     )
@@ -227,7 +227,7 @@ def test_batch_capture_created_at_override_requires_operator(
     check for the whole batch. Keeps semantics simple: mixed batches
     fail fast rather than partially-succeed."""
     r = client.post(
-        "/v1/memories/batch",
+        "/v1/episodic/batch",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
             "namespace": "eric/claude-code/episodic",
@@ -257,7 +257,7 @@ def test_batch_capture_created_at_override_with_operator_applies_per_item(
     )
     headers = {"Authorization": f"Bearer {token}"}
     r = client.post(
-        "/v1/memories/batch",
+        "/v1/episodic/batch",
         headers=headers,
         json={
             "namespace": namespace,
@@ -271,12 +271,12 @@ def test_batch_capture_created_at_override_with_operator_applies_per_item(
     oids = r.json()["object_ids"]
     assert len(oids) == 2
     a = client.get(
-        f"/v1/memories/{oids[0]}",
+        f"/v1/episodic/{oids[0]}",
         headers=headers,
         params={"namespace": namespace},
     ).json()
     b = client.get(
-        f"/v1/memories/{oids[1]}",
+        f"/v1/episodic/{oids[1]}",
         headers=headers,
         params={"namespace": namespace},
     ).json()
@@ -304,7 +304,7 @@ def test_patch_episodic_updates_tags_and_importance(
 
     oid = asyncio.run(_seed())
     r = client.patch(
-        f"/v1/memories/{oid}",
+        f"/v1/episodic/{oid}",
         headers={"Authorization": f"Bearer {valid_token}"},
         params={"namespace": namespace},
         json={"tags": ["new-tag"], "importance": 9},
@@ -333,7 +333,7 @@ def test_patch_rejects_state_field_changes(
 
     oid = asyncio.run(_seed())
     r = client.patch(
-        f"/v1/memories/{oid}",
+        f"/v1/episodic/{oid}",
         headers={"Authorization": f"Bearer {valid_token}"},
         params={"namespace": namespace},
         json={"state": "matured"},
@@ -360,7 +360,7 @@ def test_delete_episodic_soft_archives(
 
     oid = asyncio.run(_seed())
     r = client.delete(
-        f"/v1/memories/{oid}",
+        f"/v1/episodic/{oid}",
         headers={"Authorization": f"Bearer {valid_token}"},
         params={"namespace": namespace},
     )
@@ -383,7 +383,7 @@ def test_delete_episodic_hard_requires_operator(
 
     oid = asyncio.run(_seed())
     r = client.delete(
-        f"/v1/memories/{oid}",
+        f"/v1/episodic/{oid}",
         headers={"Authorization": f"Bearer {valid_token}"},
         params={"namespace": namespace, "hard": "true"},
     )
@@ -496,7 +496,7 @@ def test_post_curated_writes_through_plane(
         "topics": ["test"],
     }
     r = client.post(
-        "/v1/curated-knowledge",
+        "/v1/curated",
         headers={"Authorization": f"Bearer {token}"},
         json=body,
     )
@@ -664,8 +664,8 @@ def test_idempotency_key_roundtrip(
         "namespace": "eric/claude-code/episodic",
         "content": "idempotent-write-fixture-unique",
     }
-    r1 = client.post("/v1/memories", headers=headers, json=body)
-    r2 = client.post("/v1/memories", headers=headers, json=body)
+    r1 = client.post("/v1/episodic", headers=headers, json=body)
+    r2 = client.post("/v1/episodic", headers=headers, json=body)
     assert r1.status_code == 202
     assert r2.status_code == 202
     assert r1.json()["object_id"] == r2.json()["object_id"]
@@ -689,11 +689,11 @@ def test_idempotency_key_expires_after_24h(
         "namespace": "eric/claude-code/episodic",
         "content": "idempotent-ttl-fixture-unique",
     }
-    r1 = client.post("/v1/memories", headers=headers, json=body)
+    r1 = client.post("/v1/episodic", headers=headers, json=body)
     assert r1.status_code == 202
     # Force-expire the key.
     _GLOBAL_CACHE.expire_for_test(headers["Idempotency-Key"])
-    r2 = client.post("/v1/memories", headers=headers, json=body)
+    r2 = client.post("/v1/episodic", headers=headers, json=body)
     assert r2.status_code == 202
     # Same object id (plane dedup), but the response should NOT be a
     # replay — it ran fresh.
@@ -715,7 +715,7 @@ def test_rate_limit_enforces_token_bucket(
     statuses: list[int] = []
     for i in range(110):
         r = client.post(
-            "/v1/memories",
+            "/v1/episodic",
             headers=headers,
             json={
                 "namespace": "eric/claude-code/episodic",
@@ -741,7 +741,7 @@ def test_rate_limit_operator_scope_10x_limit(
     by reading the X-RateLimit-Limit header on the first response."""
     headers = {"Authorization": f"Bearer {operator_token}"}
     r = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers=headers,
         json={
             "namespace": "eric/claude-code/episodic",
@@ -825,9 +825,9 @@ def test_committed_openapi_yaml_includes_write_paths() -> None:
     paths = set(doc["paths"].keys())
     # Every write route added by this slice must be in the snapshot.
     for required in (
-        "/v1/memories",
-        "/v1/memories/batch",
-        "/v1/curated-knowledge",
+        "/v1/episodic",
+        "/v1/episodic/batch",
+        "/v1/curated",
         "/v1/artifacts",
         "/v1/thoughts/send",
         "/v1/lifecycle/transition",
@@ -850,7 +850,7 @@ def test_capture_validation_error_returns_422(
     Unprocessable Entity per RFC 9110 §15.5.21, carrying the typed
     BAD_REQUEST envelope."""
     r = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={"namespace": "eric/claude-code/episodic"},  # content missing
     )
@@ -885,7 +885,7 @@ def test_capture_malformed_namespace_returns_422_not_500(
         presence="perf-test/ephemeral",
     )
     r = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers={"Authorization": f"Bearer {token}"},
         json={
             "namespace": "perf-test/episodic",  # two segments — invalid
@@ -911,13 +911,13 @@ def test_idempotency_key_different_body_returns_conflict(
     }
     namespace = "eric/claude-code/episodic"
     r1 = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers=headers,
         json={"namespace": namespace, "content": "first-body"},
     )
     assert r1.status_code == 202
     r2 = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers=headers,
         json={"namespace": namespace, "content": "different-body"},
     )
@@ -967,7 +967,7 @@ def test_patch_curated_returns_404_when_missing(
     namespace = "eric/claude-code/curated"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     r = client.patch(
-        "/v1/curated-knowledge/0000000000000000000000000000",
+        "/v1/curated/0000000000000000000000000000",
         headers={"Authorization": f"Bearer {token}"},
         params={"namespace": namespace},
         json={"importance": 8},
@@ -997,12 +997,12 @@ def test_patch_curated_updates_and_delete_archives(
         "vault_path": "curated/eric/patch-delete.md",
         "body_hash": hashlib.sha256(body_text.encode()).hexdigest(),
     }
-    r = client.post("/v1/curated-knowledge", headers=headers, json=create_body)
+    r = client.post("/v1/curated", headers=headers, json=create_body)
     assert r.status_code == 202
     oid = r.json()["object_id"]
 
     p = client.patch(
-        f"/v1/curated-knowledge/{oid}",
+        f"/v1/curated/{oid}",
         headers=headers,
         params={"namespace": namespace},
         json={"importance": 10, "topics": ["patched-topic"]},
@@ -1012,7 +1012,7 @@ def test_patch_curated_updates_and_delete_archives(
     assert "patched-topic" in p.json()["topics"]
 
     p_state = client.patch(
-        f"/v1/curated-knowledge/{oid}",
+        f"/v1/curated/{oid}",
         headers=headers,
         params={"namespace": namespace},
         json={"state": "matured"},
@@ -1020,7 +1020,7 @@ def test_patch_curated_updates_and_delete_archives(
     assert p_state.status_code == 400
 
     d = client.delete(
-        f"/v1/curated-knowledge/{oid}",
+        f"/v1/curated/{oid}",
         headers=headers,
         params={"namespace": namespace},
     )
@@ -1038,7 +1038,7 @@ def test_delete_curated_404_when_missing(
     namespace = "eric/claude-code/curated"
     token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
     r = client.delete(
-        "/v1/curated-knowledge/0000000000000000000000000000",
+        "/v1/curated/0000000000000000000000000000",
         headers={"Authorization": f"Bearer {token}"},
         params={"namespace": namespace},
     )
@@ -1065,7 +1065,7 @@ def test_rate_limit_resets_per_minute_window(
     request never hits the cap, so the post-request bucket count is
     decremented from the initial allowance."""
     r = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={"namespace": "eric/claude-code/episodic", "content": "rate-window-probe"},
     )

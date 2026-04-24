@@ -78,7 +78,7 @@ def _require_operator_for_created_at(request: Request) -> None:
         )
 
 
-router = APIRouter(prefix="/v1/memories", tags=["episodic-writes"])
+router = APIRouter(prefix="/v1/episodic", tags=["episodic-writes"])
 
 
 def _require_tz_aware(value: datetime | None) -> datetime | None:

@@ -49,7 +49,7 @@ async def test_batch_capture_100_items_under_1s(api_client: Any) -> None:
     ]
 
     start = time.monotonic()
-    async with api_client.memories.batch(namespace=namespace) as batch:
+    async with api_client.episodic.batch(namespace=namespace) as batch:
         for content in items:
             batch.capture(content=content, importance=4)
     elapsed = time.monotonic() - start
@@ -68,7 +68,7 @@ async def test_batch_capture_100_items_completes_without_strict_budget(
     namespace = "eric/integration-test/episodic"
     items = [f"batch-surface-{uuid.uuid4().hex[:6]}-{i}-payload" for i in range(100)]
 
-    async with api_client.memories.batch(namespace=namespace) as batch:
+    async with api_client.episodic.batch(namespace=namespace) as batch:
         for content in items:
             batch.capture(content=content, importance=4)
 

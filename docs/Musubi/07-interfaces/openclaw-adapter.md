@@ -52,7 +52,7 @@ The plugin issues calls at two different namespace segment counts. Tokens must c
 
 | Plugin operation | Endpoint | Namespace | Token scope pattern |
 |---|---|---|---|
-| Capture mirror | `POST /v1/memories` | `<owner>/<presence>/episodic` | `<owner>/<presence>/episodic:w` |
+| Capture mirror | `POST /v1/episodic` | `<owner>/<presence>/episodic` | `<owner>/<presence>/episodic:w` |
 | Recall (cross-plane) | `POST /v1/retrieve` | `<owner>/<presence>` (2-seg) | `<owner>/<presence>:r` |
 | Thought send | `POST /v1/thoughts/send` | `<owner>/<presence>/thought` | `<owner>/<presence>/thought:w` |
 | Thought stream | `GET /v1/thoughts/stream` | `<owner>/<presence>` (2-seg) | `<owner>/<presence>:r` |
@@ -105,7 +105,7 @@ On reconnect, Musubi replays thoughts emitted during the gap (see [[07-interface
 Episodic mirror from an OpenClaw `agent_end` event:
 
 ```json
-POST /v1/memories
+POST /v1/episodic
 {
   "namespace": "eric/aoi/episodic",
   "content": "<agent response text>",

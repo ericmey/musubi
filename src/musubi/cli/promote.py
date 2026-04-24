@@ -9,7 +9,7 @@ Both commands wrap existing concept-write endpoints:
 
 `promote force` requires the operator to have already created the
 curated row they're linking to (operators who need the LLM-free
-custom-body path should `POST /v1/curated-knowledge` first, then
+custom-body path should `POST /v1/curated` first, then
 pass the resulting id here). Wrapping that into one command is a
 clean follow-up; this CLI is the minimum that unblocks the
 operator workflows the spec promises.
@@ -37,7 +37,7 @@ def force_promote(
         "--curated-id",
         help=(
             "KSUID of the curated row this concept is being promoted to. "
-            "Create the curated row separately via POST /v1/curated-knowledge "
+            "Create the curated row separately via POST /v1/curated "
             "if one doesn't exist yet."
         ),
     ),

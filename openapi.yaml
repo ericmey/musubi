@@ -92,12 +92,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /v1/memories/{object_id}:
+  /v1/episodic/{object_id}:
     get:
       tags:
       - episodic
       summary: Get Memory
-      operationId: get_memory_v1_memories__object_id__get
+      operationId: get_memory_v1_episodic__object_id__get
       parameters:
       - name: object_id
         in: path
@@ -209,12 +209,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /v1/memories:
+  /v1/episodic:
     get:
       tags:
       - episodic
       summary: List Memories
-      operationId: list_memories_v1_memories_get
+      operationId: list_memories_v1_episodic_get
       parameters:
       - name: namespace
         in: query
@@ -276,12 +276,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /v1/curated-knowledge/{object_id}:
+  /v1/curated/{object_id}:
     get:
       tags:
       - curated
       summary: Get Curated
-      operationId: get_curated_v1_curated_knowledge__object_id__get
+      operationId: get_curated_v1_curated__object_id__get
       parameters:
       - name: object_id
         in: path
@@ -375,12 +375,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /v1/curated-knowledge:
+  /v1/curated:
     get:
       tags:
       - curated
       summary: List Curated
-      operationId: list_curated_v1_curated_knowledge_get
+      operationId: list_curated_v1_curated_get
       parameters:
       - name: namespace
         in: query
@@ -1008,7 +1008,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
-  /v1/memories/batch:
+  /v1/episodic/batch:
     post:
       tags:
       - episodic-writes
@@ -2192,7 +2192,7 @@ components:
       additionalProperties: true
       type: object
       title: PatchCuratedRequest
-      description: "Non-state metadata only \u2014 same convention as PATCH /v1/memories.\n\
+      description: "Non-state metadata only \u2014 same convention as PATCH /v1/episodic.\n\
         \n``extra=\"allow\"`` so the handler can return a typed BAD_REQUEST\nnaming\
         \ the forbidden field instead of a generic 422."
     PatchEpisodicRequest:
@@ -2327,11 +2327,15 @@ components:
         namespace:
           type: string
           title: Namespace
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
         extra:
           additionalProperties: true
           type: object
           title: Extra
-          default: {}
       type: object
       required:
       - object_id
@@ -2646,6 +2650,11 @@ components:
             format: date-time
           - type: 'null'
           title: Last Reinforced At
+        last_reinforced_epoch:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Last Reinforced Epoch
       additionalProperties: false
       type: object
       required:

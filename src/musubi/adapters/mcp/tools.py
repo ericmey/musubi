@@ -28,7 +28,7 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
         namespace: str, content: str, importance: int = 5, tags: list[str] | None = None
     ) -> str:
         try:
-            res = await client.memories.capture(
+            res = await client.episodic.capture(
                 namespace=namespace,
                 content=content,
                 importance=importance,

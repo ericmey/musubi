@@ -13,7 +13,7 @@ from musubi.api.routers._scroll import scroll_namespace
 from musubi.planes.episodic import EpisodicPlane
 from musubi.types.episodic import EpisodicMemory
 
-router = APIRouter(prefix="/v1/memories", tags=["episodic"])
+router = APIRouter(prefix="/v1/episodic", tags=["episodic"])
 
 
 @router.get(
