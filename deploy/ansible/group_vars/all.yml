@@ -44,7 +44,7 @@ musubi_core_port: 8100
 # digest from the Actions run summary, not from the release page.
 #
 # Bump this after every release via `deploy/runbooks/upgrade-image.md`.
-musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:e3b8bfb7a1d611dab1853bac491ecf9ba2fd0270fd123338e1609d8dca5b5558"
+musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:d7cd2c4e21ba29acf74963de2f00dc60c29ee37a4e2f260c9b51e70e33a4a719"
 musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
 # compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),
