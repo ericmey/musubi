@@ -53,7 +53,8 @@ The scope matcher (see [[10-security/auth]] and `src/musubi/auth/scopes.py`) req
 | `POST /v1/retrieve` with **3-segment** namespace | body `namespace` | 3 | `r` on that one namespace |
 | `POST /v1/retrieve` with **2-segment** namespace + `planes` array | body `namespace` + `planes` | 2 (base) + strict per-plane check on each expansion | `r` on the 2-seg base **and** `r` on every `<namespace>/<plane>` target |
 | `POST /v1/thoughts/send` | body (derives `<tenant>/<presence>/thought`) | 3 | `w` |
-| `POST /v1/thoughts/check`, `/read`, `/history` | body `namespace` | 3 (`<tenant>/<presence>/thought`) | `r` |
+| `POST /v1/thoughts/read` | body `namespace` | 3 (`<tenant>/<presence>/thought`) | `w` (marking read mutates state) |
+| `POST /v1/thoughts/check`, `/history` | body `namespace` | 3 (`<tenant>/<presence>/thought`) | `r` |
 | `GET /v1/thoughts/stream` | query `namespace` | **2** (`<tenant>/<presence>`) | `r` on the 2-segment namespace |
 | `POST /v1/lifecycle/*`, `POST /v1/contradictions/resolve`, `POST /v1/ops/reindex` | n/a | operator scope | `operator` |
 | `GET /v1/namespaces[/{ns}/stats]` | n/a | operator scope for listing; own-namespace read otherwise | varies |
@@ -74,7 +75,7 @@ eric/_shared/concept:r     # read shared concepts
 
 Notes:
 
-- There is **no separate `thoughts:check:<presence>` scope**. Every thoughts endpoint checks the standard `<tenant>/<presence>/thought` 3-segment namespace — `/check`, `/read`, `/history` need `:r`; `/send` needs `:w`. Both are covered by the `<tenant>/<presence>/*:rw` wildcard.
+- There is **no separate `thoughts:check:<presence>` scope**. Every thoughts endpoint checks the standard `<tenant>/<presence>/thought` 3-segment namespace — `/check` and `/history` need `:r`; `/send` and `/read` need `:w` (the `/read` endpoint marks thoughts as read, which mutates state). All of these are covered by the `<tenant>/<presence>/*:rw` wildcard.
 - `<tenant>/_shared/curated:r` + `<tenant>/_shared/concept:r` are the cross-presence read scopes — required if the presence wants to see knowledge the Lifecycle Worker has promoted from any other presence in the same tenant. Omit them if the presence should only see its own curated/concept output.
 - For an **operator** token (admin UI, ops scripts), replace the presence-scoped entries with `operator` — that covers admin endpoints (`/v1/lifecycle/*`, `/v1/contradictions/resolve`, `/v1/ops/reindex`) and implicit broad read.
 
