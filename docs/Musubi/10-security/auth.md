@@ -13,6 +13,8 @@ implements: "docs/Musubi/10-security/"
 
 Authentication + authorization for Musubi. OAuth 2.1 for human/adapter flows; JWT bearer tokens validated at the edge.
 
+> **v1.0 convention note:** the token and scope examples on this page use the pre-v1.0 `eric/<agent>` shape (human-as-tenant). As of v1.0, namespaces are agent-as-tenant — `nyla/voice`, `aoi/discord`, etc. — per [[13-decisions/0030-agent-as-tenant|ADR 0030]]. The validation pipeline, scope-glob matching, and test contract on this page are still correct; only the example strings need a sweep. Read [[03-system-design/namespaces]] for the authoritative shape.
+
 ## Model
 
 Single authority. Every call carries a bearer token; every token has a scope list; every scope names a namespace glob + access level.

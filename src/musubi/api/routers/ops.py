@@ -107,7 +107,7 @@ class TriggerSynthesisRequest(BaseModel):
     """Debug-endpoint payload for :func:`trigger_synthesis`."""
 
     namespace: str = Field(
-        description="Tenant-scoped namespace prefix (e.g. 'eric/integration-test'). "
+        description="Agent-scoped namespace prefix (e.g. 'nyla/voice'). "
         "The synthesis loop operates on '<prefix>/episodic' + '<prefix>/concept'."
     )
     simulate_ollama_offline: bool = Field(
