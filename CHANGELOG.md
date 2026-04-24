@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/ericmey/musubi/compare/v0.6.0...v0.6.1) (2026-04-24)
+
+
+### Bug Fixes
+
+* **ci:** grant contents:write so release-body append can update release (closes [#242](https://github.com/ericmey/musubi/issues/242)) ([#243](https://github.com/ericmey/musubi/issues/243)) ([b98215c](https://github.com/ericmey/musubi/commit/b98215cb6621eb2afa3862a0a33c38fe25fcd37b))
+
 ## [0.6.0](https://github.com/ericmey/musubi/compare/v0.5.1...v0.6.0) (2026-04-24)
 
 
