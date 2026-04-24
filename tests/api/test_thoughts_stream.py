@@ -470,7 +470,6 @@ async def test_stream_endpoint_sets_truncated_header_when_plane_reports_truncati
         namespace="eric/claude-code/thought",
         include=None,
         last_event_id="0" * 27,
-        qdrant=None,  # type: ignore[arg-type]
         settings=settings,
         thoughts_plane=thoughts,
     )
@@ -522,7 +521,6 @@ async def test_stream_endpoint_unsubscribes_broker_if_replay_raises(
         namespace="eric/claude-code/thought",
         include=None,
         last_event_id="0" * 27,
-        qdrant=None,  # type: ignore[arg-type]
         settings=settings,
         thoughts_plane=thoughts,
     )
@@ -574,7 +572,6 @@ async def test_stream_endpoint_no_truncation_header_when_replay_fits(
         namespace="eric/claude-code/thought",
         include=None,
         last_event_id="0" * 27,
-        qdrant=None,  # type: ignore[arg-type]
         settings=settings,
         thoughts_plane=thoughts,
     )

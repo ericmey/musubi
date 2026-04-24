@@ -188,7 +188,6 @@ async def stream_thoughts(
     namespace: str = Query(...),
     include: str | None = Query(None),
     last_event_id: str | None = Header(None, alias="Last-Event-ID"),
-    qdrant: QdrantClient = Depends(get_qdrant_client),
     settings: Settings = Depends(get_settings_dep),
     thoughts_plane: ThoughtsPlane = Depends(get_thoughts_plane),
 ) -> Any:

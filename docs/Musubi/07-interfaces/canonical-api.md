@@ -187,7 +187,7 @@ Event semantics:
 - `ping` — keepalive, every **30 seconds**; VPN/proxy-survivable.
 - `close` — graceful-shutdown signal; client reconnects after the hinted delay. Error paths just close the TCP connection.
 
-**Replay on reconnect:** `Last-Event-ID: <ksuid>` triggers replay of every thought matching the subscription where `object_id > <ksuid>` (lexicographic, ascending) before entering live-tail mode. Single bounded range query against the thoughts plane — cheap because KSUIDs sort by time.
+**Replay on reconnect:** `Last-Event-ID: <ksuid>` triggers replay of every thought matching the subscription where `object_id > <ksuid>` (lexicographic, ascending) before entering live-tail mode. Bounded range scroll against the thoughts plane (may paginate internally until `cap + 1` post-anchor candidates are collected or the filtered slice is exhausted) — cheap because KSUIDs sort by time and the scroll is filtered by `created_epoch >= <ksuid-timestamp>` at index level.
 
 Replay is capped at **500 events per reconnect** (the window that covers typical disconnect gaps without blowing up the range query). If more events matched, the response carries the header `X-Musubi-Replay-Truncated: true` so the client can backfill the missing span via `POST /v1/thoughts/history` (which supports pagination) rather than silently losing events.
 

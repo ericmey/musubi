@@ -211,11 +211,14 @@ class ThoughtsPlane:
         after the paginated fetch so ``truncated`` reflects whether a
         genuine overflow occurred, not scroll-window quirks.
 
-        Ordered ascending by ``(created_epoch, object_id)`` so emission
-        preserves arrival order. The returned ``truncated`` flag tells
-        the caller whether to set the ``X-Musubi-Replay-Truncated``
-        response header so clients can fall back to
-        ``/v1/thoughts/history`` for deeper backfill.
+        Ordered ascending by ``object_id`` lexicographically. Since
+        ``object_id`` is a KSUID, this preserves second-level creation
+        time order with the KSUID suffix acting as the within-second
+        tiebreaker — matches the canonical-api.md contract exactly.
+        The returned ``truncated`` flag tells the caller whether to
+        set the ``X-Musubi-Replay-Truncated`` response header so
+        clients can fall back to ``/v1/thoughts/history`` for deeper
+        backfill.
         """
         # Malformed anchor → return empty replay rather than 500. A
         # garbage Last-Event-ID means the client's state is corrupt;
