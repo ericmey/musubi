@@ -2264,6 +2264,13 @@ components:
         namespace:
           type: string
           title: Namespace
+          description: |
+            Namespace pattern. Three shapes accepted:
+            - 3-segment concrete: `<tenant>/<presence>/<plane>` — single target.
+            - 2-segment: `<tenant>/<presence>` — cross-plane fanout (`planes` required).
+            - Wildcard: `*` may replace any single segment (e.g. `nyla/*/episodic`,
+              `*/voice/curated`, `nyla/*/*` with `planes`). Writes reject `*`;
+              wildcards are read-only. See ADR 0031.
         query_text:
           type: string
           title: Query Text

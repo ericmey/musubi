@@ -220,12 +220,13 @@ Single entry point for fast and deep path. Mode selected by `query.mode`. See [[
 
 #### Cross-plane retrieve: one call, not N
 
-The `namespace` field accepts two shapes, distinguished by segment count:
+The `namespace` field accepts three shapes, distinguished by segment count and the presence of `*` segments:
 
-- **3-segment** (`<tenant>/<presence>/<plane>`) — single-plane query. `planes` is ignored; results come from that one plane.
+- **3-segment concrete** (`<tenant>/<presence>/<plane>`) — single-plane query. `planes` is ignored; results come from that one plane.
 - **2-segment** (`<tenant>/<presence>`) — cross-plane query. Each entry in `planes` is expanded to `<namespace>/<plane>` server-side, the pipeline fans out in parallel, and results are merged by score into a single sorted response.
+- **Wildcard** (`*` in any segment) — read across channels for a tenant, across tenants for a channel, or any combination. `nyla/*/episodic` returns Nyla's episodic across all her channels; `*/voice/curated` spans every agent's voice curated. Wildcards expand server-side against the live Qdrant payload. **Writes still reject `*`** — channel-tagged provenance is preserved on every row.
 
-See [ADR-0028](../13-decisions/0028-retrieve-2seg-namespace-crossplane.md) for the design decision.
+See [ADR-0028](../13-decisions/0028-retrieve-2seg-namespace-crossplane.md) and [ADR-0031](../13-decisions/0031-retrieve-wildcard-namespace.md) for the design decisions.
 
 **Consumers should prefer 2-segment cross-plane calls** for any multi-plane query (prompt supplements, corpus recall). One HTTP request, server-side scoring merge, strict per-plane scope check. Do not reinvent fanout client-side.
 

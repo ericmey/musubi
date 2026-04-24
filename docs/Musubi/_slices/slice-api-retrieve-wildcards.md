@@ -45,6 +45,7 @@ read-only).
 ## Owned paths (you MAY write here)
 
 - `src/musubi/api/routers/retrieve.py`           — wildcard expansion logic
+- `src/musubi/retrieve/orchestration.py`         — one-line hardening: row's stored namespace into the response, not the request namespace (pre-existing bug, only visible once wildcards make request ≠ stored)
 - `src/musubi/sdk/async_client.py`               — surface `planes` parameter (existed in API, missing on SDK)
 - `src/musubi/sdk/client.py`                     — sync mirror
 - `tests/api/test_retrieve_router.py`            — wildcard expansion tests
@@ -58,8 +59,7 @@ read-only).
 
 - `src/musubi/types/`                            — no new types needed; namespace stays `str`
 - `src/musubi/planes/`                           — write side already rejects `*` via the existing namespace regex; verify with a test, do not change
-- `src/musubi/retrieve/orchestration.py`         — orchestration already iterates concrete targets; nothing to add
-- `src/musubi/retrieve/{fast,deep,blended,hybrid}.py` — same; downstream of the orchestrator
+- `src/musubi/retrieve/{fast,deep,blended,hybrid}.py` — downstream of the orchestrator; behaviour unchanged
 - `src/musubi/lifecycle/`                        — sweeps stay channel-aware; out of scope
 - `src/musubi/api/routers/writes_*.py`           — writes don't accept wildcards (per ADR), no code change needed; verify via test
 - `proto/`                                       — gRPC surface unchanged in this slice
