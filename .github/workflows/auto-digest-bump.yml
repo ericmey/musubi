@@ -1,25 +1,42 @@
 name: Auto digest bump
 
 # Tier-3 automation of the manual step that shipped v0.3.0: after a
-# release is published and the signed image lands on GHCR, this
-# workflow opens (or keeps updated) a PR titled
-# `chore(deploy): pin musubi-core to <tag> signed digest` that edits
-# `deploy/ansible/group_vars/all.yml::musubi_core_image` to the new
-# `@sha256:<digest>`.
+# signed image lands on GHCR, this workflow opens (or keeps updated)
+# a PR titled `chore(deploy): pin musubi-core to <tag> signed digest`
+# that edits `deploy/ansible/group_vars/all.yml::musubi_core_image` to
+# the new `@sha256:<digest>`.
 #
 # The operator still reviews and merges the PR — this workflow does
 # not touch the live deploy. Ansible's `update.yml` is invoked
 # manually from the control host after merge.
 #
-# Why release-trigger (not tag-trigger): waiting for `release:published`
-# means release-please has already filled in the GitHub Release body,
-# so the digest (which publish-core-image appended there) is available
-# via the API. It also means we only run for real releases, not
-# arbitrary tags someone might push.
+# ## Triggers
+#
+# Primary: `workflow_run` after `publish-core-image.yml` finishes on a
+# tag. This is the only correct ordering — `release:published` (the
+# previous trigger) races with the image build, and the digest lookup
+# 404s before the manifest is pushed (closes #247). `workflow_run`
+# guarantees the image exists + is signed + is SBOM-attested by the
+# time we ask GHCR for its digest.
+#
+# Fallback: `workflow_dispatch` with an optional `tag` input. Used
+# when the primary path's conditions don't fire (e.g. the publish
+# workflow was re-run after an unrelated fix and we want a new pin
+# without re-tagging).
+#
+# ## Auth
+#
+# Uses `RELEASE_PLEASE_PAT` (with `GITHUB_TOKEN` as a warned fallback)
+# so PR creation is authored by a PAT identity. PRs opened by
+# `GITHUB_TOKEN` do not trigger the target branch's CI (GitHub's
+# anti-recursion guard), which produces BLOCKED PRs waiting on a
+# required `check` context that never runs. Same fix pattern as
+# `release-please.yml`.
 
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Publish Musubi Core image"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       tag:
@@ -38,20 +55,47 @@ concurrency:
 jobs:
   bump:
     runs-on: ubuntu-latest
+    # Primary path: publish-core-image finished *successfully* on a
+    # tag ref (tag names start with "v"). Skip on main-branch pushes
+    # (publish-core-image also runs on those, but we only pin on
+    # real releases).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success'
+       && startsWith(github.event.workflow_run.head_branch, 'v'))
     steps:
+      # Warn loud if the PAT is missing. Same spirit as release-please.yml:
+      # we'd rather fail noisily up-front than create a BLOCKED PR and
+      # leave the operator guessing why CI never ran on it.
+      - name: Warn if RELEASE_PLEASE_PAT is unset
+        env:
+          RELEASE_PLEASE_PAT: ${{ secrets.RELEASE_PLEASE_PAT }}
+        if: ${{ env.RELEASE_PLEASE_PAT == '' }}
+        run: |
+          echo "::warning::RELEASE_PLEASE_PAT is unset — falling back to GITHUB_TOKEN. The auto-pin PR this run creates will NOT trigger branch CI (anti-recursion guard), so the required 'check' context never runs and the PR stays BLOCKED. Set the secret to restore auto-mergeable pin PRs."
+
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          # PAT, not GITHUB_TOKEN — see header + warning-step comments
+          # for the why. Fallback keeps the job runnable when the PAT
+          # is absent (with the warning surfaced).
+          token: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Resolve tag + digest
         id: resolve
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # 1. Determine the tag: event-provided on release, input on dispatch, latest fallback.
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            TAG="${{ github.event.release.tag_name }}"
+          # 1. Determine the tag. Three sources:
+          # - workflow_run: publish-core-image's head_branch IS the tag
+          #   name for tag-push-triggered runs ("v0.7.0", etc.).
+          # - workflow_dispatch: the explicit input.
+          # - Fallback: latest GitHub release.
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            TAG="${{ github.event.workflow_run.head_branch }}"
           elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
             TAG="${{ github.event.inputs.tag }}"
           else
@@ -121,7 +165,10 @@ jobs:
       - name: Open or update PR
         if: steps.patch.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # PAT so the PR triggers branch CI. With GITHUB_TOKEN the PR
+          # opens but the required `check` context never runs, and the
+          # PR stays BLOCKED on an absent status.
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.resolve.outputs.tag }}
           DIGEST: ${{ steps.resolve.outputs.digest }}
         run: |
