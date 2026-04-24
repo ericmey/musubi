@@ -4,10 +4,14 @@ Keeps subcommand files thin — every CLI call goes through
 :func:`resolve_base_url` + :func:`resolve_token` + :func:`post_json`
 so credential discovery + error surfacing are consistent.
 
-Env-var resolution is delegated to Typer (`typer.Option(envvar=...)`)
-at the command boundary, so this module never reads env vars
-directly — the project guardrail confines env reads to
-``musubi.config`` / ``musubi.settings``.
+This module doesn't access the process environment directly.
+CLI options that use ``typer.Option(envvar=...)`` get env
+resolution done by Typer at the command boundary; only the
+already-resolved values flow into these helpers. The project's
+env-confinement guardrail — which routes config reads through
+``musubi.config`` / ``musubi.settings`` — still applies to
+settings-backed config; the Typer path is a separate surface for
+ad-hoc operator env vars that never become application settings.
 """
 
 from __future__ import annotations

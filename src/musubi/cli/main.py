@@ -7,9 +7,10 @@ an operator-scoped bearer token.
 Environment:
 
 - ``MUSUBI_API_URL`` — base URL including ``/v1`` (default
-  ``http://localhost:8100/v1``). Both ``settings.musubi_api_url``
-  and the CLI's `--api-url` flag override.
-- ``MUSUBI_TOKEN`` — operator-scope JWT. `--token` flag overrides.
+  ``http://localhost:8100/v1``). The ``--api-url`` flag overrides.
+  Env resolution happens in Typer at the command boundary — this
+  module doesn't consult ``musubi.config.get_settings()``.
+- ``MUSUBI_TOKEN`` — operator-scope JWT. ``--token`` flag overrides.
 """
 
 from __future__ import annotations

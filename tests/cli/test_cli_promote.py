@@ -22,6 +22,16 @@ _CURATED_ID = "3CmTEST0000000000000000000002"
 _NAMESPACE = "eric/shared/concept"
 
 
+@pytest.fixture(autouse=True)
+def _scrub_cli_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Tests stub responses against `_BASE` / `_TOKEN`; a dev shell with
+    # MUSUBI_API_URL or MUSUBI_TOKEN set would otherwise route calls to
+    # the real server. Scrub both so the suite is hermetic regardless
+    # of where it runs.
+    monkeypatch.delenv("MUSUBI_API_URL", raising=False)
+    monkeypatch.delenv("MUSUBI_TOKEN", raising=False)
+
+
 @pytest.fixture
 def runner() -> CliRunner:
     return CliRunner()
