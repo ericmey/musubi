@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0](https://github.com/ericmey/musubi/compare/v0.8.3...v1.0.0) (2026-04-24)
+
+
+### Features
+
+* release v1.0 — API sealed, integrations on canonical, automation hands-off ([#264](https://github.com/ericmey/musubi/issues/264)) ([92fab8b](https://github.com/ericmey/musubi/commit/92fab8bc202f5b273638f111ac53a5d284345ae5))
+
 ## [0.8.3](https://github.com/ericmey/musubi/compare/v0.8.2...v0.8.3) (2026-04-24)
 
 
