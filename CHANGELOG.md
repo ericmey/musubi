@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/ericmey/musubi/compare/v0.8.0...v0.8.1) (2026-04-24)
+
+
+### Refactors
+
+* **model:** agent-as-tenant namespace convention (ADR 0030) ([#255](https://github.com/ericmey/musubi/issues/255)) ([f31f073](https://github.com/ericmey/musubi/commit/f31f073e425db1d9151d4525366ea5d0b79e8c90))
+
 ## [0.8.0](https://github.com/ericmey/musubi/compare/v0.7.1...v0.8.0) (2026-04-24)
 
 
