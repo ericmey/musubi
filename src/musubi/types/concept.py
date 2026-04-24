@@ -38,15 +38,17 @@ class SynthesizedConcept(MemoryObject):
     topics: list[str] = Field(default_factory=list)
     promotion_attempts: int = Field(default=0, ge=0)
     last_reinforced_at: datetime | None = None
-
-    @property
-    def last_reinforced_epoch(self) -> float | None:
-        from musubi.types.common import epoch_of
-
-        return epoch_of(self.last_reinforced_at) if self.last_reinforced_at else None
+    # Derived from `last_reinforced_at` by the validator; null when the
+    # concept has never been reinforced. Kept as a real field (not a
+    # computed property) so it lands in the Qdrant payload and can drive
+    # scroll filters — mirrors the `created_epoch` / `updated_epoch`
+    # pattern on MemoryObject.
+    last_reinforced_epoch: float | None = None
 
     @model_validator(mode="after")
     def _normalise_and_guard(self) -> SynthesizedConcept:
+        from musubi.types.common import epoch_of
+
         if self.promoted_at is not None:
             object.__setattr__(self, "promoted_at", ensure_utc(self.promoted_at))
         if self.promotion_rejected_at is not None:
@@ -57,6 +59,8 @@ class SynthesizedConcept(MemoryObject):
             )
         if self.last_reinforced_at is not None:
             object.__setattr__(self, "last_reinforced_at", ensure_utc(self.last_reinforced_at))
+            if self.last_reinforced_epoch is None:
+                object.__setattr__(self, "last_reinforced_epoch", epoch_of(self.last_reinforced_at))
 
         if self.state == "promoted" and (self.promoted_to is None or self.promoted_at is None):
             raise ValueError("state=promoted requires promoted_to and promoted_at to be set")

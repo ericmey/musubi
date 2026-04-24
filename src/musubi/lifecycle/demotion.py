@@ -109,20 +109,32 @@ async def demotion_episodic(deps: DemotionDeps, batch_size: int = 100) -> int:
 
 
 async def demotion_concept(deps: DemotionDeps, batch_size: int = 100) -> int:
-    """Demote mature concepts that haven't been reinforced recently."""
-    # Spec intent: demote when `last_reinforced_at < now - 30 days`. The
-    # field exists on SynthesizedConcept — current behavior proxies via
-    # `updated_epoch` (which ticks on *any* write), so the sweep is
-    # too lenient on concepts touched for reasons other than
-    # reinforcement (contradictions, importance re-scores). Fix is
-    # tracked in issue #218.
+    """Demote mature concepts that haven't been reinforced recently.
 
+    Selects on `last_reinforced_epoch < cutoff` when present, else
+    falls back to `created_epoch < cutoff` for concepts that have
+    never been reinforced. The fallback is qdrant-side via a `should`
+    clause (Qdrant OR); per-point re-verification in Python keeps the
+    logic honest against payload-schema drift.
+    """
     now = utc_now()
     cutoff_epoch = epoch_of(now) - (DEMOTION_CONCEPT_NO_REINFORCE_DAYS * 24 * 3600)
 
+    # Qdrant filter semantics: `must` is AND across its entries, `should`
+    # is OR. Combining must + should requires both to match — so
+    # `state == matured` must hold AND one of the two epoch branches
+    # must match.
     must_conditions: list[Any] = [
         models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
-        models.FieldCondition(key="updated_epoch", range=models.Range(lt=cutoff_epoch)),
+    ]
+    should_conditions: list[Any] = [
+        models.FieldCondition(key="last_reinforced_epoch", range=models.Range(lt=cutoff_epoch)),
+        models.Filter(
+            must=[
+                models.IsNullCondition(is_null=models.PayloadField(key="last_reinforced_epoch")),
+                models.FieldCondition(key="created_epoch", range=models.Range(lt=cutoff_epoch)),
+            ]
+        ),
     ]
 
     offset = None
@@ -134,7 +146,7 @@ async def demotion_concept(deps: DemotionDeps, batch_size: int = 100) -> int:
     while True:
         resp = deps.qdrant.scroll(
             collection_name=coll_name,
-            scroll_filter=models.Filter(must=must_conditions),
+            scroll_filter=models.Filter(must=must_conditions, should=should_conditions),
             limit=batch_size,
             offset=offset,
             with_payload=True,
@@ -144,6 +156,19 @@ async def demotion_concept(deps: DemotionDeps, batch_size: int = 100) -> int:
 
         for point in points:
             if not point.payload:
+                continue
+
+            # Re-verify in Python: the qdrant `should` clause gates which
+            # payloads we see, but a concept with null last_reinforced
+            # and fresh created_at would slip through if the fallback
+            # clause were mis-wired. Belt-and-braces.
+            last_reinforced_epoch = point.payload.get("last_reinforced_epoch")
+            reference_epoch = (
+                last_reinforced_epoch
+                if last_reinforced_epoch is not None
+                else point.payload.get("created_epoch")
+            )
+            if reference_epoch is None or reference_epoch >= cutoff_epoch:
                 continue
 
             try:
@@ -211,6 +236,25 @@ async def reinstate(deps: DemotionDeps, namespace: str, object_id: str, reason: 
                 to_state="matured",
                 actor=_LIFECYCLE_ACTOR,
                 reason=f"reinstatement: {reason}",
+            )
+            # Reset the reinforcement clock — otherwise the concept's
+            # old `last_reinforced_epoch` (which triggered demotion in
+            # the first place) still sits below the cutoff and the
+            # next sweep re-demotes it immediately. Reinstatement is
+            # an explicit operator call to give the concept a fresh
+            # chance, so set the clock to now.
+            now = utc_now()
+            now_epoch = epoch_of(now)
+            from musubi.planes.concept.plane import _point_id
+            from musubi.store.names import collection_for_plane
+
+            deps.qdrant.set_payload(
+                collection_name=collection_for_plane("concept"),
+                payload={
+                    "last_reinforced_at": now.isoformat(),
+                    "last_reinforced_epoch": now_epoch,
+                },
+                points=[_point_id(object_id)],
             )
             return
     except LookupError:
