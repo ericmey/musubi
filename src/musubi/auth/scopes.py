@@ -116,60 +116,6 @@ def require_operator_scope(context: AuthContext) -> Result[ScopeGrant, ScopeErro
     return Err(error=ScopeError(detail=detail))
 
 
-def require_thought_check_scope(
-    context: AuthContext,
-    *,
-    presence: str,
-) -> Result[ScopeGrant, ScopeError]:
-    """Require ``thoughts:check:<presence>`` for the presence's inbox."""
-
-    requested_presence = presence.rsplit("/", maxsplit=1)[-1]
-    token_presence = context.presence.rsplit("/", maxsplit=1)[-1]
-    expected_scope = f"thoughts:check:{requested_presence}"
-
-    if requested_presence == token_presence and expected_scope in context.scopes:
-        _audit(
-            "auth.allow", context, namespace=expected_scope, scope_used=expected_scope, access="r"
-        )
-        return Ok(
-            value=ScopeGrant(
-                subject=context.subject,
-                namespace=expected_scope,
-                access="r",
-                scope_used=expected_scope,
-            )
-        )
-
-    detail = f"thought check scope for {presence!r} not in token scope"
-    _audit(
-        "auth.deny", context, namespace=expected_scope, scope_used=None, access="r", reason=detail
-    )
-    return Err(error=ScopeError(detail=detail))
-
-
-def require_thought_send_scope(context: AuthContext) -> Result[ScopeGrant, ScopeError]:
-    """Require ``thoughts:send`` for thought send endpoints."""
-
-    if "thoughts:send" in context.scopes:
-        _audit(
-            "auth.allow", context, namespace="thoughts:send", scope_used="thoughts:send", access="w"
-        )
-        return Ok(
-            value=ScopeGrant(
-                subject=context.subject,
-                namespace="thoughts:send",
-                access="w",
-                scope_used="thoughts:send",
-            )
-        )
-
-    detail = "thoughts:send scope required"
-    _audit(
-        "auth.deny", context, namespace="thoughts:send", scope_used=None, access="w", reason=detail
-    )
-    return Err(error=ScopeError(detail=detail))
-
-
 def _namespace_scope_allows(scope: str, namespace: str, access: AccessLevel) -> bool:
     parsed = _parse_namespace_scope(scope)
     if parsed is None:
@@ -233,8 +179,6 @@ __all__ = [
     "ScopeError",
     "ScopeGrant",
     "require_operator_scope",
-    "require_thought_check_scope",
-    "require_thought_send_scope",
     "resolve_blended_query_scope",
     "resolve_namespace_scope",
 ]

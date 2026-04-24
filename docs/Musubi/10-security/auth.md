@@ -52,11 +52,10 @@ JWT, RS256 signed:
   "exp": 1744896000,                   // 1h
   "jti": "abc-123",
   "scope": [
-    "eric/claude-code/episodic:rw",
+    "eric/claude-code:r",
+    "eric/claude-code/*:rw",
     "eric/_shared/curated:r",
-    "eric/_shared/artifact:rw",
-    "thoughts:send",
-    "thoughts:check:claude-code"
+    "eric/_shared/artifact:rw"
   ],
   "presence": "eric/claude-code"
 }
@@ -91,10 +90,15 @@ Access level:
 
 Non-namespace scopes (special):
 
-- `thoughts:send` — may send thoughts.
-- `thoughts:check:<presence>` — may check inbox for the named presence.
-- `thoughts:history:<presence>` — may search history of the named presence.
 - `operator` — admin endpoints.
+
+**Thoughts scopes** — there is **no** separate `thoughts:send` / `thoughts:check:<presence>` / `thoughts:history:<presence>` keyword scope. Every thoughts endpoint (send, check, read, history, stream) checks against the standard namespace-scope form. See [[07-interfaces/canonical-api#scope-by-endpoint]] for the full table; the short version:
+
+- `POST /v1/thoughts/send` → 3-segment `<tenant>/<presence>/thought:w`
+- `POST /v1/thoughts/check` / `/read` / `/history` → 3-segment `<tenant>/<presence>/thought:r`
+- `GET /v1/thoughts/stream` → 2-segment `<tenant>/<presence>:r`
+
+A token with `<tenant>/<presence>:r` + `<tenant>/<presence>/*:rw` covers every thoughts flow for that presence.
 
 ## Signing key
 
@@ -132,29 +136,27 @@ clients:
     redirect_uris: ["chrome-extension://<ext-id>/oauth/callback",
                     "http://localhost:<port>/oauth/callback"]
     allowed_scopes:
-      - eric/claude-code/episodic:rw
+      - eric/claude-code:r
+      - eric/claude-code/*:rw
       - eric/_shared/curated:r
-      - thoughts:send
-      - thoughts:check:claude-code
     public: true    # PKCE only, no client secret
 
   - client_id: musubi-livekit
     redirect_uris: ["http://localhost:8200/oauth/callback"]
     allowed_scopes:
-      - eric/livekit-voice/episodic:rw
-      - eric/_shared/blended:r
+      - eric/livekit-voice:r
+      - eric/livekit-voice/*:rw
+      - eric/_shared/curated:r
+      - eric/_shared/concept:r
       - eric/_shared/artifact:rw
-      - thoughts:send
-      - thoughts:check:livekit-voice
     public: true
 
   - client_id: musubi-openclaw
     redirect_uris: ["chrome-extension://<ext-id>/oauth/callback"]
     allowed_scopes:
-      - eric/openclaw/episodic:rw
+      - eric/openclaw:r
+      - eric/openclaw/*:rw
       - eric/_shared/curated:r
-      - thoughts:send
-      - thoughts:check:openclaw
     public: true
 ```
 
@@ -172,8 +174,9 @@ On each request Core:
 6. Per-endpoint scope check:
    - Capture → `<namespace>:w`.
    - Retrieve → `<namespace>:r` (or read any of the planes named in the query).
-   - Thought send → `thoughts:send` + recipient must be a known presence.
-   - Thought check → `thoughts:check:<my_presence>`.
+   - Thought send → `<tenant>/<presence>/thought:w` + recipient must be a known presence.
+   - Thought check / read / history → `<tenant>/<presence>/thought:r`.
+   - Thought stream (SSE) → `<tenant>/<presence>:r` (2-segment).
    - Operator endpoint → `operator`.
 7. If check fails, 403 with structured error.
 
@@ -249,7 +252,7 @@ Authorization: Bearer <token with scope eric/claude-code/episodic:rw>
 
 ```
 POST /v1/thoughts/check
-Authorization: Bearer <token with presence=claude-code, scope thoughts:check:claude-code>
+Authorization: Bearer <token with presence=claude-code, scope eric/claude-code/thought:r>
 
 {"my_presence": "livekit-voice"}
 ```
