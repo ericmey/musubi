@@ -27,7 +27,7 @@ How memory enters the system, ripens, gets synthesized into concepts, and gets p
 
 ## Two write surfaces
 
-1. **API write** — `POST /v1/memories`, `POST /v1/artifacts`, etc. Used by adapters (Claude Code, LiveKit, OpenClaw). Documented in [[07-interfaces/canonical-api]].
+1. **API write** — `POST /v1/episodic`, `POST /v1/artifacts`, etc. Used by adapters (Claude Code, LiveKit, OpenClaw). Documented in [[07-interfaces/canonical-api]].
 2. **Vault write** — a human saves a markdown file in Obsidian. Picked up by the Vault Watcher. Documented in [[06-ingestion/vault-sync]].
 
 Everything else — maturation, synthesis, promotion, demotion, reflection — is a **background process** run by the Lifecycle Worker, not a user-facing write path. See [[06-ingestion/lifecycle-engine]].

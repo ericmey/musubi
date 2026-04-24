@@ -145,7 +145,7 @@ class _MockMusubi(http.server.BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         length = int(self.headers.get("Content-Length", "0"))
         body = json.loads(self.rfile.read(length) or b"{}")
-        if path == "/v1/memories":
+        if path == "/v1/episodic":
             self.server.last_capture = body.get("content", "")
             self._json(202, {"object_id": "c" * 27, "state": "provisional"})
             return

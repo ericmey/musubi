@@ -83,7 +83,7 @@ class FakeMusubiClient:
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
         # Resource namespaces.
-        self.memories = _FakeMemories(self)
+        self.episodic = _FakeEpisodic(self)
         self.curated = _FakeCurated(self)
         self.concepts = _FakeConcepts(self)
         self.artifacts = _FakeArtifacts(self)
@@ -119,7 +119,7 @@ class FakeMusubiClient:
         self.close()
 
 
-class _FakeMemories:
+class _FakeEpisodic:
     def __init__(self, client: FakeMusubiClient) -> None:
         self._c = client
 
@@ -263,7 +263,7 @@ class _AsyncFakeBatchContext:
         self.results = self._sync.results
 
 
-class _AsyncMemoriesFake:
+class _AsyncEpisodicFake:
     def __init__(self, sync_ns: Any) -> None:
         self._ns = sync_ns
 
@@ -350,7 +350,7 @@ class AsyncFakeMusubiClient:
         self._fake = FakeMusubiClient(**kwargs)
         self.calls = self._fake.calls
 
-        self.memories = _AsyncMemoriesFake(self._fake.memories)
+        self.episodic = _AsyncEpisodicFake(self._fake.episodic)
         self.curated = _AsyncCuratedFake(self._fake.curated)
         self.concepts = _AsyncConceptsFake(self._fake.concepts)
         self.artifacts = _AsyncArtifactsFake(self._fake.artifacts)

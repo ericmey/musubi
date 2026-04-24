@@ -144,7 +144,7 @@ Collection: `musubi_curated`.
 A read always comes from **Qdrant** (fast). If the content field is truncated (we only index summaries for large docs), the API caller can request the full file by ID:
 
 ```
-GET /v1/curated-knowledge/{id}?include=body
+GET /v1/curated/{id}?include=body
 ```
 
 which reads from the vault filesystem by `vault_path`.

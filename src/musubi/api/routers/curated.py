@@ -13,7 +13,7 @@ from musubi.api.routers._scroll import scroll_namespace
 from musubi.planes.curated import CuratedPlane
 from musubi.types.curated import CuratedKnowledge
 
-router = APIRouter(prefix="/v1/curated-knowledge", tags=["curated"])
+router = APIRouter(prefix="/v1/curated", tags=["curated"])
 
 
 @router.get(

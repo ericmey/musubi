@@ -89,7 +89,7 @@ echo '---\ntitle: Test\nobject_id: test-01\n---\ncontent' > vault/notes/test.md
 # Watcher should upsert into musubi_curated within a few seconds.
 sleep 5
 curl -H "Authorization: Bearer $TOKEN" \
-  http://localhost:8100/v1/curated-knowledge/test-01 | jq .title
+  http://localhost:8100/v1/curated/test-01 | jq .title
 # -> "Test"
 ```
 

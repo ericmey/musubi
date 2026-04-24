@@ -18,7 +18,7 @@ print(json.dumps({
 }))
 PY
 )"
-json_post "/v1/memories" "$capture_payload" >/dev/null
+json_post "/v1/episodic" "$capture_payload" >/dev/null
 
 retrieve_payload="$(
   CONTENT="$content" python3 - <<'PY'

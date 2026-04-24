@@ -20,14 +20,14 @@ def test_capture_rate_limit_returns_429_on_over_limit(client: TestClient, valid_
     # so changing the cap doesn't require updating N test literals.
     for _ in range(_CAPTURE_EXHAUST):
         resp = client.post(
-            "/v1/memories",
+            "/v1/episodic",
             json={"namespace": "eric/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
         pass
 
     resp = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         json={"namespace": "eric/claude-code/episodic", "content": "hit"},
         headers={"Authorization": f"Bearer {valid_token}"},
     )
@@ -40,12 +40,12 @@ def test_capture_rate_limit_resets_after_window(client: TestClient, valid_token:
     limiter.reset_for_test()
     for _ in range(_CAPTURE_EXHAUST):
         client.post(
-            "/v1/memories",
+            "/v1/episodic",
             json={"namespace": "eric/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
     resp = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         json={"namespace": "eric/claude-code/episodic", "content": "hit"},
         headers={"Authorization": f"Bearer {valid_token}"},
     )
@@ -53,7 +53,7 @@ def test_capture_rate_limit_resets_after_window(client: TestClient, valid_token:
 
     with patch("time.time", return_value=time.time() + 61):
         resp = client.post(
-            "/v1/memories",
+            "/v1/episodic",
             json={"namespace": "eric/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
@@ -67,7 +67,7 @@ def test_retrieve_rate_limit_separate_bucket_from_capture(
     limiter.reset_for_test()
     for _ in range(_CAPTURE_EXHAUST):
         client.post(
-            "/v1/memories",
+            "/v1/episodic",
             json={"namespace": "eric/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
@@ -85,12 +85,12 @@ def test_retry_after_header_present_on_429(client: TestClient, valid_token: str)
     limiter.reset_for_test()
     for _ in range(_CAPTURE_EXHAUST):
         client.post(
-            "/v1/memories",
+            "/v1/episodic",
             json={"namespace": "eric/claude-code/episodic", "content": "hit"},
             headers={"Authorization": f"Bearer {valid_token}"},
         )
     resp = client.post(
-        "/v1/memories",
+        "/v1/episodic",
         json={"namespace": "eric/claude-code/episodic", "content": "hit"},
         headers={"Authorization": f"Bearer {valid_token}"},
     )

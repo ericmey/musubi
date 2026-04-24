@@ -182,7 +182,7 @@ with client.memories.batch() as batch:
     batch.capture(...)
     batch.capture(...)
     batch.capture(...)
-# on exit, one POST /v1/memories/batch call; results attached to local references
+# on exit, one POST /v1/episodic/batch call; results attached to local references
 ```
 
 ## Streaming retrieval

@@ -11,12 +11,12 @@ implements: ["src/musubi/ingestion/capture.py", "tests/ingestion/test_capture.py
 ---
 # Capture
 
-The hot write path. An adapter calls `POST /v1/memories` (or `POST /v1/artifacts`) and we persist the object. This happens while a user (or agent) is waiting — budget is tight.
+The hot write path. An adapter calls `POST /v1/episodic` (or `POST /v1/artifacts`) and we persist the object. This happens while a user (or agent) is waiting — budget is tight.
 
 ## Endpoint
 
 ```
-POST /v1/memories
+POST /v1/episodic
 Authorization: Bearer <token>
 Content-Type: application/json
 
@@ -164,7 +164,7 @@ Without idempotency keys, dedup (step 4) catches most accidental duplicates but 
 
 ## Batched capture
 
-`POST /v1/memories/batch` accepts up to 100 items at once:
+`POST /v1/episodic/batch` accepts up to 100 items at once:
 
 - Embeds them in a single TEI batch (more efficient).
 - Dedups against the index but not against each other (within the batch).
@@ -175,7 +175,7 @@ Used by Claude Code's session-end "flush these captured observations" flow.
 
 ## Test Contract
 
-**Module under test:** `musubi/planes/episodic/` (capture entry points) + `musubi/api/v1/memories.py`
+**Module under test:** `musubi/planes/episodic/` (capture entry points) + `musubi/api/v1/episodic.py`
 
 Happy path:
 

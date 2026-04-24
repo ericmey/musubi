@@ -30,7 +30,7 @@ def _check_body_scope(request: Request, namespace: str, settings: Settings) -> N
         raise APIError(status_code=err.status_code, code=code, detail=err.detail)
 
 
-router = APIRouter(prefix="/v1/curated-knowledge", tags=["curated-writes"])
+router = APIRouter(prefix="/v1/curated", tags=["curated-writes"])
 
 
 class CuratedCreateRequest(BaseModel):
@@ -51,7 +51,7 @@ class CuratedCreateResponse(BaseModel):
 
 
 class PatchCuratedRequest(BaseModel):
-    """Non-state metadata only — same convention as PATCH /v1/memories.
+    """Non-state metadata only — same convention as PATCH /v1/episodic.
 
     ``extra="allow"`` so the handler can return a typed BAD_REQUEST
     naming the forbidden field instead of a generic 422."""

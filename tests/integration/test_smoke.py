@@ -224,7 +224,7 @@ async def test_thought_stream_delivers_live(api_client: Any, live_stack: StackHa
 
 async def test_curated_create_then_retrieve(live_stack: StackHandle) -> None:
     """The SDK's curated namespace is read-only (`get`); the create
-    surface lives at the API layer (POST /v1/curated-knowledge) and
+    surface lives at the API layer (POST /v1/curated) and
     is exercised here via raw httpx + the operator token."""
     import hashlib
 

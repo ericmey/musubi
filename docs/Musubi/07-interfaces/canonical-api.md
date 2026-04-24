@@ -46,8 +46,8 @@ The scope matcher (see [[10-security/auth]] and `src/musubi/auth/scopes.py`) req
 
 | Endpoint | Namespace source | Segments | Required access |
 |---|---|---|---|
-| `POST /v1/memories`, `/v1/memories/batch`, `GET/PATCH/DELETE /v1/memories/{id}` | request body / query | 3 (`<tenant>/<presence>/episodic`) | `r` or `w` |
-| `POST/GET/PATCH/DELETE /v1/curated-knowledge[/{id}]` | request body / query | 3 (`<tenant>/<presence>/curated`) | `r` or `w` |
+| `POST /v1/episodic`, `/v1/episodic/batch`, `GET/PATCH/DELETE /v1/episodic/{id}` | request body / query | 3 (`<tenant>/<presence>/episodic`) | `r` or `w` |
+| `POST/GET/PATCH/DELETE /v1/curated[/{id}]` | request body / query | 3 (`<tenant>/<presence>/curated`) | `r` or `w` |
 | `GET/PATCH /v1/concepts/{id}`, `POST /v1/concepts/{id}/reinforce\|promote\|reject` | query | 3 (`<tenant>/<presence>/concept`) | `r` or `w` |
 | `POST/GET /v1/artifacts`, `GET /v1/artifacts/{id}/blob\|chunks` | body / query | 3 (`<tenant>/<presence>/artifact`) | `r` or `w` |
 | `POST /v1/retrieve` with **3-segment** namespace | body `namespace` | 3 | `r` on that one namespace |
@@ -90,11 +90,11 @@ Notes:
 ### 1. Episodic memory
 
 ```
-POST   /v1/memories                          # capture
-POST   /v1/memories/batch                    # batch capture
-GET    /v1/memories/{id}                     # fetch one
-PATCH  /v1/memories/{id}                     # update tags/importance (limited fields)
-DELETE /v1/memories/{id}                     # soft delete (state=archived)
+POST   /v1/episodic                          # capture
+POST   /v1/episodic/batch                    # batch capture
+GET    /v1/episodic/{id}                     # fetch one
+PATCH  /v1/episodic/{id}                     # update tags/importance (limited fields)
+DELETE /v1/episodic/{id}                     # soft delete (state=archived)
 ```
 
 See [[06-ingestion/capture]] for semantics. Common errors: 400 (validation), 401/403, 503 (backend down).
@@ -102,11 +102,11 @@ See [[06-ingestion/capture]] for semantics. Common errors: 400 (validation), 401
 ### 2. Curated knowledge
 
 ```
-POST   /v1/curated-knowledge                 # rare — usually via vault edit
-GET    /v1/curated-knowledge/{id}?include=body
-PATCH  /v1/curated-knowledge/{id}            # metadata only; body edits via vault
-DELETE /v1/curated-knowledge/{id}            # soft-delete, archives vault file
-GET    /v1/curated-knowledge                 # list with filters
+POST   /v1/curated                 # rare — usually via vault edit
+GET    /v1/curated/{id}?include=body
+PATCH  /v1/curated/{id}            # metadata only; body edits via vault
+DELETE /v1/curated/{id}            # soft-delete, archives vault file
+GET    /v1/curated                 # list with filters
 ```
 
 Body of a curated doc is normally edited via the vault; POST exists for programmatic creation (e.g., Lifecycle Worker's promotion goes through `curated_create_from_concept` internally — but clients may POST too if they want to create a file through the API).
@@ -322,7 +322,7 @@ All request bodies are pydantic models. Examples:
 ### Capture
 
 ```json
-POST /v1/memories
+POST /v1/episodic
 {
   "namespace": "eric/claude-code/episodic",
   "content": "CUDA 13 driver 575 installed; reboot required.",
@@ -415,7 +415,7 @@ Rate limits live in Kong (simpler) or in the Core (more precise). v1: Kong. Post
 List endpoints use cursor pagination:
 
 ```
-GET /v1/memories?namespace=eric/...&limit=50&cursor=<opaque>
+GET /v1/episodic?namespace=eric/...&limit=50&cursor=<opaque>
 ```
 
 Response includes `next_cursor` if more results exist. `null` when exhausted.

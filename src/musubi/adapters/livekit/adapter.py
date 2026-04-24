@@ -102,7 +102,7 @@ class LiveKitAdapter:
             return
         scrubbed = self.maybe_redact(utterance)
         try:
-            await self.client.memories.capture(
+            await self.client.episodic.capture(
                 namespace=self.namespace,
                 content=scrubbed,
                 tags=["livekit-voice", "heuristic-fact"],
@@ -148,7 +148,7 @@ class LiveKitAdapter:
                     # Fall back to the SDK's canonical artifacts.upload
                     # surface when it ships; until then, route through
                     # memories.capture so the adapter is always live.
-                    await self.client.memories.capture(
+                    await self.client.episodic.capture(
                         namespace=self.namespace,
                         content=f"[transcript:{session_id}]",
                         tags=["livekit-voice", "session-transcript"],

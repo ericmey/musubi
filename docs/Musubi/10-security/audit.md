@@ -28,7 +28,7 @@ Format:
   "sub": "eric-claude-code",
   "client_id": "musubi-mcp",
   "presence": "eric/claude-code",
-  "endpoint": "POST /v1/memories",
+  "endpoint": "POST /v1/episodic",
   "namespace": "eric/claude-code/episodic",
   "scope_used": "eric/claude-code/episodic:rw",
   "source_ip": "10.0.0.5"
@@ -43,7 +43,7 @@ Deny example:
   "event": "auth.deny",
   "request_id": "...",
   "sub": "eric-mcp",
-  "endpoint": "POST /v1/memories",
+  "endpoint": "POST /v1/episodic",
   "namespace_requested": "eric/other/episodic",
   "reason": "scope_mismatch",
   "scope_available": ["eric/claude-code/episodic:rw"]
