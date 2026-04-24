@@ -32,15 +32,17 @@ Same core logic; different MCP server bootstrap.
 
 We expose the subset of Musubi that makes sense for a coding agent. Not everything.
 
+**Implementation status:** the current adapter (`src/musubi/adapters/mcp/tools.py`) registers `memory_capture` + `memory_recall` — enough for the v1.0 cut. The rest of the tables below is the **designed** MCP surface; unchecked rows are tracked in `[[_slices/slice-adapter-mcp]]` as follow-up work, not v1.0 scope.
+
 ### Memory
 
-| Tool | Musubi call | Notes |
-|---|---|---|
-| `memory_capture` | `client.episodic.capture()` | Capture a new episodic observation. |
-| `memory_recall` | `client.retrieve(mode="fast")` | Retrieve for just-in-time context. |
-| `memory_recent` | Filtered retrieve | Recent items in a namespace. |
-| `memory_forget` | `client.episodic.archive(id)` | Soft-archive. |
-| `memory_reflect` | Filtered retrieve + aggregation | Returns counts by tag/topic (no LLM). |
+| Tool | Status | Musubi call | Notes |
+|---|---|---|---|
+| `memory_capture` | shipped | `client.episodic.capture()` | Capture a new episodic observation. |
+| `memory_recall` | shipped | `client.retrieve(mode="fast")` | Retrieve for just-in-time context. |
+| `memory_recent` | planned | Filtered retrieve | Recent items in a namespace. |
+| `memory_forget` | planned | Raw `DELETE /v1/episodic/{id}` (SDK method TBD) | Soft-archive. No `client.episodic.archive()` on the SDK yet. |
+| `memory_reflect` | planned | Filtered retrieve + aggregation | Returns counts by tag/topic (no LLM). |
 
 ### Curated
 

@@ -73,11 +73,13 @@ make install
 make check
 ```
 
-A single-box Docker Compose deploy is laid out in [`deploy/ansible/templates/docker-compose.yml.j2`](deploy/ansible/templates/docker-compose.yml.j2); a first-deploy runbook lives at [`deploy/runbooks/upgrade-image.md`](deploy/runbooks/upgrade-image.md). Pick a version from the latest-release badge above and pull:
+A single-box Docker Compose deploy is laid out in [`deploy/ansible/templates/docker-compose.yml.j2`](deploy/ansible/templates/docker-compose.yml.j2); a first-deploy runbook lives at [`deploy/runbooks/upgrade-image.md`](deploy/runbooks/upgrade-image.md). Pin by digest — tags are mutable, digests aren't, and the rest of the repo (ansible, CI, SECURITY.md) verifies by digest:
 
 ```
-ghcr.io/ericmey/musubi-core:<version>
+ghcr.io/ericmey/musubi-core@sha256:<digest>
 ```
+
+Find the digest for a specific release on its GitHub Release page (the `publish-core-image` workflow attaches it) or via `docker buildx imagetools inspect ghcr.io/ericmey/musubi-core:<version>`.
 
 Verify the signature before pinning in production:
 
@@ -85,7 +87,7 @@ Verify the signature before pinning in production:
 cosign verify \
   --certificate-identity-regexp 'https://github.com/ericmey/musubi/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/ericmey/musubi-core:<version>
+  ghcr.io/ericmey/musubi-core@sha256:<digest>
 ```
 
 ## Repository layout
@@ -118,7 +120,7 @@ What's in the v1.0-candidate surface:
 
 - ✅ All five lifecycle sweeps (maturation, synthesis, promotion, demotion, reflection) running on cron, SQLite-journaled, with a hard three-strikes rejection cap on promotion
 - ✅ Hybrid retrieval — dense BGE-M3 + sparse SPLADE + BGE-reranker + 2-segment cross-plane fanout in one call
-- ✅ Full HTTP surface (gRPC partial; lives behind an opt-in build flag)
+- ✅ Full HTTP surface (gRPC partial; lives behind the runtime flag `MUSUBI_GRPC`, default off)
 - ✅ Plane-aligned endpoint paths: `/v1/episodic`, `/v1/curated`, `/v1/concepts`, `/v1/artifacts`
 - ✅ `Last-Event-ID` replay on `/v1/thoughts/stream` — reconnect without losing thoughts
 - ✅ MCP + LiveKit + OpenClaw adapters (external repos), static-bearer auth model with per-agent token support

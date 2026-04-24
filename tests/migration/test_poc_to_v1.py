@@ -77,6 +77,11 @@ def test_migrator_transforms_v0_episodic_to_v1_schema(mock_qdrant: Mock, mock_mu
     assert kwargs["namespace"] == "eric/poc/episodic"
     assert kwargs["topics"] == ["user"]
     assert kwargs["tags"] == ["a"]
+    # Source-truth timestamp is preserved via the SDK's operator-only
+    # `created_at` escape hatch — without it the row would be re-stamped
+    # at ingest time and the PoC timeline would be lost.
+    assert kwargs["created_at"] is not None
+    assert kwargs["created_at"].isoformat().startswith("2026-04-19T00:00:00")
 
 
 @pytest.mark.skip(
