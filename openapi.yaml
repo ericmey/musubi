@@ -2860,8 +2860,8 @@ components:
         namespace:
           type: string
           title: Namespace
-          description: Tenant-scoped namespace prefix (e.g. 'eric/integration-test').
-            The synthesis loop operates on '<prefix>/episodic' + '<prefix>/concept'.
+          description: Agent-scoped namespace prefix (e.g. 'nyla/voice'). The synthesis
+            loop operates on '<prefix>/episodic' + '<prefix>/concept'.
         simulate_ollama_offline:
           type: boolean
           title: Simulate Ollama Offline

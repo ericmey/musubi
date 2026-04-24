@@ -4,24 +4,26 @@ section: 03-system-design
 tags: [architecture, isolation, namespaces, section/system-design, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-04-24
 up: "[[03-system-design/index]]"
 reviewed: false
 implements: ["src/musubi/api/", "tests/api/"]
 ---
 # Namespaces
 
-How Musubi partitions its data so that multiple tenants and presences coexist without leaking memory across boundaries.
+How Musubi partitions its data so that agents, channels, and system services coexist without leaking memory across boundaries.
 
 ## The namespace triple
 
 Every piece of memory lives in a namespace: `{tenant}/{presence}/{plane}`.
 
-- **tenant** — a human identity or shared household bucket. Examples: `eric`, `household`.
-- **presence** — an AI agent identity. Examples: `claude-code`, `livekit-voice`, `openclaw`.
+- **tenant** — the agent persona that owns the memory (the continuous "who" across channels). Examples: `nyla`, `aoi`, `hana`, `mizuki`. Also reserved: `system` (lifecycle worker, scheduler).
+- **presence** — the channel / client the agent is speaking through. Examples: `voice` (LiveKit), `discord`, `openclaw` (browser plugin), `mcp` (MCP adapter).
 - **plane** — one of `episodic`, `curated`, `artifact`, `concept`, `thought`.
 
-Stored as a flat string on every object: `namespace: "eric/claude-code/episodic"`.
+Stored as a flat string on every object: `namespace: "nyla/voice/episodic"`.
+
+> Historical note: pre-v1.0, an earlier convention used the human operator as the tenant (`eric/nyla/episodic`). That was flipped to agent-as-tenant in [[13-decisions/0030-agent-as-tenant|ADR 0030]] before v1.0. Example namespaces elsewhere in the vault may still show the old shape; treat this page as the source of truth until the sweep lands.
 
 ## How namespaces affect storage
 
@@ -36,12 +38,12 @@ Collections:
 - `musubi_concept`
 - `musubi_thought`
 
-Why one-collection-per-plane instead of one-per-tenant?
-- With ~5 tenants × 5 planes = 25 collections, storage overhead is manageable, but every new tenant requires a provisioning step. Keeping data in a shared collection means tenant creation is a config edit, not a Qdrant operation.
+Why one-collection-per-plane instead of one-per-agent?
+- Agent creation is a config edit (mint a token, add to the fleet), not a Qdrant operation.
 - Qdrant payload filtering on an indexed KEYWORD field is O(log n); at our scale (≤ 10M points per plane) this is negligible.
-- Snapshot/restore of a shared collection captures all tenants atomically.
+- Snapshot/restore of a shared collection captures all agents atomically.
 
-**If we outgrow this** (say, > 50M points in a plane): we split the largest collection by tenant via a zero-downtime migration using Qdrant aliases. See [[11-migration/scaling]].
+**If we outgrow this** (say, > 50M points in a plane): we split the largest collection by agent via a zero-downtime migration using Qdrant aliases. See [[11-migration/scaling]].
 
 ### Filter on every query
 
@@ -56,33 +58,36 @@ Filter(
 ```
 
 where `ns_expr` is one of:
-- Exact: `"eric/claude-code/episodic"` — single-namespace query.
-- Prefix: `"eric/claude-code/"` — all planes for this presence (cross-plane blended).
-- Tenant-wide: `"eric/"` — all presences, all planes, for this tenant.
+- Exact: `"nyla/voice/episodic"` — single-namespace query.
+- 2-segment: `"nyla/voice"` — cross-plane fan (all planes Nyla has written on the voice channel). See [[13-decisions/0028-retrieve-2seg-namespace-crossplane|ADR 0028]].
+- Plane-wide via scope glob: tokens with `*/episodic:r` can read every agent's episodic rows; used by household-survey tools (see [[07-interfaces/canonical-api]]).
 
-Qdrant doesn't support prefix match on KEYWORD directly, so tenant-wide or presence-wide queries use `should` with all enumerated namespaces. Enumeration is cheap because the presence registry is ~10 entries.
+Qdrant doesn't support prefix match on KEYWORD directly, so plane-wide queries use `should` with enumerated namespaces at the router layer. Enumeration is cheap because the agent registry is ~12 entries.
 
 ### The vault
 
-Curated knowledge is partitioned under the vault filesystem:
+Curated knowledge is partitioned under the vault filesystem, one top-level directory per agent tenant:
 
 ```
 vault/
 ├── curated/
-│   ├── eric/              # tenant directory
-│   │   ├── projects/      # topic directories
+│   ├── nyla/                # agent tenant directory
+│   │   ├── projects/        # topic directories
 │   │   │   ├── musubi.md
 │   │   │   └── openclaw.md
 │   │   └── personal/
 │   │       └── preferences.md
-│   └── household/
-│       └── shared-calendar.md
-├── artifacts/             # artifact files (namespace-tagged in frontmatter, not path-partitioned)
-├── _archive/              # soft-deleted files
-└── _inbox/                # ticket / questions / locks folders
+│   ├── aoi/
+│   │   └── technical/
+│   │       └── gpu-ops.md
+│   └── _shared/             # cross-agent shared knowledge (household-read scope required)
+│       └── calendar.md
+├── artifacts/               # artifact files (namespace-tagged in frontmatter, not path-partitioned)
+├── _archive/                # soft-deleted files
+└── _inbox/                  # ticket / questions / locks folders
 ```
 
-The frontmatter in each file declares its namespace explicitly (`tenant: eric`, `plane: curated`). The filesystem structure is a convenience for humans (easy nav in Obsidian) — the namespace of record is in the frontmatter, so moving a file across tenant folders requires a frontmatter edit too.
+The frontmatter in each file declares its namespace explicitly (`tenant: nyla, presence: curated, plane: curated`). The filesystem structure is a convenience for humans (easy nav in Obsidian) — the namespace of record is in the frontmatter, so moving a file across agent folders requires a frontmatter edit too.
 
 ## Authorization maps to namespace
 
@@ -90,14 +95,15 @@ A bearer token carries claims:
 
 ```json
 {
-  "sub": "claude-code@eric",
-  "tenant": "eric",
-  "presence": "claude-code",
-  "scopes": ["memory:read", "memory:write", "curated:read"]
+  "sub": "openclaw-livekit-nyla",
+  "presence": "nyla/voice",
+  "scope": "nyla/*:rw */episodic:r */curated:r",
+  "aud": "musubi",
+  "iss": "..."
 }
 ```
 
-The auth middleware resolves this into an allowed namespace prefix and injects it into every query. A request with token for `eric/claude-code` cannot retrieve from `household/*` unless the token explicitly carries `tenant: household` as an additional allowed tenant (home-shared agents may).
+The auth middleware resolves scope globs against the request's namespace claim. A token scoped `nyla/*:rw` can write and read anywhere under the `nyla/` tenant; a token with additional `*/episodic:r` can survey every agent's episodic plane.
 
 See [[10-security/auth]] for the full token model.
 
@@ -105,34 +111,38 @@ See [[10-security/auth]] for the full token model.
 
 - **`system/lifecycle-worker/*`** — the lifecycle worker writes audit events and system-authored synthesized concepts here. Not readable to non-system tokens.
 - **`system/scheduler/*`** — scheduled-task-triggered thoughts and reflections.
-- **`{tenant}/_shared/*`** — shared across all presences of a tenant (e.g., tenant-level curated knowledge that any presence can read).
-- **`household/*`** — a tenant for multi-person shared knowledge (family calendar, home operations). Explicitly opted into by tokens.
+- **`<agent>/_shared/*`** — shared across all of an agent's channels (e.g., Nyla's canonical preferences, readable whether she's on voice or discord).
+- **`_shared/<plane>`** is not a valid namespace — use `<agent>/_shared/<plane>` for per-agent cross-channel, or grant `_shared/*:r` scope for a dedicated shared-knowledge tenant.
 
 ## Namespace rules
 
-1. **No defaulting.** Every API call must resolve a namespace. Missing namespace is a 400, not a "use current user's."
-2. **No wildcards in write paths.** Reads can query prefixes; writes must be fully qualified.
-3. **Cross-namespace relationships are allowed but logged.** A curated file in `eric/` may cite an artifact in `household/`. The audit log records the cross-namespace link.
+1. **No defaulting.** Every API call must resolve a namespace. Missing namespace is a 400, not a "use current agent's."
+2. **No wildcards in write paths.** Reads can query prefixes via scope globs; writes must be fully qualified.
+3. **Cross-namespace relationships are allowed but logged.** A curated file in `nyla/` may cite an artifact in `aoi/`. The audit log records the cross-namespace link.
 4. **Namespace strings are case-sensitive, ASCII, kebab-case.**
 5. **Namespace cannot be changed after write.** Moving a memory across namespaces is a delete + insert with new lineage.
+
+## Multi-instance note
+
+When a second human operator runs their own Musubi instance, we disambiguate by agent-name prefix or suffix (e.g. `nyla-eric` vs `nyla-lisa`) — or keep instances fully separate at the deploy layer. Until a second instance lands, agent names are flat and unique.
 
 ## Test Contract
 
 Every plane's module-level tests must include:
 
-- `test_isolation_read_enforcement` — a token for `tenant-a` cannot read `tenant-b` data at any plane.
-- `test_isolation_write_enforcement` — a token for `tenant-a` cannot write with `tenant: tenant-b` in payload.
-- `test_shared_read_ok` — a token with `tenant: eric` and `allowed_tenants: [household]` can read both.
-- `test_prefix_query_correctness` — prefix queries match all enumerated children and nothing else.
-- `test_system_namespace_not_readable_from_user_token` — a user token cannot read `system/*`.
+- `test_isolation_read_enforcement` — a token for agent `nyla` cannot read `aoi` data at any plane.
+- `test_isolation_write_enforcement` — a token for agent `nyla` cannot write with `namespace: aoi/...` in payload.
+- `test_household_read_ok` — a token with `nyla/*:rw` plus `*/episodic:r` can read both own and household episodic.
+- `test_prefix_query_correctness` — 2-seg queries match all enumerated plane children and nothing else.
+- `test_system_namespace_not_readable_from_agent_token` — an agent token cannot read `system/*`.
 
 See [[10-security/auth]] for the full auth test contract.
 
 ## Why this is load-bearing
 
 Namespaces are how we keep the small-team model sane. Get this wrong and we either:
-- Leak household memory into individual-presence retrieval (privacy / correctness).
-- Silo every presence (agents can't build on each other's context).
-- Can't ever evolve to multi-tenant because the concept isn't first-class.
+- Leak one agent's memory into another's retrieval (privacy / correctness).
+- Silo every channel (Nyla-on-voice can't build on Nyla-on-discord's context).
+- Can't evolve to multi-instance because the tenancy concept isn't first-class.
 
 Get it right and we get all three: isolation, selective sharing, and future-proof.
