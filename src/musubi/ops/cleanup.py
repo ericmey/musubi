@@ -62,13 +62,13 @@ def run_cleanup(
                 if collection == "musubi_episodic":
                     sdk._json(
                         "DELETE",
-                        f"/memories/{obj_id}",
+                        f"/episodic/{obj_id}",
                         params={"namespace": namespace, "hard": "true"},
                     )
                 elif collection == "musubi_curated":
                     sdk._json(
                         "DELETE",
-                        f"/curated-knowledge/{obj_id}",
+                        f"/curated/{obj_id}",
                         params={"namespace": namespace, "hard": "true"},
                     )
                 elif collection == "musubi_concept":

@@ -147,7 +147,7 @@ class LiveKitAdapter:
                 else:
                     # Fall back to the SDK's canonical artifacts.upload
                     # surface when it ships; until then, route through
-                    # memories.capture so the adapter is always live.
+                    # episodic.capture so the adapter is always live.
                     await self.client.episodic.capture(
                         namespace=self.namespace,
                         content=f"[transcript:{session_id}]",

@@ -35,8 +35,10 @@ service MusubiService {
   // Artifact ingestion (note: gRPC version uses byte stream; see streaming below).
   rpc IngestArtifact  (stream IngestArtifactChunk) returns (IngestArtifactResponse);
 
-  // Retrieval — cross-plane blended.
-  rpc RetrieveBlended (BlendedRequest)         returns (HitList);
+  // Cross-plane retrieve is served by RecallEpisodic above with a
+  // 2-segment (tenant/presence) namespace plus a `planes` field in
+  // RecallRequest per ADR-0028. There is no separate RetrieveBlended
+  // RPC; earlier spec drafts listed one.
 
   // Thoughts (durable inter-presence messages).
   rpc SendThought     (SendThoughtRequest)     returns (SendThoughtResponse);

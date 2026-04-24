@@ -46,7 +46,7 @@ def test_cleanup_worker_hard_deletes_archived_older_than_ttl(
         assert metrics[c] == 1
 
     assert (
-        call("DELETE", "/memories/123", params={"namespace": "test/ns", "hard": "true"})
+        call("DELETE", "/episodic/123", params={"namespace": "test/ns", "hard": "true"})
         in mock_sdk._json.call_args_list
     )
 

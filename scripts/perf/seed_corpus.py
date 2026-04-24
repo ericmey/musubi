@@ -358,7 +358,7 @@ def seed_episodic(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> 
         }
         r = post_with_backoff(
             client,
-            "/memories",
+            "/episodic",
             rng=progress_rng,
             json_body=body,
             extra_headers={"Idempotency-Key": make_idempotency_key(ns, content, ts)},
@@ -421,7 +421,7 @@ def seed_curated(client: httpx.Client, cfg: SeedConfig, rng: random.Random) -> i
             "body_hash": body_hash,
             "tags": rng.sample(_TOPICS, k=rng.randint(1, 3)),
         }
-        r = post_with_backoff(client, "/curated-knowledge", rng=backoff_rng, json_body=body)
+        r = post_with_backoff(client, "/curated", rng=backoff_rng, json_body=body)
         if r is not None and r.is_success:
             ok += 1
         elif r is not None:
