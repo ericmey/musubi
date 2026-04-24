@@ -114,23 +114,27 @@ deploy/                     ansible, prometheus, grafana, docker-compose templat
 
 ## Status
 
-**v0.6.0 — the v1.0 release candidate.** Pre-1.0 API shape is locked; the breaking changes that were going to land before 1.0 are in. If nothing major regresses in downstream-adapter validation, v1.0 ships next.
+**v1.0 — released.** The API shape is sealed, agent-as-tenant namespace model is in ([ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md)), both downstream integrations (openclaw-livekit, openclaw-musubi plugin) are on the canonical API, and the release chain from conventional commit through pinned-digest PR is fully hands-off.
 
-What's in the v1.0-candidate surface:
+In v1.0:
 
+- ✅ Three-plane memory (episodic / curated / concept) + artifacts + thoughts, per-plane collections, KSUID-addressed rows
 - ✅ All five lifecycle sweeps (maturation, synthesis, promotion, demotion, reflection) running on cron, SQLite-journaled, with a hard three-strikes rejection cap on promotion
 - ✅ Hybrid retrieval — dense BGE-M3 + sparse SPLADE + BGE-reranker + 2-segment cross-plane fanout in one call
 - ✅ Full HTTP surface (gRPC partial; lives behind the runtime flag `MUSUBI_GRPC`, default off)
 - ✅ Plane-aligned endpoint paths: `/v1/episodic`, `/v1/curated`, `/v1/concepts`, `/v1/artifacts`
+- ✅ Agent-as-tenant namespace model: `<agent>/<channel>/<plane>` ([ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md))
 - ✅ `Last-Event-ID` replay on `/v1/thoughts/stream` — reconnect without losing thoughts
 - ✅ MCP + LiveKit + OpenClaw adapters (external repos), static-bearer auth model with per-agent token support
 - ✅ Supply-chain: cosign + SBOM + Trivy on every published image
+- ✅ Fully automated release chain — conventional commit → release PR auto-merges → tag → signed image → digest pin PR auto-merges. Operator runs `ansible-playbook update.yml` from the control host and that is the only human step.
 - ✅ Operator tooling: `musubi promote force|reject` CLI, vault large-file skip-with-warning, rate-limited vault watcher
 
-Not yet:
+Post-v1.0:
 - ⏳ Fleet orchestration — single-node today; multi-node HA is a post-1.0 design space and will need its own ADR
 - ⏳ Auto-deploy pipeline (image publish is automated; host rollout is still operator-driven via ansible)
 - ⏳ gRPC transport ADR ([#98](https://github.com/ericmey/musubi/issues/98)) — priority-low, not a 1.0 blocker
+- ⏳ Vault-wide sweep to update illustrative `eric/...` examples to agent-as-tenant (normative specs already flipped; docs carry a banner pointing at [ADR 0030](docs/Musubi/13-decisions/0030-agent-as-tenant.md))
 
 Roadmap detail lives in [`docs/Musubi/12-roadmap/`](docs/Musubi/12-roadmap/).
 
