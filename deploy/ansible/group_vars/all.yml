@@ -22,28 +22,22 @@ musubi_data_dirs:
   - /var/lib/musubi/backups
 
 musubi_core_port: 8100
-# Musubi Core image. Pinned by immutable digest.
+# Musubi Core image — pinned by immutable digest.
 #
-# Current pin: v0.5.1. Rolls up #193 (rate-limit settings cleanup),
-# #209 (2-segment namespace + strict-scope crossplane fanout), and
-# #208 (artifact-plane sparse-prefetch skip — the 500 when retrieving
-# across a dense-only collection). Gates 1 + 2 were clean on the
-# previous v0.4.0 digest; the full Gate 1-4 perf sweep needs to be
-# re-run on v0.5.1 before declaring pre-prod done.
+# Every release has a cosign-signed + SBOM-attested + Trivy-scanned
+# image on GHCR, produced by `.github/workflows/publish-core-image.yml`.
+# The workflow run summary is the always-available source for the
+# digest pin block. The matching GitHub release body also carries it
+# when the tag-triggered publish run executes.
 #
-# Produced by `.github/workflows/publish-core-image.yml`; verified
-# cosign-signed + SBOM-attested + Trivy-CRITICAL-scanned.
+# Bumped automatically by `.github/workflows/auto-digest-bump.yml` on
+# every successful publish — a pin PR opens, CI runs, auto-merge
+# lands it. Deploy with `ansible-playbook deploy/ansible/update.yml`
+# from the control host (see `deploy/runbooks/upgrade-image.md`).
 #
-# Source of truth for the digest line: the Actions run summary for
-# the relevant `publish-core-image.yml` build, under the fenced
-# "Pin in deploy/ansible/group_vars/all.yml as:" block. The GitHub
-# Release body *also* carries that block — but only when the image
-# publish was triggered by the `v*` tag push, which itself requires
-# release-please to be authenticated with `RELEASE_PLEASE_PAT` (see
-# ADR 0026 addendum 2026-04-23). Until that lands, always pull the
-# digest from the Actions run summary, not from the release page.
-#
-# Bump this after every release via `deploy/runbooks/upgrade-image.md`.
+# For what's in a given version, see CHANGELOG.md (authoritative)
+# rather than a comment here — version-specific notes rot; the
+# changelog is the source of truth.
 musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:a1899c04c07177f024959fbb924d089d67e970b115b3dd07412152a943acddb7"
 musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
