@@ -520,7 +520,9 @@ async def test_event_rate_limit_drops_with_warning(
         f"expected 1 task accepted past the rate limit; saw {len(w._pending_tasks)}"
     )
     assert w._dropped_events == 4
-    warnings = [r.message for r in caplog.records if "vault-rate-limit-drop" in r.message]
+    # `record.getMessage()` is the reliable read — `.message` is only
+    # populated after a Formatter runs, which pytest doesn't guarantee.
+    warnings = [r.getMessage() for r in caplog.records if "vault-rate-limit-drop" in r.getMessage()]
     assert len(warnings) == 4, f"expected 4 drop warnings; saw {warnings}"
 
 
