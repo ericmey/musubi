@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/ericmey/musubi/compare/v1.0.0...v1.1.0) (2026-04-24)
+
+
+### Features
+
+* **api:** wildcard namespace segments for tenant-wide retrieve ([#268](https://github.com/ericmey/musubi/issues/268)) ([e9ef0be](https://github.com/ericmey/musubi/commit/e9ef0befb576ec49ddbc299da4ba5ba755df86f4))
+
 ## [1.0.0](https://github.com/ericmey/musubi/compare/v0.8.3...v1.0.0) (2026-04-24)
 
 
