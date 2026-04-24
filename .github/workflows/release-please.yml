@@ -46,7 +46,8 @@ jobs:
         run: |
           echo "::warning::RELEASE_PLEASE_PAT is unset — falling back to GITHUB_TOKEN. Release PRs will open / merge, but any vX.Y.Z tag this run creates will NOT trigger publish-core-image.yml (anti-recursion guard). No :vX.Y.Z image tag will be published to GHCR. Set the secret to restore version-tagged publishes."
 
-      - uses: googleapis/release-please-action@v4
+      - id: release-please
+        uses: googleapis/release-please-action@v4
         with:
           # A single-package repo — release-please's `manifest` mode
           # still applies because our config lives in a manifest file.
@@ -79,3 +80,22 @@ jobs:
           # emits an `::warning::` so the regression doesn't slip
           # by silently.
           token: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      # Turn the release PR into a set-and-forget merge — once required
+      # checks pass, GitHub squash-merges it without a human gate. The
+      # release-please action re-opens/updates the PR on every push to
+      # main, so re-enabling auto-merge is idempotent. Skipped when no
+      # PR was produced this run (nothing to release).
+      - name: Enable auto-merge on release PR
+        if: ${{ steps.release-please.outputs.pr != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
+          PR_JSON: ${{ steps.release-please.outputs.pr }}
+        run: |
+          pr_number=$(echo "$PR_JSON" | jq -r '.number')
+          if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
+            echo "release-please produced no PR number; skipping auto-merge."
+            exit 0
+          fi
+          echo "Enabling auto-merge on PR #$pr_number"
+          gh pr merge "$pr_number" --auto --squash -R "${{ github.repository }}"
