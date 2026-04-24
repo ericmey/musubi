@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from ksuid import Ksuid
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
@@ -177,6 +178,107 @@ class ThoughtsPlane:
             if point.payload:
                 out.append(_thought_from_payload(point.payload))
         return out
+
+    # ------------------------------------------------------------------
+    # Replay (SSE reconnect backfill)
+    # ------------------------------------------------------------------
+
+    async def replay_since(
+        self,
+        *,
+        namespace: Namespace,
+        includes: frozenset[str] | set[str],
+        last_event_id: str,
+        cap: int = 500,
+    ) -> tuple[list[Thought], bool]:
+        """Return thoughts emitted since ``last_event_id`` for SSE backfill.
+
+        Filter shape:
+        - ``namespace`` matches exactly.
+        - ``to_presence`` is in ``includes`` (typically the presence plus
+          the ``all`` broadcast bucket).
+        - ``created_epoch >= anchor_epoch``, where ``anchor_epoch`` comes
+          from decoding ``last_event_id`` as a KSUID. Narrows the scroll
+          at index level so we don't scan the whole namespace.
+        - ``object_id > last_event_id`` applied client-side, since two
+          thoughts created in the same second have random KSUID suffixes
+          and lex comparison is the tiebreaker.
+
+        Qdrant ``scroll`` doesn't order by object_id (point ids are
+        UUIDv5, uncorrelated with KSUID), so we paginate through the
+        filtered slice until we collect ``cap + 1`` post-anchor
+        candidates or exhaust the result set. Sorting + cap are applied
+        after the paginated fetch so ``truncated`` reflects whether a
+        genuine overflow occurred, not scroll-window quirks.
+
+        Ordered ascending by ``object_id`` lexicographically. Since
+        ``object_id`` is a KSUID, this preserves second-level creation
+        time order with the KSUID suffix acting as the within-second
+        tiebreaker — matches the canonical-api.md contract exactly.
+        The returned ``truncated`` flag tells the caller whether to
+        set the ``X-Musubi-Replay-Truncated`` response header so
+        clients can fall back to ``/v1/thoughts/history`` for deeper
+        backfill.
+        """
+        # Malformed anchor → return empty replay rather than 500. A
+        # garbage Last-Event-ID means the client's state is corrupt;
+        # live-tail from here is the best we can do. The KSUID
+        # decoder can raise multiple exception types depending on
+        # the flavour of garbage (empty string → IndexError from
+        # baseconv, oversized timestamp → OverflowError, invalid
+        # chars → ValueError, etc.), so we catch the superset.
+        try:
+            anchor_epoch = float(Ksuid.from_base62(last_event_id).timestamp)
+        except Exception:
+            return [], False
+
+        base_filter = models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+                models.FieldCondition(
+                    key="to_presence",
+                    match=models.MatchAny(any=list(includes)),
+                ),
+                models.FieldCondition(
+                    key="created_epoch",
+                    range=models.Range(gte=anchor_epoch),
+                ),
+            ],
+        )
+
+        candidates: list[Thought] = []
+        offset: Any | None = None
+        page_size = max(cap + 1, 64)
+
+        while len(candidates) <= cap:
+            resp, offset = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=base_filter,
+                limit=page_size,
+                offset=offset,
+                with_payload=True,
+            )
+
+            for point in resp:
+                if not point.payload:
+                    continue
+                thought = _thought_from_payload(point.payload)
+                if thought.object_id > last_event_id:
+                    candidates.append(thought)
+                    if len(candidates) > cap:
+                        break
+
+            if offset is None or len(candidates) > cap:
+                break
+
+        # Sort by object_id lex-ascending — matches the canonical-api
+        # contract ("object_id > anchor (lexicographic, ascending)")
+        # and the client-side dedup-set insertion rule. KSUID lex order
+        # is second-level time order with random within-second
+        # tiebreaks, which is fine for SSE replay.
+        candidates.sort(key=lambda t: t.object_id)
+        truncated = len(candidates) > cap
+        return candidates[:cap], truncated
 
     # ------------------------------------------------------------------
     # Mark Read

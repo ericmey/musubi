@@ -30,12 +30,14 @@ from musubi.api.dependencies import (
     get_qdrant_client,
     get_reranker,
     get_settings_dep,
+    get_thoughts_plane,
 )
 from musubi.embedding import FakeEmbedder
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
 from musubi.planes.curated import CuratedPlane
 from musubi.planes.episodic import EpisodicPlane
+from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
 from musubi.store import bootstrap
 
@@ -112,6 +114,11 @@ def artifact(qdrant: QdrantClient) -> ArtifactPlane:
 
 
 @pytest.fixture
+def thoughts(qdrant: QdrantClient) -> ThoughtsPlane:
+    return ThoughtsPlane(client=qdrant, embedder=FakeEmbedder())
+
+
+@pytest.fixture
 def app_factory(
     api_settings: Settings,
     qdrant: QdrantClient,
@@ -119,6 +126,7 @@ def app_factory(
     curated: CuratedPlane,
     concept: ConceptPlane,
     artifact: ArtifactPlane,
+    thoughts: ThoughtsPlane,
 ) -> object:
     """Returns the FastAPI app with all DI overrides wired to the
     in-memory test instances."""
@@ -136,6 +144,7 @@ def app_factory(
     app.dependency_overrides[get_curated_plane] = lambda: curated
     app.dependency_overrides[get_concept_plane] = lambda: concept
     app.dependency_overrides[get_artifact_plane] = lambda: artifact
+    app.dependency_overrides[get_thoughts_plane] = lambda: thoughts
     return app
 
 
