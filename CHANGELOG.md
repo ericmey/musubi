@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/ericmey/musubi/compare/v0.8.2...v0.8.3) (2026-04-24)
+
+
+### Bug Fixes
+
+* **deploy:** remove stale per-version commentary on the core-image pin ([#260](https://github.com/ericmey/musubi/issues/260)) ([7acd357](https://github.com/ericmey/musubi/commit/7acd35714ecff5959cc005e758447c0540d8beb8))
+
 ## [0.8.2](https://github.com/ericmey/musubi/compare/v0.8.1...v0.8.2) (2026-04-24)
 
 
