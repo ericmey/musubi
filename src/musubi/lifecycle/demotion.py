@@ -215,7 +215,15 @@ async def demotion_artifact(deps: DemotionDeps, batch_size: int = 100) -> int:
     `ArtifactPlane.transition`. The blob itself is preserved — archival
     is a soft-delete, not storage reclamation.
     """
-    if not deps.artifact_archival_enabled or deps.artifact_plane is None:
+    if not deps.artifact_archival_enabled:
+        return 0
+
+    if deps.artifact_plane is None:
+        log.warning(
+            "Artifact archival is enabled but artifact_plane is not configured; "
+            "skipping artifact demotion sweep. Wire `DemotionDeps.artifact_plane` "
+            "in the lifecycle-worker bootstrap."
+        )
         return 0
 
     now = utc_now()
@@ -247,7 +255,10 @@ async def demotion_artifact(deps: DemotionDeps, batch_size: int = 100) -> int:
             scroll_filter=models.Filter(must=must_conditions),
             limit=batch_size,
             offset=offset,
-            with_payload=True,
+            # Narrow payload: we only need the ids here, not the full
+            # artifact row (content-type, blob metadata, etc.). On
+            # sizable collections this saves real bytes per sweep.
+            with_payload=["namespace", "object_id"],
             with_vectors=False,
         )
         points, offset = resp[0], resp[1]
@@ -306,7 +317,10 @@ def _collect_referenced_artifact_ids(client: QdrantClient) -> set[str]:
                 collection_name=coll,
                 limit=500,
                 offset=offset,
-                with_payload=True,
+                # Narrow payload: we only read `supported_by` here, not
+                # the full row (which carries multi-KB `content` fields
+                # on curated/concept). Saves O(total-bytes) per sweep.
+                with_payload=["supported_by"],
                 with_vectors=False,
             )
             for point in points:
@@ -394,9 +408,12 @@ def build_demotion_jobs(
     """Return :class:`Job` objects for the demotion sweeps registered in
     :func:`musubi.lifecycle.scheduler.build_default_jobs`.
 
-    Two jobs today — ``demotion_episodic`` (weekly Sun 03:45 UTC) and
-    ``demotion_concept`` (daily 05:00 UTC). ``demotion_artifact`` stays
-    opt-in per-namespace and is not scheduled globally.
+    Three jobs — ``demotion_episodic`` (weekly Sun 03:45 UTC),
+    ``demotion_concept`` (daily 05:00 UTC), and ``demotion_artifact``
+    (weekly Sun 04:15 UTC). The artifact sweep self-gates on
+    ``deps.artifact_archival_enabled``; scheduling it unconditionally
+    keeps the cron registry stable while letting the feature flag
+    decide whether it does any work.
 
     The wrapper grabs a file lock per job so two workers on the same
     host can't double-execute, then runs the sweep via ``asyncio.run``
@@ -421,7 +438,13 @@ def build_demotion_jobs(
         elif name == "demotion_concept":
             kwargs = {"hour": 5, "minute": 0}
             grace = 3600
-        else:  # pragma: no cover — both names enumerated above
+        elif name == "demotion_artifact":
+            # Runs right after the episodic sweep so the referenced-by
+            # probe sees any fresh demotions before deciding which
+            # artifacts are orphans.
+            kwargs = {"day_of_week": "sun", "hour": 4, "minute": 15}
+            grace = 3600
+        else:  # pragma: no cover — all names enumerated above
             raise ValueError(f"unknown demotion job name: {name}")
         return Job(
             name=name,
@@ -439,6 +462,10 @@ def build_demotion_jobs(
         _wrap(
             "demotion_concept",
             lambda: demotion_concept(deps, batch_size=batch_size),
+        ),
+        _wrap(
+            "demotion_artifact",
+            lambda: demotion_artifact(deps, batch_size=batch_size),
         ),
     ]
 
