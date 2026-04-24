@@ -6,9 +6,11 @@ name: Auto digest bump
 # that edits `deploy/ansible/group_vars/all.yml::musubi_core_image` to
 # the new `@sha256:<digest>`.
 #
-# The operator still reviews and merges the PR — this workflow does
-# not touch the live deploy. Ansible's `update.yml` is invoked
-# manually from the control host after merge.
+# The pin PR auto-merges once required checks pass (auto-merge is
+# enabled by this workflow on PR creation). The operator is only in
+# the loop for the deploy itself — `ansible-playbook update.yml` is
+# invoked manually from the control host after the pin has landed on
+# `main`. Deploys are a human decision; pinning the config is not.
 #
 # ## Triggers
 #
@@ -198,7 +200,11 @@ jobs:
           git push -u origin "${BRANCH}" --force
 
           # Create or update the PR. Detect existing by branch head.
-          EXISTING=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number' || true)
+          # `// empty` coalesces a null-array (no open PR for this
+          # branch) to an empty string, so the `-n` check below
+          # correctly takes the create path instead of
+          # `gh pr edit null`.
+          EXISTING=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number // empty' || true)
           BODY=$(cat <<EOF
           ${TITLE}
 
@@ -242,15 +248,21 @@ jobs:
             PR_NUMBER="${EXISTING}"
           else
             echo "Opening new PR"
-            gh pr create --base main --head "${BRANCH}" --title "${TITLE}" --body "${BODY}"
-            PR_NUMBER=$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number')
+            # `gh pr create` prints the PR URL on stdout; the trailing
+            # path component is the number. More reliable than
+            # re-listing immediately after create (GitHub's API can
+            # briefly return an empty list while the PR is indexing).
+            PR_URL=$(gh pr create --base main --head "${BRANCH}" --title "${TITLE}" --body "${BODY}")
+            PR_NUMBER="${PR_URL##*/}"
           fi
 
           # Flip on auto-merge so the pin lands the moment required
           # checks go green. Same "no human gate" policy as
           # release-please.yml. Idempotent — calling --auto on a PR
           # that already has auto-merge is a no-op.
-          if [[ -n "${PR_NUMBER}" ]]; then
+          if [[ -n "${PR_NUMBER}" && "${PR_NUMBER}" != "null" ]]; then
             echo "Enabling auto-merge on PR #${PR_NUMBER}"
             gh pr merge "${PR_NUMBER}" --auto --squash
+          else
+            echo "::warning::could not resolve PR number; skipping auto-merge enable."
           fi
