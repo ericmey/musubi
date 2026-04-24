@@ -150,7 +150,7 @@ def migrate_memories(
                 # Since the API drops extra fields, if we pass them to the SDK `client._json` as `json_body`,
                 # they will be ignored by `CaptureRequest`.
                 # We will send it, and if it loses `created_at`, it is an API deficiency that must be fixed in a cross-slice ticket.
-                target_client.memories.capture(
+                target_client.episodic.capture(
                     namespace=namespace,
                     content=payload.get("content", ""),
                     tags=payload.get("tags", []),

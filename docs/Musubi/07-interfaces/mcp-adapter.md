@@ -36,10 +36,10 @@ We expose the subset of Musubi that makes sense for a coding agent. Not everythi
 
 | Tool | Musubi call | Notes |
 |---|---|---|
-| `memory_capture` | `client.memories.capture()` | Capture a new episodic observation. |
+| `memory_capture` | `client.episodic.capture()` | Capture a new episodic observation. |
 | `memory_recall` | `client.retrieve(mode="fast")` | Retrieve for just-in-time context. |
 | `memory_recent` | Filtered retrieve | Recent items in a namespace. |
-| `memory_forget` | `client.memories.archive(id)` | Soft-archive. |
+| `memory_forget` | `client.episodic.archive(id)` | Soft-archive. |
 | `memory_reflect` | Filtered retrieve + aggregation | Returns counts by tag/topic (no LLM). |
 
 ### Curated

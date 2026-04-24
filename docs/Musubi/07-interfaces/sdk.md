@@ -169,7 +169,7 @@ One `httpx.Client` per SDK instance. Connection pool sized to max concurrency on
 
 ## Telemetry hooks
 
-The SDK emits OpenTelemetry spans (when OTel is configured in the adapter) for each call. Span name matches the method (`musubi.memories.capture`). Default attributes: `http.method`, `http.url`, `musubi.namespace`, `musubi.duration_ms`.
+The SDK emits OpenTelemetry spans (when OTel is configured in the adapter) for each call. Span name matches the method (`musubi.episodic.capture`). Default attributes: `http.method`, `http.url`, `musubi.namespace`, `musubi.duration_ms`.
 
 If the adapter sets `X-Request-Id` in the caller's context, the SDK propagates it as a header for end-to-end tracing.
 

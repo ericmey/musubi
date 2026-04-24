@@ -73,10 +73,10 @@ make install
 make check
 ```
 
-A single-box Docker Compose deploy is laid out in [`deploy/ansible/templates/docker-compose.yml.j2`](deploy/ansible/templates/docker-compose.yml.j2); a first-deploy runbook lives at [`deploy/runbooks/upgrade-image.md`](deploy/runbooks/upgrade-image.md). The published image is:
+A single-box Docker Compose deploy is laid out in [`deploy/ansible/templates/docker-compose.yml.j2`](deploy/ansible/templates/docker-compose.yml.j2); a first-deploy runbook lives at [`deploy/runbooks/upgrade-image.md`](deploy/runbooks/upgrade-image.md). Pick a version from the latest-release badge above and pull:
 
 ```
-ghcr.io/ericmey/musubi-core:v0.3.0
+ghcr.io/ericmey/musubi-core:<version>
 ```
 
 Verify the signature before pinning in production:
@@ -85,7 +85,7 @@ Verify the signature before pinning in production:
 cosign verify \
   --certificate-identity-regexp 'https://github.com/ericmey/musubi/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/ericmey/musubi-core:v0.3.0
+  ghcr.io/ericmey/musubi-core:<version>
 ```
 
 ## Repository layout
@@ -112,19 +112,23 @@ deploy/                     ansible, prometheus, grafana, docker-compose templat
 
 ## Status
 
-**v0.3.0** (released 2026-04-21) — the first public release. Feature-complete for:
+**v0.6.0 — the v1.0 release candidate.** Pre-1.0 API shape is locked; the breaking changes that were going to land before 1.0 are in. If nothing major regresses in downstream-adapter validation, v1.0 ships next.
 
-- ✅ All five lifecycle sweeps running in production (maturation, synthesis, promotion, demotion, reflection)
-- ✅ Hybrid retrieval (dense BGE-M3 + sparse SPLADE + BGE-reranker)
-- ✅ Full HTTP/gRPC API surface
-- ✅ MCP + LiveKit adapter first cuts
+What's in the v1.0-candidate surface:
+
+- ✅ All five lifecycle sweeps (maturation, synthesis, promotion, demotion, reflection) running on cron, SQLite-journaled, with a hard three-strikes rejection cap on promotion
+- ✅ Hybrid retrieval — dense BGE-M3 + sparse SPLADE + BGE-reranker + 2-segment cross-plane fanout in one call
+- ✅ Full HTTP surface (gRPC partial; lives behind an opt-in build flag)
+- ✅ Plane-aligned endpoint paths: `/v1/episodic`, `/v1/curated`, `/v1/concepts`, `/v1/artifacts`
+- ✅ `Last-Event-ID` replay on `/v1/thoughts/stream` — reconnect without losing thoughts
+- ✅ MCP + LiveKit + OpenClaw adapters (external repos), static-bearer auth model with per-agent token support
 - ✅ Supply-chain: cosign + SBOM + Trivy on every published image
-- ✅ Homelab deployment wired, containers healthy
+- ✅ Operator tooling: `musubi promote force|reject` CLI, vault large-file skip-with-warning, rate-limited vault watcher
 
 Not yet:
-- ⏳ Fleet orchestration — single-node today; multi-node HA is a post-1.0 design space and will require a real ADR
-- ⏳ Auto-deploy pipeline
-- ⏳ OpenClaw adapter integration tests
+- ⏳ Fleet orchestration — single-node today; multi-node HA is a post-1.0 design space and will need its own ADR
+- ⏳ Auto-deploy pipeline (image publish is automated; host rollout is still operator-driven via ansible)
+- ⏳ gRPC transport ADR ([#98](https://github.com/ericmey/musubi/issues/98)) — priority-low, not a 1.0 blocker
 
 Roadmap detail lives in [`docs/Musubi/12-roadmap/`](docs/Musubi/12-roadmap/).
 
