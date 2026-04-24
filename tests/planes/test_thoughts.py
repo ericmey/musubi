@@ -295,3 +295,115 @@ async def test_thought_transition_on_missing_object_raises_lookup(
         await plane.transition(
             namespace=ns, object_id="0" * 27, to_state="matured", actor="test", reason="missing"
         )
+
+
+# ---------------------------------------------------------------------------
+# #233 — Last-Event-ID replay for SSE reconnect backfill
+# ---------------------------------------------------------------------------
+
+
+async def test_replay_since_returns_thoughts_after_last_event_id(
+    plane: ThoughtsPlane, ns: str
+) -> None:
+    """Only thoughts with ``object_id > last_event_id`` are returned.
+    KSUIDs are time-sortable lex, so "> anchor" is "emitted after the
+    last one the client saw" for any anchor across a second-boundary.
+    (KSUIDs generated in the same second have random suffixes, so this
+    test uses a sentinel anchor lex-smaller than any real KSUID to get
+    deterministic ordering.)"""
+    t1 = await plane.send(_make("first", ns, "a", "b"))
+    t2 = await plane.send(_make("second", ns, "a", "b"))
+    t3 = await plane.send(_make("third", ns, "a", "b"))
+    anchor = "0" * 27  # lex-smaller than any KSUID
+
+    replayed, truncated = await plane.replay_since(
+        namespace=ns, includes={"b", "all"}, last_event_id=anchor
+    )
+    assert truncated is False
+    returned_ids = sorted(t.object_id for t in replayed)
+    expected_ids = sorted([t1.object_id, t2.object_id, t3.object_id])
+    assert returned_ids == expected_ids, f"expected all 3 thoughts replayed; got {returned_ids}"
+    # And emission order is strictly ascending for the client's dedup set.
+    emitted_ids = [t.object_id for t in replayed]
+    assert emitted_ids == sorted(emitted_ids), (
+        f"replay must emit ascending by object_id; got {emitted_ids}"
+    )
+
+
+async def test_replay_since_is_lexicographic_by_object_id(plane: ThoughtsPlane, ns: str) -> None:
+    """Replay order is strictly ascending by object_id. Clients rely on
+    this for dedup-set insertion order (see
+    [[07-interfaces/canonical-api#consumer-expectations]] bullet 6)."""
+    sent = [await plane.send(_make(f"msg-{i}", ns, "a", "b")) for i in range(6)]
+    anchor = sent[0].object_id
+
+    replayed, _ = await plane.replay_since(
+        namespace=ns, includes={"b", "all"}, last_event_id=anchor
+    )
+    ids = [t.object_id for t in replayed]
+    assert ids == sorted(ids), f"replay not lex-sorted: {ids}"
+
+
+async def test_replay_since_respects_include_filter(plane: ThoughtsPlane, ns: str) -> None:
+    """``to_presence`` filter mirrors the live broker: only thoughts
+    targeting any presence in ``includes`` come back."""
+    for_b = await plane.send(_make("for-b", ns, "a", "b"))
+    _for_c = await plane.send(_make("for-c", ns, "a", "c"))
+    broadcast = await plane.send(_make("everyone", ns, "a", "all"))
+    anchor = "0" * 27  # before any KSUID
+
+    replayed, _ = await plane.replay_since(
+        namespace=ns, includes={"b", "all"}, last_event_id=anchor
+    )
+    contents = {t.content for t in replayed}
+    assert contents == {"for-b", "everyone"}, f"expected b+broadcast only; got {contents}"
+    ids = {t.object_id for t in replayed}
+    assert for_b.object_id in ids
+    assert broadcast.object_id in ids
+
+
+async def test_replay_since_respects_namespace(plane: ThoughtsPlane) -> None:
+    """Replay never leaks thoughts across namespaces."""
+    own_ns = "eric/claude-code/thought"
+    other_ns = "eric/livekit-voice/thought"
+    own = await plane.send(_make("own", own_ns, "a", "b"))
+    await plane.send(_make("other", other_ns, "a", "b"))
+    anchor = "0" * 27
+
+    replayed, _ = await plane.replay_since(
+        namespace=own_ns, includes={"b", "all"}, last_event_id=anchor
+    )
+    assert [t.object_id for t in replayed] == [own.object_id]
+
+
+async def test_replay_since_caps_results_and_signals_truncation(
+    plane: ThoughtsPlane, ns: str
+) -> None:
+    """When more thoughts match than the cap allows, return the first
+    ``cap`` entries and flag ``truncated=True``. Clients that see the
+    truncation signal fall back to ``/v1/thoughts/history`` for deeper
+    backfill."""
+    for i in range(5):
+        await plane.send(_make(f"msg-{i}", ns, "a", "b"))
+    anchor = "0" * 27
+
+    replayed, truncated = await plane.replay_since(
+        namespace=ns, includes={"b", "all"}, last_event_id=anchor, cap=3
+    )
+    assert len(replayed) == 3
+    assert truncated is True
+
+
+async def test_replay_since_empty_when_last_event_id_is_most_recent(
+    plane: ThoughtsPlane, ns: str
+) -> None:
+    """If the client's last-seen id is already the latest thought,
+    replay is empty — the generator skips straight to live-tail."""
+    await plane.send(_make("old", ns, "a", "b"))
+    latest = await plane.send(_make("latest", ns, "a", "b"))
+
+    replayed, truncated = await plane.replay_since(
+        namespace=ns, includes={"b", "all"}, last_event_id=latest.object_id
+    )
+    assert replayed == []
+    assert truncated is False

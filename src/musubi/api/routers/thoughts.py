@@ -19,14 +19,16 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 
-from musubi.api.dependencies import get_qdrant_client, get_settings_dep
+from musubi.api.dependencies import get_qdrant_client, get_settings_dep, get_thoughts_plane
 from musubi.api.errors import APIError, ErrorCode
 from musubi.api.events import Subscription, broker
 from musubi.api.responses import ThoughtListResponse
 from musubi.api.routers._scroll import scroll_namespace
 from musubi.auth import AuthRequirement, authenticate_request
+from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
 from musubi.types.common import Err, utc_now
+from musubi.types.thought import Thought
 
 router = APIRouter(prefix="/v1/thoughts", tags=["thoughts"])
 
@@ -119,6 +121,7 @@ def _sse_frame(event: str, data: str, event_id: str | None = None) -> bytes:
 async def _thoughts_event_generator(
     request: Request,
     sub: Subscription,
+    replay: list[Thought] | None = None,
 ) -> AsyncGenerator[bytes, None]:
     """Yield SSE byte frames until the client disconnects or the server shuts down.
 
@@ -127,12 +130,27 @@ async def _thoughts_event_generator(
     ``asyncio.wait_for`` bounded by the ping interval so the loop always
     makes progress (delivers a ping on timeout, a thought otherwise).
 
+    Replay — if ``replay`` is provided (from a ``Last-Event-ID`` reconnect),
+    those frames emit first in strictly-ascending ``object_id`` order, then
+    the generator transitions to live-tail from the broker queue. Because
+    the broker subscription was opened BEFORE the replay query, any
+    thought published during replay is captured in the queue and emitted
+    as part of live-tail — no gap.
+
     Cancellation path: when the HTTP connection is closed client-side,
     Starlette cancels this coroutine; the ``finally`` block unsubscribes.
     """
     ping_interval = 0.01 if getattr(request.app.state, "testing", False) else 30.0
 
     try:
+        if replay:
+            for t in replay:
+                yield _sse_frame(
+                    event="thought",
+                    event_id=str(t.object_id),
+                    data=t.model_dump_json(),
+                )
+
         while True:
             try:
                 thought = await asyncio.wait_for(sub.queue.get(), timeout=ping_interval)
@@ -169,14 +187,16 @@ async def stream_thoughts(
     last_event_id: str | None = Header(None, alias="Last-Event-ID"),
     qdrant: QdrantClient = Depends(get_qdrant_client),
     settings: Settings = Depends(get_settings_dep),
+    thoughts_plane: ThoughtsPlane = Depends(get_thoughts_plane),
 ) -> Any:
     """SSE endpoint for real-time thought delivery.
 
-    Replay semantics via Last-Event-ID are declared in the spec but deferred to
-    the integration harness (needs a real Qdrant with live range queries; mocked
-    Qdrant in unit tests doesn't model lex-sorted epoch-range scrolls). The
-    header is accepted and validated but currently the stream begins from the
-    live broker queue only. See slice-api-thoughts-stream work log.
+    Replay: if ``Last-Event-ID: <ksuid>`` is present, every thought matching
+    the subscription scope where ``object_id > last_event_id`` (lex,
+    ascending) is emitted before entering live-tail mode. Capped at 500
+    events — if more matched, the ``X-Musubi-Replay-Truncated: true``
+    response header tells the client to fall back to ``/v1/thoughts/history``
+    for deeper backfill.
     """
     requirement = AuthRequirement(namespace=namespace, access="r")
     result = authenticate_request(
@@ -197,6 +217,8 @@ async def stream_thoughts(
     includes = set(include.split(",")) if include else {ctx.presence, "all"}
 
     try:
+        # Subscribe BEFORE replay query so any thought published during
+        # the replay fetch lands in the live-tail queue — no gap.
         sub = broker.subscribe(namespace, includes)
     except ConnectionError:
         from musubi.api.errors import error_response
@@ -209,14 +231,29 @@ async def stream_thoughts(
         resp.headers["Retry-After"] = "5"
         return resp
 
+    replay: list[Thought] = []
+    truncated = False
+    if last_event_id:
+        replay, truncated = await thoughts_plane.replay_since(
+            namespace=namespace,
+            includes=includes,
+            last_event_id=last_event_id,
+        )
+
+    response_headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",  # disable nginx/proxy buffering
+    }
+    if truncated:
+        # Client uses this signal to backfill via POST /v1/thoughts/history
+        # for the span the replay cap couldn't cover.
+        response_headers["X-Musubi-Replay-Truncated"] = "true"
+
     return StreamingResponse(
-        _thoughts_event_generator(request, sub),
+        _thoughts_event_generator(request, sub, replay=replay),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # disable nginx/proxy buffering
-        },
+        headers=response_headers,
     )
 
 

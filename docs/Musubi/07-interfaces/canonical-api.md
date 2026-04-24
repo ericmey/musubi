@@ -189,6 +189,8 @@ Event semantics:
 
 **Replay on reconnect:** `Last-Event-ID: <ksuid>` triggers replay of every thought matching the subscription where `object_id > <ksuid>` (lexicographic, ascending) before entering live-tail mode. Single bounded range query against the thoughts plane — cheap because KSUIDs sort by time.
 
+Replay is capped at **500 events per reconnect** (the window that covers typical disconnect gaps without blowing up the range query). If more events matched, the response carries the header `X-Musubi-Replay-Truncated: true` so the client can backfill the missing span via `POST /v1/thoughts/history` (which supports pagination) rather than silently losing events.
+
 **Fanout semantics — BROADCAST (NORMATIVE).** Two clients subscribed to the same presence receive **the same events**. Example: user has OpenClaw open in two browsers + a LiveKit worker connected for `eric/openclaw` — all three streams see every thought addressed to `openclaw` or `all`. This is intentional and MUST NOT be regressed to competing-consumer round-robin under any "scaling" justification.
 
 **Backpressure:** slow-consumer events drop in-memory for that connection (metered via `thoughts_stream_dropped_events_total{reason="slow_consumer"}`); reconnect + `Last-Event-ID` recovers them because thoughts are durable in Qdrant.

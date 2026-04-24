@@ -341,21 +341,193 @@ async def test_replay_with_missing_last_event_id_starts_from_live() -> None:
     assert frame["event"] == "ping"
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-ops-integration-harness: Last-Event-ID replay "
-    "requires live Qdrant with lex-sorted epoch-range scrolls; mocked Qdrant "
-    "doesn't model that accurately at unit level"
-)
-def test_replay_from_last_event_id_emits_events_after_that_ksuid() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_replay_from_last_event_id_emits_events_before_live_tail() -> None:
+    """When the generator receives a ``replay`` list, it emits those
+    frames first — before any broker-queue reads. Verified by driving
+    the generator directly with a seeded replay list and confirming
+    the first frames are the replayed thoughts in lex-ascending
+    object_id order (ASGITransport can't be used here; the existing
+    stream tests all drive the generator directly for the same
+    reason — see `_drive_one_frame`)."""
+    sub = broker.subscribe("eric/claude-code/thought", {"claude-code", "all"})
+    replay = sorted(
+        [
+            _thought(content="alpha"),
+            _thought(content="beta"),
+            _thought(content="gamma"),
+        ],
+        key=lambda t: t.object_id,
+    )
+
+    request = _FakeRequest(testing=True)
+    agen = _thoughts_event_generator(request, sub, replay=replay)  # type: ignore[arg-type]
+    collected: list[dict[str, str]] = []
+    try:
+        async for raw in agen:
+            frame = _parse_sse_frame(raw)
+            if frame.get("event") == "thought":
+                collected.append(frame)
+            if len(collected) >= 3:
+                break
+    finally:
+        await agen.aclose()
+
+    assert len(collected) == 3, f"expected 3 replay frames; got {collected!r}"
+    ids = [f["id"] for f in collected]
+    assert ids == [t.object_id for t in replay], (
+        f"replay frames must emit in the order supplied; got {ids}"
+    )
+    # Frames must emit in lex-ascending object_id order.
+    assert ids == sorted(ids), f"replay not lex-sorted: {ids}"
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-ops-integration-harness: range-query replay is a "
-    "live-Qdrant behaviour"
-)
-def test_replay_is_lexicographic_by_object_id() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_replay_transitions_to_live_tail_after_emitting_replay() -> None:
+    """After replay frames are exhausted, the generator switches to
+    live-tail from the broker queue. Verified by seeding a replay
+    frame, publishing a live thought, and confirming both arrive as
+    ``thought`` frames in replay-first order."""
+    namespace = "eric/claude-code/thought"
+    sub = broker.subscribe(namespace, {"claude-code", "all"})
+    historic = _thought(content="historic")
+
+    request = _FakeRequest(testing=True)
+    agen = _thoughts_event_generator(request, sub, replay=[historic])  # type: ignore[arg-type]
+
+    contents: list[str] = []
+    published_live = False
+    try:
+        async for raw in agen:
+            frame = _parse_sse_frame(raw)
+            if frame.get("event") != "thought":
+                continue
+            data = json.loads(frame["data"])
+            contents.append(data["content"])
+            if not published_live and data["content"] == "historic":
+                broker.publish(
+                    _thought(
+                        namespace=namespace,
+                        from_presence="a",
+                        to_presence="claude-code",
+                        content="live",
+                    )
+                )
+                published_live = True
+            if "live" in contents:
+                break
+    finally:
+        await agen.aclose()
+
+    assert "historic" in contents, f"expected historic replay frame; got {contents}"
+    assert "live" in contents, f"expected live-tail after replay; got {contents}"
+    assert contents.index("historic") < contents.index("live")
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_sets_truncated_header_when_plane_reports_truncation(
+    app: FastAPI,
+    valid_token: str,
+    thoughts: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Endpoint-level wiring: when ``ThoughtsPlane.replay_since`` flags
+    truncated=True, the ``X-Musubi-Replay-Truncated: true`` header is
+    set on the StreamingResponse. We assert this by calling the
+    endpoint coroutine directly (ASGITransport buffers SSE bodies, so
+    round-tripping the header via HTTP isn't viable here).
+
+    Direct-call trick: pack a minimal request + settings, patch
+    replay_since to return a truncated result, inspect the
+    ``StreamingResponse.headers`` on the return value."""
+    from starlette.responses import StreamingResponse
+
+    from musubi.api.routers.thoughts import stream_thoughts
+
+    async def truncated_replay(
+        *, namespace: str, includes: Any, last_event_id: str, cap: int = 500
+    ) -> Any:
+        return ([_thought(content="hit")], True)
+
+    monkeypatch.setattr(thoughts, "replay_since", truncated_replay)
+
+    # Minimal Request surrogate — stream_thoughts uses it only for the
+    # auth token extraction and `app.state.testing`.
+    class _Req:
+        def __init__(self) -> None:
+            import types
+
+            self.app = types.SimpleNamespace(state=types.SimpleNamespace(testing=True))
+            self.headers = {"authorization": f"Bearer {valid_token}"}
+            self.state = types.SimpleNamespace()
+
+    settings = app.dependency_overrides[
+        next(k for k in app.dependency_overrides if k.__name__ == "get_settings_dep")
+    ]()
+
+    response = await stream_thoughts(
+        request=_Req(),  # type: ignore[arg-type]
+        namespace="eric/claude-code/thought",
+        include=None,
+        last_event_id="0" * 27,
+        qdrant=None,  # type: ignore[arg-type]
+        settings=settings,
+        thoughts_plane=thoughts,
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert response.headers.get("X-Musubi-Replay-Truncated") == "true", (
+        f"expected truncation header; got {dict(response.headers)!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_stream_endpoint_no_truncation_header_when_replay_fits(
+    app: FastAPI,
+    valid_token: str,
+    thoughts: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mirror of the truncation test — when the plane reports
+    ``truncated=False`` (the common case), the header must NOT appear
+    on the response."""
+    from starlette.responses import StreamingResponse
+
+    from musubi.api.routers.thoughts import stream_thoughts
+
+    async def clean_replay(
+        *, namespace: str, includes: Any, last_event_id: str, cap: int = 500
+    ) -> Any:
+        return ([_thought(content="one")], False)
+
+    monkeypatch.setattr(thoughts, "replay_since", clean_replay)
+
+    class _Req:
+        def __init__(self) -> None:
+            import types
+
+            self.app = types.SimpleNamespace(state=types.SimpleNamespace(testing=True))
+            self.headers = {"authorization": f"Bearer {valid_token}"}
+            self.state = types.SimpleNamespace()
+
+    settings = app.dependency_overrides[
+        next(k for k in app.dependency_overrides if k.__name__ == "get_settings_dep")
+    ]()
+
+    response = await stream_thoughts(
+        request=_Req(),  # type: ignore[arg-type]
+        namespace="eric/claude-code/thought",
+        include=None,
+        last_event_id="0" * 27,
+        qdrant=None,  # type: ignore[arg-type]
+        settings=settings,
+        thoughts_plane=thoughts,
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert "X-Musubi-Replay-Truncated" not in response.headers, (
+        f"header must not be set when replay fits under cap; got {dict(response.headers)!r}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────────

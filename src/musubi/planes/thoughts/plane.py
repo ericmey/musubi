@@ -179,6 +179,62 @@ class ThoughtsPlane:
         return out
 
     # ------------------------------------------------------------------
+    # Replay (SSE reconnect backfill)
+    # ------------------------------------------------------------------
+
+    async def replay_since(
+        self,
+        *,
+        namespace: Namespace,
+        includes: frozenset[str] | set[str],
+        last_event_id: str,
+        cap: int = 500,
+    ) -> tuple[list[Thought], bool]:
+        """Return thoughts emitted since ``last_event_id`` for SSE backfill.
+
+        Filter shape:
+        - ``namespace`` matches exactly.
+        - ``to_presence`` is in ``includes`` (typically the presence plus
+          the ``all`` broadcast bucket).
+        - ``object_id > last_event_id`` lexicographically. KSUIDs sort by
+          time, so lex > strictly-after is equivalent to time > for our
+          purposes.
+
+        Ordered ascending by ``object_id`` so emission preserves arrival
+        order. Capped at ``cap`` results; the returned ``truncated`` flag
+        tells the caller whether to set the
+        ``X-Musubi-Replay-Truncated`` response header so clients can
+        fall back to ``/v1/thoughts/history`` for deeper backfill.
+        """
+        resp, _ = self._client.scroll(
+            collection_name=self._collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=namespace)
+                    ),
+                    models.FieldCondition(
+                        key="to_presence",
+                        match=models.MatchAny(any=list(includes)),
+                    ),
+                ],
+            ),
+            limit=cap + 1,
+            with_payload=True,
+        )
+
+        candidates: list[Thought] = []
+        for point in resp:
+            if point.payload:
+                thought = _thought_from_payload(point.payload)
+                if thought.object_id > last_event_id:
+                    candidates.append(thought)
+
+        candidates.sort(key=lambda t: t.object_id)
+        truncated = len(candidates) > cap
+        return candidates[:cap], truncated
+
+    # ------------------------------------------------------------------
     # Mark Read
     # ------------------------------------------------------------------
 
