@@ -29,7 +29,18 @@ class VaultWriter:
 
         Updates the write-log beforehand to ensure the watcher ignores this event.
         """
-        full_path = self.vault_root / vault_relative_path.lstrip("/")
+        # Defense-in-depth: reject any path that escapes `vault_root`.
+        # The promotion sweep sanitizes topics with `slugify` before
+        # composing the path, but anything that wires a new caller to
+        # `write_curated` could forget. Resolve both sides and verify
+        # the target sits under vault_root.
+        full_path = (self.vault_root / vault_relative_path.lstrip("/")).resolve()
+        vault_root_resolved = self.vault_root.resolve()
+        if vault_root_resolved not in full_path.parents and full_path != vault_root_resolved:
+            raise ValueError(
+                f"vault-path-escape: {vault_relative_path!r} resolves outside "
+                f"vault_root {vault_root_resolved}"
+            )
         full_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Normalize body and compute hash

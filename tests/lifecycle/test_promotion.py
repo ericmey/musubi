@@ -20,6 +20,7 @@ from musubi.planes.curated.plane import CuratedPlane
 from musubi.store.bootstrap import bootstrap
 from musubi.types.common import epoch_of, generate_ksuid, utc_now
 from musubi.types.concept import SynthesizedConcept
+from musubi.vault.frontmatter import CuratedFrontmatter
 
 
 class FakePromotionLLM:
@@ -231,6 +232,39 @@ def test_path_uses_misc_when_both_topic_sources_empty() -> None:
     # synthesis gap is visible on disk rather than silently disappearing.
     path = compute_path(_concept(topics=[], linked_to_topics=[]))
     assert "_misc" in path
+
+
+def test_path_sanitizes_topics_against_traversal() -> None:
+    # If a topic contains `..` or `/`, slugify must flatten it so the
+    # composed path can't escape vault_root.
+    path = compute_path(_concept(title="T", topics=["../../etc/passwd"]))
+    assert ".." not in path
+    assert "/etc/passwd" not in path
+    # Whatever segment ends up as the primary topic, it's sluggy.
+    path_parts = path.split("/")
+    primary_topic = path_parts[-2]
+    assert primary_topic.replace("-", "").replace("_", "").isalnum()
+
+
+def test_vault_writer_rejects_path_escape(tmp_path: Path) -> None:
+    # Defense-in-depth: even if compute_path misbehaved, the VaultWriter
+    # must reject a vault_relative_path that resolves outside vault_root.
+    from musubi.vault.writelog import WriteLog
+    from musubi.vault.writer import VaultWriter
+
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    writer = VaultWriter(vault_root=vault_root, write_log=WriteLog(db_path=tmp_path / "wl.db"))
+    fm = CuratedFrontmatter(  # type: ignore[call-arg]
+        object_id=generate_ksuid(),
+        namespace="eric/shared/curated",
+        title="T",
+        musubi_managed=True,
+        created=utc_now(),
+        updated=utc_now(),
+    )
+    with pytest.raises(ValueError, match="vault-path-escape"):
+        writer.write_curated("../../../etc/passwd", fm, "## H2\n" + "A" * 100)
 
 
 @pytest.mark.asyncio
@@ -504,6 +538,58 @@ async def test_rendering_failure_increments_attempts_not_promotes(deps: Any) -> 
     # Rejection fields set, not promotion fields.
     assert after.promotion_rejected_at is not None
     assert after.promotion_rejected_reason is not None
+    assert after.promoted_to is None
+
+
+class _ExplodingVaultWriter(FakeVaultWriter):
+    """Vault writer that raises from `write_curated` — exercises the
+    post-render failure path (not the render path)."""
+
+    def write_curated(self, vault_relative_path: str, frontmatter: Any, body: str) -> Path:
+        raise OSError("simulated disk failure")
+
+
+@pytest.mark.asyncio
+async def test_post_render_failure_also_bumps_attempts(
+    qdrant: QdrantClient,
+    concept_plane: ConceptPlane,
+    curated_plane: CuratedPlane,
+    events_sink: LifecycleEventSink,
+    vault_root: Path,
+) -> None:
+    # Render succeeds (FakePromotionLLM returns a valid body), but the
+    # vault writer raises. The three-strikes gate has to cover this too
+    # — otherwise a concept whose LLM renders but whose FS op breaks
+    # would retry forever.
+
+    from musubi.lifecycle.promotion import PromotionDeps, run_promotion_sweep
+
+    deps = PromotionDeps(
+        qdrant=qdrant,
+        concept_plane=concept_plane,
+        curated_plane=curated_plane,
+        events=events_sink,
+        llm=FakePromotionLLM(),
+        vault_writer=_ExplodingVaultWriter(vault_root),
+        thoughts=FakeThoughtEmitter(),
+    )
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+    )
+    _set_old(deps, "concept", str(c.object_id))
+
+    count = await run_promotion_sweep(deps)
+    assert count == 0
+
+    after = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert after is not None
+    assert after.promotion_attempts == 1
+    assert after.promotion_rejected_reason is not None
+    assert "Post-render failed" in after.promotion_rejected_reason
+    # Not promoted.
     assert after.promoted_to is None
 
 

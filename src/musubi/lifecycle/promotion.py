@@ -174,7 +174,14 @@ def compute_path(concept: SynthesizedConcept) -> str:
     # neither file under `_misc` — deliberately not auto-synthesized
     # because that'd hide a real synthesis gap.
     topics = concept.topics or concept.linked_to_topics
-    primary_topic = topics[0] if topics else "_misc"
+    # Slugify topic-derived segments — topics can carry anything an LLM
+    # hallucinates (path separators, `..`, spaces). `slugify` reduces
+    # to `[a-z0-9-]`, making path traversal impossible at this layer.
+    # `VaultWriter.write_curated` also rejects paths that escape
+    # vault_root as defense-in-depth. When no topic is available, fall
+    # back to the `_misc` sentinel literal — preserves the leading
+    # underscore so synthesis gaps are visible on disk.
+    primary_topic = (slugify(topics[0]) or "_misc") if topics else "_misc"
     slug = slugify(concept.title)
     return f"curated/{namespace_to_dir(concept.namespace)}/{primary_topic}/{slug}.md"
 
@@ -270,9 +277,15 @@ async def run_promotion_sweep(
 
 async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> bool:
     """Attempt to promote one concept. Returns True iff it actually shipped
-    a curated row + vault file. The rejection path (LLM render failed)
-    bumps `promotion_attempts` via `record_promotion_rejection` and
-    returns False — the sweep counts only true promotions."""
+    a curated row + vault file.
+
+    Any failure — render, vault write, curated-plane create, concept
+    transition, thought emit — records a rejection via
+    :meth:`ConceptPlane.record_promotion_rejection`, which bumps
+    `promotion_attempts`. The three-strikes gate then locks the concept
+    out after three consecutive failures. Transient infra issues (e.g.
+    Qdrant briefly down) do burn an attempt — accepted cost for making
+    a genuinely broken concept stop poisoning every sweep."""
     now = utc_now()
 
     # Render markdown via LLM
@@ -285,110 +298,138 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         )
     except Exception as e:
         log.warning("Rendering failed for concept %s: %s", concept.object_id, e)
+        await _record_rejection(deps, concept, reason=f"Rendering failed: {e}")
+        return False
+
+    # Post-render path. Any exception below bumps promotion_attempts via
+    # `record_promotion_rejection` so a broken concept can't poison every
+    # sweep indefinitely; the three-strikes gate will lock it out for
+    # operator attention after three consecutive failures.
+    try:
+        rel_path = compute_path(concept)
+
+        # Check conflict
+        full_path = deps.vault_writer.vault_root / rel_path
+        if full_path.exists():
+            try:
+                content = full_path.read_text(encoding="utf-8")
+                data, _ = parse_frontmatter(content)
+                fm = CuratedFrontmatter.model_validate(data)
+
+                if fm.musubi_managed and fm.promoted_from == concept.object_id:
+                    # Idempotent rewrite allowed
+                    pass
+                elif fm.musubi_managed and fm.promoted_from != concept.object_id:
+                    # Sibling
+                    slug = slugify(concept.title)
+                    rel_path = rel_path.replace(f"{slug}.md", f"{slug}-v2.md")
+                    await deps.thoughts.emit(
+                        "ops-alerts",
+                        f"Path conflict handled with sibling: {rel_path}",
+                        "Path Conflict",
+                    )
+                else:
+                    # Human authored
+                    slug = slugify(concept.title)
+                    short_id = str(concept.object_id)[:8]
+                    rel_path = rel_path.replace(f"{slug}.md", f"{slug}-promoted-{short_id}.md")
+                    await deps.thoughts.emit(
+                        "ops-alerts",
+                        f"Path conflict with human file handled with sibling: {rel_path}",
+                        "Path Conflict",
+                    )
+
+            except Exception as e:
+                log.warning("Path conflict resolution failed for %s: %s", rel_path, e)
+
+        curated_id = generate_ksuid()
+
+        fm_obj = CuratedFrontmatter(  # type: ignore
+            object_id=curated_id,
+            namespace=concept.namespace,
+            title=concept.title,
+            topics=concept.topics or concept.linked_to_topics,
+            tags=concept.tags,
+            importance=concept.importance,
+            state="matured",
+            musubi_managed=True,
+            created=now,
+            updated=now,
+            promoted_from=concept.object_id,
+            promoted_at=now,
+        )
+
+        # Write to vault
+        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
+
+        # Create Qdrant point
+        body_hash = hashlib.sha256(render.body.encode("utf-8")).hexdigest()
+        memory = CuratedKnowledge(
+            object_id=curated_id,
+            namespace=concept.namespace,
+            vault_path=rel_path,
+            body_hash=body_hash,
+            title=concept.title,
+            content=render.body,
+            summary=concept.summary,
+            state="matured",
+            importance=concept.importance,
+            topics=concept.topics or concept.linked_to_topics,
+            tags=concept.tags,
+            promoted_from=concept.object_id,
+            promoted_at=now,
+        )
+
+        await deps.curated_plane.create(memory)
+
+        # Transition concept
+        await deps.concept_plane.transition(
+            namespace=concept.namespace,
+            object_id=concept.object_id,
+            to_state="promoted",
+            actor=_LIFECYCLE_ACTOR,
+            reason="lifecycle-promotion-sweep",
+            promoted_to=curated_id,
+            promoted_at=now,
+        )
+
+        # Notification Thought
+        await deps.thoughts.emit(
+            "ops-alerts",
+            f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
+            "Concept Promoted",
+        )
+        return True
+    except Exception as e:
+        log.warning("Post-render promotion failed for concept %s: %s", concept.object_id, e)
+        await _record_rejection(deps, concept, reason=f"Post-render failed: {e}")
+        return False
+
+
+async def _record_rejection(
+    deps: PromotionDeps, concept: SynthesizedConcept, *, reason: str
+) -> None:
+    """Record a promotion rejection (bumps attempts); swallow if the
+    rejection-write itself fails so the sweep keeps going.
+
+    `record_promotion_rejection` touches Qdrant too — if the
+    underlying failure was Qdrant being unreachable, this write will
+    fail as well. We log and move on rather than propagate, so a single
+    infra blip doesn't crash the whole sweep.
+    """
+    try:
         await deps.concept_plane.record_promotion_rejection(
             namespace=concept.namespace,
             object_id=concept.object_id,
-            reason=f"Rendering failed: {e}",
+            reason=reason,
         )
-        return False
-
-    # Compute path
-    rel_path = compute_path(concept)
-
-    # Check conflict
-    full_path = deps.vault_writer.vault_root / rel_path
-    if full_path.exists():
-        try:
-            content = full_path.read_text(encoding="utf-8")
-            data, _ = parse_frontmatter(content)
-            fm = CuratedFrontmatter.model_validate(data)
-
-            if fm.musubi_managed and fm.promoted_from == concept.object_id:
-                # Idempotent rewrite allowed
-                pass
-            elif fm.musubi_managed and fm.promoted_from != concept.object_id:
-                # Sibling
-                slug = slugify(concept.title)
-                rel_path = rel_path.replace(f"{slug}.md", f"{slug}-v2.md")
-                await deps.thoughts.emit(
-                    "ops-alerts", f"Path conflict handled with sibling: {rel_path}", "Path Conflict"
-                )
-            else:
-                # Human authored
-                slug = slugify(concept.title)
-                short_id = str(concept.object_id)[:8]
-                rel_path = rel_path.replace(f"{slug}.md", f"{slug}-promoted-{short_id}.md")
-                await deps.thoughts.emit(
-                    "ops-alerts",
-                    f"Path conflict with human file handled with sibling: {rel_path}",
-                    "Path Conflict",
-                )
-
-        except Exception as e:
-            log.warning("Path conflict resolution failed for %s: %s", rel_path, e)
-
-    curated_id = generate_ksuid()
-
-    fm_obj = CuratedFrontmatter(  # type: ignore
-        object_id=curated_id,
-        namespace=concept.namespace,
-        title=concept.title,
-        topics=concept.topics or concept.linked_to_topics,
-        tags=concept.tags,
-        importance=concept.importance,
-        state="matured",
-        musubi_managed=True,
-        created=now,
-        updated=now,
-        promoted_from=concept.object_id,
-        promoted_at=now,
-    )
-
-    # Write to vault
-    deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
-
-    # Create Qdrant point
-    body_hash = hashlib.sha256(render.body.encode("utf-8")).hexdigest()
-    memory = CuratedKnowledge(
-        object_id=curated_id,
-        namespace=concept.namespace,
-        vault_path=rel_path,
-        body_hash=body_hash,
-        title=concept.title,
-        content=render.body,
-        summary=concept.summary,
-        state="matured",
-        importance=concept.importance,
-        topics=concept.topics or concept.linked_to_topics,
-        tags=concept.tags,
-        promoted_from=concept.object_id,
-        promoted_at=now,
-    )
-
-    await deps.curated_plane.create(memory)
-
-    # Transition concept
-    await deps.concept_plane.transition(
-        namespace=concept.namespace,
-        object_id=concept.object_id,
-        to_state="promoted",
-        actor=_LIFECYCLE_ACTOR,
-        reason="lifecycle-promotion-sweep",
-        promoted_to=curated_id,
-        promoted_at=now,
-    )
-
-    # Emit LifecycleEvent for curated
-    # Curated knowledge starts at matured and has no provisional state,
-    # so we don't emit a state-change event for its creation.
-
-    # Notification Thought
-    await deps.thoughts.emit(
-        "ops-alerts",
-        f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
-        "Concept Promoted",
-    )
-    return True
+    except Exception as e:
+        log.error(
+            "record_promotion_rejection also failed for %s: %s",
+            concept.object_id,
+            e,
+            exc_info=True,
+        )
 
 
 # ---------------------------------------------------------------------------
