@@ -331,10 +331,17 @@ async def _run_single(
 
             results = []
             for hit in f_res.value.results:
+                # Pull namespace from the row's stored payload, not the
+                # request's `target_namespace`. They're equal under a strict
+                # 1:1 filter (production Qdrant), but wildcard fanout
+                # (ADR 0031) and any future filter-relaxation surfaces
+                # rows whose stored namespace differs from the leg's
+                # request — preserve provenance instead of overwriting.
+                stored_namespace = hit.payload.get("namespace")
                 results.append(
                     RetrievalResult(
                         object_id=hit.object_id,
-                        namespace=target_namespace,
+                        namespace=str(stored_namespace) if stored_namespace else target_namespace,
                         plane=str(hit.payload.get("plane", "episodic")),
                         title=hit.payload.get("title"),
                         snippet=hit.snippet,

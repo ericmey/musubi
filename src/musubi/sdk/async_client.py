@@ -83,18 +83,22 @@ class AsyncMusubiClient:
         query_text: str,
         mode: str = "fast",
         limit: int = 10,
+        planes: list[str] | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "namespace": namespace,
+            "query_text": query_text,
+            "mode": mode,
+            "limit": limit,
+        }
+        if planes is not None:
+            body["planes"] = planes
         return await self._json(
             "POST",
             "/retrieve",
             operation_name="retrieve",
-            json_body={
-                "namespace": namespace,
-                "query_text": query_text,
-                "mode": mode,
-                "limit": limit,
-            },
+            json_body=body,
             request_id=request_id,
         )
 

@@ -117,10 +117,32 @@ See [[10-security/auth]] for the full token model.
 ## Namespace rules
 
 1. **No defaulting.** Every API call must resolve a namespace. Missing namespace is a 400, not a "use current agent's."
-2. **No wildcards in write paths.** Reads can query prefixes via scope globs; writes must be fully qualified.
+2. **No wildcards in write paths.** Reads can query wildcards (see [§Wildcard reads](#wildcard-reads)); writes must be fully qualified — the canonical regex (`^[a-z0-9][a-z0-9_-]*/[a-z0-9][a-z0-9_-]*/<plane>$`) rejects `*`.
 3. **Cross-namespace relationships are allowed but logged.** A curated file in `nyla/` may cite an artifact in `aoi/`. The audit log records the cross-namespace link.
 4. **Namespace strings are case-sensitive, ASCII, kebab-case.**
 5. **Namespace cannot be changed after write.** Moving a memory across namespaces is a delete + insert with new lineage.
+
+## Wildcard reads
+
+Per [[13-decisions/0031-retrieve-wildcard-namespace|ADR 0031]], the
+`POST /v1/retrieve` namespace accepts `*` as a single-segment wildcard.
+Wildcards are read-only — writes still go to a fully-qualified
+`<tenant>/<presence>/<plane>` slot, preserving channel provenance on
+every row.
+
+| Pattern              | Meaning                                                          |
+|----------------------|------------------------------------------------------------------|
+| `nyla/voice/episodic`| Single channel, single plane                                     |
+| `nyla/voice`         | Single channel, fans across `planes` (ADR 0028)                  |
+| `nyla/*/episodic`    | All of Nyla's episodic across her channels — the platform's foundational read pattern: *one agent, many surfaces, one memory* |
+| `nyla/*/*` + planes  | Nyla cross-channel × cross-plane                                 |
+| `*/voice/episodic`   | Every agent's voice episodic                                     |
+
+`**` is not introduced — segment-count discipline is preserved. A
+wildcard segment matches any single non-empty segment in the same
+position; literal segments must be exactly equal. The server expands
+patterns against the live Qdrant payload, then runs the existing
+strict-scope fanout (per ADR 0028) over the resolved targets.
 
 ## Multi-instance note
 
