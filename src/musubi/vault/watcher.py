@@ -94,11 +94,14 @@ class VaultWatcher:
             return
 
         if p.suffix != ".md":
-            # Binary/non-markdown files aren't vault content. Warn (once
-            # per path, via structured log) so operators see what landed
-            # and skip silently otherwise. Deliberate: operators who
-            # want a PDF/image/etc. in Musubi use /v1/artifacts/ instead
-            # of drag-dropping into the vault. See issue #221.
+            # Binary/non-markdown files aren't vault content. Emit a
+            # structured warning on every event so operators can see
+            # what landed, then skip processing. Deliberate design:
+            # operators who want a PDF/image/etc. in Musubi use
+            # /v1/artifacts/ instead of drag-dropping into the vault.
+            # See issue #221. (Per-path log dedup could help on spammy
+            # sources but adds cache-invalidation complexity — not
+            # worth the ergonomics win yet.)
             logger.warning(
                 "vault-skip-non-markdown path=%s suffix=%s",
                 str(rel),

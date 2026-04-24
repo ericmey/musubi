@@ -382,8 +382,11 @@ async def test_oversize_markdown_skipped_with_warning(
     plane_after = len(cast(Any, watcher.curated_plane).created)
 
     assert plane_after == plane_before, "oversize file should not flow into the plane"
-    assert any("vault-skip-oversize-markdown" in record.message for record in caplog.records), (
-        f"expected oversize-skip log; saw {[r.message for r in caplog.records]}"
+    # `record.getMessage()` is the reliable read — `.message` is only
+    # populated after a Formatter runs, which pytest doesn't guarantee.
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("vault-skip-oversize-markdown" in m for m in messages), (
+        f"expected oversize-skip log; saw {messages}"
     )
 
 
@@ -410,8 +413,9 @@ async def test_binary_extension_skipped_with_warning(
     await asyncio.sleep(0.05)
 
     assert len(watcher._pending_tasks) == 0, "binary files must not enqueue debounce tasks"
-    assert any("vault-skip-non-markdown" in record.message for record in caplog.records), (
-        f"expected non-markdown-skip log; saw {[r.message for r in caplog.records]}"
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("vault-skip-non-markdown" in m for m in messages), (
+        f"expected non-markdown-skip log; saw {messages}"
     )
 
 
