@@ -216,13 +216,14 @@ async def retrieve(
                 plane=hit.plane,
                 content=hit.snippet,
                 namespace=hit.namespace,
-                # Rich context stays in `extra` so the top-level response
-                # shape (RetrieveResultRow) doesn't break for callers that
-                # only want object_id / score / content.
+                # `title` is top-level for curated/concept/artifact (None
+                # for episodic — no stable title field on that plane).
+                # Consumers with a UI shouldn't have to reach into `extra`
+                # for a universal display field.
+                title=hit.title,
                 extra={
                     "score_components": hit.score_components,
                     "lineage": hit.lineage,
-                    "title": hit.title,
                 },
             )
         )

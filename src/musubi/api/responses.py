@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
@@ -44,7 +44,8 @@ class RetrieveResultRow(BaseModel):
     plane: str
     content: str
     namespace: str
-    extra: dict[str, Any] = {}
+    title: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetrieveResponse(BaseModel):

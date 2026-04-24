@@ -900,6 +900,102 @@ def test_retrieve_result_carries_score_components_in_extra(
 
 
 # ---------------------------------------------------------------------------
+# #231 — title promoted from extra to top-level on RetrieveResultRow
+# ---------------------------------------------------------------------------
+
+
+def test_retrieve_row_surfaces_top_level_title_for_curated(
+    client: TestClient,
+    api_settings: object,
+    curated: CuratedPlane,
+) -> None:
+    """Curated/concept/artifact rows carry their ``title`` as a
+    first-class top-level field on ``RetrieveResultRow``, not buried
+    inside ``extra``. Consumers with a UI (OpenClaw corpus search,
+    any future dashboard) shouldn't have to reach into ``extra`` for
+    something every plane with a title has."""
+    import hashlib as _h
+
+    from tests.api.conftest import mint_token
+
+    namespace = "eric/claude-code/curated"
+    token = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=[f"{namespace}:rw"],
+    )
+    headers = {"Authorization": f"Bearer {token}"}
+
+    async def _seed() -> None:
+        body = "A curated note about restarting the livekit agent."
+        await curated.create(
+            CuratedKnowledge(
+                namespace=namespace,
+                title="LiveKit Restart Runbook",
+                content=body,
+                vault_path="curated/eric/livekit-restart.md",
+                body_hash=_h.sha256(body.encode()).hexdigest(),
+            )
+        )
+
+    asyncio.run(_seed())
+
+    r = client.post(
+        "/v1/retrieve",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "query_text": "livekit restart",
+            "mode": "fast",
+            "limit": 5,
+        },
+    )
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert results, "expected at least one hit for a seeded curated note"
+    top = results[0]
+
+    # Top-level title must be the seeded value.
+    assert top["title"] == "LiveKit Restart Runbook", f"expected top-level title; got {top!r}"
+    # And it must NOT double-live in extra — one source of truth.
+    assert "title" not in top.get("extra", {}), (
+        f"title must not be duplicated in extra; saw {top['extra']!r}"
+    )
+
+
+def test_retrieve_row_title_is_none_for_episodic(
+    client: TestClient,
+    auth: dict[str, str],
+    episodic: EpisodicPlane,
+) -> None:
+    """Episodic memories have no stable title field, so the
+    ``title`` on a retrieved episodic row is ``None``. Optional
+    top-level field; clients render a fallback from content."""
+    namespace = "eric/claude-code/episodic"
+    _seed_episodic_batch(
+        episodic,
+        namespace,
+        ["Remember to restart the livekit agent after each driver update."],
+    )
+
+    r = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={
+            "namespace": namespace,
+            "query_text": "livekit agent",
+            "mode": "fast",
+            "limit": 5,
+        },
+    )
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert results, "expected at least one hit for a seeded episodic memory"
+    top = results[0]
+    assert "title" in top, "title must be present on every RetrieveResultRow (may be null)"
+    assert top["title"] is None, f"episodic rows should have title=None; got {top['title']!r}"
+
+
+# ---------------------------------------------------------------------------
 # #209 — 2-segment namespace cross-plane retrieve
 # ---------------------------------------------------------------------------
 
