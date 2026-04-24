@@ -131,6 +131,11 @@ OAUTH_AUTHORITY=https://auth.internal.example.com
 # Feature flags
 MUSUBI_GRPC=false
 MUSUBI_ALLOW_PLAINTEXT=false
+# Opt-in to the artifact-archival lifecycle sweep. When true,
+# unreferenced artifacts older than 180 days transition to
+# state=archived (blob bytes preserved — archival is soft-delete only).
+# Default false keeps the sweep as a no-op.
+MUSUBI_ARTIFACT_ARCHIVAL_ENABLED=false
 ```
 
 ## Resource limits

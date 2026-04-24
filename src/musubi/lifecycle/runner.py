@@ -343,6 +343,9 @@ async def _main_async() -> None:
         cursor=cursor,
         lock_dir=lock_dir,
     )
+    from musubi.planes.artifact.plane import ArtifactPlane
+
+    artifact_plane = ArtifactPlane(client=qdrant, embedder=embedder)
     dem_jobs = build_demotion_jobs(
         deps=DemotionDeps(
             qdrant=qdrant,
@@ -350,6 +353,8 @@ async def _main_async() -> None:
             concept_plane=concept_plane,
             events=sink,
             thoughts=thought_emitter,
+            artifact_plane=artifact_plane,
+            artifact_archival_enabled=settings.musubi_artifact_archival_enabled,
         ),
         lock_dir=lock_dir,
     )
