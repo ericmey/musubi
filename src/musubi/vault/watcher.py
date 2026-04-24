@@ -20,6 +20,12 @@ from musubi.vault.writer import VaultWriter
 
 logger = logging.getLogger(__name__)
 
+_MAX_VAULT_MD_BYTES = 10 * 1024 * 1024
+"""Oversize markdown skip threshold. 10 MB is well above any genuine
+vault markdown (thousands of pages of text) while still catching
+runaway-plugin rewrites or hand-pasted dumps before they flood TEI
++ Qdrant. See issue #221."""
+
 
 class WatcherHandler(FileSystemEventHandler):
     """Bridge between watchdog events and our async sync logic."""
@@ -88,6 +94,19 @@ class VaultWatcher:
             return
 
         if p.suffix != ".md":
+            # Binary/non-markdown files aren't vault content. Emit a
+            # structured warning on every event so operators can see
+            # what landed, then skip processing. Deliberate design:
+            # operators who want a PDF/image/etc. in Musubi use
+            # /v1/artifacts/ instead of drag-dropping into the vault.
+            # See issue #221. (Per-path log dedup could help on spammy
+            # sources but adds cache-invalidation complexity — not
+            # worth the ergonomics win yet.)
+            logger.warning(
+                "vault-skip-non-markdown path=%s suffix=%s",
+                str(rel),
+                p.suffix or "(none)",
+            )
             return
 
         def _schedule() -> None:
@@ -137,6 +156,26 @@ class VaultWatcher:
             return
 
         if not path.exists():
+            return
+
+        # Size gate — a 50 MB hand-pasted dump or a runaway-plugin
+        # rewrite shouldn't flood TEI + Qdrant. 10 MB is comfortably
+        # above any real vault markdown (thousands of pages of text)
+        # without letting a pathological case through. Operators who
+        # need a large blob indexed route it through /v1/artifacts/
+        # rather than dropping it into the vault. See issue #221.
+        try:
+            stat_result = path.stat()
+        except OSError as exc:
+            logger.error("Failed to stat file %s: %s", path, exc)
+            return
+        if stat_result.st_size > _MAX_VAULT_MD_BYTES:
+            logger.warning(
+                "vault-skip-oversize-markdown path=%s bytes=%d limit=%d",
+                rel_path,
+                stat_result.st_size,
+                _MAX_VAULT_MD_BYTES,
+            )
             return
 
         # Read file
