@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/ericmey/musubi/compare/v0.7.1...v0.8.0) (2026-04-24)
+
+
+### Features
+
+* **ci:** auto-enable auto-merge on auto-digest-bump PRs ([#252](https://github.com/ericmey/musubi/issues/252)) ([e44abd0](https://github.com/ericmey/musubi/commit/e44abd076846fe14b87415a2b9ab090b328abb10))
+
 ## [0.7.1](https://github.com/ericmey/musubi/compare/v0.7.0...v0.7.1) (2026-04-24)
 
 
