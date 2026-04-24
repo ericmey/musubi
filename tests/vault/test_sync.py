@@ -373,8 +373,13 @@ async def test_oversize_markdown_skipped_with_warning(
     eric_dir = vault_root / "eric" / "shared"
     eric_dir.mkdir(parents=True, exist_ok=True)
     file_path = eric_dir / "huge.md"
-    # 1 MB over the limit — cheap to write, clearly over.
-    file_path.write_bytes(b"x" * (_MAX_VAULT_MD_BYTES + 1024 * 1024))
+    # Sparse file 1 MB over the limit — reports the right st_size via
+    # stat(2) without actually allocating/writing the full payload, so
+    # the test stays fast on slow CI filesystems.
+    oversize_bytes = _MAX_VAULT_MD_BYTES + 1024 * 1024
+    with file_path.open("wb") as f:
+        f.seek(oversize_bytes - 1)
+        f.write(b"x")
 
     caplog.set_level(logging.WARNING)
     plane_before = len(cast(Any, watcher.curated_plane).created)
@@ -583,6 +588,32 @@ async def test_indexing_rate_limit_backpressure(
     # 6 items / 2 slots / 50ms each ⇒ at least 3 "waves" ⇒ ~150ms.
     # Giving generous slack for scheduler jitter.
     assert elapsed >= 0.12, f"backpressure didn't actually slow things: {elapsed:.3f}s"
+
+
+def test_invalid_event_rate_per_sec_rejected(vault_root: Path, write_log: WriteLog) -> None:
+    # <= 0 would mean the bucket never accumulates a token: every
+    # event dropped forever. Fail loud on ctor so operators see it.
+    for bad in (0, -1.0, 0.0):
+        with pytest.raises(ValueError, match="event_rate_per_sec"):
+            VaultWatcher(
+                vault_root=vault_root,
+                curated_plane=FakeCuratedPlane(),  # type: ignore
+                write_log=write_log,
+                event_rate_per_sec=bad,
+            )
+
+
+def test_invalid_indexing_concurrency_rejected(vault_root: Path, write_log: WriteLog) -> None:
+    # 0 would deadlock the semaphore (acquire never releases); negative
+    # raises from asyncio. Either way, fail loud on ctor.
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="indexing_concurrency"):
+            VaultWatcher(
+                vault_root=vault_root,
+                curated_plane=FakeCuratedPlane(),  # type: ignore
+                write_log=write_log,
+                indexing_concurrency=bad,
+            )
 
 
 @pytest.mark.skip(reason="Property test deferred")

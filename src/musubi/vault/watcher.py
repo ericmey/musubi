@@ -43,18 +43,21 @@ See issue #219."""
 class _TokenBucket:
     """Simple monotonic-clock token bucket.
 
-    Tokens refill continuously at `rate_per_sec`; the bucket caps at
-    that same rate (1-second burst capacity). `try_consume()` takes
+    Tokens refill continuously at `rate_per_sec`. `try_consume()` takes
     one token atomically — returns True when a token was available,
     False otherwise. Not thread-safe; the Watcher only calls it from
     the event loop (via `call_soon_threadsafe`).
+
+    Capacity is decoupled from rate: it is clamped to at least 1 token
+    so sub-1/sec rates can still accumulate a token and fire — otherwise
+    every event would be dropped forever.
     """
 
     __slots__ = ("_capacity", "_last_refill", "_rate", "_tokens")
 
     def __init__(self, rate_per_sec: float) -> None:
         self._rate = max(rate_per_sec, 0.0)
-        self._capacity = self._rate
+        self._capacity = max(self._rate, 1.0)
         self._tokens = self._capacity
         self._last_refill = 0.0
 
@@ -110,6 +113,11 @@ class VaultWatcher:
         event_rate_per_sec: float = _DEFAULT_EVENT_RATE_PER_SEC,
         indexing_concurrency: int = _DEFAULT_INDEXING_CONCURRENCY,
     ) -> None:
+        if event_rate_per_sec <= 0:
+            raise ValueError(f"event_rate_per_sec must be > 0, got {event_rate_per_sec!r}")
+        if indexing_concurrency < 1:
+            raise ValueError(f"indexing_concurrency must be >= 1, got {indexing_concurrency!r}")
+
         self.vault_root = vault_root
         self.curated_plane = curated_plane
         self.write_log = write_log
@@ -149,13 +157,10 @@ class VaultWatcher:
 
         if p.suffix != ".md":
             # Binary/non-markdown files aren't vault content. Emit a
-            # structured warning on every event so operators can see
-            # what landed, then skip processing. Deliberate design:
-            # operators who want a PDF/image/etc. in Musubi use
-            # /v1/artifacts/ instead of drag-dropping into the vault.
-            # See issue #221. (Per-path log dedup could help on spammy
-            # sources but adds cache-invalidation complexity — not
-            # worth the ergonomics win yet.)
+            # structured warning so operators see what landed, then
+            # skip processing. Deliberate: operators who want a
+            # PDF/image/etc. in Musubi use /v1/artifacts/ instead of
+            # drag-dropping into the vault. See issue #221.
             logger.warning(
                 "vault-skip-non-markdown path=%s suffix=%s",
                 str(rel),
