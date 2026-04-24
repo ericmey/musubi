@@ -144,18 +144,20 @@ def migrate_memories(
             EpisodicMemory.model_validate(new_payload)
 
             if not dry_run:
-                # The SDK capture method does NOT currently support overriding created_at.
-                # However, the SDK `_json` method allows us to send the raw validated model directly
-                # if we manually hit the Qdrant endpoint? No, we MUST use the SDK.
-                # Since the API drops extra fields, if we pass them to the SDK `client._json` as `json_body`,
-                # they will be ignored by `CaptureRequest`.
-                # We will send it, and if it loses `created_at`, it is an API deficiency that must be fixed in a cross-slice ticket.
-                target_client.memories.capture(
+                # Preserve the source-truth timestamp by passing the
+                # parsed `created_at` through. The SDK's capture method
+                # supports it as an operator-only escape hatch
+                # (CaptureRequest.created_at on the server); migrations
+                # need operator scope anyway. Without this, the row
+                # would get re-stamped at ingest time and we'd lose
+                # the historical timeline from the PoC.
+                target_client.episodic.capture(
                     namespace=namespace,
                     content=payload.get("content", ""),
                     tags=payload.get("tags", []),
                     topics=[payload.get("type")] if payload.get("type") else [],
                     importance=5,
+                    created_at=_ensure_utc(created_at_str),
                     idempotency_key=_ksuid_from_uuid(
                         row_id, created_epoch
                     ),  # Deterministic ID mapping!

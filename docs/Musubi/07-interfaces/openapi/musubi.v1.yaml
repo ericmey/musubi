@@ -85,7 +85,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/HitList" }
 
-  /curated-knowledge/{id}:
+  /curated/{id}:
     get:
       tags: [curated]
       operationId: getCurated
@@ -120,22 +120,9 @@ paths:
       responses:
         "202": { description: Accepted for ingestion. }
 
-  /retrieve/blended:
-    post:
-      tags: [retrieve]
-      operationId: retrieveBlended
-      summary: Deep path — hybrid + rerank across planes.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/BlendedRequest" }
-      responses:
-        "200":
-          description: Ranked cross-plane hits.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/HitList" }
+  # Cross-plane retrieve is served by POST /retrieve with a 2-segment
+  # namespace + a `planes` array per ADR-0028. There is no separate
+  # /retrieve/blended path; earlier skeleton drafts listed one.
 
   /thoughts:
     post:

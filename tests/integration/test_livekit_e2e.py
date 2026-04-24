@@ -35,7 +35,7 @@ from tests.integration._livekit_fixtures import (
 
 pytestmark = pytest.mark.integration
 
-# Both memories.capture and thoughts.send authorise via per-namespace
+# Both episodic.capture and thoughts.send authorise via per-namespace
 # scope-strings on the operator token minted in conftest. The router
 # routes to the right Qdrant collection from the endpoint, not from
 # the namespace string — so a single namespace covers both writes
@@ -119,7 +119,7 @@ async def test_e2e_full_turn_persists_episodic_and_thought(api_client: Any) -> N
     # Episodic half: at least one capture ack with a real object_id.
     # Includes both the heuristic fact capture and the session-end
     # transcript fallback (_upload_transcript_with_retry currently
-    # routes through memories.capture until the SDK ships
+    # routes through episodic.capture until the SDK ships
     # artifacts.upload).
     assert capture_responses, "expected at least one episodic capture"
     assert all(resp.get("object_id") for resp in capture_responses)

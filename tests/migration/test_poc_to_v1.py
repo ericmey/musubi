@@ -71,12 +71,17 @@ def test_migrator_transforms_v0_episodic_to_v1_schema(mock_qdrant: Mock, mock_mu
     )
     migrated, _skipped = migrate_memories(mock_qdrant, mock_musubi, {}, dry_run=False)
     assert migrated == 1
-    mock_musubi.memories.capture.assert_called_once()
-    kwargs = mock_musubi.memories.capture.call_args.kwargs
+    mock_musubi.episodic.capture.assert_called_once()
+    kwargs = mock_musubi.episodic.capture.call_args.kwargs
     assert kwargs["content"] == "test"
     assert kwargs["namespace"] == "eric/poc/episodic"
     assert kwargs["topics"] == ["user"]
     assert kwargs["tags"] == ["a"]
+    # Source-truth timestamp is preserved via the SDK's operator-only
+    # `created_at` escape hatch — without it the row would be re-stamped
+    # at ingest time and the PoC timeline would be lost.
+    assert kwargs["created_at"] is not None
+    assert kwargs["created_at"].isoformat().startswith("2026-04-19T00:00:00")
 
 
 @pytest.mark.skip(
@@ -146,7 +151,7 @@ def test_migrator_dry_run_writes_nothing(mock_qdrant: Mock, mock_musubi: Mock) -
     )
     migrated, _skipped = migrate_memories(mock_qdrant, mock_musubi, {}, dry_run=True)
     assert migrated == 1
-    mock_musubi.memories.capture.assert_not_called()
+    mock_musubi.episodic.capture.assert_not_called()
 
 
 def test_migrator_state_file_tracks_progress(mock_qdrant: Mock, mock_musubi: Mock) -> None:

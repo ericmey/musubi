@@ -130,7 +130,7 @@ def test_post_with_backoff_returns_success_on_2xx(monkeypatch: Any) -> None:
     client = MagicMock()
     client.post.return_value = success
 
-    got = seed.post_with_backoff(client, "/memories", rng=random.Random(0), json_body={})
+    got = seed.post_with_backoff(client, "/episodic", rng=random.Random(0), json_body={})
     assert got is success
     assert client.post.call_count == 1
 
@@ -148,7 +148,7 @@ def test_post_with_backoff_retries_429_then_succeeds(monkeypatch: Any) -> None:
     client = MagicMock()
     client.post.side_effect = [r429, r429, r200]
 
-    got = seed.post_with_backoff(client, "/memories", rng=random.Random(0), json_body={})
+    got = seed.post_with_backoff(client, "/episodic", rng=random.Random(0), json_body={})
     assert got is r200
     assert client.post.call_count == 3
 
@@ -163,7 +163,7 @@ def test_post_with_backoff_gives_up_after_max_retries(monkeypatch: Any) -> None:
     client = MagicMock()
     client.post.return_value = r429
 
-    got = seed.post_with_backoff(client, "/memories", rng=random.Random(0), json_body={})
+    got = seed.post_with_backoff(client, "/episodic", rng=random.Random(0), json_body={})
     assert got is None
     assert client.post.call_count == seed.MAX_429_RETRIES
 
@@ -177,7 +177,7 @@ def test_post_with_backoff_does_not_retry_non_429(monkeypatch: Any) -> None:
     client = MagicMock()
     client.post.return_value = r500
 
-    got = seed.post_with_backoff(client, "/memories", rng=random.Random(0), json_body={})
+    got = seed.post_with_backoff(client, "/episodic", rng=random.Random(0), json_body={})
     assert got is r500
     assert client.post.call_count == 1
 
@@ -189,7 +189,7 @@ def test_post_with_backoff_returns_none_on_transport_error(monkeypatch: Any) -> 
     client = MagicMock()
     client.post.side_effect = seed.httpx.ConnectError("boom")
 
-    got = seed.post_with_backoff(client, "/memories", rng=random.Random(0), json_body={})
+    got = seed.post_with_backoff(client, "/episodic", rng=random.Random(0), json_body={})
     assert got is None
 
 
