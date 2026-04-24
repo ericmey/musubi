@@ -1,217 +1,192 @@
 ---
 title: OpenClaw Adapter
 section: 07-interfaces
-tags: [adapter, browser, interfaces, openclaw, section/interfaces, status/complete, type/spec]
+tags: [adapter, interfaces, openclaw, plugin, section/interfaces, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-19
+updated: 2026-04-23
 up: "[[07-interfaces/index]]"
 reviewed: false
-implements: "docs/Musubi/07-interfaces/"
+implements: "github.com/ericmey/openclaw-musubi"
 ---
 # OpenClaw Adapter
 
-Integrates Musubi into the OpenClaw browser extension. Captures web-browsing context as episodic memories, surfaces retrieval results inline in web pages, and sends/receives thoughts across the user's other presences.
+Integrates Musubi into the OpenClaw agent runtime. Mirrors agent episodic output into Musubi, serves curated + concept recall as prompt supplements, and delivers cross-presence thoughts over SSE.
 
-**Implementation lives in a sibling repo:** `github.com/ericmey/openclaw-musubi` (TypeScript browser extension). Per [[13-decisions/0022-extension-ecosystem-naming]] (ADR-0022), non-Python integrations live in external `<system>-musubi` repos so that their toolchain (pnpm, tsc, vitest) and host-system release cadence (Chrome Web Store, Firefox Add-ons) don't mix with Musubi's Python monorepo.
+**Implementation lives in a sibling repo:** `github.com/ericmey/openclaw-musubi` (TypeScript OpenClaw plugin, Node.js 20+). Per [ADR-0022](../13-decisions/0022-extension-ecosystem-naming.md), non-Python integrations live in external `<system>-musubi` repos so their toolchain (pnpm, tsc, vitest) and release cadence stay separate from Musubi's Python monorepo.
 
-This spec describes the **contract** the extension implements against Musubi's canonical API. The contract lives with Musubi (here); the implementation lives in `openclaw-musubi`. TypeScript types are generated from `openapi.yaml` (in this repo) via `openapi-typescript`, giving the extension compile-time safety against the canonical API without hand-maintaining a parallel type file. Optional Python side-car for heavy lifting (e.g., full-page extraction) is out of initial scope; if needed, it would ship as a future `packages/musubi-openclaw-sidecar/` workspace subpackage in this repo.
+This spec is the **contract** the plugin implements against Musubi's canonical API. The contract lives here; the implementation lives in `openclaw-musubi`. TypeScript types are generated from `openapi.yaml` (in this repo) via `openapi-typescript`, giving the plugin compile-time safety against the canonical API.
 
 ## What OpenClaw is
 
-OpenClaw (April 2026): an AI-assisted browser extension that observes the user's page context, suggests actions, and delegates work to agent back-ends. It needs persistent memory that spans the user's browsing, communicates with coding/voice presences, and surfaces relevant context on-page.
+OpenClaw is a local agent-orchestration runtime (April 2026 onward) that runs one or more identity-distinct agents ("presences") against a user's local context. Each presence has its own working memory, personality, and system-prompt — and needs persistent, cross-presence memory plus the ability to notify sibling presences of events.
 
 ## Capabilities
 
-### Capture
+### Capture mirror
 
-- **On-page text selection**: user highlights → "Remember this" → episodic memory with `capture_source: "openclaw-selection"`, `source_ref: <page url>`.
-- **Page capture**: "Save this page for later" → full page as an artifact (`content_type: text/html`, `chunker: html-extractor-v1` — uses Mozilla Readability-style extractor).
-- **Annotation**: user adds a note pinned to a URL → episodic memory with `source_ref: <url>` + `content` = the note.
+Every episodic event emitted by an OpenClaw agent — user messages, agent responses, tool calls, agent_end markers — is mirrored into Musubi as an episodic memory under the agent's presence namespace. The OpenClaw-side memory stays authoritative for in-session recall; Musubi becomes the durable cross-session + cross-presence store.
 
-### Retrieve
+### Prompt + corpus supplement
 
-- **Context sidebar**: as the user lands on a page, the adapter queries Musubi (fast path, planes=`[curated, concept]`) for anything relevant to the page's URL, title, or visible text. Renders as a side panel.
-- **Inline suggestions**: when the user highlights a term, a tooltip shows 3 related memories / curated notes.
-- **Global search**: a keyboard shortcut opens a search bar that queries Musubi (deep path).
+On each agent turn, the plugin asks Musubi for curated + concept hits relevant to the in-flight context and blends them into the prompt as an authority-labeled supplement ("from your durable memory…"). Corpus search is available as a tool (`musubi_recall`) for explicit lookup.
 
 ### Thoughts
 
-- **Receive**: subscribe to thoughts addressed to `openclaw`; show as an unread badge in the extension popup.
-- **Send**: "tell my coding presence to…" button sends a thought to `eric/claude-code`.
-
-## Architecture
-
-```
-┌──────────────────────────────┐
-│  Browser tab content script  │   (page DOM integration; highlights, tooltips, sidebar)
-└──────────────┬───────────────┘
-               │ postMessage
-               ▼
-┌──────────────────────────────┐
-│   Service worker (BG)         │   (stateful; holds Musubi client; OAuth)
-└──────────────┬───────────────┘
-               │ HTTPS
-               ▼
-┌──────────────────────────────┐
-│  Musubi Core (home LAN or    │
-│  internet-facing endpoint)   │
-└──────────────────────────────┘
-```
-
-The service worker holds the OAuth token and connection pool. Content scripts post messages to the service worker; never talk to Musubi directly.
-
-Optional: a local Python side-car for heavy extraction (full-page → cleaned article text), exposed over `localhost:xxxxx` via a tiny HTTP server. Off by default; enable for power users.
-
-## Presence mapping
-
-- OpenClaw → `eric/openclaw`
-- Captures under `eric/openclaw/episodic` by default.
-- Shared curated via `eric/_shared/curated`.
-- Listens for thoughts addressed to `openclaw` or `all`.
-
-## Page-relevance retrieval
-
-When a page loads:
-
-```typescript
-const query = buildPageContextQuery(page);
-const results = await musubi.retrieve({
-  namespace: "eric/_shared/blended",
-  query_text: query,
-  mode: "fast",
-  limit: 5,
-  planes: ["curated", "concept"],
-  filters: {
-    topics_any: extractTopicsFromUrl(page.url),
-  },
-});
-renderSidebar(results);
-```
-
-`buildPageContextQuery(page)`:
-
-- If page has an `<article>`, use its first 500 chars.
-- Else, page title + meta description + first 3 headings.
-
-Topics from URL:
-
-- `github.com/livekit/agents` → `[infrastructure/livekit, projects/livekit]`
-- `docs.qdrant.io/concepts` → `[infrastructure/qdrant]`
-
-Heuristic, improves with user feedback. Fallback: no topic filter.
-
-## Artifact upload flow
-
-```typescript
-async function savePage() {
-  const html = await extractCleanedPage();
-  const blob = new Blob([html], {type: "text/html"});
-  await musubi.artifacts.upload({
-    namespace: "eric/openclaw/artifact",
-    title: document.title,
-    content_type: "text/html",
-    source_system: "openclaw",
-    source_ref: document.location.href,
-    file: blob,
-  });
-  showToast("Saved to Musubi");
-}
-```
-
-Extractor uses Mozilla Readability (open-source). Images are referenced but not bundled — the extractor keeps `<img src>` tags for later resolution.
-
-## Offline behavior
-
-When offline:
-
-- Captures queue locally (IndexedDB).
-- Retrieval queries fail with a friendly error ("Musubi unreachable").
-- Thought checks pause.
-
-When back online:
-
-- Queue drains to Musubi via the capture API.
-- Thought polling resumes.
-
-Queue has a 1000-entry cap; oldest dropped with a warning.
+Presences send and receive thoughts across OpenClaw instances (e.g. Aoi says "I restarted the LiveKit agent" → Rin's next turn sees it). Delivery is push-over-SSE from Musubi's `/v1/thoughts/stream` endpoint; send uses `/v1/thoughts/send`.
 
 ## Auth
 
-OAuth 2.1 with PKCE. Flow:
+**Static bearer tokens.** Not OAuth — the plugin is a trusted local-host integration, not a third-party consumer that needs delegated user consent.
 
-1. First use: extension opens a browser tab to Musubi's OAuth endpoint.
-2. User logs in, approves namespace scope.
-3. Auth endpoint redirects to `chrome-extension://<id>/oauth/callback` with a code.
-4. Extension exchanges code + PKCE verifier for a token.
-5. Token stored in `chrome.storage.local` (encrypted at rest by Chromium).
-6. Refresh tokens rotated per OAuth 2.1 spec.
+Two token configurations:
 
-Token revocation: user clicks "Sign out" in the extension; revoke endpoint called.
+- **Single-token mode** — `core.token` covers every presence the plugin represents. Token scope must be broad enough for all of them.
+- **Per-agent tokens mode** — `core.perAgentTokens: {<agent-id>: <token-or-${ENV_VAR}>}` maps OpenClaw agent ids to dedicated Musubi bearer tokens. Each agent's operations use its own token, so identities stay cryptographically isolated at the wire. Env-var substitution (`${MUSUBI_TOKEN_AOI}`) is supported so tokens never sit in config files.
 
-## Permissions model
+Strict mode (`core.strictPerAgent: true`) rejects any operation where an agent has a presence mapping but no matching token entry — fails loud instead of silently falling back to `core.token`.
 
-Each captured memory's `namespace` must be within the token's scope. The adapter never sends to `eric/_shared/curated` directly — that's reserved for humans in Obsidian or for Lifecycle Worker promotions.
+### Scope requirements
+
+The plugin issues calls at two different namespace segment counts. Tokens must carry scopes for both. See [[07-interfaces/canonical-api#scope-by-endpoint]] for the canonical table; the plugin-relevant subset is:
+
+| Plugin operation | Endpoint | Namespace | Token scope pattern |
+|---|---|---|---|
+| Capture mirror | `POST /v1/memories` | `<owner>/<presence>/episodic` | `<owner>/<presence>/episodic:w` |
+| Recall (cross-plane) | `POST /v1/retrieve` | `<owner>/<presence>` (2-seg) | `<owner>/<presence>:r` |
+| Thought send | `POST /v1/thoughts/send` | `<owner>/<presence>/thought` | `<owner>/<presence>/thought:w` |
+| Thought stream | `GET /v1/thoughts/stream` | `<owner>/<presence>` (2-seg) | `<owner>/<presence>:r` |
+
+A presence token typically needs `<owner>/<presence>:r` (covers 2-seg reads — retrieve, stream) plus `<owner>/<presence>/episodic:w` and `<owner>/<presence>/thought:w` for the write paths. Issuing only 3-segment scopes will 403 the stream; issuing only 2-segment will 403 the writes.
+
+## Presence mapping
+
+Conventional shape — OpenClaw presence id → Musubi namespace:
+
+| OpenClaw config | Namespace convention |
+|---|---|
+| `presence.defaultId: "eric/openclaw"` | episodic: `eric/openclaw/episodic`, thought: `eric/openclaw/thought` |
+| `presence.perAgent: {"aoi": "eric/aoi"}` | episodic: `eric/aoi/episodic`, thought: `eric/aoi/thought` |
+
+The plugin never writes to `_shared` namespaces directly; cross-presence curated is populated by the Musubi Lifecycle Worker's synthesis/promotion pipeline, not by OpenClaw.
+
+## Retrieve pattern
+
+The plugin uses Musubi's 2-segment cross-plane retrieve (see [ADR-0028](../13-decisions/0028-retrieve-2seg-namespace-crossplane.md)). One call per recall or prompt-supplement refresh, not one per plane:
+
+```http
+POST /v1/retrieve
+Content-Type: application/json
+Authorization: Bearer <presence-token>
+
+{
+  "namespace": "eric/openclaw",
+  "query_text": "how do I restart the livekit agent",
+  "mode": "fast",
+  "limit": 5,
+  "planes": ["curated", "concept", "episodic"]
+}
+```
+
+Server expands `namespace + planes` into `<namespace>/<plane>` targets, fans out in parallel, merges by score, and returns a single sorted result set. Strict per-plane scope check — if the token lacks read scope for any expanded plane, the whole request is 403. (This is the correct failure mode: consumers want explicit "your scope is wrong" over silent partial results.)
+
+## Thoughts stream
+
+The plugin runs one SSE subscription per active presence. Each subscription:
+
+- Persists `Last-Event-ID` to local storage across process restarts.
+- Honors `Retry-After` on `503`; reconnects with exponential backoff + jitter (cap 60s) on other errors.
+- Does **not** reconnect on `403` — bubbles up as a re-auth signal.
+
+On reconnect, Musubi replays thoughts emitted during the gap (see [[07-interfaces/canonical-api#thoughts-stream]]); the plugin does not need to poll `/v1/thoughts/check` as a backfill mechanism.
+
+## Capture payload shape
+
+Episodic mirror from an OpenClaw `agent_end` event:
+
+```json
+POST /v1/memories
+{
+  "namespace": "eric/aoi/episodic",
+  "content": "<agent response text>",
+  "tags": ["openclaw-mirror", "agent_end"],
+  "topics": [],
+  "importance": 5,
+  "content_type": "observation",
+  "capture_source": "openclaw-agent-end",
+  "source_ref": "openclaw-session:<session-id>:<turn-ksuid>",
+  "ingestion_metadata": {
+    "agent_id": "aoi",
+    "session_id": "...",
+    "turn_id": "..."
+  }
+}
+```
+
+Notes:
+- `importance` must be in `[1, 10]` per the server schema. The plugin-side default is 5.
+- `agent_id` must be extracted from the event payload so per-agent attribution survives the mirror. Falling back to `presence.defaultId` for every capture loses the isolation that per-agent tokens were supposed to provide.
+
+## Thought-send payload shape
+
+```json
+POST /v1/thoughts/send
+Idempotency-Key: <uuid>
+
+{
+  "from_presence": "eric/aoi",
+  "to_presence": "eric/rin",
+  "channel": "default",
+  "content": "Heads up: LiveKit agent restarted at 09:03 UTC.",
+  "importance": 5
+}
+```
+
+Idempotency is **header-only** — `Idempotency-Key`. There is no `client_id` body field.
+
+## Lifecycle
+
+- **Plugin start** → validate config → resolve presences → open one SSE subscription per presence → register tools (`musubi_recall`, `musubi_remember`, `musubi_think`).
+- **Plugin unload** → close SSE subscriptions → drain in-flight captures → release tokens. Leaking the SSE listener or the capture retry loop will keep the Node.js process alive past unload.
+- **Error taxonomy** — `401` → token invalid (re-auth); `403` → scope insufficient (surface to user, don't retry); `422` → payload invalid (bug in plugin, log + drop); `503` → backend down, honor `Retry-After`.
 
 ## Observability
 
-- `openclaw.capture.count{source: selection|page|note}` counter.
-- `openclaw.retrieve.latency_ms` histogram.
-- `openclaw.thought.received` counter.
-- `openclaw.offline_queued` counter.
-
-Metrics forwarded to a small local collector; not public.
-
-## UX rules
-
-- **Never auto-capture.** Every capture is explicit (user clicks or confirms).
-- **Auto-retrieve is opt-in.** Sidebar retrieval is off by default; user enables per-site.
-- **Privacy first.** No capture on pages marked private, banking domains, or user-configured excludes.
-- **Export**: "Export all my memories" — downloads JSON + Markdown of everything the extension captured. User always owns the data.
+The plugin emits OpenClaw telemetry events for its own operations (`openclaw.memory.capture.sent`, `openclaw.recall.request.latency_ms`, `openclaw.thought.received`, etc.). Forwarding into Musubi core metrics is out of scope — metrics on the Musubi side are already exposed at `/v1/ops/metrics`.
 
 ## Test Contract
 
-**Module under test:** `musubi-openclaw-adapter/src/*` (TypeScript)
+**Module under test:** the Node.js plugin (`github.com/ericmey/openclaw-musubi`). Contract-level tests that the plugin must pass against a running Musubi:
 
-Capture:
+Capture mirror:
 
-1. `test_selection_capture_sends_expected_payload`
-2. `test_page_capture_extracts_with_readability`
-3. `test_page_capture_uploads_as_artifact`
-4. `test_note_capture_captures_with_source_ref`
+1. `test_agent_end_capture_uses_agent_specific_token_when_configured`
+2. `test_agent_end_capture_namespace_derived_from_agent_presence_mapping`
+3. `test_capture_payload_importance_clamped_to_server_range_1_10`
 
 Retrieve:
 
-5. `test_page_context_query_built_from_article`
-6. `test_page_context_query_falls_back_to_title_and_headings`
-7. `test_topics_extracted_from_url_patterns`
-8. `test_sidebar_renders_top_5_results`
+4. `test_recall_issues_single_2seg_cross_plane_call_not_per_plane_fanout`
+5. `test_recall_403_on_insufficient_scope_surfaces_as_error_not_partial_results`
+6. `test_recall_surfaces_top_level_title_field_for_curated_rows`
 
 Thoughts:
 
-9. `test_thought_check_runs_on_popup_open`
-10. `test_thought_badge_updates_on_new_thought`
-11. `test_thought_send_button_invokes_sdk`
+7. `test_stream_reconnect_with_last_event_id_receives_replayed_thoughts`
+8. `test_stream_honors_retry_after_on_503_rather_than_exponential_backoff`
+9. `test_thought_send_idempotency_via_header_not_body_field`
 
-Offline:
+Auth + presence:
 
-12. `test_offline_capture_queues_to_indexeddb`
-13. `test_online_drain_processes_queue_in_order`
-14. `test_offline_queue_caps_at_1000`
+10. `test_strict_mode_rejects_agent_missing_token_entry`
+11. `test_env_var_substitution_resolves_tokens_from_process_env`
+12. `test_single_token_mode_falls_back_when_no_per_agent_config_present`
 
-Auth:
+Lifecycle:
 
-15. `test_oauth_pkce_flow_completes`
-16. `test_token_refreshed_before_expiry`
-17. `test_sign_out_revokes_token`
+13. `test_plugin_unload_closes_all_sse_subscriptions`
+14. `test_plugin_unload_drains_in_flight_capture_retries`
 
-Privacy:
+Shared contract:
 
-18. `test_excluded_domains_not_captured`
-19. `test_auto_retrieve_off_by_default`
-20. `test_export_produces_full_json_and_markdown`
-
-Integration:
-
-21. `integration: end-to-end — capture a selection, verify it surfaces in Musubi retrieval`
-22. `integration: canonical contract suite via adapter`
+15. `integration: canonical contract suite via adapter` (subset from [[07-interfaces/contract-tests]])

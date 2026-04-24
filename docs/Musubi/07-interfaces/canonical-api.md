@@ -40,6 +40,44 @@ Tokens carry a scope list; each scope is a namespace glob:
 
 See [[10-security/auth]] for token issuance and validation.
 
+### Scope by endpoint
+
+The scope matcher (see [[10-security/auth]] and `src/musubi/auth/scopes.py`) requires **exact segment-count match** between the scope pattern and the endpoint's namespace. A scope like `eric/openclaw/*:rw` matches any 3-segment namespace under `eric/openclaw/` but does **not** match the 2-segment namespace `eric/openclaw`. Endpoints check scope at different segment counts, so a single presence typically needs multiple scope entries:
+
+| Endpoint | Namespace source | Segments | Required access |
+|---|---|---|---|
+| `POST /v1/memories`, `/v1/memories/batch`, `GET/PATCH/DELETE /v1/memories/{id}` | request body / query | 3 (`<tenant>/<presence>/episodic`) | `r` or `w` |
+| `POST/GET/PATCH/DELETE /v1/curated-knowledge[/{id}]` | request body / query | 3 (`<tenant>/<presence>/curated`) | `r` or `w` |
+| `GET/PATCH /v1/concepts/{id}`, `POST /v1/concepts/{id}/reinforce\|promote\|reject` | query | 3 (`<tenant>/<presence>/concept`) | `r` or `w` |
+| `POST/GET /v1/artifacts`, `GET /v1/artifacts/{id}/blob\|chunks` | body / query | 3 (`<tenant>/<presence>/artifact`) | `r` or `w` |
+| `POST /v1/retrieve` with **3-segment** namespace | body `namespace` | 3 | `r` on that one namespace |
+| `POST /v1/retrieve` with **2-segment** namespace + `planes` array | body `namespace` + `planes` | 2 (base) + strict per-plane check on each expansion | `r` on the 2-seg base **and** `r` on every `<namespace>/<plane>` target |
+| `POST /v1/thoughts/send` | body (derives `<tenant>/<presence>/thought`) | 3 | `w` |
+| `POST /v1/thoughts/check`, `/read`, `/history` | body `namespace` | 3 (`<tenant>/<presence>/thought`) | `r` |
+| `GET /v1/thoughts/stream` | query `namespace` | **2** (`<tenant>/<presence>`) | `r` on the 2-segment namespace |
+| `POST /v1/lifecycle/*`, `POST /v1/contradictions/resolve`, `POST /v1/ops/reindex` | n/a | operator scope | `operator` |
+| `GET /v1/namespaces[/{ns}/stats]` | n/a | operator scope for listing; own-namespace read otherwise | varies |
+
+**Common mistake:** issuing a token with only `<tenant>/<presence>/*:rw` covers every 3-segment endpoint (captures, sends, retrieve with 3-seg namespace) but returns `403` on `GET /v1/thoughts/stream` and on `POST /v1/retrieve` with a 2-segment namespace. A presence-level token typically needs both `<tenant>/<presence>:r` (2-seg reads) and `<tenant>/<presence>/*:rw` (3-seg reads+writes).
+
+### Recommended scope set for a per-presence token
+
+A typical presence token (e.g. one issued to a specific OpenClaw agent or the LiveKit voice worker) carries the following scopes. Tune per deployment, but this is the baseline that covers every common operation without over-granting:
+
+```
+eric/aoi:r                 # 2-seg: retrieve (cross-plane), thoughts/stream
+eric/aoi/*:rw              # 3-seg wildcard: captures, thoughts/send, plane-specific retrieve,
+                           #                 GET by id, PATCH, DELETE across episodic / thought / concept / curated / artifact
+eric/_shared/curated:r     # read shared curated (lifecycle-promoted knowledge)
+eric/_shared/concept:r     # read shared concepts
+```
+
+Notes:
+
+- There is **no separate `thoughts:check:<presence>` scope**. Every thoughts endpoint checks the standard `<tenant>/<presence>/thought` 3-segment namespace — `/check`, `/read`, `/history` need `:r`; `/send` needs `:w`. Both are covered by the `<tenant>/<presence>/*:rw` wildcard.
+- `<tenant>/_shared/curated:r` + `<tenant>/_shared/concept:r` are the cross-presence read scopes — required if the presence wants to see knowledge the Lifecycle Worker has promoted from any other presence in the same tenant. Omit them if the presence should only see its own curated/concept output.
+- For an **operator** token (admin UI, ops scripts), replace the presence-scoped entries with `operator` — that covers admin endpoints (`/v1/lifecycle/*`, `/v1/contradictions/resolve`, `/v1/ops/reindex`) and implicit broad read.
+
 ## Content types
 
 - Request: `application/json` (REST) or protobuf (gRPC).
@@ -177,6 +215,74 @@ POST   /v1/retrieve/stream                   # NDJSON stream for large K
 
 Single entry point for fast and deep path. Mode selected by `query.mode`. See [[05-retrieval/orchestration]].
 
+#### Cross-plane retrieve: one call, not N
+
+The `namespace` field accepts two shapes, distinguished by segment count:
+
+- **3-segment** (`<tenant>/<presence>/<plane>`) — single-plane query. `planes` is ignored; results come from that one plane.
+- **2-segment** (`<tenant>/<presence>`) — cross-plane query. Each entry in `planes` is expanded to `<namespace>/<plane>` server-side, the pipeline fans out in parallel, and results are merged by score into a single sorted response.
+
+See [ADR-0028](../13-decisions/0028-retrieve-2seg-namespace-crossplane.md) for the design decision.
+
+**Consumers should prefer 2-segment cross-plane calls** for any multi-plane query (prompt supplements, corpus recall). One HTTP request, server-side scoring merge, strict per-plane scope check. Do not reinvent fanout client-side.
+
+Worked example — pull top-5 matches across curated + concept + episodic for the `eric/openclaw` presence:
+
+```http
+POST /v1/retrieve
+Content-Type: application/json
+Authorization: Bearer <token-with-eric/openclaw:r-and-per-plane-scope>
+
+{
+  "namespace": "eric/openclaw",
+  "query_text": "how do I restart the livekit agent",
+  "mode": "fast",
+  "limit": 5,
+  "planes": ["curated", "concept", "episodic"]
+}
+```
+
+Response (abbreviated):
+
+```json
+{
+  "rows": [
+    {
+      "object_id": "2iVV…",
+      "namespace": "eric/openclaw/curated",
+      "plane": "curated",
+      "title": "LiveKit Agent Restart Runbook",
+      "score": 0.91,
+      "snippet": "Restart with `systemctl restart livekit-agent` on the GPU host …",
+      "extra": { "topics": ["infrastructure/livekit"] }
+    },
+    {
+      "object_id": "2iVW…",
+      "namespace": "eric/openclaw/episodic",
+      "plane": "episodic",
+      "title": null,
+      "score": 0.78,
+      "snippet": "Yesterday Aoi restarted the LiveKit agent via the control panel …",
+      "extra": { "capture_source": "openclaw-agent-end" }
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+**Scope check semantics:** the token must carry read access to the **2-segment base** (`eric/openclaw:r` or broader) **and** to every **expanded target** (`eric/openclaw/curated:r`, `eric/openclaw/concept:r`, `eric/openclaw/episodic:r`). Missing any one of the expansion scopes → `403` for the entire request. This is deliberate: partial results would be misleading, and the consumer can see exactly which scope is missing from the error detail.
+
+**For single-plane queries**, pass a 3-segment namespace and omit `planes`:
+
+```json
+{
+  "namespace": "eric/openclaw/curated",
+  "query_text": "...",
+  "mode": "fast",
+  "limit": 5
+}
+```
+
 ### 7. Lifecycle
 
 ```
@@ -232,10 +338,12 @@ POST /v1/memories
 
 ### Retrieve
 
+2-segment cross-plane (see §6 for the full semantics + scope rules):
+
 ```json
 POST /v1/retrieve
 {
-  "namespace": "eric/_shared/blended",
+  "namespace": "eric/openclaw",
   "query_text": "how do I restart the livekit agent",
   "mode": "fast",
   "limit": 5,

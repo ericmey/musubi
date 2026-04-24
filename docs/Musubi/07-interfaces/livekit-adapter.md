@@ -22,7 +22,7 @@ Python package; not a standalone service.
 
 Conversational AI with RAG has a latency dilemma:
 
-- Deep retrieval (with reranker, cross-plane blended) takes ~2s. That's too slow for speech generation.
+- Deep retrieval (with reranker, 2-segment cross-plane fanout) takes ~2s. That's too slow for speech generation.
 - Fast retrieval (hybrid-only) is ~150ms. Fast enough for in-speech, but might miss better context.
 
 **Dual agent answers both**:
@@ -161,8 +161,8 @@ Transcripts are chunked server-side via `vtt-turns-v1`. See [[04-data-model/sour
 
 Per voice session:
 
-- `namespace: eric/livekit-voice/episodic` — new memories captured during the session.
-- `namespace: eric/livekit-voice/blended` — retrieval scope (expands to tenant-wide per [[05-retrieval/blended#blended-scope-for-the-voice-agent]]).
+- `namespace: eric/livekit-voice/episodic` — new memories captured during the session (3-segment).
+- `namespace: eric/livekit-voice` + `planes: ["curated", "concept", "episodic"]` — retrieval scope (2-segment cross-plane per [ADR-0028](../13-decisions/0028-retrieve-2seg-namespace-crossplane.md); server-side fanout + merge, one HTTP call).
 
 ## Latency budget
 
