@@ -144,7 +144,10 @@ async def _thoughts_event_generator(
 
     try:
         if replay:
-            for t in replay:
+            # Defensive sort — callers already return lex-ascending,
+            # but the generator contract promises it too. Sort is O(n)
+            # on an already-sorted list, cheap.
+            for t in sorted(replay, key=lambda th: th.object_id):
                 yield _sse_frame(
                     event="thought",
                     event_id=str(t.object_id),
@@ -234,11 +237,27 @@ async def stream_thoughts(
     replay: list[Thought] = []
     truncated = False
     if last_event_id:
-        replay, truncated = await thoughts_plane.replay_since(
-            namespace=namespace,
-            includes=includes,
-            last_event_id=last_event_id,
-        )
+        try:
+            replay, truncated = await thoughts_plane.replay_since(
+                namespace=namespace,
+                includes=includes,
+                last_event_id=last_event_id,
+            )
+        except Exception:
+            # Replay is best-effort; never leak a broker subscription
+            # if Qdrant is unreachable or the anchor is malformed.
+            # Surface as 503 so the client can retry — same contract
+            # as the connection-cap path.
+            from musubi.api.errors import error_response
+
+            broker.unsubscribe(sub)
+            resp = error_response(
+                status_code=503,
+                detail="Thought replay unavailable",
+                code="BACKEND_UNAVAILABLE",
+            )
+            resp.headers["Retry-After"] = "5"
+            return resp
 
     response_headers = {
         "Cache-Control": "no-cache",

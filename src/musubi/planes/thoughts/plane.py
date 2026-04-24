@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+from ksuid import Ksuid
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
@@ -196,40 +197,82 @@ class ThoughtsPlane:
         - ``namespace`` matches exactly.
         - ``to_presence`` is in ``includes`` (typically the presence plus
           the ``all`` broadcast bucket).
-        - ``object_id > last_event_id`` lexicographically. KSUIDs sort by
-          time, so lex > strictly-after is equivalent to time > for our
-          purposes.
+        - ``created_epoch >= anchor_epoch``, where ``anchor_epoch`` comes
+          from decoding ``last_event_id`` as a KSUID. Narrows the scroll
+          at index level so we don't scan the whole namespace.
+        - ``object_id > last_event_id`` applied client-side, since two
+          thoughts created in the same second have random KSUID suffixes
+          and lex comparison is the tiebreaker.
 
-        Ordered ascending by ``object_id`` so emission preserves arrival
-        order. Capped at ``cap`` results; the returned ``truncated`` flag
-        tells the caller whether to set the
-        ``X-Musubi-Replay-Truncated`` response header so clients can
-        fall back to ``/v1/thoughts/history`` for deeper backfill.
+        Qdrant ``scroll`` doesn't order by object_id (point ids are
+        UUIDv5, uncorrelated with KSUID), so we paginate through the
+        filtered slice until we collect ``cap + 1`` post-anchor
+        candidates or exhaust the result set. Sorting + cap are applied
+        after the paginated fetch so ``truncated`` reflects whether a
+        genuine overflow occurred, not scroll-window quirks.
+
+        Ordered ascending by ``(created_epoch, object_id)`` so emission
+        preserves arrival order. The returned ``truncated`` flag tells
+        the caller whether to set the ``X-Musubi-Replay-Truncated``
+        response header so clients can fall back to
+        ``/v1/thoughts/history`` for deeper backfill.
         """
-        resp, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="to_presence",
-                        match=models.MatchAny(any=list(includes)),
-                    ),
-                ],
-            ),
-            limit=cap + 1,
-            with_payload=True,
+        # Malformed anchor → return empty replay rather than 500. A
+        # garbage Last-Event-ID means the client's state is corrupt;
+        # live-tail from here is the best we can do. The KSUID
+        # decoder can raise multiple exception types depending on
+        # the flavour of garbage (empty string → IndexError from
+        # baseconv, oversized timestamp → OverflowError, invalid
+        # chars → ValueError, etc.), so we catch the superset.
+        try:
+            anchor_epoch = float(Ksuid.from_base62(last_event_id).timestamp)
+        except Exception:
+            return [], False
+
+        base_filter = models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+                models.FieldCondition(
+                    key="to_presence",
+                    match=models.MatchAny(any=list(includes)),
+                ),
+                models.FieldCondition(
+                    key="created_epoch",
+                    range=models.Range(gte=anchor_epoch),
+                ),
+            ],
         )
 
         candidates: list[Thought] = []
-        for point in resp:
-            if point.payload:
+        offset: Any | None = None
+        page_size = max(cap + 1, 64)
+
+        while len(candidates) <= cap:
+            resp, offset = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=base_filter,
+                limit=page_size,
+                offset=offset,
+                with_payload=True,
+            )
+
+            for point in resp:
+                if not point.payload:
+                    continue
                 thought = _thought_from_payload(point.payload)
                 if thought.object_id > last_event_id:
                     candidates.append(thought)
+                    if len(candidates) > cap:
+                        break
 
+            if offset is None or len(candidates) > cap:
+                break
+
+        # Sort by object_id lex-ascending — matches the canonical-api
+        # contract ("object_id > anchor (lexicographic, ascending)")
+        # and the client-side dedup-set insertion rule. KSUID lex order
+        # is second-level time order with random within-second
+        # tiebreaks, which is fine for SSE replay.
         candidates.sort(key=lambda t: t.object_id)
         truncated = len(candidates) > cap
         return candidates[:cap], truncated

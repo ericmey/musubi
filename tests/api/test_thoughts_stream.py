@@ -482,6 +482,61 @@ async def test_stream_endpoint_sets_truncated_header_when_plane_reports_truncati
 
 
 @pytest.mark.asyncio
+async def test_stream_endpoint_unsubscribes_broker_if_replay_raises(
+    app: FastAPI,
+    valid_token: str,
+    thoughts: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If ``replay_since`` raises after the broker subscription is open
+    (Qdrant unreachable, malformed anchor, etc.), the endpoint must
+    clean up the subscription and return 503 — never leak a subscriber
+    slot that would erode the 100-subscriber cap."""
+    from starlette.responses import Response
+
+    from musubi.api.routers.thoughts import stream_thoughts
+
+    async def broken_replay(
+        *, namespace: str, includes: Any, last_event_id: str, cap: int = 500
+    ) -> Any:
+        raise RuntimeError("qdrant unreachable")
+
+    monkeypatch.setattr(thoughts, "replay_since", broken_replay)
+
+    class _Req:
+        def __init__(self) -> None:
+            import types
+
+            self.app = types.SimpleNamespace(state=types.SimpleNamespace(testing=True))
+            self.headers = {"authorization": f"Bearer {valid_token}"}
+            self.state = types.SimpleNamespace()
+
+    settings = app.dependency_overrides[
+        next(k for k in app.dependency_overrides if k.__name__ == "get_settings_dep")
+    ]()
+
+    subs_before = len(broker._subscribers)
+
+    response = await stream_thoughts(
+        request=_Req(),  # type: ignore[arg-type]
+        namespace="eric/claude-code/thought",
+        include=None,
+        last_event_id="0" * 27,
+        qdrant=None,  # type: ignore[arg-type]
+        settings=settings,
+        thoughts_plane=thoughts,
+    )
+
+    assert isinstance(response, Response)
+    assert response.status_code == 503
+    assert response.headers.get("Retry-After") == "5"
+    assert len(broker._subscribers) == subs_before, (
+        f"broker subscriber leaked on replay failure; subs_before={subs_before} "
+        f"subs_after={len(broker._subscribers)}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_stream_endpoint_no_truncation_header_when_replay_fits(
     app: FastAPI,
     valid_token: str,

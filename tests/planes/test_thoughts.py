@@ -394,21 +394,44 @@ async def test_replay_since_caps_results_and_signals_truncation(
     assert truncated is True
 
 
-async def test_replay_since_empty_when_anchor_is_lex_largest(
-    plane: ThoughtsPlane, ns: str
-) -> None:
-    """If the anchor is lex-equal-or-greater than every stored
-    thought's object_id, replay is empty — the generator skips
-    straight to live-tail. Uses the lex-max sentinel anchor to
-    stay deterministic (KSUIDs generated in the same second have
-    random suffix order, so the caller's ``latest_created`` isn't
-    guaranteed to be ``max_by_lex``)."""
+async def test_replay_since_empty_when_anchor_is_lex_largest(plane: ThoughtsPlane, ns: str) -> None:
+    """If the anchor is lex-greater than every stored thought's
+    object_id, replay is empty — the generator skips straight to
+    live-tail. Uses the lex-max *valid* KSUID as anchor
+    (``Ksuid.from_bytes(b"\\xff" * 20)``). Raw ``"z"*27`` isn't a
+    decodable KSUID because its timestamp prefix overflows uint32."""
+    from ksuid import Ksuid
+
     await plane.send(_make("old", ns, "a", "b"))
     await plane.send(_make("latest", ns, "a", "b"))
-    anchor = "z" * 27  # lex-greater than any KSUID (KSUIDs use base62)
+    anchor = str(Ksuid.from_bytes(b"\xff" * 20))
 
     replayed, truncated = await plane.replay_since(
         namespace=ns, includes={"b", "all"}, last_event_id=anchor
     )
     assert replayed == []
     assert truncated is False
+
+
+async def test_replay_since_returns_empty_for_malformed_anchor(
+    plane: ThoughtsPlane, ns: str
+) -> None:
+    """A garbage ``Last-Event-ID`` (wrong length, invalid chars, empty)
+    shouldn't 500 the endpoint — ``replay_since`` swallows the decode
+    error and returns empty so the stream falls through to live-tail.
+    The client's state is corrupt at that point, but the server stays
+    up."""
+    await plane.send(_make("one", ns, "a", "b"))
+
+    # "zzz..." overflows uint32 timestamp; "not-a-ksuid" has
+    # non-base62 chars; "" is empty. Each raises a different exception
+    # from the decoder — the catch-all in replay_since turns them all
+    # into empty replay. (Note: "0" alone is technically a valid
+    # lex-min KSUID — base62 left-pads — so we don't test it here;
+    # it's equivalent to replaying the whole plane, which is correct.)
+    for bad in ("zzzzzzzzzzzzzzzzzzzzzzzzzzz", "not-a-ksuid", ""):
+        replayed, truncated = await plane.replay_since(
+            namespace=ns, includes={"b", "all"}, last_event_id=bad
+        )
+        assert replayed == [], f"malformed anchor {bad!r} should yield empty replay"
+        assert truncated is False
