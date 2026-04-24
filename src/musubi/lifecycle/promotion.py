@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)
 _LIFECYCLE_ACTOR = "lifecycle-worker"
 PROMOTION_REINFORCEMENT_THRESHOLD = 3
 PROMOTION_IMPORTANCE_THRESHOLD = 6
+PROMOTION_MAX_ATTEMPTS = 3
 
 _REG = default_registry()
 _DURATION = _REG.histogram(
@@ -164,14 +165,15 @@ def namespace_to_dir(namespace: str) -> str:
 
 
 def compute_path(concept: SynthesizedConcept) -> str:
-    # `concept.topics` is always present (Field(default_factory=list)), so the
-    # previous `getattr(concept, "topics", concept.linked_to_topics)` could
-    # never actually fall through to `linked_to_topics` — the fallback was
-    # dead code. Replaced with the direct access that matches the runtime
-    # behavior exactly. Whether `topics` should fall back to
-    # `linked_to_topics` when empty is a semantic question (topic-hint
-    # unification) tracked in issue #217, not a drive-by cleanup.
-    topics = concept.topics
+    # Topic-hint unification: prefer `concept.topics` (populated by the
+    # synthesis job from the cluster); fall back to `linked_to_topics`
+    # (inherited from the originating memories) when topics is empty.
+    # `linked_to_topics` exists on every MemoryObject, so older concepts
+    # synthesized before `topics` was populated reliably still get a
+    # meaningful primary_topic from their source memories. Concepts with
+    # neither file under `_misc` — deliberately not auto-synthesized
+    # because that'd hide a real synthesis gap.
+    topics = concept.topics or concept.linked_to_topics
     primary_topic = topics[0] if topics else "_misc"
     slug = slugify(concept.title)
     return f"curated/{namespace_to_dir(concept.namespace)}/{primary_topic}/{slug}.md"
@@ -189,10 +191,11 @@ def _is_eligible(concept: SynthesizedConcept, now_epoch: float) -> bool:
     if now_epoch - created_epoch < 48 * 3600:
         return False
 
-    # `promotion_attempts >= 3` gate is deferred to issue #217 — the field
-    # exists on SynthesizedConcept but nothing increments it on failure yet,
-    # so a gate check here would never fire in practice. Current behavior:
-    # failed promotions retry indefinitely.
+    # Three-strikes gate. Every `ConceptPlane.record_promotion_rejection`
+    # bumps `promotion_attempts`, so after three failed renders a concept
+    # is locked out of further sweeps until an operator reinstates it.
+    if concept.promotion_attempts >= PROMOTION_MAX_ATTEMPTS:
+        return False
 
     if concept.contradicts:
         return False
@@ -217,6 +220,11 @@ async def run_promotion_sweep(
         ),
         models.FieldCondition(
             key="importance", range=models.Range(gte=PROMOTION_IMPORTANCE_THRESHOLD)
+        ),
+        # Three-strikes filter. Skips the payload-parse + `_is_eligible`
+        # call on concepts already locked out by prior rejections.
+        models.FieldCondition(
+            key="promotion_attempts", range=models.Range(lt=PROMOTION_MAX_ATTEMPTS)
         ),
     ]
 
@@ -246,8 +254,8 @@ async def run_promotion_sweep(
                 continue
 
             try:
-                await _promote_concept(deps, concept)
-                promoted_count += 1
+                if await _promote_concept(deps, concept):
+                    promoted_count += 1
             except Exception as e:
                 log.error("Failed to promote concept %s: %s", concept.object_id, e, exc_info=True)
 
@@ -260,7 +268,11 @@ async def run_promotion_sweep(
     return promoted_count
 
 
-async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> None:
+async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> bool:
+    """Attempt to promote one concept. Returns True iff it actually shipped
+    a curated row + vault file. The rejection path (LLM render failed)
+    bumps `promotion_attempts` via `record_promotion_rejection` and
+    returns False — the sweep counts only true promotions."""
     now = utc_now()
 
     # Render markdown via LLM
@@ -278,7 +290,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             object_id=concept.object_id,
             reason=f"Rendering failed: {e}",
         )
-        return
+        return False
 
     # Compute path
     rel_path = compute_path(concept)
@@ -321,7 +333,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         object_id=curated_id,
         namespace=concept.namespace,
         title=concept.title,
-        topics=concept.topics,
+        topics=concept.topics or concept.linked_to_topics,
         tags=concept.tags,
         importance=concept.importance,
         state="matured",
@@ -347,7 +359,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         summary=concept.summary,
         state="matured",
         importance=concept.importance,
-        topics=concept.topics,
+        topics=concept.topics or concept.linked_to_topics,
         tags=concept.tags,
         promoted_from=concept.object_id,
         promoted_at=now,
@@ -376,6 +388,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
         "Concept Promoted",
     )
+    return True
 
 
 # ---------------------------------------------------------------------------

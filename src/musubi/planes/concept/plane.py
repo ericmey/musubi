@@ -309,16 +309,13 @@ class ConceptPlane:
         data = current.model_dump()
         data.update(
             reinforcement_count=current.reinforcement_count + 1,
+            last_reinforced_at=now,
+            last_reinforced_epoch=epoch_of(now),
             merged_from=merged_from,
             version=current.version + 1,
             updated_at=now,
             updated_epoch=epoch_of(now),
         )
-        # NOTE: spec calls for ``last_reinforced_at = now`` here too, but
-        # the SynthesizedConcept type lacks the field (extra="forbid"
-        # rejects it). Cross-slice ticket
-        # ``_inbox/cross-slice/slice-plane-concept-slice-types-promotion-attempts.md``
-        # tracks the type-side fix.
         updated = SynthesizedConcept.model_validate(data)
         self._client.set_payload(
             collection_name=self._collection,
@@ -453,16 +450,11 @@ class ConceptPlane:
         data.update(
             promotion_rejected_at=now,
             promotion_rejected_reason=reason,
+            promotion_attempts=current.promotion_attempts + 1,
             version=current.version + 1,
             updated_at=now,
             updated_epoch=epoch_of(now),
         )
-        # NOTE: spec calls for ``promotion_attempts`` to bump here too, but
-        # the SynthesizedConcept type lacks the field (extra="forbid"
-        # rejects it). Cross-slice ticket
-        # ``_inbox/cross-slice/slice-plane-concept-slice-types-promotion-attempts.md``
-        # tracks the type-side fix; once it lands, slice-lifecycle-promotion
-        # can update its retry-backoff predicate.
         updated = SynthesizedConcept.model_validate(data)
         self._client.set_payload(
             collection_name=self._collection,

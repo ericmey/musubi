@@ -199,12 +199,91 @@ async def test_episodic_demotion_transitions_and_emits_event(deps: DemotionDeps)
 
 
 # Concept
-@pytest.mark.skip(
-    reason="deferred to issue #218: use last_reinforced_epoch in demotion scroll filter; "
-    "field exists on SynthesizedConcept, demotion currently proxies via updated_epoch"
-)
-def test_concept_demotion_selects_by_last_reinforced() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_concept_demotion_selects_by_last_reinforced(deps: DemotionDeps) -> None:
+    # Concept was created long ago BUT reinforced recently. It should NOT
+    # demote — the `updated_epoch`-based proxy would have (any write ticks
+    # updated_epoch); the `last_reinforced_epoch` filter gets it right.
+    from musubi.planes.concept.plane import _point_id as cp_id
+
+    now = utc_now()
+    c = SynthesizedConcept(
+        object_id=generate_ksuid(),
+        namespace="eric/shared/concept",
+        title="Recently reinforced",
+        content="C",
+        synthesis_rationale="R",
+        created_at=now - timedelta(days=100),
+        updated_at=now - timedelta(days=100),
+        merged_from=[generate_ksuid() for _ in range(3)],
+    )
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+    )
+
+    # Backdate created/updated to 100 days ago, but set last_reinforced
+    # to 5 days ago (well inside the 30-day no-reinforce window).
+    old_epoch = epoch_of(now) - 100 * 24 * 3600
+    recent_epoch = epoch_of(now) - 5 * 24 * 3600
+    deps.qdrant.set_payload(
+        collection_name="musubi_concept",
+        payload={
+            "created_epoch": old_epoch,
+            "updated_epoch": old_epoch,
+            "last_reinforced_epoch": recent_epoch,
+        },
+        points=[cp_id(str(c.object_id))],
+    )
+
+    count = await demotion_concept(deps)
+    assert count == 0
+
+    after = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert after is not None and after.state == "matured"
+
+
+@pytest.mark.asyncio
+async def test_concept_demotion_selects_when_never_reinforced_and_stale(
+    deps: DemotionDeps,
+) -> None:
+    # Concept that was never reinforced: last_reinforced_epoch is null,
+    # so we fall back to created_epoch. If the concept is old enough by
+    # that measure, it demotes.
+    from musubi.planes.concept.plane import _point_id as cp_id
+
+    now = utc_now()
+    c = SynthesizedConcept(
+        object_id=generate_ksuid(),
+        namespace="eric/shared/concept",
+        title="Never reinforced",
+        content="C",
+        synthesis_rationale="R",
+        created_at=now - timedelta(days=40),
+        updated_at=now - timedelta(days=40),
+        merged_from=[generate_ksuid() for _ in range(3)],
+    )
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+    )
+
+    old_epoch = epoch_of(now) - 40 * 24 * 3600
+    deps.qdrant.set_payload(
+        collection_name="musubi_concept",
+        payload={
+            "created_epoch": old_epoch,
+            "updated_epoch": old_epoch,
+            # last_reinforced_epoch deliberately absent / null
+        },
+        points=[cp_id(str(c.object_id))],
+    )
+
+    count = await demotion_concept(deps)
+    assert count == 1
+
+    after = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert after is not None and after.state == "demoted"
 
 
 @pytest.mark.asyncio
@@ -232,12 +311,46 @@ async def test_concept_demotion_emits_ops_thought(deps: DemotionDeps) -> None:
     assert cast(Any, deps.thoughts).calls[0][0] == "ops-alerts"
 
 
-@pytest.mark.skip(
-    reason="deferred to issue #218: use last_reinforced_epoch in demotion scroll filter; "
-    "field exists on SynthesizedConcept, demotion currently proxies via updated_epoch"
-)
-def test_concept_reinforcement_resets_demotion_clock() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_concept_reinforcement_resets_demotion_clock(deps: DemotionDeps) -> None:
+    # Concept was old + unreinforced; then gets reinforced. The reinforce
+    # call must stamp `last_reinforced_epoch` so the next sweep skips it.
+    from musubi.planes.concept.plane import _point_id as cp_id
+
+    now = utc_now()
+    c = SynthesizedConcept(
+        object_id=generate_ksuid(),
+        namespace="eric/shared/concept",
+        title="Stale then reinforced",
+        content="C",
+        synthesis_rationale="R",
+        created_at=now - timedelta(days=40),
+        updated_at=now - timedelta(days=40),
+        merged_from=[generate_ksuid() for _ in range(3)],
+    )
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+    )
+
+    old_epoch = epoch_of(now) - 40 * 24 * 3600
+    deps.qdrant.set_payload(
+        collection_name="musubi_concept",
+        payload={"created_epoch": old_epoch, "updated_epoch": old_epoch},
+        points=[cp_id(str(c.object_id))],
+    )
+
+    # Reinforce bumps count AND stamps last_reinforced_at/epoch to now.
+    reinforced = await deps.concept_plane.reinforce(namespace=c.namespace, object_id=c.object_id)
+    assert reinforced.last_reinforced_at is not None
+    assert reinforced.last_reinforced_epoch is not None
+
+    # Sweep sees a fresh last_reinforced_epoch; shouldn't demote.
+    count = await demotion_concept(deps)
+    assert count == 0
+
+    after = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert after is not None and after.state == "matured"
 
 
 # Artifact
@@ -274,12 +387,58 @@ async def test_reinstate_moves_back_to_matured(deps: DemotionDeps) -> None:
     assert p and p.state == "matured"
 
 
-@pytest.mark.skip(
-    reason="deferred to issue #218: use last_reinforced_epoch in demotion scroll filter; "
-    "field exists on SynthesizedConcept, demotion currently proxies via updated_epoch"
-)
-def test_reinstate_resets_reinforced_clock() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_reinstate_resets_reinforced_clock(deps: DemotionDeps) -> None:
+    # Concept demoted by stale last_reinforced_epoch gets reinstated; the
+    # reinstate path must stamp a fresh last_reinforced so the next sweep
+    # doesn't immediately re-demote it.
+    from musubi.planes.concept.plane import _point_id as cp_id
+
+    now = utc_now()
+    c = SynthesizedConcept(
+        object_id=generate_ksuid(),
+        namespace="eric/shared/concept",
+        title="Reinstated",
+        content="C",
+        synthesis_rationale="R",
+        created_at=now - timedelta(days=40),
+        updated_at=now - timedelta(days=40),
+        merged_from=[generate_ksuid() for _ in range(3)],
+    )
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+    )
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="demoted",
+        actor="sys",
+        reason="stale",
+    )
+
+    # Simulate the state that caused demotion in the first place: old
+    # last_reinforced_epoch sitting below the 30-day cutoff.
+    old_epoch = epoch_of(now) - 40 * 24 * 3600
+    deps.qdrant.set_payload(
+        collection_name="musubi_concept",
+        payload={
+            "created_epoch": old_epoch,
+            "updated_epoch": old_epoch,
+            "last_reinforced_epoch": old_epoch,
+        },
+        points=[cp_id(str(c.object_id))],
+    )
+
+    await reinstate(deps, c.namespace, str(c.object_id), "operator override")
+
+    after = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert after is not None
+    assert after.state == "matured"
+    assert after.last_reinforced_epoch is not None
+    # Fresh clock — well within the 30-day no-reinforce window.
+    cutoff = epoch_of(now) - 30 * 24 * 3600
+    assert after.last_reinforced_epoch > cutoff
 
 
 @pytest.mark.skip(reason="event emitted via transition method")

@@ -173,12 +173,12 @@ def test_gate_blocks_on_active_contradiction() -> None:
     assert not _is_eligible(_concept(contradicts=[generate_ksuid()]), now_epoch)
 
 
-@pytest.mark.skip(
-    reason="deferred to issue #217: wire promotion_attempts gate + increment logic; "
-    "field exists on SynthesizedConcept, gate is commented out + nothing increments it"
-)
 def test_gate_blocks_after_3_attempts() -> None:
-    pass
+    now_epoch = epoch_of(utc_now())
+    assert _is_eligible(_concept(promotion_attempts=0), now_epoch)
+    assert _is_eligible(_concept(promotion_attempts=2), now_epoch)
+    assert not _is_eligible(_concept(promotion_attempts=3), now_epoch)
+    assert not _is_eligible(_concept(promotion_attempts=5), now_epoch)
 
 
 def test_gate_skips_already_promoted() -> None:
@@ -210,12 +210,27 @@ def test_rendering_retry_corrective_prompt() -> None:
 
 
 # Path:
-@pytest.mark.skip(
-    reason="deferred to issue #217: drop stale getattr fallback + use concept.topics directly; "
-    "topics field exists on SynthesizedConcept"
-)
 def test_path_derived_from_topic_and_title() -> None:
-    pass
+    # Primary topic comes from `topics` when populated.
+    path = compute_path(_concept(title="My Title", topics=["gpu-notes"]))
+    assert "gpu-notes" in path
+    assert "my-title" in path
+    assert path.endswith(".md")
+
+
+def test_path_falls_back_to_linked_to_topics_when_topics_empty() -> None:
+    # `linked_to_topics` fills in when synthesis didn't populate `topics`
+    # (older concepts, edge cases). Exercises the topic-hint unification
+    # fallback (see issue #217 discussion).
+    path = compute_path(_concept(topics=[], linked_to_topics=["fallback-topic"]))
+    assert "fallback-topic" in path
+
+
+def test_path_uses_misc_when_both_topic_sources_empty() -> None:
+    # Neither topics nor linked_to_topics — file under _misc so a real
+    # synthesis gap is visible on disk rather than silently disappearing.
+    path = compute_path(_concept(topics=[], linked_to_topics=[]))
+    assert "_misc" in path
 
 
 @pytest.mark.asyncio
@@ -456,20 +471,83 @@ async def test_thought_emitted_to_ops_alerts(deps: Any) -> None:
 
 
 # Failure:
-@pytest.mark.skip(
-    reason="deferred to issue #217: wire promotion_attempts gate + increment logic; "
-    "field exists on SynthesizedConcept, gate is commented out + nothing increments it"
-)
-def test_promotion_rejected_after_3_attempts_stops_retrying() -> None:
-    pass
+class _AlwaysFailingLLM:
+    """LLM that raises on every render — drives the rejection path."""
+
+    async def render_curated_markdown(
+        self, title: str, content: str, rationale: str, top_memories: list[str]
+    ) -> PromotionRender:
+        raise RuntimeError("LLM render failed")
 
 
-@pytest.mark.skip(
-    reason="deferred to issue #217: wire promotion_attempts gate + increment logic; "
-    "field exists on SynthesizedConcept, gate is commented out + nothing increments it"
-)
-def test_rendering_failure_increments_attempts_not_promotes() -> None:
-    pass
+@pytest.mark.asyncio
+async def test_rendering_failure_increments_attempts_not_promotes(deps: Any) -> None:
+    from dataclasses import replace
+
+    from musubi.lifecycle.promotion import run_promotion_sweep
+
+    failing_deps = replace(deps, llm=_AlwaysFailingLLM())
+    c = _concept()
+    await failing_deps.concept_plane.create(c)
+    await failing_deps.concept_plane.transition(
+        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+    )
+    _set_old(failing_deps, "concept", str(c.object_id))
+
+    promoted_count = await run_promotion_sweep(failing_deps)
+    assert promoted_count == 0
+
+    after = await failing_deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert after is not None
+    # Render failure took the rejection path, which bumps attempts.
+    assert after.promotion_attempts == 1
+    # Rejection fields set, not promotion fields.
+    assert after.promotion_rejected_at is not None
+    assert after.promotion_rejected_reason is not None
+    assert after.promoted_to is None
+
+
+@pytest.mark.asyncio
+async def test_promotion_rejected_after_3_attempts_stops_retrying(deps: Any) -> None:
+    from dataclasses import replace
+
+    from musubi.lifecycle.promotion import run_promotion_sweep
+
+    failing_deps = replace(deps, llm=_AlwaysFailingLLM())
+    c = _concept()
+    await failing_deps.concept_plane.create(c)
+    await failing_deps.concept_plane.transition(
+        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+    )
+    _set_old(failing_deps, "concept", str(c.object_id))
+
+    # Three sweeps, three rejections.
+    for _ in range(3):
+        await run_promotion_sweep(failing_deps)
+
+    after = await failing_deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert after is not None
+    assert after.promotion_attempts == 3
+
+    # Fourth sweep — gate + scroll filter should both exclude this concept,
+    # so the LLM never gets called again.
+    class _CountingFailLLM:
+        calls = 0
+
+        async def render_curated_markdown(
+            self, title: str, content: str, rationale: str, top_memories: list[str]
+        ) -> PromotionRender:
+            _CountingFailLLM.calls += 1
+            raise RuntimeError("LLM render failed")
+
+    counting_deps = replace(failing_deps, llm=_CountingFailLLM())
+    await run_promotion_sweep(counting_deps)
+    assert _CountingFailLLM.calls == 0
+
+    # attempts count didn't go up — the concept was never loaded.
+    final = await counting_deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert final is not None
+    assert final.promotion_attempts == 3
 
 
 # Concurrency:
