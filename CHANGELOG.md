@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.6.0](https://github.com/ericmey/musubi/compare/v0.5.1...v0.6.0) (2026-04-24)
+
+
+### Features
+
+* **api:** implement Last-Event-ID replay on /v1/thoughts/stream ([#238](https://github.com/ericmey/musubi/issues/238)) ([f718116](https://github.com/ericmey/musubi/commit/f718116c18b70223af5408f10884d29ffc0af634))
+* **api:** promote `title` to top-level on RetrieveResultRow (breaking) ([#236](https://github.com/ericmey/musubi/issues/236)) ([5e79151](https://github.com/ericmey/musubi/commit/5e79151f176879e452f112fa78762aa85bc26b5b))
+* **api:** rename endpoints to plane-aligned paths (breaking, v1.0) ([#237](https://github.com/ericmey/musubi/issues/237)) ([ea16b3d](https://github.com/ericmey/musubi/commit/ea16b3d477feee32e4f9bc61f11d0306a9a050d7))
+* **cli:** operator CLI for promote force / reject ([#227](https://github.com/ericmey/musubi/issues/227)) ([b928739](https://github.com/ericmey/musubi/commit/b928739edb9785dc6599a0bccc6dbc0c8a4f0247))
+* **lifecycle:** artifact archival sweep (opt-in) + slice-ops-storage ([#226](https://github.com/ericmey/musubi/issues/226)) ([50f0c59](https://github.com/ericmey/musubi/commit/50f0c5947da683e19372f99068be35d3bab19f39))
+* **vault:** event rate limit + indexing concurrency cap ([#229](https://github.com/ericmey/musubi/issues/229)) ([6950422](https://github.com/ericmey/musubi/commit/6950422c89715360cad437db16dbde0be74fb9d5))
+* **vault:** skip-with-warning for binary + oversize files in sync layer ([#228](https://github.com/ericmey/musubi/issues/228)) ([4cf436d](https://github.com/ericmey/musubi/commit/4cf436d4fa7e2180827f4b3b14b0666b3f4a4816))
+
+
+### Bug Fixes
+
+* **ci:** release-please tag push must use a PAT, not GITHUB_TOKEN ([#215](https://github.com/ericmey/musubi/issues/215)) ([a775581](https://github.com/ericmey/musubi/commit/a775581df12e7bba4534ec8c95d27dce8ade69a4))
+* **lifecycle:** wire promotion_attempts gate + last_reinforced_at reinforce clock ([#225](https://github.com/ericmey/musubi/issues/225)) ([58eea81](https://github.com/ericmey/musubi/commit/58eea812f17fe2e0beca41d892728a6bad93b2bd))
+
+
+### Documentation
+
+* **interfaces:** v1.0 alignment — scope table, cross-plane retrieve, adapter rewrites ([#234](https://github.com/ericmey/musubi/issues/234)) ([6c035f4](https://github.com/ericmey/musubi/commit/6c035f4350add8aea87cdad39130cdd63a4da6f3))
+
 ## [0.5.1](https://github.com/ericmey/musubi/compare/v0.5.0...v0.5.1) (2026-04-23)
 
 
