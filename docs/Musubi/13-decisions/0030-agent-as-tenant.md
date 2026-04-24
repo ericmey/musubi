@@ -99,4 +99,4 @@ Executed as part of the v1.0 cutover:
 - [[03-system-design/namespaces]] — updated to reflect the new convention.
 - [[10-security/auth]] — scope examples updated.
 - [[07-interfaces/canonical-api]] / [[07-interfaces/sdk]] / [[07-interfaces/mcp-adapter]] — example namespaces refreshed.
-- ADR [[0028-retrieve-2seg-namespace-crossplane]] — 2-seg retrieve still works unchanged; the tenant slot just contains an agent name now.
+- ADR [[13-decisions/0028-retrieve-2seg-namespace-crossplane]] — 2-seg retrieve still works unchanged; the tenant slot just contains an agent name now.
