@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/ericmey/musubi/compare/v0.6.1...v0.7.0) (2026-04-24)
+
+
+### Features
+
+* **ci:** auto-enable auto-merge on release-please PRs ([#245](https://github.com/ericmey/musubi/issues/245)) ([774f5e7](https://github.com/ericmey/musubi/commit/774f5e7f8682cef71c2e5dbe5717450dd62495bb))
+
 ## [0.6.1](https://github.com/ericmey/musubi/compare/v0.6.0...v0.6.1) (2026-04-24)
 
 
