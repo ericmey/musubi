@@ -541,6 +541,69 @@ def test_concrete_3seg_namespace_passes_through_expansion_unchanged(
     assert expanded == [(concrete_ns, plane)]
 
 
+def test_retrieve_state_filter_default_omitted_preserves_v1_0_behaviour(
+    client: TestClient, episodic: EpisodicPlane, api_settings: object
+) -> None:
+    """`state_filter` field is optional; when omitted, the orchestrator
+    falls back to its existing default (`('matured', 'promoted')`).
+    Locks that omission still resolves to the same query body as
+    before this field existed (no surprise behaviour for v1.1.0
+    callers upgrading to v1.2.0)."""
+    from tests.api.conftest import mint_token
+
+    async def _seed() -> None:
+        m = EpisodicMemory(namespace="nyla/voice/episodic", content="matured-row")
+        saved = await episodic.create(m)
+        await episodic.transition(
+            namespace="nyla/voice/episodic",
+            object_id=saved.object_id,
+            to_state="matured",
+            actor="seed",
+            reason="seed",
+        )
+
+    asyncio.run(_seed())
+
+    token = mint_token(api_settings, scopes=["nyla/*/*:r"], presence="nyla/voice")  # type: ignore[arg-type]
+    # No state_filter in body — should still 200 and return the matured row.
+    r = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"namespace": "nyla/*/episodic", "query_text": "matured", "mode": "fast", "limit": 5},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_retrieve_with_state_filter_provisional_surfaces_fresh_rows(
+    client: TestClient, episodic: EpisodicPlane, api_settings: object
+) -> None:
+    """Caller passes `state_filter=['provisional', 'matured', 'promoted']`
+    to opt into fresh-save visibility. Necessary for cross-channel recall
+    of deliberate `memory_store` calls before the maturation cron runs."""
+    from tests.api.conftest import mint_token
+
+    async def _seed_provisional() -> None:
+        await episodic.create(EpisodicMemory(namespace="nyla/voice/episodic", content="fresh"))
+
+    asyncio.run(_seed_provisional())
+
+    token = mint_token(api_settings, scopes=["nyla/*/*:r"], presence="nyla/voice")  # type: ignore[arg-type]
+    r = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "namespace": "nyla/*/episodic",
+            "query_text": "fresh",
+            "mode": "fast",
+            "limit": 5,
+            "state_filter": ["provisional", "matured", "promoted"],
+        },
+    )
+    assert r.status_code == 200, r.text
+    rows = r.json()["results"]
+    assert any(row["content"] == "fresh" for row in rows), rows
+
+
 def test_every_result_namespace_satisfies_the_pattern(
     client: TestClient, episodic: EpisodicPlane, api_settings: object
 ) -> None:

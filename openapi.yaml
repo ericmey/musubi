@@ -2293,6 +2293,20 @@ components:
           type: boolean
           title: Include Archived
           default: false
+        state_filter:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: State Filter
+          description: |
+            Lifecycle states to include. `null` resolves to
+            `('matured', 'promoted')` — the v1.0/v1.1 default. Set to
+            `['provisional', 'matured', 'promoted']` for explicit recall
+            of fresh deliberate stores before maturation has run.
+            `include_archived: true` is a separate axis for archive-side
+            states (`demoted`, `archived`, `superseded`).
       type: object
       required:
       - namespace
