@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/ericmey/musubi/compare/v1.1.0...v1.2.0) (2026-04-25)
+
+
+### Features
+
+* **api:** expose state_filter on POST /v1/retrieve body ([#271](https://github.com/ericmey/musubi/issues/271)) ([e34fffe](https://github.com/ericmey/musubi/commit/e34fffe4f6bffafd575d52d954a8d995c08171e1))
+
 ## [1.1.0](https://github.com/ericmey/musubi/compare/v1.0.0...v1.1.0) (2026-04-24)
 
 
