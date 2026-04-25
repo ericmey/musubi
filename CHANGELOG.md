@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/ericmey/musubi/compare/v1.2.2...v1.2.3) (2026-04-25)
+
+
+### Documentation
+
+* **roadmap:** add public docs wiki backlog ([#281](https://github.com/ericmey/musubi/issues/281)) ([288b952](https://github.com/ericmey/musubi/commit/288b9520601d5d97db304d846de6a02136ac0a35))
+
 ## [1.2.2](https://github.com/ericmey/musubi/compare/v1.2.1...v1.2.2) (2026-04-25)
 
 
