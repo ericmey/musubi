@@ -4,7 +4,7 @@ section: 12-roadmap
 tags: [index, roadmap, section/roadmap, status/complete, type/roadmap]
 type: roadmap
 status: complete
-updated: 2026-04-17
+updated: 2026-04-25
 up: "[[00-index/index]]"
 reviewed: false
 ---
@@ -15,6 +15,7 @@ Where Musubi is headed after v1. Timelines are loose — this is a thinking road
 ## Docs in this section
 
 - [[12-roadmap/next-up]] — rolling 2-week plan; what's worth building next and in what order.
+- [[12-roadmap/public-docs-wiki]] — backlog for building a complete public documentation / wiki surface.
 - [[12-roadmap/phased-plan]] — v1 → v2 → v3 direction with bullets per phase.
 - [[12-roadmap/ownership-matrix]] — who owns which module + what "ownership" means in a one-person shop.
 - [[12-roadmap/status]] — current state of v1 phases, what's in flight, what's next.
