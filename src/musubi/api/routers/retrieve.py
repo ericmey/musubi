@@ -82,8 +82,11 @@ class RetrieveQuery(BaseModel):
             "`['provisional', 'matured', 'promoted']` for explicit recall "
             "where you want fresh deliberate `memory_store` rows visible "
             "before they age through the maturation cron. "
-            "`include_archived: true` is a separate axis that adds the "
-            "archive-side states (`demoted`, `archived`, `superseded`)."
+            "Note: in `mode='fast'`, `include_archived: true` augments the "
+            "default by adding `('demoted', 'archived', 'superseded')`. "
+            "In `mode='deep'` and `mode='blended'`, `include_archived` is "
+            "currently ignored — pass `state_filter` explicitly when those "
+            "modes need archive-side states."
         ),
     )
 
