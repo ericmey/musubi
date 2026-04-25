@@ -14,6 +14,7 @@ Where Musubi is headed after v1. Timelines are loose — this is a thinking road
 
 ## Docs in this section
 
+- [[12-roadmap/next-up]] — rolling 2-week plan; what's worth building next and in what order.
 - [[12-roadmap/phased-plan]] — v1 → v2 → v3 direction with bullets per phase.
 - [[12-roadmap/ownership-matrix]] — who owns which module + what "ownership" means in a one-person shop.
 - [[12-roadmap/status]] — current state of v1 phases, what's in flight, what's next.
