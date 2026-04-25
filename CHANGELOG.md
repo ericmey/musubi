@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/ericmey/musubi/compare/v1.2.0...v1.2.1) (2026-04-25)
+
+
+### Documentation
+
+* **api:** clarify include_archived mode-scope, harden state_filter test ([#274](https://github.com/ericmey/musubi/issues/274)) ([8c1b1db](https://github.com/ericmey/musubi/commit/8c1b1dbeb66575e96cd404dc66c93407c7fb73b0))
+
 ## [1.2.0](https://github.com/ericmey/musubi/compare/v1.1.0...v1.2.0) (2026-04-25)
 
 
