@@ -38,7 +38,7 @@ musubi_core_port: 8100
 # For what's in a given version, see CHANGELOG.md (authoritative)
 # rather than a comment here — version-specific notes rot; the
 # changelog is the source of truth.
-musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:30a28054bb33578993b2d6ba3678cd590efb79b6ce081b96cc830c55efda9f0b"
+musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:21d7a93548541d1ea5a1d56b2d118c50a4b90fe3eee0b564fe6dad57ec8e2944"
 musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
 # compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),
