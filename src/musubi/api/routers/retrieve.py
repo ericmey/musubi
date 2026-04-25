@@ -73,6 +73,19 @@ class RetrieveQuery(BaseModel):
     limit: int = 10
     planes: list[str] | None = None
     include_archived: bool = False
+    state_filter: list[str] | None = Field(
+        default=None,
+        description=(
+            "Lifecycle states to include. Default `null` resolves to "
+            "`('matured', 'promoted')` — same as before this field existed, "
+            "so existing callers see no behaviour change. Set to "
+            "`['provisional', 'matured', 'promoted']` for explicit recall "
+            "where you want fresh deliberate `memory_store` rows visible "
+            "before they age through the maturation cron. "
+            "`include_archived: true` is a separate axis that adds the "
+            "archive-side states (`demoted`, `archived`, `superseded`)."
+        ),
+    )
 
 
 # orchestration.RetrievalError.kind → (HTTP status, typed error code).
@@ -328,6 +341,8 @@ async def retrieve(
         "include_archived": body.include_archived,
         "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
     }
+    if body.state_filter is not None:
+        query_body["state_filter"] = body.state_filter
 
     orchestration_result = await run_orchestration_retrieve(
         client=qdrant,
