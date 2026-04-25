@@ -162,7 +162,13 @@ Per agent:
 
 ### PL.5 — Public wiki / installation docs
 
-**Repo:** `musubi/` (likely `docs/wiki/` or GitHub Pages). The README is a good pitch but "I want to install this for my own homelab" → terse runbook → ???. Need: end-to-end install guide, troubleshooting, common configs.
+**Repo:** `musubi/`. Expanded backlog lives at [[12-roadmap/public-docs-wiki]].
+
+The README is a good pitch, and the vault has strong architecture material, but the project still lacks a true public documentation product for evaluators, self-hosters, adapter builders, and contributors. The goal is a complete user-facing docs surface: clear landing pages, install guides, tutorials, API / SDK reference, troubleshooting, and trust / contributor pages.
+
+**Recommended publishing model:** repo-owned markdown as the source of truth, GitHub Wiki as the published surface, generated API reference from `openapi.yaml`, architecture notes in the vault linked as deeper background rather than copied wholesale.
+
+**DoD:** the backlog in [[12-roadmap/public-docs-wiki]] is seeded, linked from the roadmap, and ready to execute phase-by-phase.
 
 ### PL.6 — Thought leadership posts
 

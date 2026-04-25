@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.3](https://github.com/ericmey/musubi/compare/v1.2.2...v1.2.3) (2026-04-25)
+
+
+### Documentation
+
+* **roadmap:** add public docs wiki backlog ([#281](https://github.com/ericmey/musubi/issues/281)) ([288b952](https://github.com/ericmey/musubi/commit/288b9520601d5d97db304d846de6a02136ac0a35))
+
+## [1.2.2](https://github.com/ericmey/musubi/compare/v1.2.1...v1.2.2) (2026-04-25)
+
+
+### Documentation
+
+* **roadmap:** add next-up.md — rolling 2-week plan post-v1.2 ([#277](https://github.com/ericmey/musubi/issues/277)) ([88f1e20](https://github.com/ericmey/musubi/commit/88f1e202fbe60e00999aa8c2547b8a4616336a2f))
+
 ## [1.2.1](https://github.com/ericmey/musubi/compare/v1.2.0...v1.2.1) (2026-04-25)
 
 
