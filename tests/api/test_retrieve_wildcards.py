@@ -546,13 +546,13 @@ def test_retrieve_state_filter_default_omitted_preserves_v1_0_behaviour(
 ) -> None:
     """`state_filter` field is optional; when omitted, the orchestrator
     falls back to its existing default (`('matured', 'promoted')`).
-    Locks that omission still resolves to the same query body as
-    before this field existed (no surprise behaviour for v1.1.0
-    callers upgrading to v1.2.0)."""
+    Locks that omission still surfaces matured rows AND that the
+    response is well-formed (object_id, namespace, score on every row
+    regardless of state-filter path)."""
     from tests.api.conftest import mint_token
 
     async def _seed() -> None:
-        m = EpisodicMemory(namespace="nyla/voice/episodic", content="matured-row")
+        m = EpisodicMemory(namespace="nyla/voice/episodic", content="matured-row content")
         saved = await episodic.create(m)
         await episodic.transition(
             namespace="nyla/voice/episodic",
@@ -572,6 +572,16 @@ def test_retrieve_state_filter_default_omitted_preserves_v1_0_behaviour(
         json={"namespace": "nyla/*/episodic", "query_text": "matured", "mode": "fast", "limit": 5},
     )
     assert r.status_code == 200, r.text
+    rows = r.json()["results"]
+    # The matured row is visible under the default state filter.
+    assert any(row["content"] == "matured-row content" for row in rows), rows
+    # Response shape: every row carries object_id + concrete 3-seg
+    # namespace + numeric score. Wire shape is the same as v1.1.0.
+    for row in rows:
+        assert isinstance(row.get("object_id"), str) and len(row["object_id"]) == 27
+        assert "*" not in row["namespace"]
+        assert row["namespace"].count("/") == 2
+        assert isinstance(row.get("score"), int | float)
 
 
 def test_retrieve_with_state_filter_provisional_surfaces_fresh_rows(

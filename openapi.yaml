@@ -2305,8 +2305,11 @@ components:
             `('matured', 'promoted')` — the v1.0/v1.1 default. Set to
             `['provisional', 'matured', 'promoted']` for explicit recall
             of fresh deliberate stores before maturation has run.
-            `include_archived: true` is a separate axis for archive-side
-            states (`demoted`, `archived`, `superseded`).
+            In `mode='fast'`, `include_archived: true` augments the default
+            with `('demoted', 'archived', 'superseded')`. In `mode='deep'`
+            and `mode='blended'` `include_archived` is currently ignored —
+            pass `state_filter` explicitly when those modes need
+            archive-side states.
       type: object
       required:
       - namespace
