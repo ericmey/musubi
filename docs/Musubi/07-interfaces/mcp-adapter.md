@@ -30,44 +30,33 @@ Same core logic; different MCP server bootstrap.
 
 ## Tools exposed
 
-We expose the subset of Musubi that makes sense for a coding agent. Not everything.
+The MCP adapter exposes the **canonical agent-tools surface** ([[07-interfaces/agent-tools]]) — five tools, identical names + parameter shapes across every adapter, backed by [[13-decisions/0032-agent-tools-canonical-surface]].
 
-**Implementation status:** the current adapter (`src/musubi/adapters/mcp/tools.py`) registers `memory_capture` + `memory_recall` — enough for the v1.0 cut. The rest of the tables below is the **designed** MCP surface; unchecked rows are tracked in `[[_slices/slice-adapter-mcp]]` as follow-up work, not v1.0 scope.
+| Canonical tool | Status | Musubi call |
+|---|---|---|
+| `musubi_recent` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.retrieve(mode="recent")` (depends on [[_slices/slice-retrieve-recent]]) |
+| `musubi_search` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.retrieve(mode="deep")` |
+| `musubi_get` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.{plane}.get()` |
+| `musubi_remember` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.episodic.capture()` |
+| `musubi_think` | tracked in [[_slices/slice-mcp-canonical-tools]] | `client.thoughts.send()` |
 
-### Memory
+**Implementation status (April 2026):** the current adapter (`src/musubi/adapters/mcp/tools.py`) registers only `memory_capture` + `memory_recall` — pre-canonical names from the v1.0 cut. ADR 0032 supersedes those; the canonical surface lands via [[_slices/slice-mcp-canonical-tools]], which keeps `memory_capture` + `memory_recall` as deprecated aliases for one minor release before removal.
 
-| Tool | Status | Musubi call | Notes |
-|---|---|---|---|
-| `memory_capture` | shipped | `client.episodic.capture()` | Capture a new episodic observation. |
-| `memory_recall` | shipped | `client.retrieve(mode="fast")` | Retrieve for just-in-time context. |
-| `memory_recent` | planned | Filtered retrieve | Recent items in a namespace. |
-| `memory_forget` | planned | Raw `DELETE /v1/episodic/{id}` (SDK method TBD) | Soft-archive. No `client.episodic.archive()` on the SDK yet. |
-| `memory_reflect` | planned | Filtered retrieve + aggregation | Returns counts by tag/topic (no LLM). |
+### Granular plane tools (optional, not required by the canonical surface)
 
-### Curated
+The MCP adapter MAY expose finer-grained per-plane tools for power-use scenarios that the agent-level surface doesn't cover. These are **optional** and tracked in [[_slices/slice-adapter-mcp]] as follow-up work — not v1.0 scope, not required for canonical conformance.
 
 | Tool | Musubi call | Notes |
 |---|---|---|
-| `curated_search` | Retrieve with `planes=["curated"]` | |
-| `curated_get` | `client.curated.get(id)` | Full body on demand. |
 | `curated_link_topics` | (future) | Bulk re-tag. Post-v1. |
-
-### Thoughts
-
-| Tool | Musubi call | Notes |
-|---|---|---|
-| `thought_send` | `client.thoughts.send()` | |
-| `thought_check` | `client.thoughts.check()` | |
-| `thought_read` | `client.thoughts.read()` | |
-| `thought_history` | `client.thoughts.history()` | |
-
-### Artifacts
-
-| Tool | Musubi call | Notes |
-|---|---|---|
+| `thought_check` | `client.thoughts.check()` | Inbox poll, agent-side polling pattern. |
+| `thought_history` | `client.thoughts.history()` | Backfill on `X-Musubi-Replay-Truncated`. |
 | `artifact_upload` | `client.artifacts.upload()` | File stays in memory on MCP side; streamed. |
-| `artifact_get` | `client.artifacts.get()` | |
-| `artifact_chunks` | `client.artifacts.chunks()` | |
+| `artifact_chunks` | `client.artifacts.chunks()` | Direct chunk access for large artifacts. |
+| `memory_forget` | Raw `DELETE /v1/episodic/{id}` (SDK method TBD) | Soft-archive. Power-use only. |
+| `memory_reflect` | Filtered retrieve + aggregation | Returns counts by tag/topic (no LLM). |
+
+`musubi_get` covers single-object retrieval across every plane (curated, concept, episodic, artifact) — no separate `curated_get` / `artifact_get` needed at the agent layer.
 
 ### Not exposed via MCP
 
@@ -78,12 +67,16 @@ We expose the subset of Musubi that makes sense for a coding agent. Not everythi
 
 This restriction is important — an agent should not be able to delete a curated file, reject a concept, or reconcile the vault. Read + write-new + soft-delete is the appropriate scope.
 
-## Tool definitions (snippet)
+## Tool definitions
+
+Canonical tool input/output schemas live in [[07-interfaces/agent-tools]]. The MCP adapter renders each schema into MCP `inputSchema` form — JSON-schema-flavored — at registration time. Tool descriptions adapt the canonical text for an MCP audience but never rename the tool or change its parameter names.
+
+The legacy snippet below is the v1.0 `memory_capture` shape, kept here only as a reference for the deprecation alias path. Once aliases drop after one minor release, this block goes too.
 
 ```json
 {
   "name": "memory_capture",
-  "description": "Capture a new episodic memory observation in Musubi.",
+  "description": "[DEPRECATED] Use musubi_remember. Capture a new episodic memory observation in Musubi.",
   "inputSchema": {
     "type": "object",
     "required": ["content", "namespace"],
@@ -94,19 +87,9 @@ This restriction is important — an agent should not be able to delete a curate
       "topics": {"type": "array", "items": {"type": "string"}},
       "importance": {"type": "integer", "minimum": 1, "maximum": 10}
     }
-  },
-  "outputSchema": {
-    "type": "object",
-    "properties": {
-      "object_id": {"type": "string"},
-      "state": {"type": "string"},
-      "dedup": {"type": ["object", "null"]}
-    }
   }
 }
 ```
-
-Tool definitions mirror the canonical API shapes — they're auto-generated from the pydantic models (see `musubi-mcp-adapter/codegen/`).
 
 ## Resources
 
