@@ -101,10 +101,15 @@ class _ClientStub:
     """Mimics the surface of `AsyncMusubiClient` the MCP adapter uses."""
 
     def __init__(self) -> None:
+        # Mirror the real `AsyncMusubiClient` accessor names exactly:
+        # singular `episodic`/`curated`, plural `concepts`/`artifacts`
+        # (matching the canonical-API path prefixes). Stub names
+        # diverging from real names was the trap behind the original
+        # PLANE_ATTR pluralization bug — keep them locked in step.
         self.episodic = _PlaneStub(name="episodic")
         self.curated = _PlaneStub(name="curated")
-        self.concept = _PlaneStub(name="concept")
-        self.artifact = _PlaneStub(name="artifact")
+        self.concepts = _PlaneStub(name="concepts")
+        self.artifacts = _PlaneStub(name="artifacts")
         self.thoughts = _ThoughtsStub()
         self._retrieve_calls: list[dict[str, Any]] = []
         self._retrieve_response: dict[str, Any] = {"results": []}
@@ -257,8 +262,8 @@ async def test_get_round_trip_episodic() -> None:
 async def test_get_routes_each_plane_to_its_stub() -> None:
     mcp, client = _make_server()
     client.curated.store["cur-1"] = {"object_id": "cur-1", "content": "curated body"}
-    client.concept.store["con-1"] = {"object_id": "con-1", "content": "concept body"}
-    client.artifact.store["art-1"] = {"object_id": "art-1", "content": "artifact body"}
+    client.concepts.store["con-1"] = {"object_id": "con-1", "content": "concept body"}
+    client.artifacts.store["art-1"] = {"object_id": "art-1", "content": "artifact body"}
 
     for plane, oid, expected in [
         ("curated", "cur-1", "curated body"),
@@ -442,3 +447,39 @@ def test_attach_tools_registers_all_canonical_plus_aliases() -> None:
     # Two deprecation aliases for one minor release
     for name in ("memory_capture", "memory_recall"):
         assert name in tools, f"deprecated alias {name!r} missing"
+
+
+def test_plane_attr_map_targets_match_real_sdk_accessors() -> None:
+    """Regression test for the original PLANE_ATTR bug.
+
+    The Python SDK uses singular `episodic`/`curated` and plural
+    `concepts`/`artifacts`. An earlier draft had the map's *values*
+    in singular form (`"concept"`/`"artifact"`), which passed every
+    stub-based test but would `AttributeError` against the real
+    `AsyncMusubiClient` in production. Lock the map's values to the
+    real SDK class's attributes so this can't regress.
+    """
+    from musubi.adapters.mcp.tools import _PLANE_ATTR
+    from musubi.sdk.async_client import AsyncMusubiClient
+
+    # Construct a real client to introspect — base_url + token are
+    # required by the constructor but no I/O happens at __init__.
+    client = AsyncMusubiClient(base_url="https://musubi.test", token="t")
+    try:
+        for plane, attr in _PLANE_ATTR.items():
+            assert hasattr(client, attr), (
+                f"_PLANE_ATTR maps {plane!r} → {attr!r}, but AsyncMusubiClient "
+                f"has no such attribute. The SDK uses singular `episodic`/`curated` "
+                f"and plural `concepts`/`artifacts`."
+            )
+    finally:
+        # AsyncMusubiClient holds an httpx.AsyncClient — close it so the
+        # test doesn't trigger an "unclosed resource" warning under
+        # asyncio strict mode.
+        import asyncio
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(client.close())
+        finally:
+            loop.close()

@@ -38,12 +38,17 @@ logger = logging.getLogger(__name__)
 _MCP_MODALITY_TAG = "src:mcp-agent-remember"
 
 #: Plane → SDK accessor mapping for ``musubi_get``. Hard-coded so the
-#: agent never has to know the canonical-API pluralization rule.
+#: agent never has to know the canonical-API pluralization rule. Note:
+#: the SDK uses singular ``episodic``/``curated`` and plural
+#: ``concepts``/``artifacts`` (matching the canonical-API path prefixes
+#: ``/v1/episodic``, ``/v1/curated``, ``/v1/concepts``, ``/v1/artifacts``).
+#: Single source of truth for that mapping per
+#: [[07-interfaces/agent-tools#musubi_get]].
 _PLANE_ATTR: dict[str, str] = {
     "curated": "curated",
-    "concept": "concept",
+    "concept": "concepts",
     "episodic": "episodic",
-    "artifact": "artifact",
+    "artifact": "artifacts",
 }
 
 
