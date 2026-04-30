@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
-VAULT = ROOT / "docs" / "architecture"
+VAULT = ROOT / "docs" / "Musubi"
 TESTS_DIR = ROOT / "tests"
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
