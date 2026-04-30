@@ -3,10 +3,11 @@ title: "Slice: OpenClaw plugin — canonical agent tools"
 slice_id: slice-openclaw-canonical-tools
 section: _slices
 type: slice
-status: blocked
+status: done
+owner: aoi-claude-opus
 phase: "8 Post-1.0"
-tags: [section/slices, status/blocked, type/slice, adapter, openclaw, agent-tools]
-updated: 2026-04-29
+tags: [section/slices, status/done, type/slice, adapter, openclaw, agent-tools]
+updated: 2026-04-30
 reviewed: false
 depends-on: ["[[_slices/slice-retrieve-recent]]"]
 blocks: []
@@ -16,7 +17,7 @@ blocks: []
 
 > Bring the openclaw-musubi plugin onto the canonical agent-tools surface. Add `musubi_recent`, alias `musubi_recall` → `musubi_search` for one release, drop the alias afterward. `musubi_get` already lands in `openclaw-musubi#24`.
 
-**Phase:** 8 Post-1.0 · **Status:** `blocked` (on [[_slices/slice-retrieve-recent]] for full canonical surface; MAY pick up early with the documented fallback path for `musubi_recent`)
+**Phase:** 8 Post-1.0 · **Status:** `done` (shipped via openclaw-musubi PRs #24 + #26 on 2026-04-30; `musubi_recent` ships with the GET /v1/episodic fallback path until [[_slices/slice-retrieve-recent]] lands the cross-channel `mode=recent`) · **Owner:** `aoi-claude-opus`
 
 ## Implementation lives in a sibling repo
 
