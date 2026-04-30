@@ -1,6 +1,6 @@
 [project]
 name = "musubi"
-version = "1.2.3"
+version = "1.2.4"
 description = "Shared memory + knowledge plane for a small-team AI agent fleet. See the Obsidian architecture vault for design."
 requires-python = ">=3.12"
 authors = [{ name = "Eric Mey", email = "ericmey@gmail.com" }]

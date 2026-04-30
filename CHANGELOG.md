@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.4](https://github.com/ericmey/musubi/compare/v1.2.3...v1.2.4) (2026-04-30)
+
+
+### Documentation
+
+* **interfaces:** canonical agent-tools surface + ADR 0032 ([#289](https://github.com/ericmey/musubi/issues/289)) ([1529764](https://github.com/ericmey/musubi/commit/1529764bf3940cfb65279836e3e69d878ffb0ecb))
+
 ## [1.2.3](https://github.com/ericmey/musubi/compare/v1.2.2...v1.2.3) (2026-04-25)
 
 
