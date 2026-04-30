@@ -19,10 +19,9 @@ import logging
 from typing import Any
 
 import pytest
-
-from musubi.adapters.mcp.tools import attach_tools
 from mcp.server.fastmcp import FastMCP
 
+from musubi.adapters.mcp.tools import attach_tools
 
 # --------------------------------------------------------------------------
 # Fakes
@@ -59,9 +58,13 @@ class _PlaneStub:
 
     async def get(self, *, namespace: str, object_id: str) -> dict[str, Any]:
         if object_id not in self.store:
-            from musubi.sdk.exceptions import MusubiError
+            from musubi.sdk.exceptions import NotFound
 
-            raise MusubiError(f"not found: {object_id} in {namespace}")
+            raise NotFound(
+                code="NOT_FOUND",
+                detail=f"not found: {object_id} in {namespace}",
+                status_code=404,
+            )
         return self.store[object_id]
 
 
@@ -142,8 +145,8 @@ def _invoke(mcp: FastMCP, name: str, **kwargs: Any) -> Any:
     keyed by name (private impl detail). We dig in rather than going
     through the JSON-RPC transport for these unit tests.
     """
-    tool_manager = mcp._tool_manager  # noqa: SLF001 — test access
-    tool = tool_manager._tools[name]  # noqa: SLF001
+    tool_manager = mcp._tool_manager
+    tool = tool_manager._tools[name]
     return tool.fn(**kwargs)
 
 
@@ -426,7 +429,7 @@ async def test_memory_recall_alias_forwards_to_search_and_logs_deprecation(
 
 def test_attach_tools_registers_all_canonical_plus_aliases() -> None:
     mcp, _ = _make_server()
-    tools = mcp._tool_manager._tools  # noqa: SLF001
+    tools = mcp._tool_manager._tools
     # Five canonical tools per [[07-interfaces/agent-tools]]
     for name in (
         "musubi_recent",
