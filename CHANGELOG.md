@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/ericmey/musubi/compare/v1.2.4...v1.3.0) (2026-04-30)
+
+
+### Features
+
+* **adapters/mcp:** slice-mcp-canonical-tools — canonical 5-tool surface ([#292](https://github.com/ericmey/musubi/issues/292)) ([e1dec86](https://github.com/ericmey/musubi/commit/e1dec867ddfb6712db02d1eedd66cc2cd9b4f9f7))
+
 ## [1.2.4](https://github.com/ericmey/musubi/compare/v1.2.3...v1.2.4) (2026-04-30)
 
 
