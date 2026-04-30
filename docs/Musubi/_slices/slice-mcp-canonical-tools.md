@@ -3,9 +3,10 @@ title: "Slice: MCP adapter — canonical agent tools"
 slice_id: slice-mcp-canonical-tools
 section: _slices
 type: slice
-status: blocked
+status: in-progress
+owner: aoi-claude-opus
 phase: "8 Post-1.0"
-tags: [section/slices, status/blocked, type/slice, adapter, mcp, agent-tools]
+tags: [section/slices, status/in-progress, type/slice, adapter, mcp, agent-tools]
 updated: 2026-04-29
 reviewed: false
 depends-on: ["[[_slices/slice-adapter-mcp]]", "[[_slices/slice-retrieve-recent]]"]
@@ -16,7 +17,7 @@ blocks: []
 
 > Implement the canonical agent-tools surface in `src/musubi/adapters/mcp/`. Five tools — `musubi_recent`, `musubi_search`, `musubi_get`, `musubi_remember`, `musubi_think` — replacing the v1.0 `memory_capture` / `memory_recall`. Includes registering the MCP server with Claude Code so coding agents have the tools.
 
-**Phase:** 8 Post-1.0 · **Status:** `blocked` (on [[_slices/slice-retrieve-recent]] for full canonical surface; MAY pick up early with the documented fallback path for `musubi_recent`)
+**Phase:** 8 Post-1.0 · **Status:** `in-progress` (claimed early per the documented fallback path; full cross-modal `musubi_recent` lands when [[_slices/slice-retrieve-recent]] ships) · **Owner:** `aoi-claude-opus`
 
 ## Why this slice exists
 
