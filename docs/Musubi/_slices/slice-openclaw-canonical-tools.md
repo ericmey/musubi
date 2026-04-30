@@ -36,7 +36,7 @@ Per [[13-decisions/0032-agent-tools-canonical-surface]] the canonical search too
 - `src/tools/recent.ts` (new) — canonical `musubi_recent`
 - `src/tools/search.ts` (new) — canonical `musubi_search` body; `recall.ts` becomes a deprecation alias that delegates here
 - `src/tools/parameters.ts` — add `RecentParameters`, `SearchParameters`; keep `RecallParameters` for the alias
-- `src/plugin/bootstrap.ts` — register the canonical four (recall stays for one release as alias)
+- `src/plugin/bootstrap.ts` — register the canonical five (`musubi_search`, `musubi_recent`, `musubi_get`, `musubi_remember`, `musubi_think`); `musubi_recall` stays for one release as a deprecation alias
 - `tests/tools/*.test.ts` — contract suite cases per spec
 - `tests/plugin/bootstrap.test.ts` — update tool-count + registration order
 

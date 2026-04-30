@@ -22,10 +22,10 @@ The decision behind this spec is captured in [[13-decisions/0032-agent-tools-can
 
 | Tool | Purpose | Cross-modal by default? |
 |---|---|---|
-| `musubi_recent` | "What's recent in my world?" — recency-ordered, no query | yes |
-| `musubi_search` | "Have I seen X before?" — hybrid + rerank semantic search | yes |
+| `musubi_recent` | "What's recent in my world?" — recency-ordered, no query | yes (cross-channel) |
+| `musubi_search` | "Have I seen X before?" — hybrid + rerank semantic search | yes (cross-channel) |
 | `musubi_get` | "Tell me more about that one" — fetch a single object's full content by id | n/a (caller-specified) |
-| `musubi_remember` | "Save this" — explicit episodic capture | no (writes to caller's presence) |
+| `musubi_remember` | "Save this" — explicit episodic capture | no (writes to the calling agent's own channel) |
 | `musubi_think` | "Tell my other self" — presence-to-presence message | n/a (caller specifies recipient) |
 
 Adapters MAY also expose lower-level granular tools (per-plane `curated_get`, `thought_history`, etc.) where the surface needs them — but the five above are required and use exactly the names below.
@@ -42,30 +42,30 @@ Adapters MAY also expose lower-level granular tools (per-plane `curated_get`, `t
 
 ### `musubi_recent`
 
-Recent activity in the calling presence's scope. No query. Default scope is **cross-modal** — fans out across every modality the presence has touched (`<tenant>/*/episodic` per [[13-decisions/0031-retrieve-wildcard-namespace]]).
+Recent activity in the calling agent's scope. No query. Default scope is **cross-channel** — fans out across every channel/modality the agent has touched (`<agent>/*/episodic` per [[13-decisions/0030-agent-as-tenant]] + [[13-decisions/0031-retrieve-wildcard-namespace]]).
 
 **Parameters**
 
 | Name | Type | Required | Default | Notes |
 |---|---|---|---|---|
 | `limit` | integer | no | 10 | 1–50. Max results to return. |
-| `scope` | enum | no | `cross_modal` | `cross_modal` (`<tenant>/*/episodic`), `presence` (`<tenant>/<presence>/episodic`), `current_modality` (`<tenant>/<presence>/<this-modality>/episodic` if the adapter knows its modality, else falls back to `presence`). |
+| `scope` | enum | no | `cross_channel` | `cross_channel` (`<agent>/*/episodic` — every channel the agent has captured to), `current_channel` (`<agent>/<channel>/episodic` — only the calling adapter's channel). Channels per ADR 0030: `voice`, `discord`, `openclaw`, etc. |
 | `since` | ISO-8601 timestamp | no | none | Inclusive lower bound. Absent = "newest items, ignoring time." |
 | `tags` | array of strings | no | none | Filter to rows whose `tags` contains every listed tag. |
 
-**SDK call**: `client.retrieve(namespace=<scope-resolved>, mode="recent", limit=…, since=…, tags=…)` — depends on backend `mode=recent` (see `[[_slices/slice-retrieve-recent]]`). Until that lands, adapters MAY implement a fallback via `client.list_episodic(...)` paginated; the fallback's behavior must match the contract (recency-ordered) and is documented in the adapter spec.
+**SDK call**: the canonical landing is `client.retrieve(namespace=<scope-resolved>, mode="recent", limit=…)` once `mode=recent` ships (see [[_slices/slice-retrieve-recent]]). The exact request shape — including how `since` and `tags` are wired (top-level vs. inside a `filters` object) — is defined by that slice; the agent-facing parameter names above are stable, the over-the-wire mapping is the slice author's call. Until `mode=recent` lands, adapters MAY paginate `GET /v1/episodic?namespace=…&limit=…` and sort client-side by event timestamp; the fallback is documented per adapter and is presence-scoped only (cross-channel needs the wildcards primitive).
 
 **Response shape**
 
 ```
 Recent activity ({scope_label}, last {N}):
 
-[{modality}] {created_at} — {one-line content}
-[{modality}] {created_at} — {one-line content}
+[{channel}] {event_at} — {one-line content}
+[{channel}] {event_at} — {one-line content}
 …
 ```
 
-`{modality}` comes from the row's namespace (segment 2 of `tenant/presence/<modality>/...` if 4-segment; otherwise the presence segment). Empty result returns `No recent activity in {scope_label}.`
+`{channel}` is segment 2 of the row's stored namespace (`<agent>/<channel>/<plane>` — channel = the modality the row was captured on). Empty result returns `No recent activity in {scope_label}.`
 
 **Errors**: backend unavailable → `Couldn't reach memory right now — continuing without it.` (degraded — agent continues).
 
@@ -80,7 +80,7 @@ Hybrid + rerank semantic search across one or more planes. Default scope is **cr
 | `query` | string | yes | — | Natural-language query. Min 1 char. |
 | `limit` | integer | no | 5 | 1–20. |
 | `planes` | array of enum | no | `["episodic", "curated", "concept"]` | Subset of `curated`, `concept`, `episodic`, `artifact`. |
-| `scope` | enum | no | `cross_modal` | Same options as `musubi_recent.scope`. |
+| `scope` | enum | no | `cross_channel` | Same options as `musubi_recent.scope`. |
 
 **SDK call**: `client.retrieve(namespace=<scope-resolved>, query_text=query, mode="deep", planes=…, limit=…)`. Implementations fan out per-plane when needed, dedup by `object_id`, sort by score, slice to `limit`.
 
@@ -114,7 +114,14 @@ Fetch one object's full content + metadata by id. Companion to `musubi_search` �
 | `namespace` | string | yes | — | The namespace from a `musubi_search` row. |
 | `object_id` | string | yes | — | The object id from a `musubi_search` row. |
 
-**SDK call**: `client.{plane}.get(namespace=…, object_id=…)`. Plane → endpoint mapping is hard-coded per [[07-interfaces/canonical-api]] (`/v1/curated/{id}`, `/v1/concepts/{id}`, `/v1/episodic/{id}`, `/v1/artifacts/{id}`).
+**SDK call**: explicit plane → SDK accessor + endpoint mapping below. The Python SDK uses singular accessors for `episodic` and `curated`, plural for `concepts` and `artifacts` (matching the canonical-API path prefixes). Adapter implementations hard-code this mapping so the agent never deals with the pluralization rule:
+
+| Tool param `plane` | Python SDK accessor | API path |
+|---|---|---|
+| `curated` | `client.curated.get()` | `GET /v1/curated/{id}` |
+| `concept` | `client.concepts.get()` | `GET /v1/concepts/{id}` |
+| `episodic` | `client.episodic.get()` | `GET /v1/episodic/{id}` |
+| `artifact` | `client.artifacts.get()` | `GET /v1/artifacts/{id}` |
 
 **Response shape**
 
@@ -145,7 +152,7 @@ Explicit episodic capture into the caller's presence. Higher importance than the
 | `topics` | array of strings | no | `[]` | Topic tags for later filtering. |
 | `idempotency_key` | string | no | auto-generated | Override only when the agent has a stable client-side id. |
 
-**SDK call**: `client.episodic.capture(namespace=<presence>/episodic, content=…, importance=…, tags=topics+[<adapter-tag>], idempotency_key=…)`. Adapters MUST add their own modality tag to `tags` (e.g. `src:openclaw-agent-remember`, `src:livekit-voice-remember`) so a downstream `musubi_recent --tags=src:livekit-voice-remember` can filter to a specific modality.
+**SDK call**: `client.episodic.capture(namespace="<agent>/<channel>/episodic", content=…, importance=…, tags=…, idempotency_key=…)`. The canonical `CaptureRequest` body has no separate `topics` field — the adapter folds the agent-supplied `topics` array into `tags`, then appends the required modality tag (`src:openclaw-agent-remember`, `src:livekit-voice-remember`, `src:mcp-agent-remember`) so a downstream `musubi_recent --tags=src:livekit-voice-remember` can filter to a specific channel. Namespace is the calling agent's 3-segment episodic namespace (`<agent>/<channel>/episodic`) per [[13-decisions/0030-agent-as-tenant]].
 
 **Response shape**: `Remembered in Musubi episodic ({namespace}) — id {object_id}.`
 
@@ -159,12 +166,12 @@ Presence-to-presence message. The agent saying "tell my other self that X" — a
 
 | Name | Type | Required | Default | Notes |
 |---|---|---|---|---|
-| `to_presence` | string | yes | — | Recipient. Either the canonical `<owner>/<presence>` form or a short alias the adapter resolves (e.g. `aoi` → `eric/aoi`). `all` broadcasts. |
+| `to_presence` | string | yes | — | Recipient. Either the canonical `<agent>/<channel>` form (e.g. `aoi/voice`, `nyla/discord`) or a bare `<agent>` alias the adapter resolves to its default channel. `all` broadcasts. |
 | `content` | string | yes | — | Min 1 char. |
 | `channel` | string | no | `default` | Channel within the recipient's inbox. Use `scheduler` for time-boxed reminders. |
 | `importance` | integer | no | 5 | 1–10. Priority hint. |
 
-**SDK call**: `client.thoughts.send(namespace=<sender>/thought, from_presence=…, to_presence=…, content=…, channel=…, importance=…)`.
+**SDK call**: `client.thoughts.send(namespace="<sender-agent>/<sender-channel>/thought", from_presence=…, to_presence=…, content=…, channel=…, importance=…)`. Namespace is the sender's 3-segment thought namespace per [[13-decisions/0030-agent-as-tenant]].
 
 **Response shape**: `Sent to {to_presence}. (id={object_id})`
 
@@ -174,14 +181,15 @@ Presence-to-presence message. The agent saying "tell my other self that X" — a
 
 ### Presence resolution
 
-Every tool resolves the calling presence the same way: from the adapter's runtime context (OpenClaw `agentId`, LiveKit `AgentConfig`, MCP `session_key` once supported). The presence resolver maps that to `<owner>/<presence>` and the conventional namespaces:
+Every tool resolves the calling agent + channel the same way: from the adapter's runtime context (OpenClaw `agentId`, LiveKit `AgentConfig`, MCP session context). The resolver maps that to a 3-segment namespace per [[13-decisions/0030-agent-as-tenant]]:
 
-- `<owner>/<presence>/episodic` for episodic reads/writes
-- `<owner>/<presence>/thought` for thought sends
-- `<owner>/<presence>/artifact` for artifacts
-- `<owner>/_shared/curated` and `<owner>/_shared/concept` for shared knowledge reads (also `<owner>/<presence>/curated` for presence-specific curated, when present)
+- `<agent>/<channel>/episodic` for episodic reads/writes
+- `<agent>/<channel>/thought` for thought sends
+- `<agent>/<channel>/artifact` for artifacts
+- `<agent>/<channel>/curated` for the agent's own curated notes
+- Cross-channel reads use the 2-seg or wildcard form: `<agent>/<channel>` (cross-plane) or `<agent>/*/episodic` (cross-channel within an agent)
 
-Adapters fail loud (presence-resolution error → tool error) rather than silently using a default namespace.
+Where channels are the v1.0 set: `voice`, `discord`, `openclaw`, with more added as integrations land. Adapters fail loud (presence-resolution error → tool error) rather than silently using a default namespace.
 
 ### Modality tagging
 
@@ -196,11 +204,11 @@ Every `musubi_remember` capture carries a `src:<adapter>-<verb>` tag so `musubi_
 
 The capture mirror's tag is per-modality; this is how `musubi_recent --tags=src:openclaw-capture-mirror` finds passive captures from a specific surface.
 
-### Cross-modal default
+### Cross-channel default
 
-`musubi_recent` and `musubi_search` default to the wildcard tenant scope (`<tenant>/*/episodic`) so an agent on the phone says "what was I just working on?" and gets answers from every modality, not just phone history. Per-modality narrowing is opt-in via `scope=current_modality` or `scope=presence`.
+`musubi_recent` and `musubi_search` default to the wildcard channel scope (`<agent>/*/episodic`) so an agent on the phone (voice channel) says "what was I just working on?" and gets answers from every channel that agent has captured to (voice + discord + openclaw + …), not just voice history. Per-channel narrowing is opt-in via `scope=current_channel`.
 
-This is the load-bearing behavioral choice: cross-modality is the *expected* default for an agent that exists across modalities. Restricting scope is the deliberate exception.
+This is the load-bearing behavioral choice: cross-channel continuity is the *expected* default for an agent that exists across channels. Restricting scope is the deliberate exception.
 
 ### Aliases during deprecation
 
@@ -222,10 +230,10 @@ Concretely:
 
 Every adapter runs the canonical agent-tools contract suite (extends [[07-interfaces/contract-tests]]). A reference implementation lives in `tests/contract/agent_tools/` once shipped. Required cases (one per tool unless noted):
 
-- [ ] **`musubi_recent` — basic.** Capture three rows in three different modality namespaces (`<tenant>/<p>/episodic`, `<tenant>/<p2>/episodic`, …). Call `musubi_recent` with `scope=cross_modal`. All three rows surface, newest-first.
-- [ ] **`musubi_recent` — scope narrowing.** Same setup, call with `scope=presence`. Only the rows from the calling presence's namespace surface.
+- [ ] **`musubi_recent` — basic.** Capture three rows in three different channel namespaces of the same agent (`<agent>/voice/episodic`, `<agent>/discord/episodic`, `<agent>/openclaw/episodic`). Call `musubi_recent` with `scope=cross_channel`. All three rows surface, newest-first.
+- [ ] **`musubi_recent` — scope narrowing.** Same setup, call with `scope=current_channel`. Only the rows from the calling adapter's channel surface.
 - [ ] **`musubi_recent` — tag filter.** Capture rows with and without `src:adapter-foo`. Call with `tags=["src:adapter-foo"]`. Only tagged rows surface.
-- [ ] **`musubi_search` — cross-modal.** Capture a distinctive phrase in `<tenant>/<other-presence>/episodic`. Call `musubi_search` with `scope=cross_modal` and the phrase. Row surfaces.
+- [ ] **`musubi_search` — cross-channel.** Capture a distinctive phrase in `<agent>/<other-channel>/episodic`. Call `musubi_search` with `scope=cross_channel` and the phrase. Row surfaces.
 - [ ] **`musubi_search` — plane filter.** With curated and episodic both holding the query term, `planes=["episodic"]` returns only the episodic row.
 - [ ] **`musubi_get` — round-trip.** Capture a row via `musubi_remember`. Call `musubi_search` to get the id. Call `musubi_get` with that `(plane, namespace, object_id)`. Returned content matches the captured content exactly.
 - [ ] **`musubi_get` — 404.** Call with an unknown `object_id`. Tool error returned, message names the missing id and namespace.

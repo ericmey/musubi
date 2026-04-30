@@ -4,6 +4,8 @@ section: 13-decisions
 tags: [adapters, adr, agent-tools, architecture, section/decisions, status/proposed, type/adr]
 type: adr
 status: proposed
+date: 2026-04-29
+deciders: [Eric]
 updated: 2026-04-29
 up: "[[13-decisions/index]]"
 reviewed: false
