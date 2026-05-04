@@ -101,7 +101,7 @@ Deploy an OTel Collector container on musubi instead of prometheus. Its `prometh
    - Delete `deploy/grafana/`, `deploy/loki/loki.yml`, `deploy/tempo/tempo.yml`
    - Doc updates: `_slices/slice-ops-observability` (supersession note + work log entry), `09-operations/CLAUDE.md`, `08-deployment/CLAUDE.md`, `12-roadmap/next-up.md`, `_inbox/cross-slice/slice-ops-observability-slice-lifecycle-job-emit.md`
 3. **Apply via `deploy/ansible/update.yml`** with `-e changed_services='["prometheus","node-exporter"]'` per `deploy/runbooks/upgrade.md` — re-renders compose, reloads prometheus config (SIGHUP), starts node-exporter container.
-4. **Verify on shiori** that `system_*` and `musubi_*` series appear in Mimir tagged with `host=musubi` and `cluster=musubi` external labels.
+4. **Verify on shiori** that `node_*` (host metrics from node-exporter — e.g. `node_load1`, `node_cpu_seconds_total`, `node_memory_MemAvailable_bytes`) and `musubi_*` (musubi-core API metrics) series appear in Mimir tagged with `cluster=musubi` and `host=musubi` external labels. Note: shiori's own host metrics use the `system_*` naming convention because shiori uses the OTel Collector hostmetrics receiver; musubi's host metrics use `node_*` because musubi uses node-exporter scraped by prometheus. Both are valid; queries that span hosts need to use the appropriate name per source.
 5. **(Future, separate PRs, scoped to shiori-side codebase)** central dashboards for musubi service health, central alert rules, log shipping from musubi to Loki on shiori, distributed traces.
 
 ## Related
