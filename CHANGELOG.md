@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/ericmey/musubi/compare/v1.3.0...v1.3.1) (2026-05-04)
+
+
+### Documentation
+
+* **roadmap:** W1.2 pre-rank scoring — architecture + plan ([#280](https://github.com/ericmey/musubi/issues/280)) ([fcba068](https://github.com/ericmey/musubi/commit/fcba0687fb6f1b70a3ba86ada6f41c8f0990b3bb))
+
 ## [1.3.0](https://github.com/ericmey/musubi/compare/v1.2.4...v1.3.0) (2026-04-30)
 
 
