@@ -22,7 +22,10 @@ cd ~/musubi
 git pull --ff-only
 
 # Confirm the compose render will succeed with the current vars:
-ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
+ansible-playbook \
+ -i deploy/ansible/inventory.yml \
+ -e @~/.musubi-secrets/inventory-vars.yml \
+ -e @~/.musubi-secrets/vault.yml \
  deploy/ansible/update.yml --check --ask-vault-pass
 ```
 
@@ -55,7 +58,7 @@ sed -i '' \
  -E 's|^musubi_core_image: .*|musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:<paste>"|' \
  deploy/ansible/group_vars/all.yml
 git commit -am "ops: bump musubi_core_image to @sha256:<first 12 chars>"
-gh pr create --base v2 --title "ops: bump musubi_core_image"
+gh pr create --base main --title "ops: bump musubi_core_image"
 ```
 
 **Expected output:**
@@ -73,7 +76,10 @@ Single-line diff in `group_vars/all.yml`. PR greens on CI.
 **Command:**
 
 ```bash
-ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
+ansible-playbook \
+ -i deploy/ansible/inventory.yml \
+ -e @~/.musubi-secrets/inventory-vars.yml \
+ -e @~/.musubi-secrets/vault.yml \
  deploy/ansible/update.yml \
  --check --diff --ask-vault-pass
 ```
@@ -97,10 +103,16 @@ ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
 **Command:**
 
 ```bash
-ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
+ansible-playbook \
+ -i deploy/ansible/inventory.yml \
+ -e @~/.musubi-secrets/inventory-vars.yml \
+ -e @~/.musubi-secrets/vault.yml \
  deploy/ansible/update.yml --ask-vault-pass
 # Or for a multi-service bump:
-ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
+ansible-playbook \
+ -i deploy/ansible/inventory.yml \
+ -e @~/.musubi-secrets/inventory-vars.yml \
+ -e @~/.musubi-secrets/vault.yml \
  deploy/ansible/update.yml \
  -e changed_services='["core","tei-dense"]' --ask-vault-pass
 ```
@@ -161,10 +173,13 @@ git -C ~/musubi log -p -- deploy/ansible/group_vars/all.yml | head -40
 
 # Revert:
 git -C ~/musubi revert --no-edit <bump-sha>
-git -C ~/musubi push origin v2
+git -C ~/musubi push origin main
 
 # Re-run update.yml:
-ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
+ansible-playbook \
+ -i deploy/ansible/inventory.yml \
+ -e @~/.musubi-secrets/inventory-vars.yml \
+ -e @~/.musubi-secrets/vault.yml \
  deploy/ansible/update.yml --ask-vault-pass
 ```
 
