@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/ericmey/musubi/compare/v1.2.4...v1.3.0) (2026-04-30)
+
+
+### Features
+
+* **adapters/mcp:** slice-mcp-canonical-tools — canonical 5-tool surface ([#292](https://github.com/ericmey/musubi/issues/292)) ([e1dec86](https://github.com/ericmey/musubi/commit/e1dec867ddfb6712db02d1eedd66cc2cd9b4f9f7))
+
+## [1.2.4](https://github.com/ericmey/musubi/compare/v1.2.3...v1.2.4) (2026-04-30)
+
+
+### Documentation
+
+* **interfaces:** canonical agent-tools surface + ADR 0032 ([#289](https://github.com/ericmey/musubi/issues/289)) ([1529764](https://github.com/ericmey/musubi/commit/1529764bf3940cfb65279836e3e69d878ffb0ecb))
+
 ## [1.2.3](https://github.com/ericmey/musubi/compare/v1.2.2...v1.2.3) (2026-04-25)
 
 

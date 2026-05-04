@@ -16,6 +16,7 @@ How the world reaches Musubi. One canonical API at the core; one SDK that speaks
 
 - [[07-interfaces/canonical-api]] — The authoritative interface contract. All surfaces derive from this.
 - [[07-interfaces/sdk]] — The Python SDK. Adapters consume it; Musubi ships it.
+- [[07-interfaces/agent-tools]] — Canonical five-tool surface (`musubi_recent`, `musubi_search`, `musubi_get`, `musubi_remember`, `musubi_think`) every adapter exposes to its agents. Backed by [[13-decisions/0032-agent-tools-canonical-surface]].
 - [[07-interfaces/mcp-adapter]] — Maps Musubi SDK to the Model Context Protocol (OAuth 2.1 finalized June 2025). Independent repo.
 - [[07-interfaces/livekit-adapter]] — Maps Musubi SDK to LiveKit voice agents (Slow Thinker / Fast Talker). Independent repo.
 - [[07-interfaces/openclaw-adapter]] — Maps Musubi SDK to the OpenClaw browser-extension agent. Independent repo.

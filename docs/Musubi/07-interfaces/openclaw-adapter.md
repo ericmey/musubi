@@ -29,7 +29,19 @@ Every episodic event emitted by an OpenClaw agent — user messages, agent respo
 
 ### Prompt + corpus supplement
 
-On each agent turn, the plugin asks Musubi for curated + concept hits relevant to the in-flight context and blends them into the prompt as an authority-labeled supplement ("from your durable memory…"). Corpus search is available as a tool (`musubi_recall`) for explicit lookup.
+On each agent turn, the plugin asks Musubi for curated + concept hits relevant to the in-flight context and blends them into the prompt as an authority-labeled supplement ("from your durable memory…"). Explicit search and drill-into-source are available as tools — see the canonical agent-tools surface (next section).
+
+### Canonical agent tools
+
+The plugin exposes the **canonical agent-tools surface** ([[07-interfaces/agent-tools]]) — five tools shared with every other Musubi adapter (MCP, LiveKit). Per [[13-decisions/0032-agent-tools-canonical-surface]]:
+
+- `musubi_recent` — recent activity, cross-modal by default.
+- `musubi_search` — hybrid + rerank semantic search.
+- `musubi_get` — fetch one object's full content by id.
+- `musubi_remember` — explicit episodic capture.
+- `musubi_think` — presence-to-presence message.
+
+Migration tracker: openclaw-musubi PR #24 lands `musubi_get` + the alias path `musubi_recall` → `musubi_search` and adds `musubi_recent`. After one minor release, `musubi_recall` drops.
 
 ### Thoughts
 
@@ -146,7 +158,7 @@ Idempotency is **header-only** — `Idempotency-Key`. There is no `client_id` bo
 
 ## Lifecycle
 
-- **Plugin start** → validate config → resolve presences → open one SSE subscription per presence → register tools (`musubi_recall`, `musubi_remember`, `musubi_think`).
+- **Plugin start** → validate config → resolve presences → open one SSE subscription per presence → register canonical tools (`musubi_recent`, `musubi_search`, `musubi_get`, `musubi_remember`, `musubi_think`) per [[07-interfaces/agent-tools]] + the deprecated `musubi_recall` alias for one minor release.
 - **Plugin unload** → close SSE subscriptions → drain in-flight captures → release tokens. Leaking the SSE listener or the capture retry loop will keep the Node.js process alive past unload.
 - **Error taxonomy** — `401` → token invalid (re-auth); `403` → scope insufficient (surface to user, don't retry); `422` → payload invalid (bug in plugin, log + drop); `503` → backend down, honor `Retry-After`.
 

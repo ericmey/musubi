@@ -65,6 +65,7 @@ SORT file.name ASC
 - [[13-decisions/0024-kong-deferred-for-musubi-v1]] — Kong integration deferred for v1; first deploy is VLAN-internal only. 0014 remains the forward target.
 - [[13-decisions/0025-lifecycle-runner-without-apscheduler]] — Lifecycle worker ships as an asyncio tick-loop instead of pulling in APScheduler; revisit when we need persisted-jobstore or sub-minute cron semantics.
 - [[13-decisions/0026-release-please-for-versioning]] — release-please drives version bumps + tag cutting from conventional commits on `v2`; tag push triggers the signed GHCR publish.
+- [[13-decisions/0032-agent-tools-canonical-surface]] — Five-tool canonical agent surface (`musubi_recent`, `musubi_search`, `musubi_get`, `musubi_remember`, `musubi_think`) every adapter implements identically; cross-modal default for recent/search.
 - [[13-decisions/sources]] — Public sources that informed these decisions.
 - [[13-decisions/template-weights-change]] — Template ADR for retrieval scoring weight changes.
 
