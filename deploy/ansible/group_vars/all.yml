@@ -50,6 +50,11 @@ musubi_ollama_model: "qwen3:4b"
 # Prometheus: pinned to an LTS-ish minor so the scrape-config syntax
 # (see deploy/prometheus/prometheus.yml) doesn't drift under us.
 musubi_prometheus_image: "prom/prometheus:v2.54.1"
+# node-exporter: host-level metrics. Pinned to the latest stable as of
+# 2026-04-07 (per ADR 0033). The collector flag set in
+# deploy/ansible/templates/docker-compose.yml.j2 matches this version's
+# CLI surface; revisit on bump.
+musubi_node_exporter_image: "prom/node-exporter:v1.11.1"
 
 musubi_required_packages:
   - ca-certificates

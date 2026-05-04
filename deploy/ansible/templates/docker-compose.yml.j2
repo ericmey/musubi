@@ -168,6 +168,33 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  # node-exporter — host CPU / memory / disk / network / filesystem metrics.
+  # Added per ADR 0033 (centralize observability on shiori). Scraped by the
+  # local prometheus on the musubi compose bridge (`node-exporter:9100`),
+  # mirrored to shiori Mimir via prometheus's `remote_write`. Mounts host
+  # /proc, /sys, and / read-only via the standard node-exporter pattern.
+  #
+  # No `pid: host`: the bind-mounted /proc + /sys provide all the data the
+  # default collector set needs. Skipping `pid: host` keeps the container
+  # in its own PID namespace — smaller blast radius if the binary is ever
+  # compromised.
+  #
+  # No healthcheck: the prom/node-exporter image is a scratch-based binary
+  # with no shell, so docker healthchecks aren't practical. Process
+  # supervision (`restart: unless-stopped`) is the liveness mechanism.
+  node-exporter:
+    image: {{ musubi_node_exporter_image }}
+    command:
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--path.rootfs=/host/rootfs"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker)($|/)"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/host/rootfs:ro,rslave
+    restart: unless-stopped
+
   ollama:
     image: {{ musubi_ollama_image }}
     environment:

@@ -85,6 +85,33 @@ def test_external_labels_identify_host() -> None:
     assert "host" in labels, "external_labels.host missing"
 
 
+def test_remote_write_to_shiori_central() -> None:
+    """Per ADR 0033, prometheus mirrors all scraped samples to the central
+    Mimir instance on shiori. Without this block, musubi metrics never reach
+    central observability — the centralization is a runtime no-op.
+    """
+    cfg = _load(PROM_CONFIG)
+    rw = cfg.get("remote_write") or []
+    assert rw, "remote_write block missing — central observability won't receive musubi metrics"
+    urls = [entry.get("url", "") for entry in rw]
+    assert any("shiori" in url and "/api/v1/push" in url for url in urls), (
+        f"no remote_write target points at shiori's Mimir push endpoint; got {urls!r}"
+    )
+
+
+def test_scrape_targets_node_exporter() -> None:
+    """Per ADR 0033, host-level metrics are collected by node-exporter
+    sibling container, scraped on the compose bridge as `node-exporter:9100`.
+    """
+    cfg = _load(PROM_CONFIG)
+    jobs = {j["job_name"]: j for j in cfg["scrape_configs"]}
+    assert "node-exporter" in jobs, "no scrape job for node-exporter — host metrics gap"
+    targets = [t for sc in jobs["node-exporter"]["static_configs"] for t in sc["targets"]]
+    assert "node-exporter:9100" in targets, (
+        "node-exporter target must be 'node-exporter:9100' (compose service name on the bridge)"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Compose service
 # ---------------------------------------------------------------------------
@@ -98,6 +125,7 @@ def _render_compose() -> dict[str, Any]:
         "{{ musubi_tei_image }}": "example/tei:test",
         "{{ musubi_ollama_image }}": "ollama/ollama:test",
         "{{ musubi_prometheus_image }}": "prom/prometheus:test",
+        "{{ musubi_node_exporter_image }}": "prom/node-exporter:test",
         "{{ musubi_core_port }}": "8100",
         "{{ musubi_ollama_model }}": "qwen3:4b",
         "{{ vault_qdrant_api_key }}": "x",
@@ -112,6 +140,22 @@ def _render_compose() -> dict[str, Any]:
 def test_prometheus_service_exists() -> None:
     compose = _render_compose()
     assert "prometheus" in compose["services"], "no prometheus service in compose template"
+
+
+def test_node_exporter_service_exists() -> None:
+    """Per ADR 0033, node-exporter sibling container is required for the
+    host-level metrics gap closure. Compose template MUST declare it."""
+    compose = _render_compose()
+    assert "node-exporter" in compose["services"], (
+        "no node-exporter service in compose template — host metrics gap"
+    )
+    svc = compose["services"]["node-exporter"]
+    # Must mount /proc + /sys + / from the host so the binary can read kernel
+    # state. Without these mounts the container reports its own (mostly empty)
+    # /proc instead of the host's.
+    volumes_text = " ".join(svc.get("volumes", []))
+    assert "/proc:/host/proc:ro" in volumes_text, "node-exporter must bind-mount host /proc"
+    assert "/sys:/host/sys:ro" in volumes_text, "node-exporter must bind-mount host /sys"
 
 
 def test_prometheus_mounts_scrape_config_readonly() -> None:

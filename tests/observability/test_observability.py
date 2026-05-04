@@ -482,48 +482,10 @@ def test_prometheus_config_loads() -> None:
     assert "tei-dense" in job_names
 
 
-def test_loki_config_loads() -> None:
-    import yaml
-
-    cfg = yaml.safe_load((_DEPLOY / "loki" / "loki.yml").read_text())
-    assert "auth_enabled" in cfg
-
-
-def test_tempo_config_loads() -> None:
-    import yaml
-
-    cfg = yaml.safe_load((_DEPLOY / "tempo" / "tempo.yml").read_text())
-    assert "server" in cfg or "distributor" in cfg or "storage" in cfg
-
-
-def test_grafana_overview_dashboard_loads() -> None:
-    """The musubi-overview dashboard JSON parses as the spec calls out
-    the four boards explicitly."""
-    cfg = json.loads((_DEPLOY / "grafana" / "dashboards" / "musubi-overview.json").read_text())
-    assert "panels" in cfg
-    assert cfg.get("title", "").startswith("Musubi")
-
-
-def test_grafana_latency_dashboard_loads() -> None:
-    cfg = json.loads((_DEPLOY / "grafana" / "dashboards" / "musubi-latency.json").read_text())
-    assert "panels" in cfg
-
-
-def test_grafana_lifecycle_dashboard_loads() -> None:
-    cfg = json.loads((_DEPLOY / "grafana" / "dashboards" / "musubi-lifecycle.json").read_text())
-    assert "panels" in cfg
-
-
-def test_grafana_vault_dashboard_loads() -> None:
-    cfg = json.loads((_DEPLOY / "grafana" / "dashboards" / "musubi-vault.json").read_text())
-    assert "panels" in cfg
-
-
-def test_grafana_datasources_provisioning_loads() -> None:
-    import yaml
-
-    cfg = yaml.safe_load(
-        (_DEPLOY / "grafana" / "provisioning" / "datasources" / "datasources.yml").read_text()
-    )
-    names = {d["name"] for d in cfg["datasources"]}
-    assert {"Prometheus", "Loki"}.issubset(names)
+# Loki / Tempo / Grafana load-tests removed per
+# [[13-decisions/0033-centralize-observability-on-shiori]] —
+# `deploy/{loki,tempo,grafana}/` were never deployed locally and the
+# configurations were removed in the same PR. Visualization, log aggregation,
+# and trace storage are provided centrally by the shiori observability host;
+# equivalent shiori-side dashboard tests will live in the operator vault, not
+# in this repo.

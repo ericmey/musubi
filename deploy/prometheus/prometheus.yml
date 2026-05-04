@@ -1,5 +1,7 @@
-# Prometheus scrape config for the single-host Musubi deployment.
-# See [[09-operations/observability]] for the broader strategy.
+# Prometheus scrape config for the Musubi workload host.
+# See [[09-operations/observability]] for the broader strategy and
+# [[13-decisions/0033-centralize-observability-on-shiori]] for the
+# central-vs-local split.
 #
 # Rendered into `/etc/musubi/prometheus.yml` on the host by
 # `deploy/ansible/deploy.yml`, then mounted read-only at
@@ -9,22 +11,38 @@
 #     docker compose -f /etc/musubi/docker-compose.yml kill -s HUP prometheus
 #
 # Every `target` below is a compose service name — resolution happens on
-# the `musubi_default` bridge. External targets (host node-exporter when
-# that lands, etc.) use `host.docker.internal` or a fixed IP.
+# the musubi compose bridge.
+#
+# Sample flow: scrape locally → keep 30 days locally (`--storage.tsdb.retention.time=30d`)
+# AND remote_write to shiori's Mimir for central aggregation, multi-host
+# correlation, and longer-horizon visualization.
 #
 # Not yet scraped (reason in parens):
 #   - qdrant (its /metrics requires the api-key header; secret-file wiring
 #     belongs to a follow-up slice).
-#   - alertmanager + rule_files (no Alertmanager deployed yet; cutting
-#     a separate slice once notification channels are decided).
-#   - node-exporter (no host-level exporter deployed yet).
+#
+# Visualization, alerting, and trace collection live on shiori per ADR 0033.
+# Local Grafana/Loki/Tempo/Alertmanager were planned by slice-ops-observability
+# but never deployed; the `deploy/{grafana,loki,tempo}/` directories were
+# removed in the same PR as this header update.
 
 global:
   scrape_interval: 15s
   scrape_timeout: 10s
   external_labels:
     cluster: musubi
-    host: musubi.example.local
+    host: musubi
+
+# Mirror every sample to shiori's Mimir. Local TSDB still serves direct
+# PromQL queries on 127.0.0.1:9090 if shiori is unreachable.
+remote_write:
+  - url: http://shiori.mey.house:9009/api/v1/push
+    write_relabel_configs:
+      # Don't ship prometheus's own scrape-of-itself metrics — shiori has its
+      # own prometheus self-metrics; double-counting muddies correlation.
+      - source_labels: [job]
+        regex: prometheus
+        action: drop
 
 scrape_configs:
   # Musubi Core — HTTP API metrics (request counts, latency histograms,
@@ -64,7 +82,20 @@ scrape_configs:
           model: bge-reranker-v2-m3
 
   # Prometheus scrapes itself — cheap, handy for debugging "are scrapes
-  # landing at all?" without standing up a separate probe.
+  # landing at all?" without standing up a separate probe. Dropped from
+  # remote_write (see write_relabel_configs above) so shiori's central
+  # prometheus self-metrics aren't double-counted.
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  # node-exporter — host-level CPU / memory / disk / network / filesystem.
+  # Runs as a sibling container on the musubi compose bridge, mounting
+  # /proc, /sys, and / read-only from the host. Per ADR 0033, the host
+  # metrics gap is closed by node-exporter (rather than the OTel hostmetrics
+  # receiver pattern shiori uses) to avoid disturbing the working scraper.
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: node-exporter
