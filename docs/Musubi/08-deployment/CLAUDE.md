@@ -11,7 +11,7 @@ reviewed: true
 
 # Agent Rules — Deployment (08)
 
-Local rules for `deploy/ansible/`, `deploy/docker/`, `docker-compose.yml`, `Kong route config`, `deploy/grafana/`. Supplements [[CLAUDE]].
+Local rules for `deploy/ansible/`, `deploy/docker/`, `docker-compose.yml`, `Kong route config`. Supplements [[CLAUDE]]. (Per [[13-decisions/0033-centralize-observability-on-shiori]], `deploy/grafana/` was removed — visualization lives on the shiori observability host outside this repo.)
 
 ## Must
 

@@ -11,7 +11,7 @@ reviewed: true
 
 # Agent Rules — Operations (09)
 
-Local rules for `musubi/observability/`, `musubi/ops/`, `deploy/grafana/`, `deploy/loki/`, and every runbook under `09-operations/`. Supplements [[CLAUDE]].
+Local rules for `musubi/observability/`, `musubi/ops/`, `deploy/prometheus/`, and every runbook under `09-operations/`. Supplements [[CLAUDE]].
 
 ## Must
 
@@ -29,11 +29,17 @@ Local rules for `musubi/observability/`, `musubi/ops/`, `deploy/grafana/`, `depl
 
 ## Observability stack
 
-- **Metrics:** Prometheus scrape from `musubi-core:9100` + `qdrant:6333/metrics`.
-- **Logs:** structured JSON → Loki.
-- **Traces:** OpenTelemetry → Tempo (optional in v1, required by v1.5).
-- **Dashboards:** Grafana; committed to `deploy/grafana/dashboards/`.
-- **Alerts:** Grafana + Alertmanager → email/Pushover. Rules in `deploy/grafana/alerts/`.
+Per [[13-decisions/0033-centralize-observability-on-shiori]], visualization /
+log aggregation / trace storage / alerting all live on a dedicated
+observability host (shiori) external to this repo. Local on the musubi host:
+
+- **Metrics (local scrape):** Prometheus on the musubi compose bridge — scrapes `core:8100/v1/ops/metrics`, the three TEI services, node-exporter, and itself. Config at `deploy/prometheus/prometheus.yml`. Local TSDB retains 30 days for direct PromQL access at `127.0.0.1:9090` if shiori is unreachable.
+- **Metrics (central forward):** prometheus `remote_write` → `shiori.mey.house:9009/api/v1/push` (Mimir). Source of truth for visualization, alerting, and multi-host correlation.
+- **Host metrics:** node-exporter sidecar container; standard prom/node-exporter image, mounts /proc, /sys, / read-only.
+- **Logs:** structured JSON to stdout (still required) — central Loki ingest from musubi is a follow-up PR scoped to the shiori-side codebase.
+- **Traces:** OpenTelemetry instrumentation lands when needed; central Tempo on shiori receives them. No local trace collector planned.
+- **Dashboards:** live on shiori (`http://shiori:3000`). Musubi-specific dashboards belong in the shiori-side codebase under `wiki/services/observability/dashboards/` (operator vault), not this repo.
+- **Alerts:** central, configured against shiori Mimir/Grafana. Rule definitions live with the dashboards on the shiori side.
 
 ## Incident response
 

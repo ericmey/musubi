@@ -98,6 +98,7 @@ def _render_compose() -> dict[str, Any]:
         "{{ musubi_tei_image }}": "example/tei:test",
         "{{ musubi_ollama_image }}": "ollama/ollama:test",
         "{{ musubi_prometheus_image }}": "prom/prometheus:test",
+        "{{ musubi_node_exporter_image }}": "prom/node-exporter:test",
         "{{ musubi_core_port }}": "8100",
         "{{ musubi_ollama_model }}": "qwen3:4b",
         "{{ vault_qdrant_api_key }}": "x",

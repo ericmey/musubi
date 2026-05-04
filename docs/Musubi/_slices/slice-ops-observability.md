@@ -28,10 +28,10 @@ blocks: ["[[_slices/slice-ops-first-deploy]]", "[[_slices/slice-ops-hardening-su
 
 - `src/musubi/observability/`                        (new module — structured-log formatter, prometheus registry, OTel tracer setup)
 - `src/musubi/api/routers/ops.py`                    (parent done — extend `/ops/status` + `/ops/metrics` with real per-plane + per-dependency checks; existing skeleton was stubbed pending this slice)
-- `deploy/grafana/`                                  (new — dashboards + datasources)
-- `deploy/loki/`                                     (new — loki config + log pipeline)
+- ~~`deploy/grafana/`~~                              (planned, never built — superseded by [[13-decisions/0033-centralize-observability-on-shiori]])
+- ~~`deploy/loki/`~~                                 (planned, never built — superseded by [[13-decisions/0033-centralize-observability-on-shiori]])
 - `deploy/prometheus/`                               (new — prom config + scrape jobs)
-- `deploy/tempo/`                                    (new — tempo config for traces, if chosen)
+- ~~`deploy/tempo/`~~                                (planned, never built — superseded by [[13-decisions/0033-centralize-observability-on-shiori]])
 - `tests/observability/`                             (new — unit tests for structured-log formatter + metrics registry + ops-status wiring)
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
@@ -84,6 +84,13 @@ Agents append one entry per work session. Format:
 - `forbidden_paths` expanded from `musubi/planes/` + `musubi/api/` to the full post-monorepo list, including `openapi.yaml` (the endpoints exist; wire into them, don't reshape the contract).
 - `blocks`: removed `slice-ops-backup` (spurious — backup was done independently this session).
 - Brief path I gave VS Code said `08-deployment/observability.md`; actual spec path is `09-operations/observability.md` + `09-operations/alerts.md`. Slice file's `## Specs to implement` wikilinks were already correct; brief was wrong — noted for future render-prompt.py script (claimable.py reads specs from the slice file, so this class of error would have been auto-caught in an automated brief).
+
+### 2026-05-03 — aoi/command-chair — partial supersession by ADR 0033
+
+- The local Grafana / Loki / Tempo stack this slice planned to deploy was never actually built. Only `deploy/prometheus/` made it from the `## Owned paths` list into the production compose template; `deploy/grafana/`, `deploy/loki/`, `deploy/tempo/` existed as scaffolding but never ran.
+- A dedicated observability host (shiori) now provides the LGTM stack centrally. [[13-decisions/0033-centralize-observability-on-shiori]] formalizes the supersession: musubi keeps prometheus locally as a scraper, adds node-exporter for host metrics, and `remote_write`s everything to shiori's Mimir.
+- This work-log entry retains the slice's history; the slice is not reopened (status stays `done`). The superseded `## Owned paths` entries are struck through with a wikilink to ADR 0033 for traceability.
+- Future central-side artifacts (musubi-specific dashboards on shiori, alert routing, log shipping) are out of this slice's scope per ADR 0033 — they belong to follow-up slices/PRs scoped to the shiori-side codebase.
 
 ## Cross-slice tickets opened by this slice
 

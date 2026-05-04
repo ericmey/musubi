@@ -66,9 +66,14 @@ finally:
     _DURATION.labels(job=<name>).observe(time.monotonic() - start)
 ```
 
-The dashboard (`deploy/grafana/dashboards/musubi-lifecycle.json`) +
-the email alert `lifecycle_job_failing` already query these metric
-names — they just won't show data until the workers emit.
+The lifecycle dashboard + the email alert `lifecycle_job_failing`
+were originally planned at `deploy/grafana/dashboards/musubi-lifecycle.json`
+and `deploy/grafana/alerts/`. Per [[13-decisions/0033-centralize-observability-on-shiori]]
+those local artifacts were removed; future versions live on the shiori
+central observability host (`wiki/services/observability/dashboards/` in the
+operator's vault). The metric *names* this ticket cares about
+(`musubi_lifecycle_job_*` once emitted) are unchanged — the dashboard that
+queries them just lives elsewhere now.
 
 ## Acceptance
 

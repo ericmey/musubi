@@ -106,20 +106,22 @@ LLM-side change, not new hardcoded greeting strings. The instruction-template ju
 
 **DoD:** One command (`musubi-cli lifecycle journal --since 48h` or similar) that gives you a chronological view of overnight sweeps without opening sqlite3.
 
-### W2.2 — Ops dashboard (Grafana on existing Prometheus)
+### W2.2 — Ops dashboard on shiori (central observability)
 
-**Repo:** `musubi/` (probably under `deploy/grafana/` template). **Estimate:** 1 day. **Depends on:** Prometheus scraping (already deployed).
+**Repo:** the operator's shiori-side codebase (`wiki/services/observability/dashboards/`), NOT `musubi/`. **Estimate:** 1 day. **Depends on:** Prometheus scraping (already deployed) + shiori central stack (deployed 2026-05-03) + ADR 0033 (musubi `remote_write` to shiori Mimir).
 
-Grafana stack pointed at `musubi-prometheus`. First-pass panels:
+> *Updated 2026-05-03 per [[13-decisions/0033-centralize-observability-on-shiori]]: this dashboard lives on the central shiori observability host, not on the musubi workload host. The previously-planned `deploy/grafana/` template was removed.*
+
+Grafana on shiori, pointed at the central Mimir datasource (which receives musubi's prometheus via `remote_write`). First-pass panels (same content as before):
 
 - Lifecycle sweep durations + last-fired-at per sweep
 - Qdrant collection point counts (per plane)
 - Retrieve p95/p99 (overall + by mode)
 - Error rates per endpoint
 - Embedding + LLM latency (TEI dense / sparse / reranker / Ollama)
-- Disk + RSS on the workload host
+- Disk + RSS on the workload host (now via node-exporter, see ADR 0033)
 
-**DoD:** A single Grafana dashboard URL bookmarkable, gives you "is the system healthy" at a glance.
+**DoD:** A single Grafana dashboard URL on `shiori:3000` bookmarkable, filtered by `host=musubi`, gives "is musubi healthy" at a glance.
 
 ### W2.3 — Rin-as-watchdog
 
