@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+#
+# musubi-deploy — friendlier wrapper around the musubi ansible playbook.
+#
+# Default: dry-run (--check --diff).  Pass --apply to do the real thing.
+#
+# Usage:
+#   musubi-deploy <service[,service...]>           # dry-run
+#   musubi-deploy --apply <service[,service...]>   # real
+#   musubi-deploy --apply core,tei-dense           # multiple services
+#   musubi-deploy --help
+#
+# Env / paths assumed:
+#   This script must be run from the musubi repo root, OR set
+#   $MUSUBI_REPO to point at the checkout. Defaults to $PWD.
+#
+#   $MUSUBI_SECRETS_DIR overrides the secrets dir.
+#   Defaults to ~/.musubi-secrets/.
+#
+#   $ANSIBLE_VAULT_PASSWORD_FILE — if set and readable, the wrapper
+#   uses --vault-password-file instead of prompting via --ask-vault-pass.
+#   Useful for headless / CI invocations.
+#
+# Exit codes:
+#   0  success
+#   1  bad usage
+#   2  missing inputs (repo, secrets, etc.)
+#   anything else — ansible-playbook's exit code
+
+set -euo pipefail
+
+MUSUBI_REPO="${MUSUBI_REPO:-$PWD}"
+MUSUBI_SECRETS_DIR="${MUSUBI_SECRETS_DIR:-$HOME/.musubi-secrets}"
+
+usage() {
+  sed -n '/^# musubi-deploy/,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+die() {
+  echo "musubi-deploy: $*" >&2
+  exit "${2:-1}"
+}
+
+apply=false
+services=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --apply)
+      apply=true
+      shift
+      ;;
+    --help | -h)
+      usage 0
+      ;;
+    --*)
+      die "unknown flag: $1" 1
+      ;;
+    *)
+      if [[ -n "$services" ]]; then
+        die "only one service list allowed (use comma-separated: a,b,c)" 1
+      fi
+      services="$1"
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$services" ]] || { usage 1 ; }
+
+# Build the JSON list ansible expects: ["a", "b", ...]
+services_json="[$(echo "$services" | awk -F, '{
+  for (i = 1; i <= NF; i++) {
+    printf "%s\"%s\"", (i > 1 ? ", " : ""), $i
+  }
+}')]"
+
+# Sanity-check inputs.
+playbook="$MUSUBI_REPO/deploy/ansible/update.yml"
+inventory="$MUSUBI_REPO/deploy/ansible/inventory.yml"
+inv_vars="$MUSUBI_SECRETS_DIR/inventory-vars.yml"
+vault="$MUSUBI_SECRETS_DIR/vault.yml"
+
+[[ -f "$playbook" ]]  || die "playbook not found at $playbook (set MUSUBI_REPO?)" 2
+[[ -f "$inventory" ]] || die "inventory not found at $inventory" 2
+[[ -f "$inv_vars" ]]  || die "inventory-vars not found at $inv_vars (set MUSUBI_SECRETS_DIR?)" 2
+[[ -f "$vault" ]]     || die "vault file not found at $vault" 2
+
+# Compose the command.
+cmd=(
+  ansible-playbook
+  -i "$inventory"
+  -e "@$inv_vars"
+  -e "@$vault"
+  "$playbook"
+  -e "changed_services=$services_json"
+)
+
+# Vault password: prefer file over interactive prompt when available.
+if [[ -n "${ANSIBLE_VAULT_PASSWORD_FILE:-}" && -r "$ANSIBLE_VAULT_PASSWORD_FILE" ]]; then
+  cmd+=( --vault-password-file "$ANSIBLE_VAULT_PASSWORD_FILE" )
+else
+  cmd+=( --ask-vault-pass )
+fi
+
+if ! $apply; then
+  cmd+=(--check --diff)
+  echo "musubi-deploy: DRY RUN (--check --diff). Pass --apply to execute."
+else
+  echo "musubi-deploy: APPLY mode. Services: $services"
+  read -r -p "Confirm apply to musubi (y/N)? " response
+  case "$response" in
+    [yY] | [yY][eE][sS])
+      ;;
+    *)
+      echo "Aborted."
+      exit 0
+      ;;
+  esac
+fi
+
+echo "+ ${cmd[*]}"
+exec "${cmd[@]}"
