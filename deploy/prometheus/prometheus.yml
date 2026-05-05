@@ -30,8 +30,9 @@ global:
   scrape_interval: 15s
   scrape_timeout: 10s
   external_labels:
-    cluster: musubi
-    host: musubi
+    deployment_environment: harem-world
+    host_name: musubi
+    service_namespace: musubi
 
 # Mirror every sample to shiori's Mimir. Local TSDB still serves direct
 # PromQL queries on 127.0.0.1:9090 if shiori is unreachable.
@@ -43,6 +44,11 @@ remote_write:
       - source_labels: [job]
         regex: prometheus
         action: drop
+      # Promote `job` → `service_name` so musubi-emitted series match the
+      # OTel convention used by openclaw/livekit/shiori. See [[wiki/services/observability/integration-baseline#F3.1]].
+      - source_labels: [job]
+        target_label: service_name
+        action: replace
 
 scrape_configs:
   # Musubi Core — HTTP API metrics (request counts, latency histograms,
@@ -52,8 +58,6 @@ scrape_configs:
     metrics_path: /v1/ops/metrics
     static_configs:
       - targets: ["core:8100"]
-        labels:
-          service: core
 
   # TEI — each embedder/reranker exposes its own /metrics on port 80
   # (batch latency, queue depth, GPU utilisation).
@@ -62,7 +66,6 @@ scrape_configs:
     static_configs:
       - targets: ["tei-dense:80"]
         labels:
-          service: tei-dense
           model: bge-m3
 
   - job_name: tei-sparse
@@ -70,7 +73,6 @@ scrape_configs:
     static_configs:
       - targets: ["tei-sparse:80"]
         labels:
-          service: tei-sparse
           model: splade-v3
 
   - job_name: tei-reranker
@@ -78,7 +80,6 @@ scrape_configs:
     static_configs:
       - targets: ["tei-reranker:80"]
         labels:
-          service: tei-reranker
           model: bge-reranker-v2-m3
 
   # Prometheus scrapes itself — cheap, handy for debugging "are scrapes
@@ -97,5 +98,3 @@ scrape_configs:
   - job_name: node-exporter
     static_configs:
       - targets: ["node-exporter:9100"]
-        labels:
-          service: node-exporter

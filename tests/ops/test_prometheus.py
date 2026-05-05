@@ -78,11 +78,15 @@ def test_scrape_targets_musubi_core_metrics_endpoint() -> None:
 
 
 def test_external_labels_identify_host() -> None:
-    """Every metric must carry enough metadata to be attributed to this
-    box once we have more than one musubi host."""
+    """Every metric must carry the OTel resource attributes used by the
+    rest of the fleet (openclaw, livekit, shiori) so cross-emitter queries
+    work without a label-rename layer at query time. See
+    wiki/services/observability/integration-baseline.md (F3.1)."""
     cfg = _load(PROM_CONFIG)
     labels = cfg["global"].get("external_labels") or {}
-    assert "host" in labels, "external_labels.host missing"
+    assert "host_name" in labels, "external_labels.host_name missing (OTel convention)"
+    assert "deployment_environment" in labels, "external_labels.deployment_environment missing"
+    assert "service_namespace" in labels, "external_labels.service_namespace missing"
 
 
 def test_remote_write_to_shiori_central() -> None:
