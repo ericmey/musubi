@@ -86,6 +86,19 @@ to track in the install matrix.
 
 Resolved by PR #131.
 
-## Resolution
+## 2026-05-13 follow-up
 
-Resolved by PR #131.
+This ticket fixed the SDK consumer-side path (one span per HTTP call,
+opt-in via `[otel]` extras). It did **not** also fix the server side —
+musubi-core itself never initialized a `TracerProvider`, never installed
+`FastAPIInstrumentor`, never emitted spans.
+
+The server-side gap was scoped under `slice-ops-observability`
+(see `09-operations/observability.md` § Tracing) but discovered
+unshipped on 2026-05-13. It is being completed under issue
+[#302](https://github.com/ericmey/musubi/issues/302) — debt repayment,
+not new scope.
+
+Once the server side ships, the SDK spans this ticket resolved will
+finally have something to link to: SDK span → server span → Tempo
+trace, as the original spec diagrammed.
