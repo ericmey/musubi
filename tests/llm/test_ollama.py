@@ -103,7 +103,10 @@ async def test_score_importance_posts_chat_payload(httpx_mock: HTTPXMock) -> Non
     body = json.loads(req.content)
     assert body["model"] == _MODEL
     assert body["stream"] is False
-    assert body["format"] == "json"
+    assert isinstance(body["format"], dict)
+    assert body["format"].get("type") == "object"
+    assert "items" in body["format"].get("properties", {})
+    assert "items" in body["format"].get("required", [])
     assert body["options"]["temperature"] == 0
     assert body["messages"][0]["role"] == "user"
     assert items[0].object_id in body["messages"][0]["content"]
