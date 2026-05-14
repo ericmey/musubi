@@ -141,6 +141,43 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # OpenTelemetry tracing (server-side). Per
+    # [[09-operations/observability]] § Tracing. All fields are optional
+    # and default to "off" / unset — the server runs unchanged when
+    # traces aren't wanted. Field names match the canonical OTel env
+    # vars so existing OTel docs/tools apply directly.
+    # ------------------------------------------------------------------
+    otel_exporter_otlp_endpoint: str = Field(
+        default="",
+        description="OTLP/gRPC endpoint for span export "
+        "(e.g. `http://shiori.mey.house:4317`). Empty disables tracing.",
+    )
+    otel_service_name: str = Field(
+        default="musubi-core",
+        description="Resource `service.name` attribute on emitted spans. "
+        "Aligned with the rest of the fleet so Tempo + Mimir labels match.",
+    )
+    otel_service_namespace: str = Field(
+        default="musubi",
+        description="Resource `service.namespace` attribute on emitted spans.",
+    )
+    otel_deployment_environment: str = Field(
+        default="harem-world",
+        description="Resource `deployment.environment` attribute.",
+    )
+    otel_host_name: str = Field(
+        default="",
+        description="Override the host.name resource attribute. "
+        "Empty (default) means `init_tracing` derives it from the "
+        "container/host hostname.",
+    )
+    musubi_service_version: str = Field(
+        default="",
+        description="Resource `service.version` attribute. Typically set "
+        "by the deploy pipeline to the git sha or tag of the running image.",
+    )
+
+    # ------------------------------------------------------------------
     # repr: pydantic-settings already masks SecretStr as ``**********``;
     # override to prune internal pydantic noise for a cleaner log line.
     # ------------------------------------------------------------------

@@ -56,7 +56,13 @@ from musubi.api.routers import (
     writes_retrieve_stream,
     writes_thoughts,
 )
-from musubi.observability import install_metrics_middleware, request_id_var
+from musubi.observability import (
+    configure_logging,
+    init_tracing,
+    install_metrics_middleware,
+    instrument_fastapi,
+    request_id_var,
+)
 from musubi.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -146,6 +152,25 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         from musubi.config import get_settings as _get_settings
 
         settings = _get_settings()
+
+    # Wire structured JSON logging on root + uvicorn so the JSON-logs
+    # contract from [[09-operations/observability]] § Logs is actually
+    # honoured in container output. Idempotent — tests calling
+    # ``create_app`` repeatedly reuse the same handler.
+    configure_logging()
+
+    # Initialize OTel tracing if Settings.otel_exporter_otlp_endpoint is
+    # set. No-op otherwise; production runs unchanged when traces
+    # aren't configured. Per [[09-operations/observability]] § Tracing.
+    init_tracing(
+        endpoint=settings.otel_exporter_otlp_endpoint or None,
+        service_name=settings.otel_service_name,
+        service_namespace=settings.otel_service_namespace,
+        host_name=settings.otel_host_name or None,
+        service_version=settings.musubi_service_version or None,
+        deployment_environment=settings.otel_deployment_environment,
+    )
+
     app = FastAPI(
         title="Musubi Core API",
         version="0.1.0",
@@ -156,6 +181,10 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         docs_url="/v1/docs",
         redoc_url=None,
     )
+
+    # FastAPI auto-instrumentation: root span per HTTP request. Safe
+    # no-op when tracing isn't initialized.
+    instrument_fastapi(app)
 
     install_metrics_middleware(app)
 

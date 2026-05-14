@@ -20,11 +20,12 @@ Closure plan:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -40,6 +41,7 @@ from musubi.observability import (
     render_text_format,
     request_id_var,
 )
+from musubi.types.common import Err
 
 # ---------------------------------------------------------------------------
 # Registry primitives — unit tests for the in-process metrics layer
@@ -208,11 +210,62 @@ def test_log_line_never_contains_raw_token() -> None:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-sdk-py-otel-spans: opentelemetry-api opt-in per spec; cross-slice ticket _inbox/cross-slice/slice-sdk-py-otel-spans.md"
-)
-def test_otel_span_covers_retrieve_orchestration() -> None:
-    """Bullet 6 — placeholder."""
+def test_otel_span_covers_retrieve_orchestration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bullet 6 — verify the `retrieve.orchestration` named span fires.
+
+    Previously skipped while OTel was deferred. Now exercised by
+    initializing the tracer with an in-memory span exporter, invoking
+    the orchestrator with a bad query (so it returns early without
+    needing Qdrant), and asserting that a span with the spec's name
+    was captured.
+    """
+    from opentelemetry import trace as _trace
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+        InMemorySpanExporter,
+    )
+
+    from musubi.observability import tracing as _tracing_mod
+    from musubi.retrieve import orchestration as _orch
+
+    # Stand up a real TracerProvider with an in-memory exporter, then
+    # re-bind the orchestration module's tracer to it so spans we open
+    # actually land in the exporter.
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(resource=Resource.create({"service.name": "test"}))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(_trace, "_TRACER_PROVIDER", provider, raising=False)
+    monkeypatch.setattr(_orch, "_tracer", provider.get_tracer("musubi.retrieve"))
+
+    # Bad-query path returns early — doesn't need Qdrant / embedder /
+    # any real backend — but still passes through the orchestration
+    # span. That's enough to prove the span fires.
+    result = asyncio.run(
+        _orch.retrieve(
+            client=cast(Any, None),
+            embedder=cast(Any, None),
+            query={"namespace": "", "query_text": ""},  # invalid: namespace min_length=1
+        )
+    )
+    # Expect a bad_query Err (not a span assertion — establishing the
+    # path exercised the orchestration span).
+    assert isinstance(result, Err)
+    assert result.error.kind == "bad_query"
+
+    spans = exporter.get_finished_spans()
+    span_names = [s.name for s in spans]
+    assert "retrieve.orchestration" in span_names
+    # The invalid-query span should carry the marker attribute.
+    orch_span = next(s for s in spans if s.name == "retrieve.orchestration")
+    assert orch_span.attributes is not None
+    assert orch_span.attributes.get("musubi.query.invalid") is True
+
+    # Reset the global tracing state so subsequent tests aren't affected.
+    _tracing_mod._reset_for_tests()
 
 
 def test_lifecycle_job_start_end_emitted_to_events_table() -> None:
@@ -350,6 +403,92 @@ def test_structured_json_formatter_includes_logger_name() -> None:
     payload = json.loads(formatter.format(record))
     assert payload["service"] == "musubi.api.routers.episodic"
     assert payload["level"] == "warning"
+
+
+def test_structured_json_formatter_promotes_otel_ids_to_trace_span() -> None:
+    """When LoggingInstrumentor has set otelTraceID/otelSpanID on the
+    record, the formatter exposes them as ``trace_id``/``span_id`` and
+    suppresses the raw OTel-prefixed keys."""
+    formatter = StructuredJsonFormatter()
+    record = logging.LogRecord(
+        name="musubi.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=0,
+        msg="inside span",
+        args=(),
+        exc_info=None,
+    )
+    record.otelTraceID = "deadbeefcafef00dbaadf00ddecafbad"  # 32 hex
+    record.otelSpanID = "f00dbabe5f1c5b1e"  # 16 hex
+    record.otelTraceSampled = True
+    record.otelServiceName = "musubi-core"
+
+    payload = json.loads(formatter.format(record))
+    assert payload["trace_id"] == "deadbeefcafef00dbaadf00ddecafbad"
+    assert payload["span_id"] == "f00dbabe5f1c5b1e"
+    # Raw OTel-prefixed keys must not leak into the JSON.
+    assert "otelTraceID" not in payload
+    assert "otelSpanID" not in payload
+    assert "otelServiceName" not in payload
+    assert "otelTraceSampled" not in payload
+
+
+def test_structured_json_formatter_skips_zero_trace_ids() -> None:
+    """All-zero trace/span IDs (record had no active span at emit) are
+    not surfaced — they're noise."""
+    formatter = StructuredJsonFormatter()
+    record = logging.LogRecord(
+        name="musubi.test",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=0,
+        msg="no span active",
+        args=(),
+        exc_info=None,
+    )
+    record.otelTraceID = "0" * 32
+    record.otelSpanID = "0" * 16
+
+    payload = json.loads(formatter.format(record))
+    assert "trace_id" not in payload
+    assert "span_id" not in payload
+
+
+def test_configure_logging_routes_uvicorn_through_json_formatter() -> None:
+    """configure_logging must rewire uvicorn loggers so their records
+    propagate to a single root handler using StructuredJsonFormatter.
+
+    Otherwise uvicorn emits plain `INFO: 1.2.3.4 - "GET /foo HTTP/1.1"`
+    lines that bypass the spec's JSON contract — confirmed missing
+    against the live Loki datasource 2026-05-13.
+    """
+    from musubi.observability import configure_logging
+
+    configure_logging()
+
+    root = logging.getLogger()
+    assert len(root.handlers) == 1
+    handler = root.handlers[0]
+    assert isinstance(handler.formatter, StructuredJsonFormatter)
+
+    # Uvicorn loggers must propagate to root (so the JSON handler fires).
+    for name in ("uvicorn", "uvicorn.access", "uvicorn.error"):
+        lg = logging.getLogger(name)
+        assert lg.propagate is True, f"{name} should propagate to root"
+        assert lg.handlers == [], f"{name} should not carry its own handlers"
+
+
+def test_configure_logging_is_idempotent() -> None:
+    """Repeated calls don't stack duplicate handlers on the root."""
+    from musubi.observability import configure_logging
+
+    configure_logging()
+    first_count = len(logging.getLogger().handlers)
+    configure_logging()
+    configure_logging()
+    final_count = len(logging.getLogger().handlers)
+    assert first_count == final_count == 1
 
 
 def test_redact_token_filter_idempotent() -> None:

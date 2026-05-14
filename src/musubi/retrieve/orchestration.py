@@ -12,6 +12,7 @@ from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
 from musubi.embedding.tei import TEIRerankerClient
+from musubi.observability import get_tracer
 from musubi.retrieve.blended import (
     BlendedRetrievalQuery,
     run_blended_retrieve,
@@ -27,6 +28,11 @@ from musubi.retrieve.fast import run_fast_retrieve
 from musubi.types.common import Err, LifecycleState, Ok, Result
 
 logger = logging.getLogger(__name__)
+# Tracer for hand-instrumented spans matching the named hierarchy in
+# [[09-operations/observability]] § Tracing. When tracing is disabled
+# this is a no-op tracer; ``start_as_current_span`` is safe to call
+# unconditionally.
+_tracer = get_tracer("musubi.retrieve")
 
 
 class NamespaceTarget(BaseModel):
@@ -86,116 +92,133 @@ async def retrieve(
 ) -> Result[list[RetrievalResult], RetrievalError]:
     """Execute the configured retrieval pipeline based on the query."""
 
-    # 1. validate query
-    if isinstance(query, dict):
-        try:
-            parsed_query = RetrievalQuery.model_validate(query)
-        except ValidationError as e:
-            return Err(error=RetrievalError(kind="bad_query", detail=str(e)))
-    else:
-        try:
-            parsed_query = RetrievalQuery.model_validate(query.model_dump())
-        except ValidationError as e:
-            return Err(error=RetrievalError(kind="bad_query", detail=str(e)))
+    # Hand-instrumented span per [[09-operations/observability]] §
+    # Tracing. The span is a no-op when tracing is disabled (env var
+    # OTEL_EXPORTER_OTLP_ENDPOINT unset). Attributes are set as soon as
+    # the query is validated so a trace failing on bad_query still
+    # carries enough context to debug.
+    with _tracer.start_as_current_span("retrieve.orchestration") as _span:
+        # 1. validate query
+        if isinstance(query, dict):
+            try:
+                parsed_query = RetrievalQuery.model_validate(query)
+            except ValidationError as e:
+                _span.set_attribute("musubi.query.invalid", True)
+                return Err(error=RetrievalError(kind="bad_query", detail=str(e)))
+        else:
+            try:
+                parsed_query = RetrievalQuery.model_validate(query.model_dump())
+            except ValidationError as e:
+                _span.set_attribute("musubi.query.invalid", True)
+                return Err(error=RetrievalError(kind="bad_query", detail=str(e)))
 
-    # Basic auth check handled upstream, here we just dispatch.
-    # Expand the query into per-plane pipeline runs when the router
-    # supplied explicit `namespace_targets`; otherwise derive a single
-    # target from the top-level namespace (legacy path — orchestrator
-    # callers that don't go through the HTTP router).
-    if parsed_query.namespace_targets:
-        targets = [(t.namespace, t.plane) for t in parsed_query.namespace_targets]
-    else:
-        derived_plane = (
-            parsed_query.namespace.rsplit("/", 1)[-1]
-            if parsed_query.namespace.count("/") == 2
-            else (parsed_query.planes[0] if parsed_query.planes else "episodic")
-        )
-        targets = [(parsed_query.namespace, derived_plane)]
+        _span.set_attribute("musubi.namespace", parsed_query.namespace)
+        _span.set_attribute("musubi.mode", parsed_query.mode)
+        _span.set_attribute("musubi.limit", parsed_query.limit)
 
-    # Single-target fast path preserves the current behaviour bit-for-
-    # bit (one pipeline run, one Qdrant query per collection, no merge).
-    # Multi-target path runs the same pipeline per target concurrently
-    # and merges ranked results by score at the end.
-    if len(targets) == 1:
-        return await _run_single(
-            client=client,
-            embedder=embedder,
-            reranker=reranker,
-            llm=llm,
-            parsed_query=parsed_query,
-            namespace=targets[0][0],
-            plane=targets[0][1],
-            now=now,
-        )
+        # Basic auth check handled upstream, here we just dispatch.
+        # Expand the query into per-plane pipeline runs when the router
+        # supplied explicit `namespace_targets`; otherwise derive a
+        # single target from the top-level namespace (legacy path —
+        # orchestrator callers that don't go through the HTTP router).
+        if parsed_query.namespace_targets:
+            targets = [(t.namespace, t.plane) for t in parsed_query.namespace_targets]
+        else:
+            derived_plane = (
+                parsed_query.namespace.rsplit("/", 1)[-1]
+                if parsed_query.namespace.count("/") == 2
+                else (parsed_query.planes[0] if parsed_query.planes else "episodic")
+            )
+            targets = [(parsed_query.namespace, derived_plane)]
+        _span.set_attribute("musubi.target_count", len(targets))
 
-    # Fan out — one pipeline run per (namespace, plane) target. Call
-    # `_run_single` directly rather than recursing through `retrieve()`:
-    # the query is already parsed + validated, and re-entering the
-    # top-level would redo target expansion, pydantic validation, and
-    # the single-vs-multi branch logic for each leg. `gather(return_
-    # exceptions=True)` so a single plane failing doesn't blank the
-    # whole cross-plane response (ADR 0028).
-    results_per_target = await asyncio.gather(
-        *(
-            _run_single(
+        # Single-target fast path preserves the current behaviour bit-
+        # for-bit (one pipeline run, one Qdrant query per collection,
+        # no merge). Multi-target path runs the same pipeline per
+        # target concurrently and merges ranked results by score at
+        # the end.
+        if len(targets) == 1:
+            return await _run_single(
                 client=client,
                 embedder=embedder,
                 reranker=reranker,
                 llm=llm,
                 parsed_query=parsed_query,
-                namespace=ns,
-                plane=plane,
+                namespace=targets[0][0],
+                plane=targets[0][1],
                 now=now,
             )
-            for ns, plane in targets
-        ),
-        return_exceptions=True,
-    )
 
-    # Merge dedup keeps the **highest-scoring** hit per object_id.
-    # First-seen dedup would drop a stronger match purely because it
-    # arrived from a later target in the gather order. Build a
-    # {object_id → best hit} map, then materialise once at the end.
-    best_by_id: dict[str, RetrievalResult] = {}
-    transient_any = False
-    internal_err: RetrievalError | None = None
-    for outcome in results_per_target:
-        # Client disconnect / server shutdown produces CancelledError.
-        # Re-raise so the cancellation propagates up through the
-        # request lifecycle — swallowing it to return a partial
-        # response would be worse than surfacing the abort cleanly.
-        if isinstance(outcome, asyncio.CancelledError):
-            raise outcome
-        if isinstance(outcome, Err):
-            # Per-plane failures: transient/timeout degrades per-plane;
-            # an internal error from *any* plane surfaces as a 5xx
-            # because the merged response would silently under-report.
-            if outcome.error.kind == "timeout":
-                transient_any = True
+        # Fan out — one pipeline run per (namespace, plane) target.
+        # Call `_run_single` directly rather than recursing through
+        # `retrieve()`: the query is already parsed + validated, and
+        # re-entering the top-level would redo target expansion,
+        # pydantic validation, and the single-vs-multi branch logic
+        # for each leg. `gather(return_exceptions=True)` so a single
+        # plane failing doesn't blank the whole cross-plane response
+        # (ADR 0028).
+        results_per_target = await asyncio.gather(
+            *(
+                _run_single(
+                    client=client,
+                    embedder=embedder,
+                    reranker=reranker,
+                    llm=llm,
+                    parsed_query=parsed_query,
+                    namespace=ns,
+                    plane=plane,
+                    now=now,
+                )
+                for ns, plane in targets
+            ),
+            return_exceptions=True,
+        )
+
+        # Merge dedup keeps the **highest-scoring** hit per object_id.
+        # First-seen dedup would drop a stronger match purely because
+        # it arrived from a later target in the gather order. Build a
+        # {object_id → best hit} map, then materialise once at the end.
+        best_by_id: dict[str, RetrievalResult] = {}
+        transient_any = False
+        internal_err: RetrievalError | None = None
+        for outcome in results_per_target:
+            # Client disconnect / server shutdown produces
+            # CancelledError. Re-raise so the cancellation propagates
+            # up through the request lifecycle — swallowing it to
+            # return a partial response would be worse than surfacing
+            # the abort cleanly.
+            if isinstance(outcome, asyncio.CancelledError):
+                raise outcome
+            if isinstance(outcome, Err):
+                # Per-plane failures: transient/timeout degrades per-
+                # plane; an internal error from *any* plane surfaces
+                # as a 5xx because the merged response would silently
+                # under-report.
+                if outcome.error.kind == "timeout":
+                    transient_any = True
+                    continue
+                if outcome.error.kind in ("internal", "bad_query"):
+                    internal_err = outcome.error
+                    break
                 continue
-            if outcome.error.kind in ("internal", "bad_query"):
-                internal_err = outcome.error
+            if isinstance(outcome, Ok):
+                for hit in outcome.value:
+                    current = best_by_id.get(hit.object_id)
+                    if current is None or hit.score > current.score:
+                        best_by_id[hit.object_id] = hit
+                continue
+            if isinstance(outcome, Exception):
+                logger.warning("cross-plane retrieve per-plane exception: %r", outcome)
+                internal_err = RetrievalError(kind="internal", detail=str(outcome))
                 break
-            continue
-        if isinstance(outcome, Ok):
-            for hit in outcome.value:
-                current = best_by_id.get(hit.object_id)
-                if current is None or hit.score > current.score:
-                    best_by_id[hit.object_id] = hit
-            continue
-        if isinstance(outcome, Exception):
-            logger.warning("cross-plane retrieve per-plane exception: %r", outcome)
-            internal_err = RetrievalError(kind="internal", detail=str(outcome))
-            break
 
-    if internal_err is not None:
-        return Err(error=internal_err)
-    if not best_by_id and transient_any:
-        return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
+        if internal_err is not None:
+            return Err(error=internal_err)
+        if not best_by_id and transient_any:
+            return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
 
-    merged = sorted(best_by_id.values(), key=lambda r: r.score, reverse=True)
-    return Ok(value=merged[: parsed_query.limit])
+        merged = sorted(best_by_id.values(), key=lambda r: r.score, reverse=True)
+        return Ok(value=merged[: parsed_query.limit])
 
 
 async def _run_single(
