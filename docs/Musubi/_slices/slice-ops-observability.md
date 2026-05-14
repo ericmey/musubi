@@ -7,7 +7,7 @@ status: done
 owner: vscode-cc-sonnet47
 phase: "8 Ops"
 tags: [section/slices, status/done, type/slice]
-updated: 2026-04-19
+updated: 2026-05-13
 reviewed: true
 depends-on: ["[[_slices/slice-ops-compose]]"]
 blocks: ["[[_slices/slice-ops-first-deploy]]", "[[_slices/slice-ops-hardening-suite]]"]
@@ -99,9 +99,11 @@ the **Tracing portion** of this slice's spec
 (`09-operations/observability.md` § Tracing — "OpenTelemetry SDK in Core +
 adapter libraries. Spans go to a local OTel Collector → Tempo") was
 **never implemented**. The slice closed marking observability complete,
-but only metrics + the `StructuredJsonFormatter` shipped. There are no
-OTel imports anywhere outside `src/musubi/sdk/tracing.py` (the SDK
-consumer-side, which is itself dormant).
+but only metrics + the `StructuredJsonFormatter` shipped. In
+production code (`src/musubi/`), there are no OTel imports outside
+`src/musubi/sdk/tracing.py` (the SDK consumer-side, which is itself
+dormant). Test modules import the OTel SDK to exercise SDK behaviour,
+but no shipping code path emits spans.
 
 Verified by querying the live Tempo datasource on shiori via the Grafana
 MCP: zero tags, zero `service.name` values, zero traces. The whole fleet

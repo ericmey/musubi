@@ -137,6 +137,19 @@ class TestInitTracing:
         assert first is not None
         assert second is None
 
+    def test_noop_first_call_does_not_block_later_real_init(self) -> None:
+        """First call with no endpoint must NOT consume the idempotency
+        slot. Caller may legitimately pass ``None`` first (e.g., env
+        unset at startup, later turned on) and try again with a real
+        endpoint — the second call should still build the provider.
+
+        Regression guard for Copilot review feedback on PR #303.
+        """
+        first = tracing.init_tracing(endpoint=None)
+        assert first is None
+        second = tracing.init_tracing(endpoint=_ENDPOINT, host_name="t")
+        assert second is not None
+
     def test_host_name_defaults_from_socket_when_unset(self) -> None:
         provider = tracing.init_tracing(endpoint=_ENDPOINT)
         assert provider is not None
@@ -183,6 +196,39 @@ class TestGetTracer:
         t = tracing.get_tracer("musubi.test")
         with t.start_as_current_span("retrieve.dense_encode") as span:
             assert span.is_recording()
+
+    def test_returns_noop_when_opentelemetry_api_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``get_tracer()`` must NOT raise when ``opentelemetry-api`` is
+        not installed — the default ``pip install musubi`` doesn't pull
+        the ``[otel]`` extra, and modules like
+        :mod:`musubi.retrieve.orchestration` call ``get_tracer()`` at
+        module-import time. A hard ImportError there would crash any
+        consumer of musubi without OTel installed.
+
+        Simulate the missing dep by making ``opentelemetry`` import-error
+        at the path ``get_tracer`` reads from, then verify the returned
+        tracer still supports the span context-manager surface this
+        codebase uses.
+        """
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "opentelemetry" or name.startswith("opentelemetry."):
+                raise ImportError(f"simulated: {name} not installed")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+
+        t = tracing.get_tracer("musubi.test")
+        # Surface contract: start_as_current_span returns a context
+        # manager yielding something with set_attribute + is_recording.
+        with t.start_as_current_span("retrieve.orchestration") as span:
+            span.set_attribute("musubi.namespace", "eric/x")  # must not raise
+            assert span.is_recording() is False
 
 
 class TestLoggingInstrumentor:

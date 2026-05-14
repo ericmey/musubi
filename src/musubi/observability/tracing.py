@@ -83,9 +83,13 @@ def init_tracing(
     """
     global _provider, _provider_initialized
 
+    # Idempotency: only short-circuit when a provider was actually
+    # installed previously. No-op paths (endpoint unset, ImportError)
+    # leave the flag unset so a later call with a real endpoint /
+    # available OTel install can still initialize. Copilot review on
+    # PR #303 flagged the original eager-flag-set as a real bug.
     if _provider_initialized:
         return None
-    _provider_initialized = True
 
     if not is_enabled(endpoint):
         log.debug("tracing.init: no endpoint provided; tracing disabled")
@@ -136,6 +140,7 @@ def init_tracing(
     LoggingInstrumentor().instrument(set_logging_format=False)
 
     _provider = provider
+    _provider_initialized = True  # only after the install actually succeeded
     log.info(
         "tracing.init: ok (service=%s namespace=%s endpoint=%s)",
         service_name,
@@ -161,14 +166,60 @@ def instrument_fastapi(app: FastAPI) -> None:
     log.debug("tracing.instrument_fastapi: instrumented FastAPI app")
 
 
+class _NoOpSpan:
+    """Local no-op span used when ``opentelemetry-api`` is not installed.
+
+    Implements just the subset of the Span API hand-instrumented spans
+    in this codebase actually call:
+
+    - context-manager (``__enter__``/``__exit__``) so
+      ``with tracer.start_as_current_span(...) as span:`` works.
+    - ``set_attribute`` so attribute-tagging calls are silently dropped.
+    - ``is_recording`` returns ``False`` for tests that want to check
+      whether the span is real.
+    """
+
+    def __enter__(self) -> _NoOpSpan:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def set_attribute(self, key: str, value: object) -> None:
+        return None
+
+    def is_recording(self) -> bool:
+        return False
+
+
+class _NoOpTracer:
+    """Local no-op tracer for the ``opentelemetry-api``-not-installed path.
+
+    Only ``start_as_current_span`` is exposed because that's the surface
+    every caller in this codebase uses. If more API is needed later,
+    extend here — we'd rather extend a small local class than make
+    ``opentelemetry-api`` a hard dependency.
+    """
+
+    def start_as_current_span(self, _name: str, **_kwargs: object) -> _NoOpSpan:
+        return _NoOpSpan()
+
+
 def get_tracer(name: str = "musubi") -> Tracer:
     """Return an OTel tracer for hand-instrumented spans.
 
-    When tracing is disabled, returns OTel's default no-op tracer; callers
-    can use ``tracer.start_as_current_span(...)`` unconditionally without
-    runtime guards.
+    When tracing is disabled or ``opentelemetry-api`` is not installed,
+    returns a local no-op tracer; callers can use
+    ``tracer.start_as_current_span(...)`` unconditionally without
+    runtime guards. The local fallback matters because callers like
+    :mod:`musubi.retrieve.orchestration` invoke ``get_tracer()`` at
+    module-import time — a hard ``ImportError`` here would crash the
+    process on a default ``pip install musubi`` (no ``[otel]`` extra).
     """
-    from opentelemetry import trace as _trace  # local import to keep cold start cheap
+    try:
+        from opentelemetry import trace as _trace  # local import keeps cold start cheap
+    except ImportError:
+        return _NoOpTracer()  # type: ignore[return-value]
 
     return _trace.get_tracer(name)
 

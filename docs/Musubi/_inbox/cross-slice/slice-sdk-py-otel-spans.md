@@ -8,7 +8,7 @@ status: resolved
 opened_by: vscode-cc-sonnet47
 opened_at: 2026-04-19
 tags: [section/inbox-cross-slice, type/cross-slice, status/resolved]
-updated: 2026-04-19
+updated: 2026-05-13
 ---
 
 # Add OpenTelemetry span emission to the Python SDK

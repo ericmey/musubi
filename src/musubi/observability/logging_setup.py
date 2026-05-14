@@ -14,6 +14,7 @@ import logging
 import re
 import time
 from contextvars import ContextVar
+from typing import Any
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 """Per-request correlation id. The API's correlation-id middleware
@@ -134,11 +135,21 @@ def redact_token_filter(record: logging.LogRecord) -> bool:
     return True
 
 
+# Module-level handler reused across `configure_logging()` calls so
+# repeat invocations don't churn StreamHandler / Formatter instances.
+# Lazily constructed on first call. The TextIO type parameter is left
+# at its default (sys.stderr) — narrowing it here would constrain
+# future test fixtures that want a different stream.
+_handler: logging.StreamHandler[Any] | None = None
+
+
 def configure_logging(*, level: int = logging.INFO) -> None:
     """Install :class:`StructuredJsonFormatter` on the root + uvicorn loggers.
 
     Called once at app startup. Idempotent — multiple calls reuse the
-    same handler.
+    same module-level handler instance (constructed lazily on first
+    call) so callers that invoke this repeatedly (e.g., test suites)
+    don't churn handler/formatter objects on each call.
 
     Why: uvicorn ships with its own log config that bypasses any
     formatter installed via ``logging.basicConfig``. Without this
@@ -153,11 +164,12 @@ def configure_logging(*, level: int = logging.INFO) -> None:
     The redact filter is attached too so JWT-shaped substrings are
     scrubbed before emit.
     """
-    formatter = StructuredJsonFormatter()
-
-    handler = logging.StreamHandler()
-    handler.setFormatter(formatter)
-    handler.addFilter(redact_token_filter)
+    global _handler
+    if _handler is None:
+        _handler = logging.StreamHandler()
+        _handler.setFormatter(StructuredJsonFormatter())
+        _handler.addFilter(redact_token_filter)
+    handler = _handler
 
     # Root logger: replace whatever's there with our single JSON handler.
     root = logging.getLogger()
