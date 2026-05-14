@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/ericmey/musubi/compare/v1.3.1...v1.3.2) (2026-05-14)
+
+
+### Bug Fixes
+
+* **observability:** complete server-side OTel tracing (debt from slice-ops-observability) ([#303](https://github.com/ericmey/musubi/issues/303)) ([b04c3b1](https://github.com/ericmey/musubi/commit/b04c3b1ffcc2f7289b156aab5c3192955d0f286d))
+
 ## [1.3.1](https://github.com/ericmey/musubi/compare/v1.3.0...v1.3.1) (2026-05-04)
 
 
