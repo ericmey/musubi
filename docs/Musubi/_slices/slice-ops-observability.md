@@ -7,7 +7,7 @@ status: done
 owner: vscode-cc-sonnet47
 phase: "8 Ops"
 tags: [section/slices, status/done, type/slice]
-updated: 2026-05-13
+updated: 2026-05-14
 reviewed: true
 depends-on: ["[[_slices/slice-ops-compose]]"]
 blocks: ["[[_slices/slice-ops-first-deploy]]", "[[_slices/slice-ops-hardening-suite]]"]
@@ -131,5 +131,36 @@ This is debt repayment, not a new slice.
 
 ## PR links
 
-- _(none yet — issue [#302](https://github.com/ericmey/musubi/issues/302)
-  completes the unshipped Tracing scope)_
+- [#303](https://github.com/ericmey/musubi/pull/303) — server-side OTel
+  SDK init, FastAPI auto-instrumentation, `retrieve.orchestration` hand-
+  rolled span, uvicorn-through-StructuredJsonFormatter, formatter
+  promotes `otelTraceID`/`otelSpanID` → top-level `trace_id`/`span_id`.
+- [#306](https://github.com/ericmey/musubi/pull/306) — wires
+  `OTEL_EXPORTER_OTLP_ENDPOINT` + `MUSUBI_SERVICE_VERSION` into
+  `.env.production` from new ansible group_vars defaults; extends the
+  `auto-digest-bump.yml` generator so `musubi_core_version` is rewritten
+  in lockstep with `musubi_core_image` on every release-please pin PR.
+
+## Deploy state — 2026-05-14
+
+- v1.3.2 image rolled to musubi-workload via
+  `deploy/ansible/update.yml` (recreated `core` + `lifecycle-worker`,
+  fixing the latter's 2-week drift from v1.3.1's roll).
+- `.env.production` refreshed via `deploy/ansible/config.yml`; the
+  running container exposes
+  `OTEL_EXPORTER_OTLP_ENDPOINT=http://shiori.mey.house:4317` and
+  `MUSUBI_SERVICE_VERSION=v1.3.2`.
+- Spans verified flowing to Tempo on shiori: `GET /v1/ops/status`,
+  `/v1/ops/health`, `/v1/ops/metrics` all land with
+  `rootServiceName=musubi-core`.
+
+### Known follow-up
+
+Emitted log lines in Loki don't yet carry `trace_id`/`span_id` despite
+LoggingInstrumentor being part of the init path. Probable causes:
+uvicorn access logs emit after the request span ends (context detached),
+and outbound `httpx` calls aren't auto-instrumented
+(`opentelemetry-instrumentation-httpx` is a separate package not in
+`[otel]` extras). Tempo↔Loki correlation jumps therefore fall back to
+`service.name + time-window` rather than a precise `trace_id` join.
+Tracked separately; spans flow either way.
