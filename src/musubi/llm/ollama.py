@@ -9,8 +9,11 @@ real production implementation.
 
 Design contract:
 
-- Every call posts to ``{base_url}/api/chat`` with
-  ``format: "json"`` and ``temperature: 0`` for determinism.
+- Every call posts to ``{base_url}/api/chat`` with a Pydantic-derived
+  JSON Schema as ``format`` and ``temperature: 0`` for determinism.
+  Ollama's structured-output decoder (≥0.5.0) constrains generation to
+  the schema, preventing missing-field validation failures that
+  free-form ``format: "json"`` permits.
 - A fresh :class:`httpx.AsyncClient` per call — matches the rest of the
   codebase (see :mod:`musubi.embedding.tei`) and keeps the client
   loop-agnostic so the lifecycle worker can re-enter
@@ -90,6 +93,15 @@ class _ContradictionResponse(BaseModel):
     reason: str = ""
 
 
+# Cache JSON Schemas at import time — they're used on every Ollama call
+# as the ``format`` value, which switches Ollama into structured-output
+# mode and constrains decoding to required fields.
+_IMPORTANCE_SCHEMA: dict[str, Any] = _ImportanceResponse.model_json_schema()
+_TOPICS_SCHEMA: dict[str, Any] = _TopicResponse.model_json_schema()
+_SYNTHESIS_SCHEMA: dict[str, Any] = _SynthesisResponse.model_json_schema()
+_CONTRADICTION_SCHEMA: dict[str, Any] = _ContradictionResponse.model_json_schema()
+
+
 def _load_prompt(name: str, version: str) -> str:
     """Load a frozen prompt file from ``musubi.llm.prompts.<name>``."""
     resource = files("musubi.llm.prompts").joinpath(name).joinpath(f"{version}.txt")
@@ -151,7 +163,7 @@ class HttpxOllamaClient:
         )
         prompt = _load_prompt("importance", _IMPORTANCE_PROMPT_V).replace("{ITEMS}", rendered)
 
-        raw = await self._chat(prompt, kind="importance")
+        raw = await self._chat(prompt, kind="importance", schema=_IMPORTANCE_SCHEMA)
         if raw is None:
             return None
         try:
@@ -184,7 +196,7 @@ class HttpxOllamaClient:
         )
         prompt = _load_prompt("topics", _TOPICS_PROMPT_V).replace("{ITEMS}", rendered)
 
-        raw = await self._chat(prompt, kind="topics")
+        raw = await self._chat(prompt, kind="topics", schema=_TOPICS_SCHEMA)
         if raw is None:
             return None
         try:
@@ -224,7 +236,7 @@ class HttpxOllamaClient:
             for m in cluster.memories
         )
         prompt = _load_prompt("synthesis", _SYNTHESIS_PROMPT_V).replace("{ITEMS}", rendered)
-        raw = await self._chat(prompt, kind="synthesis")
+        raw = await self._chat(prompt, kind="synthesis", schema=_SYNTHESIS_SCHEMA)
         if raw is None:
             return None
         try:
@@ -251,7 +263,7 @@ class HttpxOllamaClient:
             .replace("{B_TITLE}", pair.concept_b.title)
             .replace("{B_CONTENT}", _one_line(pair.concept_b.content))
         )
-        raw = await self._chat(prompt, kind="contradiction")
+        raw = await self._chat(prompt, kind="contradiction", schema=_CONTRADICTION_SCHEMA)
         if raw is None:
             return None
         try:
@@ -266,14 +278,26 @@ class HttpxOllamaClient:
     # Internals
     # ------------------------------------------------------------------
 
-    async def _chat(self, prompt: str, *, kind: str) -> str | None:
-        """POST to /api/chat; return the assistant message content or None."""
+    async def _chat(
+        self,
+        prompt: str,
+        *,
+        kind: str,
+        schema: dict[str, Any] | None = None,
+    ) -> str | None:
+        """POST to /api/chat; return the assistant message content or None.
+
+        When ``schema`` is provided, it is passed as the ``format`` value
+        to engage Ollama's structured-output mode (≥0.5.0); the model
+        is then constrained to emit JSON conforming to the schema. When
+        ``schema`` is ``None``, falls back to free-form JSON mode.
+        """
         url = f"{self._base_url}/api/chat"
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            "format": "json",
+            "format": schema if schema is not None else "json",
             "options": {"temperature": 0},
         }
         try:
