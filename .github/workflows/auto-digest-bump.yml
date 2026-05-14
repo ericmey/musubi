@@ -133,35 +133,59 @@ jobs:
 
       - name: Patch group_vars
         id: patch
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+          FILE: deploy/ansible/group_vars/all.yml
+          NEW_IMAGE: ghcr.io/ericmey/musubi-core@${{ steps.resolve.outputs.digest }}
         run: |
           set -euo pipefail
-          FILE="deploy/ansible/group_vars/all.yml"
-          NEW="ghcr.io/ericmey/musubi-core@${{ steps.resolve.outputs.digest }}"
 
-          # Replace the line regardless of what was there before. The file
-          # uses double-quoted strings for this field.
-          python3 - <<PY
-          import re, pathlib
-          p = pathlib.Path("$FILE")
+          # Patch both `musubi_core_image:` (digest pin) and
+          # `musubi_core_version:` (human-readable tag) so spans + dashboards
+          # carry the release tag alongside the immutable digest. Both lines
+          # use double-quoted strings. Each substitution is required — a
+          # mismatch means the file shape drifted and the patch should fail
+          # loudly rather than silently no-op one of the two fields.
+          #
+          # FILE/NEW_IMAGE/TAG arrive via the step-level `env:` block above so
+          # the Python subprocess sees them in `os.environ` (shell-only
+          # assignments would not be exported into the heredoc's process).
+          python3 - <<'PY'
+          import os, pathlib, re
+
+          p = pathlib.Path(os.environ["FILE"])
+          tag = os.environ["TAG"]
+          new_image = os.environ["NEW_IMAGE"]
           text = p.read_text()
-          new = '"${NEW}"'
-          updated = re.sub(
+
+          updated, n_image = re.subn(
               r'(musubi_core_image:\s*)(["\x27])[^"\x27]+\2',
-              rf'\g<1>{new}',
+              rf'\g<1>"{new_image}"',
               text,
               count=1,
           )
-          if updated == text:
+          if n_image == 0:
               raise SystemExit("musubi_core_image line not found in " + str(p))
+
+          updated, n_version = re.subn(
+              r'(musubi_core_version:\s*)(["\x27])[^"\x27]+\2',
+              rf'\g<1>"{tag}"',
+              updated,
+              count=1,
+          )
+          if n_version == 0:
+              raise SystemExit("musubi_core_version line not found in " + str(p))
+
           p.write_text(updated)
           PY
 
           if git diff --quiet "$FILE"; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "Already pinned to ${NEW}; nothing to do."
+            echo "Already pinned to ${NEW_IMAGE} @ ${TAG}; nothing to do."
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Patched ${FILE}."
+            echo "Patched ${FILE} (image=${NEW_IMAGE}, version=${TAG})."
           fi
 
       - name: Open or update PR
