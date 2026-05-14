@@ -136,10 +136,10 @@ jobs:
         env:
           TAG: ${{ steps.resolve.outputs.tag }}
           DIGEST: ${{ steps.resolve.outputs.digest }}
+          FILE: deploy/ansible/group_vars/all.yml
+          NEW_IMAGE: ghcr.io/ericmey/musubi-core@${{ steps.resolve.outputs.digest }}
         run: |
           set -euo pipefail
-          FILE="deploy/ansible/group_vars/all.yml"
-          NEW_IMAGE="ghcr.io/ericmey/musubi-core@${DIGEST}"
 
           # Patch both `musubi_core_image:` (digest pin) and
           # `musubi_core_version:` (human-readable tag) so spans + dashboards
@@ -147,6 +147,10 @@ jobs:
           # use double-quoted strings. Each substitution is required — a
           # mismatch means the file shape drifted and the patch should fail
           # loudly rather than silently no-op one of the two fields.
+          #
+          # FILE/NEW_IMAGE/TAG arrive via the step-level `env:` block above so
+          # the Python subprocess sees them in `os.environ` (shell-only
+          # assignments would not be exported into the heredoc's process).
           python3 - <<'PY'
           import os, pathlib, re
 
@@ -175,7 +179,6 @@ jobs:
 
           p.write_text(updated)
           PY
-          export FILE NEW_IMAGE
 
           if git diff --quiet "$FILE"; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
