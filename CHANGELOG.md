@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.3](https://github.com/ericmey/musubi/compare/v1.3.2...v1.3.3) (2026-05-14)
+
+
+### Documentation
+
+* **slice-ops-observability:** record v1.3.2 deploy + OTEL activation ([#307](https://github.com/ericmey/musubi/issues/307)) ([ce26ac0](https://github.com/ericmey/musubi/commit/ce26ac0d4ee6641a6fe5f3e6df1e18a43b960efe))
+
 ## [1.3.2](https://github.com/ericmey/musubi/compare/v1.3.1...v1.3.2) (2026-05-14)
 
 
