@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.4](https://github.com/ericmey/musubi/compare/v1.3.3...v1.3.4) (2026-05-14)
+
+
+### Bug Fixes
+
+* **llm:** constrain Ollama decoding with Pydantic JSON Schema ([#311](https://github.com/ericmey/musubi/issues/311)) ([0909a93](https://github.com/ericmey/musubi/commit/0909a93dd0654b43d6fc4e22cf2f120f78fae47b))
+
 ## [1.3.3](https://github.com/ericmey/musubi/compare/v1.3.2...v1.3.3) (2026-05-14)
 
 
