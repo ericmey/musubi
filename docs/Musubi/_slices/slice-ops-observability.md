@@ -7,7 +7,7 @@ status: done
 owner: vscode-cc-sonnet47
 phase: "8 Ops"
 tags: [section/slices, status/done, type/slice]
-updated: 2026-04-19
+updated: 2026-05-13
 reviewed: true
 depends-on: ["[[_slices/slice-ops-compose]]"]
 blocks: ["[[_slices/slice-ops-first-deploy]]", "[[_slices/slice-ops-hardening-suite]]"]
@@ -92,10 +92,44 @@ Agents append one entry per work session. Format:
 - This work-log entry retains the slice's history; the slice is not reopened (status stays `done`). The superseded `## Owned paths` entries are struck through with a wikilink to ADR 0033 for traceability.
 - Future central-side artifacts (musubi-specific dashboards on shiori, alert routing, log shipping) are out of this slice's scope per ADR 0033 — they belong to follow-up slices/PRs scoped to the shiori-side codebase.
 
+### 2026-05-13 — aoi/command-chair — Tracing section was never implemented
+
+While building the harem-ops fleet telemetry coverage map, discovered that
+the **Tracing portion** of this slice's spec
+(`09-operations/observability.md` § Tracing — "OpenTelemetry SDK in Core +
+adapter libraries. Spans go to a local OTel Collector → Tempo") was
+**never implemented**. The slice closed marking observability complete,
+but only metrics + the `StructuredJsonFormatter` shipped. In
+production code (`src/musubi/`), there are no OTel imports outside
+`src/musubi/sdk/tracing.py` (the SDK consumer-side, which is itself
+dormant). Test modules import the OTel SDK to exercise SDK behaviour,
+but no shipping code path emits spans.
+
+Verified by querying the live Tempo datasource on shiori via the Grafana
+MCP: zero tags, zero `service.name` values, zero traces. The whole fleet
+has zero trace coverage.
+
+The status of this slice **stays `done`** — its history is the artifact.
+The unshipped Tracing scope is being completed under issue
+[#302](https://github.com/ericmey/musubi/issues/302) without expanding
+beyond the original spec. Two small companion fixes are included to make
+the spec actually true:
+
+- Route uvicorn access + error logs through `StructuredJsonFormatter`
+  (currently they bypass it and emit plain `INFO: ... GET ...` lines —
+  the JSON-logs contract the spec mandated has not been honoured in
+  practice).
+- Inject `trace_id` / `span_id` into the formatter's payload when there
+  is an active span — connecting tissue between the two telemetry
+  signals the spec already requires.
+
+This is debt repayment, not a new slice.
+
 ## Cross-slice tickets opened by this slice
 
 - _(none yet)_
 
 ## PR links
 
-- _(none yet)_
+- _(none yet — issue [#302](https://github.com/ericmey/musubi/issues/302)
+  completes the unshipped Tracing scope)_

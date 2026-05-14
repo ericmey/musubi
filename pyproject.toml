@@ -36,8 +36,17 @@ musubi = "musubi.cli.main:app"
 
 
 [project.optional-dependencies]
+# Server-side OTel: tracer provider + OTLP gRPC exporter + auto-instrumentation
+# for FastAPI and the stdlib `logging` module. The SDK consumer-side
+# (src/musubi/sdk/tracing.py) only needs the API; the server needs the full
+# pipeline to actually emit spans. Both share the [otel] extra so installs
+# remain coherent.
 otel = [
     "opentelemetry-api>=1.27",
+    "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-instrumentation-logging>=0.48b0",
 ]
 dev = [
     "pytest>=8",
@@ -53,8 +62,13 @@ dev = [
 
     "types-PyYAML",
     "jinja2>=3",
+    # OTel deps duplicated here so the dev env can import tracing helpers
+    # without pulling the [otel] extra explicitly. Mirrors the [otel] set above.
     "opentelemetry-api>=1.27",
     "opentelemetry-sdk>=1.27",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.27",
+    "opentelemetry-instrumentation-fastapi>=0.48b0",
+    "opentelemetry-instrumentation-logging>=0.48b0",
 ]
 
 

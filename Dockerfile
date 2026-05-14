@@ -16,15 +16,20 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 # Install production deps first so the layer caches when only source changes.
+# `--extra otel` includes the OpenTelemetry SDK + OTLP exporter + FastAPI/
+# logging instrumentation so the server can emit spans to Tempo when
+# Settings.otel_exporter_otlp_endpoint is set. Per
+# [[09-operations/observability]] § Tracing. When the endpoint is unset
+# the deps are imported lazily and produce no overhead.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/uv-cache \
-    uv sync --frozen --no-install-project --no-dev
+    uv sync --frozen --no-install-project --no-dev --extra otel
 
 # Now install the project itself.
 COPY src/ ./src/
 COPY README.md ./
 RUN --mount=type=cache,target=/uv-cache \
-    uv sync --frozen --no-dev
+    uv sync --frozen --no-dev --extra otel
 
 
 FROM python:3.12-slim-bookworm AS runtime
