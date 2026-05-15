@@ -20,11 +20,16 @@ future qdrant_client warning surfaces unchanged.
 
 from __future__ import annotations
 
+import re
 import warnings
 
 from qdrant_client import QdrantClient
 
-_INSECURE_API_KEY_WARNING = "Api key is used with an insecure connection."
+# `warnings.filterwarnings` treats `message` as a regex matched from
+# the start of the warning text. Escape the literal — the trailing `.`
+# is a literal period in the upstream message, not a regex wildcard —
+# and add `\Z` so we only match this exact warning.
+_INSECURE_API_KEY_WARNING = re.escape("Api key is used with an insecure connection.") + r"\Z"
 
 
 def build_qdrant_client(
@@ -43,11 +48,16 @@ def build_qdrant_client(
     ``warnings.catch_warnings`` blocks across modules.
     """
     with warnings.catch_warnings():
+        # The `\Z` anchor on the message pattern is the precision
+        # guarantee here — we suppress only the exact documented
+        # warning. The `module` filter was tempting as belt-and-braces
+        # but excludes warnings whose stacklevel resolves outside
+        # `qdrant_client` (test stubs, future code paths) and led to
+        # leakage in tests. Message-anchor is enough.
         warnings.filterwarnings(
             "ignore",
             message=_INSECURE_API_KEY_WARNING,
             category=UserWarning,
-            module=r"qdrant_client\..*",
         )
         return QdrantClient(host=host, port=port, api_key=api_key, https=https)
 

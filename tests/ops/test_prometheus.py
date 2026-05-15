@@ -170,6 +170,25 @@ def test_node_exporter_service_exists() -> None:
     assert "/sys:/host/sys:ro" in volumes_text, "node-exporter must bind-mount host /sys"
 
 
+def test_node_exporter_has_udev_mount_and_flag() -> None:
+    """Without /run/udev mounted AND --path.udev.data pointing at it,
+    the diskstats collector self-disables udev metadata and node_disk_*
+    series lose ID_WWN / ID_SERIAL / ID_MODEL labels. Both halves are
+    required; either one missing reintroduces the warning + gap."""
+    svc = _render_compose()["services"]["node-exporter"]
+    volumes_text = " ".join(svc.get("volumes", []))
+    assert "/run/udev:/host/run/udev:ro" in volumes_text, (
+        "node-exporter must bind-mount /run/udev so the diskstats collector "
+        "can read udev device properties"
+    )
+    cmd = svc.get("command") or []
+    joined_cmd = " ".join(cmd) if isinstance(cmd, list) else str(cmd)
+    assert "--path.udev.data=/host/run/udev/data" in joined_cmd, (
+        "node-exporter must be told where to find udev data in the container; "
+        "the bind mount alone is insufficient"
+    )
+
+
 def test_prometheus_mounts_scrape_config_readonly() -> None:
     svc = _render_compose()["services"]["prometheus"]
     ro_mounts = [

@@ -195,11 +195,13 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/rootfs:ro,rslave
-      # /run/udev so the diskstats collector can attach the human-
-      # readable device name + WWN to disk metrics (DEVNAME, ID_FS_UUID).
-      # Without this the collector logs `Failed to open directory,
-      # disabling udev device properties` on every restart and the
-      # node_disk_* series lack the udev-derived labels.
+      # /run/udev so the diskstats collector can attach udev-derived
+      # labels to node_disk_* series — DEVNAME, ID_WWN, ID_SERIAL,
+      # ID_MODEL and friends (not ID_FS_UUID, which is the filesystem
+      # UUID exposed via a different udev path). Without this the
+      # collector logs `Failed to open directory, disabling udev
+      # device properties` on every restart and node_disk_* loses
+      # those identifying labels.
       - /run/udev:/host/run/udev:ro
     restart: unless-stopped
 

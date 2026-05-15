@@ -41,14 +41,15 @@ def _build_qdrant_client_default() -> QdrantClient:
     """Lazy production-default Qdrant client; constructed on first use."""
     settings = get_settings()
     # Test/dev fallback only: production replaces this whole factory
-    # via `bootstrap_production_app`. Plain HTTP is the historical
-    # default here and matches the QdrantClient default that this path
-    # used pre-factory.
+    # via `bootstrap_production_app`. Honour `musubi_allow_plaintext`
+    # the same way the production path does so route-level callers of
+    # `get_qdrant_client` get the configured TLS policy when they
+    # haven't gone through bootstrap.
     return build_qdrant_client(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
         api_key=settings.qdrant_api_key.get_secret_value(),
-        https=False,
+        https=not settings.musubi_allow_plaintext,
     )
 
 
