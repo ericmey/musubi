@@ -287,8 +287,6 @@ async def _main_async() -> None:
     """Module entrypoint — compose real deps and run until signal."""
     from pathlib import Path
 
-    from qdrant_client import QdrantClient
-
     from musubi.config import get_settings
     from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
     from musubi.lifecycle.demotion import DemotionDeps, build_demotion_jobs
@@ -317,6 +315,7 @@ async def _main_async() -> None:
     from musubi.planes.curated.plane import CuratedPlane
     from musubi.planes.episodic.plane import EpisodicPlane
     from musubi.planes.thoughts.plane import ThoughtsPlane
+    from musubi.storage import build_qdrant_client
     from musubi.vault.writelog import WriteLog
     from musubi.vault.writer import VaultWriter as _VaultWriter
 
@@ -340,7 +339,7 @@ async def _main_async() -> None:
         deployment_environment=settings.otel_deployment_environment,
     )
 
-    qdrant = QdrantClient(
+    qdrant = build_qdrant_client(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
         api_key=settings.qdrant_api_key.get_secret_value(),

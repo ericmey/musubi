@@ -65,25 +65,29 @@ def settings(api_settings: Settings) -> Settings:
 def patch_qdrant_ok() -> Iterator[Any]:
     """Replace BOTH dep probes with happy-path doubles so the
     bootstrap completes without touching the network. Yields the
-    QdrantClient mock for tests that need to introspect it."""
+    QdrantClient mock for tests that need to introspect it.
+
+    Patches the `build_qdrant_client` factory (introduced in the
+    qdrant-warning-suppression slice) rather than the raw class, so
+    fixtures stay valid as production wiring evolves."""
     with (
-        patch("musubi.api.bootstrap.QdrantClient") as mock_qd_cls,
+        patch("musubi.api.bootstrap.build_qdrant_client") as mock_qd_factory,
         patch("musubi.api.bootstrap._probe_tei", return_value=None),
         patch("musubi.store.bootstrap"),
     ):
-        instance = mock_qd_cls.return_value
+        instance = mock_qd_factory.return_value
         instance.get_collections.return_value = type("Collections", (), {"collections": []})()
-        yield mock_qd_cls
+        yield mock_qd_factory
 
 
 @pytest.fixture
 def patch_qdrant_unreachable() -> Iterator[Any]:
     """First call to QdrantClient.get_collections raises ConnectionError;
     bootstrap's retry should eventually surface BootstrapError."""
-    with patch("musubi.api.bootstrap.QdrantClient") as mock_cls:
-        instance = mock_cls.return_value
+    with patch("musubi.api.bootstrap.build_qdrant_client") as mock_factory:
+        instance = mock_factory.return_value
         instance.get_collections.side_effect = ConnectionError("qdrant unreachable")
-        yield mock_cls
+        yield mock_factory
 
 
 @pytest.fixture
@@ -92,16 +96,16 @@ def patch_qdrant_recovers() -> Iterator[Any]:
     probe is patched happy throughout so this fixture isolates the
     Qdrant retry behaviour."""
     with (
-        patch("musubi.api.bootstrap.QdrantClient") as mock_cls,
+        patch("musubi.api.bootstrap.build_qdrant_client") as mock_factory,
         patch("musubi.api.bootstrap._probe_tei", return_value=None),
         patch("musubi.store.bootstrap"),
     ):
-        instance = mock_cls.return_value
+        instance = mock_factory.return_value
         instance.get_collections.side_effect = [
             ConnectionError("qdrant transient"),
             type("Collections", (), {"collections": []})(),
         ]
-        yield mock_cls
+        yield mock_factory
 
 
 # ---------------------------------------------------------------------------

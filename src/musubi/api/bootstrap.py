@@ -53,6 +53,7 @@ from musubi.planes.curated import CuratedPlane
 from musubi.planes.episodic import EpisodicPlane
 from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
+from musubi.storage import build_qdrant_client
 
 _DEFAULT_RETRY_ATTEMPTS = 5
 _DEFAULT_RETRY_BACKOFF_S = 1.0
@@ -171,7 +172,7 @@ def bootstrap_production_app(
     # plaintext Qdrant doesn't ssl-handshake-fail against an HTTP
     # endpoint. Production deploys leave the flag at its default
     # (False) so https=True is the production default.
-    qdrant = QdrantClient(
+    qdrant = build_qdrant_client(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
         api_key=settings.qdrant_api_key.get_secret_value(),
