@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/ericmey/musubi/compare/v1.3.4...v1.4.0) (2026-05-15)
+
+
+### Features
+
+* **observability:** scrape qdrant metrics via Bearer-authed Prometheus job ([#314](https://github.com/ericmey/musubi/issues/314)) ([9d1ddeb](https://github.com/ericmey/musubi/commit/9d1ddeb49b5e801383b43379cc911639e3f4da8b))
+
 ## [1.3.4](https://github.com/ericmey/musubi/compare/v1.3.3...v1.3.4) (2026-05-14)
 
 
