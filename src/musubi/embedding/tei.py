@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import threading
 import weakref
 from typing import Any
 
@@ -145,7 +146,8 @@ class _LoopBoundAsyncClient:
     """Per-event-loop ``httpx.AsyncClient`` cache.
 
     The lifecycle worker spawns a fresh asyncio loop per tick (job funcs
-    call ``asyncio.run()`` inside ``asyncio.to_thread``). A long-lived
+    call ``asyncio.run()`` inside ``asyncio.to_thread``), and ticks can
+    run concurrently in different worker threads. A long-lived
     ``httpx.AsyncClient`` constructed at process start can't safely be
     reused across loops — its connection pool holds connections whose
     transports bind to the loop that opened them. Once that loop closes,
@@ -157,30 +159,26 @@ class _LoopBoundAsyncClient:
     06:00 UTC with the closed-loop traceback through
     ``httpcore.connection_pool._close_connections``.
 
-    This wrapper keeps one ``AsyncClient`` per loop. ``get()`` returns
-    the client bound to the current loop, rebuilding when the loop
-    changes (or its previous loop closed). The previous client is
-    dropped without ``aclose()`` — that path is exactly what we're
-    avoiding. Its sockets die with its loop; httpx's ``__del__`` does
-    not attempt cleanup, so there's no orphan task.
+    Cache shape: a ``WeakKeyDictionary[loop -> AsyncClient]`` protected
+    by a ``threading.Lock``. Per-loop entries auto-evict when the loop
+    is garbage-collected at ``asyncio.run`` exit — no manual cleanup
+    needed for dead loops. The lock guards the dict mutations so two
+    worker threads handling concurrent ticks on different loops can't
+    race on insertion.
 
-    Single-entry cache; we don't need history. Per-loop reuse still
-    enjoys connection pooling for the duration of that loop.
+    Within one loop the same ``AsyncClient`` is reused for the whole
+    tick so HTTP/1.1 keepalive + connection pooling are still in play.
     """
 
-    __slots__ = ("_client", "_closed", "_limits", "_loop_ref", "_timeout")
+    __slots__ = ("_clients", "_closed", "_limits", "_lock", "_timeout")
 
     def __init__(self, *, timeout: float, limits: httpx.Limits) -> None:
         self._timeout = timeout
         self._limits = limits
-        # Weak ref to the loop the cached client was built for. weakref
-        # so we don't keep the loop alive (it must be free to GC at
-        # asyncio.run exit) and so we can distinguish "same loop, still
-        # alive" from "previous loop, now gone" without using id(),
-        # which is not stable across object lifetimes — CPython reuses
-        # freed memory addresses for newly-allocated loops.
-        self._loop_ref: weakref.ref[asyncio.AbstractEventLoop] | None = None
-        self._client: httpx.AsyncClient | None = None
+        self._lock = threading.Lock()
+        self._clients: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = (
+            weakref.WeakKeyDictionary()
+        )
         self._closed: bool = False
 
     @property
@@ -195,37 +193,43 @@ class _LoopBoundAsyncClient:
         return self._closed
 
     def get(self) -> httpx.AsyncClient:
-        """Return an ``AsyncClient`` bound to the currently-running loop."""
+        """Return an ``AsyncClient`` bound to the currently-running loop.
+
+        Concurrent ticks on different loops each get their own entry;
+        re-entries on the same loop reuse the cached client. A loop
+        that's been closed (e.g. by an early ``loop.close()`` outside
+        ``asyncio.run``) gets a fresh client too.
+        """
         if self._closed:
             raise RuntimeError(
                 "TEI client used after aclose(); construct a new client to continue."
             )
         loop = asyncio.get_running_loop()
-        cached_loop = self._loop_ref() if self._loop_ref is not None else None
-        if cached_loop is not loop or loop.is_closed():
-            self._client = _build_client(self._timeout, self._limits)
-            self._loop_ref = weakref.ref(loop)
-        assert self._client is not None  # set above
-        return self._client
+        with self._lock:
+            cached = self._clients.get(loop)
+            if cached is None or loop.is_closed():
+                cached = _build_client(self._timeout, self._limits)
+                self._clients[loop] = cached
+            return cached
 
     async def aclose(self) -> None:
-        """Close the current loop's cached client, if any. Idempotent."""
+        """Close the current loop's cached client, if any. Idempotent.
+
+        Only the entry for the currently-running loop is awaited;
+        clients bound to other (possibly dead) loops are dropped
+        without attempting cleanup — that path is exactly what this
+        wrapper exists to avoid.
+        """
         self._closed = True
-        if self._client is None:
-            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # Called from sync context (e.g. test teardown) — drop the
-            # reference without trying to await cleanup.
-            self._client = None
-            self._loop_ref = None
-            return
-        cached_loop = self._loop_ref() if self._loop_ref is not None else None
-        if cached_loop is loop and not loop.is_closed():
-            await self._client.aclose()
-        self._client = None
-        self._loop_ref = None
+            loop = None
+        with self._lock:
+            current = self._clients.pop(loop, None) if loop is not None else None
+            self._clients.clear()
+        if current is not None and loop is not None and not loop.is_closed():
+            await current.aclose()
 
 
 class TEIDenseClient:
