@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import weakref
 from typing import Any
 
 import httpx
@@ -140,6 +141,93 @@ def _build_client(timeout: float, limits: httpx.Limits) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, limits=limits)
 
 
+class _LoopBoundAsyncClient:
+    """Per-event-loop ``httpx.AsyncClient`` cache.
+
+    The lifecycle worker spawns a fresh asyncio loop per tick (job funcs
+    call ``asyncio.run()`` inside ``asyncio.to_thread``). A long-lived
+    ``httpx.AsyncClient`` constructed at process start can't safely be
+    reused across loops — its connection pool holds connections whose
+    transports bind to the loop that opened them. Once that loop closes,
+    the pool's next maintenance pass (during a NEW request on a NEW
+    loop) tries to ``aclose`` those stale connections and trips
+    ``RuntimeError: Event loop is closed``.
+
+    Symptom: lifecycle-worker's ``reflection_digest`` crashed daily at
+    06:00 UTC with the closed-loop traceback through
+    ``httpcore.connection_pool._close_connections``.
+
+    This wrapper keeps one ``AsyncClient`` per loop. ``get()`` returns
+    the client bound to the current loop, rebuilding when the loop
+    changes (or its previous loop closed). The previous client is
+    dropped without ``aclose()`` — that path is exactly what we're
+    avoiding. Its sockets die with its loop; httpx's ``__del__`` does
+    not attempt cleanup, so there's no orphan task.
+
+    Single-entry cache; we don't need history. Per-loop reuse still
+    enjoys connection pooling for the duration of that loop.
+    """
+
+    __slots__ = ("_client", "_closed", "_limits", "_loop_ref", "_timeout")
+
+    def __init__(self, *, timeout: float, limits: httpx.Limits) -> None:
+        self._timeout = timeout
+        self._limits = limits
+        # Weak ref to the loop the cached client was built for. weakref
+        # so we don't keep the loop alive (it must be free to GC at
+        # asyncio.run exit) and so we can distinguish "same loop, still
+        # alive" from "previous loop, now gone" without using id(),
+        # which is not stable across object lifetimes — CPython reuses
+        # freed memory addresses for newly-allocated loops.
+        self._loop_ref: weakref.ref[asyncio.AbstractEventLoop] | None = None
+        self._client: httpx.AsyncClient | None = None
+        self._closed: bool = False
+
+    @property
+    def is_closed(self) -> bool:
+        """``True`` iff :meth:`aclose` has been called.
+
+        Distinct from the per-loop ``httpx.AsyncClient``'s own
+        ``is_closed``: this wrapper outlives any one loop's client,
+        so the wrapper's closed-state tracks the *intentional* shutdown
+        signal, not the lifecycle of a single underlying client.
+        """
+        return self._closed
+
+    def get(self) -> httpx.AsyncClient:
+        """Return an ``AsyncClient`` bound to the currently-running loop."""
+        if self._closed:
+            raise RuntimeError(
+                "TEI client used after aclose(); construct a new client to continue."
+            )
+        loop = asyncio.get_running_loop()
+        cached_loop = self._loop_ref() if self._loop_ref is not None else None
+        if cached_loop is not loop or loop.is_closed():
+            self._client = _build_client(self._timeout, self._limits)
+            self._loop_ref = weakref.ref(loop)
+        assert self._client is not None  # set above
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the current loop's cached client, if any. Idempotent."""
+        self._closed = True
+        if self._client is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # Called from sync context (e.g. test teardown) — drop the
+            # reference without trying to await cleanup.
+            self._client = None
+            self._loop_ref = None
+            return
+        cached_loop = self._loop_ref() if self._loop_ref is not None else None
+        if cached_loop is loop and not loop.is_closed():
+            await self._client.aclose()
+        self._client = None
+        self._loop_ref = None
+
+
 class TEIDenseClient:
     """Client for a TEI dense encoder endpoint.
 
@@ -162,7 +250,7 @@ class TEIDenseClient:
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _build_client(timeout, limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
 
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -170,7 +258,7 @@ class TEIDenseClient:
         out: list[list[float]] = []
         for batch in _chunks(texts, self._max_batch_size):
             data = await _post_json(
-                self._client,
+                self._client.get(),
                 self._base_url,
                 "/embed",
                 {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
@@ -208,7 +296,7 @@ class TEISparseClient:
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _build_client(timeout, limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         if not texts:
@@ -216,7 +304,7 @@ class TEISparseClient:
         out: list[dict[int, float]] = []
         for batch in _chunks(texts, self._max_batch_size):
             data = await _post_json(
-                self._client,
+                self._client.get(),
                 self._base_url,
                 "/embed_sparse",
                 {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
@@ -256,13 +344,13 @@ class TEIRerankerClient:
         self._timeout = timeout
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _build_client(timeout, limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
 
     async def rerank(self, query: str, candidates: list[str]) -> list[float]:
         if not candidates:
             return []
         data = await _post_json(
-            self._client,
+            self._client.get(),
             self._base_url,
             "/rerank",
             {

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import weakref
 from collections.abc import AsyncIterator
 
 import httpx
@@ -646,8 +647,8 @@ async def test_tei_reranker_client_reuses_single_async_client(
 
 
 async def test_tei_dense_client_aclose_closes_pool() -> None:
-    """aclose() must actually close the underlying httpx pool so process
-    shutdown drains cleanly + tests don't leak ResourceWarnings."""
+    """aclose() must mark the wrapper closed so subsequent use raises
+    a clear error and tests don't leak ResourceWarnings."""
     client = TEIDenseClient(base_url="http://tei-dense")
     assert not client._client.is_closed
     await client.aclose()
@@ -664,3 +665,73 @@ async def test_tei_reranker_client_aclose_closes_pool() -> None:
     client = TEIRerankerClient(base_url="http://tei-reranker")
     await client.aclose()
     assert client._client.is_closed
+
+
+def test_tei_dense_client_rebuilds_async_client_across_event_loops() -> None:
+    """Regression for the daily reflection_digest crash:
+    ``RuntimeError: Event loop is closed`` during ``_close_connections``.
+
+    The lifecycle worker spawns a fresh asyncio loop per tick. A long-lived
+    ``httpx.AsyncClient`` constructed at process start binds its
+    connection pool to whichever loop made the first request. When the
+    NEXT tick's loop tries to reuse it, the pool's maintenance pass
+    closes stale connections that reference the dead loop and trips
+    a closed-loop RuntimeError.
+
+    The wrapper must rebuild on loop change. Two probes used together
+    because CPython reuses memory addresses (so `id(loop)` and `id(client)`
+    are NOT stable across short-lived ``asyncio.run`` scopes):
+
+    1. Capture a weak reference to loop-1's AsyncClient while loop-1 is
+       still alive; expect it to die after loop-1 exits AND a new
+       client is built in loop-2.
+    2. Inside loop-2, confirm the wrapper's weak loop-ref does NOT
+       point at any object the test created in loop-1 (loop-1 should
+       be GC'd, weak-ref-dead).
+    """
+    import gc
+
+    from musubi.embedding.tei import TEIDenseClient
+
+    client = TEIDenseClient(base_url="http://tei-dense")
+    loop1_client_ref: list[weakref.ref[httpx.AsyncClient]] = []
+    loop1_loop_ref: list[weakref.ref[asyncio.AbstractEventLoop]] = []
+    loop2_client_alive: list[bool] = []
+
+    async def fetch_in_loop_1() -> None:
+        c = client._client.get()
+        loop1_client_ref.append(weakref.ref(c))
+        loop = asyncio.get_running_loop()
+        loop1_loop_ref.append(weakref.ref(loop))
+
+    async def fetch_in_loop_2() -> None:
+        client._client.get()
+        # Loop 1's client should be unreachable from the wrapper now.
+        loop2_client_alive.append(loop1_client_ref[0]() is not None)
+
+    asyncio.run(fetch_in_loop_1())
+    gc.collect()  # let loop-1's client (no longer referenced by wrapper) free
+    asyncio.run(fetch_in_loop_2())
+    gc.collect()
+    assert loop2_client_alive == [False], (
+        "wrapper must drop its reference to the previous loop's AsyncClient "
+        "when a new loop calls get(); otherwise stale connections from the "
+        "previous loop's pool trip closed-loop errors on the next tick"
+    )
+
+
+def test_tei_dense_client_reuses_async_client_within_one_event_loop() -> None:
+    """Per-loop reuse must still hold so HTTP/1.1 keepalive + connection
+    pooling are in play for the duration of one tick."""
+    from musubi.embedding.tei import TEIDenseClient
+
+    client = TEIDenseClient(base_url="http://tei-dense")
+    seen: list[httpx.AsyncClient] = []
+
+    async def take_three_within_one_loop() -> None:
+        seen.append(client._client.get())
+        seen.append(client._client.get())
+        seen.append(client._client.get())
+
+    asyncio.run(take_three_within_one_loop())
+    assert seen[0] is seen[1] is seen[2], "must reuse the SAME AsyncClient within one loop"
