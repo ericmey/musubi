@@ -198,6 +198,8 @@ class LifecycleRunner:
         Without a parent span the per-job httpx/qdrant/embedding calls
         scatter as orphan spans; one wrapping span ties them together.
         """
+        from opentelemetry.trace import Status, StatusCode
+
         from musubi.observability import get_tracer
 
         tracer = get_tracer("musubi.lifecycle.runner")
@@ -206,10 +208,12 @@ class LifecycleRunner:
             span.set_attribute("lifecycle.job.trigger_kind", job.trigger_kind)
             try:
                 await asyncio.to_thread(job.func)
-            except Exception:
+            except Exception as exc:
                 log.exception("lifecycle-job-crashed name=%s", job.name)
                 if span.is_recording():
                     span.set_attribute("lifecycle.job.crashed", True)
+                    span.record_exception(exc)
+                    span.set_status(Status(StatusCode.ERROR, str(exc)))
 
 
 def _utc_now() -> datetime:
