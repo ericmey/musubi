@@ -191,11 +191,29 @@ class LifecycleRunner:
         raise ValueError(f"unsupported trigger_kind: {job.trigger_kind!r}")
 
     async def _dispatch(self, job: Job) -> None:
-        """Run a Job's func in a worker thread; log any crash."""
-        try:
-            await asyncio.to_thread(job.func)
-        except Exception:
-            log.exception("lifecycle-job-crashed name=%s", job.name)
+        """Run a Job's func in a worker thread; log any crash.
+
+        Each job execution gets its own span (`lifecycle.job.<name>`)
+        so cron-driven work shows up as a top-level trace in Tempo.
+        Without a parent span the per-job httpx/qdrant/embedding calls
+        scatter as orphan spans; one wrapping span ties them together.
+        """
+        from opentelemetry.trace import Status, StatusCode
+
+        from musubi.observability import get_tracer
+
+        tracer = get_tracer("musubi.lifecycle.runner")
+        with tracer.start_as_current_span(f"lifecycle.job.{job.name}") as span:
+            span.set_attribute("lifecycle.job.name", job.name)
+            span.set_attribute("lifecycle.job.trigger_kind", job.trigger_kind)
+            try:
+                await asyncio.to_thread(job.func)
+            except Exception as exc:
+                log.exception("lifecycle-job-crashed name=%s", job.name)
+                if span.is_recording():
+                    span.set_attribute("lifecycle.job.crashed", True)
+                    span.record_exception(exc)
+                    span.set_status(Status(StatusCode.ERROR, str(exc)))
 
 
 def _utc_now() -> datetime:
@@ -294,6 +312,7 @@ async def _main_async() -> None:
     )
     from musubi.llm.promotion_client import HttpxPromotionClient
     from musubi.llm.reflection_client import HttpxReflectionClient
+    from musubi.observability import configure_logging, init_tracing
     from musubi.planes.concept.plane import ConceptPlane
     from musubi.planes.curated.plane import CuratedPlane
     from musubi.planes.episodic.plane import EpisodicPlane
@@ -301,11 +320,25 @@ async def _main_async() -> None:
     from musubi.vault.writelog import WriteLog
     from musubi.vault.writer import VaultWriter as _VaultWriter
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format='{"ts":"%(asctime)s","level":"%(levelname)s","name":"%(name)s","msg":%(message)r}',
-    )
+    # Same structured-JSON logging the API uses, so log shippers see one
+    # format across both containers (lifecycle-worker shares the
+    # musubi-core image but runs `python -m musubi.lifecycle.runner`).
+    configure_logging()
     settings = get_settings()
+
+    # Initialize OTel tracing. Mirrors api/app.py but pins
+    # `service.name=lifecycle-worker` so spans land under their own
+    # service in Tempo instead of being attributed to musubi-core. The
+    # exporter, version, host, and environment come from the shared
+    # settings (same env file as core).
+    init_tracing(
+        endpoint=settings.otel_exporter_otlp_endpoint or None,
+        service_name="lifecycle-worker",
+        service_namespace=settings.otel_service_namespace,
+        host_name=settings.otel_host_name or None,
+        service_version=settings.musubi_service_version or None,
+        deployment_environment=settings.otel_deployment_environment,
+    )
 
     qdrant = QdrantClient(
         host=settings.qdrant_host,
