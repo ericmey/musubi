@@ -34,6 +34,8 @@ from __future__ import annotations
 
 import asyncio
 import random
+import threading
+import weakref
 from typing import Any
 
 import httpx
@@ -140,6 +142,96 @@ def _build_client(timeout: float, limits: httpx.Limits) -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=timeout, limits=limits)
 
 
+class _LoopBoundAsyncClient:
+    """Per-event-loop ``httpx.AsyncClient`` cache.
+
+    The lifecycle worker spawns a fresh asyncio loop per tick (job funcs
+    call ``asyncio.run()`` inside ``asyncio.to_thread``), and ticks can
+    run concurrently in different worker threads. A long-lived
+    ``httpx.AsyncClient`` constructed at process start can't safely be
+    reused across loops — its connection pool holds connections whose
+    transports bind to the loop that opened them. Once that loop closes,
+    the pool's next maintenance pass (during a NEW request on a NEW
+    loop) tries to ``aclose`` those stale connections and trips
+    ``RuntimeError: Event loop is closed``.
+
+    Symptom: lifecycle-worker's ``reflection_digest`` crashed daily at
+    06:00 UTC with the closed-loop traceback through
+    ``httpcore.connection_pool._close_connections``.
+
+    Cache shape: a ``WeakKeyDictionary[loop -> AsyncClient]`` protected
+    by a ``threading.Lock``. Per-loop entries auto-evict when the loop
+    is garbage-collected at ``asyncio.run`` exit — no manual cleanup
+    needed for dead loops. The lock guards the dict mutations so two
+    worker threads handling concurrent ticks on different loops can't
+    race on insertion.
+
+    Within one loop the same ``AsyncClient`` is reused for the whole
+    tick so HTTP/1.1 keepalive + connection pooling are still in play.
+    """
+
+    __slots__ = ("_clients", "_closed", "_limits", "_lock", "_timeout")
+
+    def __init__(self, *, timeout: float, limits: httpx.Limits) -> None:
+        self._timeout = timeout
+        self._limits = limits
+        self._lock = threading.Lock()
+        self._clients: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = (
+            weakref.WeakKeyDictionary()
+        )
+        self._closed: bool = False
+
+    @property
+    def is_closed(self) -> bool:
+        """``True`` iff :meth:`aclose` has been called.
+
+        Distinct from the per-loop ``httpx.AsyncClient``'s own
+        ``is_closed``: this wrapper outlives any one loop's client,
+        so the wrapper's closed-state tracks the *intentional* shutdown
+        signal, not the lifecycle of a single underlying client.
+        """
+        return self._closed
+
+    def get(self) -> httpx.AsyncClient:
+        """Return an ``AsyncClient`` bound to the currently-running loop.
+
+        Concurrent ticks on different loops each get their own entry;
+        re-entries on the same loop reuse the cached client. A loop
+        that's been closed (e.g. by an early ``loop.close()`` outside
+        ``asyncio.run``) gets a fresh client too.
+        """
+        if self._closed:
+            raise RuntimeError(
+                "TEI client used after aclose(); construct a new client to continue."
+            )
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            cached = self._clients.get(loop)
+            if cached is None or loop.is_closed():
+                cached = _build_client(self._timeout, self._limits)
+                self._clients[loop] = cached
+            return cached
+
+    async def aclose(self) -> None:
+        """Close the current loop's cached client, if any. Idempotent.
+
+        Only the entry for the currently-running loop is awaited;
+        clients bound to other (possibly dead) loops are dropped
+        without attempting cleanup — that path is exactly what this
+        wrapper exists to avoid.
+        """
+        self._closed = True
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        with self._lock:
+            current = self._clients.pop(loop, None) if loop is not None else None
+            self._clients.clear()
+        if current is not None and loop is not None and not loop.is_closed():
+            await current.aclose()
+
+
 class TEIDenseClient:
     """Client for a TEI dense encoder endpoint.
 
@@ -162,7 +254,7 @@ class TEIDenseClient:
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _build_client(timeout, limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
 
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         if not texts:
@@ -170,7 +262,7 @@ class TEIDenseClient:
         out: list[list[float]] = []
         for batch in _chunks(texts, self._max_batch_size):
             data = await _post_json(
-                self._client,
+                self._client.get(),
                 self._base_url,
                 "/embed",
                 {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
@@ -208,7 +300,7 @@ class TEISparseClient:
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _build_client(timeout, limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         if not texts:
@@ -216,7 +308,7 @@ class TEISparseClient:
         out: list[dict[int, float]] = []
         for batch in _chunks(texts, self._max_batch_size):
             data = await _post_json(
-                self._client,
+                self._client.get(),
                 self._base_url,
                 "/embed_sparse",
                 {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
@@ -256,13 +348,13 @@ class TEIRerankerClient:
         self._timeout = timeout
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _build_client(timeout, limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
 
     async def rerank(self, query: str, candidates: list[str]) -> list[float]:
         if not candidates:
             return []
         data = await _post_json(
-            self._client,
+            self._client.get(),
             self._base_url,
             "/rerank",
             {

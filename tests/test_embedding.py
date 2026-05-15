@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import weakref
 from collections.abc import AsyncIterator
 
 import httpx
@@ -646,8 +647,8 @@ async def test_tei_reranker_client_reuses_single_async_client(
 
 
 async def test_tei_dense_client_aclose_closes_pool() -> None:
-    """aclose() must actually close the underlying httpx pool so process
-    shutdown drains cleanly + tests don't leak ResourceWarnings."""
+    """aclose() must mark the wrapper closed so subsequent use raises
+    a clear error and tests don't leak ResourceWarnings."""
     client = TEIDenseClient(base_url="http://tei-dense")
     assert not client._client.is_closed
     await client.aclose()
@@ -664,3 +665,113 @@ async def test_tei_reranker_client_aclose_closes_pool() -> None:
     client = TEIRerankerClient(base_url="http://tei-reranker")
     await client.aclose()
     assert client._client.is_closed
+
+
+def test_tei_dense_client_rebuilds_async_client_across_event_loops() -> None:
+    """Regression for the daily reflection_digest crash:
+    ``RuntimeError: Event loop is closed`` during ``_close_connections``.
+
+    The lifecycle worker spawns a fresh asyncio loop per tick. A long-lived
+    ``httpx.AsyncClient`` bound to loop A can't survive into loop B —
+    pool maintenance on loop B trips a closed-loop RuntimeError on the
+    stale connections.
+
+    Probe: capture a weakref to loop-1's AsyncClient while loop-1 is
+    still alive. After loop-1 exits and loop-2 calls ``get()``, the
+    wrapper must drop its reference to loop-1's client — the weakref
+    goes dead after a ``gc.collect()``.
+    """
+    import gc
+
+    from musubi.embedding.tei import TEIDenseClient
+
+    client = TEIDenseClient(base_url="http://tei-dense")
+    loop1_client_ref: list[weakref.ref[httpx.AsyncClient]] = []
+    loop2_client_alive: list[bool] = []
+
+    async def fetch_in_loop_1() -> None:
+        c = client._client.get()
+        loop1_client_ref.append(weakref.ref(c))
+
+    async def fetch_in_loop_2() -> None:
+        client._client.get()
+        loop2_client_alive.append(loop1_client_ref[0]() is not None)
+
+    asyncio.run(fetch_in_loop_1())
+    gc.collect()
+    asyncio.run(fetch_in_loop_2())
+    gc.collect()
+    assert loop2_client_alive == [False], (
+        "wrapper must drop its reference to the previous loop's AsyncClient "
+        "when a new loop calls get(); otherwise stale connections from the "
+        "previous loop's pool trip closed-loop errors on the next tick"
+    )
+
+
+def test_tei_dense_client_reuses_async_client_within_one_event_loop() -> None:
+    """Per-loop reuse must still hold so HTTP/1.1 keepalive + connection
+    pooling are in play for the duration of one tick."""
+    from musubi.embedding.tei import TEIDenseClient
+
+    client = TEIDenseClient(base_url="http://tei-dense")
+    seen: list[httpx.AsyncClient] = []
+
+    async def take_three_within_one_loop() -> None:
+        seen.append(client._client.get())
+        seen.append(client._client.get())
+        seen.append(client._client.get())
+
+    asyncio.run(take_three_within_one_loop())
+    assert seen[0] is seen[1] is seen[2], "must reuse the SAME AsyncClient within one loop"
+
+
+def test_tei_dense_client_isolates_clients_across_concurrent_loops() -> None:
+    """Lifecycle worker dispatches each job via ``asyncio.to_thread``,
+    so multiple jobs can run in different worker threads — each
+    spawning its own ``asyncio.run`` and therefore its own loop. They
+    share the same TEI client instance, so the wrapper's cache must
+    safely give each loop its own ``AsyncClient`` without races.
+
+    Spin two worker threads that each ``asyncio.run`` a coroutine
+    calling ``get()`` concurrently. Both threads collect the
+    ``AsyncClient`` instance they received; the two must be different
+    objects (one per loop), and the wrapper's WeakKeyDictionary must
+    have held both entries simultaneously while both loops were
+    alive.
+    """
+    import threading
+
+    from musubi.embedding.tei import TEIDenseClient
+
+    client = TEIDenseClient(base_url="http://tei-dense")
+    barrier = threading.Barrier(2)
+    results: dict[int, httpx.AsyncClient] = {}
+    cache_size_observed: list[int] = []
+
+    def worker(slot: int) -> None:
+        async def run_inside_own_loop() -> None:
+            barrier.wait()  # both threads enter get() in their own loops simultaneously
+            results[slot] = client._client.get()
+            cache_size_observed.append(len(client._client._clients))
+            # Hold the loop alive briefly so the other thread's loop
+            # also gets a chance to register before either dies.
+            await asyncio.sleep(0.05)
+
+        asyncio.run(run_inside_own_loop())
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert 0 in results and 1 in results, "both worker threads must reach get()"
+    assert results[0] is not results[1], (
+        "concurrent loops must each receive their own AsyncClient — sharing "
+        "one across threads/loops reintroduces the closed-loop race"
+    )
+    # Both loops were alive simultaneously, so at the observation point
+    # the WeakKeyDictionary held two entries (one per loop).
+    assert max(cache_size_observed) == 2, (
+        "WeakKeyDictionary should briefly hold both loops' clients during concurrent ticks"
+    )
