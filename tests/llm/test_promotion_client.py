@@ -99,6 +99,27 @@ async def test_render_includes_top_memories_in_prompt(httpx_mock: HTTPXMock) -> 
     assert "the-tell-tale-memory-string" in user_prompt
 
 
+async def test_render_engages_ollama_structured_output_mode(httpx_mock: HTTPXMock) -> None:
+    """The /api/chat payload must pass a JSON Schema as `format` so
+    Ollama refuses to emit responses missing required fields (e.g.
+    `body`). Same constraint we ship in musubi.llm.ollama."""
+    httpx_mock.add_response(
+        url=f"{_BASE_URL}/api/chat",
+        method="POST",
+        json=_chat_body(_valid_payload()),
+    )
+    client = _client()
+    await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
+    request = httpx_mock.get_request()
+    assert request is not None
+    body = json.loads(request.content)
+    fmt = body["format"]
+    assert isinstance(fmt, dict), "format must be a JSON Schema dict, not the bare 'json' string"
+    assert fmt.get("type") == "object"
+    assert "body" in fmt.get("properties", {})
+    assert "body" in fmt.get("required", []), "`body` must be in required so Ollama can't omit it"
+
+
 # ---------------------------------------------------------------------------
 # Failure paths — Protocol contract says RAISE, not return None
 # ---------------------------------------------------------------------------

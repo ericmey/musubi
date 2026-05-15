@@ -28,6 +28,7 @@ from musubi.planes.curated import CuratedPlane
 from musubi.planes.episodic import EpisodicPlane
 from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
+from musubi.storage import build_qdrant_client
 
 
 def get_settings_dep() -> Settings:
@@ -39,10 +40,16 @@ def get_settings_dep() -> Settings:
 def _build_qdrant_client_default() -> QdrantClient:
     """Lazy production-default Qdrant client; constructed on first use."""
     settings = get_settings()
-    return QdrantClient(
+    # Test/dev fallback only: production replaces this whole factory
+    # via `bootstrap_production_app`. Honour `musubi_allow_plaintext`
+    # the same way the production path does so route-level callers of
+    # `get_qdrant_client` get the configured TLS policy when they
+    # haven't gone through bootstrap.
+    return build_qdrant_client(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
         api_key=settings.qdrant_api_key.get_secret_value(),
+        https=not settings.musubi_allow_plaintext,
     )
 
 

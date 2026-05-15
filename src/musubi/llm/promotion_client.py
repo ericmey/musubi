@@ -48,6 +48,13 @@ class _PromotionResponse(BaseModel):
     sections: list[str] = Field(default_factory=list)
 
 
+# Cache the JSON Schema at import time so each promotion call doesn't
+# pay regeneration cost. The schema constrains Ollama's structured-output
+# decoder (≥0.5.0) — the LLM can't omit `body` even on best-of-N drift.
+# Same pattern as `musubi.llm.ollama` (PR #311, 2026-05-14).
+_PROMOTION_SCHEMA: dict[str, Any] = _PromotionResponse.model_json_schema()
+
+
 def _load_prompt(name: str, version: str) -> str:
     resource = files("musubi.llm.prompts").joinpath(name).joinpath(f"{version}.txt")
     return resource.read_text(encoding="utf-8")
@@ -126,12 +133,17 @@ class HttpxPromotionClient:
             raise ValueError(f"promotion-render body rejected: {exc}") from exc
 
     async def _chat(self, prompt: str) -> str:
+        # Pass the Pydantic-derived JSON Schema as `format` to engage
+        # Ollama's structured-output mode (≥0.5.0). Without this, qwen3:4b
+        # occasionally emits a response missing `body`, which would
+        # ValueError out of `render_curated_markdown` and burn a sweep
+        # tick. See PR #311 (the same fix applied to musubi.llm.ollama).
         url = f"{self._base_url}/api/chat"
         payload: dict[str, Any] = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
             "stream": False,
-            "format": "json",
+            "format": _PROMOTION_SCHEMA,
             "options": {"temperature": 0.2},
         }
         async with httpx.AsyncClient(timeout=self._timeout_s) as client:

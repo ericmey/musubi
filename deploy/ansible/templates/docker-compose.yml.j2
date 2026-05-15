@@ -189,11 +189,20 @@ services:
       - "--path.procfs=/host/proc"
       - "--path.sysfs=/host/sys"
       - "--path.rootfs=/host/rootfs"
+      - "--path.udev.data=/host/run/udev/data"
       - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc|var/lib/docker)($|/)"
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/host/rootfs:ro,rslave
+      # /run/udev so the diskstats collector can attach udev-derived
+      # labels to node_disk_* series — DEVNAME, ID_WWN, ID_SERIAL,
+      # ID_MODEL and friends (not ID_FS_UUID, which is the filesystem
+      # UUID exposed via a different udev path). Without this the
+      # collector logs `Failed to open directory, disabling udev
+      # device properties` on every restart and node_disk_* loses
+      # those identifying labels.
+      - /run/udev:/host/run/udev:ro
     restart: unless-stopped
 
   ollama:
