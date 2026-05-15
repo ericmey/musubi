@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/ericmey/musubi/compare/v1.5.0...v1.5.1) (2026-05-15)
+
+
+### Bug Fixes
+
+* **embedding:** rebuild TEI httpx.AsyncClient per asyncio loop ([#321](https://github.com/ericmey/musubi/issues/321)) ([7a66a03](https://github.com/ericmey/musubi/commit/7a66a03ec8dc6c2a1ecc7e9bf433cd19036443d5))
+
 ## [1.5.0](https://github.com/ericmey/musubi/compare/v1.4.0...v1.5.0) (2026-05-15)
 
 
