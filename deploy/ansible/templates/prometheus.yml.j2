@@ -17,9 +17,13 @@
 # AND remote_write to shiori's Mimir for central aggregation, multi-host
 # correlation, and longer-horizon visualization.
 #
-# Not yet scraped (reason in parens):
-#   - qdrant (its /metrics requires the api-key header; secret-file wiring
-#     belongs to a follow-up slice).
+# Qdrant scrape uses `authorization.credentials_file` to send
+# `Authorization: Bearer <api-key>`. Qdrant 1.17 accepts either an
+# `api-key:` header or the Bearer form; Prometheus only natively
+# supports the Bearer form, so that's what we use. The token file is
+# rendered separately by `deploy/ansible/deploy.yml` from the
+# `vault_qdrant_api_key` variable and mounted into the container at
+# `/etc/prometheus/qdrant.token` (mode 0640, root:musubi).
 #
 # Visualization, alerting, and trace collection live on shiori per ADR 0033.
 # Local Grafana/Loki/Tempo/Alertmanager were planned by slice-ops-observability
@@ -89,6 +93,17 @@ scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
+
+  # Qdrant — vector storage. Native Prometheus endpoint at /metrics; auth
+  # required. Bearer credentials come from a file rendered by ansible from
+  # `vault_qdrant_api_key`.
+  - job_name: qdrant
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/qdrant.token
+    static_configs:
+      - targets: ["qdrant:6333"]
 
   # node-exporter — host-level CPU / memory / disk / network / filesystem.
   # Runs as a sibling container on the musubi compose bridge, mounting

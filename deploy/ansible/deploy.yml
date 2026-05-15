@@ -11,16 +11,31 @@
         group: "{{ musubi_service_group }}"
         mode: "0640"
 
-    - name: Copy Prometheus scrape config
+    - name: Render Prometheus scrape config
       # Prometheus mounts this file read-only at
-      # /etc/prometheus/prometheus.yml. A `SIGHUP` to the container
-      # reloads it without downtime.
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../prometheus/prometheus.yml"
+      # /etc/prometheus/prometheus.yml. The container has
+      # `--web.enable-lifecycle`, so a POST to /-/reload is the
+      # zero-downtime reload path; handled by the notify handler below.
+      ansible.builtin.template:
+        src: templates/prometheus.yml.j2
         dest: "{{ musubi_config_dir }}/prometheus.yml"
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0644"
+      notify: reload prometheus
+
+    - name: Render Qdrant bearer-token file for Prometheus
+      # Mounted into the prometheus container at
+      # /etc/prometheus/qdrant.token; referenced by the qdrant scrape
+      # job's `authorization.credentials_file`. Mode 0640 keeps it
+      # readable by the musubi service group only.
+      ansible.builtin.template:
+        src: templates/qdrant.token.j2
+        dest: "{{ musubi_config_dir }}/qdrant.token"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      notify: reload prometheus
 
     - name: Pull missing pinned images
       community.docker.docker_compose_v2_pull:
@@ -73,3 +88,20 @@
       register: core_health
       until: core_health.status == 200
       changed_when: false
+
+  handlers:
+    - name: reload prometheus
+      # `kill -s HUP` is the zero-downtime reload signal — the container
+      # stays up, Prometheus re-reads `prometheus.yml` in place. Cheaper
+      # than the HTTP `/-/reload` path because it has no in-container
+      # tooling dependency. The prometheus container may not be running
+      # yet on a first-deploy run (it starts after this handler is
+      # registered but before flush), so swallow a "not running" exit.
+      ansible.builtin.command:
+        cmd: docker compose -f {{ musubi_config_dir }}/docker-compose.yml kill -s HUP prometheus
+      register: prometheus_reload
+      failed_when:
+        - prometheus_reload.rc != 0
+        - "'no such service' not in (prometheus_reload.stderr | default(''))"
+        - "'not running' not in (prometheus_reload.stderr | default(''))"
+      changed_when: prometheus_reload.rc == 0

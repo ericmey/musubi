@@ -38,12 +38,20 @@
         mode: "0640"
 
     - name: Refresh Prometheus scrape config (may have new targets)
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../prometheus/prometheus.yml"
+      ansible.builtin.template:
+        src: templates/prometheus.yml.j2
         dest: "{{ musubi_config_dir }}/prometheus.yml"
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0644"
+
+    - name: Refresh Qdrant bearer-token file for Prometheus
+      ansible.builtin.template:
+        src: templates/qdrant.token.j2
+        dest: "{{ musubi_config_dir }}/qdrant.token"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
 
     - name: Force-pull any image references (policy=always)
       # Distinct from deploy.yml, which uses policy=missing. Without

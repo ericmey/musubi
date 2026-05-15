@@ -33,7 +33,7 @@ Per [[13-decisions/0033-centralize-observability-on-shiori]], visualization /
 log aggregation / trace storage / alerting all live on a dedicated
 observability host (shiori) external to this repo. Local on the musubi host:
 
-- **Metrics (local scrape):** Prometheus on the musubi compose bridge — scrapes `core:8100/v1/ops/metrics`, the three TEI services, node-exporter, and itself. Config at `deploy/prometheus/prometheus.yml`. Local TSDB retains 30 days for direct PromQL access at `127.0.0.1:9090` if shiori is unreachable.
+- **Metrics (local scrape):** Prometheus on the musubi compose bridge — scrapes `core:8100/v1/ops/metrics`, qdrant (Bearer-authed `/metrics`), the three TEI services, node-exporter, and itself. Config rendered from `deploy/ansible/templates/prometheus.yml.j2`. Local TSDB retains 30 days for direct PromQL access at `127.0.0.1:9090` if shiori is unreachable.
 - **Metrics (central forward):** prometheus `remote_write` → `shiori.mey.house:9009/api/v1/push` (Mimir). Source of truth for visualization, alerting, and multi-host correlation.
 - **Host metrics:** node-exporter sidecar container; standard prom/node-exporter image, mounts /proc, /sys, / read-only.
 - **Logs:** structured JSON to stdout (still required) — central Loki ingest from musubi is a follow-up PR scoped to the shiori-side codebase.
