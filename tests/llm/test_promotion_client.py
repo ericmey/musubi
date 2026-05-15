@@ -109,9 +109,7 @@ async def test_render_engages_ollama_structured_output_mode(httpx_mock: HTTPXMoc
         json=_chat_body(_valid_payload()),
     )
     client = _client()
-    await client.render_curated_markdown(
-        title="T", content="C", rationale="R", top_memories=[]
-    )
+    await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
     request = httpx_mock.get_request()
     assert request is not None
     body = json.loads(request.content)
