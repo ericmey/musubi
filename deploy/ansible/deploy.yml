@@ -13,9 +13,9 @@
 
     - name: Render Prometheus scrape config
       # Prometheus mounts this file read-only at
-      # /etc/prometheus/prometheus.yml. The container has
-      # `--web.enable-lifecycle`, so a POST to /-/reload is the
-      # zero-downtime reload path; handled by the notify handler below.
+      # /etc/prometheus/prometheus.yml. The reload-prometheus handler
+      # below sends SIGHUP to the running container on change so the
+      # new config is picked up without recreating it.
       ansible.builtin.template:
         src: templates/prometheus.yml.j2
         dest: "{{ musubi_config_dir }}/prometheus.yml"
@@ -25,16 +25,19 @@
       notify: reload prometheus
 
     - name: Render Qdrant bearer-token file for Prometheus
-      # Mounted into the prometheus container at
+      # Mounted read-only into the prometheus container at
       # /etc/prometheus/qdrant.token; referenced by the qdrant scrape
-      # job's `authorization.credentials_file`. Mode 0640 keeps it
-      # readable by the musubi service group only.
+      # job's `authorization.credentials_file`. Chown to UID 65534
+      # (`nobody`) because the official prom/prometheus image runs as
+      # that user — bind mounts preserve host UID/GID, so the file
+      # must be readable by 65534 specifically. Mode 0400 grants
+      # owner-only read.
       ansible.builtin.template:
         src: templates/qdrant.token.j2
         dest: "{{ musubi_config_dir }}/qdrant.token"
-        owner: root
-        group: "{{ musubi_service_group }}"
-        mode: "0640"
+        owner: "65534"
+        group: "65534"
+        mode: "0400"
       notify: reload prometheus
 
     - name: Pull missing pinned images
