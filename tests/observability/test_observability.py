@@ -605,20 +605,22 @@ _DEPLOY = _REPO_ROOT / "deploy"
 
 
 def test_prometheus_config_loads() -> None:
-    """deploy/prometheus/prometheus.yml parses as YAML + has scrape_configs.
-
-    Qdrant is intentionally NOT scraped yet — its /metrics requires
-    the `api-key` header and the secret-file wiring is a follow-up
-    (see work-log 2026-04-21 entry). The active targets are
-    musubi-core + the three TEI services + prometheus self-scrape.
+    """deploy/ansible/templates/prometheus.yml.j2 parses as YAML (after Jinja
+    placeholder substitution) and has the expected scrape targets:
+    musubi-core, qdrant, the three TEI services, prometheus self,
+    and node-exporter.
     """
     import yaml
 
-    cfg = yaml.safe_load((_DEPLOY / "prometheus" / "prometheus.yml").read_text())
+    raw = (_DEPLOY / "ansible" / "templates" / "prometheus.yml.j2").read_text()
+    # Substitute the lone Jinja placeholder so yaml.safe_load can parse.
+    raw = raw.replace("{{ vault_qdrant_api_key }}", "x")
+    cfg = yaml.safe_load(raw)
     assert "scrape_configs" in cfg
     job_names = {j["job_name"] for j in cfg["scrape_configs"]}
     assert "musubi-core" in job_names
     assert "tei-dense" in job_names
+    assert "qdrant" in job_names, "qdrant scrape must be present (added 2026-05-14)"
 
 
 # Loki / Tempo / Grafana load-tests removed per

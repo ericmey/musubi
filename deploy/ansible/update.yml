@@ -38,12 +38,24 @@
         mode: "0640"
 
     - name: Refresh Prometheus scrape config (may have new targets)
-      ansible.builtin.copy:
-        src: "{{ playbook_dir }}/../prometheus/prometheus.yml"
+      ansible.builtin.template:
+        src: templates/prometheus.yml.j2
         dest: "{{ musubi_config_dir }}/prometheus.yml"
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0644"
+      notify: reload prometheus
+
+    - name: Refresh Qdrant bearer-token file for Prometheus
+      # See deploy.yml for the UID 65534 rationale (prometheus container
+      # runs as `nobody`; bind mounts preserve host ownership).
+      ansible.builtin.template:
+        src: templates/qdrant.token.j2
+        dest: "{{ musubi_config_dir }}/qdrant.token"
+        owner: "65534"
+        group: "65534"
+        mode: "0400"
+      notify: reload prometheus
 
     - name: Force-pull any image references (policy=always)
       # Distinct from deploy.yml, which uses policy=missing. Without
@@ -77,6 +89,21 @@
       register: core_health
       until: core_health.status == 200
       changed_when: false
+
+  handlers:
+    - name: reload prometheus
+      # SIGHUP triggers an in-place reload of prometheus.yml. The
+      # prometheus service may not be in `changed_services` for this
+      # update run, so swallow "no such service" / "not running"
+      # without failing the play.
+      ansible.builtin.command:
+        cmd: docker compose -f {{ musubi_config_dir }}/docker-compose.yml kill -s HUP prometheus
+      register: prometheus_reload
+      failed_when:
+        - prometheus_reload.rc != 0
+        - "'no such service' not in (prometheus_reload.stderr | default(''))"
+        - "'not running' not in (prometheus_reload.stderr | default(''))"
+      changed_when: prometheus_reload.rc == 0
 
     - name: Ensure upgrade-history log directory exists
       ansible.builtin.file:

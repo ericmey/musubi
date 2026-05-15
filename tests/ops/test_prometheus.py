@@ -16,7 +16,7 @@ Scope:
   scrape config read-only, persists TSDB under `/var/lib/musubi/prometheus-data`,
   binds host-local-only (no external exposure without Kong — see
   ADR 0024), and carries the retention flag.
-- `deploy.yml` copies the scrape config to the host alongside the
+- `deploy.yml` renders the scrape config to the host alongside the
   compose render step.
 """
 
@@ -28,10 +28,18 @@ from typing import Any
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-PROM_CONFIG = ROOT / "deploy" / "prometheus" / "prometheus.yml"
+PROM_CONFIG = ROOT / "deploy" / "ansible" / "templates" / "prometheus.yml.j2"
 COMPOSE_TEMPLATE = ROOT / "deploy" / "ansible" / "templates" / "docker-compose.yml.j2"
 GROUP_VARS = ROOT / "deploy" / "ansible" / "group_vars" / "all.yml"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
+
+
+def _load_prom_config() -> Any:
+    # `prometheus.yml.j2` has no Jinja placeholders inside scrape blocks
+    # today, but tolerate them in case a future change adds one.
+    rendered = PROM_CONFIG.read_text()
+    rendered = rendered.replace("{{ vault_qdrant_api_key }}", "x")
+    return yaml.safe_load(rendered)
 
 
 def _load(path: Path) -> Any:
@@ -45,14 +53,14 @@ def _load(path: Path) -> Any:
 
 def test_prometheus_config_parses() -> None:
     assert PROM_CONFIG.exists(), f"missing {PROM_CONFIG}"
-    cfg = _load(PROM_CONFIG)
+    cfg = _load_prom_config()
     assert isinstance(cfg, dict)
     assert "global" in cfg
     assert "scrape_configs" in cfg
 
 
 def test_scrape_interval_is_fast_enough_for_p95_math() -> None:
-    cfg = _load(PROM_CONFIG)
+    cfg = _load_prom_config()
     interval = cfg["global"]["scrape_interval"]
     # Parse "15s" / "60s" / "1m"
     if interval.endswith("s"):
@@ -65,7 +73,7 @@ def test_scrape_interval_is_fast_enough_for_p95_math() -> None:
 
 
 def test_scrape_targets_musubi_core_metrics_endpoint() -> None:
-    cfg = _load(PROM_CONFIG)
+    cfg = _load_prom_config()
     jobs = {j["job_name"]: j for j in cfg["scrape_configs"]}
     assert "musubi-core" in jobs, "no scrape job for musubi-core"
     core = jobs["musubi-core"]
@@ -82,7 +90,7 @@ def test_external_labels_identify_host() -> None:
     rest of the fleet (openclaw, livekit, shiori) so cross-emitter queries
     work without a label-rename layer at query time. See
     wiki/services/observability/integration-baseline.md (F3.1)."""
-    cfg = _load(PROM_CONFIG)
+    cfg = _load_prom_config()
     labels = cfg["global"].get("external_labels") or {}
     assert "host_name" in labels, "external_labels.host_name missing (OTel convention)"
     assert "deployment_environment" in labels, "external_labels.deployment_environment missing"
@@ -94,7 +102,7 @@ def test_remote_write_to_shiori_central() -> None:
     Mimir instance on shiori. Without this block, musubi metrics never reach
     central observability — the centralization is a runtime no-op.
     """
-    cfg = _load(PROM_CONFIG)
+    cfg = _load_prom_config()
     rw = cfg.get("remote_write") or []
     assert rw, "remote_write block missing — central observability won't receive musubi metrics"
     urls = [entry.get("url", "") for entry in rw]
@@ -107,7 +115,7 @@ def test_scrape_targets_node_exporter() -> None:
     """Per ADR 0033, host-level metrics are collected by node-exporter
     sibling container, scraped on the compose bridge as `node-exporter:9100`.
     """
-    cfg = _load(PROM_CONFIG)
+    cfg = _load_prom_config()
     jobs = {j["job_name"]: j for j in cfg["scrape_configs"]}
     assert "node-exporter" in jobs, "no scrape job for node-exporter — host metrics gap"
     targets = [t for sc in jobs["node-exporter"]["static_configs"] for t in sc["targets"]]
@@ -220,7 +228,41 @@ def test_group_vars_declares_prometheus_data_dir() -> None:
     assert "/var/lib/musubi/prometheus-data" in gv["musubi_data_dirs"]
 
 
-def test_deploy_playbook_copies_scrape_config() -> None:
+def test_deploy_playbook_renders_scrape_config() -> None:
     text = DEPLOY_PLAYBOOK.read_text()
-    assert "prometheus.yml" in text
-    assert "/prometheus/prometheus.yml" in text or "prometheus/prometheus.yml" in text
+    assert "templates/prometheus.yml.j2" in text, (
+        "deploy.yml must render prometheus.yml.j2 (not copy a static file)"
+    )
+    assert "templates/qdrant.token.j2" in text, (
+        "deploy.yml must render qdrant.token.j2 so the prometheus container "
+        "can authenticate against qdrant /metrics"
+    )
+
+
+def test_scrape_targets_qdrant_with_bearer_auth() -> None:
+    """Qdrant 1.17 requires Authorization: Bearer <api-key> on /metrics.
+    Prometheus uses authorization.credentials_file pointing at a file
+    rendered from `vault_qdrant_api_key` so the scrape config itself
+    stays secret-free."""
+    cfg = _load_prom_config()
+    jobs = {j["job_name"]: j for j in cfg["scrape_configs"]}
+    assert "qdrant" in jobs, "no scrape job for qdrant"
+    qdrant = jobs["qdrant"]
+    assert qdrant["metrics_path"] == "/metrics"
+    auth = qdrant.get("authorization") or {}
+    assert auth.get("type") == "Bearer", "qdrant scrape must use Bearer auth"
+    assert auth.get("credentials_file") == "/etc/prometheus/qdrant.token", (
+        "qdrant scrape must read the api-key from the mounted token file"
+    )
+    targets = [t for sc in qdrant["static_configs"] for t in sc["targets"]]
+    assert "qdrant:6333" in targets, "qdrant target must be 'qdrant:6333'"
+
+
+def test_prometheus_mounts_qdrant_token_readonly() -> None:
+    svc = _render_compose()["services"]["prometheus"]
+    ro_mounts = [
+        v
+        for v in svc["volumes"]
+        if isinstance(v, str) and v.endswith(":ro") and "qdrant.token" in v
+    ]
+    assert ro_mounts, "qdrant.token must be mounted read-only into prometheus"

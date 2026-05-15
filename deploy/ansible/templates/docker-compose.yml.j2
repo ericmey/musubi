@@ -154,6 +154,7 @@ services:
     image: {{ musubi_prometheus_image }}
     volumes:
       - /etc/musubi/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - /etc/musubi/qdrant.token:/etc/prometheus/qdrant.token:ro
       - /var/lib/musubi/prometheus-data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
