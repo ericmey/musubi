@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/ericmey/musubi/compare/v1.4.0...v1.5.0) (2026-05-15)
+
+
+### Features
+
+* **lifecycle:** wire OTel tracing in lifecycle-worker ([#317](https://github.com/ericmey/musubi/issues/317)) ([ff75a68](https://github.com/ericmey/musubi/commit/ff75a68659355cfd6060fe45f93c0a650d69367a))
+
 ## [1.4.0](https://github.com/ericmey/musubi/compare/v1.3.4...v1.4.0) (2026-05-15)
 
 
