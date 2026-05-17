@@ -10,17 +10,62 @@ chunking + max-pool aggregation. Tests cover:
 4. Mixed batches preserve input order and per-input vector identity.
 5. Dense + rerank delegate unchanged regardless of input length.
 6. Empty input returns empty output.
+7. Construction is hermetic — no tokenizer load, no network, no HF token.
 
 The wrapped embedder is a spy that records every call, so we can assert on
 both the shape of the output AND the batching pattern (one flattened call
 per :meth:`embed_sparse` invocation, regardless of input count).
+
+A whitespace-based fake tokenizer is injected into ``ChunkedEmbedder`` so
+the tests don't depend on HuggingFace download, cached tokenizer files,
+or the gated ``naver/splade-v3`` repo. The real SPLADE-v3 tokenizer is
+exercised by the Docker build's pre-cache step and the live deploy.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from musubi.embedding import ChunkedEmbedder, FakeEmbedder
 from musubi.embedding.base import Embedder
 from musubi.embedding.chunked import _max_pool_sparse
+
+
+@dataclass(frozen=True)
+class _FakeEncoded:
+    ids: list[int]
+    offsets: list[tuple[int, int]]
+
+
+class _WhitespaceTokenizer:
+    """Hermetic stand-in for the real BGE-M3 / SPLADE-v3 tokenizer.
+
+    One token per whitespace-delimited word. Offsets map back to the
+    original text so :func:`musubi.planes.artifact.chunking._tokenize`'s
+    filtering + :class:`TokenSlidingChunker`'s windowing both work.
+
+    Token ids are sequential starting at 1 — 0 is a conventional unknown
+    marker; nothing in the wrapper actually inspects ids, but the
+    convention costs nothing.
+    """
+
+    def encode(self, sequence: str) -> _FakeEncoded:
+        ids: list[int] = []
+        offsets: list[tuple[int, int]] = []
+        i = 0
+        n = len(sequence)
+        while i < n:
+            while i < n and sequence[i].isspace():
+                i += 1
+            if i >= n:
+                break
+            start = i
+            while i < n and not sequence[i].isspace():
+                i += 1
+            end = i
+            ids.append(len(ids) + 1)
+            offsets.append((start, end))
+        return _FakeEncoded(ids=ids, offsets=offsets)
 
 
 class _SpyEmbedder(Embedder):
@@ -49,15 +94,35 @@ class _SpyEmbedder(Embedder):
         return await self._inner.rerank(query, candidates)
 
 
-def _long_english_text(approx_tokens: int) -> str:
-    """Build a deterministic English paragraph of roughly ``approx_tokens``
-    BGE-M3 tokens. Uses a fixed sentence so tests are reproducible."""
+def _make_embedder(
+    spy: _SpyEmbedder,
+    *,
+    sparse_window_tokens: int = 510,
+    sparse_overlap_tokens: int = 64,
+) -> ChunkedEmbedder:
+    """Construct a hermetic :class:`ChunkedEmbedder` for testing.
+
+    Always injects the whitespace tokenizer so no test touches the
+    network or the HF cache.
+    """
+    return ChunkedEmbedder(
+        spy,
+        tokenizer=_WhitespaceTokenizer(),
+        sparse_window_tokens=sparse_window_tokens,
+        sparse_overlap_tokens=sparse_overlap_tokens,
+    )
+
+
+def _long_text(approx_words: int) -> str:
+    """Build a deterministic English paragraph of roughly ``approx_words``
+    whitespace-words. Uses a fixed sentence so tests are reproducible."""
     sentence = (
         "The quick brown fox jumps over the lazy dog while observability "
         "engineers debate retention policies and chunk-window overlaps. "
     )
-    # ~22 BGE-M3 tokens per sentence in practice; over-shoot to be safe.
-    n = max(1, approx_tokens // 18 + 2)
+    # Sentence has 19 whitespace-words. Over-shoot to be safe.
+    words_per_sentence = 19
+    n = max(1, approx_words // words_per_sentence + 2)
     return sentence * n
 
 
@@ -68,7 +133,7 @@ def _long_english_text(approx_tokens: int) -> str:
 
 async def test_short_input_takes_single_chunk_path() -> None:
     spy = _SpyEmbedder()
-    embedder = ChunkedEmbedder(spy)
+    embedder = _make_embedder(spy)
 
     out = await embedder.embed_sparse(["hello world"])
 
@@ -86,12 +151,12 @@ async def test_short_input_takes_single_chunk_path() -> None:
 
 async def test_long_input_chunked_into_multiple_windows() -> None:
     spy = _SpyEmbedder()
-    embedder = ChunkedEmbedder(spy, sparse_window_tokens=64, sparse_overlap_tokens=8)
+    embedder = _make_embedder(spy, sparse_window_tokens=64, sparse_overlap_tokens=8)
 
-    # ~600 tokens worth of text; with window=64 / overlap=8, this guarantees
+    # ~600 whitespace-words; with window=64 / overlap=8, this guarantees
     # the chunker produces multiple windows. Window is shrunk for the test
     # so we don't have to construct genuinely SPLADE-overflowing text.
-    text = _long_english_text(approx_tokens=600)
+    text = _long_text(approx_words=600)
 
     out = await embedder.embed_sparse([text])
 
@@ -133,10 +198,10 @@ def test_max_pool_takes_per_index_max() -> None:
 
 async def test_mixed_batch_preserves_per_input_identity() -> None:
     spy = _SpyEmbedder()
-    embedder = ChunkedEmbedder(spy, sparse_window_tokens=64, sparse_overlap_tokens=8)
+    embedder = _make_embedder(spy, sparse_window_tokens=64, sparse_overlap_tokens=8)
 
     short = "tiny"
-    long_text = _long_english_text(approx_tokens=600)
+    long_text = _long_text(approx_words=600)
 
     out = await embedder.embed_sparse([short, long_text, "another short"])
 
@@ -160,7 +225,7 @@ async def test_mixed_batch_short_input_vector_matches_unwrapped() -> None:
     vector is that vector."""
     inner = FakeEmbedder()
     spy = _SpyEmbedder()
-    embedder = ChunkedEmbedder(spy, sparse_window_tokens=64, sparse_overlap_tokens=8)
+    embedder = _make_embedder(spy, sparse_window_tokens=64, sparse_overlap_tokens=8)
 
     short = "trust but verify"
     [wrapped_out] = await embedder.embed_sparse([short])
@@ -175,9 +240,9 @@ async def test_mixed_batch_short_input_vector_matches_unwrapped() -> None:
 
 async def test_dense_passes_through_unchanged() -> None:
     spy = _SpyEmbedder()
-    embedder = ChunkedEmbedder(spy)
+    embedder = _make_embedder(spy)
 
-    long_text = _long_english_text(approx_tokens=600)
+    long_text = _long_text(approx_words=600)
     out = await embedder.embed_dense([long_text, "short"])
 
     assert len(out) == 2
@@ -188,9 +253,9 @@ async def test_dense_passes_through_unchanged() -> None:
 
 async def test_rerank_passes_through_unchanged() -> None:
     spy = _SpyEmbedder()
-    embedder = ChunkedEmbedder(spy)
+    embedder = _make_embedder(spy)
 
-    long_text = _long_english_text(approx_tokens=600)
+    long_text = _long_text(approx_words=600)
     scores = await embedder.rerank("query", [long_text, "candidate"])
 
     assert len(scores) == 2
@@ -205,7 +270,7 @@ async def test_rerank_passes_through_unchanged() -> None:
 
 async def test_empty_sparse_input_returns_empty_and_skips_downstream() -> None:
     spy = _SpyEmbedder()
-    embedder = ChunkedEmbedder(spy)
+    embedder = _make_embedder(spy)
 
     out = await embedder.embed_sparse([])
 
@@ -219,7 +284,7 @@ async def test_whitespace_only_input_forwards_original_text() -> None:
     whitespace string downstream so cache keys + per-embedder behavior
     stay consistent with the pre-wrap contract."""
     spy = _SpyEmbedder()
-    embedder = ChunkedEmbedder(spy)
+    embedder = _make_embedder(spy)
 
     out = await embedder.embed_sparse(["   "])
 
@@ -232,10 +297,26 @@ async def test_whitespace_only_input_forwards_original_text() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 7. Protocol conformance
+# 7. Hermetic construction + protocol conformance
 # ---------------------------------------------------------------------------
 
 
 def test_chunked_embedder_implements_embedder_protocol() -> None:
-    embedder = ChunkedEmbedder(FakeEmbedder())
+    embedder = ChunkedEmbedder(FakeEmbedder(), tokenizer=_WhitespaceTokenizer())
     assert isinstance(embedder, Embedder)
+
+
+def test_construction_does_not_load_tokenizer() -> None:
+    """Constructing ``ChunkedEmbedder`` without an injected tokenizer must
+    not trigger an HF download or any tokenizer load. The real SPLADE-v3
+    tokenizer is lazy-loaded on the first :meth:`embed_sparse` call.
+
+    Without this guarantee, importing/instantiating the production embedder
+    would couple module-load time to network availability and HF auth,
+    breaking unit tests + fork-PR CI runs where neither is available.
+    """
+    embedder = ChunkedEmbedder(FakeEmbedder())  # no tokenizer arg
+    # If the constructor eagerly loaded the tokenizer, we'd see _chunker
+    # set immediately. The lazy-load contract is that it stays None until
+    # the first embed_sparse call.
+    assert embedder._chunker is None

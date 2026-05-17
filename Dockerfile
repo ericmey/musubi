@@ -93,11 +93,12 @@ USER musubi
 # secret from the `HF_TOKEN` repository secret; for local builds:
 #   docker build --secret id=hf_token,src=$HOME/.huggingface/token .
 #
-# If a new tokenizer is ever added in code, this RUN must be updated to
-# match — otherwise the first runtime use will fail (HF_HOME is a baked
-# layer, not writable at runtime). The `hf-cache` bind-mount declared in
-# the compose template provides a writable defense-in-depth path that
-# tolerates this drift, but the canonical home is the baked layer here.
+# `/opt/musubi/hf-cache` is created musubi-owned above, so it is writable
+# at runtime — but no runtime download is intended. Production relies
+# entirely on the baked tokenizers; runtime writes would only happen if
+# code drifts (a new tokenizer added without updating this RUN). That
+# class of drift should be caught in PR review, not papered over with
+# runtime hedging.
 RUN --mount=type=secret,id=hf_token,uid=999 \
     HF_TOKEN="$(cat /run/secrets/hf_token)" \
     HUGGINGFACE_HUB_TOKEN="$(cat /run/secrets/hf_token)" \

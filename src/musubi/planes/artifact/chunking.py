@@ -43,17 +43,19 @@ class _TokenizedText:
 
 
 @lru_cache(maxsize=1)
-def _load_bge_m3_tokenizer() -> Tokenizer:
+def load_bge_m3_tokenizer() -> Tokenizer:
     """Load and cache the BGE-M3 tokenizer.
 
     `tokenizers` handles the HuggingFace cache on disk; this process-level
     cache keeps repeated chunking calls from paying construction cost.
+    Public because it's imported cross-module (e.g. by callers that need
+    a tokenizer instance to feed a chunker).
     """
     return Tokenizer.from_pretrained(_BGE_M3_TOKENIZER)
 
 
 @lru_cache(maxsize=1)
-def _load_splade_v3_tokenizer() -> Tokenizer:
+def load_splade_v3_tokenizer() -> Tokenizer:
     """Load and cache the SPLADE-v3 tokenizer.
 
     Used by :class:`musubi.embedding.chunked.ChunkedEmbedder` to count
@@ -65,7 +67,7 @@ def _load_splade_v3_tokenizer() -> Tokenizer:
 
 
 def _tokenize(text: str, tokenizer: TokenizerProtocol | None = None) -> _TokenizedText:
-    tok = tokenizer or _load_bge_m3_tokenizer()
+    tok = tokenizer or load_bge_m3_tokenizer()
     encoded = tok.encode(text)
     ids = list(encoded.ids)
     offsets = [tuple(offset) for offset in encoded.offsets]
@@ -155,7 +157,7 @@ class MarkdownHeadingChunker:
                 )
                 continue
 
-            tokenizer = tokenizer or _load_bge_m3_tokenizer()
+            tokenizer = tokenizer or load_bge_m3_tokenizer()
             splitter = TokenSlidingChunker(
                 tokenizer=tokenizer,
                 window_tokens=self._window_tokens,

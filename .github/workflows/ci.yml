@@ -33,14 +33,4 @@ jobs:
         run: uv run mypy src tests
 
       - name: pytest
-        env:
-          # The ChunkedEmbedder tests instantiate the SPLADE-v3 tokenizer
-          # via HuggingFace. SPLADE-v3 lives in a gated repo, so the
-          # first import on a fresh CI runner downloads tokenizer.json and
-          # needs an HF read token. After the first run the `tokenizers`
-          # library caches the file under ~/.cache/huggingface, and the
-          # uv-cache caching step keeps the runner warm across builds —
-          # but the token must always be present in case the cache is cold.
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HUGGINGFACE_HUB_TOKEN: ${{ secrets.HF_TOKEN }}
         run: uv run pytest --cov=musubi --cov-report=term
