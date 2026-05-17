@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.4](https://github.com/ericmey/musubi/compare/v1.5.3...v1.5.4) (2026-05-17)
+
+
+### Bug Fixes
+
+* **embedding:** raise TEI client char-truncate from 2048 to 32000 ([#330](https://github.com/ericmey/musubi/issues/330)) ([0a33d7b](https://github.com/ericmey/musubi/commit/0a33d7b0e5decd410bbf69e9e4a7cca33eab8ca3))
+
 ## [1.5.3](https://github.com/ericmey/musubi/compare/v1.5.2...v1.5.3) (2026-05-17)
 
 
