@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.3](https://github.com/ericmey/musubi/compare/v1.5.2...v1.5.3) (2026-05-17)
+
+
+### Bug Fixes
+
+* **deploy:** bake tokenizers into image, fix /app cache permissions ([#327](https://github.com/ericmey/musubi/issues/327)) ([7dd406a](https://github.com/ericmey/musubi/commit/7dd406aa28dc29b154711294ab1667ccb93557e1))
+
 ## [1.5.2](https://github.com/ericmey/musubi/compare/v1.5.1...v1.5.2) (2026-05-17)
 
 
