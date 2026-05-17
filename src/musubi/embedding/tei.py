@@ -44,7 +44,15 @@ from musubi.embedding.base import EmbeddingError
 
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_BATCH_SIZE = 64
-_DEFAULT_MAX_INPUT_CHARS = 2048
+# Char-level safety belt against pathological inputs (~10s of KB). Sized
+# under BGE-M3's 8192-token native ceiling at a conservative ~4 chars/token,
+# so the dense encoder sees the full document on every realistic input.
+# The sparse path is independently length-aware via ChunkedEmbedder; this
+# truncate now matters only for the dense client and only at the upper
+# extreme. Before this raise it was 2048 — symmetric to the bug
+# ChunkedEmbedder closed for sparse, the dense path was silently losing
+# the tail of any long document.
+_DEFAULT_MAX_INPUT_CHARS = 32000
 _DEFAULT_RETRY_BACKOFF = 0.05
 
 # Per-client connection pool. 100 max inflight is generous — Musubi's worst

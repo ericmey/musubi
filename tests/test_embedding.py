@@ -335,8 +335,13 @@ async def test_batch_encode_above_64_chunks_requests(httpx_mock: HTTPXMock) -> N
     assert len(httpx_mock.get_requests()) == 2
 
 
-async def test_truncate_content_to_2048_chars(httpx_mock: HTTPXMock) -> None:
-    long_text = "x" * 2050
+async def test_truncate_content_to_default_safety_belt(httpx_mock: HTTPXMock) -> None:
+    """Char-truncate is now a safety belt at ~32k chars (under BGE-M3's 8192
+    native ceiling), not the practical limit it was at 2048. Inputs shorter
+    than the ceiling pass through unchanged; pathological inputs get cut at
+    the ceiling so the dense encoder never sees obviously-malformed
+    multi-MB blobs."""
+    long_text = "x" * 32002
     httpx_mock.add_response(
         url="http://tei-dense/embed",
         method="POST",
@@ -349,8 +354,29 @@ async def test_truncate_content_to_2048_chars(httpx_mock: HTTPXMock) -> None:
     request = httpx_mock.get_request()
     assert request is not None
     payload = request.content.decode()
-    assert "x" * 2048 in payload
-    assert "x" * 2049 not in payload
+    assert "x" * 32000 in payload
+    assert "x" * 32001 not in payload
+
+
+async def test_long_realistic_content_not_truncated(httpx_mock: HTTPXMock) -> None:
+    """A realistic long memory (~5000 chars) must pass through the dense
+    client without truncation. Before the raise from 2048 to 32000, any
+    content over ~2k chars silently lost its tail from the dense vector —
+    symmetric to the SPLADE truncation B1 closed for sparse."""
+    long_text = "x" * 5000
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[0.0] * DENSE_SIZE],
+    )
+
+    client = TEIDenseClient(base_url="http://tei-dense")
+    await client.embed_dense([long_text])
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    payload = request.content.decode()
+    assert "x" * 5000 in payload, "5000-char input must reach the encoder intact"
 
 
 async def test_query_cache_hit_on_repeat() -> None:
