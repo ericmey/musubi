@@ -246,12 +246,21 @@ class SynthesisCursor:
     def _family_of(value: str) -> str:
         """Reduce a namespace-like input to the identity family.
 
-        Accepts either an identity family (no slash) or a namespace
-        (with slashes); returns the first path component in both
-        cases. This lets pre-migration callers pass a namespace and
-        get the right cursor without changing their signature.
+        Thin wrapper around the public ``musubi.types.common.family_of``
+        with the additional concession that bare-family inputs (no
+        slash) pass through as-is. ``family_of`` itself raises on
+        inputs without a separator because the public contract is
+        "give me a namespace, get back the family"; this wrapper
+        exists because cursor callers legitimately pass either form
+        (e.g. the scheduler passes "aoi" while legacy callers pass
+        "aoi/command-chair"). Centralising on the public helper for
+        the namespace case keeps the two implementations from drifting.
         """
-        return value.split("/", 1)[0] if "/" in value else value
+        if "/" not in value:
+            return value
+        from musubi.types.common import family_of
+
+        return family_of(value)
 
     # ------------------------------------------------------------------
     # Cursor — high-water mark per identity family
@@ -296,8 +305,13 @@ class SynthesisCursor:
     # Candidates — per-memory eligibility, not lost on cursor advance
     # ------------------------------------------------------------------
 
-    def upsert_candidate(self, family: str, memory_object_id: str, now_epoch: float) -> None:
-        """Mark a memory as a synthesis candidate; bump attempts on repeat."""
+    def upsert_candidate(self, family: str, memory_object_id: str, *, now_epoch: float) -> None:
+        """Mark a memory as a synthesis candidate; bump attempts on repeat.
+
+        ``now_epoch`` is keyword-only for consistency with the sibling
+        timing-aware methods (``get_candidates``, ``prune_aged_candidates``)
+        and so call sites read self-documentingly.
+        """
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO synthesis_candidates "
@@ -509,15 +523,15 @@ async def synthesis_run(
     # Step 1b: Pull unclustered candidates from prior sweeps within TTL.
     # Candidates are stored by object_id (KSUID), but Qdrant identifies
     # points by point_id (UUID5 derived from object_id) — translate via
-    # the episodic plane's `_point_id` helper so retrieve actually finds them.
-    from musubi.planes.episodic.plane import _point_id as _episodic_point_id
+    # the episodic plane's public `episodic_point_id` helper.
+    from musubi.planes.episodic.plane import episodic_point_id
 
     candidate_ids = cursor.get_candidates(family, ttl_sec=cfg.candidate_ttl_sec, now_epoch=now)
     candidate_ids_to_fetch = [oid for oid in candidate_ids if oid not in seen_ids]
     if candidate_ids_to_fetch:
         retrieved = client.retrieve(
             collection_name=collection_for_plane("episodic"),
-            ids=[_episodic_point_id(oid) for oid in candidate_ids_to_fetch],
+            ids=[episodic_point_id(oid) for oid in candidate_ids_to_fetch],
             with_payload=True,
             with_vectors=True,
         )
@@ -547,7 +561,7 @@ async def synthesis_run(
         # scanned memories and existing candidates we just re-pulled
         # (the latter bumping their attempts counter).
         for mwv in memories_with_vectors:
-            cursor.upsert_candidate(family, mwv.memory.object_id, now)
+            cursor.upsert_candidate(family, mwv.memory.object_id, now_epoch=now)
         if memories_with_vectors:
             cursor.set(family, max_epoch)
         pruned = cursor.prune_aged_candidates(family, ttl_sec=cfg.candidate_ttl_sec, now_epoch=now)
@@ -727,7 +741,7 @@ async def synthesis_run(
         if mwv.memory.object_id not in clustered_memory_ids
     ]
     for oid in unclustered_ids:
-        cursor.upsert_candidate(family, oid, now)
+        cursor.upsert_candidate(family, oid, now_epoch=now)
     pruned = cursor.prune_aged_candidates(family, ttl_sec=cfg.candidate_ttl_sec, now_epoch=now)
 
     # Step 6: Cursor (high-water mark only — eligibility is in candidates)
