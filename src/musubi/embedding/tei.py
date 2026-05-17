@@ -44,15 +44,30 @@ from musubi.embedding.base import EmbeddingError
 
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_BATCH_SIZE = 64
-# Char-level safety belt against pathological inputs (~10s of KB). Sized
-# under BGE-M3's 8192-token native ceiling at a conservative ~4 chars/token,
-# so the dense encoder sees the full document on every realistic input.
-# The sparse path is independently length-aware via ChunkedEmbedder; this
-# truncate now matters only for the dense client and only at the upper
-# extreme. Before this raise it was 2048 — symmetric to the bug
-# ChunkedEmbedder closed for sparse, the dense path was silently losing
-# the tail of any long document.
-_DEFAULT_MAX_INPUT_CHARS = 32000
+
+# Char-level safety belts. Split per-client because each model has a
+# different input contract and not every call site is wrapped in a
+# length-aware helper:
+#
+# DENSE: BGE-M3 accepts up to 8192 tokens natively. 32000 chars is an
+# English-leaning heuristic (~4 chars/token) — for CJK-heavy text it can
+# still overshoot the token cap; treat it as a "stop pathological MB-sized
+# inputs" guard, not a precise token bound. Pre-raise this was 2048,
+# silently losing the tail of any long English document from the dense
+# vector — symmetric to the bug ChunkedEmbedder closed for sparse.
+#
+# SPARSE: SPLADE-v3 has a hard 512-token cap. The length-aware path is
+# ChunkedEmbedder (wrapped around the composite embedder), but not every
+# call site goes through that wrapper — the lifecycle-worker constructs
+# TEISparseClient directly. Keep the sparse ceiling at the pre-raise
+# 2048 value so that direct-construction path stays bounded; deliberate
+# long-text callers route through ChunkedEmbedder.
+#
+# RERANKER: rerank inputs are short query + candidate strings by
+# convention. 2048 is plenty.
+_DEFAULT_MAX_INPUT_CHARS_DENSE = 32000
+_DEFAULT_MAX_INPUT_CHARS_SPARSE = 2048
+_DEFAULT_MAX_INPUT_CHARS_RERANKER = 2048
 _DEFAULT_RETRY_BACKOFF = 0.05
 
 # Per-client connection pool. 100 max inflight is generous — Musubi's worst
@@ -253,7 +268,7 @@ class TEIDenseClient:
         base_url: str,
         timeout: float = _DEFAULT_TIMEOUT,
         max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE,
-        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
+        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS_DENSE,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
         limits: httpx.Limits = _DEFAULT_LIMITS,
     ) -> None:
@@ -299,7 +314,7 @@ class TEISparseClient:
         base_url: str,
         timeout: float = _DEFAULT_TIMEOUT,
         max_batch_size: int = _DEFAULT_MAX_BATCH_SIZE,
-        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
+        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS_SPARSE,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
         limits: httpx.Limits = _DEFAULT_LIMITS,
     ) -> None:
@@ -348,7 +363,7 @@ class TEIRerankerClient:
         *,
         base_url: str,
         timeout: float = _DEFAULT_TIMEOUT,
-        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS,
+        max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS_RERANKER,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
         limits: httpx.Limits = _DEFAULT_LIMITS,
     ) -> None:

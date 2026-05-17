@@ -335,12 +335,14 @@ async def test_batch_encode_above_64_chunks_requests(httpx_mock: HTTPXMock) -> N
     assert len(httpx_mock.get_requests()) == 2
 
 
-async def test_truncate_content_to_default_safety_belt(httpx_mock: HTTPXMock) -> None:
-    """Char-truncate is now a safety belt at ~32k chars (under BGE-M3's 8192
-    native ceiling), not the practical limit it was at 2048. Inputs shorter
-    than the ceiling pass through unchanged; pathological inputs get cut at
-    the ceiling so the dense encoder never sees obviously-malformed
-    multi-MB blobs."""
+async def test_dense_client_truncates_to_default_safety_belt(httpx_mock: HTTPXMock) -> None:
+    """Dense char-truncate is now a safety belt at ~32k chars (under
+    BGE-M3's 8192 native ceiling), not the practical limit it was at 2048.
+    Inputs shorter than the ceiling pass through unchanged; pathological
+    inputs get cut at the ceiling so the dense encoder never sees
+    obviously-malformed multi-MB blobs."""
+    import json as _json
+
     long_text = "x" * 32002
     httpx_mock.add_response(
         url="http://tei-dense/embed",
@@ -353,16 +355,19 @@ async def test_truncate_content_to_default_safety_belt(httpx_mock: HTTPXMock) ->
 
     request = httpx_mock.get_request()
     assert request is not None
-    payload = request.content.decode()
-    assert "x" * 32000 in payload
-    assert "x" * 32001 not in payload
+    body = _json.loads(request.content.decode())
+    assert len(body["inputs"][0]) == 32000
 
 
-async def test_long_realistic_content_not_truncated(httpx_mock: HTTPXMock) -> None:
+async def test_dense_client_passes_long_realistic_content_untouched(
+    httpx_mock: HTTPXMock,
+) -> None:
     """A realistic long memory (~5000 chars) must pass through the dense
     client without truncation. Before the raise from 2048 to 32000, any
     content over ~2k chars silently lost its tail from the dense vector —
     symmetric to the SPLADE truncation B1 closed for sparse."""
+    import json as _json
+
     long_text = "x" * 5000
     httpx_mock.add_response(
         url="http://tei-dense/embed",
@@ -375,8 +380,54 @@ async def test_long_realistic_content_not_truncated(httpx_mock: HTTPXMock) -> No
 
     request = httpx_mock.get_request()
     assert request is not None
-    payload = request.content.decode()
-    assert "x" * 5000 in payload, "5000-char input must reach the encoder intact"
+    body = _json.loads(request.content.decode())
+    assert body["inputs"][0] == long_text
+
+
+async def test_sparse_client_keeps_pre_raise_safety_belt(httpx_mock: HTTPXMock) -> None:
+    """SPLADE-v3's input contract (512 tokens) hasn't moved. Sparse client
+    callers that don't go through ChunkedEmbedder (e.g. the lifecycle
+    worker constructing TEISparseClient directly) still rely on the
+    char-level 2048 guard to keep individual unwrapped writes from
+    tripping 413s. Pinning the test so the dense raise doesn't drag
+    sparse along with it."""
+    import json as _json
+
+    long_text = "x" * 3000
+    httpx_mock.add_response(
+        url="http://tei-sparse/embed_sparse",
+        method="POST",
+        json=[[]],
+    )
+
+    client = TEISparseClient(base_url="http://tei-sparse")
+    await client.embed_sparse([long_text])
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    body = _json.loads(request.content.decode())
+    assert len(body["inputs"][0]) == 2048
+
+
+async def test_reranker_client_keeps_pre_raise_safety_belt(httpx_mock: HTTPXMock) -> None:
+    """Reranker inputs are short query + candidate strings by convention.
+    The 2048-char belt stays put."""
+    import json as _json
+
+    long_query = "q" * 3000
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": 0, "score": 0.5}],
+    )
+
+    client = TEIRerankerClient(base_url="http://tei-reranker")
+    await client.rerank(long_query, ["candidate"])
+
+    request = httpx_mock.get_request()
+    assert request is not None
+    body = _json.loads(request.content.decode())
+    assert len(body["query"]) == 2048
 
 
 async def test_query_cache_hit_on_repeat() -> None:
