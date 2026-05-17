@@ -9,6 +9,7 @@ from typing import Any, Protocol, runtime_checkable
 from tokenizers import Tokenizer
 
 _BGE_M3_TOKENIZER = "BAAI/bge-m3"
+_SPLADE_V3_TOKENIZER = "naver/splade-v3"
 _DEFAULT_WINDOW_TOKENS = 512
 _DEFAULT_OVERLAP_TOKENS = 128
 # Sentence-end markers cover ASCII + CJK. noqa: RUF001 — the fullwidth
@@ -49,6 +50,18 @@ def _load_bge_m3_tokenizer() -> Tokenizer:
     cache keeps repeated chunking calls from paying construction cost.
     """
     return Tokenizer.from_pretrained(_BGE_M3_TOKENIZER)
+
+
+@lru_cache(maxsize=1)
+def _load_splade_v3_tokenizer() -> Tokenizer:
+    """Load and cache the SPLADE-v3 tokenizer.
+
+    Used by :class:`musubi.embedding.chunked.ChunkedEmbedder` to count
+    tokens against the sparse encoder's actual 512-token ceiling
+    (DistilBERT WordPiece), instead of approximating via BGE-M3's
+    different (XLM-Roberta SentencePiece) tokenization.
+    """
+    return Tokenizer.from_pretrained(_SPLADE_V3_TOKENIZER)
 
 
 def _tokenize(text: str, tokenizer: TokenizerProtocol | None = None) -> _TokenizedText:

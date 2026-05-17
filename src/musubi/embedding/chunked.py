@@ -8,10 +8,11 @@ limit leaks up to callers — long inputs hit the encoder and return HTTP 413.
 :class:`ChunkedEmbedder` closes that leak. It wraps any :class:`Embedder` and
 honors the sparse encoder's contract by:
 
-1. tokenizing each input with the BGE-M3 tokenizer (already cached at
-   process scope in :mod:`musubi.planes.artifact.chunking`);
-2. routing inputs that exceed a conservative window through a sliding
-   token-window chunker;
+1. tokenizing each input with SPLADE-v3's own tokenizer (loaded once at
+   process scope via :mod:`musubi.planes.artifact.chunking`), so the token
+   count is exact against the encoder that will see the chunks;
+2. routing inputs that exceed a 510-token window (512 cap minus the two
+   special tokens SPLADE prepends/appends) through a sliding-window chunker;
 3. embedding all chunks (batched across inputs in a single downstream call);
 4. **max-pooling** the per-chunk sparse vectors into one aggregate per input
    — the canonical aggregation for SPLADE-style term-presence vectors.
@@ -27,18 +28,17 @@ non-zero entry asserts "this term has weight W in the document." Max across
 chunks preserves "term X appears in this document with weight ≥W," matching
 the underlying retrieval semantic. Averaging dilutes single-chunk terms;
 summing inflates. Max is the SPLADE long-doc standard.
-
-The BGE-M3 tokenizer is used for counting because it's already loaded; SPLADE
-uses a different tokenizer (WordPiece vs SentencePiece) so the count is
-approximate. The 460-token window (vs the 512 hard cap) absorbs the slop.
 """
 
 from __future__ import annotations
 
 from musubi.embedding.base import Embedder
-from musubi.planes.artifact.chunking import TokenSlidingChunker
+from musubi.planes.artifact.chunking import TokenSlidingChunker, _load_splade_v3_tokenizer
 
-_DEFAULT_SPARSE_WINDOW_TOKENS = 460
+# SPLADE-v3's max_position_embeddings is 512 and the model wraps each input
+# with two special tokens (``[CLS]`` … ``[SEP]``). 510 is the largest content
+# window that guarantees the encoder will accept it.
+_DEFAULT_SPARSE_WINDOW_TOKENS = 510
 _DEFAULT_SPARSE_OVERLAP_TOKENS = 64
 
 
@@ -84,6 +84,7 @@ class ChunkedEmbedder(Embedder):
     ) -> None:
         self._wrapped = wrapped
         self._chunker = TokenSlidingChunker(
+            tokenizer=_load_splade_v3_tokenizer(),
             window_tokens=sparse_window_tokens,
             overlap_tokens=sparse_overlap_tokens,
         )
