@@ -51,13 +51,60 @@ WORKDIR /app
 
 COPY --from=builder --chown=musubi:musubi /app /app
 
+# Two ownership/cache invariants the rest of the runtime depends on:
+#
+# 1. `/app` itself must be musubi-owned. `WORKDIR /app` above creates the
+#    dir as root, and the `--chown` on the COPY only applies to the copied
+#    contents — the dir's own owner stays root unless explicitly chowned.
+#    Without this any code that tries to write a sibling under /app (HF's
+#    default `$HOME/.cache`, pip's cache, transient temp files) fails with
+#    `PermissionError: [Errno 13]`. Production hit this when the embedding
+#    chunker's `Tokenizer.from_pretrained` was first wired into the episodic
+#    write path.
+#
+# 2. `HF_HOME` lives outside `/app` so the cache is independent of any
+#    bind-mount applied at /app, and so the cache survives independently
+#    of any future change to /app ownership. The dir is pre-created musubi-
+#    writable; the `RUN` below (as user musubi) populates it at build time
+#    so the runtime image has the tokenizers baked in and needs no network
+#    on first use.
+RUN chown musubi:musubi /app \
+ && install -d -o musubi -g musubi /opt/musubi/hf-cache
+
 ENV PATH="/app/.venv/bin:${PATH}" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     MUSUBI_BIND_HOST=0.0.0.0 \
-    MUSUBI_PORT=8100
+    MUSUBI_PORT=8100 \
+    HF_HOME=/opt/musubi/hf-cache
 
 USER musubi
+
+# Pre-cache the tokenizers the embedding chunker needs. SPLADE-v3 is the
+# load-bearing one (ChunkedEmbedder counts tokens against it for the
+# 512-token sparse-encoder cap); BGE-M3 is used by the artifact plane's
+# MarkdownHeadingChunker for storage-side chunking. Baking both into the
+# image means zero runtime HuggingFace Hub dependency.
+#
+# SPLADE-v3 lives in a gated HF repo (https://huggingface.co/naver/splade-v3)
+# so the build needs an HF read token to pull it. The token is provided
+# via a build secret (`docker build --secret id=hf_token,…`) — never as
+# a build-arg or ENV — so it never enters an image layer. CI sets up the
+# secret from the `HF_TOKEN` repository secret; for local builds:
+#   docker build --secret id=hf_token,src=$HOME/.huggingface/token .
+#
+# `/opt/musubi/hf-cache` is created musubi-owned above, so it is writable
+# at runtime — but no runtime download is intended. Production relies
+# entirely on the baked tokenizers; runtime writes would only happen if
+# code drifts (a new tokenizer added without updating this RUN). That
+# class of drift should be caught in PR review, not papered over with
+# runtime hedging.
+RUN --mount=type=secret,id=hf_token,uid=999 \
+    HF_TOKEN="$(cat /run/secrets/hf_token)" \
+    HUGGINGFACE_HUB_TOKEN="$(cat /run/secrets/hf_token)" \
+    python -c "from tokenizers import Tokenizer; \
+Tokenizer.from_pretrained('naver/splade-v3'); \
+Tokenizer.from_pretrained('BAAI/bge-m3')"
 
 EXPOSE 8100
 

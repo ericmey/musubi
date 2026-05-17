@@ -117,6 +117,14 @@ jobs:
           # explicitly documents the supply-chain commitment.
           provenance: true
           sbom: true
+          # Build-time secret for the Dockerfile's tokenizer pre-cache
+          # RUN step. SPLADE-v3 is a gated HF repo, so the pre-cache
+          # needs an HF read token to pull it. The token is mounted via
+          # the BuildKit secret API and never enters an image layer or
+          # the build cache — only the resulting cached tokenizer JSON
+          # is baked in. See the Dockerfile RUN block for the consumer.
+          secrets: |
+            hf_token=${{ secrets.HF_TOKEN }}
 
       # ------------------------------------------------------------------
       # Supply-chain hardening. Each step is allowed to fail the job —
