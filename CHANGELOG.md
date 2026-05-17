@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/ericmey/musubi/compare/v1.7.0...v1.7.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* **synthesis:** substitute generic rationale when LLM returns empty ([#340](https://github.com/ericmey/musubi/issues/340)) ([59f7610](https://github.com/ericmey/musubi/commit/59f76104bae0a64330e487a57945e68d09ade544))
+
 ## [1.7.0](https://github.com/ericmey/musubi/compare/v1.6.0...v1.7.0) (2026-05-17)
 
 
