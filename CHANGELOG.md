@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/ericmey/musubi/compare/v1.5.4...v1.6.0) (2026-05-17)
+
+
+### Features
+
+* **types:** add identity_family field for cross-substrate federation ([#332](https://github.com/ericmey/musubi/issues/332)) ([7d032a9](https://github.com/ericmey/musubi/commit/7d032a99ce3da7c642d761f0452ac5de4d93af20))
+
 ## [1.5.4](https://github.com/ericmey/musubi/compare/v1.5.3...v1.5.4) (2026-05-17)
 
 
