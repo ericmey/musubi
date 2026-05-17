@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.0](https://github.com/ericmey/musubi/compare/v1.6.0...v1.7.0) (2026-05-17)
+
+
+### Features
+
+* **lifecycle:** per-family synthesis with candidates pool ([#335](https://github.com/ericmey/musubi/issues/335)) ([e2b8377](https://github.com/ericmey/musubi/commit/e2b83775dc2af9d47d03e9137d064ca7f5f708b4))
+* **retrieve:** federate hybrid retrieval by identity_family ([#334](https://github.com/ericmey/musubi/issues/334)) ([61c99ae](https://github.com/ericmey/musubi/commit/61c99aebda3d5203ed11127fee93877bf1815dc5))
+
 ## [1.6.0](https://github.com/ericmey/musubi/compare/v1.5.4...v1.6.0) (2026-05-17)
 
 
