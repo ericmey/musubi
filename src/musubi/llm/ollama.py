@@ -245,10 +245,20 @@ class HttpxOllamaClient:
             self._write_debug("synthesis", raw, reason=str(exc))
             log.warning("ollama-synthesis-validate-failed err=%s", exc)
             return None
+        # SynthesizedConcept enforces `synthesis_rationale: min_length=1`,
+        # but small LLMs occasionally return an empty `rationale` field
+        # (even though the schema asks for one). Substitute a generic-but-
+        # valid fallback so a single weak response doesn't crash the
+        # synthesis sweep for the entire identity family.
+        rationale = parsed.rationale or (
+            f"Auto-synthesized from {len(cluster.memories)} matured episodics "
+            f"clustering on shared tags / dense similarity. Rationale not "
+            f"provided by the LLM."
+        )
         return SynthesisOutput(
             title=parsed.title,
             content=parsed.content,
-            rationale=parsed.rationale,
+            rationale=rationale,
             tags=list(parsed.tags),
             importance=parsed.importance,
             contradicts_notice=parsed.contradicts_notice,
