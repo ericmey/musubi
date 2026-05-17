@@ -24,11 +24,13 @@ Specs realised:
 
 from musubi.embedding.base import Embedder, EmbeddingError
 from musubi.embedding.cache import CachedEmbedder
+from musubi.embedding.chunked import ChunkedEmbedder
 from musubi.embedding.fake import FakeEmbedder
 from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
 
 __all__ = [
     "CachedEmbedder",
+    "ChunkedEmbedder",
     "Embedder",
     "EmbeddingError",
     "FakeEmbedder",
