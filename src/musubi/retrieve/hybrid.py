@@ -348,15 +348,29 @@ def _build_filter(
 
     Federates at the identity level: the filter scopes to
     ``identity_family`` (derived from the namespace's first path
-    component) rather than the exact namespace. This makes
-    ``aoi/command-chair``, ``aoi/voice``, ``aoi/shared`` etc. all
-    visible to one another as one continuous Aoi memory stream — same
-    for every identity in the house. Per-substrate forensic queries
-    can post-filter on `payload["namespace"]` from results; for
+    component) rather than the exact namespace. Every presence of one
+    identity — e.g. ``aoi/command-chair/episodic``,
+    ``aoi/voice/episodic``, ``aoi/shared/episodic`` — carries
+    ``identity_family="aoi"`` and is therefore visible to retrieval
+    from any of the others. Per-substrate forensic queries can
+    post-filter on ``payload["namespace"]`` from the result set; for
     semantic retrieval, identity is the right scope.
 
-    See `family_of` in musubi.types.common; see the v1.5.5 federation
-    PR for the architectural rationale.
+    **Migration contract.** This filter assumes every persisted point
+    carries ``identity_family`` in its payload. New writes get the
+    field automatically via the ``MusubiObject`` validator; existing
+    points are populated by ``scripts/backfill_identity_family.py``.
+    The deploy order is therefore:
+
+        1. Deploy the version that adds the field + validator (#332).
+        2. Run the backfill script — confirm 100% updated.
+        3. Deploy this version (the retrieval change).
+
+    Steps 1 and 3 can be the same release if step 2 runs in between.
+    Skipping step 2 will silently exclude pre-deploy points from
+    retrieval until backfill catches up.
+
+    See ``family_of`` in ``musubi.types.common``.
     """
     must: list[models.Condition] = [
         models.FieldCondition(

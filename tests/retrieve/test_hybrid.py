@@ -188,13 +188,19 @@ async def test_identity_family_filter_applied_not_namespace() -> None:
     musubi.retrieve.hybrid for the rationale."""
     spy, _result = await _call()
 
+    from musubi.types.common import family_of
+
     conditions = _filter_conditions(spy.calls[0])
-    # Identity-family filter IS present
+    # Identity-family filter IS present — coupled to family_of() so this
+    # test exercises the same derivation logic the runtime uses, not a
+    # hard-coded expected value that would silently rot if NAMESPACE
+    # changes.
+    expected_family = family_of(NAMESPACE)
     assert any(
         isinstance(condition, models.FieldCondition)
         and condition.key == "identity_family"
         and isinstance(condition.match, models.MatchValue)
-        and condition.match.value == "tenant"  # first component of NAMESPACE
+        and condition.match.value == expected_family
         for condition in conditions
     ), "filter must scope to identity_family for cross-substrate federation"
 
