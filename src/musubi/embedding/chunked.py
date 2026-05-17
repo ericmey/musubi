@@ -98,9 +98,12 @@ class ChunkedEmbedder(Embedder):
         per_input_chunks: list[list[str]] = []
         for text in texts:
             chunks = self._chunker.chunk(text)
-            if not chunks:
-                # Whitespace-only or empty input; let the downstream embedder
-                # decide. Preserves existing fake/TEI behavior for edge text.
+            # Whitespace-only inputs survive chunking as a single RawChunk
+            # whose content is "" (TokenSlidingChunker trims via _trim_span).
+            # Forward the original text in that case so cache keys and
+            # downstream embedder behavior stay consistent with the pre-wrap
+            # contract.
+            if not chunks or not any(c.content for c in chunks):
                 per_input_chunks.append([text])
             else:
                 per_input_chunks.append([c.content for c in chunks])

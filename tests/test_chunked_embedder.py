@@ -213,6 +213,24 @@ async def test_empty_sparse_input_returns_empty_and_skips_downstream() -> None:
     assert spy.embed_sparse_calls == [], "no downstream call for empty input"
 
 
+async def test_whitespace_only_input_forwards_original_text() -> None:
+    """TokenSlidingChunker trims whitespace and emits a RawChunk with
+    empty content. The wrapper must detect this and forward the original
+    whitespace string downstream so cache keys + per-embedder behavior
+    stay consistent with the pre-wrap contract."""
+    spy = _SpyEmbedder()
+    embedder = ChunkedEmbedder(spy)
+
+    out = await embedder.embed_sparse(["   "])
+
+    assert len(out) == 1
+    assert isinstance(out[0], dict)
+    assert len(spy.embed_sparse_calls) == 1
+    assert spy.embed_sparse_calls[0] == ["   "], (
+        "downstream must receive the original whitespace, not chunked ''"
+    )
+
+
 # ---------------------------------------------------------------------------
 # 7. Protocol conformance
 # ---------------------------------------------------------------------------
