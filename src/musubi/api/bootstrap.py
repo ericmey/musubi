@@ -46,7 +46,13 @@ from musubi.api.dependencies import (
     get_reranker,
     get_thoughts_plane,
 )
-from musubi.embedding import Embedder, TEIDenseClient, TEIRerankerClient, TEISparseClient
+from musubi.embedding import (
+    ChunkedEmbedder,
+    Embedder,
+    TEIDenseClient,
+    TEIRerankerClient,
+    TEISparseClient,
+)
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
 from musubi.planes.curated import CuratedPlane
@@ -202,7 +208,14 @@ def bootstrap_production_app(
         backoff_s=retry_backoff_s,
     )
 
-    embedder: Embedder = _TEICompositeEmbedder(dense=dense, sparse=sparse, reranker=reranker)
+    # ChunkedEmbedder enforces SPLADE-v3's 512-token input contract by
+    # chunking long inputs + max-pooling the sparse vectors. Without this
+    # wrap, writes that exceed the cap (information-dense milestone memories)
+    # bounce with HTTP 413 from tei-sparse and the whole episodic write
+    # fails — see musubi.embedding.chunked for the rationale.
+    embedder: Embedder = ChunkedEmbedder(
+        _TEICompositeEmbedder(dense=dense, sparse=sparse, reranker=reranker)
+    )
 
     # Every override below is a fresh closure-captured factory; calling
     # bootstrap a second time replaces the dict entries cleanly (idempotent).
