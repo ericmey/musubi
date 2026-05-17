@@ -21,6 +21,7 @@ from musubi.types.common import (
     Namespace,
     ensure_utc,
     epoch_of,
+    family_of,
     generate_ksuid,
     utc_now,
 )
@@ -41,6 +42,14 @@ class MusubiObject(BaseModel):
 
     object_id: KSUID = Field(default_factory=generate_ksuid)
     namespace: Namespace
+    # `identity_family` is the load-bearing field for cross-substrate
+    # federation: aoi/command-chair, aoi/voice, aoi/shared all carry
+    # identity_family="aoi", which lets retrieval, ranking, and synthesis
+    # treat them as one continuous Aoi memory stream regardless of which
+    # substrate captured a given memory. Derived from the namespace's
+    # first path component at validation time; never needs to be set by
+    # callers. See `family_of` in musubi.types.common.
+    identity_family: str | None = None
     schema_version: int = SCHEMA_VERSION
     created_at: datetime = Field(default_factory=utc_now)
     created_epoch: float | None = None
@@ -68,6 +77,15 @@ class MusubiObject(BaseModel):
             )
         if self.version < 1:
             raise ValueError(f"version must start at 1, got {self.version}")
+
+        # Auto-derive identity_family from namespace. Callers should never
+        # set this explicitly; deriving here keeps it consistent with the
+        # namespace through any rename or migration. The field is mutable
+        # to allow that migration (e.g. namespace changes hands), but the
+        # default keeps it in lockstep with whatever namespace is current.
+        if self.identity_family is None:
+            object.__setattr__(self, "identity_family", family_of(self.namespace))
+
         return self
 
 
