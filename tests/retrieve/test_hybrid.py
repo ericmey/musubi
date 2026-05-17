@@ -180,17 +180,36 @@ async def test_rrf_fusion_requested_server_side() -> None:
 
 
 @pytest.mark.asyncio
-async def test_namespace_filter_always_applied() -> None:
+async def test_identity_family_filter_applied_not_namespace() -> None:
+    """Hybrid retrieval filters on `identity_family` (the federation key),
+    not on the exact namespace. The caller passes "tenant/presence/plane"
+    but the filter scopes to "tenant" so every substrate under that
+    identity is visible to the search. See `_build_filter` in
+    musubi.retrieve.hybrid for the rationale."""
     spy, _result = await _call()
 
+    from musubi.types.common import family_of
+
     conditions = _filter_conditions(spy.calls[0])
+    # Identity-family filter IS present — coupled to family_of() so this
+    # test exercises the same derivation logic the runtime uses, not a
+    # hard-coded expected value that would silently rot if NAMESPACE
+    # changes.
+    expected_family = family_of(NAMESPACE)
     assert any(
         isinstance(condition, models.FieldCondition)
-        and condition.key == "namespace"
+        and condition.key == "identity_family"
         and isinstance(condition.match, models.MatchValue)
-        and condition.match.value == NAMESPACE
+        and condition.match.value == expected_family
         for condition in conditions
-    )
+    ), "filter must scope to identity_family for cross-substrate federation"
+
+    # Exact-namespace filter is GONE — federation means we no longer
+    # gate retrieval at substrate granularity.
+    assert not any(
+        isinstance(condition, models.FieldCondition) and condition.key == "namespace"
+        for condition in conditions
+    ), "namespace filter should not be present — identity_family is the scope"
 
 
 @pytest.mark.asyncio

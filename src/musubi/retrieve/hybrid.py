@@ -14,7 +14,7 @@ from qdrant_client import QdrantClient, models
 from musubi.config import get_settings
 from musubi.embedding.base import Embedder
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, collection_has_sparse
-from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
+from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result, family_of
 
 HYBRID_PREFETCH_LIMIT = 50
 _DEFAULT_VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured", "promoted")
@@ -344,8 +344,39 @@ def _build_filter(
     state_filter: Sequence[LifecycleState] | None,
     include_archived: bool,
 ) -> models.Filter:
+    """Build the Qdrant filter for a hybrid search.
+
+    Federates at the identity level: the filter scopes to
+    ``identity_family`` (derived from the namespace's first path
+    component) rather than the exact namespace. Every presence of one
+    identity — e.g. ``aoi/command-chair/episodic``,
+    ``aoi/voice/episodic``, ``aoi/shared/episodic`` — carries
+    ``identity_family="aoi"`` and is therefore visible to retrieval
+    from any of the others. Per-substrate forensic queries can
+    post-filter on ``payload["namespace"]`` from the result set; for
+    semantic retrieval, identity is the right scope.
+
+    **Migration contract.** This filter assumes every persisted point
+    carries ``identity_family`` in its payload. New writes get the
+    field automatically via the ``MusubiObject`` validator; existing
+    points are populated by ``scripts/backfill_identity_family.py``.
+    The deploy order is therefore:
+
+        1. Deploy the version that adds the field + validator (#332).
+        2. Run the backfill script — confirm 100% updated.
+        3. Deploy this version (the retrieval change).
+
+    Steps 1 and 3 can be the same release if step 2 runs in between.
+    Skipping step 2 will silently exclude pre-deploy points from
+    retrieval until backfill catches up.
+
+    See ``family_of`` in ``musubi.types.common``.
+    """
     must: list[models.Condition] = [
-        models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
+        models.FieldCondition(
+            key="identity_family",
+            match=models.MatchValue(value=family_of(namespace)),
+        )
     ]
     states = state_filter
     if states is None and not include_archived:
