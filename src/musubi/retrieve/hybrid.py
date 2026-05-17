@@ -14,7 +14,7 @@ from qdrant_client import QdrantClient, models
 from musubi.config import get_settings
 from musubi.embedding.base import Embedder
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, collection_has_sparse
-from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
+from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result, family_of
 
 HYBRID_PREFETCH_LIMIT = 50
 _DEFAULT_VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured", "promoted")
@@ -344,8 +344,25 @@ def _build_filter(
     state_filter: Sequence[LifecycleState] | None,
     include_archived: bool,
 ) -> models.Filter:
+    """Build the Qdrant filter for a hybrid search.
+
+    Federates at the identity level: the filter scopes to
+    ``identity_family`` (derived from the namespace's first path
+    component) rather than the exact namespace. This makes
+    ``aoi/command-chair``, ``aoi/voice``, ``aoi/shared`` etc. all
+    visible to one another as one continuous Aoi memory stream — same
+    for every identity in the house. Per-substrate forensic queries
+    can post-filter on `payload["namespace"]` from results; for
+    semantic retrieval, identity is the right scope.
+
+    See `family_of` in musubi.types.common; see the v1.5.5 federation
+    PR for the architectural rationale.
+    """
     must: list[models.Condition] = [
-        models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
+        models.FieldCondition(
+            key="identity_family",
+            match=models.MatchValue(value=family_of(namespace)),
+        )
     ]
     states = state_filter
     if states is None and not include_archived:

@@ -374,7 +374,18 @@ def _cache_key(
     limit: int,
     state_filter: Sequence[LifecycleState],
 ) -> tuple[Any, ...]:
-    return (namespace, query, tuple(collections), limit, tuple(state_filter))
+    """Cache key scoped to identity family, not exact namespace.
+
+    Retrieval federates at the identity level (see
+    `musubi.retrieve.hybrid._build_filter`), so two queries from
+    different presences of the same identity (`aoi/command-chair` vs
+    `aoi/voice`) produce identical results and SHOULD share a cache
+    entry. Keying on the full namespace would split that cache and
+    miss on every cross-substrate query.
+    """
+    from musubi.types.common import family_of
+
+    return (family_of(namespace), query, tuple(collections), limit, tuple(state_filter))
 
 
 __all__ = [
