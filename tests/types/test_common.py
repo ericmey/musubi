@@ -19,6 +19,33 @@ from musubi.types import (
 from musubi.types.common import KSUID_LENGTH
 
 
+class TestFamilyOf:
+    @pytest.mark.parametrize(
+        ("ns", "expected"),
+        [
+            ("aoi/command-chair/episodic", "aoi"),
+            ("aoi/voice/episodic", "aoi"),
+            ("aoi/shared/episodic", "aoi"),
+            ("nyla/voice/episodic", "nyla"),
+            ("yua/codex/episodic", "yua"),
+            ("ericmey/yua/episodic", "ericmey"),
+            ("a/b/concept", "a"),
+            # also works on non-plane forms — the helper just splits at /
+            ("aoi/anything", "aoi"),
+        ],
+    )
+    def test_returns_first_path_component(self, ns: str, expected: str) -> None:
+        from musubi.types.common import family_of
+
+        assert family_of(ns) == expected
+
+    def test_rejects_string_without_separator(self) -> None:
+        from musubi.types.common import family_of
+
+        with pytest.raises(ValueError, match="cannot be split"):
+            family_of("noseparator")
+
+
 class TestNamespaceValidator:
     @pytest.mark.parametrize(
         "ns",

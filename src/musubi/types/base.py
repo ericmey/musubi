@@ -21,6 +21,7 @@ from musubi.types.common import (
     Namespace,
     ensure_utc,
     epoch_of,
+    family_of,
     generate_ksuid,
     utc_now,
 )
@@ -41,6 +42,30 @@ class MusubiObject(BaseModel):
 
     object_id: KSUID = Field(default_factory=generate_ksuid)
     namespace: Namespace
+    # `identity_family` is the load-bearing field for cross-substrate
+    # federation: aoi/command-chair, aoi/voice, aoi/shared all carry
+    # identity_family="aoi", which lets retrieval, ranking, and synthesis
+    # treat them as one continuous Aoi memory stream regardless of which
+    # substrate captured a given memory. See `family_of` in musubi.types.common.
+    #
+    # Contract:
+    # - The type is `str | None` only to express "not yet derived" at
+    #   construction time. Persisted points always carry a non-empty
+    #   string after the validator runs OR after the operator backfill
+    #   has been applied. Downstream readers may assume a string in
+    #   production but should guard for None when reading raw,
+    #   unvalidated payloads (e.g. during partial migrations).
+    # - The validator derives this from `namespace` only when the caller
+    #   passes the auto-sentinel `None`. Explicit values (including
+    #   "legacy-aoi" for migration scenarios) are preserved as-is.
+    # - This validator runs again on assignment (`validate_assignment=True`),
+    #   but because the auto-derive only kicks in for the sentinel, a
+    #   later `obj.namespace = "yua/..."` will NOT silently re-derive
+    #   `identity_family`. If a migration genuinely needs both to move
+    #   together, the caller assigns both, or assigns `identity_family =
+    #   None` to re-trigger derivation. This is intentional: it prevents
+    #   namespace renames from silently re-homing data across identities.
+    identity_family: str | None = None
     schema_version: int = SCHEMA_VERSION
     created_at: datetime = Field(default_factory=utc_now)
     created_epoch: float | None = None
@@ -68,6 +93,15 @@ class MusubiObject(BaseModel):
             )
         if self.version < 1:
             raise ValueError(f"version must start at 1, got {self.version}")
+
+        # Auto-derive `identity_family` from `namespace` ONLY when the
+        # caller passed the None sentinel. Explicit values are preserved
+        # so migrations can decouple identity from namespace temporarily
+        # (see the contract block on the field declaration above for
+        # why we don't auto-update on later namespace mutations).
+        if self.identity_family is None:
+            object.__setattr__(self, "identity_family", family_of(self.namespace))
+
         return self
 
 

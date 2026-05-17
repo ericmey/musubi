@@ -79,6 +79,76 @@ class TestMusubiObjectInvariants:
                 unknown_field="surprise",  # type: ignore[call-arg]
             )
 
+    def test_identity_family_auto_populated_from_namespace(self) -> None:
+        """`identity_family` is the load-bearing field for cross-substrate
+        federation. It must be derived from the namespace at construction
+        time so every plane's create() automatically sets it without the
+        caller having to think about it."""
+        m = EpisodicMemory(namespace="aoi/command-chair/episodic", content="x")
+        assert m.identity_family == "aoi"
+
+    def test_identity_family_unifies_aoi_substrates(self) -> None:
+        """The whole point of the field: aoi/command-chair, aoi/voice,
+        aoi/shared all carry identity_family='aoi' so retrieval/ranking/
+        synthesis can treat them as one Aoi memory stream."""
+        for ns in (
+            "aoi/command-chair/episodic",
+            "aoi/voice/episodic",
+            "aoi/shared/episodic",
+            "aoi/openclaw/episodic",
+            "aoi/claude-code/episodic",
+        ):
+            assert EpisodicMemory(namespace=ns, content="x").identity_family == "aoi"
+
+    def test_identity_family_separates_different_identities(self) -> None:
+        cases = [
+            ("yua/codex/episodic", "yua"),
+            ("nyla/voice/episodic", "nyla"),
+            ("ericmey/yua/episodic", "ericmey"),
+            ("smoke/ops/episodic", "smoke"),
+        ]
+        for ns, expected_family in cases:
+            assert EpisodicMemory(namespace=ns, content="x").identity_family == expected_family
+
+    def test_explicit_identity_family_respected_for_migration(self) -> None:
+        """A caller can set identity_family explicitly to support migration
+        scenarios where the family differs from the namespace prefix (e.g.,
+        a namespace renames hands and the old family tag is being preserved
+        for one final synthesis pass)."""
+        m = EpisodicMemory(
+            namespace="aoi/voice/episodic",
+            content="x",
+            identity_family="legacy-aoi",
+        )
+        assert m.identity_family == "legacy-aoi"
+
+    def test_identity_family_none_triggers_auto_derive(self) -> None:
+        """`None` is the auto-derive sentinel — callers that pass None get
+        the namespace-derived family. Explicit None means "give me the
+        default," not "I want this field to stay None.\""""
+        m = EpisodicMemory(
+            namespace="aoi/command-chair/episodic",
+            content="x",
+            identity_family=None,
+        )
+        assert m.identity_family == "aoi"
+
+    def test_identity_family_empty_string_is_kept_as_is(self) -> None:
+        """Empty string is a corrupt value — the validator only fills None,
+        not falsy values, because we want explicit empty-string to surface
+        as a downstream filter mismatch (and a test failure here) rather
+        than be silently coerced. This test pins the current behavior so
+        callers passing "" by mistake don't get silently rewritten."""
+        m = EpisodicMemory(
+            namespace="aoi/command-chair/episodic",
+            content="x",
+            identity_family="",
+        )
+        # Empty string is retained; the auto-derive does NOT overwrite it.
+        # Downstream filtering on identity_family="aoi" will simply miss
+        # this point, which surfaces the corruption fast.
+        assert m.identity_family == ""
+
 
 class TestMemoryObjectLineage:
     def test_supersedes_self_rejected(self, episodic_namespace: str) -> None:

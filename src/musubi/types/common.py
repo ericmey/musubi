@@ -66,6 +66,27 @@ def validate_namespace(ns: str) -> str:
 Namespace = Annotated[str, AfterValidator(validate_namespace)]
 
 
+def family_of(namespace: str) -> str:
+    """Return the identity family (first path component) of a namespace.
+
+    Identity families group every namespace belonging to one identity
+    across the substrates it shows up on. Aoi has presences in
+    ``aoi/command-chair``, ``aoi/voice``, ``aoi/shared``, etc.; they all
+    belong to identity family ``"aoi"``. Retrieval, ranking, and
+    synthesis treat the family as one continuous stream.
+
+    >>> family_of("aoi/command-chair/episodic")
+    'aoi'
+    >>> family_of("nyla/voice/episodic")
+    'nyla'
+    """
+    if "/" not in namespace:
+        raise ValueError(
+            f"namespace {namespace!r} cannot be split — expected '<tenant>/<presence>/<plane>' form"
+        )
+    return namespace.split("/", 1)[0]
+
+
 # ---------------------------------------------------------------------------
 # KSUID helpers
 # ---------------------------------------------------------------------------

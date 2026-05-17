@@ -98,6 +98,12 @@ def collection_has_sparse(collection: str) -> bool:
 
 UNIVERSAL_INDEXES: Final[tuple[IndexSpec, ...]] = (
     IndexSpec(field_name="namespace", schema="keyword"),
+    # `identity_family` is the cross-substrate federation key — see
+    # `family_of` in musubi.types.common. Adding it here ensures every
+    # collection gets the index for free, so retrieval can filter on
+    # identity rather than on per-substrate namespace without paying
+    # full-scan costs.
+    IndexSpec(field_name="identity_family", schema="keyword"),
     IndexSpec(field_name="object_id", schema="keyword"),
     IndexSpec(field_name="state", schema="keyword"),
     IndexSpec(field_name="schema_version", schema="integer"),
