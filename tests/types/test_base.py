@@ -122,6 +122,33 @@ class TestMusubiObjectInvariants:
         )
         assert m.identity_family == "legacy-aoi"
 
+    def test_identity_family_none_triggers_auto_derive(self) -> None:
+        """`None` is the auto-derive sentinel — callers that pass None get
+        the namespace-derived family. Explicit None means "give me the
+        default," not "I want this field to stay None.\""""
+        m = EpisodicMemory(
+            namespace="aoi/command-chair/episodic",
+            content="x",
+            identity_family=None,
+        )
+        assert m.identity_family == "aoi"
+
+    def test_identity_family_empty_string_is_kept_as_is(self) -> None:
+        """Empty string is a corrupt value — the validator only fills None,
+        not falsy values, because we want explicit empty-string to surface
+        as a downstream filter mismatch (and a test failure here) rather
+        than be silently coerced. This test pins the current behavior so
+        callers passing "" by mistake don't get silently rewritten."""
+        m = EpisodicMemory(
+            namespace="aoi/command-chair/episodic",
+            content="x",
+            identity_family="",
+        )
+        # Empty string is retained; the auto-derive does NOT overwrite it.
+        # Downstream filtering on identity_family="aoi" will simply miss
+        # this point, which surfaces the corruption fast.
+        assert m.identity_family == ""
+
 
 class TestMemoryObjectLineage:
     def test_supersedes_self_rejected(self, episodic_namespace: str) -> None:

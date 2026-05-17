@@ -38,20 +38,40 @@ import httpx
 QDRANT_URL = os.environ.get("MUSUBI_QDRANT_URL", "http://qdrant:6333")
 QDRANT_KEY = os.environ.get("MUSUBI_QDRANT_API_KEY", os.environ.get("QDRANT_API_KEY", ""))
 DRY_RUN = os.environ.get("BACKFILL_CONFIRM", "") != "1"
+# Stop after N consecutive write failures so a systemic error (auth, network)
+# doesn't silently grind through every point producing identical error lines.
+MAX_CONSECUTIVE_FAILURES = 5
 
-# Every collection that stores `MusubiObject`-derived points and therefore
-# inherits the `identity_family` field via the Pydantic validator. Kept in
-# sync with `musubi.store.specs.REGISTRY` (the source of truth) — if a new
-# collection is added there, add it here too.
-COLLECTIONS = (
-    "musubi_episodic",
-    "musubi_concept",
-    "musubi_curated",
-    "musubi_thought",
-    "musubi_artifact",
-    "musubi_artifact_chunks",
-)
 
+def _resolve_collections() -> tuple[str, ...]:
+    """Pull the canonical collection list from `musubi.store.specs.REGISTRY`
+    if the musubi package is importable (it will be inside the core container),
+    falling back to the hand-maintained list otherwise.
+
+    The fallback exists so this script can be smoke-tested from any Python
+    environment. Inside the production container, `REGISTRY` is the source
+    of truth — if a new collection is ever added there, this script picks
+    it up without an edit here.
+    """
+    try:
+        from musubi.store.specs import REGISTRY
+
+        return tuple(spec.name for spec in REGISTRY)
+    except Exception:
+        # Standalone fallback. Kept in sync with REGISTRY by convention;
+        # the assertion in main() will surface drift when the import path
+        # is available.
+        return (
+            "musubi_episodic",
+            "musubi_concept",
+            "musubi_curated",
+            "musubi_thought",
+            "musubi_artifact",
+            "musubi_artifact_chunks",
+        )
+
+
+COLLECTIONS = _resolve_collections()
 H = {"api-key": QDRANT_KEY, "content-type": "application/json"}
 
 
@@ -63,13 +83,36 @@ def family_of(namespace: str) -> str:
     return namespace.split("/", 1)[0]
 
 
+def preflight(client: httpx.Client) -> None:
+    """Fail fast if the Qdrant URL is unreachable or the API key is bad.
+
+    Without this, an unset API key falls through to per-point 401s buried
+    in the bare-except logging — surfacing 232 nearly-identical failure
+    lines instead of one clear error at startup.
+    """
+    if not QDRANT_KEY:
+        print(
+            "FATAL: neither MUSUBI_QDRANT_API_KEY nor QDRANT_API_KEY is set.\n"
+            "       Run this script inside the musubi-core container or "
+            "explicitly export the key.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    try:
+        resp = client.get(f"{QDRANT_URL}/collections", headers=H, timeout=10.0)
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        print(f"FATAL: cannot reach Qdrant at {QDRANT_URL}: {exc}", file=sys.stderr)
+        sys.exit(2)
+
+
 def scroll_all(client: httpx.Client, collection: str) -> list[dict]:
     """Page through every point in a collection, returning payload only
     (vectors not needed for backfill)."""
     out: list[dict] = []
     offset = None
     while True:
-        body = {"limit": 256, "with_payload": True, "with_vector": False}
+        body: dict = {"limit": 256, "with_payload": True, "with_vector": False}
         if offset is not None:
             body["offset"] = offset
         try:
@@ -93,15 +136,22 @@ def scroll_all(client: httpx.Client, collection: str) -> list[dict]:
     return out
 
 
-def set_payload(client: httpx.Client, collection: str, point_id: str, family: str) -> None:
-    """Upsert `identity_family` on a single point, leaving every other
-    payload field untouched."""
+def set_family_for_batch(
+    client: httpx.Client, collection: str, family: str, point_ids: list[str]
+) -> None:
+    """Upsert `identity_family=<family>` on a batch of point IDs in one
+    HTTP call. Qdrant's /points/payload endpoint accepts a list of points
+    in a single request — so we collapse the N-points-needing-the-same-family
+    into one round-trip per (collection, family) pair instead of per point.
+    """
+    if not point_ids:
+        return
     resp = client.post(
         f"{QDRANT_URL}/collections/{collection}/points/payload",
         headers=H,
         json={
             "payload": {"identity_family": family},
-            "points": [point_id],
+            "points": point_ids,
         },
     )
     resp.raise_for_status()
@@ -110,23 +160,24 @@ def set_payload(client: httpx.Client, collection: str, point_id: str, family: st
 def main() -> int:
     print(f"=== Identity-family backfill ({'DRY RUN' if DRY_RUN else 'EXECUTING'}) ===")
     print(f"Qdrant: {QDRANT_URL}")
+    print(f"Collections: {', '.join(COLLECTIONS)}")
     print()
 
     with httpx.Client(timeout=60.0) as client:
+        preflight(client)
+
         total_seen = 0
         total_needs_update = 0
         total_updated = 0
+        consecutive_failures = 0
         per_family_counts: dict[str, int] = defaultdict(int)
-        per_collection_summary: dict[str, dict[str, int]] = {}
 
         for collection in COLLECTIONS:
             print(f"[{collection}]", flush=True)
             points = scroll_all(client, collection)
             seen = len(points)
             already_set = 0
-            needs_update = 0
-            updated = 0
-            failures = 0
+            updates_by_family: dict[str, list[str]] = defaultdict(list)
             missing_namespace = 0
 
             for p in points:
@@ -144,31 +195,40 @@ def main() -> int:
                     already_set += 1
                     continue
 
-                needs_update += 1
-                if DRY_RUN:
-                    continue
+                updates_by_family[family].append(p["id"])
 
-                try:
-                    set_payload(client, collection, p["id"], family)
-                    updated += 1
-                except Exception as exc:
-                    print(f"  ! failed for {p['id']}: {exc}", flush=True)
-                    failures += 1
-
-            per_collection_summary[collection] = {
-                "seen": seen,
-                "already_set": already_set,
-                "needs_update": needs_update,
-                "updated": updated,
-                "failures": failures,
-                "missing_namespace": missing_namespace,
-            }
+            needs_update = sum(len(ids) for ids in updates_by_family.values())
             total_seen += seen
             total_needs_update += needs_update
-            total_updated += updated
+
+            updated_this_collection = 0
+            failures = 0
+            if not DRY_RUN:
+                for family, point_ids in updates_by_family.items():
+                    try:
+                        set_family_for_batch(client, collection, family, point_ids)
+                        updated_this_collection += len(point_ids)
+                        consecutive_failures = 0
+                    except httpx.HTTPError as exc:
+                        failures += len(point_ids)
+                        consecutive_failures += 1
+                        print(
+                            f"  ! batch failed (family={family!r}, n={len(point_ids)}): {exc}",
+                            flush=True,
+                        )
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                            print(
+                                f"FATAL: {consecutive_failures} consecutive "
+                                f"batch failures — likely a systemic issue. "
+                                f"Aborting.",
+                                file=sys.stderr,
+                            )
+                            return 3
+                total_updated += updated_this_collection
+
             print(
                 f"  seen={seen} already_set={already_set} "
-                f"needs_update={needs_update} updated={updated} "
+                f"needs_update={needs_update} updated={updated_this_collection} "
                 f"failures={failures} missing_namespace={missing_namespace}",
                 flush=True,
             )

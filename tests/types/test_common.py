@@ -43,7 +43,7 @@ class TestFamilyOf:
         from musubi.types.common import family_of
 
         with pytest.raises(ValueError, match="cannot be split"):
-            family_of("nosepenator")
+            family_of("noseparator")
 
 
 class TestNamespaceValidator:
