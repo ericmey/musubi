@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2](https://github.com/ericmey/musubi/compare/v1.5.1...v1.5.2) (2026-05-17)
+
+
+### Bug Fixes
+
+* **embedding:** chunk + max-pool sparse inputs over SPLADE's 512-token cap ([#324](https://github.com/ericmey/musubi/issues/324)) ([3c31a23](https://github.com/ericmey/musubi/commit/3c31a23e395045d998a164f371942825b88fb269))
+
 ## [1.5.1](https://github.com/ericmey/musubi/compare/v1.5.0...v1.5.1) (2026-05-15)
 
 
