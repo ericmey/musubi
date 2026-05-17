@@ -63,9 +63,21 @@ _VISIBLE_STATES_WITH_DEMOTED: tuple[LifecycleState, ...] = ("matured", "demoted"
 MergeStrategy = Literal["replace", "longer-wins"]
 
 
-def _point_id(object_id: str) -> str:
-    """Return the deterministic Qdrant point ID for a given KSUID."""
+def episodic_point_id(object_id: str) -> str:
+    """Return the deterministic Qdrant point ID for an episodic KSUID.
+
+    Public because cross-module callers (e.g. the lifecycle synthesis
+    candidate-fetch path) need to translate object_ids → point_ids to
+    `client.retrieve()` episodic points. Keeping this private would
+    force those callers into reach-into-private-helper patterns that
+    silently break on refactor.
+    """
     return str(uuid.uuid5(_POINT_NS, object_id))
+
+
+# Backwards-compatible alias for in-module callers; removable once all
+# internal references are migrated to the public name.
+_point_id = episodic_point_id
 
 
 def _sparse_to_model(sparse: dict[int, float]) -> models.SparseVector:

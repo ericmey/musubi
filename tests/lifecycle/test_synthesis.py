@@ -301,6 +301,125 @@ async def test_cluster_by_dense_similarity_within_tag_group(
     assert report.clusters_formed == 2
 
 
+# ---------------------------------------------------------------------------
+# Candidates pool — the v1.5.5 cursor-skip fix
+# ---------------------------------------------------------------------------
+
+
+def test_candidates_upsert_and_get_within_ttl(cursor: SynthesisCursor) -> None:
+    """A memory marked as a candidate is visible to subsequent calls
+    within the TTL window."""
+    cursor.upsert_candidate("aoi", "mem-1", now_epoch=100.0)
+    cursor.upsert_candidate("aoi", "mem-2", now_epoch=100.0)
+    cursor.upsert_candidate("yua", "mem-99", now_epoch=100.0)
+
+    aoi_candidates = cursor.get_candidates("aoi", ttl_sec=3600.0, now_epoch=200.0)
+    assert sorted(aoi_candidates) == ["mem-1", "mem-2"]
+    yua_candidates = cursor.get_candidates("yua", ttl_sec=3600.0, now_epoch=200.0)
+    assert yua_candidates == ["mem-99"]
+
+
+def test_candidates_filtered_by_ttl_window(cursor: SynthesisCursor) -> None:
+    """Candidates whose first_seen_epoch is older than `now - ttl`
+    are not returned, even if `prune_aged_candidates` hasn't run."""
+    cursor.upsert_candidate("aoi", "old-mem", now_epoch=100.0)
+    cursor.upsert_candidate("aoi", "fresh-mem", now_epoch=900.0)
+
+    # ttl=500: old-mem (first_seen=100) is past cutoff (1000-500=500)
+    visible = cursor.get_candidates("aoi", ttl_sec=500.0, now_epoch=1000.0)
+    assert visible == ["fresh-mem"]
+
+
+def test_candidates_remove_on_successful_cluster(cursor: SynthesisCursor) -> None:
+    """When a memory clusters, it's removed from the candidate pool."""
+    cursor.upsert_candidate("aoi", "mem-a", now_epoch=100.0)
+    cursor.upsert_candidate("aoi", "mem-b", now_epoch=100.0)
+    cursor.upsert_candidate("aoi", "mem-c", now_epoch=100.0)
+
+    cursor.remove_candidates("aoi", ["mem-a", "mem-c"])
+
+    remaining = cursor.get_candidates("aoi", ttl_sec=3600.0, now_epoch=200.0)
+    assert remaining == ["mem-b"]
+
+
+def test_candidates_pruned_after_ttl(cursor: SynthesisCursor) -> None:
+    """Aging past TTL physically deletes the row, returning the count
+    pruned. This is the housekeeping path that prevents the candidates
+    table from growing unboundedly."""
+    cursor.upsert_candidate("aoi", "ancient-1", now_epoch=100.0)
+    cursor.upsert_candidate("aoi", "ancient-2", now_epoch=100.0)
+    cursor.upsert_candidate("aoi", "fresh", now_epoch=900.0)
+
+    pruned = cursor.prune_aged_candidates("aoi", ttl_sec=500.0, now_epoch=1000.0)
+    assert pruned == 2
+    remaining = cursor.get_candidates("aoi", ttl_sec=3600.0, now_epoch=1000.0)
+    assert remaining == ["fresh"]
+
+
+def test_candidates_per_family_isolation(cursor: SynthesisCursor) -> None:
+    """Operations on one family's candidates don't touch another's."""
+    cursor.upsert_candidate("aoi", "shared-id", now_epoch=100.0)
+    cursor.upsert_candidate("yua", "shared-id", now_epoch=100.0)
+
+    cursor.remove_candidates("aoi", ["shared-id"])
+    assert cursor.get_candidates("aoi", ttl_sec=3600.0, now_epoch=200.0) == []
+    assert cursor.get_candidates("yua", ttl_sec=3600.0, now_epoch=200.0) == ["shared-id"]
+
+
+def test_cursor_get_set_accepts_namespace_or_family(cursor: SynthesisCursor) -> None:
+    """The cursor's `get`/`set` accept either an identity family ("aoi")
+    or a full namespace ("aoi/command-chair/episodic"); both reduce to
+    the same family-keyed entry. This keeps pre-v1.5.5 callers working
+    without signature changes."""
+    cursor.set("aoi/command-chair/episodic", 42.0)
+    assert cursor.get("aoi/voice/episodic") == 42.0
+    assert cursor.get("aoi") == 42.0
+
+
+async def test_cursor_skip_fix_unclustered_memories_carry_forward(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """The headline v1.5.5 fix: a memory that doesn't cluster on its
+    first synthesis pass stays eligible for the next pass via the
+    candidate pool. Pre-v1.5.5, it would have been cursor-skipped
+    forever.
+
+    Setup:
+    1. Write 2 memories with shared tag — too few to cluster (min=3).
+    2. Run synthesis. Expect 0 clusters BUT both memories upserted as
+       candidates.
+    3. Write 1 more memory with the same tag.
+    4. Run synthesis again. Expect 1 cluster combining ALL THREE
+       (the two carried-forward candidates + the new memory).
+    """
+    eps_ns = _ns(ns, "episodic")
+
+    # Pass 1: 2 memories, no cluster
+    for _ in range(2):
+        await _inject_episodic(qdrant, embedder, eps_ns, "carry forward", tags=["topic"])
+    ollama = FakeSynthesisOllama()
+    report1 = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
+    assert report1.clusters_formed == 0
+    assert report1.memories_selected == 2
+    assert report1.candidates_carried_forward >= 2, (
+        "unclustered memories should be retained in the candidate pool"
+    )
+
+    # Pass 2: third memory arrives — combined pool should cluster
+    await _inject_episodic(qdrant, embedder, eps_ns, "carry forward", tags=["topic"])
+    report2 = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
+    assert report2.memories_selected == 3, (
+        "candidates from pass 1 must be re-pulled together with the new memory"
+    )
+    assert report2.clusters_formed == 1, (
+        "the new memory + 2 carried-forward candidates form a cluster"
+    )
+
+
 async def test_cluster_min_size_3_enforced(
     qdrant: QdrantClient,
     ns: str,
@@ -308,7 +427,11 @@ async def test_cluster_min_size_3_enforced(
     cursor: SynthesisCursor,
     embedder: FakeEmbedder,
 ) -> None:
-    """Bullet 6 — min_cluster_size=3."""
+    """Bullet 6 — min_cluster_size=3 (default).
+
+    A concept must aggregate at least three episodic sources — the
+    concept plane enforces this via `_MIN_MERGED_FROM=3`. Two memories
+    are not yet a pattern; they're a duplicate."""
     eps_ns = _ns(ns, "episodic")
     for i in range(2):
         await _inject_episodic(qdrant, embedder, eps_ns, "too small", tags=["tag"])
@@ -561,7 +684,6 @@ async def test_contradictory_concepts_link_both_sides(
 ) -> None:
     """Bullet 16 — symmetric links."""
     eps_ns = _ns(ns, "episodic")
-    conc_ns = _ns(ns, "concept")
     for i in range(3):
         await _inject_episodic(qdrant, embedder, eps_ns, "content a", tags=["tag_a"])
     for i in range(3):
@@ -577,8 +699,11 @@ async def test_contradictory_concepts_link_both_sides(
     concepts, _ = qdrant.scroll(collection_name="musubi_concept", limit=2)
     payload1 = cast(dict[str, Any], concepts[0].payload)
     payload2 = cast(dict[str, Any], concepts[1].payload)
-    c1 = await cplane.get(namespace=conc_ns, object_id=payload1["object_id"])
-    c2 = await cplane.get(namespace=conc_ns, object_id=payload2["object_id"])
+    # Concepts are written to <family>/shared/concept in v1.5.5+, not to
+    # the original synthesis namespace. Use the actual stored namespace
+    # so this test works regardless of where synthesis routes its writes.
+    c1 = await cplane.get(namespace=payload1["namespace"], object_id=payload1["object_id"])
+    c2 = await cplane.get(namespace=payload2["namespace"], object_id=payload2["object_id"])
     assert c1 is not None and c2 is not None
     assert c2.object_id in c1.contradicts
     assert c1.object_id in c2.contradicts
@@ -827,29 +952,35 @@ class _FakeQdrantForDiscovery:
         return self._pages.pop(0)
 
 
-def test_discover_namespaces_happy_path_strips_episodic_suffix() -> None:
+def test_discover_returns_identity_families_not_full_namespaces() -> None:
+    """v1.5.5+ discovery returns identity families (first path component)
+    instead of `<tenant>/<presence>` prefixes. Synthesis runs per-family,
+    federating across substrates."""
     client = _FakeQdrantForDiscovery(
         [
             (
                 [
-                    _FakeRecord({"namespace": "eric/aoi/episodic"}),
-                    _FakeRecord({"namespace": "eric/aoi/episodic"}),  # dedupe
-                    _FakeRecord({"namespace": "eric/ops/episodic"}),
+                    _FakeRecord({"namespace": "eric/aoi/episodic", "identity_family": "eric"}),
+                    _FakeRecord(
+                        {"namespace": "eric/aoi/episodic", "identity_family": "eric"}
+                    ),  # dedupe
+                    _FakeRecord({"namespace": "eric/ops/episodic", "identity_family": "eric"}),
+                    _FakeRecord({"namespace": "alice/voice/episodic", "identity_family": "alice"}),
                 ],
-                None,  # single page — done.
+                None,
             ),
         ]
     )
     result = _discover_episodic_namespaces(cast(Any, client))
-    assert result == ["eric/aoi", "eric/ops"]
+    assert result == ["alice", "eric"]
 
 
-def test_discover_namespaces_paginates_until_offset_none() -> None:
-    """A namespace whose records are on page 2 must not be silently
+def test_discover_paginates_until_offset_none() -> None:
+    """An identity whose records are on page 2 must not be silently
     dropped — the scroll must keep iterating until Qdrant signals
     ``offset is None``."""
-    page1 = [_FakeRecord({"namespace": "eric/aoi/episodic"})]
-    page2 = [_FakeRecord({"namespace": "alice/ghost/episodic"})]
+    page1 = [_FakeRecord({"namespace": "eric/aoi/episodic", "identity_family": "eric"})]
+    page2 = [_FakeRecord({"namespace": "alice/ghost/episodic", "identity_family": "alice"})]
     client = _FakeQdrantForDiscovery(
         [
             (page1, "cursor-1"),
@@ -857,12 +988,12 @@ def test_discover_namespaces_paginates_until_offset_none() -> None:
         ]
     )
     result = _discover_episodic_namespaces(cast(Any, client))
-    assert result == ["alice/ghost", "eric/aoi"]
+    assert result == ["alice", "eric"]
     # Second scroll call must carry the offset returned by the first.
     assert client.calls[1]["offset"] == "cursor-1"
 
 
-def test_discover_namespaces_returns_empty_on_scroll_exception() -> None:
+def test_discover_returns_empty_on_scroll_exception() -> None:
     class _BoomClient:
         def scroll(self, **_: Any) -> tuple[list[_FakeRecord], Any]:
             raise RuntimeError("qdrant down")
@@ -870,19 +1001,27 @@ def test_discover_namespaces_returns_empty_on_scroll_exception() -> None:
     assert _discover_episodic_namespaces(cast(Any, _BoomClient())) == []
 
 
-def test_discover_namespaces_skips_non_string_or_missing_payload() -> None:
+def test_discover_falls_back_to_namespace_prefix_when_identity_family_missing() -> None:
+    """Pre-v1.5.5 points may not have identity_family populated yet
+    (backfill hasn't run). Discovery falls back to deriving the family
+    from the namespace prefix so the new synthesis flow still works
+    against not-yet-backfilled data."""
     client = _FakeQdrantForDiscovery(
         [
             (
                 [
                     _FakeRecord(None),  # missing payload
-                    _FakeRecord({}),  # no namespace key
-                    _FakeRecord({"namespace": 42}),  # non-string
-                    _FakeRecord({"namespace": "eric/aoi/concept"}),  # wrong plane
-                    _FakeRecord({"namespace": "eric/aoi/episodic"}),  # kept
+                    _FakeRecord({}),  # empty payload
+                    _FakeRecord({"namespace": 42}),  # non-string namespace
+                    _FakeRecord(
+                        {"namespace": "eric/aoi/concept"}
+                    ),  # no identity_family — fall back
+                    _FakeRecord(
+                        {"namespace": "eric/aoi/episodic", "identity_family": "eric"}
+                    ),  # canonical
                 ],
                 None,
             ),
         ]
     )
-    assert _discover_episodic_namespaces(cast(Any, client)) == ["eric/aoi"]
+    assert _discover_episodic_namespaces(cast(Any, client)) == ["eric"]
