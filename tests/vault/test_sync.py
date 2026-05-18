@@ -480,8 +480,13 @@ async def test_reconciler_idempotent_on_second_run(
     await reconciler.reconcile()
 
     plane = reconciler.curated_plane
-    # create called twice, but CuratedPlane implementation handles the actual Qdrant idempotency
-    assert len(plane.created) == 2  # type: ignore
+    # Per musubi#345's skip-on-unchanged cache: the second reconcile
+    # pass sees the same body-hash and skips the upsert entirely (no
+    # embedding churn on every 6h tick). Before #345 this assertion was
+    # `== 2` — CuratedPlane handled the Qdrant idempotency downstream,
+    # but the reconciler still re-paid the embed cost. Now idempotency
+    # is enforced at the reconciler boundary too.
+    assert len(plane.created) == 1  # type: ignore
 
 
 @pytest.mark.asyncio

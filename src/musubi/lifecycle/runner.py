@@ -228,13 +228,16 @@ def build_lifecycle_jobs(
     synthesis_jobs: Iterable[Job] | None = None,
     promotion_jobs: Iterable[Job] | None = None,
     reflection_jobs: Iterable[Job] | None = None,
+    vault_reconcile_jobs: Iterable[Job] | None = None,
 ) -> list[Job]:
     """Compose the full job list the production worker drives.
 
     Real job builders replace the placeholder-lambdas emitted by
     :func:`build_default_jobs` for every name they cover. Any job
     name the builders haven't claimed keeps the placeholder (which
-    log-skips). Only ``vault_reconcile`` still uses a placeholder.
+    log-skips). Post-musubi#345 every job has a real builder; the
+    placeholder fallback only fires for tests that intentionally
+    omit a group.
 
     Injection points keep unit tests deterministic — a test can
     pass a stub Job without wiring a QdrantClient / Ollama / etc.
@@ -248,6 +251,7 @@ def build_lifecycle_jobs(
         synthesis_jobs,
         promotion_jobs,
         reflection_jobs,
+        vault_reconcile_jobs,
     ):
         if group is not None:
             real_jobs.extend(group)
@@ -316,6 +320,7 @@ async def _main_async() -> None:
     from musubi.planes.episodic.plane import EpisodicPlane
     from musubi.planes.thoughts.plane import ThoughtsPlane
     from musubi.storage import build_qdrant_client
+    from musubi.vault.reconciler import build_vault_reconcile_jobs
     from musubi.vault.writelog import WriteLog
     from musubi.vault.writer import VaultWriter as _VaultWriter
 
@@ -465,12 +470,23 @@ async def _main_async() -> None:
         namespace=reflection_namespace,
         lock_dir=lock_dir,
     )
+    # vault_reconcile — periodic drift catch-up between the Obsidian
+    # vault filesystem and the curated plane. Real-time changes go
+    # through the (still-unbuilt) musubi-vault-watcher process; this
+    # 6h sweep catches anything the watcher missed (or runs in lieu of
+    # the watcher entirely until it's deployed). See musubi#345.
+    vault_reconcile_jobs = build_vault_reconcile_jobs(
+        vault_root=Path(settings.vault_path),
+        curated_plane=curated_plane,
+        lock_dir=lock_dir,
+    )
     jobs = build_lifecycle_jobs(
         maturation_jobs=mat_jobs,
         demotion_jobs=dem_jobs,
         synthesis_jobs=syn_jobs,
         promotion_jobs=prom_jobs,
         reflection_jobs=ref_jobs,
+        vault_reconcile_jobs=vault_reconcile_jobs,
     )
 
     runner = LifecycleRunner(jobs=jobs)
