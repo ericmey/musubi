@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/ericmey/musubi/compare/v1.9.2...v1.10.0) (2026-05-18)
+
+
+### Features
+
+* **vault:** wire vault_reconcile into lifecycle scheduler (partial musubi[#345](https://github.com/ericmey/musubi/issues/345)) ([#357](https://github.com/ericmey/musubi/issues/357)) ([eb49125](https://github.com/ericmey/musubi/commit/eb4912557807ddf332f8453e522fb5459ca3fdf8))
+
 ## [1.9.2](https://github.com/ericmey/musubi/compare/v1.9.1...v1.9.2) (2026-05-18)
 
 
