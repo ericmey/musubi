@@ -105,6 +105,15 @@ async def run_recent_retrieve(
         for tag in tags:
             must.append(models.FieldCondition(key="tags", match=models.MatchValue(value=tag)))
 
+    # IMPORTANT — `order_by` on Qdrant scroll requires the key to be a
+    # declared payload index on the target collection. `created_epoch`
+    # is indexed on every plane that uses it for ordering (verified via
+    # `musubi.planes.thoughts.plane` which already scrolls with the same
+    # `order_by=created_epoch DESC`). New planes that want recent-mode
+    # support must declare the index at collection creation; otherwise
+    # this call fails at runtime with a Qdrant error. `order_by` is also
+    # incompatible with offset-based pagination — current code asks for
+    # the first `capped_limit` rows only, which is the supported shape.
     try:
         records, _ = client.scroll(
             collection_name=collection,
@@ -136,13 +145,37 @@ async def run_recent_retrieve(
     for record in records:
         payload = dict(record.payload or {})
         if not payload:
+            # Surfacing the skip as DEBUG (not WARN) — for recent mode
+            # this is more likely to bite than ranked modes ("give me
+            # everything since X" callers expect every row), but a row
+            # with NO payload at all has nothing to project. The DEBUG
+            # log lets operators investigate data-quality drift without
+            # being woken up.
+            logger.debug(
+                "recent retrieve skipping empty-payload point id=%s",
+                record.id,
+            )
             continue
+        # Explicit `is None` rather than `or 0.0` so a legitimately old
+        # row with `created_epoch=0.0` isn't indistinguishable from a
+        # missing field. A row missing `created_epoch` is a data-quality
+        # signal worth logging; the score still falls back to 0.0 so the
+        # row isn't dropped.
+        raw_ce = payload.get("created_epoch")
+        if raw_ce is None:
+            logger.debug(
+                "recent retrieve row missing created_epoch object_id=%s",
+                payload.get("object_id") or record.id,
+            )
+            created_epoch = 0.0
+        else:
+            created_epoch = float(raw_ce)
         hits.append(
             RecentHit(
                 object_id=str(payload.get("object_id") or record.id),
                 payload=payload,
                 snippet=_snippet(payload),
-                created_epoch=float(payload.get("created_epoch") or 0.0),
+                created_epoch=created_epoch,
             )
         )
 

@@ -112,14 +112,22 @@ def test_retrieve_recent_results_are_newest_first(
 
 
 def test_retrieve_recent_with_query_text_is_accept_and_ignore(
-    client: TestClient, episodic: EpisodicPlane, api_settings: object
+    client: TestClient,
+    episodic: EpisodicPlane,
+    api_settings: object,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Slice design decision: mode=recent + query_text → ignore, log WARN.
 
     422 would force assistant-side error handling for a no-op problem.
-    Accept-and-ignore is the forgiving boundary behaviour. We assert 200
-    plus the row count matches what an un-queried recent call would return.
+    Accept-and-ignore is the forgiving boundary behaviour. We assert 200,
+    the row count matches what an un-queried recent call would return,
+    AND that the WARN log line actually fires — if someone later removes
+    the warning, the contract documented in the slice spec quietly
+    breaks; the caplog assert locks it in.
     """
+    import logging
+
     from tests.api.conftest import mint_token
 
     _seed(episodic, "aoi/command-chair/episodic", "alpha")
@@ -130,19 +138,68 @@ def test_retrieve_recent_with_query_text_is_accept_and_ignore(
         scopes=["aoi/*/*:r"],
         presence="aoi/command-chair",
     )
+    with caplog.at_level(logging.WARNING, logger="musubi.retrieve.orchestration"):
+        r = client.post(
+            "/v1/retrieve",
+            json={
+                "namespace": "aoi/command-chair/episodic",
+                "mode": "recent",
+                "query_text": "ignored field",
+                "limit": 10,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert r.status_code == 200, r.text
+    # Same 2 rows recent would return without a query_text.
+    assert len(r.json()["results"]) == 2
+    # Locks in the WARN-on-ignore design decision — if this assertion
+    # disappears, the silent-drop becomes possible again.
+    assert any(
+        "mode=recent ignoring query_text" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    ), f"expected WARN log; got: {[r.message for r in caplog.records]}"
+
+
+@pytest.mark.parametrize("mode", ["fast", "deep", "blended"])
+def test_retrieve_ranked_modes_accept_since_and_tags_without_effect(
+    client: TestClient,
+    episodic: EpisodicPlane,
+    api_settings: object,
+    mode: str,
+) -> None:
+    """`since` and `tags` are recent-mode fields, but ranked modes accept
+    them without effect (forward-compat — documented behaviour in the
+    router model + openapi).
+
+    Caller passes both with a real `query_text`; assert 200 and that
+    rows come back. The fields are silently ignored, not filtered on.
+    """
+    from tests.api.conftest import mint_token
+
+    _seed(episodic, "aoi/command-chair/episodic", "anything")
+    token = mint_token(
+        api_settings,  # type: ignore[arg-type]
+        scopes=["aoi/*/*:r"],
+        presence="aoi/command-chair",
+    )
     r = client.post(
         "/v1/retrieve",
         json={
             "namespace": "aoi/command-chair/episodic",
-            "mode": "recent",
-            "query_text": "ignored field",
+            "mode": mode,
+            "query_text": "anything",
+            "since": 1.0,
+            "tags": ["nonexistent-tag-that-would-filter-everything"],
             "limit": 10,
         },
         headers={"Authorization": f"Bearer {token}"},
     )
+    # 200, not 400/422 — fields accepted. If the tags filter were
+    # actually applied here, the row wouldn't carry the tag and we'd
+    # see 0 results. We don't assert non-zero (depending on mode the
+    # similarity score may not surface the row) — just that the call
+    # succeeds and isn't 4xx'd by the new fields.
     assert r.status_code == 200, r.text
-    # Same 2 rows recent would return without a query_text.
-    assert len(r.json()["results"]) == 2
 
 
 def test_retrieve_recent_with_since_filter_excludes_old_rows(
@@ -197,7 +254,14 @@ def test_retrieve_ranked_modes_without_query_text_still_422(
     api_settings: object,
     mode: str,
 ) -> None:
-    """Adding mode=recent doesn't loosen query_text for the ranked modes."""
+    """Adding mode=recent doesn't loosen query_text for the ranked modes.
+
+    Pre-slice, `query_text` was a required string and FastAPI body
+    validation returned 422. The slice adds a router-side model_validator
+    (mirrors the orchestration rule) so the wire status stays 422 —
+    rather than turning into a 400 from the orchestration layer.
+    Locks in the wire contract for retry logic that branches on status.
+    """
     from tests.api.conftest import mint_token
 
     _seed(episodic, "aoi/command-chair/episodic", "anything")
@@ -215,6 +279,7 @@ def test_retrieve_ranked_modes_without_query_text_still_422(
         },
         headers={"Authorization": f"Bearer {token}"},
     )
-    # Validator-rejected at orchestration; router maps to 400 BAD_REQUEST.
-    assert r.status_code == 400, r.text
+    # Router-side model_validator catches the cross-field rule before
+    # orchestration even runs — preserves the pre-slice 422 contract.
+    assert r.status_code == 422, r.text
     assert "query_text" in r.text

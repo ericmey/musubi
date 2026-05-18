@@ -33,8 +33,10 @@ everything interesting happens behind the orchestration boundary.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Body, Depends, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from qdrant_client import QdrantClient
 
 from musubi.api.dependencies import (
@@ -69,11 +71,18 @@ class RetrieveQuery(BaseModel):
         ),
     )
     # query_text required for fast/deep/blended; optional for recent.
-    # Orchestration-side validator enforces non-empty for ranked modes;
-    # router accepts the empty string at the boundary so MCP callers don't
-    # have to know the mode-specific rule.
+    # Enforced by the router-side model_validator below so the wire-level
+    # response stays at 422 (FastAPI body validation) for ranked-mode
+    # callers that omit query_text — preserves the pre-slice contract
+    # rather than turning it into a 400 from the orchestration layer.
     query_text: str = ""
-    mode: str = "fast"
+    # `Literal` matches the `enum` constraint in openapi.yaml. Without
+    # this, the pydantic body model would accept any string while the
+    # published schema told clients only four values were valid; pydantic
+    # would silently pass through and orchestration would emit a 400
+    # `bad_query`. Keeping the two surfaces in sync produces a 422 here
+    # for unknown values, matching every other ranked-mode validation.
+    mode: Literal["fast", "deep", "blended", "recent"] = "fast"
     limit: int = 10
     planes: list[str] | None = None
     include_archived: bool = False
@@ -107,8 +116,8 @@ class RetrieveQuery(BaseModel):
             "pre-`recent` behaviour). For `mode='recent'`, the default is "
             "`('provisional', 'matured', 'promoted')` — recent's purpose "
             "is 'what just happened', so the freshest tier is included by "
-            "default. Set explicitly for `['provisional', 'matured', "
-            "'promoted']` recall on ranked modes when you want fresh "
+            "default. Set explicitly to `['provisional', 'matured', "
+            "'promoted']` for recall on ranked modes when you want fresh "
             "deliberate `memory_store` rows visible before they age "
             "through the maturation cron. "
             "Note: in `mode='fast'`, `include_archived: true` augments "
@@ -118,6 +127,27 @@ class RetrieveQuery(BaseModel):
             "modes need archive-side states."
         ),
     )
+
+    @model_validator(mode="after")
+    def _require_query_text_for_ranked_modes(self) -> RetrieveQuery:
+        """Match the orchestration-side rule at the wire boundary.
+
+        Pre-slice, `query_text` was a required `str` field and FastAPI
+        body validation rejected a missing one with **422**. Now that
+        `query_text` defaults to `""` (so `mode="recent"` can omit it),
+        a ranked-mode caller missing `query_text` would be caught by
+        the orchestration validator and surface as a **400** —
+        a wire-level status-code change for existing callers.
+
+        Enforcing the same cross-field rule here keeps the contract at
+        422 for ranked-mode bodies missing `query_text`, matching every
+        other body-validation error from FastAPI.
+        """
+        if self.mode != "recent" and not self.query_text.strip():
+            raise ValueError(
+                f"query_text is required for mode={self.mode!r} (only mode='recent' may omit it)"
+            )
+        return self
 
 
 # orchestration.RetrievalError.kind → (HTTP status, typed error code).
