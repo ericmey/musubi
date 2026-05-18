@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.2](https://github.com/ericmey/musubi/compare/v1.10.1...v1.10.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* **lifecycle:** wrap embedder in ChunkedEmbedder (closes [#367](https://github.com/ericmey/musubi/issues/367)) ([#369](https://github.com/ericmey/musubi/issues/369)) ([e7c781d](https://github.com/ericmey/musubi/commit/e7c781de6ad04ac0aa53597c80e6802429891f6f))
+
 ## [1.10.1](https://github.com/ericmey/musubi/compare/v1.10.0...v1.10.1) (2026-05-18)
 
 
