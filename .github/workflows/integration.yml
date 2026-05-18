@@ -33,6 +33,15 @@ on:
 jobs:
   integration:
     name: Integration (run ${{ matrix.run }})
+    # Skip integration on release-please PRs — they bump pyproject.toml
+    # (so they match the `paths:` filter above) but the musubi-core image
+    # for the new version doesn't exist until the release-please PR
+    # MERGES and triggers `Publish Musubi Core image`. Booting the
+    # test-env compose stack against an unpublished image always fails
+    # with NETWORK_ERROR. Scheduled nightly runs, workflow_dispatch, and
+    # real PRs touching `tests/integration/**` / `deploy/test-env/**` /
+    # the integration workflow itself / `Makefile` still run.
+    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
