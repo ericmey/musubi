@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 import urllib.request
+from collections.abc import Iterator
 
 import pytest
 
@@ -19,7 +20,7 @@ from musubi.observability.scrape_server import start_metrics_server
 
 
 @pytest.fixture
-def metrics_server() -> tuple[int, object]:
+def metrics_server() -> Iterator[tuple[int, object]]:
     """Boot the server on an OS-picked port; tear down after the test."""
     thread = start_metrics_server(port=0, host="127.0.0.1")
     httpd = thread.httpd  # type: ignore[attr-defined]
