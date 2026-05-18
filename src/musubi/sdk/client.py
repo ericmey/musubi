@@ -124,12 +124,21 @@ class MusubiClient:
         self,
         *,
         namespace: str,
-        query_text: str,
+        query_text: str = "",
         mode: str = "fast",
         limit: int = 10,
         planes: list[str] | None = None,
+        since: float | None = None,
+        tags: list[str] | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
+        """Retrieve from Musubi (sync mirror of ``AsyncMusubiClient.retrieve``).
+
+        ``query_text`` defaults to empty — required by the server for
+        ``mode`` in ``fast|deep|blended``, optional for ``mode="recent"``.
+        ``since`` is epoch seconds; ``tags`` is the AND filter. Both are
+        consumed only by ``mode="recent"``.
+        """
         body: dict[str, Any] = {
             "namespace": namespace,
             "query_text": query_text,
@@ -138,6 +147,10 @@ class MusubiClient:
         }
         if planes is not None:
             body["planes"] = planes
+        if since is not None:
+            body["since"] = since
+        if tags is not None:
+            body["tags"] = tags
         return self._json(
             "POST",
             "/retrieve",

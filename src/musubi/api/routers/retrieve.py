@@ -68,22 +68,51 @@ class RetrieveQuery(BaseModel):
             "Writes reject `*`; wildcards are read-only. See ADR 0031."
         ),
     )
-    query_text: str
+    # query_text required for fast/deep/blended; optional for recent.
+    # Orchestration-side validator enforces non-empty for ranked modes;
+    # router accepts the empty string at the boundary so MCP callers don't
+    # have to know the mode-specific rule.
+    query_text: str = ""
     mode: str = "fast"
     limit: int = 10
     planes: list[str] | None = None
     include_archived: bool = False
+    #: Inclusive epoch-seconds floor — only consumed by ``mode="recent"``.
+    #: Ignored by other modes (which rank with their own recency-weighting).
+    since: float | None = Field(
+        default=None,
+        description=(
+            "Recent-mode only: inclusive lower bound on `created_epoch`. "
+            "Rows older than `since` are excluded. ISO-format timestamps "
+            "are NOT accepted — convert client-side via "
+            "`datetime.timestamp()`."
+        ),
+    )
+    #: Tag-AND filter — a row must contain every listed tag to match.
+    #: Currently consumed only by ``mode="recent"``; accepted by other
+    #: modes without effect (forward-compat).
+    tags: list[str] | None = Field(
+        default=None,
+        description=(
+            "Recent-mode tag filter. AND semantics — a row must contain "
+            "every listed tag to match. Empty list and `null` both mean "
+            "no filter."
+        ),
+    )
     state_filter: list[str] | None = Field(
         default=None,
         description=(
             "Lifecycle states to include. Default `null` resolves to "
-            "`('matured', 'promoted')` — same as before this field existed, "
-            "so existing callers see no behaviour change. Set to "
-            "`['provisional', 'matured', 'promoted']` for explicit recall "
-            "where you want fresh deliberate `memory_store` rows visible "
-            "before they age through the maturation cron. "
-            "Note: in `mode='fast'`, `include_archived: true` augments the "
-            "default by adding `('demoted', 'archived', 'superseded')`. "
+            "`('matured', 'promoted')` for fast/deep/blended (matching the "
+            "pre-`recent` behaviour). For `mode='recent'`, the default is "
+            "`('provisional', 'matured', 'promoted')` — recent's purpose "
+            "is 'what just happened', so the freshest tier is included by "
+            "default. Set explicitly for `['provisional', 'matured', "
+            "'promoted']` recall on ranked modes when you want fresh "
+            "deliberate `memory_store` rows visible before they age "
+            "through the maturation cron. "
+            "Note: in `mode='fast'`, `include_archived: true` augments "
+            "the default by adding `('demoted', 'archived', 'superseded')`. "
             "In `mode='deep'` and `mode='blended'`, `include_archived` is "
             "currently ignored — pass `state_filter` explicitly when those "
             "modes need archive-side states."
@@ -346,6 +375,10 @@ async def retrieve(
     }
     if body.state_filter is not None:
         query_body["state_filter"] = body.state_filter
+    if body.since is not None:
+        query_body["since"] = body.since
+    if body.tags is not None:
+        query_body["tags"] = body.tags
 
     orchestration_result = await run_orchestration_retrieve(
         client=qdrant,

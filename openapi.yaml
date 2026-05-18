@@ -2274,10 +2274,16 @@ components:
         query_text:
           type: string
           title: Query Text
+          default: ""
+          description: |
+            Required for `mode` in `fast|deep|blended` (the server returns 400
+            if empty for those modes). Optional for `mode='recent'` — if
+            provided, the server logs a WARN and ignores it.
         mode:
           type: string
           title: Mode
           default: fast
+          enum: [fast, deep, blended, recent]
         limit:
           type: integer
           title: Limit
@@ -2293,6 +2299,27 @@ components:
           type: boolean
           title: Include Archived
           default: false
+        since:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Since
+          description: |
+            Recent-mode only. Inclusive lower bound on `created_epoch`
+            (epoch seconds). Rows older than `since` are excluded. ISO
+            strings are NOT accepted — convert client-side via
+            `datetime.timestamp()`.
+        tags:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Tags
+          description: |
+            Recent-mode tag filter (AND across all listed tags — a row
+            must contain every tag to match). Empty list and `null` both
+            mean no filter. Other modes accept this field without effect.
         state_filter:
           anyOf:
           - items:
@@ -2301,19 +2328,22 @@ components:
           - type: 'null'
           title: State Filter
           description: |
-            Lifecycle states to include. `null` resolves to
-            `('matured', 'promoted')` — the v1.0/v1.1 default. Set to
-            `['provisional', 'matured', 'promoted']` for explicit recall
-            of fresh deliberate stores before maturation has run.
-            In `mode='fast'`, `include_archived: true` augments the default
-            with `('demoted', 'archived', 'superseded')`. In `mode='deep'`
-            and `mode='blended'` `include_archived` is currently ignored —
-            pass `state_filter` explicitly when those modes need
-            archive-side states.
+            Lifecycle states to include. For `fast|deep|blended`, `null`
+            resolves to `('matured', 'promoted')` — the v1.0/v1.1 default.
+            For `mode='recent'`, `null` resolves to
+            `('provisional', 'matured', 'promoted')` — recent mode's purpose
+            is "what just happened," provisional is the freshest tier,
+            excluding it by default would defeat the use case.
+            Set explicitly to `['provisional', 'matured', 'promoted']` for
+            ranked-mode recall of fresh deliberate stores before maturation
+            has run. In `mode='fast'`, `include_archived: true` augments
+            the default with `('demoted', 'archived', 'superseded')`. In
+            `mode='deep'` and `mode='blended'` `include_archived` is
+            currently ignored — pass `state_filter` explicitly when those
+            modes need archive-side states.
       type: object
       required:
       - namespace
-      - query_text
       title: RetrieveQuery
     RetrieveResponse:
       properties:

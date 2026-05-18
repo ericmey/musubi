@@ -3,10 +3,11 @@ title: "Slice: Retrieve mode=recent"
 slice_id: slice-retrieve-recent
 section: _slices
 type: slice
-status: blocked
+status: in-progress
+owner: aoi-claude-opus
 phase: "8 Post-1.0"
-tags: [section/slices, status/blocked, type/slice, api, retrieve, recency]
-updated: 2026-04-29
+tags: [section/slices, status/in-progress, type/slice, api, retrieve, recency]
+updated: 2026-05-17
 reviewed: false
 depends-on: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-retrieve-wildcards]]"]
 blocks: ["[[_slices/slice-mcp-canonical-tools]]", "[[_slices/slice-livekit-canonical-tools]]", "[[_slices/slice-openclaw-canonical-tools]]"]
@@ -16,7 +17,13 @@ blocks: ["[[_slices/slice-mcp-canonical-tools]]", "[[_slices/slice-livekit-canon
 
 > Add `mode=recent` to `POST /v1/retrieve` — query-less, time-ordered scroll across the namespace fanout. Required by the canonical `musubi_recent` agent tool ([[07-interfaces/agent-tools]]) so an agent can answer "what was I just doing?" without a query string.
 
-**Phase:** 8 Post-1.0 · **Status:** `blocked` (on [[_slices/slice-api-retrieve-wildcards]])
+**Phase:** 8 Post-1.0 · **Status:** `in-progress` (picked up 2026-05-17 — `slice-api-retrieve-wildcards` merged 2026-04-24 via PR #268; the tracker had stayed `blocked` for ~3 weeks past the actual unblock)
+
+## Design decisions (locked at pickup, 2026-05-17)
+
+- **`query_text` provided with `mode="recent"`:** accept-and-ignore with a WARN-level log. Voice MCP callers pass stray context; 422 creates noise the assistant has to apologize about. Strict can be added later; lenient is hard to back out of.
+- **`since` shape:** `float` (epoch seconds) only. Canonical internal type. ISO conversion is one line client-side.
+- **Default `state_filter` for `mode="recent"`:** `("provisional", "matured", "promoted")` — deliberately includes `provisional` (different from fast/deep defaults of `("matured", "promoted")`). The mode's purpose is "what just happened" and provisional is the freshest tier; excluding it defeats the use case.
 
 ## Why this slice exists
 
@@ -33,28 +40,25 @@ The canonical agent-tools surface ([[13-decisions/0032-agent-tools-canonical-sur
 
 ## Owned paths
 
-This slice is `blocked` on [[_slices/slice-api-retrieve-wildcards]] (currently `in-progress`). The files this slice will touch are mostly owned by that active slice and **MUST NOT** be claimed here while it is in flight — see the "Anticipated paths at pickup" section below. When this slice transitions to `in-progress`, the slice author moves the anticipated-paths list into this section.
+New:
 
-For now, this slice claims **no active paths** — it's a tracking spec, not a worker.
+- `src/musubi/retrieve/recent.py`
+- `tests/retrieve/test_recent.py`
 
-## Anticipated paths at pickup
+Modified:
 
-The slice author who claims this slice (after [[_slices/slice-api-retrieve-wildcards]] merges) will add these into ## Owned paths:
+- `src/musubi/retrieve/orchestration.py` — extend `RetrievalQuery.mode` Literal, add `since`, dispatch branch in `_run_single`
+- `src/musubi/api/routers/retrieve.py` — extend `RetrieveQuery` (router-level), validator for query_text-optional iff mode=recent
+- `src/musubi/sdk/async_client.py`, `src/musubi/sdk/client.py` — expose mode + since
+- `openapi.yaml` — extend `RetrieveQuery` schema
+- `docs/Musubi/07-interfaces/canonical-api.md` — §Retrieve modes table
+- `tests/retrieve/test_orchestration.py` — mode=recent dispatch
+- `tests/api/test_retrieve_router.py` — end-to-end mode=recent
+- `tests/sdk/test_async_client.py` — SDK call shape
 
-Owned outright:
+Out of scope (separate PR):
 
-- src/musubi/retrieve/orchestration.py
-- tests/retrieve/test_orchestration.py
-- openapi.yaml
-- docs/Musubi/07-interfaces/canonical-api.md
-
-Released by [[_slices/slice-api-retrieve-wildcards]] when it merges:
-
-- src/musubi/api/routers/retrieve.py
-- src/musubi/sdk/async_client.py
-- src/musubi/sdk/client.py
-- tests/api/test_retrieve_router.py
-- tests/sdk/test_async_client.py
+- `src/musubi/adapters/mcp/tools.py:193` — MCP `musubi_recent` stub → real call. Folded into a follow-up PR so this one reviews cleanly as a backend addition and the MCP wiring is its own change.
 
 ## Forbidden paths
 

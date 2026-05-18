@@ -216,7 +216,16 @@ POST   /v1/retrieve                          # body = RetrievalQuery
 POST   /v1/retrieve/stream                   # NDJSON stream for large K
 ```
 
-Single entry point for fast and deep path. Mode selected by `query.mode`. See [[05-retrieval/orchestration]].
+Single entry point for the retrieve pipeline. Mode selected by `query.mode`. See [[05-retrieval/orchestration]].
+
+| `mode` | What it does | Requires `query_text` | Default `state_filter` |
+| --- | --- | --- | --- |
+| `fast` | Latency-budgeted hybrid + recency + reinforcement scoring (≤400ms). Default for interactive callers. | yes | `(matured, promoted)` |
+| `deep` | Full hybrid + cross-encoder rerank + lineage hydration (≤5s). Default for prompt-supplement use cases. | yes | `(matured, promoted)` |
+| `blended` | Deep without the reranker — when you need lineage + cross-plane but not the rerank cost. | yes | `(matured, promoted)` |
+| `recent` | Time-ordered scroll, no ranking. Newest-first. Used by `musubi_recent`. | no (ignored if provided) | `(provisional, matured, promoted)` |
+
+`mode='recent'` additionally accepts `since` (epoch-seconds floor) and `tags` (AND filter). Per [[_slices/slice-retrieve-recent]]. Cross-modal fanout (`<tenant>/*/episodic`) works the same way as for ranked modes.
 
 #### Cross-plane retrieve: one call, not N
 
