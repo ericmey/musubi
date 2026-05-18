@@ -33,6 +33,15 @@ on:
 jobs:
   integration:
     name: Integration (run ${{ matrix.run }})
+    # Skip integration on release-please PRs — they bump pyproject.toml
+    # (so they match the `paths:` filter above) but the musubi-core image
+    # for the new version doesn't exist until the release-please PR
+    # MERGES and triggers `Publish Musubi Core image`. Booting the
+    # test-env compose stack against an unpublished image always fails
+    # with NETWORK_ERROR. Scheduled nightly runs, workflow_dispatch, and
+    # real PRs touching `tests/integration/**` / `deploy/test-env/**` /
+    # the integration workflow itself / `Makefile` still run.
+    if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     timeout-minutes: 25
     strategy:
@@ -79,6 +88,16 @@ jobs:
       - name: Run integration suite
         env:
           MUSUBI_TEST_PROJECT: musubi-integration
+          # musubi-core boots in-process via uvicorn here (see compose
+          # header — core is NOT in the test-env stack). At boot it
+          # loads the SPLADE-v3 tokenizer for the ChunkedEmbedder
+          # (gotcha §9). If the HF cache miss-falls-through to a live
+          # download, splade-v3's gated 401s without an auth token —
+          # the same trap the production image's build-time `HF_TOKEN`
+          # secret addresses for the baked-in cache. Wire the same
+          # secret here so the integration suite has an alternative
+          # to a warm `~/.cache/huggingface`.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -o pipefail
           uv run pytest tests/integration/ -m integration -ra --strict-markers --no-cov -v 2>&1 | tee integration.log
