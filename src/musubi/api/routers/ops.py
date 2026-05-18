@@ -148,6 +148,14 @@ class TriggerSynthesisResponse(BaseModel):
     concepts_reinforced: int
     contradictions_detected: int
     cursor_advanced_to: float | None
+    #: Carried-forward count from the SynthesisReport's candidates pool.
+    #: Added in PR #354 to match the full SynthesisReport shape; per
+    #: PR #335's candidates pool, this is the number of episodics that
+    #: didn't cluster on this pass and were upserted for the next sweep.
+    candidates_carried_forward: int = 0
+    #: Aged-out candidates pruned this run (>30-day TTL by default).
+    #: Also added in PR #354 to match the full SynthesisReport shape.
+    candidates_pruned: int = 0
 
 
 class _NoOpOllamaClient:
@@ -244,6 +252,8 @@ async def trigger_synthesis(
         concepts_reinforced=report.concepts_reinforced,
         contradictions_detected=report.contradictions_detected,
         cursor_advanced_to=report.cursor_advanced_to,
+        candidates_carried_forward=report.candidates_carried_forward,
+        candidates_pruned=report.candidates_pruned,
     )
 
 
