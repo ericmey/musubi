@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.1](https://github.com/ericmey/musubi/compare/v1.9.0...v1.9.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **ci:** skip Integration on release-please PRs ([#350](https://github.com/ericmey/musubi/issues/350)) ([8b7db98](https://github.com/ericmey/musubi/commit/8b7db987a0f326cd95ec9e9e0bcd87d87a03b29d))
+
 ## [1.9.0](https://github.com/ericmey/musubi/compare/v1.8.0...v1.9.0) (2026-05-18)
 
 
