@@ -339,6 +339,17 @@ async def _main_async() -> None:
         deployment_environment=settings.otel_deployment_environment,
     )
 
+    # Start `/metrics` HTTP exposition. The four lifecycle jobs
+    # (maturation, synthesis, promotion, reflection) register
+    # `musubi_lifecycle_job_duration_seconds` + `_errors_total` against
+    # `default_registry()` and increment per tick — without this server,
+    # those increments never reach Prometheus and operators cannot answer
+    # "did synthesis run? how long? did it error?" from the metrics
+    # layer. See musubi#344.
+    from musubi.observability.scrape_server import start_metrics_server
+
+    start_metrics_server(settings.lifecycle_metrics_port)
+
     qdrant = build_qdrant_client(
         host=settings.qdrant_host,
         port=settings.qdrant_port,

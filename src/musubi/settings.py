@@ -94,6 +94,17 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     musubi_grpc: bool = Field(default=False, description="Expose the gRPC API alongside REST.")
 
+    lifecycle_metrics_port: int = Field(
+        default=8101,
+        description=(
+            "Port the lifecycle-worker exposes Prometheus `/metrics` on. "
+            "Worker has no FastAPI surface, so this is a stdlib HTTP server "
+            "started by `musubi.observability.scrape_server.start_metrics_server` "
+            "during worker boot. Bound on 0.0.0.0; production deploys reach it "
+            "via the compose internal network and do not host-bind."
+        ),
+    )
+
     musubi_artifact_archival_enabled: bool = Field(
         default=False,
         description=(
