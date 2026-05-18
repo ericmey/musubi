@@ -292,6 +292,7 @@ async def _main_async() -> None:
     from pathlib import Path
 
     from musubi.config import get_settings
+    from musubi.embedding.chunked import ChunkedEmbedder
     from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
     from musubi.lifecycle.demotion import DemotionDeps, build_demotion_jobs
     from musubi.lifecycle.emitters import (
@@ -368,10 +369,18 @@ async def _main_async() -> None:
     # Protocols — see src/musubi/llm/ollama.py.
     ollama = default_ollama_client()
 
-    embedder = _TEICompositeEmbedder(
-        dense=TEIDenseClient(base_url=str(settings.tei_dense_url)),
-        sparse=TEISparseClient(base_url=str(settings.tei_sparse_url)),
-        reranker=TEIRerankerClient(base_url=str(settings.tei_reranker_url)),
+    # Wrap the composite in ChunkedEmbedder so sparse inputs > 510 tokens
+    # are sliding-window-chunked + max-pooled before they hit tei-sparse
+    # (SPLADE-v3 has a hard 512-token model cap). The API server's
+    # bootstrap (src/musubi/api/bootstrap.py) wraps the same way; without
+    # this, vault_reconcile / synthesis / any lifecycle-side embed of a
+    # long input HTTP 413s. See musubi#367.
+    embedder = ChunkedEmbedder(
+        _TEICompositeEmbedder(
+            dense=TEIDenseClient(base_url=str(settings.tei_dense_url)),
+            sparse=TEISparseClient(base_url=str(settings.tei_sparse_url)),
+            reranker=TEIRerankerClient(base_url=str(settings.tei_reranker_url)),
+        )
     )
 
     episodic_plane = EpisodicPlane(client=qdrant, embedder=embedder)
