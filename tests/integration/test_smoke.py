@@ -312,7 +312,14 @@ async def test_concept_synthesis_flow_ollama_offline(
 
     # Graceful-degradation invariants: no crash + zero concepts (because
     # the loop skipped every cluster on the None response).
-    assert report["namespace"] == "eric/integration-test"
+    # Per v1.5.5+'s per-family synthesis (musubi#335), the report's
+    # `namespace` field carries the IDENTITY FAMILY the loop actually
+    # clustered ("eric") — NOT an echo of the input namespace
+    # ("eric/integration-test"). The new `identity_family` field added
+    # in musubi#352 makes this semantic explicit; assert against both
+    # to lock in the contract.
+    assert report["namespace"] == "eric"
+    assert report["identity_family"] == "eric"
     assert report["concepts_created"] == 0
     assert report["concepts_reinforced"] == 0
     # memories_selected / clusters_formed are shape-dependent on prior

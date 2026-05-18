@@ -123,9 +123,25 @@ class TriggerSynthesisRequest(BaseModel):
 
 
 class TriggerSynthesisResponse(BaseModel):
-    """Same shape as ``musubi.lifecycle.synthesis.SynthesisReport``."""
+    """Same shape as ``musubi.lifecycle.synthesis.SynthesisReport``.
+
+    The ``namespace`` field carries the **identity family** (e.g. ``"aoi"``)
+    that synthesis actually clustered, NOT an echo of the input
+    namespace. Per v1.5.5+'s per-family synthesis (musubi#335), the loop
+    operates on identity-family scope; the field name is preserved for
+    backward-compat with log scrapers but the semantic shifted from
+    "input namespace echo" to "scope actually clustered." The new
+    ``identity_family`` field below makes this explicit for new
+    callers that want unambiguous semantics. See musubi#352 for the
+    investigation that surfaced this naming confusion.
+    """
 
     namespace: str
+    #: Identity family the synthesis loop actually clustered. Same value
+    #: as ``namespace`` today (kept aliased for the v1.5.5+ per-family
+    #: flow); the dual surface lets future callers depend on the
+    #: explicit name without breaking existing log scrapers.
+    identity_family: str
     memories_selected: int
     clusters_formed: int
     concepts_created: int
@@ -217,7 +233,11 @@ async def trigger_synthesis(
         namespace=request.namespace,
     )
     return TriggerSynthesisResponse(
+        # Both fields carry the same value (identity family the loop
+        # clustered). `namespace` is the back-compat alias; new callers
+        # should prefer `identity_family` for unambiguous semantics.
         namespace=report.namespace,
+        identity_family=report.namespace,
         memories_selected=report.memories_selected,
         clusters_formed=report.clusters_formed,
         concepts_created=report.concepts_created,
