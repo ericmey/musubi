@@ -80,12 +80,25 @@ class AsyncMusubiClient:
         self,
         *,
         namespace: str,
-        query_text: str,
+        query_text: str = "",
         mode: str = "fast",
         limit: int = 10,
         planes: list[str] | None = None,
+        since: float | None = None,
+        tags: list[str] | None = None,
         request_id: str | None = None,
     ) -> dict[str, Any]:
+        """Retrieve from Musubi.
+
+        ``query_text`` defaults to empty — required by the server for
+        ``mode`` in ``fast|deep|blended`` (server returns 400 otherwise),
+        and optional for ``mode="recent"`` (the slice-retrieve-recent
+        backend ignores any value passed with `recent`).
+
+        ``since`` is epoch seconds (``float``); ``tags`` is the AND filter.
+        Both are consumed only by ``mode="recent"``; other modes accept
+        them without effect.
+        """
         body: dict[str, Any] = {
             "namespace": namespace,
             "query_text": query_text,
@@ -94,6 +107,10 @@ class AsyncMusubiClient:
         }
         if planes is not None:
             body["planes"] = planes
+        if since is not None:
+            body["since"] = since
+        if tags is not None:
+            body["tags"] = tags
         return await self._json(
             "POST",
             "/retrieve",

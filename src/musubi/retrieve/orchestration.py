@@ -7,7 +7,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Literal, cast
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
@@ -25,6 +25,7 @@ from musubi.retrieve.deep import (
     RetrievalQuery as DeepRetrievalQuery,
 )
 from musubi.retrieve.fast import run_fast_retrieve
+from musubi.retrieve.recent import run_recent_retrieve
 from musubi.types.common import Err, LifecycleState, Ok, Result
 
 logger = logging.getLogger(__name__)
@@ -46,14 +47,25 @@ class NamespaceTarget(BaseModel):
 
 class RetrievalQuery(BaseModel):
     namespace: str = Field(min_length=1)
-    query_text: str = Field(min_length=1)
-    mode: Literal["fast", "deep", "blended"] = "deep"
+    # query_text is required for fast/deep/blended; ignored for recent.
+    # The model_validator below enforces non-empty for the non-recent modes.
+    query_text: str = ""
+    mode: Literal["fast", "deep", "blended", "recent"] = "deep"
     limit: int = Field(default=25, ge=1, le=100)
     planes: list[str] = Field(default_factory=lambda: ["curated", "concept", "episodic"])
     include_lineage: bool = True
     include_archived: bool = False
     presences: list[str] | None = None
     state_filter: list[LifecycleState] | None = None
+    #: Inclusive epoch-seconds floor for ``mode="recent"``. Ignored by
+    #: other modes (they rank with their own recency-weighting). Per
+    #: [[_slices/slice-retrieve-recent]] design decisions: ``float`` only;
+    #: ISO conversion is a one-line client-side call.
+    since: float | None = None
+    #: Tag-AND filter — a row must contain every listed tag to match.
+    #: Composes with ``mode="recent"``; the other modes don't currently
+    #: consume this field but accept it without error for forward compat.
+    tags: list[str] | None = None
     #: Per-plane namespace fanout. When set, each target drives one
     #: single-plane pipeline run and results are merged by score.
     #: Set by the router from :func:`retrieve._resolve_targets` — callers
@@ -61,6 +73,21 @@ class RetrievalQuery(BaseModel):
     #: orchestrator derives a default single-plane target from the
     #: top-level ``namespace``.
     namespace_targets: list[NamespaceTarget] | None = None
+
+    @model_validator(mode="after")
+    def _require_query_text_for_ranked_modes(self) -> RetrievalQuery:
+        """Enforce: fast/deep/blended require non-empty query_text; recent doesn't.
+
+        ``mode="recent"`` with a `query_text` is accept-and-ignore (the
+        dispatch branch logs a WARN). The validator is for the inverse —
+        a ranked-mode caller without a query_text would silently retrieve
+        garbage; reject loudly at the boundary.
+        """
+        if self.mode != "recent" and not self.query_text.strip():
+            raise ValueError(
+                f"query_text is required for mode={self.mode!r} (only mode='recent' may omit it)"
+            )
+        return self
 
 
 class RetrievalResult(BaseModel):
@@ -326,6 +353,74 @@ async def _run_single(
                     d_res.value, warnings, include_payload=not getattr(parsed_query, "brief", False)
                 )
             )
+
+        elif mode == "recent":
+            # Recent mode: pure time-ordered scroll. No embedder. No rerank.
+            # Per slice-retrieve-recent. If query_text was passed, log and
+            # ignore (accept-and-ignore design decision).
+            if parsed_query.query_text:
+                logger.warning(
+                    "retrieve mode=recent ignoring query_text "
+                    "(slice-retrieve-recent: accept-and-ignore at boundary)"
+                )
+            # Recent's default state_filter deliberately includes provisional
+            # (mode purpose is "what just happened"; provisional is the
+            # freshest tier). Per slice-retrieve-recent design decisions.
+            recent_states: tuple[LifecycleState, ...] = (
+                cast(Any, tuple(parsed_query.state_filter))
+                if parsed_query.state_filter
+                else ("provisional", "matured", "promoted")
+            )
+            r_res = await asyncio.wait_for(
+                run_recent_retrieve(
+                    client=client,
+                    namespace=target_namespace,
+                    collection="musubi_" + plane,
+                    limit=parsed_query.limit,
+                    since=parsed_query.since,
+                    tags=parsed_query.tags,
+                    state_filter=recent_states,
+                ),
+                # Generous vs spec's 200ms p99 budget; scroll on an indexed
+                # field is fast, but Qdrant cold-cache + network jitter
+                # benefit from headroom. The timeout is a safety net, not a
+                # latency contract.
+                timeout=2.0,
+            )
+            if isinstance(r_res, Err):
+                map_kind: Literal["bad_query", "internal"] = (
+                    "internal" if r_res.error.status_code >= 500 else "bad_query"
+                )
+                return Err(error=RetrievalError(kind=map_kind, detail=r_res.error.detail))
+
+            recent_results: list[RetrievalResult] = []
+            for recent_hit in r_res.value.results:
+                stored_namespace = recent_hit.payload.get("namespace")
+                recent_results.append(
+                    RetrievalResult(
+                        object_id=recent_hit.object_id,
+                        namespace=str(stored_namespace) if stored_namespace else target_namespace,
+                        plane=str(recent_hit.payload.get("plane", plane)),
+                        title=recent_hit.payload.get("title"),
+                        snippet=recent_hit.snippet,
+                        # Recent has no relevance scoring; row order is
+                        # the signal. Score = created_epoch so cross-target
+                        # merge in the fanout preserves newest-first.
+                        score=recent_hit.created_epoch,
+                        score_components={
+                            "relevance": 0.0,
+                            "recency": 1.0,
+                            "reinforcement": 0.0,
+                        },
+                        lineage=_summarize_lineage(recent_hit.payload),
+                        payload=(
+                            recent_hit.payload
+                            if not getattr(parsed_query, "brief", False)
+                            else None
+                        ),
+                    )
+                )
+            return Ok(value=recent_results)
 
         elif mode == "fast":
             # Fast timeout (400ms)
