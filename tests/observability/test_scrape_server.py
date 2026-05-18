@@ -32,12 +32,24 @@ def metrics_server() -> Iterator[tuple[int, object]]:
     # couple of GETs with short retry delays rather than a single
     # arbitrary sleep — the alternative is flaky on slow runners.
     deadline = time.monotonic() + 1.0
+    boot_confirmed = False
     while time.monotonic() < deadline:
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=0.2).close()
+            boot_confirmed = True
             break
         except (urllib.error.URLError, ConnectionError):
             time.sleep(0.02)
+    if not boot_confirmed:
+        # Fall-through means the deadline elapsed without a successful
+        # GET — turn that into a clear failure here rather than letting
+        # the actual test fail later with a confusing connection error.
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2.0)
+        pytest.fail(
+            f"metrics-server did not start accepting connections on 127.0.0.1:{port} within 1s"
+        )
     yield port, httpd
     httpd.shutdown()
     httpd.server_close()
@@ -64,10 +76,14 @@ def test_metrics_endpoint_renders_exposition_format(
     metrics_server: tuple[int, object],
 ) -> None:
     port, _ = metrics_server
-    # Register + increment a counter so the body is non-trivial.
+    # Per-test unique metric name so test reruns + future tests that
+    # reuse the global `default_registry()` singleton don't end up
+    # asserting against a counter that's already been incremented by
+    # a prior test in the same session.
+    metric_name = f"musubi_scrape_server_test_{time.monotonic_ns()}_total"
     reg = default_registry()
     counter = reg.counter(
-        "musubi_scrape_server_test_total",
+        metric_name,
         "test counter for scrape_server endpoint smoke",
         labelnames=("variant",),
     )
@@ -77,11 +93,11 @@ def test_metrics_endpoint_renders_exposition_format(
     status, body = _get(port)
     assert status == 200
     # Prometheus exposition format markers (# HELP, # TYPE).
-    assert "# HELP musubi_scrape_server_test_total" in body
-    assert "# TYPE musubi_scrape_server_test_total counter" in body
+    assert f"# HELP {metric_name}" in body
+    assert f"# TYPE {metric_name} counter" in body
     # Both label-value combinations are rendered.
-    assert 'musubi_scrape_server_test_total{variant="alpha"} 3' in body
-    assert 'musubi_scrape_server_test_total{variant="beta"} 1' in body
+    assert f'{metric_name}{{variant="alpha"}} 3' in body
+    assert f'{metric_name}{{variant="beta"}} 1' in body
 
 
 def test_non_metrics_path_404s(metrics_server: tuple[int, object]) -> None:

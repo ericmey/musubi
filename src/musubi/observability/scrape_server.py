@@ -5,10 +5,11 @@ shares :func:`musubi.observability.registry.default_registry`). The
 worker is a pure asyncio tick loop — no API surface — so the in-process
 Registry has no exposition path without something like this.
 
-Pattern mirrors the API's `/v1/ops/metrics` endpoint
-(``musubi.observability.metrics_middleware``) — same renderer
-(:func:`render_text_format`), same Registry singleton — but exposed via
-stdlib ``http.server`` in a daemon thread instead of through FastAPI.
+Pattern mirrors the API's `/v1/ops/metrics` endpoint (served by
+``musubi.api.routers.ops`` over the same renderer
+:func:`render_text_format` and the same :func:`default_registry`
+singleton) — but exposed via stdlib ``http.server`` in a daemon thread
+instead of through FastAPI.
 """
 
 from __future__ import annotations
@@ -84,6 +85,15 @@ def start_metrics_server(
             httpd.serve_forever()
         except Exception:
             logger.exception("metrics-server crashed")
+        finally:
+            # Always close the server socket — if serve_forever raises,
+            # the listening port would otherwise remain bound until the
+            # process exits, blocking subsequent restarts inside the
+            # same container until the kernel reclaims the descriptor.
+            try:
+                httpd.server_close()
+            except Exception:
+                logger.exception("metrics-server close on crash failed")
 
     thread = threading.Thread(target=_serve, name="metrics-server", daemon=True)
     thread.start()
