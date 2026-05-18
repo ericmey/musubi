@@ -159,15 +159,26 @@ class CuratedPlane:
         # supersession is for distinct objects sharing a vault slot;
         # same-id-different-body is just an in-place update.
         if memory.object_id == existing.object_id:
-            updated_data = existing.model_dump()
+            # Start from the FULL incoming memory so frontmatter-driven
+            # changes (valid_from/valid_until, musubi_managed, vault_path,
+            # state, etc.) all reach storage — earlier draft of this
+            # branch hand-copied a subset and silently dropped the rest
+            # (Copilot review on PR #363). Then preserve the invariants
+            # that must come from `existing`: the identity (object_id),
+            # the creation timestamps (immutable across an update), the
+            # lineage trail (supersedes/superseded_by carried forward
+            # untouched), and any state machine fields the update isn't
+            # supposed to mutate in-place. Bump version + refresh
+            # updated_at last.
+            updated_data = memory.model_dump()
             updated_data.update(
-                content=memory.content,
-                body_hash=memory.body_hash,
-                title=memory.title,
-                summary=memory.summary,
-                topics=memory.topics,
-                tags=memory.tags,
-                importance=memory.importance,
+                object_id=existing.object_id,
+                created_at=existing.created_at,
+                created_epoch=existing.created_epoch,
+                supersedes=existing.supersedes,
+                superseded_by=existing.superseded_by,
+                promoted_from=existing.promoted_from,
+                promoted_at=existing.promoted_at,
                 version=existing.version + 1,
                 updated_at=now,
                 updated_epoch=epoch_of(now),

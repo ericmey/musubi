@@ -537,6 +537,58 @@ async def test_create_same_object_id_new_body_updates_in_place(
     assert fetched.content == "edited body"
 
 
+async def test_create_same_object_id_update_propagates_frontmatter_fields(
+    plane: CuratedPlane, ns: str
+) -> None:
+    """Companion to musubi#362 — make sure the update path doesn't
+    silently drop fields that aren't body/title.
+
+    The earlier Copilot review on PR #363 pointed out that hand-copying
+    a subset of fields (content/title/summary/topics/tags/importance)
+    would leave bitemporal validity (`valid_from`, `valid_until`),
+    `musubi_managed`, and other frontmatter-driven fields stale across
+    a reconcile. Update path now starts from the FULL incoming memory
+    and preserves only identity/creation/lineage from existing.
+    """
+    now = datetime.now(UTC)
+    first = await plane.create(
+        _make(
+            namespace=ns,
+            content="original body",
+            vault_path="curated/eric/dated.md",
+            valid_from=now - timedelta(days=30),
+            valid_until=now + timedelta(days=30),
+            musubi_managed=True,
+        )
+    )
+
+    edited = _make(
+        namespace=ns,
+        content="edited body",
+        vault_path="curated/eric/dated.md",
+        object_id=first.object_id,
+        # Frontmatter edits the operator might make:
+        valid_from=now - timedelta(days=15),  # narrowed
+        valid_until=now + timedelta(days=60),  # extended
+        musubi_managed=False,  # operator un-flagged
+        tags=["edited", "newtag"],
+        importance=9,
+    )
+    updated = await plane.create(edited)
+
+    # All edited fields reached storage.
+    assert updated.valid_from is not None
+    assert updated.valid_until is not None
+    assert (now - timedelta(days=16)) <= updated.valid_from <= (now - timedelta(days=14))
+    assert (now + timedelta(days=59)) <= updated.valid_until <= (now + timedelta(days=61))
+    assert updated.musubi_managed is False
+    assert set(updated.tags) == {"edited", "newtag"}
+    assert updated.importance == 9
+    # And identity/creation invariants preserved.
+    assert updated.object_id == first.object_id
+    assert updated.created_at == first.created_at
+
+
 async def test_query_excludes_archived_by_default(plane: CuratedPlane, ns: str) -> None:
     saved = await plane.create(
         _make(namespace=ns, content="hidden-me", vault_path="curated/eric/hidden.md")
