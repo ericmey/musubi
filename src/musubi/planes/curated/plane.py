@@ -147,12 +147,54 @@ class CuratedPlane:
             self._upsert(fresh, dense=dense, sparse=sparse)
             return fresh
 
-        # Supersession path. Two writes: re-embed the new row, mark the
-        # old row superseded. Both writes hit the same collection; if the
-        # second one fails the first one is still on disk — acceptable
-        # because a stale "superseded" row simply won't appear in default
-        # queries until the supersession completes (eventual consistency
-        # handled at slice-lifecycle-engine).
+        # Same logical object (same `object_id` in vault frontmatter),
+        # new body: this is an UPDATE, not a supersession. Pre-musubi#362
+        # the code below went into the supersession path even for this
+        # case, which built a new_row with `object_id == existing.object_id`
+        # AND `supersedes=[existing.object_id]` — failing the
+        # `MemoryObject` invariant "object cannot appear in its own
+        # supersedes list." Surfaced loudly the first time vault_reconcile
+        # actually ran (musubi#357 deploy), errored 11 of 26 reflection
+        # files. Distinguishing the two cases here is the honest semantic:
+        # supersession is for distinct objects sharing a vault slot;
+        # same-id-different-body is just an in-place update.
+        if memory.object_id == existing.object_id:
+            # Start from the FULL incoming memory so frontmatter-driven
+            # changes (valid_from/valid_until, musubi_managed, vault_path,
+            # state, etc.) all reach storage — earlier draft of this
+            # branch hand-copied a subset and silently dropped the rest
+            # (Copilot review on PR #363). Then preserve the invariants
+            # that must come from `existing`: the identity (object_id),
+            # the creation timestamps (immutable across an update), the
+            # lineage trail (supersedes/superseded_by carried forward
+            # untouched), and any state machine fields the update isn't
+            # supposed to mutate in-place. Bump version + refresh
+            # updated_at last.
+            updated_data = memory.model_dump()
+            updated_data.update(
+                object_id=existing.object_id,
+                created_at=existing.created_at,
+                created_epoch=existing.created_epoch,
+                supersedes=existing.supersedes,
+                superseded_by=existing.superseded_by,
+                promoted_from=existing.promoted_from,
+                promoted_at=existing.promoted_at,
+                version=existing.version + 1,
+                updated_at=now,
+                updated_epoch=epoch_of(now),
+            )
+            updated = CuratedKnowledge.model_validate(updated_data)
+            dense, sparse = await self._embed_both(_embed_target(updated))
+            self._upsert(updated, dense=dense, sparse=sparse)
+            return updated
+
+        # True supersession path (distinct objects sharing a vault slot).
+        # Two writes: insert the new row, mark the old row superseded.
+        # Both writes hit the same collection; if the second fails the
+        # first is still on disk — acceptable because a stale "superseded"
+        # row won't appear in default queries until the supersession
+        # completes (eventual consistency handled at
+        # slice-lifecycle-engine).
         data = memory.model_dump()
         data.update(
             state="matured",
