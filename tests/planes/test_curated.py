@@ -489,6 +489,54 @@ async def test_create_auto_embeds_dense_and_sparse_vectors(
     assert "sparse_splade_v1" in vectors
 
 
+async def test_create_same_object_id_new_body_updates_in_place(
+    plane: CuratedPlane, ns: str
+) -> None:
+    """Regression for musubi#362.
+
+    The supersession path was triggered any time `body_hash` differed
+    from the existing row's hash — even when `memory.object_id ==
+    existing.object_id` (the common case for vault reconcile: same file,
+    edited body). It built `new_row(object_id=X, supersedes=[X])` which
+    fails the MemoryObject invariant "object cannot appear in its own
+    supersedes list."
+
+    The fix: distinguish same-id-update from supersession. Same id +
+    new body should produce an updated row at the SAME object_id, with
+    `supersedes=[]` and an incremented version. Locks in the contract.
+    """
+    first = await plane.create(
+        _make(namespace=ns, content="original body", vault_path="curated/eric/note.md")
+    )
+
+    # Reconciler-style: same file (same object_id, same vault_path),
+    # edited body. Build a CuratedKnowledge with the existing object_id.
+    edited = _make(
+        namespace=ns,
+        content="edited body",
+        vault_path="curated/eric/note.md",
+        object_id=first.object_id,
+    )
+    updated = await plane.create(edited)
+
+    # Same logical row — id preserved.
+    assert updated.object_id == first.object_id
+    # Version bumped (update increments).
+    assert updated.version == first.version + 1
+    # New content reached storage.
+    assert updated.content == "edited body"
+    assert updated.body_hash != first.body_hash
+    # Supersession invariants: NOT a supersession (so the dangerous
+    # validator wouldn't have a chance to fail anyway).
+    assert updated.supersedes == []
+    assert updated.superseded_by is None
+
+    # And it's actually fetchable from storage (round-trip via get).
+    fetched = await plane.get(namespace=ns, object_id=first.object_id)
+    assert fetched is not None
+    assert fetched.content == "edited body"
+
+
 async def test_query_excludes_archived_by_default(plane: CuratedPlane, ns: str) -> None:
     saved = await plane.create(
         _make(namespace=ns, content="hidden-me", vault_path="curated/eric/hidden.md")
