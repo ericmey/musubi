@@ -88,6 +88,16 @@ jobs:
       - name: Run integration suite
         env:
           MUSUBI_TEST_PROJECT: musubi-integration
+          # musubi-core boots in-process via uvicorn here (see compose
+          # header — core is NOT in the test-env stack). At boot it
+          # loads the SPLADE-v3 tokenizer for the ChunkedEmbedder
+          # (gotcha §9). If the HF cache miss-falls-through to a live
+          # download, splade-v3's gated 401s without an auth token —
+          # the same trap the production image's build-time `HF_TOKEN`
+          # secret addresses for the baked-in cache. Wire the same
+          # secret here so the integration suite has an alternative
+          # to a warm `~/.cache/huggingface`.
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -o pipefail
           uv run pytest tests/integration/ -m integration -ra --strict-markers --no-cov -v 2>&1 | tee integration.log
