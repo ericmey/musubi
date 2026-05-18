@@ -33,6 +33,21 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # Required by the uv.lock regen step below — that step needs a
+      # checked-out git repo with the PAT credentials configured to
+      # push back to the release-please branch. Pre-musubi#360 this
+      # job had no checkout because the release-please-action talks
+      # directly to the GitHub API and didn't need a workspace.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Use the PAT (or fallback to GITHUB_TOKEN) so the later
+          # `git push origin <release-please branch>` step has
+          # credentials for the remote.
+          token: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
+          # Full history isn't required (release-please works off the
+          # default depth=1 fine) — keep checkout fast.
+
       # Surface the fallback loudly. Without RELEASE_PLEASE_PAT, the job
       # still runs — release PRs open and merge — but tag pushes
       # authored by GITHUB_TOKEN don't trigger `publish-core-image.yml`,
@@ -80,6 +95,58 @@ jobs:
           # emits an `::warning::` so the regression doesn't slip
           # by silently.
           token: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
+
+      # Install uv via the maintained setup action (same pattern used
+      # by ci.yml + integration.yml). Copilot review on PR #364 flagged
+      # the prior `curl | sh` install as a supply-chain divergence.
+      # Installing once at the job level means the regen step just
+      # calls `uv lock`.
+      - name: Install uv
+        if: ${{ steps.release-please.outputs.pr != '' }}
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
+      # Regenerate uv.lock on the release PR branch so the lockfile's
+      # `musubi` package version matches the bumped pyproject.toml.
+      # Pre-musubi#360, every release PR (v1.7.1 through v1.10.0) left
+      # uv.lock stale — Copilot caught it every time, operators
+      # admin-merged through, and `uv sync` consumers ran against a
+      # lockfile listing the prior version. Closing the loop here so
+      # the lockfile is current with no operator intervention.
+      - name: Regenerate uv.lock on release PR branch
+        if: ${{ steps.release-please.outputs.pr != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
+          PR_JSON: ${{ steps.release-please.outputs.pr }}
+        run: |
+          set -euo pipefail
+          pr_number=$(echo "$PR_JSON" | jq -r '.number')
+          head_ref=$(echo "$PR_JSON" | jq -r '.headBranchName')
+          if [ -z "$pr_number" ] || [ "$pr_number" = "null" ]; then
+            echo "release-please produced no PR number; skipping uv.lock regen."
+            exit 0
+          fi
+          if [ -z "$head_ref" ] || [ "$head_ref" = "null" ]; then
+            echo "release-please did not surface a headBranchName; skipping uv.lock regen."
+            exit 0
+          fi
+          echo "Regenerating uv.lock on branch $head_ref (PR #$pr_number)"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git fetch origin "$head_ref"
+          git checkout "$head_ref"
+          uv lock
+          if git diff --quiet uv.lock; then
+            echo "uv.lock already up to date; nothing to commit."
+            exit 0
+          fi
+          git add uv.lock
+          git commit -m "chore(release): regen uv.lock for the version bump
+
+          Auto-applied by release-please.yml so the lockfile's musubi
+          package version matches the bumped pyproject.toml. Closes #360."
+          git push origin "$head_ref"
 
       # Turn the release PR into a set-and-forget merge — once required
       # checks pass, GitHub squash-merges it without a human gate. The
