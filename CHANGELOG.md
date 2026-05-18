@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/ericmey/musubi/compare/v1.7.1...v1.8.0) (2026-05-18)
+
+
+### Features
+
+* **retrieve:** mode=recent (slice-retrieve-recent) ([#343](https://github.com/ericmey/musubi/issues/343)) ([6695f5d](https://github.com/ericmey/musubi/commit/6695f5d86c40335cd699ad6bbab10baddbc63501))
+
 ## [1.7.1](https://github.com/ericmey/musubi/compare/v1.7.0...v1.7.1) (2026-05-17)
 
 
