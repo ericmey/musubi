@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.10.1](https://github.com/ericmey/musubi/compare/v1.10.0...v1.10.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **curated:** same-id new-body is an UPDATE, not supersession (closes [#362](https://github.com/ericmey/musubi/issues/362)) ([#363](https://github.com/ericmey/musubi/issues/363)) ([9ed6f68](https://github.com/ericmey/musubi/commit/9ed6f6848f1fb3f6a123c59a6979716c6cdb294c))
+
+
+### CI / Ops
+
+* **release-please:** auto-regen uv.lock after version bump (closes [#360](https://github.com/ericmey/musubi/issues/360)) ([#364](https://github.com/ericmey/musubi/issues/364)) ([1c933c8](https://github.com/ericmey/musubi/commit/1c933c8739e63df7c7a0813626795d621bd1d1bd))
+
 ## [1.10.0](https://github.com/ericmey/musubi/compare/v1.9.2...v1.10.0) (2026-05-18)
 
 
