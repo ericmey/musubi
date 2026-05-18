@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.2](https://github.com/ericmey/musubi/compare/v1.9.1...v1.9.2) (2026-05-18)
+
+
+### Bug Fixes
+
+* **api,test:** clarify trigger-synthesis namespace semantics ([#354](https://github.com/ericmey/musubi/issues/354)) ([4cb9739](https://github.com/ericmey/musubi/commit/4cb9739538a688fc61e30ba075851d034f5d33d8))
+
 ## [1.9.1](https://github.com/ericmey/musubi/compare/v1.9.0...v1.9.1) (2026-05-18)
 
 
