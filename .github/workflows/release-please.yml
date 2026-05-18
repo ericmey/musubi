@@ -33,6 +33,21 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
+      # Required by the uv.lock regen step below — that step needs a
+      # checked-out git repo with the PAT credentials configured to
+      # push back to the release-please branch. Pre-musubi#360 this
+      # job had no checkout because the release-please-action talks
+      # directly to the GitHub API and didn't need a workspace.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          # Use the PAT (or fallback to GITHUB_TOKEN) so the later
+          # `git push origin <release-please branch>` step has
+          # credentials for the remote.
+          token: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
+          # Full history isn't required (release-please works off the
+          # default depth=1 fine) — keep checkout fast.
+
       # Surface the fallback loudly. Without RELEASE_PLEASE_PAT, the job
       # still runs — release PRs open and merge — but tag pushes
       # authored by GITHUB_TOKEN don't trigger `publish-core-image.yml`,
@@ -81,6 +96,17 @@ jobs:
           # by silently.
           token: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
 
+      # Install uv via the maintained setup action (same pattern used
+      # by ci.yml + integration.yml). Copilot review on PR #364 flagged
+      # the prior `curl | sh` install as a supply-chain divergence.
+      # Installing once at the job level means the regen step just
+      # calls `uv lock`.
+      - name: Install uv
+        if: ${{ steps.release-please.outputs.pr != '' }}
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+
       # Regenerate uv.lock on the release PR branch so the lockfile's
       # `musubi` package version matches the bumped pyproject.toml.
       # Pre-musubi#360, every release PR (v1.7.1 through v1.10.0) left
@@ -110,8 +136,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git fetch origin "$head_ref"
           git checkout "$head_ref"
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
           uv lock
           if git diff --quiet uv.lock; then
             echo "uv.lock already up to date; nothing to commit."
