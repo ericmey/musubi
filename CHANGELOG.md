@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/ericmey/musubi/compare/v1.8.0...v1.9.0) (2026-05-18)
+
+
+### Features
+
+* **observability:** lifecycle-worker /metrics exposition ([#346](https://github.com/ericmey/musubi/issues/346)) ([de71ba7](https://github.com/ericmey/musubi/commit/de71ba70f719aa51d4e8cc1356f36d1bbecfd6c2))
+
 ## [1.8.0](https://github.com/ericmey/musubi/compare/v1.7.1...v1.8.0) (2026-05-18)
 
 
