@@ -41,11 +41,18 @@ def _payload(object_id: str, *, created_epoch: float, **extra: Any) -> dict[str,
 
 
 class _SpyQdrantClient:
-    """Records the last scroll call's args; returns canned points."""
+    """Records the last scroll call's args; returns canned points.
+
+    ``last_kwargs`` is initialized to ``{}`` rather than ``None`` so
+    tests can index into it without first narrowing through an
+    ``assert is not None``. Every test calls ``run_recent_retrieve``
+    before inspecting, so the empty default is never observed in
+    practice — it's a type-friendliness shim.
+    """
 
     def __init__(self, points: list[Any] | None = None) -> None:
         self.points = points or []
-        self.last_kwargs: dict[str, Any] | None = None
+        self.last_kwargs: dict[str, Any] = {}
         self.scroll_calls = 0
 
     def scroll(self, **kwargs: Any) -> tuple[list[Any], Any]:

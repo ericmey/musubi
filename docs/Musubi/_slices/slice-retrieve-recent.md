@@ -40,21 +40,30 @@ The canonical agent-tools surface ([[13-decisions/0032-agent-tools-canonical-sur
 
 ## Owned paths
 
-New:
+This slice's exclusive paths — files introduced by this slice that no
+other slice claims:
 
 - `src/musubi/retrieve/recent.py`
 - `tests/retrieve/test_recent.py`
+- `tests/api/test_retrieve_recent.py`
 
-Modified:
+## Extends (not owned)
 
-- `src/musubi/retrieve/orchestration.py` — extend `RetrievalQuery.mode` Literal, add `since`, dispatch branch in `_run_single`
-- `src/musubi/api/routers/retrieve.py` — extend `RetrieveQuery` (router-level), validator for query_text-optional iff mode=recent
-- `src/musubi/sdk/async_client.py`, `src/musubi/sdk/client.py` — expose mode + since
-- `openapi.yaml` — extend `RetrieveQuery` schema
-- `docs/Musubi/07-interfaces/canonical-api.md` — §Retrieve modes table
-- `tests/retrieve/test_orchestration.py` — mode=recent dispatch
-- `tests/api/test_retrieve_router.py` — end-to-end mode=recent
-- `tests/sdk/test_async_client.py` — SDK call shape
+This slice also modifies files owned by previously-shipped slices.
+Listed here for review traceability; the hygiene check tracks exclusive
+ownership in `## Owned paths` above, so these aren't re-claimed here.
+
+- `src/musubi/retrieve/orchestration.py` (owned by `slice-retrieval-orchestration`)
+  — extend `RetrievalQuery.mode` Literal, add `since`/`tags`, model-validator
+  for query_text-required-iff-not-recent, dispatch branch in `_run_single`.
+- `src/musubi/api/routers/retrieve.py` (owned by `slice-api-retrieve-wildcards`)
+  — extend `RetrieveQuery` body model, thread `since`/`tags` into query_body.
+- `src/musubi/sdk/{async_client,client}.py` (owned by `slice-api-retrieve-wildcards`)
+  — expose `since`/`tags` parameters; default `query_text=""`.
+- `openapi.yaml` (owned by `slice-api-v0-write`) — extend `RetrieveQuery`
+  schema with `mode` enum, `since`, `tags`, optional query_text.
+- `docs/Musubi/07-interfaces/canonical-api.md` (owned by `slice-api-thoughts-stream`)
+  — add §Retrieve modes table including `recent`.
 
 Out of scope (separate PR):
 
