@@ -23,6 +23,21 @@ from musubi.observability.registry import default_registry, render_text_format
 logger = logging.getLogger(__name__)
 
 
+class _ReusableHTTPServer(HTTPServer):
+    """`HTTPServer` with `SO_REUSEADDR` so lifecycle-worker restarts are reliable.
+
+    Stdlib `HTTPServer` inherits `socketserver.TCPServer.allow_reuse_address
+    = False`. On a fast container restart, recent Prometheus scrape sockets
+    can sit in `TIME_WAIT` for ~60s, and binding the same port without
+    SO_REUSEADDR raises `EADDRINUSE` — making the worker crash-loop until
+    the kernel releases the port. Setting `True` lets the new process bind
+    immediately. Safe here because port `lifecycle_metrics_port` is
+    process-exclusive within the container (one worker per container).
+    """
+
+    allow_reuse_address = True
+
+
 class _MetricsHandler(BaseHTTPRequestHandler):
     """Serve `GET /metrics` from the process-wide registry; 404 elsewhere."""
 
@@ -60,7 +75,7 @@ def start_metrics_server(
     ``.start()`` it. Pass ``port=0`` to let the OS pick a port (tests
     use this; production passes a fixed port from settings).
     """
-    httpd = HTTPServer((host, port), _MetricsHandler)
+    httpd = _ReusableHTTPServer((host, port), _MetricsHandler)
 
     def _serve() -> None:
         bound_port = httpd.server_address[1]

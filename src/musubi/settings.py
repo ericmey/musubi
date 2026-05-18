@@ -96,6 +96,8 @@ class Settings(BaseSettings):
 
     lifecycle_metrics_port: int = Field(
         default=8101,
+        ge=1,
+        le=65535,
         description=(
             "Port the lifecycle-worker exposes Prometheus `/metrics` on. "
             "Worker has no FastAPI surface, so this is a stdlib HTTP server "

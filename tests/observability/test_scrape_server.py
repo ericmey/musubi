@@ -10,6 +10,7 @@ without depending on Prometheus being installed.
 from __future__ import annotations
 
 import time
+import urllib.error
 import urllib.request
 from collections.abc import Iterator
 
@@ -25,13 +26,26 @@ def metrics_server() -> Iterator[tuple[int, object]]:
     thread = start_metrics_server(port=0, host="127.0.0.1")
     httpd = thread.httpd  # type: ignore[attr-defined]
     port = httpd.server_address[1]
-    # Tiny wait so the thread is past serve_forever() entry. The poll
-    # loop below tolerates a slow boot, but a 1ms yield is enough to
-    # avoid most flake.
-    time.sleep(0.005)
+    # Poll until the server is actually accepting connections. The
+    # thread is `start()`ed before the fixture sees it, but there is a
+    # brief window before `serve_forever()` enters its loop. Try a
+    # couple of GETs with short retry delays rather than a single
+    # arbitrary sleep — the alternative is flaky on slow runners.
+    deadline = time.monotonic() + 1.0
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/metrics", timeout=0.2).close()
+            break
+        except (urllib.error.URLError, ConnectionError):
+            time.sleep(0.02)
     yield port, httpd
     httpd.shutdown()
     httpd.server_close()
+    # Join the server thread so we don't leak it across tests. The
+    # daemon flag stops process shutdown from blocking; an explicit
+    # join here stops a slow-shutting-down server from accumulating
+    # idle threads in long test runs.
+    thread.join(timeout=2.0)
 
 
 def _get(port: int, path: str = "/metrics", timeout: float = 2.0) -> tuple[int, str]:
