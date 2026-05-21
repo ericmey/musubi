@@ -24,20 +24,17 @@
         mode: "0644"
       notify: reload prometheus
 
-    - name: Render Qdrant bearer-token file for Prometheus
-      # Mounted read-only into the prometheus container at
-      # /etc/prometheus/qdrant.token; referenced by the qdrant scrape
-      # job's `authorization.credentials_file`. Chown to UID 65534
-      # (`nobody`) because the official prom/prometheus image runs as
-      # that user — bind mounts preserve host UID/GID, so the file
-      # must be readable by 65534 specifically. Mode 0400 grants
-      # owner-only read.
+    - name: Render Qdrant bearer-token op-inject template for Prometheus
+      # The token is no longer rendered to disk. This template holds only the
+      # op:// reference; the musubi.service unit `op inject`s it into a tmpfs
+      # (/run/musubi-secrets/qdrant.token) at start and chowns it to UID 65534
+      # (the prom/prometheus container user). No Qdrant secret persists on disk.
       ansible.builtin.template:
-        src: templates/qdrant.token.j2
-        dest: "{{ musubi_config_dir }}/qdrant.token"
-        owner: "65534"
-        group: "65534"
-        mode: "0400"
+        src: templates/qdrant.token.tpl.j2
+        dest: "{{ musubi_config_dir }}/qdrant.token.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0644"
       notify: reload prometheus
 
     - name: Pull missing pinned images

@@ -21,9 +21,10 @@
 # `Authorization: Bearer <api-key>`. Qdrant 1.17 accepts either an
 # `api-key:` header or the Bearer form; Prometheus only natively
 # supports the Bearer form, so that's what we use. The token file is
-# rendered separately by `deploy/ansible/deploy.yml` from the
-# `vault_qdrant_api_key` variable and mounted into the container at
-# `/etc/prometheus/qdrant.token` (mode 0640, root:musubi).
+# rendered at service start by the musubi.service unit (`op inject` from
+# 1Password Connect, op://Harem World/musubi-qdrant-auth) into a tmpfs
+# (`/run/musubi-secrets/qdrant.token`, mode 0400, owned UID 65534) and mounted
+# read-only into the container at `/etc/prometheus/qdrant.token`.
 #
 # Visualization, alerting, and trace collection live on shiori per ADR 0033.
 # Local Grafana/Loki/Tempo/Alertmanager were planned by slice-ops-observability
@@ -95,8 +96,8 @@ scrape_configs:
       - targets: ["localhost:9090"]
 
   # Qdrant — vector storage. Native Prometheus endpoint at /metrics; auth
-  # required. Bearer credentials come from a file rendered by ansible from
-  # `vault_qdrant_api_key`.
+  # required. Bearer credentials come from the tmpfs token rendered at service
+  # start by `op inject` from 1Password Connect (see header).
   - job_name: qdrant
     metrics_path: /metrics
     authorization:

@@ -6,8 +6,22 @@ Requires=docker.service
 [Service]
 Type=simple
 WorkingDirectory={{ musubi_config_dir }}
-ExecStart=/usr/bin/docker compose --env-file {{ musubi_config_dir }}/.env.production up
-ExecStop=/usr/bin/docker compose --env-file {{ musubi_config_dir }}/.env.production down
+# 1Password Connect creds (OP_CONNECT_HOST / OP_CONNECT_TOKEN) consumed by both
+# `op inject` (below) and `op run` (ExecStart). Root-only file, 0600.
+EnvironmentFile=/etc/musubi/connect.env
+# tmpfs at /run/musubi-secrets (0711, auto-removed on stop) holds the rendered
+# Qdrant scrape token — never persisted to disk. Re-rendered on every (re)start.
+RuntimeDirectory=musubi-secrets
+RuntimeDirectoryMode=0711
+# Render the Qdrant scrape token from Connect into tmpfs, then hand it to UID
+# 65534 (the prom/prometheus container user) so the read-only bind mount works.
+ExecStartPre=/usr/bin/op inject -i {{ musubi_config_dir }}/qdrant.token.tpl -o /run/musubi-secrets/qdrant.token
+ExecStartPre=/usr/bin/chown 65534:65534 /run/musubi-secrets/qdrant.token
+ExecStartPre=/usr/bin/chmod 0400 /run/musubi-secrets/qdrant.token
+# Resolve op:// refs via Connect into the compose process env, then bring the
+# stack up. Material secrets live in process env only — not on disk. Restart rolls.
+ExecStart=/usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl -- /usr/bin/docker compose up
+ExecStop=/usr/bin/docker compose down
 Restart=always
 RestartSec=10
 

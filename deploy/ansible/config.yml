@@ -1,16 +1,15 @@
 ---
-- name: Refresh Musubi runtime configuration
+- name: Refresh Musubi runtime configuration (1Password Connect / op-run model)
   hosts: musubi
   become: true
   tasks:
-    - name: Render production environment
+    - name: Render production environment (non-secret config only)
       ansible.builtin.template:
         src: templates/env.production.j2
         dest: "{{ musubi_config_dir }}/.env.production"
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0640"
-      no_log: true
       notify: Restart Musubi stack
 
     - name: Render docker-compose anchor
@@ -22,7 +21,47 @@
         mode: "0640"
       notify: Restart Musubi stack
 
+    - name: Render op-run secrets template (op:// refs only — no secret values)
+      ansible.builtin.template:
+        src: templates/secrets.tpl.j2
+        dest: "{{ musubi_config_dir }}/secrets.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0644"
+      notify: Restart Musubi stack
+
+    - name: Render Qdrant op-inject template (op:// ref only — no secret value)
+      ansible.builtin.template:
+        src: templates/qdrant.token.tpl.j2
+        dest: "{{ musubi_config_dir }}/qdrant.token.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0644"
+      notify: Restart Musubi stack
+
+    - name: Install Musubi systemd unit (op-run model)
+      ansible.builtin.template:
+        src: templates/musubi.service.j2
+        dest: /etc/systemd/system/musubi.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart Musubi stack
+
+    - name: Remove the legacy on-disk Qdrant token (now tmpfs-only via op inject)
+      ansible.builtin.file:
+        path: "{{ musubi_config_dir }}/qdrant.token"
+        state: absent
+
   handlers:
+    # Defined reload-before-restart: Ansible runs handlers in definition order,
+    # so the new unit is loaded before the stack restarts onto it.
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
     - name: Restart Musubi stack
       ansible.builtin.systemd_service:
         name: musubi

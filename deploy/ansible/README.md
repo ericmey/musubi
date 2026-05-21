@@ -102,6 +102,28 @@ ansible-playbook \
 The real `bootstrap.yml`, `config.yml`, and `deploy.yml` need the encrypted
 vault — they must run from the ansible control host.
 
+## Runtime secrets (1Password Connect)
+
+As of 2026-05-21, Musubi's **material runtime secrets** — the JWT signing key and
+the Qdrant API key — are **not** in `vault.yml`. They live in the `Harem World`
+1Password vault and are resolved **at container start** by the `musubi.service`
+unit via 1Password Connect:
+
+- `ExecStart=op run --env-file=secrets.tpl -- docker compose up` injects the
+  `op://` refs into the compose process env (consumed via `${VAR}`).
+- `ExecStartPre=op inject` renders the Qdrant scrape token into a tmpfs
+  (`/run/musubi-secrets/qdrant.token`), chowned to UID 65534 for prometheus.
+- The unit reads `OP_CONNECT_HOST`/`OP_CONNECT_TOKEN` from
+  `/etc/musubi/connect.env` (root, `0600`) — a per-machine, read-only Connect
+  token (Connect runs on shiori, reached by IP).
+
+`vault.yml` still holds the non-Connect secrets (deploy token, Kong, backup
+creds). **Prerequisites on the host:** `op` installed, and
+`/etc/musubi/connect.env` present. The connect.env is currently placed manually
+(a control-host script pipes the token over ssh) — folding it into
+`bootstrap.yml` is a follow-up. Rotation of Connect-sourced secrets = update the
+1P item + `systemctl restart musubi`.
+
 ## Why this split
 
 - **Repo = single source of truth.** Playbook edits go through PR review.
