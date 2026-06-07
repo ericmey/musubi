@@ -41,9 +41,15 @@ FROM python:3.12-slim-bookworm AS runtime
 # lets bind-mounts from the host data dirs (`/var/lib/musubi/*`, `/var/log/musubi`,
 # 0750 perms owned by host `musubi`) be read and written without privilege
 # escalation or chown gymnastics.
+# `apt-get upgrade` security-patches packages baked into the base image
+# (python:3.12-slim-bookworm) before it next republishes. The image's CI
+# Trivy scan gates on CRITICAL CVEs with a fix available, and Debian point
+# releases (e.g. libgnutls30 deb12u6 -> deb12u7) land faster than the base
+# image rebuilds — without this the gate trips on a CVE we didn't introduce.
 RUN groupadd --system --gid 985 musubi \
  && useradd  --system --uid 999 --gid 985 --home-dir /app --no-create-home musubi \
  && apt-get update \
+ && apt-get -y upgrade \
  && apt-get install -y --no-install-recommends curl ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 
@@ -99,12 +105,20 @@ USER musubi
 # code drifts (a new tokenizer added without updating this RUN). That
 # class of drift should be caught in PR review, not papered over with
 # runtime hedging.
+# Retry the prefetch: HuggingFace Hub rate-limits shared CI-runner IPs with
+# HTTP 429, which the hub client's own backoff (~24s) doesn't always outlast.
+# 5 outer attempts with growing backoff give the per-IP window time to reset
+# so a transient 429 self-heals within the build instead of failing it. A
+# genuine auth/gating error (401/403) still fails fast on the first attempt.
 RUN --mount=type=secret,id=hf_token,uid=999 \
-    HF_TOKEN="$(cat /run/secrets/hf_token)" \
-    HUGGINGFACE_HUB_TOKEN="$(cat /run/secrets/hf_token)" \
-    python -c "from tokenizers import Tokenizer; \
-Tokenizer.from_pretrained('naver/splade-v3'); \
-Tokenizer.from_pretrained('BAAI/bge-m3')"
+    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
+           HUGGINGFACE_HUB_TOKEN="$(cat /run/secrets/hf_token)"; \
+    for attempt in 1 2 3 4 5; do \
+      python -c "from tokenizers import Tokenizer; Tokenizer.from_pretrained('naver/splade-v3'); Tokenizer.from_pretrained('BAAI/bge-m3')" && break; \
+      if [ "$attempt" = 5 ]; then echo "tokenizer prefetch failed after 5 attempts" >&2; exit 1; fi; \
+      echo "tokenizer prefetch attempt $attempt failed (transient HF Hub error, e.g. 429); backing off..."; \
+      sleep $((attempt * 20)); \
+    done
 
 EXPOSE 8100
 
