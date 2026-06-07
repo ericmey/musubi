@@ -105,20 +105,62 @@ USER musubi
 # code drifts (a new tokenizer added without updating this RUN). That
 # class of drift should be caught in PR review, not papered over with
 # runtime hedging.
-# Retry the prefetch: HuggingFace Hub rate-limits shared CI-runner IPs with
-# HTTP 429, which the hub client's own backoff (~24s) doesn't always outlast.
-# 5 outer attempts with growing backoff give the per-IP window time to reset
-# so a transient 429 self-heals within the build instead of failing it. A
-# genuine auth/gating error (401/403) still fails fast on the first attempt.
+# Retry the prefetch on TRANSIENT errors only. HuggingFace Hub rate-limits
+# shared CI-runner IPs with HTTP 429, which the hub client's own backoff
+# (~24s) doesn't always outlast; up to 5 attempts with growing backoff give
+# the per-IP window time to reset so a transient 429 self-heals in-build.
+# Auth/gating errors (gated repo, 401/403/404) are classified and fail
+# IMMEDIATELY — no wasted retries, and no mislabeling a real auth problem as
+# a 429. The retry lives in Python (not a shell loop) precisely so it can
+# inspect the exception chain to make that transient-vs-fatal distinction.
 RUN --mount=type=secret,id=hf_token,uid=999 \
-    export HF_TOKEN="$(cat /run/secrets/hf_token)" \
-           HUGGINGFACE_HUB_TOKEN="$(cat /run/secrets/hf_token)"; \
-    for attempt in 1 2 3 4 5; do \
-      python -c "from tokenizers import Tokenizer; Tokenizer.from_pretrained('naver/splade-v3'); Tokenizer.from_pretrained('BAAI/bge-m3')" && break; \
-      if [ "$attempt" = 5 ]; then echo "tokenizer prefetch failed after 5 attempts" >&2; exit 1; fi; \
-      echo "tokenizer prefetch attempt $attempt failed (transient HF Hub error, e.g. 429); backing off..."; \
-      sleep $((attempt * 20)); \
-    done
+    HF_TOKEN="$(cat /run/secrets/hf_token)" \
+    HUGGINGFACE_HUB_TOKEN="$(cat /run/secrets/hf_token)" \
+    python - <<'PY'
+import sys
+import time
+
+from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError
+from tokenizers import Tokenizer
+
+MODELS = ("naver/splade-v3", "BAAI/bge-m3")
+MAX_ATTEMPTS = 5
+
+
+def _chain(exc):
+    seen, out = set(), []
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        out.append(exc)
+        exc = exc.__cause__ or exc.__context__
+    return out
+
+
+def _is_fatal(exc):
+    """Auth / gating / missing-repo are not transient: don't retry them."""
+    for e in _chain(exc):
+        if isinstance(e, (GatedRepoError, RepositoryNotFoundError)):
+            return True
+        if getattr(getattr(e, "response", None), "status_code", None) in (401, 403, 404):
+            return True
+    return False
+
+
+for attempt in range(1, MAX_ATTEMPTS + 1):
+    try:
+        for model in MODELS:
+            Tokenizer.from_pretrained(model)
+        sys.exit(0)
+    except Exception as exc:
+        if _is_fatal(exc):
+            print(f"tokenizer prefetch: fatal auth/gating error, not retrying: {exc!r}", file=sys.stderr)
+            raise
+        if attempt == MAX_ATTEMPTS:
+            print(f"tokenizer prefetch: transient error persisted after {attempt} attempts: {exc!r}", file=sys.stderr)
+            raise
+        print(f"tokenizer prefetch attempt {attempt} failed (transient, e.g. HF 429); backing off {attempt * 20}s...", file=sys.stderr)
+        time.sleep(attempt * 20)
+PY
 
 EXPOSE 8100
 
