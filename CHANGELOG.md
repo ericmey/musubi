@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.3](https://github.com/ericmey/musubi/compare/v1.10.2...v1.10.3) (2026-06-07)
+
+
+### Bug Fixes
+
+* **mcp:** musubi_get 2-part namespace foot-gun + wire musubi_recent ([#288](https://github.com/ericmey/musubi/issues/288)) ([#373](https://github.com/ericmey/musubi/issues/373)) ([1df9e62](https://github.com/ericmey/musubi/commit/1df9e620907e7654c40d086fe10fdcb4108ef47f))
+
 ## [1.10.2](https://github.com/ericmey/musubi/compare/v1.10.1...v1.10.2) (2026-05-18)
 
 
