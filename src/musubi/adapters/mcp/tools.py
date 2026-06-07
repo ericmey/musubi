@@ -211,8 +211,10 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
         description=(
             "Recent activity in a namespace, newest first — no query needed. "
             "Use to orient ('what's happened lately') rather than to search. "
-            "Pass the 2-part presence root (e.g. `aoi/command-chair`) to span "
-            "every plane. Optional `tags` is an AND-filter (e.g. "
+            "A 2-part presence root (e.g. `aoi/command-chair`) returns recent "
+            "episodic memories (the default plane); pass a full 3-part "
+            "namespace (e.g. `aoi/command-chair/curated`) to see another "
+            "plane's recents. Optional `tags` is an AND-filter (e.g. "
             "`src:mcp-agent-remember` for captures from coding-agent sessions)."
         ),
     )
