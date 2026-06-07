@@ -33,6 +33,7 @@ class _PlaneStub:
         self.name = name
         self.store = store if store is not None else {}
         self.captured: list[dict[str, Any]] = []
+        self.get_calls: list[dict[str, str]] = []
 
     async def capture(
         self,
@@ -57,6 +58,7 @@ class _PlaneStub:
         return {"object_id": oid, "state": "provisional"}
 
     async def get(self, *, namespace: str, object_id: str) -> dict[str, Any]:
+        self.get_calls.append({"namespace": namespace, "object_id": object_id})
         if object_id not in self.store:
             from musubi.sdk.exceptions import NotFound
 
@@ -292,6 +294,51 @@ async def test_get_unknown_id_returns_tool_error_with_id_and_namespace() -> None
     )
     assert "missing-xyz" in result
     assert "eric/claude-code/episodic" in result
+
+
+def test_normalize_get_namespace_composes_two_part_root_with_plane() -> None:
+    from musubi.adapters.mcp.tools import _normalize_get_namespace
+
+    # 2-part presence root (what musubi_search takes) + plane → canonical 3-part
+    assert _normalize_get_namespace("aoi/command-chair", "episodic") == "aoi/command-chair/episodic"
+    # trailing slash on the root is tolerated, not double-slashed
+    assert _normalize_get_namespace("aoi/command-chair/", "curated") == "aoi/command-chair/curated"
+    # an already-3-part namespace is trusted as-is — never double-suffixed
+    assert (
+        _normalize_get_namespace("aoi/command-chair/episodic", "episodic")
+        == "aoi/command-chair/episodic"
+    )
+    # an explicit 3-part namespace is left alone even if its tail differs from `plane`
+    assert (
+        _normalize_get_namespace("aoi/command-chair/episodic", "curated")
+        == "aoi/command-chair/episodic"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_accepts_two_part_root_and_composes_plane() -> None:
+    # Regression: an agent that splits a search result row into the 2-part presence
+    # root + a plane (the natural reading) must still resolve to the stored 3-part
+    # namespace — not a false NOT_FOUND. (2026-06-07 namespace foot-gun.)
+    mcp, client = _make_server()
+    client.episodic.store["ep-2"] = {
+        "object_id": "ep-2",
+        "namespace": "eric/claude-code/episodic",
+        "content": "Body fetched via the 2-part presence root.",
+        "title": None,
+    }
+    result = await _invoke(
+        mcp,
+        "musubi_get",
+        plane="episodic",
+        namespace="eric/claude-code",  # 2-part root, NOT the full 3-part namespace
+        object_id="ep-2",
+    )
+    assert "Body fetched via the 2-part presence root." in result
+    # the SDK get() was actually called with the composed canonical namespace
+    assert client.episodic.get_calls[-1]["namespace"] == "eric/claude-code/episodic"
+    # and the rendered header reflects it
+    assert "eric/claude-code/episodic/ep-2" in result
 
 
 # --------------------------------------------------------------------------

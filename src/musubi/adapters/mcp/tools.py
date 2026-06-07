@@ -52,6 +52,28 @@ _PLANE_ATTR: dict[str, str] = {
 }
 
 
+def _normalize_get_namespace(namespace: str, plane: str) -> str:
+    """Resolve the namespace ``musubi_get`` needs from what an agent realistically passes.
+
+    Objects are stored under the canonical 3-part namespace
+    ``tenant/presence/plane`` (e.g. ``aoi/command-chair/episodic``), and
+    ``get`` filters on it exactly. But ``musubi_search`` accepts — and is
+    usually called with — the **2-part presence root** (``aoi/command-chair``),
+    because a 2-part namespace is a *blended* cross-plane query. Search result
+    rows then render the full 3-part namespace, so an agent passing "namespace +
+    plane straight from a search row" naturally splits off the 2-part root and a
+    separate plane. Composing them here makes that Just Work instead of returning
+    a false ``NOT_FOUND`` that an exact-namespace filter could never match.
+
+    A 2-part namespace + ``plane`` composes to ``{namespace}/{plane}``; an
+    already-3-part namespace is trusted as-is.
+    """
+    ns = namespace.rstrip("/")
+    if ns.count("/") == 1:  # exactly 2 parts → presence root, append the plane
+        return f"{ns}/{plane}"
+    return ns
+
+
 def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
     """Register every canonical agent tool on the given FastMCP server.
 
@@ -92,7 +114,10 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
             "Fetch one Musubi object's full content + metadata by id. "
             "Use after `musubi_search` when a snippet looks load-bearing "
             "and you need the underlying source. Pass `plane`, `namespace`, "
-            "and `object_id` straight from a search result row."
+            "and `object_id` straight from a search result row — `namespace` "
+            "may be the 2-part presence root (e.g. `aoi/command-chair`) or the "
+            "full 3-part namespace (`aoi/command-chair/episodic`); the 2-part "
+            "form is composed with `plane` automatically."
         ),
     )
     async def musubi_get(
@@ -102,6 +127,7 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
     ) -> str:
         if plane not in _PLANE_ATTR:
             return f"Error: unknown plane {plane!r} — must be one of {sorted(_PLANE_ATTR)}."
+        namespace = _normalize_get_namespace(namespace, plane)
         plane_client = getattr(client, _PLANE_ATTR[plane])
         try:
             row = await plane_client.get(namespace=namespace, object_id=object_id)
