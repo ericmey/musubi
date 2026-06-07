@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.4](https://github.com/ericmey/musubi/compare/v1.10.3...v1.10.4) (2026-06-07)
+
+
+### Bug Fixes
+
+* **image:** patch gnutls CRITICAL CVEs + retry HF tokenizer prefetch ([#375](https://github.com/ericmey/musubi/issues/375)) ([f34a7df](https://github.com/ericmey/musubi/commit/f34a7df2558209e9eb99cf8b6de42093b0155484))
+
 ## [1.10.3](https://github.com/ericmey/musubi/compare/v1.10.2...v1.10.3) (2026-06-07)
 
 
