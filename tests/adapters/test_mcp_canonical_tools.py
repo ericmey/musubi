@@ -33,6 +33,7 @@ class _PlaneStub:
         self.name = name
         self.store = store if store is not None else {}
         self.captured: list[dict[str, Any]] = []
+        self.get_calls: list[dict[str, str]] = []
 
     async def capture(
         self,
@@ -57,6 +58,7 @@ class _PlaneStub:
         return {"object_id": oid, "state": "provisional"}
 
     async def get(self, *, namespace: str, object_id: str) -> dict[str, Any]:
+        self.get_calls.append({"namespace": namespace, "object_id": object_id})
         if object_id not in self.store:
             from musubi.sdk.exceptions import NotFound
 
@@ -119,10 +121,12 @@ class _ClientStub:
         self,
         *,
         namespace: str,
-        query_text: str,
+        query_text: str = "",
         mode: str = "fast",
         limit: int = 10,
         planes: list[str] | None = None,
+        since: float | None = None,
+        tags: list[str] | None = None,
     ) -> dict[str, Any]:
         self._retrieve_calls.append(
             {
@@ -131,6 +135,8 @@ class _ClientStub:
                 "mode": mode,
                 "limit": limit,
                 "planes": planes,
+                "since": since,
+                "tags": tags,
             }
         )
         if self._retrieve_raise is not None:
@@ -294,6 +300,51 @@ async def test_get_unknown_id_returns_tool_error_with_id_and_namespace() -> None
     assert "eric/claude-code/episodic" in result
 
 
+def test_normalize_get_namespace_composes_two_part_root_with_plane() -> None:
+    from musubi.adapters.mcp.tools import _normalize_get_namespace
+
+    # 2-part presence root (what musubi_search takes) + plane → canonical 3-part
+    assert _normalize_get_namespace("aoi/command-chair", "episodic") == "aoi/command-chair/episodic"
+    # trailing slash on the root is tolerated, not double-slashed
+    assert _normalize_get_namespace("aoi/command-chair/", "curated") == "aoi/command-chair/curated"
+    # an already-3-part namespace is trusted as-is — never double-suffixed
+    assert (
+        _normalize_get_namespace("aoi/command-chair/episodic", "episodic")
+        == "aoi/command-chair/episodic"
+    )
+    # an explicit 3-part namespace is left alone even if its tail differs from `plane`
+    assert (
+        _normalize_get_namespace("aoi/command-chair/episodic", "curated")
+        == "aoi/command-chair/episodic"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_accepts_two_part_root_and_composes_plane() -> None:
+    # Regression: an agent that splits a search result row into the 2-part presence
+    # root + a plane (the natural reading) must still resolve to the stored 3-part
+    # namespace — not a false NOT_FOUND. (2026-06-07 namespace foot-gun.)
+    mcp, client = _make_server()
+    client.episodic.store["ep-2"] = {
+        "object_id": "ep-2",
+        "namespace": "eric/claude-code/episodic",
+        "content": "Body fetched via the 2-part presence root.",
+        "title": None,
+    }
+    result = await _invoke(
+        mcp,
+        "musubi_get",
+        plane="episodic",
+        namespace="eric/claude-code",  # 2-part root, NOT the full 3-part namespace
+        object_id="ep-2",
+    )
+    assert "Body fetched via the 2-part presence root." in result
+    # the SDK get() was actually called with the composed canonical namespace
+    assert client.episodic.get_calls[-1]["namespace"] == "eric/claude-code/episodic"
+    # and the rendered header reflects it
+    assert "eric/claude-code/episodic/ep-2" in result
+
+
 # --------------------------------------------------------------------------
 # musubi_remember
 # --------------------------------------------------------------------------
@@ -361,24 +412,69 @@ async def test_think_sends_thought_to_recipient_presence() -> None:
 
 
 # --------------------------------------------------------------------------
-# musubi_recent — deferred stub
+# musubi_recent
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_recent_returns_deferred_message_until_backend_lands() -> None:
-    """`musubi_recent` is the canonical-contract tool; its full implementation
-    waits on slice-retrieve-recent (Musubi #288). The stub must return a
-    clearly user-readable deferred message, not silently no-op or 500."""
-    mcp, _ = _make_server()
+async def test_recent_invokes_retrieve_recent_mode_without_query() -> None:
+    """`musubi_recent` runs retrieve in recent mode with no query_text, and
+    renders each row newest-first with a timestamp from the created_epoch
+    (carried as `score`), not the raw float."""
+    mcp, client = _make_server()
+    client._retrieve_response = {
+        "results": [
+            {
+                "plane": "episodic",
+                "object_id": "ep-9",
+                "namespace": "aoi/command-chair/episodic",
+                "title": None,
+                "snippet": "the freshest thing that happened",
+                "score": 1780794147.0,  # created_epoch → 2026-06-07 01:02 UTC
+            }
+        ]
+    }
     result = await _invoke(
         mcp,
         "musubi_recent",
-        namespace="eric/claude-code",
-        limit=10,
+        namespace="aoi/command-chair",
+        limit=5,
     )
-    assert "not yet available" in result.lower() or "deferred" in result.lower()
-    assert "slice-retrieve-recent" in result or "#288" in result
+    call = client._retrieve_calls[-1]
+    assert call["mode"] == "recent"
+    assert call["query_text"] == ""  # recent omits the query
+    assert call["limit"] == 5
+    assert "the freshest thing that happened" in result
+    assert "aoi/command-chair/episodic/ep-9" in result
+    assert "2026-06-07 01:02" in result  # epoch rendered as a timestamp, not 1780794147.0
+
+
+@pytest.mark.asyncio
+async def test_recent_passes_tags_filter() -> None:
+    mcp, client = _make_server()
+    await _invoke(
+        mcp,
+        "musubi_recent",
+        namespace="aoi/command-chair",
+        tags=["src:mcp-agent-remember"],
+    )
+    assert client._retrieve_calls[-1]["tags"] == ["src:mcp-agent-remember"]
+
+
+@pytest.mark.asyncio
+async def test_recent_no_results_returns_clear_message() -> None:
+    mcp, client = _make_server()
+    client._retrieve_response = {"results": []}
+    result = await _invoke(mcp, "musubi_recent", namespace="aoi/command-chair")
+    assert "no recent activity" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_recent_backend_error_returns_tool_error_string() -> None:
+    mcp, client = _make_server()
+    client._retrieve_raise = RuntimeError("boom")
+    result = await _invoke(mcp, "musubi_recent", namespace="aoi/command-chair")
+    assert result.startswith("Error:")
 
 
 # --------------------------------------------------------------------------

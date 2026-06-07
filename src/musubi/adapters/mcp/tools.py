@@ -10,9 +10,8 @@ Tools registered:
 - ``musubi_get`` — fetch one object's full content + metadata by id
 - ``musubi_remember`` — explicit episodic capture
 - ``musubi_think`` — presence-to-presence message
-- ``musubi_recent`` — recency-ordered scroll
-  (currently a deferred stub — depends on [[_slices/slice-retrieve-
-  recent]] / Musubi #288 for ``mode=recent``)
+- ``musubi_recent`` — recency-ordered scroll (``retrieve`` ``mode=recent``,
+  no query needed), backed by [[_slices/slice-retrieve-recent]] / Musubi #288
 
 Plus two deprecation aliases for one minor release:
 
@@ -23,6 +22,7 @@ Plus two deprecation aliases for one minor release:
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -50,6 +50,28 @@ _PLANE_ATTR: dict[str, str] = {
     "episodic": "episodic",
     "artifact": "artifacts",
 }
+
+
+def _normalize_get_namespace(namespace: str, plane: str) -> str:
+    """Resolve the namespace ``musubi_get`` needs from what an agent realistically passes.
+
+    Objects are stored under the canonical 3-part namespace
+    ``tenant/presence/plane`` (e.g. ``aoi/command-chair/episodic``), and
+    ``get`` filters on it exactly. But ``musubi_search`` accepts — and is
+    usually called with — the **2-part presence root** (``aoi/command-chair``),
+    because a 2-part namespace is a *blended* cross-plane query. Search result
+    rows then render the full 3-part namespace, so an agent passing "namespace +
+    plane straight from a search row" naturally splits off the 2-part root and a
+    separate plane. Composing them here makes that Just Work instead of returning
+    a false ``NOT_FOUND`` that an exact-namespace filter could never match.
+
+    A 2-part namespace + ``plane`` composes to ``{namespace}/{plane}``; an
+    already-3-part namespace is trusted as-is.
+    """
+    ns = namespace.rstrip("/")
+    if ns.count("/") == 1:  # exactly 2 parts → presence root, append the plane
+        return f"{ns}/{plane}"
+    return ns
 
 
 def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
@@ -92,7 +114,10 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
             "Fetch one Musubi object's full content + metadata by id. "
             "Use after `musubi_search` when a snippet looks load-bearing "
             "and you need the underlying source. Pass `plane`, `namespace`, "
-            "and `object_id` straight from a search result row."
+            "and `object_id` straight from a search result row — `namespace` "
+            "may be the 2-part presence root (e.g. `aoi/command-chair`) or the "
+            "full 3-part namespace (`aoi/command-chair/episodic`); the 2-part "
+            "form is composed with `plane` automatically."
         ),
     )
     async def musubi_get(
@@ -102,6 +127,7 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
     ) -> str:
         if plane not in _PLANE_ATTR:
             return f"Error: unknown plane {plane!r} — must be one of {sorted(_PLANE_ATTR)}."
+        namespace = _normalize_get_namespace(namespace, plane)
         plane_client = getattr(client, _PLANE_ATTR[plane])
         try:
             row = await plane_client.get(namespace=namespace, object_id=object_id)
@@ -177,39 +203,27 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
         return f"Sent to {to_presence}. (id={res['object_id']})"
 
     # ------------------------------------------------------------------
-    # musubi_recent — deferred stub (#288 / slice-retrieve-recent)
+    # musubi_recent — recency-ordered scroll (retrieve mode=recent)
     # ------------------------------------------------------------------
 
     @mcp.tool(
         name="musubi_recent",
         description=(
-            "Recent activity, recency-ordered, no query needed. NOT YET "
-            "WIRED — depends on slice-retrieve-recent (Musubi #288). The "
-            "tool registers so its name is reserved at the canonical "
-            "surface; calls return a clear deferred message until the "
-            "backend ships."
+            "Recent activity in a namespace, newest first — no query needed. "
+            "Use to orient ('what's happened lately') rather than to search. "
+            "A 2-part presence root (e.g. `aoi/command-chair`) returns recent "
+            "episodic memories (the default plane); pass a full 3-part "
+            "namespace (e.g. `aoi/command-chair/curated`) to see another "
+            "plane's recents. Optional `tags` is an AND-filter (e.g. "
+            "`src:mcp-agent-remember` for captures from coding-agent sessions)."
         ),
     )
     async def musubi_recent(
         namespace: str,
         limit: int = 10,
+        tags: list[str] | None = None,
     ) -> str:
-        # Per [[CLAUDE#prohibited-patterns]]: ADR-punted dependencies fail
-        # loud. This tool's contract is canonical, but the backend it needs
-        # (`mode=recent`) is on the way. We return a clearly user-readable
-        # message rather than silently no-op, and we log at WARNING so the
-        # operator notices repeated calls in degraded mode.
-        logger.warning(
-            "musubi_recent invoked but is not yet available "
-            "(deferred to slice-retrieve-recent / Musubi #288)"
-        )
-        return (
-            "musubi_recent is not yet available — its backend dependency "
-            "(slice-retrieve-recent, Musubi #288) hasn't shipped. Until it does, "
-            "use `musubi_search` with a date- or recency-flavored query as a "
-            "workaround. Tracking issue: "
-            "https://github.com/ericmey/musubi/issues/288"
-        )
+        return await _do_recent(client, namespace=namespace, limit=limit, tags=tags)
 
     # ------------------------------------------------------------------
     # Deprecation aliases — one minor release, then drop
@@ -301,6 +315,62 @@ async def _do_search(
         ns = hit.get("namespace") or namespace
         title_or_oid = hit.get("title") or f"{ns}/{oid}"
         lines.append(f"[{plane}]{score_str} {title_or_oid}")
+        content = (hit.get("content") or hit.get("snippet") or "").strip()
+        if content:
+            lines.append(content)
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def _fmt_recent_when(score: Any) -> str:
+    """Render a recent row's ``score`` (which is ``created_epoch`` in recent
+    mode) as a compact UTC timestamp. Returns ``""`` if it isn't a usable
+    epoch so the line degrades to just the id rather than erroring."""
+    if not isinstance(score, (int, float)):
+        return ""
+    try:
+        return datetime.fromtimestamp(score, tz=UTC).strftime("%Y-%m-%d %H:%M") + "  "
+    except (ValueError, OverflowError, OSError):
+        return ""
+
+
+async def _do_recent(
+    client: AsyncMusubiClient,
+    *,
+    namespace: str,
+    limit: int,
+    tags: list[str] | None,
+) -> str:
+    """Backing implementation for ``musubi_recent`` — ``retrieve(mode="recent")``.
+
+    No query, no rerank: rows come back newest-first (``score`` is
+    ``created_epoch``), so order is the signal. Renders a timestamp instead of
+    the raw epoch ``score`` that ``_do_search`` would show.
+    """
+    try:
+        res = await client.retrieve(
+            namespace=namespace,
+            mode="recent",
+            limit=limit,
+            tags=tags,
+        )
+    except Exception as e:
+        return f"Error: {e}"
+    rows: list[dict[str, Any]] = res.get("results") or []
+    if not rows:
+        scope = f" tagged {', '.join(tags)}" if tags else ""
+        return f"No recent activity in {namespace!r}{scope}."
+    suffix = f" tagged {', '.join(tags)}" if tags else ""
+    lines: list[str] = [f"{len(rows)} recent in {namespace!r}{suffix} (newest first):", ""]
+    for hit in rows:
+        plane = hit.get("plane") or "memory"
+        oid = hit.get("object_id") or "<no-id>"
+        ns = hit.get("namespace") or namespace
+        head = f"[{plane}] {_fmt_recent_when(hit.get('score'))}{ns}/{oid}"
+        title = hit.get("title")
+        if title:
+            head += f" — {title}"
+        lines.append(head)
         content = (hit.get("content") or hit.get("snippet") or "").strip()
         if content:
             lines.append(content)
