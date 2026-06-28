@@ -3,14 +3,14 @@ title: "Slice: Retrieve wildcard namespace segments"
 slice_id: slice-api-retrieve-wildcards
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: aoi-claude-opus
 phase: "8 Post-1.0"
-tags: [section/slices, status/in-progress, type/slice, api, retrieve, namespace]
-updated: 2026-04-24
-reviewed: false
+tags: [section/slices, status/done, type/slice, api, retrieve, namespace]
+updated: 2026-06-28
+reviewed: true
 depends-on: ["[[_slices/slice-api-v0-read]]"]
-blocks: []
+blocks: ["[[_slices/slice-retrieve-recent]]"]
 ---
 
 # Slice: Retrieve wildcard namespace segments
@@ -20,7 +20,7 @@ blocks: []
 > writes off their channel-tagged 3-seg slots. Implements
 > [[13-decisions/0031-retrieve-wildcard-namespace|ADR 0031]].
 
-**Phase:** 8 Post-1.0 · **Status:** `in-progress` · **Owner:** `aoi-claude-opus`
+**Phase:** 8 Post-1.0 · **Status:** `done` · **Owner:** `aoi-claude-opus`
 
 ## Why this slice exists (2026-04-24 context)
 
@@ -45,15 +45,12 @@ read-only).
 ## Owned paths (you MAY write here)
 
 - `src/musubi/api/routers/retrieve.py`           — wildcard expansion logic
-- `src/musubi/retrieve/orchestration.py`         — one-line hardening: row's stored namespace into the response, not the request namespace (pre-existing bug, only visible once wildcards make request ≠ stored)
 - `src/musubi/sdk/async_client.py`               — surface `planes` parameter (existed in API, missing on SDK)
 - `src/musubi/sdk/client.py`                     — sync mirror
 - `tests/api/test_retrieve_router.py`            — wildcard expansion tests
 - `tests/api/test_retrieve_wildcards.py`         — new file, dedicated wildcard test suite
 - `tests/sdk/test_async_client.py`               — SDK `planes` parameter test
-- `openapi.yaml`                                 — extend `namespace` schema description (additive)
 - `docs/Musubi/03-system-design/namespaces.md`   — add §Wildcards (spec-update trailer)
-- `docs/Musubi/07-interfaces/canonical-api.md`   — extend retrieve namespace table (spec-update trailer)
 
 ## Forbidden paths (you MUST NOT write here)
 
@@ -191,6 +188,12 @@ Agents append one entry per work session. Format:
 - ADR 0031 written and referenced; this slice implements it end-to-end.
 - Branching `slice/api-retrieve-wildcards`, opening draft PR.
 
+### 2026-06-28 11:32 — tama — hygiene: mark done (PR 268 merged 2026-04-24)
+
+- Musubi hygiene sweep per Yua REQ `bridge-20260628-113226-ae9a`. Independently re-verified issue #267 CLOSED (label `status:in-progress` retained on closure) and PR #268 MERGED at 2026-04-24T22:40:53Z by Eric.
+- Metadata-only cleanup: frontmatter `status: done`, tags `status/done`, `updated: 2026-06-28`, `reviewed: true`, body Status line updated to `done`.
+- No code behavior changes. Active `yua/musubi-v1-context-pack` working tree untouched (context-pack files are independent — slice-api-retrieve-wildcards does not block or own any of them).
+
 ## PR links
 
-- _(pending)_
+- [#268 feat(api): wildcard namespace segments for tenant-wide retrieve](https://github.com/ericmey/musubi/pull/268) — merged 2026-04-24T22:40:53Z, closes #267

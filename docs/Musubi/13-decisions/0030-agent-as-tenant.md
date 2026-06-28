@@ -1,5 +1,5 @@
 ---
-title: Agent-as-tenant namespace convention
+title: ADR 0030 — Agent-as-tenant
 section: 13-decisions
 tags: [adr, architecture, namespaces, auth, section/decisions, status/accepted, type/adr]
 type: adr
