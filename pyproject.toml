@@ -33,6 +33,7 @@ dependencies = [
 
 [project.scripts]
 musubi = "musubi.cli.main:app"
+musubi-context = "musubi.cli.context:main"
 
 
 [project.optional-dependencies]

@@ -323,6 +323,70 @@ def test_check_observability_scrapes_valid_prometheus_text() -> None:
     assert "[PASS] metric families" in result.stdout
 
 
+def test_check_consumers_requires_every_live_consumer_command() -> None:
+    result = subprocess.run(
+        ["bash", str(SMOKE / "check_consumers.sh")],
+        cwd=ROOT,
+        env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "[FAIL] consumer command-chair agents" in result.stdout
+    assert "MUSUBI_CONSUMER_COMMAND_CHAIR_CMD is not set" in result.stdout
+    assert "MUSUBI_CONSUMER_PHONE_AGENTS_CMD is not set" in result.stdout
+    assert "MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD is not set" in result.stdout
+    assert "MUSUBI_CONSUMER_VICE_CMD is not set" in result.stdout
+
+
+def test_check_consumers_runs_every_live_consumer_command() -> None:
+    result = subprocess.run(
+        ["bash", str(SMOKE / "check_consumers.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "MUSUBI_CONSUMER_PHASE": "pre-deploy",
+            "MUSUBI_CONSUMER_COMMAND_CHAIR_CMD": "printf command-chair-smoke",
+            "MUSUBI_CONSUMER_PHONE_AGENTS_CMD": "printf phone-smoke",
+            "MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD": "printf openclaw-smoke",
+            "MUSUBI_CONSUMER_VICE_CMD": "printf vice-smoke",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Musubi consumer regression smoke (pre-deploy)" in result.stdout
+    assert "[PASS] consumer command-chair agents" in result.stdout
+    assert "[PASS] consumer phone agents" in result.stdout
+    assert "[PASS] consumer OpenClaw on Nyla" in result.stdout
+    assert "[PASS] consumer Vice app" in result.stdout
+
+
+def test_check_consumers_rejects_placeholders_and_noops() -> None:
+    result = subprocess.run(
+        ["bash", str(SMOKE / "check_consumers.sh")],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "MUSUBI_CONSUMER_COMMAND_CHAIR_CMD": "true",
+            "MUSUBI_CONSUMER_PHONE_AGENTS_CMD": "<phone-agent live smoke command>",
+            "MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD": "printf openclaw-smoke",
+            "MUSUBI_CONSUMER_VICE_CMD": "printf vice-smoke",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "MUSUBI_CONSUMER_COMMAND_CHAIR_CMD must be a real live-consumer command" in result.stdout
+    assert "MUSUBI_CONSUMER_PHONE_AGENTS_CMD must be a real live-consumer command" in result.stdout
+
+
 def test_verify_sh_aggregates_all_checks() -> None:
     with _mock_musubi() as base_url:
         result = _run_script("verify.sh", base_url)

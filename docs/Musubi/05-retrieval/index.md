@@ -4,7 +4,7 @@ section: 05-retrieval
 tags: [retrieval, scoring, search, section/retrieval, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-06-28
 up: "[[00-index/index]]"
 reviewed: false
 ---
@@ -19,6 +19,7 @@ How Musubi turns a query into a ranked, blended result across planes. Two paths,
 - [[05-retrieval/fast-path]] — Sub-400ms recall for voice/chat. Cache + lightweight fusion, no rerank.
 - [[05-retrieval/reranker]] — Cross-encoder pass for deep retrieval. BGE-reranker-v2-m3 via TEI.
 - [[05-retrieval/orchestration]] — The retrieval pipeline as code: filter → hybrid → rerank → score → pack.
+- [[05-retrieval/context-pack]] — Startup/readiness context packs with BM25 ranking, closed kinds, staleness suppression, and grouped output.
 - [[05-retrieval/blended]] — Blending results from multiple planes: weights, dedup, lineage-aware merging.
 - [[05-retrieval/deep-path]] — LLM-in-the-loop retrieval for planning tasks (Slow Thinker pattern).
 - [[05-retrieval/evals]] — How we evaluate retrieval quality. Golden sets, regression tests, ragas metrics.

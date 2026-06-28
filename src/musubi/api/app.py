@@ -40,6 +40,7 @@ from musubi.api.rate_limit import DEFAULT_BUCKETS, RateLimiter, get_rate_limiter
 from musubi.api.routers import (
     artifacts,
     concepts,
+    context,
     contradictions,
     curated,
     episodic,
@@ -82,6 +83,7 @@ _PATH_TO_BUCKET: tuple[tuple[str, str], ...] = (
     ("/v1/thoughts/read", "default"),
     ("/v1/lifecycle/transition", "transition"),
     ("/v1/concepts", "default"),
+    ("/v1/context", "retrieve"),
     ("/v1/retrieve/stream", "retrieve"),
     ("/v1/retrieve", "retrieve"),
 )
@@ -351,6 +353,7 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
     app.include_router(concepts.router)
     app.include_router(artifacts.router)
     app.include_router(thoughts.router)
+    app.include_router(context.router)
     app.include_router(retrieve.router)
     app.include_router(lifecycle.router)
     app.include_router(contradictions.router)

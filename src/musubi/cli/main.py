@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import typer
 
+from musubi.cli.context import context_app
 from musubi.cli.promote import promote_app
 
 app = typer.Typer(
@@ -25,6 +26,7 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+app.add_typer(context_app, name="context", help="Build ranked startup context packs.")
 app.add_typer(promote_app, name="promote", help="Concept promotion / rejection subcommands.")
 
 
