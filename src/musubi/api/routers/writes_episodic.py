@@ -14,6 +14,7 @@ from musubi.api.errors import APIError, ErrorCode
 from musubi.auth import AuthRequirement, authenticate_request
 from musubi.lifecycle.transitions import transition
 from musubi.planes.episodic import EpisodicPlane
+from musubi.retrieve.context_pack import VALID_KINDS, VALID_STALENESS
 from musubi.settings import Settings
 from musubi.types.common import Err, Ok, utc_now
 from musubi.types.episodic import EpisodicMemory
@@ -111,6 +112,15 @@ def _reject_future_created_at(value: datetime | None) -> None:
         )
 
 
+def _validate_context_tags(tags: list[str]) -> list[str]:
+    for tag in tags:
+        if tag.startswith("kind:") and tag.removeprefix("kind:") not in VALID_KINDS:
+            raise ValueError(f"unknown essence kind tag {tag!r}")
+        if tag.startswith("staleness:") and tag.removeprefix("staleness:") not in VALID_STALENESS:
+            raise ValueError(f"unknown essence staleness tag {tag!r}")
+    return tags
+
+
 class CaptureRequest(BaseModel):
     namespace: str
     content: str = Field(min_length=1)
@@ -127,6 +137,11 @@ class CaptureRequest(BaseModel):
     @classmethod
     def _tz_aware_created_at(cls, v: datetime | None) -> datetime | None:
         return _require_tz_aware(v)
+
+    @field_validator("tags")
+    @classmethod
+    def _valid_context_tags(cls, v: list[str]) -> list[str]:
+        return _validate_context_tags(v)
 
 
 class CaptureResponse(BaseModel):
@@ -151,6 +166,11 @@ class CaptureItem(BaseModel):
     def _tz_aware_created_at(cls, v: datetime | None) -> datetime | None:
         return _require_tz_aware(v)
 
+    @field_validator("tags")
+    @classmethod
+    def _valid_context_tags(cls, v: list[str]) -> list[str]:
+        return _validate_context_tags(v)
+
 
 class BatchCaptureRequest(BaseModel):
     namespace: str
@@ -173,6 +193,13 @@ class PatchEpisodicRequest(BaseModel):
     tags: list[str] | None = None
     importance: int | None = Field(default=None, ge=1, le=10)
     summary: str | None = None
+
+    @field_validator("tags")
+    @classmethod
+    def _valid_context_tags(cls, v: list[str] | None) -> list[str] | None:
+        if v is None:
+            return None
+        return _validate_context_tags(v)
 
 
 _FORBIDDEN_PATCH_FIELDS = {"state", "version", "object_id", "namespace"}

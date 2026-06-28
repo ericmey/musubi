@@ -4,10 +4,10 @@ section: 07-interfaces
 tags: [api, grpc, http, interfaces, section/interfaces, status/complete, type/spec]
 type: spec
 status: complete
-updated: 2026-04-17
+updated: 2026-06-28
 up: "[[07-interfaces/index]]"
 reviewed: false
-implements: ["src/musubi/api/", "src/musubi/api/app.py", "src/musubi/api/bootstrap.py", "src/musubi/api/dependencies.py", "src/musubi/api/events.py", "src/musubi/api/routers/thoughts.py", "src/musubi/api/routers/writes_thoughts.py", "tests/api/", "tests/api/test_bootstrap.py", "tests/api/test_thoughts_stream.py"]
+implements: ["src/musubi/api/", "src/musubi/api/app.py", "src/musubi/api/bootstrap.py", "src/musubi/api/dependencies.py", "src/musubi/api/events.py", "src/musubi/api/routers/thoughts.py", "src/musubi/api/routers/writes_thoughts.py", "src/musubi/api/routers/context.py", "tests/api/", "tests/api/test_bootstrap.py", "tests/api/test_thoughts_stream.py", "tests/api/test_context.py"]
 ---
 # Canonical API
 
@@ -52,6 +52,7 @@ The scope matcher (see [[10-security/auth]] and `src/musubi/auth/scopes.py`) req
 | `POST/GET /v1/artifacts`, `GET /v1/artifacts/{id}/blob\|chunks` | body / query | 3 (`<tenant>/<presence>/artifact`) | `r` or `w` |
 | `POST /v1/retrieve` with **3-segment** namespace | body `namespace` | 3 | `r` on that one namespace |
 | `POST /v1/retrieve` with **2-segment** namespace + `planes` array | body `namespace` + `planes` | 2 (base) + strict per-plane check on each expansion | `r` on the 2-seg base **and** `r` on every `<namespace>/<plane>` target |
+| `POST /v1/context` with **2- or 3-segment** namespace | body `namespace` + `planes` | same as `/v1/retrieve` | same as `/v1/retrieve` |
 | `POST /v1/thoughts/send` | body (derives `<tenant>/<presence>/thought`) | 3 | `w` |
 | `POST /v1/thoughts/read` | body `namespace` | 3 (`<tenant>/<presence>/thought`) | `w` (marking read mutates state) |
 | `POST /v1/thoughts/check`, `/history` | body `namespace` | 3 (`<tenant>/<presence>/thought`) | `r` |
@@ -217,6 +218,66 @@ POST   /v1/retrieve/stream                   # NDJSON stream for large K
 ```
 
 Single entry point for the retrieve pipeline. Mode selected by `query.mode`. See [[05-retrieval/orchestration]].
+
+### 7. Context packs
+
+```
+POST   /v1/context                           # body = ContextQuery
+```
+
+Builds a small, grouped startup/readiness context pack from server-side
+retrieval payloads. This is the "essence alignment" surface: clients send the
+current task or moment as `query_text`, and Musubi returns a char-capped pack
+grouped by operational purpose.
+
+Request shape:
+
+```json
+{
+  "namespace": "yua/command-chair",
+  "query_text": "Vice LoRA promptsmith Shiori image flow",
+  "mode": "startup",
+  "planes": ["episodic", "curated", "concept"],
+  "candidate_limit": 30,
+  "max_items": 8,
+  "max_chars": 1200,
+  "include_history": false
+}
+```
+
+Response shape:
+
+```json
+{
+  "mode": "startup",
+  "query_text": "...",
+  "groups": [
+    {
+      "title": "Current-Project",
+      "items": [
+        {
+          "kind": "project-stance",
+          "staleness": "durable",
+          "content": "...",
+          "evidence_handle": "yua/command-chair/episodic/<object_id>",
+          "why_surfaced": "durable project-stance; BM25 lexical match"
+        }
+      ]
+    }
+  ],
+  "max_chars": 1200,
+  "used_chars": 248,
+  "suppressed": {"superseded": 1}
+}
+```
+
+Typed metadata uses tags such as `kind:project-stance` and
+`staleness:durable`. Unknown typed values are rejected on episodic capture or
+patch. Legacy rows with no `kind:` tag adapt as `episode`. Superseded/history
+records are suppressed unless `include_history=true`.
+
+See [[05-retrieval/context-pack]] for the ranking contract and acceptance
+tests.
 
 | `mode` | What it does | Requires `query_text` | Default `state_filter` |
 | --- | --- | --- | --- |

@@ -143,6 +143,17 @@ curl -sS http://musubi.example.local:8100/v1/ops/status | jq .
 # Inspect the upgrade log:
 ssh ericmey@musubi.example.local \
  'sudo tail -1 /var/log/musubi/upgrade-history.jsonl | jq .'
+
+# Live consumer blast-radius smoke. Run once before deploy with
+# MUSUBI_CONSUMER_PHASE=pre-deploy and again here with post-deploy.
+# Each command must exercise the real consumer, not only curl Musubi.
+# The script rejects unset values, literal <placeholder> text, and no-ops.
+MUSUBI_CONSUMER_PHASE=post-deploy \
+MUSUBI_CONSUMER_COMMAND_CHAIR_CMD='<command-chair live smoke command>' \
+MUSUBI_CONSUMER_PHONE_AGENTS_CMD='<phone-agent live smoke command>' \
+MUSUBI_CONSUMER_OPENCLAW_NYLA_CMD='<openclaw-on-nyla live smoke command>' \
+MUSUBI_CONSUMER_VICE_CMD='<vice live app smoke command>' \
+deploy/smoke/check_consumers.sh
 ```
 
 **Expected output:**
@@ -150,11 +161,15 @@ ssh ericmey@musubi.example.local \
 - `status` is `ok` and every component is `healthy: true`.
 - The last `upgrade-history.jsonl` entry is this run (matching
  timestamp, listed services, current `core_image`).
+- `check_consumers.sh` reports `[PASS]` for all four live consumer
+ classes: command-chair agents, phone agents, OpenClaw on Nyla, and
+ Vice. If any consumer fails, treat the deploy as failed even when Core
+ health is green.
 
 **Destructive:** no.
 
-**Rollback:** if `/v1/ops/status` is not `ok`, proceed to step 6
-immediately.
+**Rollback:** if `/v1/ops/status` is not `ok` or any live consumer
+regression smoke fails, proceed to step 6 immediately.
 
 ---
 

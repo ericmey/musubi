@@ -3,11 +3,11 @@ title: "Slice: Retrieve mode=recent"
 slice_id: slice-retrieve-recent
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: aoi-claude-opus
 phase: "8 Post-1.0"
-tags: [section/slices, status/in-progress, type/slice, api, retrieve, recency]
-updated: 2026-05-17
+tags: [section/slices, status/done, type/slice, api, retrieve, recency]
+updated: 2026-06-28
 reviewed: false
 depends-on: ["[[_slices/slice-api-v0-read]]", "[[_slices/slice-api-retrieve-wildcards]]"]
 blocks: ["[[_slices/slice-mcp-canonical-tools]]", "[[_slices/slice-livekit-canonical-tools]]", "[[_slices/slice-openclaw-canonical-tools]]"]
@@ -17,7 +17,7 @@ blocks: ["[[_slices/slice-mcp-canonical-tools]]", "[[_slices/slice-livekit-canon
 
 > Add `mode=recent` to `POST /v1/retrieve` — query-less, time-ordered scroll across the namespace fanout. Required by the canonical `musubi_recent` agent tool ([[07-interfaces/agent-tools]]) so an agent can answer "what was I just doing?" without a query string.
 
-**Phase:** 8 Post-1.0 · **Status:** `in-progress` (picked up 2026-05-17 — `slice-api-retrieve-wildcards` merged 2026-04-24 via PR #268; the tracker had stayed `blocked` for ~3 weeks past the actual unblock)
+**Phase:** 8 Post-1.0 · **Status:** `done` (Issue #288 is closed; status corrected during 2026-06-28 Musubi v1 context-pack hygiene)
 
 ## Design decisions (locked at pickup, 2026-05-17)
 
@@ -103,3 +103,13 @@ Out of scope (separate PR):
 ## Definition of Done
 
 ![[00-index/definition-of-done]]
+
+## Work log
+
+### 2026-06-28 — codex-gpt5 — hygiene correction
+
+- Metadata-only cleanup during Adoption Day Musubi v1 work.
+- `make agent-check` reported Issue #288 closed while this slice frontmatter
+  still said `status: in-progress`.
+- Corrected frontmatter/body status to `done`; no code or test contract changes
+  in this slice file.

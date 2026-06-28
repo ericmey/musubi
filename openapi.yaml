@@ -777,18 +777,12 @@ paths:
       tags:
       - thoughts
       summary: Stream Thoughts
-      description: 'SSE endpoint for real-time thought delivery.
-
-
-        Replay semantics via Last-Event-ID are declared in the spec but deferred to
-
-        the integration harness (needs a real Qdrant with live range queries; mocked
-
-        Qdrant in unit tests doesn''t model lex-sorted epoch-range scrolls). The
-
-        header is accepted and validated but currently the stream begins from the
-
-        live broker queue only. See slice-api-thoughts-stream work log.'
+      description: "SSE endpoint for real-time thought delivery.\n\nReplay: if ``Last-Event-ID:\
+        \ <ksuid>`` is present, every thought matching\nthe subscription scope where\
+        \ ``object_id > last_event_id`` (lex,\nascending) is emitted before entering\
+        \ live-tail mode. Capped at 500\nevents \u2014 if more matched, the ``X-Musubi-Replay-Truncated:\
+        \ true``\nresponse header tells the client to fall back to ``/v1/thoughts/history``\n\
+        for deeper backfill."
       operationId: stream_thoughts.bucket=default
       parameters:
       - name: namespace
@@ -827,6 +821,37 @@ paths:
           description: Caller does not hold read scope for `namespace`.
         '503':
           description: Thought broker unavailable.
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /v1/context:
+    post:
+      tags:
+      - context
+      summary: Context Pack
+      description: 'Return a ranked, grouped context pack.
+
+
+        Ranking happens server-side because clients should not have to
+
+        rehydrate payload metadata or maintain their own essence heuristics.'
+      operationId: context_pack_v1_context_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContextQuery'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContextPack'
         '422':
           description: Validation Error
           content:
@@ -1534,6 +1559,168 @@ components:
       - name
       - healthy
       title: ComponentStatus
+    ContextPack:
+      properties:
+        mode:
+          type: string
+          const: startup
+          title: Mode
+        query_text:
+          type: string
+          title: Query Text
+        groups:
+          items:
+            $ref: '#/components/schemas/ContextPackGroup'
+          type: array
+          title: Groups
+        max_chars:
+          type: integer
+          title: Max Chars
+        used_chars:
+          type: integer
+          title: Used Chars
+        suppressed:
+          additionalProperties:
+            type: integer
+          type: object
+          title: Suppressed
+      type: object
+      required:
+      - mode
+      - query_text
+      - groups
+      - max_chars
+      - used_chars
+      title: ContextPack
+    ContextPackGroup:
+      properties:
+        title:
+          type: string
+          title: Title
+        items:
+          items:
+            $ref: '#/components/schemas/ContextPackItem'
+          type: array
+          title: Items
+      type: object
+      required:
+      - title
+      - items
+      title: ContextPackGroup
+    ContextPackItem:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        namespace:
+          type: string
+          title: Namespace
+        plane:
+          type: string
+          title: Plane
+        kind:
+          type: string
+          enum:
+          - boundary
+          - operating-rule
+          - identity-principle
+          - relationship/care-cue
+          - project-stance
+          - open-loop
+          - tool/runtime-fact
+          - correction/suppression
+          - episode
+          title: Kind
+        staleness:
+          type: string
+          enum:
+          - durable
+          - current
+          - episodic
+          - superseded
+          title: Staleness
+        content:
+          type: string
+          title: Content
+        evidence_handle:
+          type: string
+          title: Evidence Handle
+        why_surfaced:
+          type: string
+          title: Why Surfaced
+        score:
+          type: number
+          title: Score
+      type: object
+      required:
+      - object_id
+      - namespace
+      - plane
+      - kind
+      - staleness
+      - content
+      - evidence_handle
+      - why_surfaced
+      - score
+      title: ContextPackItem
+      description: One surfaced context item.
+    ContextQuery:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+          description: Two- or three-segment namespace, same shape as /v1/retrieve.
+        query_text:
+          type: string
+          minLength: 1
+          title: Query Text
+        mode:
+          type: string
+          const: startup
+          title: Mode
+          default: startup
+        planes:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Planes
+        candidate_limit:
+          type: integer
+          maximum: 100.0
+          minimum: 1.0
+          title: Candidate Limit
+          default: 30
+        max_items:
+          type: integer
+          maximum: 50.0
+          minimum: 1.0
+          title: Max Items
+          default: 8
+        max_chars:
+          type: integer
+          maximum: 8000.0
+          minimum: 120.0
+          title: Max Chars
+          default: 1200
+        include_history:
+          type: boolean
+          title: Include History
+          default: false
+        state_filter:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: State Filter
+      type: object
+      required:
+      - namespace
+      - query_text
+      title: ContextQuery
+      description: Build a small, grouped context pack for a presence.
     ContradictionListResponse:
       properties:
         items:
@@ -1637,6 +1824,11 @@ components:
         namespace:
           type: string
           title: Namespace
+        identity_family:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Identity Family
         schema_version:
           type: integer
           title: Schema Version
@@ -1820,6 +2012,11 @@ components:
         namespace:
           type: string
           title: Namespace
+        identity_family:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Identity Family
         schema_version:
           type: integer
           title: Schema Version
@@ -2264,26 +2461,24 @@ components:
         namespace:
           type: string
           title: Namespace
-          description: |
-            Namespace pattern. Three shapes accepted:
-            - 3-segment concrete: `<tenant>/<presence>/<plane>` — single target.
-            - 2-segment: `<tenant>/<presence>` — cross-plane fanout (`planes` required).
-            - Wildcard: `*` may replace any single segment (e.g. `nyla/*/episodic`,
-              `*/voice/curated`, `nyla/*/*` with `planes`). Writes reject `*`;
-              wildcards are read-only. See ADR 0031.
+          description: 'Namespace pattern. Three shapes accepted: 3-segment concrete
+            `<tenant>/<presence>/<plane>` (single target), 2-segment `<tenant>/<presence>`
+            (cross-plane fanout, requires `planes`), or wildcard with `*` replacing
+            any single segment (e.g. `nyla/*/episodic`, `*/voice/curated`). Writes
+            reject `*`; wildcards are read-only. See ADR 0031.'
         query_text:
           type: string
           title: Query Text
-          default: ""
-          description: |
-            Required for `mode` in `fast|deep|blended` (the server returns 400
-            if empty for those modes). Optional for `mode='recent'` — if
-            provided, the server logs a WARN and ignores it.
+          default: ''
         mode:
           type: string
+          enum:
+          - fast
+          - deep
+          - blended
+          - recent
           title: Mode
           default: fast
-          enum: [fast, deep, blended, recent]
         limit:
           type: integer
           title: Limit
@@ -2304,11 +2499,9 @@ components:
           - type: number
           - type: 'null'
           title: Since
-          description: |
-            Recent-mode only. Inclusive lower bound on `created_epoch`
-            (epoch seconds). Rows older than `since` are excluded. ISO
-            strings are NOT accepted — convert client-side via
-            `datetime.timestamp()`.
+          description: "Recent-mode only: inclusive lower bound on `created_epoch`.\
+            \ Rows older than `since` are excluded. ISO-format timestamps are NOT\
+            \ accepted \u2014 convert client-side via `datetime.timestamp()`."
         tags:
           anyOf:
           - items:
@@ -2316,10 +2509,8 @@ components:
             type: array
           - type: 'null'
           title: Tags
-          description: |
-            Recent-mode tag filter (AND across all listed tags — a row
-            must contain every tag to match). Empty list and `null` both
-            mean no filter. Other modes accept this field without effect.
+          description: "Recent-mode tag filter. AND semantics \u2014 a row must contain\
+            \ every listed tag to match. Empty list and `null` both mean no filter."
         state_filter:
           anyOf:
           - items:
@@ -2327,20 +2518,17 @@ components:
             type: array
           - type: 'null'
           title: State Filter
-          description: |
-            Lifecycle states to include. For `fast|deep|blended`, `null`
-            resolves to `('matured', 'promoted')` — the v1.0/v1.1 default.
-            For `mode='recent'`, `null` resolves to
-            `('provisional', 'matured', 'promoted')` — recent mode's purpose
-            is "what just happened," provisional is the freshest tier,
-            excluding it by default would defeat the use case.
-            Set explicitly to `['provisional', 'matured', 'promoted']` for
-            ranked-mode recall of fresh deliberate stores before maturation
-            has run. In `mode='fast'`, `include_archived: true` augments
-            the default with `('demoted', 'archived', 'superseded')`. In
-            `mode='deep'` and `mode='blended'` `include_archived` is
-            currently ignored — pass `state_filter` explicitly when those
-            modes need archive-side states.
+          description: "Lifecycle states to include. Default `null` resolves to `('matured',\
+            \ 'promoted')` for fast/deep/blended (matching the pre-`recent` behaviour).\
+            \ For `mode='recent'`, the default is `('provisional', 'matured', 'promoted')`\
+            \ \u2014 recent's purpose is 'what just happened', so the freshest tier\
+            \ is included by default. Set explicitly to `['provisional', 'matured',\
+            \ 'promoted']` for recall on ranked modes when you want fresh deliberate\
+            \ `memory_store` rows visible before they age through the maturation cron.\
+            \ Note: in `mode='fast'`, `include_archived: true` augments the default\
+            \ by adding `('demoted', 'archived', 'superseded')`. In `mode='deep'`\
+            \ and `mode='blended'`, `include_archived` is currently ignored \u2014\
+            \ pass `state_filter` explicitly when those modes need archive-side states."
       type: object
       required:
       - namespace
@@ -2406,6 +2594,11 @@ components:
         namespace:
           type: string
           title: Namespace
+        identity_family:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Identity Family
         schema_version:
           type: integer
           title: Schema Version
@@ -2529,6 +2722,11 @@ components:
         namespace:
           type: string
           title: Namespace
+        identity_family:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Identity Family
         schema_version:
           type: integer
           title: Schema Version
@@ -2934,6 +3132,9 @@ components:
         namespace:
           type: string
           title: Namespace
+        identity_family:
+          type: string
+          title: Identity Family
         memories_selected:
           type: integer
           title: Memories Selected
@@ -2954,9 +3155,18 @@ components:
           - type: number
           - type: 'null'
           title: Cursor Advanced To
+        candidates_carried_forward:
+          type: integer
+          title: Candidates Carried Forward
+          default: 0
+        candidates_pruned:
+          type: integer
+          title: Candidates Pruned
+          default: 0
       type: object
       required:
       - namespace
+      - identity_family
       - memories_selected
       - clusters_formed
       - concepts_created
@@ -2964,7 +3174,26 @@ components:
       - contradictions_detected
       - cursor_advanced_to
       title: TriggerSynthesisResponse
-      description: Same shape as ``musubi.lifecycle.synthesis.SynthesisReport``.
+      description: 'Same shape as ``musubi.lifecycle.synthesis.SynthesisReport``.
+
+
+        The ``namespace`` field carries the **identity family** (e.g. ``"aoi"``)
+
+        that synthesis actually clustered, NOT an echo of the input
+
+        namespace. Per v1.5.5+''s per-family synthesis (musubi#335), the loop
+
+        operates on identity-family scope; the field name is preserved for
+
+        backward-compat with log scrapers but the semantic shifted from
+
+        "input namespace echo" to "scope actually clustered." The new
+
+        ``identity_family`` field below makes this explicit for new
+
+        callers that want unambiguous semantics. See musubi#352 for the
+
+        investigation that surfaced this naming confusion.'
     ValidationError:
       properties:
         loc:
