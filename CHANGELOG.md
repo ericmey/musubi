@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.0](https://github.com/ericmey/musubi/compare/v1.10.4...v1.11.0) (2026-06-28)
+
+
+### Features
+
+* **retrieve:** add context-pack endpoint ([#379](https://github.com/ericmey/musubi/issues/379)) ([6bb0591](https://github.com/ericmey/musubi/commit/6bb059112ff9fb6e0c73670d4213465d30aed819))
+
 ## [1.10.4](https://github.com/ericmey/musubi/compare/v1.10.3...v1.10.4) (2026-06-07)
 
 
