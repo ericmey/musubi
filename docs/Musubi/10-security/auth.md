@@ -82,7 +82,10 @@ Namespace glob:
 - `eric/claude-code/episodic` — exact.
 - `eric/_shared/curated` — shared scope.
 - `eric/*/episodic` — all of Eric's episodic (rare; operator scope).
-- `**` — full access (operator only).
+- `**` — recursive read across all namespaces. Recursive namespace scope is
+  read-only by policy; `**:rw` does not grant write access. Use explicit
+  segment wildcards for scoped writes, or `operator` for admin/migration
+  actions.
 
 Access level:
 
