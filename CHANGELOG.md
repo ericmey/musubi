@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.3](https://github.com/ericmey/musubi/compare/v1.11.2...v1.11.3) (2026-06-29)
+
+
+### Bug Fixes
+
+* **adapters:** add typed episode tags to captures ([#386](https://github.com/ericmey/musubi/issues/386)) ([1663e20](https://github.com/ericmey/musubi/commit/1663e208fee3211018281b4f1cda3123a2ff6327))
+
 ## [1.11.2](https://github.com/ericmey/musubi/compare/v1.11.1...v1.11.2) (2026-06-29)
 
 
