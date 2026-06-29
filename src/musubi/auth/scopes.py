@@ -122,6 +122,9 @@ def _namespace_scope_allows(scope: str, namespace: str, access: AccessLevel) -> 
         return False
 
     pattern, granted_access = parsed
+    if pattern == "**" and access == "w":
+        return False
+
     return _namespace_matches(pattern, namespace) and _access_allows(granted_access, access)
 
 

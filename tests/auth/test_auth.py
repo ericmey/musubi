@@ -165,6 +165,61 @@ def test_scope_match_grants_access(
     assert scope_result.value.scope_used == "eric/claude-code/episodic:rw"
 
 
+def test_recursive_scope_grants_read_without_write() -> None:
+    context = AuthContext(
+        subject="aoi-phone",
+        issuer="https://auth.example.test",
+        audience="musubi",
+        scopes=("**:r",),
+        presence="aoi/voice",
+        token_id="token-123",
+    )
+
+    read = resolve_namespace_scope(context, namespace="yua/command-chair/episodic", access="r")
+    write = resolve_namespace_scope(context, namespace="yua/command-chair/episodic", access="w")
+
+    assert read.is_ok()
+    assert write.is_err()
+    assert isinstance(write, Err)
+    assert "yua/command-chair/episodic" in write.error.detail
+
+
+def test_recursive_rw_scope_does_not_grant_cross_namespace_write() -> None:
+    context = AuthContext(
+        subject="legacy-shared-token",
+        issuer="https://auth.example.test",
+        audience="musubi",
+        scopes=("**:rw",),
+        presence="openclaw-nyla",
+        token_id="token-123",
+    )
+
+    read = resolve_namespace_scope(context, namespace="aoi/voice/episodic", access="r")
+    write = resolve_namespace_scope(context, namespace="aoi/voice/episodic", access="w")
+
+    assert read.is_ok()
+    assert write.is_err()
+    assert isinstance(write, Err)
+    assert "aoi/voice/episodic" in write.error.detail
+
+
+def test_segment_wildcard_rw_scope_still_grants_matching_write() -> None:
+    context = AuthContext(
+        subject="aoi-voice",
+        issuer="https://auth.example.test",
+        audience="musubi",
+        scopes=("aoi/voice/*:rw",),
+        presence="aoi/voice",
+        token_id="token-123",
+    )
+
+    own_write = resolve_namespace_scope(context, namespace="aoi/voice/episodic", access="w")
+    cross_write = resolve_namespace_scope(context, namespace="yua/voice/episodic", access="w")
+
+    assert own_write.is_ok()
+    assert cross_write.is_err()
+
+
 def test_scope_mismatch_returns_403_with_detail(auth_settings: Settings) -> None:
     token = _hs_token(auth_settings)
     request = SimpleNamespace(
