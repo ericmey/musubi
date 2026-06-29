@@ -374,6 +374,87 @@ def test_ops_status_populates_real_components_per_aoi_review(obs_app: TestClient
         assert isinstance(c["healthy"], bool)
 
 
+def _ops_status_client_for_settings(
+    settings: Any,
+    qdrant: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> TestClient:
+    from musubi.api.app import create_app
+    from musubi.api.dependencies import get_qdrant_client, get_settings_dep
+    from musubi.api.routers import ops as ops_router_mod
+    from musubi.config import get_settings as _get_settings
+    from musubi.observability import health as health_mod
+
+    _get_settings.cache_clear()
+    monkeypatch.setattr("musubi.config.get_settings", lambda: settings)
+    monkeypatch.setattr("musubi.api.routers.ops.get_settings", lambda: settings)
+
+    real_check = health_mod.check_component_health
+
+    def _faked_check(
+        *,
+        name: str,
+        url: str,
+        transport: object | None = None,
+        timeout: float = 1.5,
+    ) -> object:
+        ok_transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"status": "ok"}))
+        return real_check(name=name, url=url, transport=ok_transport, timeout=timeout)
+
+    monkeypatch.setattr(ops_router_mod, "check_component_health", _faked_check)
+
+    app = create_app(settings=settings)
+    app.dependency_overrides[get_qdrant_client] = lambda: qdrant
+    app.dependency_overrides[get_settings_dep] = lambda: settings
+    return TestClient(app)
+
+
+def test_ops_status_returns_configured_service_version(
+    obs_settings: Any,
+    obs_qdrant: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitHub #382 — /ops/status reports the configured Core version."""
+    settings = obs_settings.model_copy(update={"musubi_service_version": "v1.11.0-test"})
+
+    with _ops_status_client_for_settings(settings, obs_qdrant, monkeypatch) as client:
+        resp = client.get("/v1/ops/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["version"] == "v1.11.0-test"
+    assert set(body["components"]) >= {
+        "qdrant",
+        "tei-dense",
+        "tei-sparse",
+        "tei-reranker",
+        "ollama",
+    }
+
+
+def test_ops_status_returns_null_when_service_version_empty(
+    obs_settings: Any,
+    obs_qdrant: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitHub #382 — blank/default service version remains explicit null."""
+    settings = obs_settings.model_copy(update={"musubi_service_version": ""})
+
+    with _ops_status_client_for_settings(settings, obs_qdrant, monkeypatch) as client:
+        resp = client.get("/v1/ops/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["version"] is None
+    assert set(body["components"]) >= {
+        "qdrant",
+        "tei-dense",
+        "tei-sparse",
+        "tei-reranker",
+        "ollama",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Coverage tests
 # ---------------------------------------------------------------------------
