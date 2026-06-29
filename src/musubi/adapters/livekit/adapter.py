@@ -28,6 +28,8 @@ from musubi.sdk.exceptions import MusubiError
 
 log = logging.getLogger("musubi.adapters.livekit")
 
+_EPISODE_CONTEXT_TAGS = ["kind:episode", "staleness:episodic"]
+
 
 class LiveKitAdapter:
     """Per-session wiring of LiveKit events to Musubi SDK calls."""
@@ -105,7 +107,7 @@ class LiveKitAdapter:
             await self.client.episodic.capture(
                 namespace=self.namespace,
                 content=scrubbed,
-                tags=["livekit-voice", "heuristic-fact"],
+                tags=["livekit-voice", "heuristic-fact", *_EPISODE_CONTEXT_TAGS],
                 importance=6,
             )
         except MusubiError:
@@ -151,7 +153,7 @@ class LiveKitAdapter:
                     await self.client.episodic.capture(
                         namespace=self.namespace,
                         content=f"[transcript:{session_id}]",
-                        tags=["livekit-voice", "session-transcript"],
+                        tags=["livekit-voice", "session-transcript", *_EPISODE_CONTEXT_TAGS],
                         importance=4,
                     )
                 self.upload_history.append(payload)
