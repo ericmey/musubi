@@ -88,6 +88,65 @@ def test_capture_dedup_returns_same_id(
     assert r2.json()["object_id"] == r1.json()["object_id"]
 
 
+def test_capture_adds_default_typed_episode_tags(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    headers = {"Authorization": f"Bearer {valid_token}"}
+    namespace = "eric/claude-code/episodic"
+    r = client.post(
+        "/v1/episodic",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "content": "typed-default-capture-write",
+            "tags": ["src:direct-test"],
+        },
+    )
+    assert r.status_code == 202, r.text
+    object_id = r.json()["object_id"]
+    got = client.get(
+        f"/v1/episodic/{object_id}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["tags"] == [
+        "src:direct-test",
+        "kind:episode",
+        "staleness:episodic",
+    ]
+
+
+def test_capture_preserves_explicit_typed_tags(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    headers = {"Authorization": f"Bearer {valid_token}"}
+    namespace = "eric/claude-code/episodic"
+    tags = ["src:direct-test", "kind:project-stance", "staleness:durable"]
+    r = client.post(
+        "/v1/episodic",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "content": "typed-explicit-capture-write",
+            "tags": tags,
+        },
+    )
+    assert r.status_code == 202, r.text
+    object_id = r.json()["object_id"]
+    got = client.get(
+        f"/v1/episodic/{object_id}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["tags"] == tags
+    assert "kind:episode" not in got.json()["tags"]
+    assert "staleness:episodic" not in got.json()["tags"]
+
+
 def test_capture_rejects_out_of_scope_namespace(
     client: TestClient,
     out_of_scope_token: str,
@@ -124,6 +183,54 @@ def test_batch_capture_writes_each_row(client: TestClient, valid_token: str) -> 
     assert len(out["object_ids"]) == 3
     for oid in out["object_ids"]:
         assert len(oid) == 27
+
+
+def test_batch_capture_adds_default_typed_episode_tags_per_item(
+    client: TestClient,
+    valid_token: str,
+) -> None:
+    headers = {"Authorization": f"Bearer {valid_token}"}
+    namespace = "eric/claude-code/episodic"
+    body = {
+        "namespace": namespace,
+        "items": [
+            {
+                "content": "batch-typed-default-write",
+                "tags": ["src:direct-test"],
+            },
+            {
+                "content": "batch-typed-explicit-write",
+                "tags": ["src:direct-test", "kind:project-stance", "staleness:durable"],
+            },
+        ],
+    }
+    r = client.post("/v1/episodic/batch", headers=headers, json=body)
+    assert r.status_code == 202, r.text
+    object_ids = r.json()["object_ids"]
+
+    defaulted = client.get(
+        f"/v1/episodic/{object_ids[0]}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert defaulted.status_code == 200, defaulted.text
+    assert defaulted.json()["tags"] == [
+        "src:direct-test",
+        "kind:episode",
+        "staleness:episodic",
+    ]
+
+    explicit = client.get(
+        f"/v1/episodic/{object_ids[1]}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert explicit.status_code == 200, explicit.text
+    assert explicit.json()["tags"] == [
+        "src:direct-test",
+        "kind:project-stance",
+        "staleness:durable",
+    ]
 
 
 # ---------------------------------------------------------------------------
