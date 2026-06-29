@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/ericmey/musubi/compare/v1.11.0...v1.11.1) (2026-06-29)
+
+
+### Bug Fixes
+
+* **ops:** expose service version in status ([#383](https://github.com/ericmey/musubi/issues/383)) ([a081501](https://github.com/ericmey/musubi/commit/a0815013c7335037005194e75da6264077f148f0))
+
 ## [1.11.0](https://github.com/ericmey/musubi/compare/v1.10.4...v1.11.0) (2026-06-28)
 
 
