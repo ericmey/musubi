@@ -37,6 +37,15 @@
         group: "{{ musubi_service_group }}"
         mode: "0640"
 
+    - name: Refresh production environment (version / config vars)
+      ansible.builtin.template:
+        src: templates/env.production.j2
+        dest: "{{ musubi_config_dir }}/.env.production"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      no_log: true
+
     - name: Refresh Prometheus scrape config (may have new targets)
       ansible.builtin.template:
         src: templates/prometheus.yml.j2
@@ -79,6 +88,9 @@
         wait: true
         wait_timeout: 300
         services: "{{ changed_services }}"
+      notify:
+        - Ensure upgrade-history log directory exists
+        - Append an upgrade-history entry
 
     - name: Probe Core health post-update
       ansible.builtin.uri:

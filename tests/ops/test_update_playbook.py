@@ -101,6 +101,29 @@ def test_update_recreates_only_named_services_with_core_default() -> None:
     )
 
 
+def test_update_renders_production_env_before_recreate() -> None:
+    tasks = _tasks(_play())
+    env_indices = [
+        idx
+        for idx, task in enumerate(tasks)
+        if task.get("ansible.builtin.template", {}).get("dest")
+        == "{{ musubi_config_dir }}/.env.production"
+    ]
+    assert env_indices, "update.yml must refresh .env.production"
+    env_task = tasks[env_indices[0]]
+    assert env_task.get("no_log") is True, ".env.production rendering must not log secrets"
+
+    recreate_indices = [
+        idx
+        for idx, task in enumerate(tasks)
+        if "services" in (task.get("community.docker.docker_compose_v2") or {})
+    ]
+    assert recreate_indices, "update.yml has no per-service compose recreate task"
+    assert env_indices[0] < recreate_indices[0], (
+        ".env.production must render before containers are recreated"
+    )
+
+
 def test_update_does_not_invoke_bootstrap_tasks() -> None:
     """update.yml must NOT re-run apt installs or user-creation tasks —
     that's bootstrap.yml's job and re-running it on every upgrade is slow
@@ -144,6 +167,15 @@ def test_update_writes_upgrade_history() -> None:
     # Line contents must carry the core_image + service list for later forensics.
     assert "core_image" in text
     assert "services" in text
+    for task in _tasks(_play()):
+        module = task.get("community.docker.docker_compose_v2")
+        if not module or "services" not in module:
+            continue
+        notify = task.get("notify") or []
+        assert "Ensure upgrade-history log directory exists" in notify
+        assert "Append an upgrade-history entry" in notify
+        return
+    raise AssertionError("update.yml has no per-service compose recreate task")
 
 
 def test_update_playbook_does_not_lower_deploys_digest_pin_behaviour() -> None:
