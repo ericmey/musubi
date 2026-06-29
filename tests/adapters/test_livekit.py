@@ -597,6 +597,7 @@ def test_transcript_fallback_capture_adds_typed_episode_tags() -> None:
 
     asyncio.run(_run())
     captures = [c for c in fake.calls if c[0] == "episodic.capture"]
+    assert len(captures) == 1
     assert captures[0][1]["content"] == "[transcript:sess-typed-tags]"
     assert captures[0][1]["tags"] == [
         "livekit-voice",
