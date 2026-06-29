@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.2](https://github.com/ericmey/musubi/compare/v1.11.1...v1.11.2) (2026-06-29)
+
+
+### Bug Fixes
+
+* **auth:** make recursive scope read-only ([#387](https://github.com/ericmey/musubi/issues/387)) ([3fd8dbd](https://github.com/ericmey/musubi/commit/3fd8dbd175294c5419b2d447b69e524675b7daf1))
+
 ## [1.11.1](https://github.com/ericmey/musubi/compare/v1.11.0...v1.11.1) (2026-06-29)
 
 
