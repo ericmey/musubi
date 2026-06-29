@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 #: carries — lets ``musubi_recent --tags=src:mcp-agent-remember`` filter
 #: writes that came specifically from an MCP coding-agent session.
 _MCP_MODALITY_TAG = "src:mcp-agent-remember"
+_DEFAULT_KIND_TAG = "kind:episode"
+_DEFAULT_STALENESS_TAG = "staleness:episodic"
 
 #: Plane → SDK accessor mapping for ``musubi_get``. Hard-coded so the
 #: agent never has to know the canonical-API pluralization rule. Note:
@@ -50,6 +52,16 @@ _PLANE_ATTR: dict[str, str] = {
     "episodic": "episodic",
     "artifact": "artifacts",
 }
+
+
+def _with_default_context_tags(tags: list[str]) -> list[str]:
+    """Add context-pack typed defaults unless the caller supplied them."""
+    normalized = list(tags)
+    if not any(tag.startswith("kind:") for tag in normalized):
+        normalized.append(_DEFAULT_KIND_TAG)
+    if not any(tag.startswith("staleness:") for tag in normalized):
+        normalized.append(_DEFAULT_STALENESS_TAG)
+    return normalized
 
 
 def _normalize_get_namespace(namespace: str, plane: str) -> str:
@@ -155,7 +167,7 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
     ) -> str:
         # Adapter modality tag is auto-added so cross-modality recent / search
         # can filter by source per [[07-interfaces/agent-tools#modality-tagging]].
-        tags = list(topics or [])
+        tags = _with_default_context_tags(list(topics or []))
         if _MCP_MODALITY_TAG not in tags:
             tags.append(_MCP_MODALITY_TAG)
         try:
@@ -249,7 +261,7 @@ def attach_tools(mcp: FastMCP, client: AsyncMusubiClient) -> None:
         # Forward through the canonical body. Existing memory_capture
         # default importance was 5; preserve it on the alias path so
         # behavior doesn't change for legacy callers.
-        normalized_tags = list(tags or [])
+        normalized_tags = _with_default_context_tags(list(tags or []))
         if _MCP_MODALITY_TAG not in normalized_tags:
             normalized_tags.append(_MCP_MODALITY_TAG)
         try:

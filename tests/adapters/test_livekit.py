@@ -558,6 +558,12 @@ def test_heuristic_capture_routed_via_episodic_capture() -> None:
     captures = [c for c in fake.calls if c[0] == "episodic.capture"]
     assert len(captures) == 1
     assert captures[0][1]["namespace"] == _NS
+    assert captures[0][1]["tags"] == [
+        "livekit-voice",
+        "heuristic-fact",
+        "kind:episode",
+        "staleness:episodic",
+    ]
 
 
 def test_heuristic_capture_skipped_when_uninteresting() -> None:
@@ -575,3 +581,27 @@ def test_heuristic_capture_skipped_when_uninteresting() -> None:
     asyncio.run(_run())
     captures = [c for c in fake.calls if c[0] == "episodic.capture"]
     assert captures == []
+
+
+def test_transcript_fallback_capture_adds_typed_episode_tags() -> None:
+    fake = _fake()
+    adapter = LiveKitAdapter(
+        client=fake,
+        namespace=_NS,
+        artifact_namespace="eric/_shared/artifact",
+        config=LiveKitAdapterConfig(capture_transcripts=True),
+    )
+
+    async def _run() -> None:
+        await adapter.on_session_end(session_id="sess-typed-tags", vtt_transcript="WEBVTT")
+
+    asyncio.run(_run())
+    captures = [c for c in fake.calls if c[0] == "episodic.capture"]
+    assert len(captures) == 1
+    assert captures[0][1]["content"] == "[transcript:sess-typed-tags]"
+    assert captures[0][1]["tags"] == [
+        "livekit-voice",
+        "session-transcript",
+        "kind:episode",
+        "staleness:episodic",
+    ]

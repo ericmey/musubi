@@ -370,8 +370,28 @@ async def test_remember_writes_to_episodic_with_modality_tag() -> None:
     assert "ship-order" in write["tags"]
     # Required modality tag per [[07-interfaces/agent-tools#modality-tagging]]
     assert "src:mcp-agent-remember" in write["tags"]
+    assert "kind:episode" in write["tags"]
+    assert "staleness:episodic" in write["tags"]
     # Returns a confirmation string with the new id
     assert "obj-1" in result
+
+
+@pytest.mark.asyncio
+async def test_remember_preserves_explicit_typed_context_tags() -> None:
+    mcp, client = _make_server()
+    await _invoke(
+        mcp,
+        "musubi_remember",
+        namespace="eric/claude-code/episodic",
+        content="Eric said this is a durable project stance.",
+        topics=["kind:project-stance", "staleness:durable"],
+    )
+    tags = client.episodic.captured[0]["tags"]
+    assert tags.count("kind:project-stance") == 1
+    assert tags.count("staleness:durable") == 1
+    assert "kind:episode" not in tags
+    assert "staleness:episodic" not in tags
+    assert "src:mcp-agent-remember" in tags
 
 
 @pytest.mark.asyncio
@@ -496,6 +516,10 @@ async def test_memory_capture_alias_forwards_to_remember_and_logs_deprecation(
         importance=5,
     )
     assert client.episodic.captured, "alias did not forward to canonical impl"
+    tags = client.episodic.captured[0]["tags"]
+    assert "kind:episode" in tags
+    assert "staleness:episodic" in tags
+    assert "src:mcp-agent-remember" in tags
     assert any(
         "memory_capture" in rec.message.lower() and "deprecated" in rec.message.lower()
         for rec in caplog.records
