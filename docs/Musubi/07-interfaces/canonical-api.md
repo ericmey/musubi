@@ -36,9 +36,11 @@ Tokens carry a scope list; each scope is a namespace glob:
 - `eric/claude-code/episodic:rw` — read+write to that specific namespace.
 - `eric/*/episodic:r` — read any of Eric's episodic (rare; operator scope).
 - `eric/_shared/curated:rw` — shared curated.
-- `**:r` — recursive read across all namespaces. Recursive write is not granted;
-  `**:rw` is treated as read-only by the matcher. Use explicit segment globs
-  for scoped writes or `operator` for admin/migration actions.
+- `**:r` — recursive read across all namespaces. Unlike `*`, which matches a
+  single segment and requires the same segment count, `**` is special-cased to
+  match any namespace at any depth. Recursive write is not granted; `**:rw` is
+  treated as read-only by the matcher. Use explicit segment globs for scoped
+  writes or `operator` for admin/migration actions.
 - `operator` — meta scope for admin endpoints.
 
 See [[10-security/auth]] for token issuance and validation.
