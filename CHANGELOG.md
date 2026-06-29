@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.5](https://github.com/ericmey/musubi/compare/v1.11.4...v1.11.5) (2026-06-29)
+
+
+### Bug Fixes
+
+* **deploy:** refresh env during image updates ([#395](https://github.com/ericmey/musubi/issues/395)) ([cb09a51](https://github.com/ericmey/musubi/commit/cb09a51031c1852674f0eeda3822aaf2fc44162b))
+
 ## [1.11.4](https://github.com/ericmey/musubi/compare/v1.11.3...v1.11.4) (2026-06-29)
 
 
