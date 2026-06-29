@@ -69,6 +69,18 @@ Only these typed kinds are accepted:
 
 Legacy rows without a typed `kind:` tag adapt as `episode`.
 
+New episodic captures default missing typed tags at the API boundary:
+
+- missing `kind:*` -> `kind:episode`
+- missing `staleness:*` -> `staleness:episodic`
+- caller-supplied typed tags are preserved exactly
+
+`kind:episode` is therefore the default classification for rows written through
+`POST /v1/episodic`, not proof that the caller explicitly marked the row as an
+episode. Future read filters should treat it as a broad episodic-plane default;
+if a caller-intent distinction becomes necessary, add a separate provenance tag
+or metadata field instead of overloading `kind:episode`.
+
 Typed writes use tags:
 
 ```text
@@ -76,8 +88,8 @@ kind:project-stance
 staleness:durable
 ```
 
-Unknown `kind:` or `staleness:` tags are rejected at capture/patch time. Plain
-legacy tags remain legal.
+Unknown `kind:` or `staleness:` tags are rejected at capture/patch time with a
+422 request-validation error. Plain legacy tags remain legal.
 
 ## Ranking
 

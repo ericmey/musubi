@@ -281,6 +281,12 @@ Typed metadata uses tags such as `kind:project-stance` and
 patch. Legacy rows with no `kind:` tag adapt as `episode`. Superseded/history
 records are suppressed unless `include_history=true`.
 
+`POST /v1/episodic` and `POST /v1/episodic/batch` fill missing typed metadata at
+the API boundary: missing `kind:*` becomes `kind:episode`; missing
+`staleness:*` becomes `staleness:episodic`; caller-supplied typed tags are
+preserved. The default `kind:episode` is a broad episodic-plane classification,
+not evidence that the caller explicitly chose that kind.
+
 See [[05-retrieval/context-pack]] for the ranking contract and acceptance
 tests.
 
