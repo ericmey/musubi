@@ -455,6 +455,37 @@ def test_ops_status_returns_null_when_service_version_empty(
     }
 
 
+def test_ops_status_returns_null_when_settings_unavailable(
+    obs_settings: Any,
+    obs_qdrant: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """GitHub #382 — settings-load failure keeps version explicit null."""
+    from musubi.api.app import create_app
+    from musubi.api.dependencies import get_qdrant_client, get_settings_dep
+    from musubi.config import get_settings as _get_settings
+
+    _get_settings.cache_clear()
+
+    def _broken_settings() -> object:
+        raise RuntimeError("settings unavailable")
+
+    monkeypatch.setattr("musubi.api.routers.ops.get_settings", _broken_settings)
+
+    app = create_app(settings=obs_settings)
+    app.dependency_overrides[get_qdrant_client] = lambda: obs_qdrant
+    app.dependency_overrides[get_settings_dep] = lambda: obs_settings
+
+    with TestClient(app) as client:
+        resp = client.get("/v1/ops/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["version"] is None
+    assert body["components"]["tei-dense"]["detail"].startswith("settings unavailable:")
+
+
 # ---------------------------------------------------------------------------
 # Coverage tests
 # ---------------------------------------------------------------------------
