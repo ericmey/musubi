@@ -121,6 +121,15 @@ def _validate_context_tags(tags: list[str]) -> list[str]:
     return tags
 
 
+def _with_default_episode_tags(tags: list[str]) -> list[str]:
+    out = list(tags)
+    if not any(tag.startswith("kind:") for tag in out):
+        out.append("kind:episode")
+    if not any(tag.startswith("staleness:") for tag in out):
+        out.append("staleness:episodic")
+    return out
+
+
 class CaptureRequest(BaseModel):
     namespace: str
     content: str = Field(min_length=1)
@@ -222,7 +231,7 @@ async def capture(
         "namespace": body.namespace,
         "content": body.content,
         "summary": body.summary,
-        "tags": body.tags,
+        "tags": _with_default_episode_tags(body.tags),
         "importance": body.importance,
     }
     preserve_created_at = False
@@ -266,7 +275,7 @@ async def batch_capture(
             "namespace": body.namespace,
             "content": item.content,
             "summary": item.summary,
-            "tags": item.tags,
+            "tags": _with_default_episode_tags(item.tags),
             "importance": item.importance,
         }
         preserve = False
