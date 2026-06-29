@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.4](https://github.com/ericmey/musubi/compare/v1.11.3...v1.11.4) (2026-06-29)
+
+
+### Bug Fixes
+
+* **api:** default episodic typed tags ([#392](https://github.com/ericmey/musubi/issues/392)) ([09a0d73](https://github.com/ericmey/musubi/commit/09a0d73037a31064c041ae8d7caa0bf7b9d3cb9e))
+
 ## [1.11.3](https://github.com/ericmey/musubi/compare/v1.11.2...v1.11.3) (2026-06-29)
 
 
