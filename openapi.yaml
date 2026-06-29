@@ -2704,6 +2704,11 @@ components:
         status:
           type: string
           title: Status
+        version:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Version
         components:
           additionalProperties:
             $ref: '#/components/schemas/ComponentStatus'

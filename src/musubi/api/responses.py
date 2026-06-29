@@ -25,6 +25,7 @@ class ComponentStatus(BaseModel):
 
 class StatusResponse(BaseModel):
     status: str
+    version: str | None = None
     components: dict[str, ComponentStatus]
 
 

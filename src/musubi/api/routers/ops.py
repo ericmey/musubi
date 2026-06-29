@@ -71,6 +71,8 @@ async def status(
         overall = "degraded"
         return StatusResponse(status=overall, components=components)
 
+    version = settings.musubi_service_version or None
+
     # Per-service liveness paths. TEI exposes `/health`; Ollama doesn't —
     # it returns 404 on `/health` and 200 on `/api/tags` (empty model list
     # when no model is loaded, which still proves the daemon is up).
@@ -86,7 +88,7 @@ async def status(
         )
 
     overall = "ok" if all(c.healthy for c in components.values()) else "degraded"
-    return StatusResponse(status=overall, components=components)
+    return StatusResponse(status=overall, version=version, components=components)
 
 
 @router.get("/metrics")
