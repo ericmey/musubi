@@ -19,6 +19,7 @@ import typer
 
 from musubi.cli.context import context_app
 from musubi.cli.promote import promote_app
+from musubi.cli.validate import validate_app
 
 app = typer.Typer(
     name="musubi",
@@ -28,6 +29,11 @@ app = typer.Typer(
 )
 app.add_typer(context_app, name="context", help="Build ranked startup context packs.")
 app.add_typer(promote_app, name="promote", help="Concept promotion / rejection subcommands.")
+app.add_typer(
+    validate_app,
+    name="validate",
+    help="Non-mutating integrity sweeps — find rows their own model can no longer read.",
+)
 
 
 __all__ = ["app"]

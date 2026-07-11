@@ -65,6 +65,16 @@ class PatchCuratedRequest(BaseModel):
 
 _FORBIDDEN_PATCH_FIELDS = {"state", "version", "object_id", "namespace", "vault_path"}
 
+# Derived from the model, never hand-maintained. See PATCH /v1/episodic for the full
+# reasoning: the body is `extra="allow"` and `incoming` is written verbatim by
+# `set_payload`, so a DENYLIST of five names could not stop an unmodeled key from
+# reaching the payload — where the READ model (`extra="forbid"`) rejects it forever,
+# making the row unreadable AND (before this PR) undeletable.
+#
+# Curated is the shared settled-truth plane. A denylist guarding it can only block the
+# mistakes someone already imagined; everything else becomes permanent false ground.
+_PATCHABLE_FIELDS = set(PatchCuratedRequest.model_fields)
+
 
 @router.post(
     "",
@@ -116,8 +126,18 @@ async def patch_curated(
             code="BAD_REQUEST",
             detail=f"PATCH cannot modify state-managed fields: {sorted(overlap)}",
         )
-    current = await plane.get(namespace=namespace, object_id=object_id)
-    if current is None:
+    # Allowlist, not denylist — anything not in the model never reaches the payload.
+    unknown = set(incoming) - _PATCHABLE_FIELDS
+    if unknown:
+        raise APIError(
+            status_code=400,
+            code="BAD_REQUEST",
+            detail=f"PATCH does not accept unknown fields: {sorted(unknown)}; "
+            f"patchable fields are {sorted(_PATCHABLE_FIELDS)}. An unmodeled key would "
+            f"be written to the payload and then rejected by the read model, making this "
+            f"curated row permanently unreadable.",
+        )
+    if not await plane.exists(namespace=namespace, object_id=object_id):
         raise APIError(
             status_code=404,
             code="NOT_FOUND",
@@ -148,8 +168,11 @@ async def delete_curated(
     qdrant: QdrantClient = Depends(get_qdrant_client),
     plane: CuratedPlane = Depends(get_curated_plane),
 ) -> Response:
-    current = await plane.get(namespace=namespace, object_id=object_id)
-    if current is None:
+    # exists(), not get(): the transition below goes by object_id and never touches the
+    # deserialized row, so a corrupted payload must not be able to block the archive.
+    # Curated is shared settled truth — a false row here that cannot be archived out of
+    # the way keeps teaching every agent that reads the plane.
+    if not await plane.exists(namespace=namespace, object_id=object_id):
         raise APIError(
             status_code=404,
             code="NOT_FOUND",

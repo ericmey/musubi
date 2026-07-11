@@ -37,6 +37,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
 from musubi.store.names import collection_for_plane
+from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
 from musubi.types.episodic import EpisodicMemory
@@ -455,38 +456,25 @@ class EpisodicPlane:
     # ------------------------------------------------------------------
 
     async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
-        """Does this object exist? Answered WITHOUT deserializing it.
+        """Is this row present? Answered WITHOUT deserializing it.
 
-        ``get()`` ends in :func:`_memory_from_payload`, which constructs the strict
-        ``EpisodicMemory`` model (``extra="forbid"``). A row carrying an unmodeled
-        payload key therefore raises on *read* — so any caller that used ``get()``
-        merely to answer "is it there?" inherited a 500 on exactly the rows that are
-        broken.
-
-        That is not hypothetical, and the cost was not hypothetical either: it made
-        the delete path unable to remove a corrupted row, which is precisely the row
-        a delete exists for. A memory that cannot be deleted because it is *too
-        broken to read* is a memory that can teach a falsehood forever.
-
-        Existence is a question about the index, not about the model. Ask the index.
+        ``get()`` model-validates, so it raises on a corrupted row — which meant any
+        caller using it merely to ask "is it there?" inherited a hard failure on
+        exactly the rows that are broken, and a corrupted row could not be deleted or
+        archived. The removability of a memory must never depend on that memory being
+        valid. See :mod:`musubi.store.raw_lookup`.
         """
-        records, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                ]
-            ),
-            limit=1,
-            with_payload=False,  # ← the whole point: never build the model
-            with_vectors=False,
+        return point_exists(
+            self._client, self._collection, namespace=namespace, object_id=object_id
         )
-        return bool(records)
+
+    async def raw_payload(self, *, namespace: Namespace, object_id: KSUID) -> dict[str, Any] | None:
+        """The stored payload exactly as persisted — never model-validated.
+
+        The inspection/repair door for a row the model refuses to open. Treat every key
+        as untrusted: ``.get()`` with a default, never index.
+        """
+        return raw_payload(self._client, self._collection, namespace=namespace, object_id=object_id)
 
     async def get(
         self, *, namespace: Namespace, object_id: KSUID, bump_access: bool = True
@@ -678,9 +666,21 @@ class EpisodicPlane:
         if not is_operator:
             raise PermissionError("operator scope required")
 
-        current = await self.get(namespace=namespace, object_id=object_id, bump_access=False)
-        if not current:
+        # Read RAW, not typed. This path used to call `self.get()`, which
+        # model-validates — so a row carrying an unmodeled payload key raised here,
+        # and the delete never ran. That made a corrupted row undeletable through the
+        # SDK exactly as it was through the API, and the router-level fix does not
+        # protect direct callers (Yua, PR #398 review, 2026-07-11).
+        #
+        # We still need the prior state for the lifecycle event's `from_state`, so we
+        # cannot skip the read — but we must not let the MODEL decide whether a delete
+        # is allowed to proceed. Deleting a memory must never depend on that memory
+        # being valid; that is the whole defect.
+        payload = await self.raw_payload(namespace=namespace, object_id=object_id)
+        if payload is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
+        # Untrusted: a corrupted row may be missing or malforming any key.
+        from_state = payload.get("state") or "unknown"
 
         now = utc_now()
         from musubi.types.common import generate_ksuid
@@ -691,7 +691,7 @@ class EpisodicPlane:
             object_type="episodic",
             namespace=namespace,
             schema_version=1,
-            from_state=current.state,
+            from_state=from_state,
             to_state="archived",
             actor=actor,
             reason=reason,

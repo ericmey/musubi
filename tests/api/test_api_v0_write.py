@@ -27,6 +27,7 @@ import io
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from qdrant_client import QdrantClient
 
 from musubi.planes.episodic import EpisodicPlane
@@ -612,11 +613,30 @@ def _brick(episodic: EpisodicPlane, qdrant: QdrantClient, namespace: str, conten
         payload={"retracted_original": "an unmodeled key the read model forbids"},
         points=[episodic_point_id(oid)],
     )
-    # Precondition: the row is genuinely unreadable. If this ever stops raising,
-    # the test is no longer testing what it claims to test.
-    with pytest.raises(Exception):
+    # Precondition: the row is genuinely unreadable, and unreadable for the REASON we
+    # think. A bare `pytest.raises(Exception)` would pass on a typo, a connection
+    # error, or a missing collection — it would prove the row is broken without
+    # proving it is broken by `extra_forbidden`, which is the whole premise.
+    with pytest.raises(ValidationError) as exc:
         asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert any(e["type"] == "extra_forbidden" for e in exc.value.errors()), (
+        "the row must be unreadable because of the forbidden extra key, not for some "
+        "other reason — otherwise this fixture is not reproducing the real defect"
+    )
     return oid
+
+
+def _raw_point(qdrant: QdrantClient, object_id: str) -> dict[str, object] | None:
+    """The persisted payload, unvalidated — for asserting what actually landed on disk
+    rather than trusting an HTTP status code."""
+    from musubi.planes.episodic.plane import episodic_point_id
+
+    points = qdrant.retrieve(
+        collection_name="musubi_episodic",
+        ids=[episodic_point_id(object_id)],
+        with_payload=True,
+    )
+    return dict(points[0].payload) if points and points[0].payload else None
 
 
 def test_corrupted_row_can_still_be_hard_deleted(
@@ -664,6 +684,17 @@ def test_corrupted_row_can_still_be_soft_archived(
     )
     assert r.status_code == 200, f"corrupted row must be archivable, got {r.text}"
 
+    # A 200 proves the handler did not raise. It does NOT prove the archive landed.
+    # Read the raw point and assert the state actually moved on disk — the endpoint
+    # could return 200 having done nothing at all and this test would still have
+    # passed. (Yua, PR #398 review: "regression proof is weaker than the PR claims.")
+    payload = _raw_point(qdrant, oid)
+    assert payload is not None, "row vanished; soft-delete must archive, not remove"
+    assert payload["state"] == "archived", f"state did not move on disk: {payload['state']!r}"
+    # And the corruption is still there — soft-delete archives, it does not repair.
+    # If this ever stops being true, something is silently rewriting payloads.
+    assert "retracted_original" in payload
+
 
 def test_patch_rejects_unknown_fields_that_would_brick_the_row(
     client: TestClient,
@@ -698,6 +729,56 @@ def test_patch_rejects_unknown_fields_that_would_brick_the_row(
     # partial write.
     after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
     assert after is not None and after.content == "patchme"
+
+
+def test_patch_accepts_a_retract_shaped_body(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """Retraction must keep working. This is the caller contract, not an internal one.
+
+    Musubi is append-only: a false memory cannot be deleted, only rewritten to say
+    that it lied. ``memory-data musubi retract`` is the fleet's ONLY mechanism for
+    neutralising a falsehood, and it PATCHes exactly this shape:
+
+        {"content": ..., "summary": ..., "tags": [...], "importance": 1}
+
+    The first cut of the PATCH allowlist omitted ``content`` — so every retraction
+    across the fleet would have started returning 400. A memory-integrity fix that
+    disables the tool for fixing memory is worse than the bug it closes.
+
+    The tests I wrote for my own fix could not have caught this: they exercised the
+    code I had just written, not the callers that depend on it. Caught by Yua in
+    adversarial review (PR #398, 2026-07-11). Hence this test — it asserts the
+    CONTRACT, from the caller's side.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(
+            EpisodicMemory(namespace=namespace, content="a claim that turned out to be false")
+        )
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={
+            "content": "RETRACTED 2026-07-11. This memory was FALSE. Do not act on it.",
+            "summary": "RETRACTED: this memory was false.",
+            "tags": ["retracted", "kind:episode", "staleness:episodic"],
+            "importance": 1,
+        },
+    )
+    assert r.status_code == 200, f"retraction must not be refused, got {r.status_code}: {r.text}"
+
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None
+    assert after.content.startswith("RETRACTED"), "the retraction text must actually land"
+    assert after.importance == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1390,3 +1471,102 @@ def test_rate_limit_resets_per_minute_window(
 )
 def test_protobuf_via_grpc_matches_rest_semantics_writes() -> None:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Curated corrupted-row regressions (2026-07-11, PR #398 review by Yua)
+#
+# The episodic fix was proposed as complete. It was not: `writes_curated` carried
+# BOTH bugs in full. Curated is the plane that matters most — it is the shared
+# settled-truth layer every agent reads as fact. A false row here that cannot be
+# removed is permanent false ground for the whole fleet.
+# ---------------------------------------------------------------------------
+
+
+def _seed_curated(client: TestClient, headers: dict[str, str], namespace: str, slug: str) -> str:
+    import hashlib
+
+    body_text = f"curated body for {slug}"
+    r = client.post(
+        "/v1/curated",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "title": f"curated {slug}",
+            "content": body_text,
+            "vault_path": f"curated/eric/{slug}.md",
+            "body_hash": hashlib.sha256(body_text.encode()).hexdigest(),
+        },
+    )
+    assert r.status_code == 202, r.text
+    return str(r.json()["object_id"])
+
+
+def _brick_curated(qdrant: QdrantClient, object_id: str) -> None:
+    """Write an unmodeled payload key straight into Qdrant, bypassing the API —
+    reproducing the state a real row would be in, not the state the new allowlist
+    would permit."""
+    from musubi.planes.curated.plane import _point_id
+
+    qdrant.set_payload(
+        collection_name="musubi_curated",
+        payload={"retracted_original": "an unmodeled key the read model forbids"},
+        points=[_point_id(object_id)],
+    )
+
+
+def test_curated_patch_rejects_unknown_fields(
+    client: TestClient,
+    api_settings: Settings,
+) -> None:
+    """A five-name denylist guarded the shared truth plane. Everything it had not
+    imagined became permanent, unreadable, unremovable false ground."""
+    namespace = "eric/claude-code/curated"
+    headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
+    oid = _seed_curated(client, headers, namespace, "reject-unknown")
+
+    r = client.patch(
+        f"/v1/curated/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+        json={"retracted_original": "this would have bricked shared truth forever"},
+    )
+    assert r.status_code == 400, f"unknown PATCH field must be refused, got {r.status_code}"
+    assert "retracted_original" in r.json()["error"]["detail"]
+
+    # The row is UNHARMED — a rejected write must not be a partial write.
+    got = client.get(f"/v1/curated/{oid}", headers=headers, params={"namespace": namespace})
+    assert got.status_code == 200, "the row must still be readable after a refused PATCH"
+
+
+def test_curated_corrupted_row_can_still_be_archived(
+    client: TestClient,
+    api_settings: Settings,
+    qdrant: QdrantClient,
+) -> None:
+    """`delete_curated` guarded with a deserializing `get()` it never used — so a
+    corrupted curated row could not even be archived out of the way."""
+    namespace = "eric/claude-code/curated"
+    headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
+    oid = _seed_curated(client, headers, namespace, "archive-bricked")
+    _brick_curated(qdrant, oid)
+
+    # Precondition: genuinely unreadable, and for the reason we think.
+    got = client.get(f"/v1/curated/{oid}", headers=headers, params={"namespace": namespace})
+    assert got.status_code == 500, "fixture must reproduce a real corrupted row"
+
+    r = client.delete(
+        f"/v1/curated/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert r.status_code == 200, f"corrupted curated row must be archivable, got {r.text}"
+
+    # Assert it landed on disk, not merely that the handler returned 200.
+    from musubi.planes.curated.plane import _point_id
+
+    points = qdrant.retrieve(
+        collection_name="musubi_curated", ids=[_point_id(oid)], with_payload=True
+    )
+    assert points and points[0].payload
+    assert points[0].payload["state"] == "archived"

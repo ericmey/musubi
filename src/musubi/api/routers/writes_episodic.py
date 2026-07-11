@@ -195,13 +195,34 @@ class PatchEpisodicRequest(BaseModel):
     POST /v1/lifecycle/transition (the canonical primitive). Extra
     fields are captured (``extra="allow"``) so the handler can return
     a typed BAD_REQUEST naming the forbidden field instead of a
-    generic 422."""
+    generic 422.
+
+    **This model IS the public PATCH contract** — the handler's allowlist is
+    derived from it (``_PATCHABLE_FIELDS``), so a field that is not declared here
+    is not patchable, full stop.
+
+    ``content`` is declared because retraction depends on it. Musubi is
+    append-only: a false memory cannot be deleted, it can only be rewritten to say
+    that it lied. ``memory-data musubi retract`` therefore PATCHes ``content`` (plus
+    summary/tags/importance), and it is the fleet's only mechanism for neutralising
+    a falsehood. An earlier revision of this allowlist omitted ``content`` and would
+    have returned 400 to every retraction — shipping a memory-integrity fix that
+    disabled the tool for fixing memory. Caught by Yua in review of PR #398, and the
+    reason this docstring now spells the contract out instead of leaving it implied.
+
+    Note on vectors: ``content`` is patched via ``set_payload``, which does NOT
+    re-embed. A retracted row keeps the embedding of its original text — which is
+    the behaviour we want: searching the false claim still surfaces the row, and the
+    row now says RETRACTED. If that ever changes, retraction stops being findable by
+    the thing people actually remember.
+    """
 
     model_config = ConfigDict(extra="allow")
 
     tags: list[str] | None = None
     importance: int | None = Field(default=None, ge=1, le=10)
     summary: str | None = None
+    content: str | None = None
 
     @field_validator("tags")
     @classmethod

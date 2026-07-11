@@ -139,8 +139,10 @@ async def delete_concept(
     namespace: str = Query(...),
     plane: ConceptPlane = Depends(get_concept_plane),
 ) -> Response:
-    current = await plane.get(namespace=namespace, object_id=object_id)
-    if current is None:
+    # exists(), not get(): the transition below goes by object_id and never uses the
+    # deserialized row, so a corrupted payload must not be able to block removal.
+    # The removability of a memory must never depend on that memory being valid.
+    if not await plane.exists(namespace=namespace, object_id=object_id):
         raise APIError(
             status_code=404,
             code="NOT_FOUND",

@@ -13,6 +13,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
 from musubi.planes.artifact.chunking import get_chunker
+from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
 from musubi.types.common import (
@@ -165,6 +166,27 @@ class ArtifactPlane:
                 points=[_point_id(artifact.object_id)],
             )
             return failed
+
+    async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
+        """Is this row present? Answered WITHOUT deserializing it.
+
+        ``get()`` model-validates, so it raises on a corrupted row — which meant any
+        caller using it merely to ask "is it there?" inherited a hard failure on
+        exactly the rows that are broken, and a corrupted row could not be deleted or
+        archived. The removability of a memory must never depend on that memory being
+        valid. See :mod:`musubi.store.raw_lookup`.
+        """
+        return point_exists(
+            self._client, self._collection, namespace=namespace, object_id=object_id
+        )
+
+    async def raw_payload(self, *, namespace: Namespace, object_id: KSUID) -> dict[str, Any] | None:
+        """The stored payload exactly as persisted — never model-validated.
+
+        The inspection/repair door for a row the model refuses to open. Treat every key
+        as untrusted: ``.get()`` with a default, never index.
+        """
+        return raw_payload(self._client, self._collection, namespace=namespace, object_id=object_id)
 
     async def get(self, *, namespace: Namespace, object_id: KSUID) -> SourceArtifact | None:
         records, _ = self._client.scroll(
