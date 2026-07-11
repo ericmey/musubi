@@ -213,6 +213,11 @@ class PatchEpisodicRequest(BaseModel):
 
 _FORBIDDEN_PATCH_FIELDS = {"state", "version", "object_id", "namespace"}
 
+# Derived from the model, never hand-maintained — a hand-kept list is the next
+# thing to drift out of sync with what the model actually declares. Add a field to
+# PatchEpisodicRequest and it becomes patchable; there is no second place to update.
+_PATCHABLE_FIELDS = set(PatchEpisodicRequest.model_fields)
+
 
 @router.post(
     "",
@@ -319,8 +324,36 @@ async def patch_episodic(
             detail=f"PATCH cannot modify state-managed fields: {sorted(overlap)}; "
             f"use POST /v1/lifecycle/transition for state changes",
         )
-    current = await plane.get(namespace=namespace, object_id=object_id)
-    if current is None:
+    # Anything not in the model is rejected — an ALLOWLIST, not a denylist.
+    #
+    # This body is `extra="allow"` (so we can 400 nicely instead of 422), and the
+    # payload below is written verbatim with `set_payload`. Until 2026-07-11 the only
+    # gate was `_FORBIDDEN_PATCH_FIELDS` — a denylist of four names. Every key nobody
+    # had thought of went straight into the Qdrant payload, where the READ model
+    # (`extra="forbid"`) then rejected it *forever*: the row 500s on every subsequent
+    # GET, and could not even be deleted, because the delete path's 404-guard was
+    # itself a `get()`.
+    #
+    # The write model must never accept what the read model forbids. A denylist
+    # guarding a strict reader is unsound by construction — it can only block the
+    # mistakes someone already imagined.
+    #
+    # Lived, not theorised: on 2026-07-10 a `retracted_original` key sent through this
+    # endpoint permanently bricked aoi/command-chair/episodic/3GJhJLAvYXzIp8Qe8tuPHR9S9th.
+    # Note the shape of that failure — `set_payload` SUCCEEDS, then the refresh `get()`
+    # raises, so the caller sees a 500 and believes the write failed while the row has
+    # already been destroyed.
+    unknown = set(incoming) - _PATCHABLE_FIELDS
+    if unknown:
+        raise APIError(
+            status_code=400,
+            code="BAD_REQUEST",
+            detail=f"PATCH does not accept unknown fields: {sorted(unknown)}; "
+            f"patchable fields are {sorted(_PATCHABLE_FIELDS)}. An unmodeled key would "
+            f"be written to the payload and then rejected by the read model, making the "
+            f"row permanently unreadable.",
+        )
+    if not await plane.exists(namespace=namespace, object_id=object_id):
         raise APIError(
             status_code=404,
             code="NOT_FOUND",
@@ -359,7 +392,16 @@ async def delete_episodic(
 
     The operator-scope check on the hard path reads the
     :class:`AuthContext` that the outer ``require_auth`` dependency has
-    already attached to ``request.state.auth``."""
+    already attached to ``request.state.auth``.
+
+    Both paths guard existence with ``plane.exists()``, NOT ``plane.get()``.
+    ``get()`` deserializes into the strict ``EpisodicMemory`` model, so a row with
+    an unmodeled payload key raised a 500 *inside the 404-guard* — before the
+    delete ran. The result was that a corrupted row could be neither hard-deleted
+    nor archived: it was unremovable precisely because it was broken, which is
+    exactly backwards. Neither path needs the deserialized object (the hard path
+    deletes by ``object_id`` filter; the soft path calls ``transition()`` by id),
+    so neither path should ever have been able to fail on a bad payload."""
     if hard:
         ctx = getattr(request.state, "auth", None)
         if ctx is None or "operator" not in (ctx.scopes or ()):
@@ -368,8 +410,7 @@ async def delete_episodic(
                 code="FORBIDDEN",
                 detail="hard delete requires operator scope; pass an operator token",
             )
-        current = await plane.get(namespace=namespace, object_id=object_id)
-        if current is None:
+        if not await plane.exists(namespace=namespace, object_id=object_id):
             raise APIError(
                 status_code=404,
                 code="NOT_FOUND",
@@ -388,8 +429,7 @@ async def delete_episodic(
             ),
         )
         return Response(status_code=204)
-    current = await plane.get(namespace=namespace, object_id=object_id)
-    if current is None:
+    if not await plane.exists(namespace=namespace, object_id=object_id):
         raise APIError(
             status_code=404,
             code="NOT_FOUND",

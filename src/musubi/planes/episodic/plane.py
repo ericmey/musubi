@@ -454,10 +454,50 @@ class EpisodicPlane:
     # Read
     # ------------------------------------------------------------------
 
+    async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
+        """Does this object exist? Answered WITHOUT deserializing it.
+
+        ``get()`` ends in :func:`_memory_from_payload`, which constructs the strict
+        ``EpisodicMemory`` model (``extra="forbid"``). A row carrying an unmodeled
+        payload key therefore raises on *read* — so any caller that used ``get()``
+        merely to answer "is it there?" inherited a 500 on exactly the rows that are
+        broken.
+
+        That is not hypothetical, and the cost was not hypothetical either: it made
+        the delete path unable to remove a corrupted row, which is precisely the row
+        a delete exists for. A memory that cannot be deleted because it is *too
+        broken to read* is a memory that can teach a falsehood forever.
+
+        Existence is a question about the index, not about the model. Ask the index.
+        """
+        records, _ = self._client.scroll(
+            collection_name=self._collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=namespace)
+                    ),
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=object_id)
+                    ),
+                ]
+            ),
+            limit=1,
+            with_payload=False,  # ← the whole point: never build the model
+            with_vectors=False,
+        )
+        return bool(records)
+
     async def get(
         self, *, namespace: Namespace, object_id: KSUID, bump_access: bool = True
     ) -> EpisodicMemory | None:
-        """Fetch one object by id, scoped to ``namespace``."""
+        """Fetch one object by id, scoped to ``namespace``.
+
+        Raises if the stored payload does not satisfy the ``EpisodicMemory`` model.
+        If you only need to know whether the object is *there*, call
+        :meth:`exists` — it does not deserialize, so it still answers for a
+        corrupted row.
+        """
         records, _ = self._client.scroll(
             collection_name=self._collection,
             scroll_filter=models.Filter(

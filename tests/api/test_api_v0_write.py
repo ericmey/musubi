@@ -27,9 +27,12 @@ import io
 
 import pytest
 from fastapi.testclient import TestClient
+from qdrant_client import QdrantClient
 
 from musubi.planes.episodic import EpisodicPlane
+from musubi.settings import Settings
 from musubi.types.episodic import EpisodicMemory
+from tests.api.conftest import mint_token
 
 # ---------------------------------------------------------------------------
 # Capture
@@ -574,6 +577,127 @@ def test_delete_episodic_hard_requires_operator(
     )
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "FORBIDDEN"
+
+
+# ---------------------------------------------------------------------------
+# Corrupted-row regressions (2026-07-11)
+#
+# A row carrying a payload key the strict read model forbids used to be
+# unreadable AND unremovable: every path guarded existence with `plane.get()`,
+# which deserializes, so the guard 500'd before the delete ran. A memory that
+# cannot be deleted *because it is too broken to read* can teach a falsehood
+# forever. These three tests are the proof it cannot happen again.
+#
+# Lived instance: aoi/command-chair/episodic/3GJhJLAvYXzIp8Qe8tuPHR9S9th, bricked
+# 2026-07-10 by a `retracted_original` key sent through PATCH.
+# ---------------------------------------------------------------------------
+
+
+def _brick(episodic: EpisodicPlane, qdrant: QdrantClient, namespace: str, content: str) -> str:
+    """Seed a row, then write an unmodeled payload key straight into Qdrant.
+
+    This bypasses the API on purpose — it reproduces the state of a row that was
+    corrupted *before* the PATCH allowlist existed, which is the state real rows
+    in production are actually in.
+    """
+    from musubi.planes.episodic.plane import episodic_point_id
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content=content))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"retracted_original": "an unmodeled key the read model forbids"},
+        points=[episodic_point_id(oid)],
+    )
+    # Precondition: the row is genuinely unreadable. If this ever stops raising,
+    # the test is no longer testing what it claims to test.
+    with pytest.raises(Exception):
+        asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    return oid
+
+
+def test_corrupted_row_can_still_be_hard_deleted(
+    client: TestClient,
+    api_settings: Settings,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+) -> None:
+    """The row a hard-delete most needs to remove is the one it could not remove.
+
+    Note the token: hard-delete needs BOTH namespace write (the route's outer
+    ``require_auth(access="w")``) AND operator scope (the in-handler check). The
+    bare ``operator_token`` fixture carries only the latter and is refused at the
+    door — which is why the real failure in production was a 500, not a 403.
+    """
+    namespace = "eric/claude-code/episodic"
+    oid = _brick(episodic, qdrant, namespace, "bricked-hard")
+    token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])
+
+    r = client.delete(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"namespace": namespace, "hard": "true"},
+    )
+    assert r.status_code == 204, f"corrupted row must be hard-deletable, got {r.text}"
+    # And it is actually gone from the index, not merely reported gone.
+    assert not asyncio.run(episodic.exists(namespace=namespace, object_id=oid))
+
+
+def test_corrupted_row_can_still_be_soft_archived(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+) -> None:
+    """Soft-delete carried the same deserializing guard — so a bad row could not
+    even be archived out of the way."""
+    namespace = "eric/claude-code/episodic"
+    oid = _brick(episodic, qdrant, namespace, "bricked-soft")
+
+    r = client.delete(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+    )
+    assert r.status_code == 200, f"corrupted row must be archivable, got {r.text}"
+
+
+def test_patch_rejects_unknown_fields_that_would_brick_the_row(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """The write model must never accept what the read model forbids.
+
+    `_FORBIDDEN_PATCH_FIELDS` was a denylist of four names; every key nobody had
+    thought of went straight into the payload and made the row permanently
+    unreadable. Note the old failure shape: `set_payload` SUCCEEDED and only the
+    refreshing `get()` raised — so the caller saw a 500 and believed the write had
+    failed, while the row was already destroyed.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="patchme"))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"retracted_original": "this would have bricked the row forever"},
+    )
+    assert r.status_code == 400, f"unknown PATCH field must be refused, got {r.status_code}"
+    assert "retracted_original" in r.json()["error"]["detail"]
+
+    # The decisive assertion: the row is UNHARMED. A rejected write must not be a
+    # partial write.
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None and after.content == "patchme"
 
 
 # ---------------------------------------------------------------------------
