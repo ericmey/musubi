@@ -63,7 +63,25 @@ passed — ``--allow-absent`` changes whether we PROCEED, not whether we LOOKED.
 ``unknown`` whenever coverage is incomplete: if we did not look, we get no opinion. And the
 human output never claims every row is readable while unreadable rows exist.
 
-Only exit 0 is a production integrity pass.
+## The denominator is ALWAYS the canonical set
+
+The fourth thing this file got wrong, and the same defect once more with a different flag:
+``--plane episodic`` reduced the plane list to one entry, and coverage was computed over
+*that list* — so scanning **1 of 7** canonical collections produced ``coverage: full``,
+``complete: true``, ``verdict: clean``, **exit 0**: the exact machine signal of a clean
+full-production sweep. And ``test_single_plane_filter`` asserted exit 0, locking it in.
+(Yua, rev5 review.)
+
+*Full relative to what I selected* is not *full relative to production.*
+
+So the results list **always** holds all seven canonical planes. A plane that was not
+requested is simply ``not_requested`` — visibly not scanned. Partial coverage now falls out
+structurally instead of depending on a rule someone has to remember to apply, and JSON
+reports ``canonical_collections`` and ``requested_collections`` explicitly so no consumer
+ever has to infer the denominator.
+
+**Only exit 0 is a production integrity pass** — and only the default, all-seven, fully
+scanned, clean run can produce it.
 """
 
 from __future__ import annotations
@@ -112,11 +130,11 @@ _PLANE_MODELS: dict[str, tuple[str, type[BaseModel]]] = {
 #   "I looked at SOME of it" — with or without findings
 # None of those may ever collapse into the same number.
 #
-#   0        clean          — full coverage, nothing unreadable
-#   1..250   N broken rows  — FULL coverage, that many unreadable
+#   0        clean          — ALL SEVEN canonical collections scanned, nothing unreadable
+#   1..250   N broken rows  — all seven scanned, that many unreadable
 #   251      incomplete     — coverage failed; integrity UNKNOWN
-#   252      clean-partial  — accepted absence; nothing bad in what WAS scanned
-#   253      broken-partial — accepted absence AND unreadable rows found (count in output)
+#   252      clean-partial  — narrowed scope (--plane) or accepted absence; nothing bad found
+#   253      broken-partial — narrowed scope or accepted absence, AND unreadable rows found
 #
 # The partial codes sit above the broken cap on purpose. `broken-partial` must NOT collapse
 # into an ordinary fully-scanned broken count: "I found 2 bad rows and saw everything" and
@@ -135,7 +153,7 @@ class PlaneResult:
 
     plane: str
     collection: str
-    status: str  # "scanned" | "absent" | "error"
+    status: str  # "scanned" | "absent" | "error" | "not_requested"
     scanned: int = 0
     broken: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
@@ -252,66 +270,101 @@ def validate_rows(
       integrity: clean | broken | unknown        — was what I saw sound?
 
     Exit codes:
-      0        clean          — full coverage, nothing unreadable.
-      1..250   N broken rows  — FULL coverage, that many unreadable.
+      0        clean          — ALL SEVEN canonical collections scanned, nothing unreadable.
+      1..250   N broken rows  — all seven scanned, that many unreadable.
       251      incomplete     — could not scan something. Integrity is UNKNOWN.
-      252      clean-partial  — --allow-absent; nothing bad in what WAS scanned.
-      253      broken-partial — --allow-absent AND unreadable rows found.
+      252      clean-partial  — narrowed scope (--plane) or accepted absence; nothing bad in
+                                what WAS scanned. NOT a production pass.
+      253      broken-partial — narrowed scope or accepted absence, AND unreadable rows found.
 
-    Only exit 0 is a production integrity pass.
+    Only exit 0 is a production integrity pass, and only the default all-seven run can
+    produce it. `--plane` is a diagnostic, never a gate.
     """
     if batch <= 0:
         raise typer.BadParameter("batch must be > 0", param_hint="--batch")
 
-    planes = [plane] if plane else list(_PLANE_MODELS)
-    for name in planes:
-        if name not in _PLANE_MODELS:
-            raise typer.BadParameter(
-                f"unknown plane {name!r}; expected one of {sorted(_PLANE_MODELS)}",
-                param_hint="--plane",
-            )
+    if plane is not None and plane not in _PLANE_MODELS:
+        raise typer.BadParameter(
+            f"unknown plane {plane!r}; expected one of {sorted(_PLANE_MODELS)}",
+            param_hint="--plane",
+        )
+
+    # THE DENOMINATOR IS ALWAYS THE CANONICAL SET. Never the subset I happened to ask for.
+    #
+    # `--plane episodic` used to reduce `planes` to one entry, and coverage was then computed
+    # over that list — so scanning 1 of 7 canonical collections yielded coverage=full,
+    # complete=true, verdict=clean, exit 0: **the exact machine signal of a full clean
+    # production sweep.** And `test_single_plane_filter` asserted exit 0, locking it in.
+    # (Yua, rev5 review of PR #398.)
+    #
+    # That is the same coverage-denominator defect as accepted absence, wearing a scope flag.
+    # "Full relative to what I selected" is not "full relative to production."
+    #
+    # So the results list ALWAYS holds all seven canonical planes. A plane that was not
+    # requested is simply not scanned — it shows up as `not_requested`, and partial coverage
+    # falls out structurally rather than needing a rule someone has to remember.
+    scope = "canonical" if plane is None else "selected"
+    requested = [plane] if plane else list(_PLANE_MODELS)
+
+    def _unrequested(n: str) -> PlaneResult:
+        return PlaneResult(plane=n, collection=_PLANE_MODELS[n][0], status="not_requested")
 
     # Construction itself can fail (bad URL). That is an incomplete run, not a clean one.
+    client: QdrantClient | None = None
+    conn_error: str | None = None
     try:
         client = QdrantClient(url=url, api_key=api_key)
     except Exception as exc:
-        results = [
-            PlaneResult(
-                plane=n,
-                collection=_PLANE_MODELS[n][0],
-                status="error",
-                error=f"{type(exc).__name__}: {exc}",
+        conn_error = f"{type(exc).__name__}: {exc}"
+
+    results = []
+    for n in _PLANE_MODELS:
+        if n not in requested:
+            results.append(_unrequested(n))
+        elif client is None:
+            results.append(
+                PlaneResult(
+                    plane=n, collection=_PLANE_MODELS[n][0], status="error", error=conn_error
+                )
             )
-            for n in planes
-        ]
-    else:
-        results = [
-            _scan_collection(client, n, _PLANE_MODELS[n][0], _PLANE_MODELS[n][1], batch)
-            for n in planes
-        ]
+        else:
+            results.append(
+                _scan_collection(client, n, _PLANE_MODELS[n][0], _PLANE_MODELS[n][1], batch)
+            )
 
     all_broken = [b for r in results for b in r.broken]
     absent = [r for r in results if r.status == "absent"]
     errored = [r for r in results if r.status == "error"]
+    unrequested = [r for r in results if r.status == "not_requested"]
     total_scanned = sum(r.scanned for r in results)
 
-    # TWO INDEPENDENT AXES. Collapsing them is what produced the last bug.
+    # TWO INDEPENDENT AXES. Collapsing them is what produced every false-clean in this file.
     #
     #   COVERAGE  — did I see everything?     full | partial | incomplete
     #   INTEGRITY — was what I saw sound?     clean | broken  | unknown
     #
-    # The previous cut folded `--allow-absent` into a single `incomplete` list, which then
-    # defined `complete`, which then drove the verdict AND the human summary. So an
-    # accepted absence made `complete: true` (it was not), and any absence printed
-    # "every one readable" — directly above the list of unreadable rows. The output
-    # contradicted itself in adjacent sentences. (Yua, rev4 review of PR #398.)
+    # An earlier cut folded `--allow-absent` into a single `incomplete` list, which defined
+    # `complete`, which drove the verdict AND the summary. So an accepted absence reported
+    # `complete: true`, and any absence printed "every one readable" directly above the list
+    # of unreadable rows — the output contradicted itself in adjacent sentences. (rev4.)
     #
-    # Coverage is NEVER "full" while a canonical collection is missing, no matter what
-    # flag was passed. `--allow-absent` changes whether we PROCEED, not whether we LOOKED.
+    # COVERAGE IS ALWAYS MEASURED AGAINST THE CANONICAL SET. It is never `full` unless every
+    # canonical collection was actually scanned. Three distinct ways to fall short, and none
+    # of them may masquerade as a pass:
+    #
+    #   - a scan failed                          → incomplete (we could not look)
+    #   - a canonical collection is missing      → incomplete, or `partial` with --allow-absent
+    #   - a canonical collection was NOT ASKED FOR (`--plane`) → partial (we chose not to look)
+    #
+    # That last one is the rev5 finding: `--plane episodic` scanned 1 of 7 and emitted
+    # coverage=full / complete=true / exit 0 — the exact machine signal of a clean production
+    # sweep. "Full relative to what I selected" is not "full relative to production."
     if errored or (absent and not allow_absent):
         coverage = "incomplete"
-    elif absent:
-        coverage = "partial"  # absence explicitly accepted — but still not full coverage
+    elif absent or unrequested:
+        # Either explicitly-accepted absence, or a deliberately narrowed scope. Both mean we
+        # did not look at all of production, and neither is a production pass.
+        coverage = "partial"
     else:
         coverage = "full"
 
@@ -340,10 +393,17 @@ def validate_rows(
                     "verdict": verdict,
                     "coverage": coverage,
                     "integrity": integrity,
-                    # `complete` means FULL coverage. Never true with a canonical
-                    # collection missing, accepted or not.
+                    # `complete` means CANONICAL full coverage — every canonical collection
+                    # actually scanned. Never true for an accepted absence, and never true
+                    # for a narrowed --plane scope.
                     "complete": coverage == "full",
+                    "scope": scope,  # "canonical" | "selected"
+                    # Both sets, explicit. A consumer must never have to infer the
+                    # denominator.
+                    "canonical_collections": [c for c, _ in _PLANE_MODELS.values()],
+                    "requested_collections": [_PLANE_MODELS[n][0] for n in requested],
                     "absent_collections": [r.collection for r in absent],
+                    "not_requested_collections": [r.collection for r in unrequested],
                     "scanned": total_scanned,
                     "broken_total": len(all_broken),
                     # Every requested plane appears, including the ones that failed.
@@ -355,7 +415,9 @@ def validate_rows(
         )
     else:
         for r in results:
-            if r.status == "error":
+            if r.status == "not_requested":
+                typer.echo(f"  ---- {r.plane:15} {'':>6}       not requested (--plane)")
+            elif r.status == "error":
                 typer.echo(f"  FAIL {r.plane:15} {'':>6}       SCAN FAILED — {r.error}")
             elif r.status == "absent":
                 typer.echo(f"  GONE {r.plane:15} {'':>6}       CANONICAL COLLECTION MISSING")
@@ -390,16 +452,23 @@ def validate_rows(
                 "   verdict is clean-partial / broken-partial, never a production pass.)"
             )
         elif coverage == "partial":
-            gone = ", ".join(r.plane for r in absent)
-            typer.echo(
-                f"COVERAGE — PARTIAL. These canonical collections are MISSING and were never\n"
-                f"  scanned: {gone}. (--allow-absent was set.)\n"
-                f"  This is NOT a production integrity pass — whatever is in those collections\n"
-                f"  is unknown."
-            )
+            typer.echo("COVERAGE — PARTIAL. This is NOT a production integrity pass.")
+            if unrequested:
+                skipped = ", ".join(r.plane for r in unrequested)
+                typer.echo(
+                    f"  NOT REQUESTED (--plane {plane}): {skipped}\n"
+                    f"  You asked for one plane. Six canonical collections were never looked at.\n"
+                    f"  Whatever is in them is unknown."
+                )
+            if absent:
+                gone = ", ".join(r.plane for r in absent)
+                typer.echo(
+                    f"  MISSING canonical collections (--allow-absent was set): {gone}\n"
+                    f"  Whatever is in them is unknown."
+                )
         else:
             typer.echo(
-                f"COVERAGE — FULL. All {len(results)} canonical collection(s) scanned end to end."
+                f"COVERAGE — FULL. All {len(results)} canonical collections scanned end to end."
             )
 
         # --- integrity, stated separately and only about what was ACTUALLY scanned ---

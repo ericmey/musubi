@@ -334,13 +334,72 @@ def test_pagination_walks_every_page(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_single_plane_filter(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_single_plane_can_never_emit_the_production_pass_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--plane episodic` scans 1 of 7 canonical collections. It must NOT look like a pass.
+
+    This test is the previous one inverted. `test_single_plane_filter` asserted exit 0 —
+    so a narrowed scope emitted `coverage: full`, `complete: true`, `verdict: clean`,
+    exit 0: **the exact machine signal of a clean full-production sweep**, while six
+    canonical collections were never even requested. It locked the false pass in.
+
+    Same coverage-denominator defect as accepted absence, wearing a scope flag. "Full
+    relative to what I selected" is not "full relative to production." (Yua, rev5 review.)
+    """
     behaviour = dict(ALL_EMPTY)
     behaviour["musubi_episodic"] = [[_Rec(GOOD_EPISODIC)]]
 
     result = _run(monkeypatch, behaviour, "--plane", "episodic", "--json")
     doc = json.loads(result.stdout)
-    assert [p["plane"] for p in doc["planes"]] == ["episodic"]
+
+    assert result.exit_code == EXIT_CLEAN_PARTIAL, "a one-plane run must never exit 0"
+    assert doc["verdict"] == "clean-partial"
+    assert doc["coverage"] == "partial"
+    assert doc["complete"] is False, "1 of 7 collections is not complete coverage"
+    assert doc["scope"] == "selected"
+
+    # The denominator must be explicit — a consumer must never have to infer it.
+    assert set(doc["canonical_collections"]) == {c for c, _ in _PLANE_MODELS.values()}
+    assert doc["requested_collections"] == ["musubi_episodic"]
+    assert len(doc["not_requested_collections"]) == len(_PLANE_MODELS) - 1
+
+    # Every canonical plane still appears in the report, marked not_requested.
+    assert {p["plane"] for p in doc["planes"]} == set(_PLANE_MODELS)
+    ep = next(p for p in doc["planes"] if p["plane"] == "episodic")
+    assert ep["status"] == "scanned"
+
+
+def test_single_plane_with_broken_rows_is_broken_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A narrowed scope that finds a bad row is broken-PARTIAL, not an ordinary broken run."""
+    bad = dict(GOOD_EPISODIC, retracted_original="bricks it")
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(bad)]]
+
+    result = _run(monkeypatch, behaviour, "--plane", "episodic", "--json")
+    doc = json.loads(result.stdout)
+
+    assert doc["verdict"] == "broken-partial"
+    assert doc["complete"] is False
+    assert result.exit_code == EXIT_BROKEN_PARTIAL, (
+        "must not collapse into a fully-scanned broken count — six collections were unseen"
+    )
+
+
+def test_default_run_is_canonical_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only the default, all-seven, fully-scanned, clean run may exit 0."""
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(GOOD_EPISODIC)]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert doc["scope"] == "canonical"
+    assert doc["coverage"] == "full"
+    assert doc["complete"] is True
+    assert doc["not_requested_collections"] == []
     assert result.exit_code == 0
 
 
