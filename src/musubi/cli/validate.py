@@ -19,71 +19,154 @@ At least one row is known to be in this state:
 ``aoi/command-chair/episodic/3GJhJLAvYXzIp8Qe8tuPHR9S9th``. **Nobody knows how many
 others are**, because nothing has ever looked. This command is what looks.
 
-## How it reads
+## "Clean" is a claim, and this command must earn it
 
-By raw scroll, with the payload unvalidated, then ``model_validate`` per row inside a
-try/except. That is the only honest way to ask "can this row still be read?" — asking
-the plane's ``get()`` would just raise and tell you nothing about the other 40,000 rows.
+The first cut of this file caught every exception from a collection scan, continued, and
+then printed ``clean`` and exited 0 whenever no broken rows had been *collected* — which
+included the case where **auth failed, the network failed, or every collection was
+misnamed and nothing was scanned at all.** A sweep that reports the vault healthy because
+it could not look at the vault is the exact defect this whole PR exists to fix, rebuilt
+one layer up. (Caught by Yua, rev2 review. It was the third instance of this shape in a
+single day: the vault's stale-check reported "0 stale" while reading 8 of 164 pages, the
+frontmatter lint could never pass so was never run, and then this.)
 
-Reports collection, namespace, object_id, and the concrete validation errors, so the
-output is directly actionable rather than a count.
+So the invariant here is structural, not a promise:
 
-Requested by Yua in adversarial review of PR #398: *"production needs a non-mutating
-validation sweep before repair."* She is right, and the ordering is the point — you do
-not get to repair what you have not first counted.
+    A plane that was not fully scanned CANNOT be counted as clean.
+    Any incomplete scan makes the whole run INCOMPLETE and the exit code non-zero.
+    ``clean`` is printed only when every requested plane was scanned end to end.
+
+An absent *optional* collection (a plane never bootstrapped on this cluster) is a
+distinct, benign outcome — reported as ``absent``, not silently folded into success and
+not treated as a failure. Everything else that stops a scan is an **error**, and an error
+anywhere means this command does not get to say the word "clean".
 """
 
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from typing import Any
 
 import typer
 from pydantic import BaseModel, ValidationError
 from qdrant_client import QdrantClient
+from qdrant_client.http.exceptions import UnexpectedResponse
 
-from musubi.types.artifact import SourceArtifact
+from musubi.types.artifact import ArtifactChunk, SourceArtifact
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
+from musubi.types.lifecycle_event import LifecycleEvent
 from musubi.types.thought import Thought
 
 validate_app = typer.Typer(help="Non-mutating integrity sweeps. Never writes.")
 
 # Collection → the model that MUST be able to read every row in it.
-# `thought` is included on purpose: Yua flagged that its get/history/transition paths can
-# be poisoned the same way, and a sweep that skips a plane is a sweep that lies.
+#
+# ALL SEVEN canonical collections in `store/names.py`. The first cut covered five and
+# quietly omitted `musubi_artifact_chunks` and `musubi_lifecycle_events` — both of which
+# have strict payload models and active read paths. A sweep that skips a collection is a
+# sweep that lies, and it lies in the most dangerous direction: it reports clean.
+#
+# If you add a collection to `store/names.py`, add it here. `test_every_canonical_
+# collection_is_swept` fails if you don't — the mapping cannot silently fall behind.
 _PLANE_MODELS: dict[str, tuple[str, type[BaseModel]]] = {
     "episodic": ("musubi_episodic", EpisodicMemory),
     "curated": ("musubi_curated", CuratedKnowledge),
     "concept": ("musubi_concept", SynthesizedConcept),
     "artifact": ("musubi_artifact", SourceArtifact),
+    "artifact_chunks": ("musubi_artifact_chunks", ArtifactChunk),
     "thought": ("musubi_thought", Thought),
+    "lifecycle": ("musubi_lifecycle_events", LifecycleEvent),
 }
+
+# Exit codes. A caller must be able to tell "I looked and it is fine" from "I could not
+# look", and those must never be the same number.
+#
+#   0        clean — every requested plane scanned end to end, nothing unreadable
+#   1..250   that many unreadable rows (capped)
+#   251      INCOMPLETE — a scan failed; the result is UNKNOWN
+#
+# EXIT_INCOMPLETE sits ABOVE the broken cap on purpose. The obvious choice (2) would be
+# indistinguishable from "2 broken rows found" — an exit code that means two different
+# things is an instrument that lies, which is the entire subject of this PR.
+EXIT_CLEAN = 0
+_MAX_BROKEN_EXIT = 250
+EXIT_INCOMPLETE = 251
+
+
+@dataclass
+class PlaneResult:
+    """What actually happened to one plane. `status` is the load-bearing field."""
+
+    plane: str
+    collection: str
+    status: str  # "scanned" | "absent" | "error"
+    scanned: int = 0
+    broken: list[dict[str, Any]] = field(default_factory=list)
+    error: str | None = None
+
+    @property
+    def complete(self) -> bool:
+        """Did we actually see every row? `absent` counts: there was nothing to see."""
+        return self.status in ("scanned", "absent")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "plane": self.plane,
+            "collection": self.collection,
+            "status": self.status,
+            "scanned": self.scanned,
+            "broken": len(self.broken),
+            "error": self.error,
+        }
+
+
+def _collection_missing(exc: Exception) -> bool:
+    """Is this "the collection isn't here" rather than "I could not reach Qdrant"?
+
+    Only a 404 from Qdrant means absent. Anything else — auth, timeout, DNS, a 500 — is
+    an operational failure and must NOT be mistaken for an empty plane.
+    """
+    if isinstance(exc, UnexpectedResponse):
+        return exc.status_code == 404
+    return False
 
 
 def _scan_collection(
-    client: QdrantClient, collection: str, model: type[BaseModel], batch: int
-) -> tuple[int, list[dict[str, Any]]]:
-    """Return (rows_scanned, broken_rows). Reads only."""
-    scanned = 0
-    broken: list[dict[str, Any]] = []
+    client: QdrantClient, plane: str, collection: str, model: type[BaseModel], batch: int
+) -> PlaneResult:
+    """Scan one collection. Reads only. Never raises — records what happened instead."""
+    result = PlaneResult(plane=plane, collection=collection, status="scanned")
     offset = None
     while True:
-        records, offset = client.scroll(
-            collection_name=collection,
-            limit=batch,
-            offset=offset,
-            with_payload=True,
-            with_vectors=False,
-        )
+        try:
+            records, offset = client.scroll(
+                collection_name=collection,
+                limit=batch,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            if _collection_missing(exc) and result.scanned == 0:
+                result.status = "absent"
+                return result
+            # A failure PART-WAY through pagination is the nastiest case: we have real
+            # rows and real findings, but we did NOT see everything. Keep what we found
+            # and mark the plane incomplete — partial results must never read as total.
+            result.status = "error"
+            result.error = f"{type(exc).__name__}: {exc}"
+            return result
+
         for rec in records:
-            scanned += 1
+            result.scanned += 1
             payload = rec.payload or {}
             try:
                 model.model_validate(payload)
             except ValidationError as exc:
-                broken.append(
+                result.broken.append(
                     {
                         "collection": collection,
                         # A broken row may be missing these too — never index.
@@ -91,14 +174,9 @@ def _scan_collection(
                         "object_id": payload.get("object_id", "<missing>"),
                         "point_id": str(rec.id),
                         "errors": [
-                            {
-                                "type": e["type"],
-                                "loc": list(e["loc"]),
-                                "msg": e["msg"],
-                            }
+                            {"type": e["type"], "loc": list(e["loc"]), "msg": e["msg"]}
                             for e in exc.errors()
                         ],
-                        # The unmodeled keys are usually the whole story.
                         "unknown_keys": sorted(
                             str(e["loc"][0])
                             for e in exc.errors()
@@ -107,73 +185,119 @@ def _scan_collection(
                     }
                 )
         if offset is None:
-            break
-    return scanned, broken
+            return result
 
 
 @validate_app.command("rows")
 def validate_rows(
     url: str = typer.Option("http://localhost:6333", help="Qdrant URL."),
-    api_key: str | None = typer.Option(None, help="Qdrant API key, if the cluster needs one."),
+    api_key: str | None = typer.Option(
+        None,
+        envvar="QDRANT_API_KEY",
+        help=(
+            "Qdrant API key, if the cluster needs one. PREFER the QDRANT_API_KEY env var: "
+            "a key passed as a flag lands in argv, which is visible in `ps` and in shell "
+            "history."
+        ),
+    ),
     plane: str | None = typer.Option(
         None, help="Limit to one plane. Default: every plane, which is what you want."
     ),
-    batch: int = typer.Option(256, help="Scroll page size."),
+    batch: int = typer.Option(256, help="Scroll page size. Must be > 0."),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON for piping."),
 ) -> None:
     """Scan every persisted row and report the ones their own model can no longer read.
 
-    Exit code is the number of broken rows, capped at 250 — so this is usable as a
-    health check in CI or a cron without parsing stdout. Zero means clean, and zero is a
-    claim this command is actually entitled to make, because it looked at every row.
+    Exit codes:
+      0        clean — every requested plane scanned end to end, no unreadable rows.
+      1..250   that many unreadable rows found.
+      251      INCOMPLETE — at least one plane could not be scanned. The result is
+               UNKNOWN. This is not "clean" and must never be treated as such.
     """
-    client = QdrantClient(url=url, api_key=api_key)
+    if batch <= 0:
+        raise typer.BadParameter("batch must be > 0", param_hint="--batch")
+
     planes = [plane] if plane else list(_PLANE_MODELS)
-
-    total_scanned = 0
-    all_broken: list[dict[str, Any]] = []
-    per_plane: dict[str, int] = {}
-
     for name in planes:
         if name not in _PLANE_MODELS:
             raise typer.BadParameter(
-                f"unknown plane {name!r}; expected one of {sorted(_PLANE_MODELS)}"
+                f"unknown plane {name!r}; expected one of {sorted(_PLANE_MODELS)}",
+                param_hint="--plane",
             )
-        collection, model = _PLANE_MODELS[name]
-        try:
-            scanned, broken = _scan_collection(client, collection, model, batch)
-        except Exception as exc:  # collection may not exist on a fresh cluster
-            if not as_json:
-                typer.echo(f"  {name:9} SKIPPED — {type(exc).__name__}: {exc}")
-            continue
-        total_scanned += scanned
-        per_plane[name] = len(broken)
-        all_broken.extend(broken)
-        if not as_json:
-            mark = "OK  " if not broken else "BAD "
-            typer.echo(f"  {mark} {name:9} {scanned:>6} rows   {len(broken)} unreadable")
+
+    # Construction itself can fail (bad URL). That is an incomplete run, not a clean one.
+    try:
+        client = QdrantClient(url=url, api_key=api_key)
+    except Exception as exc:
+        results = [
+            PlaneResult(
+                plane=n,
+                collection=_PLANE_MODELS[n][0],
+                status="error",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            for n in planes
+        ]
+    else:
+        results = [
+            _scan_collection(client, n, _PLANE_MODELS[n][0], _PLANE_MODELS[n][1], batch)
+            for n in planes
+        ]
+
+    all_broken = [b for r in results for b in r.broken]
+    incomplete = [r for r in results if not r.complete]
+    total_scanned = sum(r.scanned for r in results)
 
     if as_json:
         typer.echo(
             json.dumps(
                 {
+                    # The verdict is FIRST and explicit. A consumer must not have to
+                    # infer health from an empty `broken` list.
+                    "complete": not incomplete,
+                    "verdict": (
+                        "incomplete" if incomplete else ("clean" if not all_broken else "broken")
+                    ),
                     "scanned": total_scanned,
                     "broken_total": len(all_broken),
-                    "broken_by_plane": per_plane,
+                    # Every requested plane appears, including the ones that failed.
+                    "planes": [r.as_dict() for r in results],
                     "broken": all_broken,
                 },
                 indent=2,
             )
         )
     else:
+        for r in results:
+            if r.status == "error":
+                typer.echo(f"  FAIL {r.plane:9} {'':>6}        SCAN FAILED — {r.error}")
+            elif r.status == "absent":
+                typer.echo(f"  --   {r.plane:9} {'':>6}        collection absent")
+            else:
+                mark = "OK  " if not r.broken else "BAD "
+                typer.echo(f"  {mark} {r.plane:9} {r.scanned:>6} rows   {len(r.broken)} unreadable")
         typer.echo("")
-        if not all_broken:
-            typer.echo(f"clean — {total_scanned} rows scanned, every one readable by its model.")
-        else:
+
+        if incomplete:
+            names = ", ".join(r.plane for r in incomplete)
             typer.echo(
-                f"{len(all_broken)} of {total_scanned} rows are UNREADABLE by their own model.\n"
-                f"These rows cannot be retrieved. Until musubi#398 is deployed they also "
-                f"cannot be deleted.\n"
+                f"INCOMPLETE — could not scan: {names}.\n"
+                f"This run makes NO claim about integrity. {len(all_broken)} unreadable "
+                f"row(s) were found in the planes that did scan, but the planes above were "
+                f"not read at all, so the real number is UNKNOWN.\n"
+                f"Fix the connection/auth/collection problem and re-run. Do not treat this "
+                f"as clean."
+            )
+        elif not all_broken:
+            typer.echo(
+                f"clean — {total_scanned} rows scanned across {len(results)} plane(s), "
+                f"every one readable by its model."
+            )
+
+        if all_broken:
+            typer.echo(
+                f"\n{len(all_broken)} of {total_scanned} scanned rows are UNREADABLE by "
+                f"their own model. These rows cannot be retrieved.\n"
             )
             for b in all_broken:
                 keys = ", ".join(b["unknown_keys"]) or "—"
@@ -183,10 +307,13 @@ def validate_rows(
                     typer.echo(f"      {e['type']}: {'.'.join(map(str, e['loc']))} — {e['msg']}")
             typer.echo(
                 "\nNEXT: back up the collection before any repair or quarantine mutation.\n"
-                "This command will never mutate; repair is a separate, deliberate operator step."
+                "This command will never mutate; repair is a separate, deliberate step."
             )
 
-    raise typer.Exit(code=min(len(all_broken), 250))
+    # An incomplete scan outranks a clean count. We do not know, and the exit code says so.
+    if incomplete:
+        raise typer.Exit(code=EXIT_INCOMPLETE)
+    raise typer.Exit(code=min(len(all_broken), _MAX_BROKEN_EXIT))
 
 
-__all__ = ["validate_app"]
+__all__ = ["EXIT_CLEAN", "EXIT_INCOMPLETE", "validate_app"]

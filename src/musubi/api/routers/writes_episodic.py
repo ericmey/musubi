@@ -11,6 +11,7 @@ from qdrant_client import QdrantClient, models
 from musubi.api.auth import require_auth
 from musubi.api.dependencies import get_episodic_plane, get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError, ErrorCode
+from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
 from musubi.auth import AuthRequirement, authenticate_request
 from musubi.lifecycle.transitions import transition
 from musubi.planes.episodic import EpisodicPlane
@@ -222,7 +223,7 @@ class PatchEpisodicRequest(BaseModel):
     tags: list[str] | None = None
     importance: int | None = Field(default=None, ge=1, le=10)
     summary: str | None = None
-    content: str | None = None
+    content: str | None = Field(default=None, min_length=1)
 
     @field_validator("tags")
     @classmethod
@@ -364,22 +365,32 @@ async def patch_episodic(
     # Note the shape of that failure — `set_payload` SUCCEEDS, then the refresh `get()`
     # raises, so the caller sees a 500 and believes the write failed while the row has
     # already been destroyed.
-    unknown = set(incoming) - _PATCHABLE_FIELDS
-    if unknown:
-        raise APIError(
-            status_code=400,
-            code="BAD_REQUEST",
-            detail=f"PATCH does not accept unknown fields: {sorted(unknown)}; "
-            f"patchable fields are {sorted(_PATCHABLE_FIELDS)}. An unmodeled key would "
-            f"be written to the payload and then rejected by the read model, making the "
-            f"row permanently unreadable.",
-        )
-    if not await plane.exists(namespace=namespace, object_id=object_id):
+    reject_unknown_fields(incoming, _PATCHABLE_FIELDS, plane="episodic")
+
+    # Read RAW — this must still work on a row that is already corrupted and is being
+    # repaired. `raw_payload()` returns None only when the point is absent, which is the
+    # 404 below.
+    current_raw = await plane.raw_payload(namespace=namespace, object_id=object_id)
+    if current_raw is None:
         raise APIError(
             status_code=404,
             code="NOT_FOUND",
             detail=f"episodic {object_id!r} not found in namespace {namespace!r}",
         )
+
+    # NEVER PERSIST WHAT YOU CANNOT READ BACK.
+    #
+    # The allowlist above stops unknown KEYS. It does nothing about invalid VALUES of
+    # known keys — `{"content": ""}` passed it, persisted, and then failed the refresh
+    # read with `string_too_short`, bricking the row exactly as an unknown key did. The
+    # fix for one bricking bug had introduced another.
+    #
+    # So we simulate the write and read it back before touching disk. This makes the
+    # invariant total instead of remembered: any divergence between this request model
+    # and EpisodicMemory — today's or a future one nobody has thought of — becomes a
+    # clean 400 rather than a 500 and a dead memory.
+    assert_readable_after_patch(current_raw, incoming, EpisodicMemory, object_id=object_id)
+
     qdrant.set_payload(
         collection_name="musubi_episodic",
         payload=incoming,

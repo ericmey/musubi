@@ -31,13 +31,13 @@ Design notes:
 from __future__ import annotations
 
 import uuid
-from typing import Any, Literal
+from typing import Any, Literal, cast, get_args
 
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
 from musubi.store.names import collection_for_plane
-from musubi.store.raw_lookup import point_exists, raw_payload
+from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
 from musubi.types.episodic import EpisodicMemory
@@ -676,11 +676,39 @@ class EpisodicPlane:
         # cannot skip the read — but we must not let the MODEL decide whether a delete
         # is allowed to proceed. Deleting a memory must never depend on that memory
         # being valid; that is the whole defect.
-        payload = await self.raw_payload(namespace=namespace, object_id=object_id)
+        # Address the point DIRECTLY, not through a payload filter. `raw_payload()` finds a
+        # row by its `namespace`/`object_id` PAYLOAD fields — so a row that has lost or
+        # malformed those very keys is invisible to it, and would once again be
+        # undeletable-because-broken. The point ID is derived deterministically from the
+        # object_id, so it addresses the row no matter what the payload says.
+        # (Yua, rev2 review of PR #398.)
+        payload = retrieve_by_point_id(
+            self._client, self._collection, point_id=_point_id(object_id)
+        )
         if payload is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
-        # Untrusted: a corrupted row may be missing or malforming any key.
-        from_state = payload.get("state") or "unknown"
+
+        # Namespace isolation still has to hold — but only when the payload can actually
+        # tell us the namespace. A row whose namespace key is gone is corrupt, and refusing
+        # to delete it on isolation grounds would recreate the defect. Delete it; the
+        # operator scope already gates this path.
+        stored_ns = payload.get("namespace")
+        if stored_ns is not None and stored_ns != namespace:
+            raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
+
+        # Normalize the prior state DELIBERATELY. A corrupted row may carry a `state` that
+        # is not a LifecycleState at all, and `model_construct` skips validation — so
+        # writing it through raw would emit an audit record that violates the very contract
+        # LifecycleEvent declares. We record the weakest honest claim ("provisional") and
+        # preserve the truth in `reason`, rather than fabricating a state that looks valid.
+        raw_state = payload.get("state")
+        from_state: LifecycleState = (
+            cast(LifecycleState, raw_state)
+            if raw_state in get_args(LifecycleState)
+            else "provisional"
+        )
+        if from_state != raw_state:
+            reason = f"{reason} [prior state unreadable ({raw_state!r}); normalized for audit]"
 
         now = utc_now()
         from musubi.types.common import generate_ksuid

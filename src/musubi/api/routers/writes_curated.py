@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient, models
 from musubi.api.auth import require_auth
 from musubi.api.dependencies import get_curated_plane, get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError, ErrorCode
+from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
 from musubi.auth import AuthRequirement, authenticate_request
 from musubi.lifecycle.transitions import transition
 from musubi.planes.curated import CuratedPlane
@@ -126,23 +127,21 @@ async def patch_curated(
             code="BAD_REQUEST",
             detail=f"PATCH cannot modify state-managed fields: {sorted(overlap)}",
         )
-    # Allowlist, not denylist — anything not in the model never reaches the payload.
-    unknown = set(incoming) - _PATCHABLE_FIELDS
-    if unknown:
-        raise APIError(
-            status_code=400,
-            code="BAD_REQUEST",
-            detail=f"PATCH does not accept unknown fields: {sorted(unknown)}; "
-            f"patchable fields are {sorted(_PATCHABLE_FIELDS)}. An unmodeled key would "
-            f"be written to the payload and then rejected by the read model, making this "
-            f"curated row permanently unreadable.",
-        )
-    if not await plane.exists(namespace=namespace, object_id=object_id):
+    reject_unknown_fields(incoming, _PATCHABLE_FIELDS, plane="curated")
+
+    # Read RAW so this still works on an already-corrupted row being repaired.
+    current_raw = await plane.raw_payload(namespace=namespace, object_id=object_id)
+    if current_raw is None:
         raise APIError(
             status_code=404,
             code="NOT_FOUND",
             detail=f"curated knowledge {object_id!r} not found in namespace {namespace!r}",
         )
+
+    # NEVER PERSIST WHAT YOU CANNOT READ BACK. The allowlist stops unknown keys; this
+    # stops invalid values of known keys. Curated is shared settled truth — a row bricked
+    # here is permanent false ground for every agent. See musubi.api.patch_guard.
+    assert_readable_after_patch(current_raw, incoming, CuratedKnowledge, object_id=object_id)
     qdrant.set_payload(
         collection_name="musubi_curated",
         payload=incoming,

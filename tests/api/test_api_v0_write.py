@@ -1570,3 +1570,39 @@ def test_curated_corrupted_row_can_still_be_archived(
     )
     assert points and points[0].payload
     assert points[0].payload["state"] == "archived"
+
+
+def test_patch_empty_content_is_refused_and_row_unharmed(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """PATCH/read validation parity — the allowlist alone was not enough.
+
+    `PatchEpisodicRequest.content` was declared `str | None` (unconstrained), while the
+    persisted `MemoryObject.content` is `Field(min_length=1)`. So `{"content": ""}` passed
+    the REQUEST model, persisted via `set_payload`, and then failed the REFRESH read with
+    `string_too_short` — recreating the exact 500-after-corruption failure this PR exists
+    to kill. My fix for the bricking bug introduced a new way to brick a row.
+
+    The allowlist stops unknown KEYS. It does nothing about invalid VALUES of known keys.
+    Caught by Yua, rev2 review.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"content": ""},
+    )
+    assert r.status_code in (400, 422), f"empty content must be refused, got {r.status_code}"
+
+    # The decisive assertion: the row is STILL READABLE. A refused write must not persist.
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None and after.content == "intact"

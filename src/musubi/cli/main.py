@@ -1,8 +1,23 @@
 """`musubi` CLI entry point.
 
-Thin wrappers over the canonical HTTP API. The CLI never talks to
-Qdrant or the planes directly — it posts to `/v1/…` endpoints with
-an operator-scoped bearer token.
+Thin wrappers over the canonical HTTP API. Almost every command posts to `/v1/…`
+endpoints with an operator-scoped bearer token and never touches storage directly.
+
+**The one deliberate exception is ``musubi validate rows``.** It connects to Qdrant
+directly, because it must be able to read rows the API *cannot serve* — a row whose
+payload the canonical model rejects 500s on every `/v1` read, and those are exactly the
+rows an integrity sweep exists to find. Going through the API would mean the instrument
+is blind to precisely the thing it is looking for. It is read-only (raw ``scroll``, no
+writes, and no code path that mutates).
+
+That exception has an operational consequence, so it is stated rather than left implied:
+
+- ``validate rows --api-key`` puts the Qdrant key in **argv**, which is visible in the
+  process list (``ps``) and in shell history. Prefer running it on the Musubi host where
+  Qdrant is not exposed and no key is needed; if a key is required, pass it via the
+  environment rather than the flag.
+- Qdrant is not exposed off-host, so this command is an **on-host operator tool**, not
+  something a laptop can point at production.
 
 Environment:
 

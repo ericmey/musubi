@@ -50,7 +50,14 @@ def _by_id(namespace: str, object_id: str) -> models.Filter:
 
 
 def point_exists(client: QdrantClient, collection: str, *, namespace: str, object_id: str) -> bool:
-    """Is this object present? Answered from the index, never from the model."""
+    """Is this object present? Answered from the index, never from the model.
+
+    NOTE the reachability limit shared by every payload-filtered lookup here: this finds
+    the row by its ``namespace`` and ``object_id`` **payload fields**. A row whose payload
+    is missing or malforming *those* keys is invisible to it. For deletion — where being
+    unreachable is fatal — use :func:`retrieve_by_point_id`, which addresses the point
+    directly and does not care what the payload says.
+    """
     records, _ = client.scroll(
         collection_name=collection,
         scroll_filter=_by_id(namespace, object_id),
@@ -66,9 +73,17 @@ def raw_payload(
 ) -> dict[str, Any] | None:
     """The payload exactly as persisted — never model-validated.
 
-    Returns ``None`` when the point does not exist. An existing point with an empty
-    payload also returns ``None``; callers asking a pure existence question should use
-    :func:`point_exists`, which does not conflate the two.
+    ``None`` means **the point does not exist**. An existing point whose payload is empty
+    returns ``{}`` — an empty dict, not ``None``.
+
+    That distinction is load-bearing and was wrong in the first cut: returning ``None`` for
+    both conflated "absent" with "present but corrupt", so ``EpisodicPlane.delete()`` raised
+    ``LookupError`` on an empty-payload row and refused to remove it. That is the same class
+    of bug this whole module exists to kill — a corruption shape that makes a memory
+    *undeletable because it is broken*. Callers must test ``is None``, never truthiness.
+    (Yua, rev2 review of PR #398.)
+
+    Subject to the same payload-filter reachability limit as :func:`point_exists`.
     """
     records, _ = client.scroll(
         collection_name=collection,
@@ -79,7 +94,35 @@ def raw_payload(
     )
     if not records:
         return None
-    return records[0].payload or None
+    # `or {}` — NOT `or None`. An existing point with no payload still EXISTS.
+    return records[0].payload or {}
 
 
-__all__ = ["point_exists", "raw_payload"]
+def retrieve_by_point_id(
+    client: QdrantClient, collection: str, *, point_id: str
+) -> dict[str, Any] | None:
+    """Fetch a payload by its Qdrant point ID, bypassing payload filters entirely.
+
+    This is the lookup of last resort, and the only one that still works when a row's
+    payload has lost the very identifiers everything else searches by. Every plane derives
+    its point ID deterministically (``uuid5(_POINT_NS, object_id)``), so a caller holding
+    an ``object_id`` can always address the point **even if that object_id no longer
+    appears in the payload**.
+
+    ``None`` means the point does not exist. ``{}`` means it exists with an empty payload.
+
+    Deletion must go through this. A memory that cannot be addressed cannot be removed, and
+    a memory that cannot be removed can keep teaching a falsehood forever.
+    """
+    points = client.retrieve(
+        collection_name=collection,
+        ids=[point_id],
+        with_payload=True,
+        with_vectors=False,
+    )
+    if not points:
+        return None
+    return dict(points[0].payload or {})
+
+
+__all__ = ["point_exists", "raw_payload", "retrieve_by_point_id"]
