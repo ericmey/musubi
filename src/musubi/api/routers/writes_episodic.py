@@ -337,7 +337,23 @@ async def patch_episodic(
     enrichment writes the maturation sweep does — see
     :mod:`musubi.lifecycle.maturation` for precedent).
     """
-    incoming = body.model_dump(exclude_none=True)
+    # `exclude_unset`, NOT `exclude_none`.
+    #
+    # `exclude_none=True` drops explicitly-supplied nulls BEFORE the allowlist and the
+    # canonical merged-row guard ever see them. So `PATCH {"retracted_original": null}`
+    # became `{}` — the allowlist saw no unknown key, nothing was written, and the endpoint
+    # returned **200 OK**. A caller who sent an unknown field was told it succeeded.
+    #
+    # That is a FALSE SUCCESS: the handler reported success without applying the mutation and
+    # without rejecting it — the exact defect this PR exists to remove, living inside the
+    # guard written to prevent it. It also conflated "field omitted" with "field explicitly
+    # set to null", which are different requests. (Yua, review of d5c7e0f.)
+    #
+    # `exclude_unset=True` preserves the caller's ACTUAL key set, so:
+    #   - unknown keys are rejected whatever their value, null included;
+    #   - known nulls are judged by the canonical persisted model, not silently discarded;
+    #   - omitted fields stay omitted.
+    incoming = body.model_dump(exclude_unset=True)
     overlap = _FORBIDDEN_PATCH_FIELDS & set(incoming)
     if overlap:
         raise APIError(

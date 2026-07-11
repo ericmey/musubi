@@ -1655,3 +1655,137 @@ def test_hard_delete_removes_an_identity_damaged_row_via_http(
 
     # Gone from storage, not merely reported gone.
     assert retrieve_by_point_id(qdrant, "musubi_episodic", point_id=pid) is None
+
+
+def test_patch_explicit_null_unknown_field_is_rejected_not_silently_dropped(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """An explicit null must not become a FALSE SUCCESS.
+
+    Both PATCH handlers built `incoming` with `model_dump(exclude_none=True)`, which drops
+    explicitly-supplied nulls BEFORE the allowlist and the canonical merged-row guard ever
+    see them. So:
+
+        PATCH {"retracted_original": null}  ->  incoming == {}  ->  200 OK, nothing written
+
+    The endpoint returned success without applying the mutation and without rejecting it.
+    The caller believes an unknown field was accepted. That is the defect this entire PR is
+    about — a component reporting success without doing the work — sitting in the guard
+    written to prevent it. (Yua, review of d5c7e0f.)
+
+    `exclude_unset=True` preserves the caller's actual key set, so unknown keys are rejected
+    whatever their value.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"retracted_original": None},
+    )
+    assert r.status_code == 400, (
+        f"an unknown field must be rejected whatever its value; a null must not be silently "
+        f"dropped into a no-op 200. Got {r.status_code}."
+    )
+    assert "retracted_original" in r.json()["error"]["detail"]
+
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None and after.content == "intact"
+
+
+def test_patch_explicit_null_on_a_known_field_is_judged_by_the_canonical_model(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """`{"content": null}` was treated as omission. It is not an omission — it is a request
+    to set content to null, which the persisted model forbids. It must be judged, not
+    silently discarded, and the row must survive either way."""
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"content": None},
+    )
+    assert r.status_code in (400, 422), f"a null content must be judged, not dropped: {r.text}"
+
+    # Whatever the verdict, the row is UNHARMED.
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None and after.content == "intact"
+
+
+def test_curated_patch_explicit_null_unknown_field_is_rejected(
+    client: TestClient,
+    api_settings: Settings,
+) -> None:
+    """Same false-success on the shared-truth plane. Both handlers used exclude_none, so an
+    explicit null on an unknown field became a no-op 200 on CURATED too.
+
+    Testing the class, not the example — that is the mistake that produced the previous
+    three commits.
+    """
+    namespace = "eric/claude-code/curated"
+    headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
+    oid = _seed_curated(client, headers, namespace, "explicit-null")
+
+    r = client.patch(
+        f"/v1/curated/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+        json={"retracted_original": None},
+    )
+    assert r.status_code == 400, f"unknown field must be rejected even when null: {r.text}"
+    assert "retracted_original" in r.json()["error"]["detail"]
+
+    got = client.get(f"/v1/curated/{oid}", headers=headers, params={"namespace": namespace})
+    assert got.status_code == 200, "the row must be unharmed by a refused PATCH"
+
+
+def test_patch_omitted_field_is_still_omitted(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """`exclude_unset` must not turn omission into a null write.
+
+    Fixing the null bug by switching to exclude_unset would be worthless if it then wrote
+    `None` over every field the caller simply did not mention. A PATCH of one field must
+    leave the others exactly as they were.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(
+            EpisodicMemory(namespace=namespace, content="keep me", summary="keep this too")
+        )
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"importance": 9},  # content and summary NOT mentioned
+    )
+    assert r.status_code == 200, r.text
+
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None
+    assert after.importance == 9
+    assert after.content == "keep me", "an omitted field must not be nulled"
+    assert after.summary == "keep this too", "an omitted field must not be nulled"
