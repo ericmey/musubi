@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient, models
 from musubi.api.auth import require_auth
 from musubi.api.dependencies import get_curated_plane, get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError, ErrorCode
+from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
 from musubi.auth import AuthRequirement, authenticate_request
 from musubi.lifecycle.transitions import transition
 from musubi.planes.curated import CuratedPlane
@@ -65,6 +66,16 @@ class PatchCuratedRequest(BaseModel):
 
 _FORBIDDEN_PATCH_FIELDS = {"state", "version", "object_id", "namespace", "vault_path"}
 
+# Derived from the model, never hand-maintained. See PATCH /v1/episodic for the full
+# reasoning: the body is `extra="allow"` and `incoming` is written verbatim by
+# `set_payload`, so a DENYLIST of five names could not stop an unmodeled key from
+# reaching the payload — where the READ model (`extra="forbid"`) rejects it forever,
+# making the row unreadable AND (before this PR) undeletable.
+#
+# Curated is the shared settled-truth plane. A denylist guarding it can only block the
+# mistakes someone already imagined; everything else becomes permanent false ground.
+_PATCHABLE_FIELDS = set(PatchCuratedRequest.model_fields)
+
 
 @router.post(
     "",
@@ -108,7 +119,23 @@ async def patch_curated(
     qdrant: QdrantClient = Depends(get_qdrant_client),
     plane: CuratedPlane = Depends(get_curated_plane),
 ) -> CuratedKnowledge:
-    incoming = body.model_dump(exclude_none=True)
+    # `exclude_unset`, NOT `exclude_none`.
+    #
+    # `exclude_none=True` drops explicitly-supplied nulls BEFORE the allowlist and the
+    # canonical merged-row guard ever see them. So `PATCH {"retracted_original": null}`
+    # became `{}` — the allowlist saw no unknown key, nothing was written, and the endpoint
+    # returned **200 OK**. A caller who sent an unknown field was told it succeeded.
+    #
+    # That is a FALSE SUCCESS: the handler reported success without applying the mutation and
+    # without rejecting it — the exact defect this PR exists to remove, living inside the
+    # guard written to prevent it. It also conflated "field omitted" with "field explicitly
+    # set to null", which are different requests. (Yua, review of d5c7e0f.)
+    #
+    # `exclude_unset=True` preserves the caller's ACTUAL key set, so:
+    #   - unknown keys are rejected whatever their value, null included;
+    #   - known nulls are judged by the canonical persisted model, not silently discarded;
+    #   - omitted fields stay omitted.
+    incoming = body.model_dump(exclude_unset=True)
     overlap = _FORBIDDEN_PATCH_FIELDS & set(incoming)
     if overlap:
         raise APIError(
@@ -116,13 +143,23 @@ async def patch_curated(
             code="BAD_REQUEST",
             detail=f"PATCH cannot modify state-managed fields: {sorted(overlap)}",
         )
-    current = await plane.get(namespace=namespace, object_id=object_id)
-    if current is None:
+    reject_unknown_fields(incoming, _PATCHABLE_FIELDS, plane="curated")
+
+    # Read RAW so that READING does not itself blow up on an already-corrupted row.
+    # NOT a repair path — see musubi.api.patch_guard: this prevents further corruption, it
+    # cannot heal an existing one (PATCH cannot remove an unknown key).
+    current_raw = await plane.raw_payload(namespace=namespace, object_id=object_id)
+    if current_raw is None:
         raise APIError(
             status_code=404,
             code="NOT_FOUND",
             detail=f"curated knowledge {object_id!r} not found in namespace {namespace!r}",
         )
+
+    # NEVER PERSIST WHAT YOU CANNOT READ BACK. The allowlist stops unknown keys; this
+    # stops invalid values of known keys. Curated is shared settled truth — a row bricked
+    # here is permanent false ground for every agent. See musubi.api.patch_guard.
+    assert_readable_after_patch(current_raw, incoming, CuratedKnowledge, object_id=object_id)
     qdrant.set_payload(
         collection_name="musubi_curated",
         payload=incoming,
@@ -148,8 +185,11 @@ async def delete_curated(
     qdrant: QdrantClient = Depends(get_qdrant_client),
     plane: CuratedPlane = Depends(get_curated_plane),
 ) -> Response:
-    current = await plane.get(namespace=namespace, object_id=object_id)
-    if current is None:
+    # exists(), not get(): the transition below goes by object_id and never touches the
+    # deserialized row, so a corrupted payload must not be able to block the archive.
+    # Curated is shared settled truth — a false row here that cannot be archived out of
+    # the way keeps teaching every agent that reads the plane.
+    if not await plane.exists(namespace=namespace, object_id=object_id):
         raise APIError(
             status_code=404,
             code="NOT_FOUND",

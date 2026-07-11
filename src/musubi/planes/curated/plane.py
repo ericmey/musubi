@@ -48,6 +48,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
 from musubi.store.names import collection_for_plane
+from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
 from musubi.types.curated import CuratedKnowledge
@@ -281,11 +282,36 @@ class CuratedPlane:
             return None
         return _curated_from_payload(payload)
 
+    async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
+        """Is this row present? Answered WITHOUT deserializing it.
+
+        ``get()`` model-validates, so it raises on a corrupted row — which meant any
+        caller using it merely to ask "is it there?" inherited a hard failure on
+        exactly the rows that are broken, and a corrupted row could not be deleted or
+        archived. The removability of a memory must never depend on that memory being
+        valid. See :mod:`musubi.store.raw_lookup`.
+        """
+        return point_exists(
+            self._client, self._collection, namespace=namespace, object_id=object_id
+        )
+
+    async def raw_payload(self, *, namespace: Namespace, object_id: KSUID) -> dict[str, Any] | None:
+        """The stored payload exactly as persisted — never model-validated.
+
+        The inspection/repair door for a row the model refuses to open. Treat every key
+        as untrusted: ``.get()`` with a default, never index.
+        """
+        return raw_payload(self._client, self._collection, namespace=namespace, object_id=object_id)
+
     async def get(self, *, namespace: Namespace, object_id: KSUID) -> CuratedKnowledge | None:
         """Fetch one curated row by id, scoped to ``namespace``.
 
         Wrong-namespace lookups return ``None`` — this is how the read
         path enforces namespace isolation.
+
+        Raises if the stored payload does not satisfy ``CuratedKnowledge``. To ask
+        only whether the row is present, call :meth:`exists` — it does not
+        deserialize, so it still answers for a corrupted row.
         """
         records, _ = self._client.scroll(
             collection_name=self._collection,

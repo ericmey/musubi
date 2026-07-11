@@ -27,9 +27,13 @@ import io
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
+from qdrant_client import QdrantClient
 
 from musubi.planes.episodic import EpisodicPlane
+from musubi.settings import Settings
 from musubi.types.episodic import EpisodicMemory
+from tests.api.conftest import mint_token
 
 # ---------------------------------------------------------------------------
 # Capture
@@ -574,6 +578,208 @@ def test_delete_episodic_hard_requires_operator(
     )
     assert r.status_code == 403
     assert r.json()["error"]["code"] == "FORBIDDEN"
+
+
+# ---------------------------------------------------------------------------
+# Corrupted-row regressions (2026-07-11)
+#
+# A row carrying a payload key the strict read model forbids used to be
+# unreadable AND unremovable: every path guarded existence with `plane.get()`,
+# which deserializes, so the guard 500'd before the delete ran. A memory that
+# cannot be deleted *because it is too broken to read* can teach a falsehood
+# forever. These three tests are the proof it cannot happen again.
+#
+# Lived instance: aoi/command-chair/episodic/3GJhJLAvYXzIp8Qe8tuPHR9S9th, bricked
+# 2026-07-10 by a `retracted_original` key sent through PATCH.
+# ---------------------------------------------------------------------------
+
+
+def _brick(episodic: EpisodicPlane, qdrant: QdrantClient, namespace: str, content: str) -> str:
+    """Seed a row, then write an unmodeled payload key straight into Qdrant.
+
+    This bypasses the API on purpose — it reproduces the state of a row that was
+    corrupted *before* the PATCH allowlist existed, which is the state real rows
+    in production are actually in.
+    """
+    from musubi.planes.episodic.plane import episodic_point_id
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content=content))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"retracted_original": "an unmodeled key the read model forbids"},
+        points=[episodic_point_id(oid)],
+        wait=True,  # the test reads this back immediately; without wait it can race
+    )
+    # Precondition: the row is genuinely unreadable, and unreadable for the REASON we
+    # think. A bare `pytest.raises(Exception)` would pass on a typo, a connection
+    # error, or a missing collection — it would prove the row is broken without
+    # proving it is broken by `extra_forbidden`, which is the whole premise.
+    with pytest.raises(ValidationError) as exc:
+        asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert any(e["type"] == "extra_forbidden" for e in exc.value.errors()), (
+        "the row must be unreadable because of the forbidden extra key, not for some "
+        "other reason — otherwise this fixture is not reproducing the real defect"
+    )
+    return oid
+
+
+def _raw_point(qdrant: QdrantClient, object_id: str) -> dict[str, object] | None:
+    """The persisted payload, unvalidated — for asserting what actually landed on disk
+    rather than trusting an HTTP status code."""
+    from musubi.planes.episodic.plane import episodic_point_id
+
+    points = qdrant.retrieve(
+        collection_name="musubi_episodic",
+        ids=[episodic_point_id(object_id)],
+        with_payload=True,
+    )
+    return dict(points[0].payload) if points and points[0].payload else None
+
+
+def test_corrupted_row_can_still_be_hard_deleted(
+    client: TestClient,
+    api_settings: Settings,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+) -> None:
+    """The row a hard-delete most needs to remove is the one it could not remove.
+
+    Note the token: hard-delete needs BOTH namespace write (the route's outer
+    ``require_auth(access="w")``) AND operator scope (the in-handler check). The
+    bare ``operator_token`` fixture carries only the latter and is refused at the
+    door — which is why the real failure in production was a 500, not a 403.
+    """
+    namespace = "eric/claude-code/episodic"
+    oid = _brick(episodic, qdrant, namespace, "bricked-hard")
+    token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])
+
+    r = client.delete(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"namespace": namespace, "hard": "true"},
+    )
+    assert r.status_code == 204, f"corrupted row must be hard-deletable, got {r.text}"
+    # And it is actually gone from the index, not merely reported gone.
+    assert not asyncio.run(episodic.exists(namespace=namespace, object_id=oid))
+
+
+def test_corrupted_row_can_still_be_soft_archived(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+) -> None:
+    """Soft-delete carried the same deserializing guard — so a bad row could not
+    even be archived out of the way."""
+    namespace = "eric/claude-code/episodic"
+    oid = _brick(episodic, qdrant, namespace, "bricked-soft")
+
+    r = client.delete(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+    )
+    assert r.status_code == 200, f"corrupted row must be archivable, got {r.text}"
+
+    # A 200 proves the handler did not raise. It does NOT prove the archive landed.
+    # Read the raw point and assert the state actually moved on disk — the endpoint
+    # could return 200 having done nothing at all and this test would still have
+    # passed. (Yua, PR #398 review: "regression proof is weaker than the PR claims.")
+    payload = _raw_point(qdrant, oid)
+    assert payload is not None, "row vanished; soft-delete must archive, not remove"
+    assert payload["state"] == "archived", f"state did not move on disk: {payload['state']!r}"
+    # And the corruption is still there — soft-delete archives, it does not repair.
+    # If this ever stops being true, something is silently rewriting payloads.
+    assert "retracted_original" in payload
+
+
+def test_patch_rejects_unknown_fields_that_would_brick_the_row(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """The write model must never accept what the read model forbids.
+
+    `_FORBIDDEN_PATCH_FIELDS` was a denylist of four names; every key nobody had
+    thought of went straight into the payload and made the row permanently
+    unreadable. Note the old failure shape: `set_payload` SUCCEEDED and only the
+    refreshing `get()` raised — so the caller saw a 500 and believed the write had
+    failed, while the row was already destroyed.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="patchme"))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"retracted_original": "this would have bricked the row forever"},
+    )
+    assert r.status_code == 400, f"unknown PATCH field must be refused, got {r.status_code}"
+    assert "retracted_original" in r.json()["error"]["detail"]
+
+    # The decisive assertion: the row is UNHARMED. A rejected write must not be a
+    # partial write.
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None and after.content == "patchme"
+
+
+def test_patch_accepts_a_retract_shaped_body(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """Retraction must keep working. This is the caller contract, not an internal one.
+
+    Musubi is append-only: a false memory cannot be deleted, only rewritten to say
+    that it lied. ``memory-data musubi retract`` is the fleet's ONLY mechanism for
+    neutralising a falsehood, and it PATCHes exactly this shape:
+
+        {"content": ..., "summary": ..., "tags": [...], "importance": 1}
+
+    The first cut of the PATCH allowlist omitted ``content`` — so every retraction
+    across the fleet would have started returning 400. A memory-integrity fix that
+    disables the tool for fixing memory is worse than the bug it closes.
+
+    The tests I wrote for my own fix could not have caught this: they exercised the
+    code I had just written, not the callers that depend on it. Caught by Yua in
+    adversarial review (PR #398, 2026-07-11). Hence this test — it asserts the
+    CONTRACT, from the caller's side.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(
+            EpisodicMemory(namespace=namespace, content="a claim that turned out to be false")
+        )
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={
+            "content": "RETRACTED 2026-07-11. This memory was FALSE. Do not act on it.",
+            "summary": "RETRACTED: this memory was false.",
+            "tags": ["retracted", "kind:episode", "staleness:episodic"],
+            "importance": 1,
+        },
+    )
+    assert r.status_code == 200, f"retraction must not be refused, got {r.status_code}: {r.text}"
+
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None
+    assert after.content.startswith("RETRACTED"), "the retraction text must actually land"
+    assert after.importance == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1266,3 +1472,320 @@ def test_rate_limit_resets_per_minute_window(
 )
 def test_protobuf_via_grpc_matches_rest_semantics_writes() -> None:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Curated corrupted-row regressions (2026-07-11, PR #398 review by Yua)
+#
+# The episodic fix was proposed as complete. It was not: `writes_curated` carried
+# BOTH bugs in full. Curated is the plane that matters most — it is the shared
+# settled-truth layer every agent reads as fact. A false row here that cannot be
+# removed is permanent false ground for the whole fleet.
+# ---------------------------------------------------------------------------
+
+
+def _seed_curated(client: TestClient, headers: dict[str, str], namespace: str, slug: str) -> str:
+    import hashlib
+
+    body_text = f"curated body for {slug}"
+    r = client.post(
+        "/v1/curated",
+        headers=headers,
+        json={
+            "namespace": namespace,
+            "title": f"curated {slug}",
+            "content": body_text,
+            "vault_path": f"curated/eric/{slug}.md",
+            "body_hash": hashlib.sha256(body_text.encode()).hexdigest(),
+        },
+    )
+    assert r.status_code == 202, r.text
+    return str(r.json()["object_id"])
+
+
+def _brick_curated(qdrant: QdrantClient, object_id: str) -> None:
+    """Write an unmodeled payload key straight into Qdrant, bypassing the API —
+    reproducing the state a real row would be in, not the state the new allowlist
+    would permit."""
+    from musubi.planes.curated.plane import _point_id
+
+    qdrant.set_payload(
+        collection_name="musubi_curated",
+        payload={"retracted_original": "an unmodeled key the read model forbids"},
+        points=[_point_id(object_id)],
+        wait=True,  # the test reads this back immediately; without wait it can race
+    )
+
+
+def test_curated_patch_rejects_unknown_fields(
+    client: TestClient,
+    api_settings: Settings,
+) -> None:
+    """A five-name denylist guarded the shared truth plane. Everything it had not
+    imagined became permanent, unreadable, unremovable false ground."""
+    namespace = "eric/claude-code/curated"
+    headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
+    oid = _seed_curated(client, headers, namespace, "reject-unknown")
+
+    r = client.patch(
+        f"/v1/curated/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+        json={"retracted_original": "this would have bricked shared truth forever"},
+    )
+    assert r.status_code == 400, f"unknown PATCH field must be refused, got {r.status_code}"
+    assert "retracted_original" in r.json()["error"]["detail"]
+
+    # The row is UNHARMED — a rejected write must not be a partial write.
+    got = client.get(f"/v1/curated/{oid}", headers=headers, params={"namespace": namespace})
+    assert got.status_code == 200, "the row must still be readable after a refused PATCH"
+
+
+def test_curated_corrupted_row_can_still_be_archived(
+    client: TestClient,
+    api_settings: Settings,
+    qdrant: QdrantClient,
+) -> None:
+    """`delete_curated` guarded with a deserializing `get()` it never used — so a
+    corrupted curated row could not even be archived out of the way."""
+    namespace = "eric/claude-code/curated"
+    headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
+    oid = _seed_curated(client, headers, namespace, "archive-bricked")
+    _brick_curated(qdrant, oid)
+
+    # Precondition: genuinely unreadable, and for the reason we think.
+    got = client.get(f"/v1/curated/{oid}", headers=headers, params={"namespace": namespace})
+    assert got.status_code == 500, "fixture must reproduce a real corrupted row"
+
+    r = client.delete(
+        f"/v1/curated/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+    )
+    assert r.status_code == 200, f"corrupted curated row must be archivable, got {r.text}"
+
+    # Assert it landed on disk, not merely that the handler returned 200.
+    from musubi.planes.curated.plane import _point_id
+
+    points = qdrant.retrieve(
+        collection_name="musubi_curated", ids=[_point_id(oid)], with_payload=True
+    )
+    assert points and points[0].payload
+    assert points[0].payload["state"] == "archived"
+
+
+def test_patch_empty_content_is_refused_and_row_unharmed(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """PATCH/read validation parity — the allowlist alone was not enough.
+
+    `PatchEpisodicRequest.content` was declared `str | None` (unconstrained), while the
+    persisted `MemoryObject.content` is `Field(min_length=1)`. So `{"content": ""}` passed
+    the REQUEST model, persisted via `set_payload`, and then failed the REFRESH read with
+    `string_too_short` — recreating the exact 500-after-corruption failure this PR exists
+    to kill. My fix for the bricking bug introduced a new way to brick a row.
+
+    The allowlist stops unknown KEYS. It does nothing about invalid VALUES of known keys.
+    Caught by Yua, rev2 review.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"content": ""},
+    )
+    assert r.status_code in (400, 422), f"empty content must be refused, got {r.status_code}"
+
+    # The decisive assertion: the row is STILL READABLE. A refused write must not persist.
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None and after.content == "intact"
+
+
+def test_hard_delete_removes_an_identity_damaged_row_via_http(
+    client: TestClient,
+    api_settings: Settings,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+) -> None:
+    """The OPERATOR route must remove a row whose payload identifiers are gone.
+
+    Rev3 hardened `EpisodicPlane.delete()` with deterministic point-ID addressing — and
+    left THIS route calling payload-filtered `plane.exists()` and deleting via an
+    `object_id` payload filter. So a row that had lost its `namespace`/`object_id` keys
+    returned 404 and stayed stored, through the very path the fleet and operators actually
+    use. The path nobody calls was fixed; the path that failed in production was not.
+    (Yua, rev3 review of PR #398.)
+    """
+    from musubi.planes.episodic.plane import episodic_point_id
+    from musubi.store.raw_lookup import retrieve_by_point_id
+
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(
+            EpisodicMemory(namespace=namespace, content="identity-will-be-stripped")
+        )
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    pid = episodic_point_id(oid)
+
+    # Destroy the identifiers every payload-filtered lookup searches by.
+    qdrant.clear_payload(collection_name="musubi_episodic", points_selector=[pid], wait=True)
+    assert retrieve_by_point_id(qdrant, "musubi_episodic", point_id=pid) == {}, (
+        "fixture must leave the point present but identity-damaged"
+    )
+
+    token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])
+    r = client.delete(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"namespace": namespace, "hard": "true"},
+    )
+    assert r.status_code == 204, f"identity-damaged row must be removable via HTTP, got {r.text}"
+
+    # Gone from storage, not merely reported gone.
+    assert retrieve_by_point_id(qdrant, "musubi_episodic", point_id=pid) is None
+
+
+def test_patch_explicit_null_unknown_field_is_rejected_not_silently_dropped(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """An explicit null must not become a FALSE SUCCESS.
+
+    Both PATCH handlers built `incoming` with `model_dump(exclude_none=True)`, which drops
+    explicitly-supplied nulls BEFORE the allowlist and the canonical merged-row guard ever
+    see them. So:
+
+        PATCH {"retracted_original": null}  ->  incoming == {}  ->  200 OK, nothing written
+
+    The endpoint returned success without applying the mutation and without rejecting it.
+    The caller believes an unknown field was accepted. That is the defect this entire PR is
+    about — a component reporting success without doing the work — sitting in the guard
+    written to prevent it. (Yua, review of d5c7e0f.)
+
+    `exclude_unset=True` preserves the caller's actual key set, so unknown keys are rejected
+    whatever their value.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"retracted_original": None},
+    )
+    assert r.status_code == 400, (
+        f"an unknown field must be rejected whatever its value; a null must not be silently "
+        f"dropped into a no-op 200. Got {r.status_code}."
+    )
+    assert "retracted_original" in r.json()["error"]["detail"]
+
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None and after.content == "intact"
+
+
+def test_patch_explicit_null_on_a_known_field_is_judged_by_the_canonical_model(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """`{"content": null}` was treated as omission. It is not an omission — it is a request
+    to set content to null, which the persisted model forbids. It must be judged, not
+    silently discarded, and the row must survive either way."""
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(EpisodicMemory(namespace=namespace, content="intact"))
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"content": None},
+    )
+    assert r.status_code in (400, 422), f"a null content must be judged, not dropped: {r.text}"
+
+    # Whatever the verdict, the row is UNHARMED.
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None and after.content == "intact"
+
+
+def test_curated_patch_explicit_null_unknown_field_is_rejected(
+    client: TestClient,
+    api_settings: Settings,
+) -> None:
+    """Same false-success on the shared-truth plane. Both handlers used exclude_none, so an
+    explicit null on an unknown field became a no-op 200 on CURATED too.
+
+    Testing the class, not the example — that is the mistake that produced the previous
+    three commits.
+    """
+    namespace = "eric/claude-code/curated"
+    headers = {"Authorization": f"Bearer {mint_token(api_settings, scopes=[f'{namespace}:rw'])}"}
+    oid = _seed_curated(client, headers, namespace, "explicit-null")
+
+    r = client.patch(
+        f"/v1/curated/{oid}",
+        headers=headers,
+        params={"namespace": namespace},
+        json={"retracted_original": None},
+    )
+    assert r.status_code == 400, f"unknown field must be rejected even when null: {r.text}"
+    assert "retracted_original" in r.json()["error"]["detail"]
+
+    got = client.get(f"/v1/curated/{oid}", headers=headers, params={"namespace": namespace})
+    assert got.status_code == 200, "the row must be unharmed by a refused PATCH"
+
+
+def test_patch_omitted_field_is_still_omitted(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+) -> None:
+    """`exclude_unset` must not turn omission into a null write.
+
+    Fixing the null bug by switching to exclude_unset would be worthless if it then wrote
+    `None` over every field the caller simply did not mention. A PATCH of one field must
+    leave the others exactly as they were.
+    """
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(
+            EpisodicMemory(namespace=namespace, content="keep me", summary="keep this too")
+        )
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    r = client.patch(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        params={"namespace": namespace},
+        json={"importance": 9},  # content and summary NOT mentioned
+    )
+    assert r.status_code == 200, r.text
+
+    after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
+    assert after is not None
+    assert after.importance == 9
+    assert after.content == "keep me", "an omitted field must not be nulled"
+    assert after.summary == "keep this too", "an omitted field must not be nulled"

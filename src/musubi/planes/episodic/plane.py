@@ -31,14 +31,22 @@ Design notes:
 from __future__ import annotations
 
 import uuid
-from typing import Any, Literal
+from typing import Any, Literal, cast, get_args
 
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
 from musubi.store.names import collection_for_plane
+from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
+from musubi.types.common import (
+    KSUID,
+    LifecycleState,
+    Namespace,
+    epoch_of,
+    utc_now,
+    validate_namespace,
+)
 from musubi.types.episodic import EpisodicMemory
 from musubi.types.lifecycle_event import LifecycleEvent
 
@@ -454,10 +462,37 @@ class EpisodicPlane:
     # Read
     # ------------------------------------------------------------------
 
+    async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
+        """Is this row present? Answered WITHOUT deserializing it.
+
+        ``get()`` model-validates, so it raises on a corrupted row — which meant any
+        caller using it merely to ask "is it there?" inherited a hard failure on
+        exactly the rows that are broken, and a corrupted row could not be deleted or
+        archived. The removability of a memory must never depend on that memory being
+        valid. See :mod:`musubi.store.raw_lookup`.
+        """
+        return point_exists(
+            self._client, self._collection, namespace=namespace, object_id=object_id
+        )
+
+    async def raw_payload(self, *, namespace: Namespace, object_id: KSUID) -> dict[str, Any] | None:
+        """The stored payload exactly as persisted — never model-validated.
+
+        The inspection/repair door for a row the model refuses to open. Treat every key
+        as untrusted: ``.get()`` with a default, never index.
+        """
+        return raw_payload(self._client, self._collection, namespace=namespace, object_id=object_id)
+
     async def get(
         self, *, namespace: Namespace, object_id: KSUID, bump_access: bool = True
     ) -> EpisodicMemory | None:
-        """Fetch one object by id, scoped to ``namespace``."""
+        """Fetch one object by id, scoped to ``namespace``.
+
+        Raises if the stored payload does not satisfy the ``EpisodicMemory`` model.
+        If you only need to know whether the object is *there*, call
+        :meth:`exists` — it does not deserialize, so it still answers for a
+        corrupted row.
+        """
         records, _ = self._client.scroll(
             collection_name=self._collection,
             scroll_filter=models.Filter(
@@ -638,9 +673,78 @@ class EpisodicPlane:
         if not is_operator:
             raise PermissionError("operator scope required")
 
-        current = await self.get(namespace=namespace, object_id=object_id, bump_access=False)
-        if not current:
+        # Read RAW, not typed. This path used to call `self.get()`, which
+        # model-validates — so a row carrying an unmodeled payload key raised here,
+        # and the delete never ran. That made a corrupted row undeletable through the
+        # SDK exactly as it was through the API, and the router-level fix does not
+        # protect direct callers (Yua, PR #398 review, 2026-07-11).
+        #
+        # We still need the prior state for the lifecycle event's `from_state`, so we
+        # cannot skip the read — but we must not let the MODEL decide whether a delete
+        # is allowed to proceed. Deleting a memory must never depend on that memory
+        # being valid; that is the whole defect.
+        # Address the point DIRECTLY, not through a payload filter. `raw_payload()` finds a
+        # row by its `namespace`/`object_id` PAYLOAD fields — so a row that has lost or
+        # malformed those very keys is invisible to it, and would once again be
+        # undeletable-because-broken. The point ID is derived deterministically from the
+        # object_id, so it addresses the row no matter what the payload says.
+        # (Yua, rev2 review of PR #398.)
+        payload = retrieve_by_point_id(
+            self._client, self._collection, point_id=_point_id(object_id)
+        )
+        if payload is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
+
+        # Namespace isolation still has to hold — but ONLY when the stored value is a
+        # namespace AT ALL, judged by the CANONICAL contract, not by a local approximation.
+        #
+        # This took three attempts, and the failures are worth naming because they are the
+        # same failure:
+        #
+        #   1. `stored_ns is not None and stored_ns != namespace`
+        #      Handled a MISSING namespace. A namespace corrupted to a list/int/dict is
+        #      not-None and unequal → LookupError → undeletable because corrupted.
+        #
+        #   2. `isinstance(stored_ns, str) and stored_ns != namespace`
+        #      Fixed exactly the examples the reviewer had listed (list/int/dict) and left
+        #      the CLASS open. A namespace corrupted to `""`, `"garbage"`, a missing plane
+        #      component, or bad casing is a *string* → still unequal → still undeletable.
+        #      I implemented the examples instead of the class: a denylist of remembered
+        #      mistakes, which is the exact unsound pattern this whole PR exists to remove.
+        #
+        #   3. This. `validate_namespace` is the canonical contract
+        #      (`tenant/presence/plane`, lowercase). A stored value that does not satisfy it
+        #      is not a namespace — it is damage.
+        #
+        # The rule, stated once: **isolation is enforced against a namespace that is
+        # canonically VALID and different. Anything else — missing, non-string, or invalid
+        # under the canonical contract — is corruption, and corruption must be removable.**
+        # Operator scope already gates this path.
+        # (Copilot found the class; Yua found that I had fixed only its examples.)
+        stored_ns = payload.get("namespace")
+        stored_ns_is_canonical = False
+        if isinstance(stored_ns, str):
+            try:
+                validate_namespace(stored_ns)
+                stored_ns_is_canonical = True
+            except ValueError:
+                stored_ns_is_canonical = False  # a string, but not a namespace: damage
+        if stored_ns_is_canonical and stored_ns != namespace:
+            raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
+
+        # Normalize the prior state DELIBERATELY. A corrupted row may carry a `state` that
+        # is not a LifecycleState at all, and `model_construct` skips validation — so
+        # writing it through raw would emit an audit record that violates the very contract
+        # LifecycleEvent declares. We record the weakest honest claim ("provisional") and
+        # preserve the truth in `reason`, rather than fabricating a state that looks valid.
+        raw_state = payload.get("state")
+        from_state: LifecycleState = (
+            cast(LifecycleState, raw_state)
+            if raw_state in get_args(LifecycleState)
+            else "provisional"
+        )
+        if from_state != raw_state:
+            reason = f"{reason} [prior state unreadable ({raw_state!r}); normalized for audit]"
 
         now = utc_now()
         from musubi.types.common import generate_ksuid
@@ -651,7 +755,7 @@ class EpisodicPlane:
             object_type="episodic",
             namespace=namespace,
             schema_version=1,
-            from_state=current.state,
+            from_state=from_state,
             to_state="archived",
             actor=actor,
             reason=reason,
