@@ -199,7 +199,7 @@ async def test_sdk_delete_requires_operator(episodic: EpisodicPlane) -> None:
         )
 
 
-async def test_sdk_delete_removes_a_row_whose_namespace_is_MALFORMED(
+async def test_sdk_delete_removes_a_row_whose_namespace_is_CORRUPT(
     episodic: EpisodicPlane, qdrant: QdrantClient
 ) -> None:
     """A malformed (not merely missing) namespace must not block deletion.
@@ -222,7 +222,29 @@ async def test_sdk_delete_removes_a_row_whose_namespace_is_MALFORMED(
 
     Found by the Copilot reviewer on PR #398 — whose five reviews I had not read.
     """
-    for bad_ns in (["a", "b"], 12345, {"ns": "x"}):
+    # EVERY shape of corruption, not just the ones an example happened to name.
+    #
+    # The first fix was `isinstance(stored_ns, str)` — which repaired list/int/dict damage
+    # and left STRING damage untouched. `""`, `"garbage"`, `"WRONG/Case/episodic"`, a bad
+    # plane: all strings, all still tripped the mismatch guard, all still undeletable
+    # because corrupted.
+    #
+    # I implemented the EXAMPLES the reviewer named instead of the CLASS it named. That is a
+    # denylist of remembered mistakes — the precise unsound pattern this entire PR is about,
+    # committed inside the fix for the fix. (Yua, review of 760f222.)
+    #
+    # The canonical contract is `validate_namespace` (tenant/presence/plane). A stored value
+    # that does not satisfy it is not a namespace — it is damage, and damage is removable.
+    for bad_ns in (
+        ["a", "b"],  # non-string
+        12345,  # non-string
+        {"ns": "x"},  # non-string
+        "",  # string, empty
+        "garbage",  # string, no structure
+        "eric/claude-code",  # string, missing the plane component
+        "eric/claude-code/not-a-plane",  # string, invalid plane
+        "Eric/Claude-Code/episodic",  # string, invalid casing
+    ):
         oid = await _seed(episodic, f"malformed-ns-{bad_ns!r}")
         qdrant.set_payload(
             collection_name=COLLECTION,

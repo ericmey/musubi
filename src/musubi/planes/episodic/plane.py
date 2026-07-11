@@ -39,7 +39,14 @@ from musubi.embedding.base import Embedder
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
+from musubi.types.common import (
+    KSUID,
+    LifecycleState,
+    Namespace,
+    epoch_of,
+    utc_now,
+    validate_namespace,
+)
 from musubi.types.episodic import EpisodicMemory
 from musubi.types.lifecycle_event import LifecycleEvent
 
@@ -688,20 +695,41 @@ class EpisodicPlane:
         if payload is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
 
-        # Namespace isolation still has to hold — but ONLY when the payload can RELIABLY
-        # STATE a namespace, which means: it is a string.
+        # Namespace isolation still has to hold — but ONLY when the stored value is a
+        # namespace AT ALL, judged by the CANONICAL contract, not by a local approximation.
         #
-        # The first cut was `if stored_ns is not None and stored_ns != namespace`. That
-        # handled a MISSING namespace (None → skip the check) and not a MALFORMED one. A row
-        # whose `namespace` key is corrupted to a list, an int, or a dict is `not None` AND
-        # `!= namespace` — so it raised LookupError and became **undeletable because it was
-        # corrupted.** That is the exact defect this whole change exists to kill, recreated
-        # inside the fix for it. (Copilot reviewer on PR #398 — whose reviews I had not read.)
+        # This took three attempts, and the failures are worth naming because they are the
+        # same failure:
         #
-        # A non-string namespace is not a namespace; it is damage. Damage must be removable.
+        #   1. `stored_ns is not None and stored_ns != namespace`
+        #      Handled a MISSING namespace. A namespace corrupted to a list/int/dict is
+        #      not-None and unequal → LookupError → undeletable because corrupted.
+        #
+        #   2. `isinstance(stored_ns, str) and stored_ns != namespace`
+        #      Fixed exactly the examples the reviewer had listed (list/int/dict) and left
+        #      the CLASS open. A namespace corrupted to `""`, `"garbage"`, a missing plane
+        #      component, or bad casing is a *string* → still unequal → still undeletable.
+        #      I implemented the examples instead of the class: a denylist of remembered
+        #      mistakes, which is the exact unsound pattern this whole PR exists to remove.
+        #
+        #   3. This. `validate_namespace` is the canonical contract
+        #      (`tenant/presence/plane`, lowercase). A stored value that does not satisfy it
+        #      is not a namespace — it is damage.
+        #
+        # The rule, stated once: **isolation is enforced against a namespace that is
+        # canonically VALID and different. Anything else — missing, non-string, or invalid
+        # under the canonical contract — is corruption, and corruption must be removable.**
         # Operator scope already gates this path.
+        # (Copilot found the class; Yua found that I had fixed only its examples.)
         stored_ns = payload.get("namespace")
-        if isinstance(stored_ns, str) and stored_ns != namespace:
+        stored_ns_is_canonical = False
+        if isinstance(stored_ns, str):
+            try:
+                validate_namespace(stored_ns)
+                stored_ns_is_canonical = True
+            except ValueError:
+                stored_ns_is_canonical = False  # a string, but not a namespace: damage
+        if stored_ns_is_canonical and stored_ns != namespace:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
 
         # Normalize the prior state DELIBERATELY. A corrupted row may carry a `state` that
