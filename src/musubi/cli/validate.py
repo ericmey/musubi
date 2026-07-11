@@ -34,12 +34,23 @@ So the invariant here is structural, not a promise:
 
     A plane that was not fully scanned CANNOT be counted as clean.
     Any incomplete scan makes the whole run INCOMPLETE and the exit code non-zero.
-    ``clean`` is printed only when every requested plane was scanned end to end.
+    ``clean`` is printed only when every canonical collection was scanned end to end.
 
-An absent *optional* collection (a plane never bootstrapped on this cluster) is a
-distinct, benign outcome — reported as ``absent``, not silently folded into success and
-not treated as a failure. Everything else that stops a scan is an **error**, and an error
-anywhere means this command does not get to say the word "clean".
+**A missing canonical collection counts as NOT SCANNED.** This is the second thing this
+file got wrong. ``absent`` was treated as benign — "an empty plane, nothing to see" — so
+pointing the command at the wrong Qdrant node found no collections at all and printed
+``clean — 0 rows scanned across 7 plane(s)``, exit 0. And the test guarding that behaviour
+was named ``test_absent_collection_is_not_an_error_and_not_a_lie`` while *asserting the
+lie*. (Yua, rev3 review.)
+
+Every collection in ``store/names.py`` is canonical and ``store/collections.py``
+bootstraps all of them. A missing one therefore does not mean an empty plane — it means
+an unbootstrapped, partially initialized, damaged, or **wrong** node. That is not evidence
+that production is clean; it is evidence that we are not looking at production.
+
+``--allow-absent`` exists for a knowingly fresh or partial cluster. Even then the verdict
+is ``clean-partial`` — deliberately a different word, so it can never be mistaken for the
+verdict of a run that actually saw everything.
 """
 
 from __future__ import annotations
@@ -109,8 +120,25 @@ class PlaneResult:
 
     @property
     def complete(self) -> bool:
-        """Did we actually see every row? `absent` counts: there was nothing to see."""
-        return self.status in ("scanned", "absent")
+        """Did we actually see every row of a collection that IS THERE?
+
+        `absent` does NOT count. Every collection in `store/names.py` is canonical and
+        `store/collections.py` bootstraps all of them, so a missing one does not mean
+        "an empty plane" — it means the operator reached an unbootstrapped, partially
+        initialized, damaged, or simply WRONG Qdrant node. That is not evidence that
+        production holds no unreadable rows; it is evidence that we are not looking at
+        production.
+
+        The first cut treated `absent` as complete, so pointing this command at the wrong
+        node produced `clean — 0 rows scanned across 7 plane(s)` and exit 0. The test that
+        was supposed to guard this — `test_absent_collection_is_not_an_error_and_not_a_lie`
+        — asserted `complete is True` and locked the lie in under a name that claimed the
+        opposite. (Yua, rev3 review of PR #398.)
+
+        `--allow-absent` opts into the permissive diagnostic mode for a genuinely fresh or
+        partial cluster, and even then the verdict is `clean-partial`, never `clean`.
+        """
+        return self.status == "scanned"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -205,6 +233,15 @@ def validate_rows(
     ),
     batch: int = typer.Option(256, help="Scroll page size. Must be > 0."),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON for piping."),
+    allow_absent: bool = typer.Option(
+        False,
+        "--allow-absent",
+        help=(
+            "Permissive diagnostic mode: tolerate missing canonical collections (a fresh "
+            "or partially bootstrapped cluster). The verdict becomes `clean-partial`, "
+            "never `clean` — this is NOT a production integrity pass."
+        ),
+    ),
 ) -> None:
     """Scan every persisted row and report the ones their own model can no longer read.
 
@@ -245,8 +282,22 @@ def validate_rows(
         ]
 
     all_broken = [b for r in results for b in r.broken]
-    incomplete = [r for r in results if not r.complete]
+    absent = [r for r in results if r.status == "absent"]
+    errored = [r for r in results if r.status == "error"]
+    # A missing canonical collection is a failure to LOOK, not a clean look at nothing.
+    # --allow-absent downgrades it to a distinct, non-production verdict; it never
+    # produces `clean`.
+    incomplete = errored + ([] if allow_absent else absent)
     total_scanned = sum(r.scanned for r in results)
+
+    if incomplete:
+        verdict = "incomplete"
+    elif all_broken:
+        verdict = "broken"
+    elif absent:
+        verdict = "clean-partial"  # --allow-absent was set and some collections are gone
+    else:
+        verdict = "clean"
 
     if as_json:
         typer.echo(
@@ -255,9 +306,8 @@ def validate_rows(
                     # The verdict is FIRST and explicit. A consumer must not have to
                     # infer health from an empty `broken` list.
                     "complete": not incomplete,
-                    "verdict": (
-                        "incomplete" if incomplete else ("clean" if not all_broken else "broken")
-                    ),
+                    "verdict": verdict,
+                    "absent_collections": [r.collection for r in absent],
                     "scanned": total_scanned,
                     "broken_total": len(all_broken),
                     # Every requested plane appears, including the ones that failed.
@@ -270,23 +320,41 @@ def validate_rows(
     else:
         for r in results:
             if r.status == "error":
-                typer.echo(f"  FAIL {r.plane:9} {'':>6}        SCAN FAILED — {r.error}")
+                typer.echo(f"  FAIL {r.plane:15} {'':>6}       SCAN FAILED — {r.error}")
             elif r.status == "absent":
-                typer.echo(f"  --   {r.plane:9} {'':>6}        collection absent")
+                typer.echo(f"  GONE {r.plane:15} {'':>6}       CANONICAL COLLECTION MISSING")
             else:
                 mark = "OK  " if not r.broken else "BAD "
-                typer.echo(f"  {mark} {r.plane:9} {r.scanned:>6} rows   {len(r.broken)} unreadable")
+                typer.echo(f"  {mark} {r.plane:15} {r.scanned:>6} rows  {len(r.broken)} unreadable")
         typer.echo("")
 
         if incomplete:
-            names = ", ".join(r.plane for r in incomplete)
+            errs = ", ".join(r.plane for r in errored)
+            gone = ", ".join(r.plane for r in absent)
+            typer.echo("INCOMPLETE — this run makes NO claim about integrity.")
+            if errs:
+                typer.echo(f"  could not scan: {errs}")
+            if gone:
+                typer.echo(
+                    f"  canonical collections MISSING: {gone}\n"
+                    f"  Every collection in store/names.py is canonical and is bootstrapped by\n"
+                    f"  store/collections.py. A missing one does not mean an empty plane — it\n"
+                    f"  means this is an unbootstrapped, damaged, or WRONG Qdrant node. You are\n"
+                    f"  not looking at production."
+                )
             typer.echo(
-                f"INCOMPLETE — could not scan: {names}.\n"
-                f"This run makes NO claim about integrity. {len(all_broken)} unreadable "
-                f"row(s) were found in the planes that did scan, but the planes above were "
-                f"not read at all, so the real number is UNKNOWN.\n"
-                f"Fix the connection/auth/collection problem and re-run. Do not treat this "
-                f"as clean."
+                f"\n  {len(all_broken)} unreadable row(s) were found in the planes that DID "
+                f"scan, but the planes above were not read, so the real number is UNKNOWN.\n"
+                f"  Fix it and re-run. Do not treat this as clean.\n"
+                f"  (Use --allow-absent only for a knowingly fresh/partial cluster — the "
+                f"verdict is then `clean-partial`, never a production pass.)"
+            )
+        elif absent:
+            gone = ", ".join(r.plane for r in absent)
+            typer.echo(
+                f"clean-partial — {total_scanned} rows scanned; every one readable by its "
+                f"model.\nBUT these canonical collections are MISSING and were never scanned: "
+                f"{gone}.\nThis is NOT a production integrity pass. --allow-absent was set."
             )
         elif not all_broken:
             typer.echo(

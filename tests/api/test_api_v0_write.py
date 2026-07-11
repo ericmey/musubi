@@ -1606,3 +1606,50 @@ def test_patch_empty_content_is_refused_and_row_unharmed(
     # The decisive assertion: the row is STILL READABLE. A refused write must not persist.
     after = asyncio.run(episodic.get(namespace=namespace, object_id=oid))
     assert after is not None and after.content == "intact"
+
+
+def test_hard_delete_removes_an_identity_damaged_row_via_http(
+    client: TestClient,
+    api_settings: Settings,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+) -> None:
+    """The OPERATOR route must remove a row whose payload identifiers are gone.
+
+    Rev3 hardened `EpisodicPlane.delete()` with deterministic point-ID addressing — and
+    left THIS route calling payload-filtered `plane.exists()` and deleting via an
+    `object_id` payload filter. So a row that had lost its `namespace`/`object_id` keys
+    returned 404 and stayed stored, through the very path the fleet and operators actually
+    use. The path nobody calls was fixed; the path that failed in production was not.
+    (Yua, rev3 review of PR #398.)
+    """
+    from musubi.planes.episodic.plane import episodic_point_id
+    from musubi.store.raw_lookup import retrieve_by_point_id
+
+    namespace = "eric/claude-code/episodic"
+
+    async def _seed() -> str:
+        saved = await episodic.create(
+            EpisodicMemory(namespace=namespace, content="identity-will-be-stripped")
+        )
+        return str(saved.object_id)
+
+    oid = asyncio.run(_seed())
+    pid = episodic_point_id(oid)
+
+    # Destroy the identifiers every payload-filtered lookup searches by.
+    qdrant.clear_payload(collection_name="musubi_episodic", points_selector=[pid], wait=True)
+    assert retrieve_by_point_id(qdrant, "musubi_episodic", point_id=pid) == {}, (
+        "fixture must leave the point present but identity-damaged"
+    )
+
+    token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])
+    r = client.delete(
+        f"/v1/episodic/{oid}",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"namespace": namespace, "hard": "true"},
+    )
+    assert r.status_code == 204, f"identity-damaged row must be removable via HTTP, got {r.text}"
+
+    # Gone from storage, not merely reported gone.
+    assert retrieve_by_point_id(qdrant, "musubi_episodic", point_id=pid) is None

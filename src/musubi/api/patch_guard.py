@@ -37,9 +37,17 @@ before touching disk: merge the patch onto the current raw payload, validate the
 against the real persisted model, and only write if the row that would result is a row the
 system can actually read.
 
+    Never persist what you cannot read back.
+
 That makes the invariant total rather than remembered. Any present or future divergence
 between a request model and its persisted model becomes a clean 400 with a real message,
 instead of a 500 and a dead memory.
+
+**What this does NOT do: repair.** It prevents a readable row from being broken. It cannot
+un-break an already-broken one — merging an allowed patch onto a payload that still holds
+an unknown key correctly fails validation, and PATCH has no way to *remove* that key.
+Repair of existing corrupt rows is a separate raw operator path (or a hard delete). Said
+plainly so the next reader does not mistake this for a repair tool.
 """
 
 from __future__ import annotations
@@ -77,8 +85,20 @@ def assert_readable_after_patch(
     """Validate the row that WOULD result, before any of it is persisted.
 
     ``current_payload`` is the raw, un-deserialized payload (see
-    :mod:`musubi.store.raw_lookup`) — raw on purpose, so this guard still functions on a
-    row that is *already* corrupted and is now being repaired.
+    :mod:`musubi.store.raw_lookup`) — raw on purpose, so reading it does not itself blow
+    up on an already-corrupted row.
+
+    **Scope, stated precisely: this PREVENTS FURTHER CORRUPTION. It does not repair.**
+
+    An earlier draft of this docstring claimed the guard "still works while repairing an
+    already-corrupted row." That overclaimed. If the stored payload already carries an
+    unknown key, merging an allowed patch onto it still fails canonical validation — and
+    it *should*, because the merged row genuinely would not be readable. PATCH cannot
+    remove an unknown key; nothing in the write path can. Repairing an existing corrupt
+    row needs a separate raw operator path (or a hard delete). The honest statement is:
+    a clean row can never be broken through here, and a broken row cannot be healed
+    through here either. (Yua, rev3 review of PR #398 — a doc that promises more than the
+    code delivers is the same class of defect as the code that started this.)
 
     Raises ``APIError(400)`` if the merged row would not satisfy ``model``. Writes nothing
     either way; the caller only reaches ``set_payload`` if this returns.

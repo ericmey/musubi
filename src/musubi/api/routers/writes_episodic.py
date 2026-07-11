@@ -426,14 +426,26 @@ async def delete_episodic(
     :class:`AuthContext` that the outer ``require_auth`` dependency has
     already attached to ``request.state.auth``.
 
-    Both paths guard existence with ``plane.exists()``, NOT ``plane.get()``.
-    ``get()`` deserializes into the strict ``EpisodicMemory`` model, so a row with
-    an unmodeled payload key raised a 500 *inside the 404-guard* — before the
-    delete ran. The result was that a corrupted row could be neither hard-deleted
-    nor archived: it was unremovable precisely because it was broken, which is
-    exactly backwards. Neither path needs the deserialized object (the hard path
-    deletes by ``object_id`` filter; the soft path calls ``transition()`` by id),
-    so neither path should ever have been able to fail on a bad payload."""
+    Neither path deserializes the row. ``get()`` model-validates, so a row with an
+    unmodeled payload key raised a 500 *inside the 404-guard*, before the delete ran —
+    the row was unremovable precisely because it was broken, which is exactly backwards.
+
+    **The hard path delegates to ``plane.delete()``.** It used to do its own
+    ``plane.exists()`` check and then delete via an ``object_id`` PAYLOAD FILTER — both
+    of which locate the row by payload fields. So a row that had lost or malformed its
+    ``namespace`` / ``object_id`` keys returned 404 and stayed stored, **through the very
+    route the fleet and operators actually use.** Rev3 hardened the SDK method with
+    deterministic point-ID addressing and left this route on the old contract: the path
+    nobody calls was fixed, and the path that actually failed in production was not.
+    (Yua, rev3 review of PR #398.)
+
+    ``plane.delete()`` addresses the point by its deterministic ID, enforces the stored
+    namespace when the payload can state one, normalizes an unreadable prior state for the
+    audit record, and emits the LifecycleEvent. One hardened contract, one place.
+
+    The soft path remains payload-filtered by design: archiving requires constructing a
+    valid lifecycle transition, which an identity-damaged row cannot support. Such a row
+    is removable (hard delete), not archivable — and removable is what matters."""
     if hard:
         ctx = getattr(request.state, "auth", None)
         if ctx is None or "operator" not in (ctx.scopes or ()):
@@ -442,24 +454,20 @@ async def delete_episodic(
                 code="FORBIDDEN",
                 detail="hard delete requires operator scope; pass an operator token",
             )
-        if not await plane.exists(namespace=namespace, object_id=object_id):
+        try:
+            await plane.delete(
+                namespace=namespace,
+                object_id=object_id,
+                actor="api-hard-delete",
+                reason="api-hard-delete",
+                is_operator=True,
+            )
+        except LookupError as exc:
             raise APIError(
                 status_code=404,
                 code="NOT_FOUND",
                 detail=f"episodic {object_id!r} not found in namespace {namespace!r}",
-            )
-        from qdrant_client import models as _qm
-
-        qdrant.delete(
-            collection_name="musubi_episodic",
-            points_selector=_qm.FilterSelector(
-                filter=_qm.Filter(
-                    must=[
-                        _qm.FieldCondition(key="object_id", match=_qm.MatchValue(value=object_id)),
-                    ]
-                )
-            ),
-        )
+            ) from exc
         return Response(status_code=204)
     if not await plane.exists(namespace=namespace, object_id=object_id):
         raise APIError(

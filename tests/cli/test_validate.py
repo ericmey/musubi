@@ -91,11 +91,10 @@ def test_every_canonical_collection_is_swept() -> None:
     This test exists so the mapping cannot fall behind `names.py` again: add a collection
     there and this fails until you add it here.
     """
-    from musubi.store.names import _PLANE_TO_COLLECTION
+    from musubi.store.names import COLLECTION_NAMES
 
     swept = {collection for collection, _ in _PLANE_MODELS.values()}
-    canonical = set(_PLANE_TO_COLLECTION.values()) | {"musubi_artifact_chunks"}
-    missing = canonical - swept
+    missing = set(COLLECTION_NAMES) - swept
     assert not missing, f"these canonical collections are NOT swept: {sorted(missing)}"
 
 
@@ -205,19 +204,53 @@ def test_broken_row_is_reported_with_the_offending_key(monkeypatch: pytest.Monke
     assert "3GJhJLAvYXzIp8Qe8tuPHR9S9th" in result.stdout
 
 
-def test_absent_collection_is_not_an_error_and_not_a_lie(
+def test_all_collections_missing_is_never_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point at the WRONG QDRANT NODE and every collection 404s. This must not say clean.
+
+    This is the test that was here before, inverted. The old one was called
+    `test_absent_collection_is_not_an_error_and_not_a_lie` and it asserted
+    `complete is True` and exit 0 — it LOCKED IN the lie, under a name that claimed the
+    opposite. With every canonical collection absent the command printed
+    `clean — 0 rows scanned across 7 plane(s)`.
+
+    A missing canonical collection is not an empty plane. `store/names.py` declares all
+    seven canonical and `store/collections.py` bootstraps every one, so absence means an
+    unbootstrapped, damaged, or wrong node. That is not evidence production is clean; it
+    is evidence we are not looking at production. (Yua, rev3 review.)
+    """
+    result = _run(monkeypatch, {})  # nothing exists → every scroll 404s
+
+    assert result.exit_code == EXIT_INCOMPLETE, "a wrong/empty node must never exit 0"
+    assert "clean —" not in result.stdout
+    assert "INCOMPLETE" in result.stdout
+    assert "WRONG Qdrant node" in result.stdout
+
+
+def test_one_missing_canonical_collection_is_never_clean(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A plane never bootstrapped on this cluster is `absent` — benign, and distinct
-    from both `clean` and `error`. It must not be silently folded into success."""
+    """Six planes scan clean, one collection is missing. Still not a production pass."""
     behaviour = dict(ALL_EMPTY)
-    del behaviour["musubi_thought"]  # 404 → absent
+    del behaviour["musubi_thought"]
 
-    result = _run(monkeypatch, behaviour, "--json")
+    result = _run(monkeypatch, behaviour)
+    assert result.exit_code == EXIT_INCOMPLETE
+    assert "clean —" not in result.stdout
+    assert "CANONICAL COLLECTION MISSING" in result.stdout
+
+
+def test_allow_absent_is_clean_partial_never_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The permissive escape hatch exists for a knowingly fresh cluster — and even then it
+    must NOT be able to produce the same verdict as a fully scanned clean run."""
+    behaviour = dict(ALL_EMPTY)
+    del behaviour["musubi_thought"]
+
+    result = _run(monkeypatch, behaviour, "--allow-absent", "--json")
     doc = json.loads(result.stdout)
-    thought = next(p for p in doc["planes"] if p["plane"] == "thought")
-    assert thought["status"] == "absent"
-    assert doc["complete"] is True, "an absent collection does not make the run incomplete"
+
+    assert doc["verdict"] == "clean-partial", "must be distinguishable from a real clean run"
+    assert doc["verdict"] != "clean"
+    assert doc["absent_collections"] == ["musubi_thought"]
     assert result.exit_code == 0
 
 
