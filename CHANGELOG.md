@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.6](https://github.com/ericmey/musubi/compare/v1.11.5...v1.11.6) (2026-07-11)
+
+
+### Bug Fixes
+
+* **api:** a corrupted memory must be removable, must not be creatable, and retraction must keep working ([#398](https://github.com/ericmey/musubi/issues/398)) ([4f574da](https://github.com/ericmey/musubi/commit/4f574da285f8e3a3854e0d84c09d70212dbda026))
+
 ## [1.11.5](https://github.com/ericmey/musubi/compare/v1.11.4...v1.11.5) (2026-06-29)
 
 
