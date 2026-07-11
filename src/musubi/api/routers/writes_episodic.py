@@ -367,9 +367,13 @@ async def patch_episodic(
     # already been destroyed.
     reject_unknown_fields(incoming, _PATCHABLE_FIELDS, plane="episodic")
 
-    # Read RAW — this must still work on a row that is already corrupted and is being
-    # repaired. `raw_payload()` returns None only when the point is absent, which is the
-    # 404 below.
+    # Read RAW so that READING does not itself blow up on an already-corrupted row.
+    # `raw_payload()` returns None only when the point is absent, which is the 404 below.
+    #
+    # NOT a repair path: `assert_readable_after_patch()` will still refuse a patch whose
+    # merged result is unreadable, and a row that already carries an unknown key stays
+    # unreadable no matter what we patch — PATCH cannot REMOVE a key. Repair is a hard
+    # delete or a separate raw operator path. (Copilot reviewer, PR #398.)
     current_raw = await plane.raw_payload(namespace=namespace, object_id=object_id)
     if current_raw is None:
         raise APIError(

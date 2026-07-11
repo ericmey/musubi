@@ -129,7 +129,9 @@ async def patch_curated(
         )
     reject_unknown_fields(incoming, _PATCHABLE_FIELDS, plane="curated")
 
-    # Read RAW so this still works on an already-corrupted row being repaired.
+    # Read RAW so that READING does not itself blow up on an already-corrupted row.
+    # NOT a repair path — see musubi.api.patch_guard: this prevents further corruption, it
+    # cannot heal an existing one (PATCH cannot remove an unknown key).
     current_raw = await plane.raw_payload(namespace=namespace, object_id=object_id)
     if current_raw is None:
         raise APIError(

@@ -612,6 +612,7 @@ def _brick(episodic: EpisodicPlane, qdrant: QdrantClient, namespace: str, conten
         collection_name="musubi_episodic",
         payload={"retracted_original": "an unmodeled key the read model forbids"},
         points=[episodic_point_id(oid)],
+        wait=True,  # the test reads this back immediately; without wait it can race
     )
     # Precondition: the row is genuinely unreadable, and unreadable for the REASON we
     # think. A bare `pytest.raises(Exception)` would pass on a typo, a connection
@@ -1512,6 +1513,7 @@ def _brick_curated(qdrant: QdrantClient, object_id: str) -> None:
         collection_name="musubi_curated",
         payload={"retracted_original": "an unmodeled key the read model forbids"},
         points=[_point_id(object_id)],
+        wait=True,  # the test reads this back immediately; without wait it can race
     )
 
 

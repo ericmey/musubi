@@ -688,12 +688,20 @@ class EpisodicPlane:
         if payload is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
 
-        # Namespace isolation still has to hold — but only when the payload can actually
-        # tell us the namespace. A row whose namespace key is gone is corrupt, and refusing
-        # to delete it on isolation grounds would recreate the defect. Delete it; the
-        # operator scope already gates this path.
+        # Namespace isolation still has to hold — but ONLY when the payload can RELIABLY
+        # STATE a namespace, which means: it is a string.
+        #
+        # The first cut was `if stored_ns is not None and stored_ns != namespace`. That
+        # handled a MISSING namespace (None → skip the check) and not a MALFORMED one. A row
+        # whose `namespace` key is corrupted to a list, an int, or a dict is `not None` AND
+        # `!= namespace` — so it raised LookupError and became **undeletable because it was
+        # corrupted.** That is the exact defect this whole change exists to kill, recreated
+        # inside the fix for it. (Copilot reviewer on PR #398 — whose reviews I had not read.)
+        #
+        # A non-string namespace is not a namespace; it is damage. Damage must be removable.
+        # Operator scope already gates this path.
         stored_ns = payload.get("namespace")
-        if stored_ns is not None and stored_ns != namespace:
+        if isinstance(stored_ns, str) and stored_ns != namespace:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
 
         # Normalize the prior state DELIBERATELY. A corrupted row may carry a `state` that

@@ -21,6 +21,7 @@ import warnings
 from collections.abc import Iterator
 
 import pytest
+from pydantic import ValidationError
 from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
@@ -132,9 +133,13 @@ async def test_sdk_delete_removes_a_corrupted_row(
         points=[episodic_point_id(oid)],
         wait=True,
     )
-    # Precondition: genuinely unreadable through the typed path.
-    with pytest.raises(Exception):
+    # Precondition: unreadable, and unreadable for the REASON we think. A bare
+    # `pytest.raises(Exception)` would pass on a typo, a missing collection, or a connection
+    # error — proving the row is broken without proving it is broken by `extra_forbidden`,
+    # which is the entire premise of the regression.
+    with pytest.raises(ValidationError) as exc:
         await episodic.get(namespace=NS, object_id=oid)
+    assert any(e["type"] == "extra_forbidden" for e in exc.value.errors())
 
     event = await episodic.delete(
         namespace=NS, object_id=oid, actor="test", reason="regression", is_operator=True
@@ -191,4 +196,44 @@ async def test_sdk_delete_requires_operator(episodic: EpisodicPlane) -> None:
     with pytest.raises(PermissionError):
         await episodic.delete(
             namespace=NS, object_id=oid, actor="test", reason="regression", is_operator=False
+        )
+
+
+async def test_sdk_delete_removes_a_row_whose_namespace_is_MALFORMED(
+    episodic: EpisodicPlane, qdrant: QdrantClient
+) -> None:
+    """A malformed (not merely missing) namespace must not block deletion.
+
+    The isolation guard read:
+
+        stored_ns = payload.get("namespace")
+        if stored_ns is not None and stored_ns != namespace:
+            raise LookupError(...)
+
+    A row whose `namespace` key is corrupted to a list/int/dict is `not None` AND
+    `!= namespace` — so it raised LookupError and became **undeletable because it was
+    corrupted.** That is the precise defect this entire PR exists to kill, recreated inside
+    the fix for it.
+
+    Missing namespace was handled (None → skip the check). Malformed was not. The guard
+    must enforce isolation only when the payload can *reliably state* a namespace — i.e.
+    when it is a string. Anything else is corruption, and corruption must be removable.
+    Operator scope already gates this path.
+
+    Found by the Copilot reviewer on PR #398 — whose five reviews I had not read.
+    """
+    for bad_ns in (["a", "b"], 12345, {"ns": "x"}):
+        oid = await _seed(episodic, f"malformed-ns-{bad_ns!r}")
+        qdrant.set_payload(
+            collection_name=COLLECTION,
+            payload={"namespace": bad_ns},
+            points=[episodic_point_id(oid)],
+            wait=True,
+        )
+        event = await episodic.delete(
+            namespace=NS, object_id=oid, actor="test", reason="regression", is_operator=True
+        )
+        assert event.to_state == "archived"
+        assert retrieve_by_point_id(qdrant, COLLECTION, point_id=episodic_point_id(oid)) is None, (
+            f"a row with a malformed namespace ({bad_ns!r}) must still be removable"
         )
