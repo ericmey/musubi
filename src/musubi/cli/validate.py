@@ -30,27 +30,40 @@ one layer up. (Caught by Yua, rev2 review. It was the third instance of this sha
 single day: the vault's stale-check reported "0 stale" while reading 8 of 164 pages, the
 frontmatter lint could never pass so was never run, and then this.)
 
-So the invariant here is structural, not a promise:
+**A missing canonical collection counts as NOT SCANNED.** The second thing this file got
+wrong. ``absent`` was treated as benign — "an empty plane, nothing to see" — so pointing
+the command at the wrong Qdrant node found no collections at all and printed
+``clean — 0 rows scanned across 7 plane(s)``, exit 0. The test guarding that behaviour was
+named ``test_absent_collection_is_not_an_error_and_not_a_lie`` while *asserting the lie*.
+(Yua, rev3 review.)
 
-    A plane that was not fully scanned CANNOT be counted as clean.
-    Any incomplete scan makes the whole run INCOMPLETE and the exit code non-zero.
-    ``clean`` is printed only when every canonical collection was scanned end to end.
+Every collection in ``store/names.py`` is canonical and ``store/collections.py`` bootstraps
+all of them. A missing one is not an empty plane — it is an unbootstrapped, damaged, or
+**wrong** node. Not evidence that production is clean; evidence that we are not looking at
+production.
 
-**A missing canonical collection counts as NOT SCANNED.** This is the second thing this
-file got wrong. ``absent`` was treated as benign — "an empty plane, nothing to see" — so
-pointing the command at the wrong Qdrant node found no collections at all and printed
-``clean — 0 rows scanned across 7 plane(s)``, exit 0. And the test guarding that behaviour
-was named ``test_absent_collection_is_not_an_error_and_not_a_lie`` while *asserting the
-lie*. (Yua, rev3 review.)
+## Coverage and integrity are SEPARATE AXES
 
-Every collection in ``store/names.py`` is canonical and ``store/collections.py``
-bootstraps all of them. A missing one therefore does not mean an empty plane — it means
-an unbootstrapped, partially initialized, damaged, or **wrong** node. That is not evidence
-that production is clean; it is evidence that we are not looking at production.
+The third thing this file got wrong, and the root of the other two: it folded "did I see
+everything?" and "was what I saw sound?" into a single verdict. So ``--allow-absent``
+mutated the completeness flag, which drove the verdict, which drove the summary — and a run
+that skipped a collection AND found a broken row printed ``clean-partial … every one
+readable by its model`` immediately above ``1 of 1 scanned rows are UNREADABLE``. The output
+contradicted itself in adjacent sentences. (Yua, rev4 review.)
 
-``--allow-absent`` exists for a knowingly fresh or partial cluster. Even then the verdict
-is ``clean-partial`` — deliberately a different word, so it can never be mistaken for the
-verdict of a run that actually saw everything.
+    coverage:  full | partial | incomplete     — did I see everything?
+    integrity: clean | broken | unknown        — was what I saw sound?
+
+They are reported independently and combined into one unambiguous verdict:
+
+    clean | broken | clean-partial | broken-partial | incomplete
+
+Coverage is **never** ``full`` while a canonical collection is missing, whatever flag was
+passed — ``--allow-absent`` changes whether we PROCEED, not whether we LOOKED. Integrity is
+``unknown`` whenever coverage is incomplete: if we did not look, we get no opinion. And the
+human output never claims every row is readable while unreadable rows exist.
+
+Only exit 0 is a production integrity pass.
 """
 
 from __future__ import annotations
@@ -92,19 +105,28 @@ _PLANE_MODELS: dict[str, tuple[str, type[BaseModel]]] = {
     "lifecycle": ("musubi_lifecycle_events", LifecycleEvent),
 }
 
-# Exit codes. A caller must be able to tell "I looked and it is fine" from "I could not
-# look", and those must never be the same number.
+# Exit codes. A caller must be able to distinguish, from the number alone:
+#   "I looked at everything and it is fine"
+#   "I looked at everything and found N bad rows"
+#   "I could not look"
+#   "I looked at SOME of it" — with or without findings
+# None of those may ever collapse into the same number.
 #
-#   0        clean — every requested plane scanned end to end, nothing unreadable
-#   1..250   that many unreadable rows (capped)
-#   251      INCOMPLETE — a scan failed; the result is UNKNOWN
+#   0        clean          — full coverage, nothing unreadable
+#   1..250   N broken rows  — FULL coverage, that many unreadable
+#   251      incomplete     — coverage failed; integrity UNKNOWN
+#   252      clean-partial  — accepted absence; nothing bad in what WAS scanned
+#   253      broken-partial — accepted absence AND unreadable rows found (count in output)
 #
-# EXIT_INCOMPLETE sits ABOVE the broken cap on purpose. The obvious choice (2) would be
-# indistinguishable from "2 broken rows found" — an exit code that means two different
-# things is an instrument that lies, which is the entire subject of this PR.
+# The partial codes sit above the broken cap on purpose. `broken-partial` must NOT collapse
+# into an ordinary fully-scanned broken count: "I found 2 bad rows and saw everything" and
+# "I found 2 bad rows but skipped a collection" are different facts, and a CI gate reading
+# only the exit code must not confuse them. (Yua, rev4 review of PR #398.)
 EXIT_CLEAN = 0
 _MAX_BROKEN_EXIT = 250
 EXIT_INCOMPLETE = 251
+EXIT_CLEAN_PARTIAL = 252
+EXIT_BROKEN_PARTIAL = 253
 
 
 @dataclass
@@ -117,28 +139,6 @@ class PlaneResult:
     scanned: int = 0
     broken: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
-
-    @property
-    def complete(self) -> bool:
-        """Did we actually see every row of a collection that IS THERE?
-
-        `absent` does NOT count. Every collection in `store/names.py` is canonical and
-        `store/collections.py` bootstraps all of them, so a missing one does not mean
-        "an empty plane" — it means the operator reached an unbootstrapped, partially
-        initialized, damaged, or simply WRONG Qdrant node. That is not evidence that
-        production holds no unreadable rows; it is evidence that we are not looking at
-        production.
-
-        The first cut treated `absent` as complete, so pointing this command at the wrong
-        node produced `clean — 0 rows scanned across 7 plane(s)` and exit 0. The test that
-        was supposed to guard this — `test_absent_collection_is_not_an_error_and_not_a_lie`
-        — asserted `complete is True` and locked the lie in under a name that claimed the
-        opposite. (Yua, rev3 review of PR #398.)
-
-        `--allow-absent` opts into the permissive diagnostic mode for a genuinely fresh or
-        partial cluster, and even then the verdict is `clean-partial`, never `clean`.
-        """
-        return self.status == "scanned"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -245,11 +245,20 @@ def validate_rows(
 ) -> None:
     """Scan every persisted row and report the ones their own model can no longer read.
 
+    Coverage and integrity are reported as SEPARATE axes, because they are separate
+    questions and folding them together is how this command last lied:
+
+      coverage:  full | partial | incomplete     — did I see everything?
+      integrity: clean | broken | unknown        — was what I saw sound?
+
     Exit codes:
-      0        clean — every requested plane scanned end to end, no unreadable rows.
-      1..250   that many unreadable rows found.
-      251      INCOMPLETE — at least one plane could not be scanned. The result is
-               UNKNOWN. This is not "clean" and must never be treated as such.
+      0        clean          — full coverage, nothing unreadable.
+      1..250   N broken rows  — FULL coverage, that many unreadable.
+      251      incomplete     — could not scan something. Integrity is UNKNOWN.
+      252      clean-partial  — --allow-absent; nothing bad in what WAS scanned.
+      253      broken-partial — --allow-absent AND unreadable rows found.
+
+    Only exit 0 is a production integrity pass.
     """
     if batch <= 0:
         raise typer.BadParameter("batch must be > 0", param_hint="--batch")
@@ -284,29 +293,56 @@ def validate_rows(
     all_broken = [b for r in results for b in r.broken]
     absent = [r for r in results if r.status == "absent"]
     errored = [r for r in results if r.status == "error"]
-    # A missing canonical collection is a failure to LOOK, not a clean look at nothing.
-    # --allow-absent downgrades it to a distinct, non-production verdict; it never
-    # produces `clean`.
-    incomplete = errored + ([] if allow_absent else absent)
     total_scanned = sum(r.scanned for r in results)
 
-    if incomplete:
-        verdict = "incomplete"
-    elif all_broken:
-        verdict = "broken"
+    # TWO INDEPENDENT AXES. Collapsing them is what produced the last bug.
+    #
+    #   COVERAGE  — did I see everything?     full | partial | incomplete
+    #   INTEGRITY — was what I saw sound?     clean | broken  | unknown
+    #
+    # The previous cut folded `--allow-absent` into a single `incomplete` list, which then
+    # defined `complete`, which then drove the verdict AND the human summary. So an
+    # accepted absence made `complete: true` (it was not), and any absence printed
+    # "every one readable" — directly above the list of unreadable rows. The output
+    # contradicted itself in adjacent sentences. (Yua, rev4 review of PR #398.)
+    #
+    # Coverage is NEVER "full" while a canonical collection is missing, no matter what
+    # flag was passed. `--allow-absent` changes whether we PROCEED, not whether we LOOKED.
+    if errored or (absent and not allow_absent):
+        coverage = "incomplete"
     elif absent:
-        verdict = "clean-partial"  # --allow-absent was set and some collections are gone
+        coverage = "partial"  # absence explicitly accepted — but still not full coverage
     else:
-        verdict = "clean"
+        coverage = "full"
+
+    if coverage == "incomplete":
+        integrity = "unknown"  # we did not look; we get no opinion
+    elif all_broken:
+        integrity = "broken"
+    else:
+        integrity = "clean"
+
+    # A single unambiguous combined verdict, so no consumer has to reason about the pair.
+    verdict = {
+        ("full", "clean"): "clean",
+        ("full", "broken"): "broken",
+        ("partial", "clean"): "clean-partial",
+        ("partial", "broken"): "broken-partial",
+        ("incomplete", "unknown"): "incomplete",
+    }[(coverage, integrity)]
 
     if as_json:
         typer.echo(
             json.dumps(
                 {
-                    # The verdict is FIRST and explicit. A consumer must not have to
-                    # infer health from an empty `broken` list.
-                    "complete": not incomplete,
+                    # Verdict FIRST and explicit. A consumer must not have to infer health
+                    # from an empty `broken` list, nor coverage from a verdict string.
                     "verdict": verdict,
+                    "coverage": coverage,
+                    "integrity": integrity,
+                    # `complete` means FULL coverage. Never true with a canonical
+                    # collection missing, accepted or not.
+                    "complete": coverage == "full",
                     "absent_collections": [r.collection for r in absent],
                     "scanned": total_scanned,
                     "broken_total": len(all_broken),
@@ -328,10 +364,16 @@ def validate_rows(
                 typer.echo(f"  {mark} {r.plane:15} {r.scanned:>6} rows  {len(r.broken)} unreadable")
         typer.echo("")
 
-        if incomplete:
+        # COVERAGE first, INTEGRITY second — always both, always in that order, and never
+        # a sentence that claims one while the other contradicts it.
+        typer.echo(f"VERDICT: {verdict}   (coverage: {coverage}, integrity: {integrity})")
+        typer.echo("")
+
+        # --- coverage ---
+        if coverage == "incomplete":
             errs = ", ".join(r.plane for r in errored)
             gone = ", ".join(r.plane for r in absent)
-            typer.echo("INCOMPLETE — this run makes NO claim about integrity.")
+            typer.echo("COVERAGE — INCOMPLETE. This run makes NO claim about integrity.")
             if errs:
                 typer.echo(f"  could not scan: {errs}")
             if gone:
@@ -343,30 +385,44 @@ def validate_rows(
                     f"  not looking at production."
                 )
             typer.echo(
-                f"\n  {len(all_broken)} unreadable row(s) were found in the planes that DID "
-                f"scan, but the planes above were not read, so the real number is UNKNOWN.\n"
-                f"  Fix it and re-run. Do not treat this as clean.\n"
-                f"  (Use --allow-absent only for a knowingly fresh/partial cluster — the "
-                f"verdict is then `clean-partial`, never a production pass.)"
+                "  Fix it and re-run. Do not treat this as clean.\n"
+                "  (--allow-absent only for a knowingly fresh/partial cluster; even then the\n"
+                "   verdict is clean-partial / broken-partial, never a production pass.)"
             )
-        elif absent:
+        elif coverage == "partial":
             gone = ", ".join(r.plane for r in absent)
             typer.echo(
-                f"clean-partial — {total_scanned} rows scanned; every one readable by its "
-                f"model.\nBUT these canonical collections are MISSING and were never scanned: "
-                f"{gone}.\nThis is NOT a production integrity pass. --allow-absent was set."
+                f"COVERAGE — PARTIAL. These canonical collections are MISSING and were never\n"
+                f"  scanned: {gone}. (--allow-absent was set.)\n"
+                f"  This is NOT a production integrity pass — whatever is in those collections\n"
+                f"  is unknown."
             )
-        elif not all_broken:
+        else:
             typer.echo(
-                f"clean — {total_scanned} rows scanned across {len(results)} plane(s), "
-                f"every one readable by its model."
+                f"COVERAGE — FULL. All {len(results)} canonical collection(s) scanned end to end."
+            )
+
+        # --- integrity, stated separately and only about what was ACTUALLY scanned ---
+        typer.echo("")
+        if integrity == "unknown":
+            typer.echo(
+                f"INTEGRITY — UNKNOWN. {len(all_broken)} unreadable row(s) turned up in the "
+                f"planes that did scan,\n  but coverage is incomplete, so the real number is "
+                f"not known."
+            )
+        elif integrity == "clean":
+            typer.echo(
+                f"INTEGRITY — CLEAN. All {total_scanned} rows THAT WERE SCANNED are readable "
+                f"by their model."
+            )
+        else:
+            typer.echo(
+                f"INTEGRITY — BROKEN. {len(all_broken)} of {total_scanned} scanned rows are "
+                f"UNREADABLE by their own\n  model. These rows cannot be retrieved."
             )
 
         if all_broken:
-            typer.echo(
-                f"\n{len(all_broken)} of {total_scanned} scanned rows are UNREADABLE by "
-                f"their own model. These rows cannot be retrieved.\n"
-            )
+            typer.echo("")
             for b in all_broken:
                 keys = ", ".join(b["unknown_keys"]) or "—"
                 typer.echo(f"  {b['collection']}  {b['namespace']}/{b['object_id']}")
@@ -378,9 +434,11 @@ def validate_rows(
                 "This command will never mutate; repair is a separate, deliberate step."
             )
 
-    # An incomplete scan outranks a clean count. We do not know, and the exit code says so.
-    if incomplete:
+    # Coverage outranks integrity: if we did not look, we do not get to report a count.
+    if coverage == "incomplete":
         raise typer.Exit(code=EXIT_INCOMPLETE)
+    if coverage == "partial":
+        raise typer.Exit(code=EXIT_BROKEN_PARTIAL if all_broken else EXIT_CLEAN_PARTIAL)
     raise typer.Exit(code=min(len(all_broken), _MAX_BROKEN_EXIT))
 
 

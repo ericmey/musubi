@@ -27,7 +27,12 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from typer.testing import CliRunner
 
 from musubi.cli.main import app
-from musubi.cli.validate import _PLANE_MODELS, EXIT_INCOMPLETE
+from musubi.cli.validate import (
+    _PLANE_MODELS,
+    EXIT_BROKEN_PARTIAL,
+    EXIT_CLEAN_PARTIAL,
+    EXIT_INCOMPLETE,
+)
 
 runner = CliRunner()
 
@@ -188,8 +193,9 @@ def test_clean_run_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = _run(monkeypatch, behaviour)
     assert result.exit_code == 0
-    assert "clean" in result.stdout
-    assert "1 rows scanned" in result.stdout or "rows scanned" in result.stdout
+    assert "VERDICT: clean" in result.stdout
+    assert "COVERAGE — FULL" in result.stdout
+    assert "INTEGRITY — CLEAN" in result.stdout
 
 
 def test_broken_row_is_reported_with_the_offending_key(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -249,9 +255,67 @@ def test_allow_absent_is_clean_partial_never_clean(monkeypatch: pytest.MonkeyPat
     doc = json.loads(result.stdout)
 
     assert doc["verdict"] == "clean-partial", "must be distinguishable from a real clean run"
-    assert doc["verdict"] != "clean"
+    assert doc["coverage"] == "partial"
+    assert doc["integrity"] == "clean"
+    # `complete` means FULL coverage. Accepting an absence does not make it full.
+    assert doc["complete"] is False, "an accepted absence is still not complete coverage"
     assert doc["absent_collections"] == ["musubi_thought"]
-    assert result.exit_code == 0
+    assert result.exit_code == EXIT_CLEAN_PARTIAL
+
+
+# ---------------------------------------------------------------------------
+# The mixed-result contract: coverage and integrity are INDEPENDENT
+#
+# Folding them together made the command contradict itself in adjacent sentences:
+# `clean-partial ... every one readable by its model` printed directly above
+# `1 of 1 scanned rows are UNREADABLE`. And `--allow-absent` set `complete: true` on a run
+# that had skipped a canonical collection. (Yua, rev4 review of PR #398.)
+# ---------------------------------------------------------------------------
+
+
+def test_allow_absent_with_broken_rows_is_broken_partial_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absence accepted AND a broken row found. Both facts must survive, separately."""
+    bad = dict(GOOD_EPISODIC, retracted_original="bricks the row")
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(bad)]]
+    del behaviour["musubi_thought"]
+
+    result = _run(monkeypatch, behaviour, "--allow-absent", "--json")
+    doc = json.loads(result.stdout)
+
+    assert doc["verdict"] == "broken-partial"
+    assert doc["coverage"] == "partial", "a skipped canonical collection is not full coverage"
+    assert doc["integrity"] == "broken"
+    assert doc["complete"] is False, "MUST NOT claim complete coverage — a collection was skipped"
+    assert doc["absent_collections"] == ["musubi_thought"]
+    assert doc["broken_total"] == 1
+    assert result.exit_code == EXIT_BROKEN_PARTIAL, (
+        "broken-partial must not collapse into an ordinary fully-scanned broken count — "
+        "'2 bad rows, saw everything' and '2 bad rows, skipped a collection' are different facts"
+    )
+
+
+def test_allow_absent_with_broken_rows_never_claims_rows_are_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The human output must not say every scanned row is readable while listing unreadable
+    rows two lines later. It literally did."""
+    bad = dict(GOOD_EPISODIC, retracted_original="bricks the row")
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(bad)]]
+    del behaviour["musubi_thought"]
+
+    result = _run(monkeypatch, behaviour, "--allow-absent")
+    out = result.stdout
+
+    assert "VERDICT: broken-partial" in out
+    assert "every one readable" not in out, "must never claim readability while rows are broken"
+    assert "INTEGRITY — BROKEN" in out
+    assert "COVERAGE — PARTIAL" in out
+    assert "UNREADABLE" in out
+    assert result.exit_code == EXIT_BROKEN_PARTIAL
 
 
 def test_pagination_walks_every_page(monkeypatch: pytest.MonkeyPatch) -> None:
