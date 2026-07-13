@@ -1,7 +1,0 @@
-owner: aoi
-branch: slice/auth-boundary-phase-a
-claimed: 2026-07-13
-scope: SEC-004 contradictions fanout + backend 5xx (closed by #403). status=done is the pre-merge closure state (Vault check); PR #403 + Issue OPEN, not merged/deployed.
-authorization: Yua Phase A src (REQ 2026-07-12T22:51) + stack rulings 2026-07-13.
-second-reader: yua; acceptance: yua; merger: different party.
-forbidden: Phase B idempotency/observer/dependency; multipart/D5; retrieval/lifecycle.

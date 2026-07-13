@@ -1,7 +1,0 @@
-owner: aoi
-branch: slice/auth-boundary-phase-a
-claimed: 2026-07-13
-scope: Phase A src (SEC-003+SEC-004+REQ-10) — the canonical owner of #403 src. status=done is the pre-merge closure state (Vault check); PR #403 + Issue OPEN, not merged/deployed.
-authorization: Yua Phase A src (REQ 2026-07-12T22:51) + stack rulings 2026-07-13.
-second-reader: yua; acceptance: yua; merger: different party.
-forbidden: Phase B idempotency/observer/dependency; multipart/D5; retrieval/lifecycle.
