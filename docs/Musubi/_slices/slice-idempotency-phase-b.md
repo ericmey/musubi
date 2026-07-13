@@ -3,13 +3,14 @@ title: "Slice: Phase B — routed post-authz idempotency pipeline (SEC-002 + IDE
 slice_id: slice-idempotency-phase-b
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: aoi
 phase: "Security audit 2026-07-12/13 — narrow source, Phase B (Yua-authorized 2026-07-13T00:17)"
-tags: [section/slices, status/in-review, type/slice, security, p0, auth, idempotency]
+tags: [section/slices, status/done, type/slice, security, p0, auth, idempotency]
 updated: 2026-07-13
-reviewed: false
-depends-on: [slice-auth-boundary-red-contract, slice-sec-002-idempotency-auth-bypass]
+reviewed: true
+issue: 405
+depends-on: [slice-auth-boundary-red-contract, slice-sec-002-idempotency-auth-bypass, slice-auth-boundary-phase-a]
 blocks: []
 ---
 
@@ -23,9 +24,10 @@ the accepted D3 design spikes.
 ## Specs to implement
 
 - [[_slices/slice-idempotency-phase-b]] — this remediation's contract is defined by its own
-  `## Test Contract` below (the SEC-002 / IDEM-001 / REQ-5 red-contract), not a separate product
-  spec; the slice is the canonical home for the closure matrix. Related security findings:
-  [[_slices/slice-sec-002-idempotency-auth-bypass]], [[_slices/slice-auth-boundary-red-contract]].
+  `## Test Contract` below (the SEC-002 / IDEM-001 / REQ-5 closure), not a separate product spec;
+  the slice is the canonical home for the closure matrix. (The related SEC-002 / red-contract
+  slices carry their OWN Test Contracts and are closed separately — not linked here, so
+  tc-coverage scopes to phase-b's own bullets.)
 
 ## Evidence (do not orphan)
 

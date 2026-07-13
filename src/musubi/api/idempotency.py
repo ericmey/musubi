@@ -161,8 +161,10 @@ class IdempotencyLeaseCache:
     from the validated principal + operation + authorized namespace + key), an ``owner`` token,
     and the canonical request ``digest``. The single atomic ``acquire`` gates execution:
 
-    - ``"acquired"`` — the caller owns the in-flight slot; it must ``store`` then the outer wrapper
-      releases (or ``release`` on error/cancel).
+    - ``"acquired"`` — the caller owns the in-flight slot. On a clean success it ``store``s the
+      completed response, which RETAINS that entry as the replay cache (a successful store does NOT
+      release). The outer wrapper ``release``s ONLY on a non-stored exit (error / cancel / non-2xx /
+      a store that itself fails).
     - ``"in_flight"`` — another owner holds a live lease; the caller 409s (never executes). A live
       lease is NEVER reclaimed by elapsed time — see below.
     - ``"hit"``      — a completed response with the SAME digest exists; replay it.
