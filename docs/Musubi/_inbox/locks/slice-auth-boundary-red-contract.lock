@@ -1,0 +1,10 @@
+owner: aoi
+branch: slice/auth-boundary-phase-a
+claimed: 2026-07-12
+scope: Phase A src implementation — SEC-003 (Form/Path namespace authz), SEC-004
+  (contradictions operator + error semantics), REQ-10 (single-worker fail-closed).
+authorization: Yua narrow src authorization (REQ 2026-07-12T22:51), Phase A only.
+  Verified green gate at 02e69550e908228dad7751bc70f86824d3843c3f.
+second-reader: tama (after aoi self-review); acceptance: yua; merger: different party.
+forbidden: idempotency middleware/cache/lease/replay/store; streaming; multipart
+  digest/body hashing; req5; early optional authn/req8; req7/D6.
