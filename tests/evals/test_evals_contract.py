@@ -1106,7 +1106,7 @@ def test_discrimination_abstention_fpr() -> None:
 
 
 def _assert_contradiction_blending(
-    eval_func: Callable[[list[dict[str, Any]], str], list[dict[str, Any]]],
+    eval_func: Callable[[list[dict[str, Any]], str, float], list[dict[str, Any]]],
 ) -> None:
     corpus_con = [
         {"id": "doc_pro", "text": "X is safe.", "base_score": 0.9},
@@ -1119,29 +1119,45 @@ def _assert_contradiction_blending(
         {"id": "doc_other", "text": "X was discovered in 1990.", "base_score": 0.7},
     ]
 
-    res_con = eval_func(corpus_con, "Is X safe?")
-    res_ctrl = eval_func(corpus_ctrl, "Is X safe?")
+    # Test 1: Penalty 0.1
+    res_con_1 = eval_func(corpus_con, "Is X safe?", 0.1)
+    res_ctrl_1 = eval_func(corpus_ctrl, "Is X safe?", 0.1)
 
-    ctrl_dict = {r["id"]: r for r in res_ctrl}
-    if ctrl_dict["doc_pro"].get("contradiction_penalty", 0.0) > 0.0:
+    # Test 2: Penalty 0.2
+    res_con_2 = eval_func(corpus_con, "Is X safe?", 0.2)
+
+    ctrl_dict = {r["id"]: r for r in res_ctrl_1}
+    if ctrl_dict["doc_pro"].get("contradiction_penalty", 0.0) != 0.0:
         raise ValueError("Control penalty applied incorrectly")
+    if abs(ctrl_dict["doc_pro"]["score"] - 0.9) > 0.001:
+        raise ValueError("Control score mutated incorrectly")
 
-    con_dict = {r["id"]: r for r in res_con}
+    con_dict_1 = {r["id"]: r for r in res_con_1}
+    con_dict_2 = {r["id"]: r for r in res_con_2}
 
-    top_5 = [r["id"] for r in res_con[:5]]
+    top_5 = [r["id"] for r in res_con_1[:5]]
     if "doc_pro" not in top_5 or "doc_con" not in top_5:
         raise ValueError("Contradictory facts not in top-K context")
 
-    if con_dict["doc_pro"].get("contradiction_penalty", 0.0) <= 0.0:
-        raise ValueError("doc_pro not penalized")
-    if con_dict["doc_con"].get("contradiction_penalty", 0.0) <= 0.0:
-        raise ValueError("doc_con not penalized")
+    if abs(con_dict_1["doc_pro"].get("contradiction_penalty", 0.0) - 0.1) > 0.001:
+        raise ValueError("doc_pro penalty mismatch 1")
+    if abs(con_dict_1["doc_con"].get("contradiction_penalty", 0.0) - 0.1) > 0.001:
+        raise ValueError("doc_con penalty mismatch 1")
 
-    if con_dict["doc_other"].get("contradiction_penalty", 0.0) > 0.0:
+    if abs(con_dict_1["doc_pro"]["score"] - 0.8) > 0.001:  # 0.9 - 0.1
+        raise ValueError("doc_pro exact score math failure 1")
+    if abs(con_dict_1["doc_con"]["score"] - 0.75) > 0.001:  # 0.85 - 0.1
+        raise ValueError("doc_con exact score math failure 1")
+
+    if abs(con_dict_2["doc_pro"].get("contradiction_penalty", 0.0) - 0.2) > 0.001:
+        raise ValueError("doc_pro penalty mismatch 2")
+    if abs(con_dict_2["doc_pro"]["score"] - 0.7) > 0.001:  # 0.9 - 0.2
+        raise ValueError("doc_pro exact score math failure 2")
+
+    if con_dict_1["doc_other"].get("contradiction_penalty", 0.0) != 0.0:
         raise ValueError("Penalize-all detected")
-
-    if con_dict["doc_pro"]["score"] >= ctrl_dict["doc_pro"]["score"]:
-        raise ValueError("Score did not decrease vs control")
+    if abs(con_dict_1["doc_other"]["score"] - 0.7) > 0.001:
+        raise ValueError("doc_other exact score math failure")
 
 
 @pytest.mark.xfail(
@@ -1156,49 +1172,76 @@ def test_eval_contradiction_blending() -> None:
 
 
 def test_discrimination_contradiction_blending() -> None:
-    def correct_check(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    def correct_check(
+        corpus: list[dict[str, Any]], query: str, config_pen: float
+    ) -> list[dict[str, Any]]:
         has_con = any(d["id"] == "doc_con" for d in corpus)
         res = []
         for d in corpus:
-            pen = 0.1 if has_con and d["id"] in ("doc_pro", "doc_con") else 0.0
+            pen = config_pen if has_con and d["id"] in ("doc_pro", "doc_con") else 0.0
             res.append(
                 {"id": d["id"], "score": d["base_score"] - pen, "contradiction_penalty": pen}
             )
         res.sort(key=lambda x: x["score"], reverse=True)
         return res
 
-    def wrong_ignore_penalty(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    def wrong_ignore_penalty(
+        corpus: list[dict[str, Any]], query: str, config_pen: float
+    ) -> list[dict[str, Any]]:
         return [
             {"id": d["id"], "score": d["base_score"], "contradiction_penalty": 0.0} for d in corpus
         ]
 
-    def wrong_drop_one(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    def wrong_drop_one(
+        corpus: list[dict[str, Any]], query: str, config_pen: float
+    ) -> list[dict[str, Any]]:
         c = [d for d in corpus if d["id"] != "doc_con"]
-        return correct_check(c, query)
+        return correct_check(c, query, config_pen)
 
-    def wrong_penalize_all(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+    def wrong_penalize_all(
+        corpus: list[dict[str, Any]], query: str, config_pen: float
+    ) -> list[dict[str, Any]]:
         has_con = any(d["id"] == "doc_con" for d in corpus)
         res = []
         for d in corpus:
-            pen = 0.1 if has_con else 0.0
+            pen = config_pen if has_con else 0.0
             res.append(
                 {"id": d["id"], "score": d["base_score"] - pen, "contradiction_penalty": pen}
             )
         return res
 
-    def wrong_hardcode(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
-        # Always applies penalty to doc_pro, even on control
+    def wrong_hardcode(
+        corpus: list[dict[str, Any]], query: str, config_pen: float
+    ) -> list[dict[str, Any]]:
         res = []
         for d in corpus:
-            pen = 0.1 if d["id"] == "doc_pro" else 0.0
+            pen = config_pen if d["id"] == "doc_pro" else 0.0
             res.append(
                 {"id": d["id"], "score": d["base_score"] - pen, "contradiction_penalty": pen}
             )
         return res
+
+    def wrong_arbitrary_score_math(
+        corpus: list[dict[str, Any]], query: str, config_pen: float
+    ) -> list[dict[str, Any]]:
+        has_con = any(d["id"] == "doc_con" for d in corpus)
+        res = []
+        for d in corpus:
+            pen = config_pen if has_con and d["id"] in ("doc_pro", "doc_con") else 0.0
+            # Wrong: arbitrary lowered score instead of exact base - penalty
+            score = 0.5 if pen > 0 else d["base_score"]
+            res.append({"id": d["id"], "score": score, "contradiction_penalty": pen})
+        res.sort(key=lambda x: x["score"], reverse=True)
+        return res
+
+    def wrong_insensitive_to_config(
+        corpus: list[dict[str, Any]], query: str, config_pen: float
+    ) -> list[dict[str, Any]]:
+        return correct_check(corpus, query, 0.1)  # Hardcodes 0.1, ignores config_pen
 
     _assert_contradiction_blending(correct_check)
 
-    with pytest.raises(ValueError, match="doc_pro not penalized"):
+    with pytest.raises(ValueError, match="doc_pro penalty mismatch 1"):
         _assert_contradiction_blending(wrong_ignore_penalty)
 
     with pytest.raises(ValueError, match="Contradictory facts not in top-K context"):
@@ -1209,6 +1252,12 @@ def test_discrimination_contradiction_blending() -> None:
 
     with pytest.raises(ValueError, match="Control penalty applied incorrectly"):
         _assert_contradiction_blending(wrong_hardcode)
+
+    with pytest.raises(ValueError, match="doc_pro exact score math failure 1"):
+        _assert_contradiction_blending(wrong_arbitrary_score_math)
+
+    with pytest.raises(ValueError, match="doc_pro penalty mismatch 2"):
+        _assert_contradiction_blending(wrong_insensitive_to_config)
 
 
 def _assert_cross_plane_blending(
