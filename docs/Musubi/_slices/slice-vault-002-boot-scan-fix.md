@@ -5,20 +5,20 @@ issue: 444
 section: _slices
 type: slice
 status: in-progress
-owner: unassigned
+owner: tama
 phase: "Retrieval"
 tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-07-13
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
 
 # Slice: VAULT-002 boot_scan relative path no-op
 
-> Tests-first red contract for the boot_scan relative-path silent-swallow bug. Source is forbidden in this slice; the fix lands in a separate follow-up PR after the red contract is approved.
+> Combined contract+implementation: tests-first red contract for the boot_scan relative-path silent-swallow bug PLUS the accepted source fix (Option A: pass absolute path in boot_scan, commit c0c91ba). Both the red contract and the implementation are in this slice on branch slice/vault-002-boot-scan-fix (PR #445). History is preserved in the commit log; the red-contract work and the source-fix work are additive, not a rewrite. No claim of merge/closure; status remains in-progress until deployment proof and independent sign-off per the final completion gate.
 
-**Phase:** Retrieval · **Status:** `in-progress` · **Owner:** `unassigned`
+**Phase:** Retrieval · **Status:** `in-progress` · **Owner:** `tama` · **Reviewed by:** Yua (exact-head review and acceptance), Shiori (independent second-read APPROVE)
 
 ## Specs to implement
 
@@ -33,12 +33,10 @@ blocks: []
 
 ## Out of owns_paths (intentionally not claimed by this slice)
 
-- `tests/vault/test_watcher_boot_scan.py` (overlaps with `slice-ops-hardening-suite`; that file is owned by the hardening slice, NOT by this slice; the VAULT-002 red contract adds a new test file, `test_watcher_boot_scan_vault_002.py`, instead of modifying the existing one)
 - The vacuous `test_boot_scan_archives_removed_files` (formerly in `tests/vault/test_watcher_boot_scan.py`) was REMOVED in this slice's hygiene-cleanup successor (per Yua 2026-07-13 18:01:24 WITHHOLD on dbef1a4) because its deletion expectation belongs to VAULT-001, not VAULT-002. The deletion handling is durably routed to **Issue #446** (VAULT-001: ghost rows (known_hashes minus disk) are not reconciled), NOT claimed by this slice. The PR445 marker / earlier b6a56c2 claim that the vacuous test was already removed was FALSE on dbef1a4; the actual removal is in this slice's hygiene-cleanup commit on top of dbef1a4. The slice doc's prose now reflects the exact truth.
 
 ## Forbidden paths
 
-- `src/musubi/vault/watcher.py` (the fix lands in a SEPARATE follow-up PR; this slice is tests-only)
 - `src/musubi/vault/reconciler.py` (VAULT-001's lane; do NOT conflate)
 
 ## Critical corrections (per Yua 2026-07-13 15:12)
@@ -70,16 +68,19 @@ blocks: []
 - `log_only`: candidate that LOGS but does not actually write to Qdrant. Caught by the body_hash change assertion.
 - `mock_handler`: candidate that uses `setattr(watcher, "_handle_event", AsyncMock())` to mock the handler. The test asserts the REAL handler was called; the mock prevents that; the test FAILS, proving the red contract is meaningful and not vacuous.
 
-## Source-level invariant (lands in the implementation PR, not this red PR)
+## Source-level invariant (implementation in c0c91ba; this PR)
 
-The path representation crossing internal component boundaries must be normalized:
-- Option A (ACCEPTED per Yua 17:43:21; landed at c0c91ba): `boot_scan` passes `str(path)` (the ABSOLUTE path from rglob) to `_handle_event`. The handler's `path.relative_to(self.vault_root)` succeeds; the file is processed; the typed `CuratedKnowledge` is constructed with the relative `vault_path` (the handler's `rel_path`).
-- Option B (REJECTED per Yua 17:54:34): enforce absolute-before-relative_to in `_handle_event_inner` by joining the relative path to `vault_root`. This was REJECTED because joining arbitrary relative input to `vault_root` can admit `../` traversal lexically and broadens handler semantics.
-- Option C: `os.path.relpath` + normalization (no exception swallow).
+The path representation crossing internal component boundaries is normalized by the IMPLEMENTATION in this slice (commit c0c91ba, Option A — the accepted design per Yua 17:43:21). History: the slice was originally tests-first (source forbidden); Yua 17:43:21 granted NARROW source authorization; Option A (boot_scan passes `str(path)` absolute) was ACCEPTED and Option B (handler normalizes) was REJECTED (per Yua 17:54:34, because joining arbitrary relative input to `vault_root` can admit `../` traversal lexically and broadens handler semantics).
 
-## Test accounting (post-Yua-17:20:42 repair)
+- Option A (ACCEPTED; landed at c0c91ba IN THIS PR): `boot_scan` passes `str(path)` (the ABSOLUTE path from rglob) to `_handle_event`. The handler's `path.relative_to(self.vault_root)` succeeds; the file is processed; the typed `CuratedKnowledge` is constructed with the relative `vault_path` (the handler's `rel_path`). The handler's outside-root fail-closed boundary is preserved: an absolute path NOT under `vault_root` causes `relative_to` to raise ValueError, which is silently swallowed by `except ValueError: return` — the outside-root file is NOT processed.
+- Option B (REJECTED per Yua 17:54:34): enforce absolute-before-relative_to in `_handle_event_inner` by joining the relative path to `vault_root`. The implementation was REJECTED because joining arbitrary relative input to `vault_root` can admit `../` traversal lexically and broadens handler semantics. The rejected implementation exists on the preserved local branch `slice/vault-002-boot-scan-fix` at commit `1f63692` (kept as evidence per Yua 17:54:34).
+- Option C (not implemented): `os.path.relpath` + normalization (no exception swallow).
 
-The red contract shape is exactly **9 tests** = 2 source reds (xfail) + 6 plain-pass controls/discriminators + 1 documentary skip.
+## Test accounting (post-Yua-17:20:42 repair; post-c0c91ba implementation)
+
+The red contract shape is exactly **9 tests** = 2 source reds (xfail, now flipped to PASS by the c0c91ba implementation) + 6 plain-pass controls/discriminators + 1 documentary skip.
+
+CURRENT STATE (after c0c91ba landed in this PR): 8 passed + 1 skipped = 9 tests. The two source reds (RED, CONTROL 4) have their `@pytest.mark.xfail(strict=True, ...)` markers REMOVED; the tests now pass cleanly. The xfail markers were removed in commit `ee3693e` (the test-update commit that landed with the source fix).
 
 The contract is observed on the typed `CuratedKnowledge` object passed to `curated_plane.create(memory)`, NOT on `call_args`/`kwargs` introspection (create takes one positional arg), NOT on `Qdrant client.set_payload` side effects (which an `AsyncMock` never calls), NOT on a captured task raising (`boot_scan` intentionally catches per-path exceptions and logs them as `Boot scan failed on path ...`). The body_hash is computed by a single shared helper `_read_and_hash_body` that calls the real `parse_frontmatter` (no hand-duplicated parsing semantics).
 
