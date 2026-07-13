@@ -323,6 +323,43 @@ class Fixture:
             raise RuntimeError(f"requested {n}, capture returned {len(set(oids))} distinct ids")
         return oids, anchor
 
+    def seed_exact(self, content: str, *, importance: int = 5,
+                   settle_s: float = 2.5) -> str:
+        """Seed a memory with CALLER-SUPPLIED content, and still prove it is new.
+
+        The grapheme/boundary probes need exact byte content (a cluster straddling index
+        300), so they cannot use the random seed(). But they must NOT bypass the seed
+        invariant — Yua: "both bypass Fixture.seed invariants via direct musubi.write, so
+        semantic dedup can return an older object again." So this proves the same
+        postcondition against the raw store, and additionally proves the STORED CONTENT is
+        byte-exact what we asked for (dedup would return a different string).
+        """
+        oid = self.musubi.write(self.namespace, content, importance=importance)
+        deadline = time.time() + 25
+        pl: Optional[dict] = None
+        while time.time() < deadline:
+            pl = self.store.payload(oid)
+            if pl is not None:
+                break
+            time.sleep(settle_s)
+        if pl is None:
+            raise RuntimeError(f"seed_exact: {oid} never appeared in the store")
+        problems = []
+        if pl.get("version") not in (1, None):
+            problems.append(f"version={pl.get('version')} (not new)")
+        if (pl.get("access_count") or 0) != 0:
+            problems.append(f"access_count={pl.get('access_count')}")
+        if (pl.get("reinforcement_count") or 0) != 0:
+            problems.append(f"reinforcement_count={pl.get('reinforcement_count')} (DEDUPED)")
+        stored = pl.get("content") or ""
+        if stored != content:
+            problems.append(
+                "STORED CONTENT != REQUESTED — capture altered or deduped it. "
+                f"requested {len(content)} chars, stored {len(stored)}")
+        if problems:
+            raise RuntimeError(f"seed_exact INVARIANT VIOLATED for {oid}: " + "; ".join(problems))
+        return oid
+
     def seed_many(self, n: int, *, importance: int = 5) -> list[str]:
         """n DISTINCT memories, each proven new. Raises if capture deduped any.
 

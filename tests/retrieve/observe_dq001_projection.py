@@ -164,61 +164,70 @@ if rowu:
     # é (e + U+0301), a ZWJ family emoji — leaving valid UTF-8 that means something else.
     line("    delivered is valid UTF-8 (code-point safe)", reencoded_ok)
     line("    cut is CHARACTER-based (len==300), not byte-based", len(du) == 300)
-    # The real test: a grapheme cluster ACROSS the cut, with the DECOMPOSED sequence and
-    # code-point ASSERTIONS (Yua). My first pass used precomposed '\u00e9' (one code
-    # point) while claiming e+U+0301 — so it reported a result for a fixture I never
-    # wrote. uuid markers, collision-proof.
+    # ── SELF-PROVING grapheme assertions (Yua: "grade code, not commit message").
+    # Every fact is an assert, not a printed boolean. Setup goes through seed_exact so it
+    # CANNOT bypass the seed invariant, and it proves the stored content is byte-exact
+    # (dedup would return a different string). Fails LOUDLY on setup or result.
     import uuid as _uuid
-    combining = "e\u0301"          # U+0065 + U+0301 — two code points, one grapheme
-    assert [ord(c) for c in combining] == [0x65, 0x301], "fixture must be decomposed"
-    gm = f"gz{_uuid.uuid4().hex[:10]}"
-    gpre = f"{gm}. "
-    gbody = gpre + ("x" * (299 - len(gpre))) + combining + "TAIL"
-    assert gbody[299] == "e" and gbody[300] == "\u0301", "cut must straddle the cluster"
-    goid = musubi.write(NS_RECALL, gbody, importance=6)
-    time.sleep(2.5)
-    gres = musubi.recall(NS_RECALL, gm, mode="blended", limit=5, state_filter=FRESH_STATES)
-    grow = next((r for r in gres if r.get("object_id") == goid), None)
-    assert grow is not None, "combining-mark fixture was not returned"
-    gstored = (store.payload(goid) or {}).get("content") or ""
-    gd = grow.get("content") or ""
-    # HARD assertions, not printed inference:
-    assert "e\u0301" in gstored, "stored must contain the adjacent e + U+0301"
-    combining_split = gd.endswith("e") and not gd.endswith("e\u0301")
-    line("    combining mark e+U+0301: accent CUT across the boundary?", combining_split,
-         "*** 'é' DELIVERED AS 'e' ***" if combining_split else "accent survived")
 
-    # ZWJ family emoji across the cut
-    zwj = "\U0001F468\u200d\U0001F469\u200d\U0001F467"   # 👨‍👩‍👧, one grapheme
-    zm = f"gz{_uuid.uuid4().hex[:10]}"
-    zpre = f"{zm}. "
-    zbody = zpre + ("x" * (299 - len(zpre))) + zwj + "TAIL"
-    zoid = musubi.write(NS_RECALL, zbody, importance=6)
-    time.sleep(2.5)
-    zres = musubi.recall(NS_RECALL, zm, mode="blended", limit=5, state_filter=FRESH_STATES)
-    zrow = next((r for r in zres if r.get("object_id") == zoid), None)
-    if zrow:
-        zd = zrow.get("content") or ""
-        zwj_split = (zwj not in zd) and 0 < sum(cp in zd for cp in zwj) < len(zwj)
-        line("    ZWJ family emoji: severed across the boundary?", zwj_split,
-             "*** family emoji DELIVERED as a fragment ***" if zwj_split else "cluster survived")
+    def _straddle(cluster: str) -> tuple[str, str, str]:
+        gm = f"gz{_uuid.uuid4().hex[:10]}"
+        gpre = f"{gm}. "
+        body = gpre + ("x" * (299 - len(gpre))) + cluster + "TAIL"
+        return gm, body, body
+
+    # combining mark: e (U+0065) + COMBINING ACUTE (U+0301) — decomposed, one grapheme
+    combining = "e\u0301"
+    assert [ord(c) for c in combining] == [0x65, 0x301], "combining fixture must be decomposed"
+    gm_c, body_c, _ = _straddle(combining)
+    assert body_c[299] == "e" and body_c[300] == "\u0301", \
+        f"combining cut must straddle: got {body_c[299:301]!r}"
+    oid_c = fix.seed_exact(body_c, importance=6)               # invariant-checked
+    res_c = musubi.recall(NS_RECALL, gm_c, mode="blended", limit=5, state_filter=FRESH_STATES)
+    row_c = next((r for r in res_c if r.get("object_id") == oid_c), None)
+    assert row_c is not None, "combining-mark fixture was not returned by recall"
+    d_c = row_c.get("content") or ""
+    assert len(d_c) == 300, f"expected a 300-char projection, got {len(d_c)}"
+    combining_split = d_c.endswith("e") and not d_c.endswith("e\u0301")
+    assert combining_split, \
+        f"expected the accent CUT (delivered ends bare 'e'); got tail {d_c[-3:]!r}"
+    line("    combining e+U+0301: accent CUT (asserted)", True, "'é' delivered as 'e'")
+
+    # ZWJ family emoji — one grapheme, 5 code points with U+200D joiners
+    zwj = "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+    gm_z, body_z, _ = _straddle(zwj)
+    assert body_z[299] == "\U0001F468", f"zwj cut must straddle: got {body_z[299]!r}"
+    oid_z = fix.seed_exact(body_z, importance=6)               # invariant-checked
+    assert oid_z != oid_c, "grapheme fixtures must be distinct objects"
+    res_z = musubi.recall(NS_RECALL, gm_z, mode="blended", limit=5, state_filter=FRESH_STATES)
+    row_z = next((r for r in res_z if r.get("object_id") == oid_z), None)
+    assert row_z is not None, "ZWJ fixture was not returned by recall"
+    d_z = row_z.get("content") or ""
+    assert len(d_z) == 300, f"expected a 300-char projection, got {len(d_z)}"
+    zwj_split = (zwj not in d_z) and 0 < sum(cp in d_z for cp in zwj) < len(zwj)
+    assert zwj_split, f"expected the family emoji SEVERED; got tail {d_z[-3:]!r}"
+    line("    ZWJ family emoji: SEVERED (asserted)", True, "family delivered as a fragment")
 
 # ── O6: key fact at exactly 301 / 1501 / end ─────────────────────────────────
 print()
-print("O6  A load-bearing fact placed at char 301, 1501, and the very end")
+print("O6  A load-bearing fact placed at char 301 and 1501 (via seed_exact, asserted)")
+import uuid as _u6
 for pos, label in ((301, "char 301 (just past the 300 cut)"),
                    (1501, "char 1501 (past the 1500 LLM-input budget)")):
-    m = f"dqp{pos}{int(time.time())}"
+    mk = f"dq{_u6.uuid4().hex[:10]}"          # uuid marker, not timestamp (collision-proof)
     fact = f"FACTAT{pos}"
-    filler = "." * (pos - len(m) - 2)
-    body = f"{m}.{filler}{fact} and the rest continues."
-    o = musubi.write(NS_RECALL, body, importance=8)
-    time.sleep(2.5)
-    r = musubi.recall(NS_RECALL, m, mode="blended", limit=5, state_filter=FRESH_STATES)
+    filler = "." * (pos - len(mk) - 1)   # fact index = len(mk)+1+len(filler) == pos
+    body = f"{mk}.{filler}{fact} and the rest continues."
+    assert body.index(fact) == pos, f"fact must sit at char {pos}, sits at {body.index(fact)}"
+    o = fix.seed_exact(body, importance=8)     # invariant-checked, byte-exact, no bypass
+    r = musubi.recall(NS_RECALL, mk, mode="blended", limit=5, state_filter=FRESH_STATES)
     row = next((x for x in r if x.get("object_id") == o), None)
-    survives = row is not None and fact in (row.get("content") or "")
-    line(f"    fact at {label}", survives,
-         "delivered" if survives else "*** LOST — caller never sees it ***")
+    assert row is not None, f"O6 fixture at {pos} not returned by recall"
+    delivered = row.get("content") or ""
+    lost = fact not in delivered
+    assert lost, (f"expected the fact at char {pos} to be LOST (delivered len "
+                  f"{len(delivered)}), but it survived")
+    line(f"    fact at {label}: LOST (asserted)", True, "caller never sees it")
 
 print()
 print("=" * 98)
