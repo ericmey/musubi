@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-types]]", "[[_slices/slice-qdrant-layout]]", "[[_slices/slice-embedding]]"]
-blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]"]
+blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]", "[[_slices/slice-ret004-evals]]"]
 ---
 
 # Slice: Hybrid dense + sparse search

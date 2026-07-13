@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice]
 updated: 2026-04-19
 reviewed: true
 depends-on: ["[[_slices/slice-types]]"]
-blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]", "[[_slices/slice-retrieval-blended]]"]
+blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]", "[[_slices/slice-retrieval-blended]]", "[[_slices/slice-ret004-evals]]"]
 ---
 
 # Slice: Retrieval scoring model
