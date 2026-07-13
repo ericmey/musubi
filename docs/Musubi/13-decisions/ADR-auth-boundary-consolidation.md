@@ -206,9 +206,11 @@ Qdrant is not a lock/CAS store. Phase it:
   > **Rev 4 correction vs Rev1–3:** a LIVE in-flight lease is **NEVER reclaimed by elapsed time.**
   > Any stale/timeout "crash recovery" reclaim is wrong: the cache is process-local, so a crash
   > destroys the WHOLE cache — a time-based reclaim can never recover crash state and only
-  > re-executes a slow-but-live request into a DUPLICATE mutation. A live lease is freed ONLY by its
-  > owner (`store` on success, `release` on error/cancel); a hung owner fails closed (409 until the
-  > process restarts). Only COMPLETED entries expire (TTL).
+  > re-executes a slow-but-live request into a DUPLICATE mutation. An in-flight entry may be
+  > transitioned ONLY by its owner: `store` atomically COMPLETES it and RETAINS the entry as the
+  > replay cache (it does NOT free/delete it), while `release` REMOVES an incomplete entry on a
+  > non-stored exit (error / cancel / non-2xx / a store that itself fails). A hung owner fails closed
+  > (409 until the process restarts). Only COMPLETED entries expire (TTL).
 - **Phase 1 (DEFERRED — distinct future store/ADR):** durable **cross-process** ownership for
   multi-worker (`slice-api-v0-write-distributed-idempotency`). Not implemented; multi-worker
   idempotency stays unimplemented and fail-closed by REQ-10.
