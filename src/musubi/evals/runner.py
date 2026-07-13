@@ -18,8 +18,10 @@ def run_isolated_eval(loader: Callable[[], tuple[list[Any], list[Any]]], trainer
     return trainer(train_queries)
 
 
+from musubi.evals.gates import check_delta_tolerances
 def run_scheduled_report(runner: Any, expected: dict[str, float]) -> bool:
-    return True
+    metrics = runner.run()
+    return check_delta_tolerances(expected, metrics)
 
 def run_smoke_gate(corpus: list[dict[str, Any]]) -> Any:
     pass

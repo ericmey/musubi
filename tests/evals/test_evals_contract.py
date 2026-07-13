@@ -1,12 +1,14 @@
 import copy
 from collections.abc import Callable
-from dataclasses import dataclass
 from math import log2
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
 from pydantic import BaseModel, ValidationError
+
+from musubi.evals.gates import FrozenModelConfig, MockEvalReport
+from musubi.evals.runner import EvalResult
 
 
 class MockQuery(NamedTuple):
@@ -185,7 +187,6 @@ def test_discrimination_manifest_checksum(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Test 4: Deterministic Rerun Stability
 # ---------------------------------------------------------------------------
-from musubi.evals.runner import EvalResult
 
 def _assert_deterministic_rerun(
     run_eval_func: Callable[[list[dict[str, Any]], str, int], EvalResult],
@@ -324,14 +325,9 @@ def _assert_nightly_thresholds(check_func: Callable[[dict[str, float], str], boo
         pass
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: Missing eval for nightly qdrant tei thresholds",
-)
 def test_eval_nightly_qdrant_tei_thresholds() -> None:
     try:
-        from musubi.evals.gates import check_nightly_thresholds  # type: ignore[import-untyped]
+        from musubi.evals.gates import check_nightly_thresholds
     except ImportError:
         raise DefectStillPresent("musubi.evals.gates module does not exist")
     _assert_nightly_thresholds(check_nightly_thresholds)
@@ -436,11 +432,6 @@ def _assert_baseline_delta_gate(
         pass
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: Missing eval for baseline delta gate unit",
-)
 def test_eval_baseline_delta_gate_unit() -> None:
     try:
         from musubi.evals.gates import check_delta_tolerances
@@ -527,11 +518,6 @@ def _assert_scheduled_baseline_report(report_func: Callable[[Any, dict[str, floa
         pass
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: Missing eval for scheduled baseline report",
-)
 def test_eval_scheduled_baseline_report() -> None:
     try:
         from musubi.evals.runner import run_scheduled_report
@@ -573,11 +559,6 @@ def _assert_per_query_top_hit_drop(
     assert check_func(baseline, candidate_pass) is True
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: Missing eval for per query top hit drop",
-)
 def test_eval_per_query_top_hit_drop() -> None:
     try:
         from musubi.evals.gates import check_top_hit_drops
@@ -873,29 +854,6 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_nondeterministic, monkeypatch)
 
 
-@dataclass(frozen=True)
-class FrozenModelConfig:
-    thresholds: tuple[tuple[str, float], ...]
-    version: str
-    calibrated_on: str
-
-
-class MockEvalReport:
-    def __init__(
-        self,
-        version: str,
-        calibrated_on: str,
-        fast_fpr: float,
-        fast_fnr: float,
-        deep_fpr: float,
-        deep_fnr: float,
-    ):
-        self.version = version
-        self.calibrated_on = calibrated_on
-        self.fast_fpr = fast_fpr
-        self.fast_fnr = fast_fnr
-        self.deep_fpr = deep_fpr
-        self.deep_fnr = deep_fnr
 
 
 def _assert_abstention_fpr(
@@ -984,9 +942,6 @@ def _assert_abstention_fpr(
         raise ValueError("Deep FNR exact mismatch 2")
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: Abstention FPR threshold unproven"
-)
 def test_eval_abstention_fpr() -> None:
     try:
         from musubi.evals.gates import check_abstention_fpr
@@ -1141,9 +1096,6 @@ def _assert_contradiction_blending(
         raise ValueError("doc_other exact score math failure")
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: Contradiction blending unproven"
-)
 def test_eval_contradiction_blending() -> None:
     try:
         from musubi.evals.gates import check_contradiction_blending
@@ -1284,9 +1236,6 @@ def _assert_cross_plane_blending(
         raise ValueError("Missing blended provenance")
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: Cross plane blending unproven"
-)
 def test_eval_cross_plane_blending() -> None:
     try:
         from musubi.evals.gates import check_cross_plane_blending
@@ -1382,9 +1331,6 @@ def _assert_provisional_immediate_recall(
         pass
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: Provisional immediate recall unproven"
-)
 def test_eval_provisional_immediate_recall() -> None:
     try:
         from musubi.evals.gates import check_provisional_recall
