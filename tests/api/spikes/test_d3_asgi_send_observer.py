@@ -27,6 +27,13 @@ TWO TIERS, and the KEY design finding (Yua 2026-07-13):
     (post-authz); the outer wrapper is store-only. Controls prove no cross-principal / cross-
     operation replay, no lookup/acquire on invalid-auth or foreign-namespace, and re-auth on replay.
 
+IDENTITY CLOSURE (Yua 2026-07-13): identity = validated principal tuple (issuer, subject,
+presence) + method + operation + AUTHORIZED NAMESPACE + key; the canonical body DIGEST is
+persisted separately. Same identity+same digest => replay; same identity+different body =>
+409 (no handler); same key across namespaces => distinct execution. JSON canonicalisation is
+BYTE-EXACT (whitespace/key-order change => 409, not a semantic-equivalence replay); multipart
+uses the D5 scheme. Duplicate Idempotency-Key headers => 400 (not first-wins).
+
     UV_PROJECT_ENVIRONMENT=/Users/ericmey/Projects/musubi/.venv uv run --no-sync \
       pytest tests/api/spikes/test_d3_asgi_send_observer.py -v
 """
@@ -34,6 +41,7 @@ TWO TIERS, and the KEY design finding (Yua 2026-07-13):
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -433,14 +441,12 @@ class StoreOnlyObserver:
     scope['state']['idem'] (post-authz) and stores the captured bytes only on a clean 2xx MISS;
     it releases the lease the dependency acquired. Shares the cache dict with the dependency."""
 
-    def __init__(
-        self, app: ASGIApp, *, cache: dict[str, tuple[int, list[tuple[bytes, bytes]], bytes]]
-    ) -> None:
+    def __init__(self, app: ASGIApp, *, cache: dict[Any, Any]) -> None:
         self.app = app
-        self.cache = cache
-        self.stored: list[str] = []
-        self.released: list[str] = []
-        self.acquired_seen: list[str] = []
+        self.cache = cache  # identity tuple -> (digest, status, headers, body)
+        self.stored: list[Any] = []
+        self.released: list[Any] = []
+        self.acquired_seen: list[Any] = []
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -471,7 +477,9 @@ class StoreOnlyObserver:
                 and cap.status is not None
                 and 200 <= cap.status < 300
             ):
-                self.cache[state["identity"]] = (cap.status, cap.headers, cap.body)
+                # persist the canonical request digest ALONGSIDE the response (separate from the
+                # identity tuple) so a same-identity replay can compare body digests.
+                self.cache[state["identity"]] = (state["digest"], cap.status, cap.headers, cap.body)
                 self.stored.append(state["identity"])
         finally:
             state = scope.get("state", {}).get("idem")
@@ -479,46 +487,84 @@ class StoreOnlyObserver:
                 self.released.append(state["lease_owner"])
 
 
-def _auth_app(
-    cache: dict[str, tuple[int, list[tuple[bytes, bytes]], bytes]], counters: dict[str, int]
-) -> FastAPI:
-    """Real FastAPI app. authenticate (authn+authz) → idem (EDGE, post-authz) does identity +
-    lease + replay-on-hit. A route with only authenticate models 'eligible path without state'."""
+@dataclass(frozen=True)
+class _Principal:
+    """The STABLE validated principal (D6/req7): issuer + subject + presence — NOT display token
+    text. The idempotency identity binds all three."""
+
+    issuer: str
+    subject: str
+    presence: str
+
+
+def _canonical_digest(body: bytes, content_type: str) -> bytes:
+    """JSON/default canonicalisation is BYTE-EXACT: digest the exact received body bytes plus the
+    content-type. NO semantic JSON equivalence — whitespace / key-order differences MUST change the
+    digest (locked by test_d3_json_byte_exact_*). Multipart bodies use the D5 canonical scheme
+    (test_d5_multipart_digest_ingress.py::test_identity_*), not this path."""
+    return hashlib.sha256(content_type.encode("latin-1") + b"\x00" + body).digest()
+
+
+def _auth_app(cache: dict[Any, Any], counters: dict[str, int]) -> FastAPI:
+    """authenticate (authn + namespace authz) → idem (EDGE, post-authz). The idem identity is
+    (issuer, subject, presence, method, operation, authorized-namespace, key); the canonical body
+    digest is persisted SEPARATELY and compared: same identity+same digest => replay; same
+    identity+different digest => 409 (no handler). Duplicate Idempotency-Key headers => 400."""
     app = FastAPI()
 
-    async def authenticate(request: Request) -> str:
+    async def authenticate(request: Request) -> _Principal:
         counters["auth"] += 1
         auth = request.headers.get("authorization", "")
         if not auth.startswith("Bearer tok-"):
             raise HTTPException(status_code=401, detail="invalid token")
-        principal = auth[len("Bearer tok-") :]
+        subject = auth[len("Bearer tok-") :]
         ns = request.query_params.get("namespace")
-        if ns is not None and not ns.startswith(principal + "/"):
+        if ns is not None and not ns.startswith(subject + "/"):
             raise HTTPException(status_code=403, detail="foreign namespace")
-        return principal
+        return _Principal(
+            issuer="https://auth.test", subject=subject, presence=f"{subject}/claude-code"
+        )
 
-    async def idem(request: Request, principal: str = Depends(authenticate)) -> None:
-        key = request.headers.get("idempotency-key")
-        if key is None:
+    async def idem(request: Request, principal: _Principal = Depends(authenticate)) -> None:
+        keys = request.headers.getlist("idempotency-key")
+        if len(keys) > 1:
+            raise HTTPException(status_code=400, detail="duplicate Idempotency-Key header")
+        if not keys:
             return
-        # principal- AND operation-bound identity — the route template is the operation.
-        identity = f"{principal}::{request.scope['route'].path}::{key}"
-        hit = cache.get(identity)
-        if hit is not None:
-            request.state.idem = {"is_replay": True}  # observer must NOT re-store
-            raise Replay(*hit)
+        key = keys[0]
+        ns = request.query_params.get("namespace")
+        identity = (
+            principal.issuer,
+            principal.subject,
+            principal.presence,
+            request.method,
+            request.scope["route"].path,  # normalized operation
+            ns,  # authorized namespace
+            key,
+        )
+        digest = _canonical_digest(await request.body(), request.headers.get("content-type", ""))
+        entry = cache.get(identity)
+        if entry is not None:
+            stored_digest, status, headers, body = entry
+            if stored_digest == digest:
+                request.state.idem = {"is_replay": True}
+                raise Replay(status, headers, body)
+            # same identity, DIFFERENT body → conflict; NO handler, NO store, NO replay.
+            raise HTTPException(
+                status_code=409, detail="Idempotency-Key reused with a different body"
+            )
         counters["acquire"] += 1
         request.state.idem = {
             "eligible": True,
             "identity": identity,
-            "lease_owner": f"lease:{identity}",
-            "is_replay": False,
+            "digest": digest,
+            "lease_owner": ("lease", identity),
         }
 
     @app.exception_handler(Replay)
     async def _replay_handler(request: Request, exc: Replay) -> Response:
         r = Response(content=exc.body, status_code=exc.status)
-        r.raw_headers = [*exc.headers, (b"x-idempotent-replay", b"true")]  # duplicates preserved
+        r.raw_headers = [*exc.headers, (b"x-idempotent-replay", b"true")]
         return r
 
     @app.post("/dict", dependencies=[Depends(idem)])
@@ -538,7 +584,7 @@ def _auth_app(
         counters["boom_handler"] += 1
         raise HTTPException(status_code=503, detail="backend down")
 
-    @app.post("/no-idem", dependencies=[Depends(authenticate)])  # authenticated but NO idem dep
+    @app.post("/no-idem", dependencies=[Depends(authenticate)])  # authenticated, NO idem dep
     async def no_idem_route() -> dict[str, int]:
         counters["no_idem_handler"] += 1
         return {"ok": 1}
@@ -546,8 +592,8 @@ def _auth_app(
     return app
 
 
-def _mk() -> tuple[dict[str, Any], dict[str, int], StoreOnlyObserver, TestClient]:
-    cache: dict[str, tuple[int, list[tuple[bytes, bytes]], bytes]] = {}
+def _mk() -> tuple[dict[Any, Any], dict[str, int], StoreOnlyObserver, TestClient]:
+    cache: dict[Any, Any] = {}
     counters = dict.fromkeys(
         ("auth", "acquire", "dict_handler", "resp_handler", "boom_handler", "no_idem_handler"), 0
     )
@@ -555,91 +601,127 @@ def _mk() -> tuple[dict[str, Any], dict[str, int], StoreOnlyObserver, TestClient
     return cache, counters, obs, TestClient(obs, raise_server_exceptions=False)
 
 
-def _auth(principal: str, key: str) -> dict[str, str]:
-    return {"Authorization": f"Bearer tok-{principal}", "Idempotency-Key": key}
+def _h(subject: str, key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer tok-{subject}", "Idempotency-Key": key}
 
 
-def test_d3_12_dependency_drives_identity_lease_replay_dict_and_response() -> None:
-    """authorize→identity→lease→store handoff via scope state; replay is the DEPENDENCY's, and it
-    re-authenticates+re-authorizes every time (handler mutates only on the miss)."""
+def test_d3_12_full_identity_replay_reauth_and_principal_tuple() -> None:
     _cache, counters, obs, client = _mk()
     for path, key, ct in [("/dict", "d1", "application/json"), ("/resp", "r1", "text/csv")]:
-        first = client.post(path, headers=_auth("eric", key))
+        first = client.post(path, headers=_h("eric", key), json={"payload": 1})
         assert first.status_code == 200 and first.headers.get("x-idempotent-replay") is None
-        replay = client.post(path, headers=_auth("eric", key))
-        assert replay.headers.get("x-idempotent-replay") == "true", (
-            "replay served by the dependency"
-        )
-        assert replay.content == first.content, "replay bytes identical"
-        assert replay.headers.get("content-type", "").startswith(ct), "media type preserved"
-    assert counters["auth"] == 4, (
-        "auth ran on EVERY request incl the two replays (re-auth on replay)"
+        replay = client.post(path, headers=_h("eric", key), json={"payload": 1})
+        assert replay.headers.get("x-idempotent-replay") == "true", "same identity+digest replays"
+        assert replay.content == first.content and replay.headers.get(
+            "content-type", ""
+        ).startswith(ct)
+    assert counters["auth"] == 4, "re-authenticated on every request incl the two replays"
+    assert (
+        counters["acquire"] == 2 and counters["dict_handler"] == 1 and counters["resp_handler"] == 1
     )
-    assert counters["acquire"] == 2, "lease acquired once per identity (miss only), not on replay"
-    assert counters["dict_handler"] == 1 and counters["resp_handler"] == 1, (
-        "handler mutates only on miss"
+    # identity binds the validated principal TUPLE (issuer, subject, presence), not token text.
+    assert obs.stored[0][:3] == ("https://auth.test", "eric", "eric/claude-code")
+
+
+def test_d3_same_key_same_identity_different_body_is_409_no_handler() -> None:
+    _cache, counters, _obs, client = _mk()
+    a = client.post("/dict", headers=_h("eric", "k"), json={"payload": "A"})
+    assert a.status_code == 200
+    b = client.post(
+        "/dict", headers=_h("eric", "k"), json={"payload": "B"}
+    )  # same identity, diff body
+    assert b.status_code == 409, "same identity + different body must be 409, not a replay"
+    assert b.headers.get("x-idempotent-replay") is None
+    assert counters["dict_handler"] == 1, "the 409 must NOT run the handler (no second mutation)"
+
+
+def test_d3_same_key_across_namespace_is_distinct_execution() -> None:
+    _cache, counters, _obs, client = _mk()
+    r_a = client.post("/dict?namespace=eric/a", headers=_h("eric", "k"), json={"p": 1})
+    r_b = client.post(
+        "/dict?namespace=eric/b", headers=_h("eric", "k"), json={"p": 1}
+    )  # same key, other ns
+    assert r_a.status_code == 200 and r_b.status_code == 200
+    assert r_b.headers.get("x-idempotent-replay") is None, (
+        "cross-namespace must NOT replay/disclose"
     )
-    assert obs.released == obs.acquired_seen and len(obs.released) == 2, (
-        "each acquired lease released"
+    assert counters["dict_handler"] == 2, "distinct authorized namespaces execute distinctly"
+
+
+def test_d3_json_byte_exact_whitespace_or_keyorder_change_is_409_not_replay() -> None:
+    """Locks the canonicalisation contract as BYTE-EXACT (not semantic JSON equivalence): the same
+    logical JSON with different whitespace/key-order is a DIFFERENT digest → 409, never a replay."""
+    _cache, counters, _obs, client = _mk()
+    ct = {"content-type": "application/json"}
+    first = client.post("/dict", headers={**_h("eric", "k"), **ct}, content=b'{"a":1,"b":2}')
+    assert first.status_code == 200
+    reorder = client.post("/dict", headers={**_h("eric", "k"), **ct}, content=b'{"b":2, "a":1}')
+    assert reorder.status_code == 409, (
+        "different bytes (key-order+whitespace) → 409, NOT semantic replay"
     )
-    r2 = client.post("/resp", headers=_auth("eric", "r1"))
-    assert any("s=1" in c for c in r2.headers.get_list("set-cookie")), (
-        "Set-Cookie preserved on replay"
+    assert counters["dict_handler"] == 1, "byte-different body did not re-run the handler"
+
+
+def test_d3_duplicate_idempotency_key_header_is_400() -> None:
+    _cache, counters, _obs, client = _mk()
+    r = client.post(
+        "/dict",
+        headers=[
+            ("authorization", "Bearer tok-eric"),
+            ("idempotency-key", "a"),
+            ("idempotency-key", "b"),
+        ],
+        json={"p": 1},
     )
+    assert r.status_code == 400, "duplicate Idempotency-Key headers must fail 400 (not first-wins)"
+    assert counters["dict_handler"] == 0 and counters["acquire"] == 0
 
 
 def test_d3_control_eligible_path_without_state_never_stores_or_acquires() -> None:
-    """A route with NO idem dependency writes no scope state → the observer stores nothing, sees
-    no lease, and never replays, even with an Idempotency-Key present."""
     _cache, counters, obs, client = _mk()
-    r1 = client.post("/no-idem", headers=_auth("eric", "k"))
-    r2 = client.post("/no-idem", headers=_auth("eric", "k"))
-    assert r1.status_code == 200 and r2.status_code == 200
+    client.post("/no-idem", headers=_h("eric", "k"), json={"p": 1})
+    client.post("/no-idem", headers=_h("eric", "k"), json={"p": 1})
     assert obs.stored == [] and obs.acquired_seen == [] and obs.released == []
-    assert counters["no_idem_handler"] == 2, "no state → no replay; the handler runs both times"
+    assert counters["no_idem_handler"] == 2, (
+        "no dependency state → no replay; handler runs both times"
+    )
 
 
 def test_d3_control_invalid_auth_never_looks_up_or_acquires() -> None:
-    _cache, counters, obs, client = _mk()
-    # seed a cache entry under a valid principal first
-    client.post("/dict", headers=_auth("eric", "d1"))
-    before = dict(_cache)
-    r = client.post("/dict", headers={"Authorization": "Bearer BAD", "Idempotency-Key": "d1"})
-    assert r.status_code == 401, "invalid auth is rejected by the authn dependency"
-    assert counters["acquire"] == 1, "the idem dependency never ran (edge after failed authz)"
-    assert _cache == before and obs.stored == ["eric::/dict::d1"], "no store/lookup on the 401 path"
+    cache, counters, _obs, client = _mk()
+    client.post("/dict", headers=_h("eric", "d1"), json={"p": 1})  # seed
+    before = dict(cache)
+    r = client.post(
+        "/dict", headers={"Authorization": "Bearer BAD", "Idempotency-Key": "d1"}, json={"p": 1}
+    )
+    assert r.status_code == 401
+    assert counters["acquire"] == 1 and cache == before, (
+        "idem edge never ran; no lookup/acquire/store"
+    )
 
 
 def test_d3_control_foreign_namespace_never_looks_up_or_acquires() -> None:
     _cache, counters, _obs, client = _mk()
-    client.post("/dict?namespace=eric/x", headers=_auth("eric", "d1"))  # authorized, stores
-    acquire_after_seed = counters["acquire"]
-    r = client.post("/dict?namespace=eric/x", headers=_auth("mallory", "d1"))  # foreign ns
-    assert r.status_code == 403, "foreign namespace rejected by authz before idem"
-    assert counters["acquire"] == acquire_after_seed, "idem dependency never ran on the 403 path"
+    client.post("/dict?namespace=eric/x", headers=_h("eric", "d1"), json={"p": 1})
+    acq = counters["acquire"]
+    r = client.post("/dict?namespace=eric/x", headers=_h("mallory", "d1"), json={"p": 1})
+    assert r.status_code == 403 and counters["acquire"] == acq, "authz blocks before idem runs"
 
 
 def test_d3_control_5xx_not_cached_lease_released() -> None:
     _cache, counters, obs, client = _mk()
-    r = client.post("/boom", headers=_auth("eric", "b1"))
-    assert r.status_code == 503
-    assert obs.stored == [], "a real exception-handler 5xx is not cached"
-    assert obs.released == ["lease:eric::/boom::b1"], "lease released on the 5xx path"
-    client.post("/boom", headers=_auth("eric", "b1"))
+    r = client.post("/boom", headers=_h("eric", "b1"), json={"p": 1})
+    assert r.status_code == 503 and obs.stored == []
+    assert len(obs.released) == 1, "lease released on the 5xx path"
+    client.post("/boom", headers=_h("eric", "b1"), json={"p": 1})
     assert counters["boom_handler"] == 2, "nothing cached → handler runs again (no false replay)"
 
 
 def test_d3_control_key_collision_across_principal_and_operation_does_not_replay() -> None:
-    """The anti-SEC-002 control: the SAME Idempotency-Key must NOT replay across a different
-    principal OR a different operation — identity is principal- and operation-bound."""
     _cache, counters, _obs, client = _mk()
-    client.post("/dict", headers=_auth("eric", "shared"))  # store under eric::/dict::shared
-    # same key, DIFFERENT principal → different identity → miss → handler runs, NOT a replay
-    r_other_principal = client.post("/dict", headers=_auth("mallory", "shared"))
-    assert r_other_principal.headers.get("x-idempotent-replay") is None, "no cross-principal replay"
-    # same key + same principal, DIFFERENT operation (route) → different identity → miss
-    r_other_op = client.post("/resp", headers=_auth("eric", "shared"))
-    assert r_other_op.headers.get("x-idempotent-replay") is None, "no cross-operation replay"
-    assert counters["dict_handler"] == 2 and counters["resp_handler"] == 1, (
-        "each distinct identity executed"
-    )
+    client.post("/dict", headers=_h("eric", "shared"), json={"p": 1})
+    other_principal = client.post("/dict", headers=_h("mallory", "shared"), json={"p": 1})
+    assert other_principal.headers.get("x-idempotent-replay") is None, "no cross-principal replay"
+    other_op = client.post("/resp", headers=_h("eric", "shared"), json={"p": 1})
+    assert other_op.headers.get("x-idempotent-replay") is None, "no cross-operation replay"
+    assert counters["dict_handler"] == 2 and counters["resp_handler"] == 1
