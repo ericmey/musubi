@@ -1,13 +1,13 @@
 {
   "agent": "tama",
   "branch": "slice/release-automation-issue449",
-  "timestamp": "2026-07-13T19:15:00Z",
-  "reason": "Issue #449 release-automation architecture-contract hardening. Tests/docs/design only per Yua 2026-07-13 19:11:24. The contract is Option C (intentionally separate main/release builds with explicit expected digest divergence). The 6 invariants are mechanically testable via the wrong-fixture mutation tests. The previous red-contract framing and self-referential AST/mtime proof are REMOVED. No source/workflow/deploy changes. No live GitHub Actions calls. No host contact. No merge.",
+  "timestamp": "2026-07-13T19:50:00Z",
+  "reason": "Issue #449 release-automation architecture-contract hardening. Tests/docs/design only per Yua 2026-07-13 19:11:24 and 6e07c56. The contract is Option C (intentionally separate main/release builds with explicit expected digest divergence). The 6 invariants are mechanically testable via the wrong-fixture mutation tests. The previous red-contract framing and self-referential AST/mtime proof are REMOVED. NEW HARDENING DEFECT: workflow_dispatch unconditionally allows an explicit tag=main; a strict red reproduces this against the current source. Per Yua 6e07c56: Invariant 5 is now a real failure; Invariant 3 enforces condition policy for each required supply-chain step; Invariant 6 proves channel-specific configuration (no prose); Invariant 2 encodes latest policy explicitly; control 5 mutation helper is no longer vacuous; Invariant 1 clarified as PUSH trigger set. No source/workflow/deploy changes. No live GH. No host. No merge.",
   "owns_paths": [
     "docs/Musubi/_slices/slice-release-automation-issue449.md",
     "docs/Musubi/_inbox/locks/slice-release-automation-issue449.lock",
     "tests/release/test_release_automation_issue449.py"
   ],
   "sid": "slice-release-automation-issue449",
-  "scope": "Release-automation architecture-contract hardening tests/docs/design only. 6 architecture-contract invariants + 6 wrong-fixture mutation tests + 4 legitimate controls. No source/workflow/deploy changes. No live GH. No host. No merge. Aoi R20 separate second read when it lands."
+  "scope": "Release-automation architecture-contract hardening tests/docs/design only. 6 architecture-contract invariants + 1 strict red + 6 wrong-fixture mutation tests + 6 legitimate controls. No source/workflow/deploy changes. No live GH. No host. No merge. Aoi R20 separate second read when it lands."
 }
