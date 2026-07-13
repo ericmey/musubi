@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Path, Request
 from qdrant_client import QdrantClient, models
 
-from musubi.api.auth import require_auth
+from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError, ErrorCode
 from musubi.api.responses import NamespaceListResponse, NamespaceStats
@@ -58,14 +58,20 @@ async def list_namespaces(
     dependencies=[Depends(require_auth(namespace_qs_param="namespace_path"))],
 )
 async def namespace_stats(
+    request: Request,
     namespace_path: str = Path(...),
     qdrant: QdrantClient = Depends(get_qdrant_client),
+    settings: Settings = Depends(get_settings_dep),
 ) -> NamespaceStats:
     """Counts per plane for the given namespace + last activity epoch.
 
     The ``namespace_path`` arrives URL-encoded (slashes → ``%2F``) per
     standard FastAPI ``:path`` handling.
     """
+    # SEC-003: the namespace arrives via Path, which require_auth cannot see (it reads the
+    # query string). Authorize the parsed Path namespace with route-native shared authz so a
+    # read-scoped token is required for the namespace whose stats are being read.
+    authorize_namespace(request, namespace_path, settings=settings, access="r")
     counts: dict[str, int] = {}
     last_epoch = 0.0
     for collection, key in (

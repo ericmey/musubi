@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, Up
 from pydantic import BaseModel
 from qdrant_client import QdrantClient
 
-from musubi.api.auth import require_auth
+from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import get_artifact_plane, get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError
 from musubi.lifecycle.transitions import transition
@@ -35,6 +35,7 @@ class ArtifactCreateResponse(BaseModel):
     dependencies=[Depends(require_auth(access="w"))],
 )
 async def upload_artifact(
+    request: Request,
     namespace: str = Form(...),
     title: str = Form(...),
     content_type: str = Form(...),
@@ -44,6 +45,10 @@ async def upload_artifact(
     plane: ArtifactPlane = Depends(get_artifact_plane),
     settings: Settings = Depends(get_settings_dep),
 ) -> ArtifactCreateResponse:
+    # SEC-003: the namespace arrives via Form, which require_auth cannot see (it reads the
+    # query string). Authorize the parsed Form namespace with route-native shared authz so a
+    # write-scoped token is required for the namespace actually being written.
+    authorize_namespace(request, namespace, settings=settings, access="w")
     raw = await file.read()
     sha = hashlib.sha256(raw).hexdigest()
     saved = await plane.create(

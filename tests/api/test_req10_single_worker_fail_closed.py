@@ -37,7 +37,6 @@ from musubi.api.app import create_app
 from musubi.settings import Settings
 
 _SERVICE_FILE = Path(__file__).resolve().parents[2] / "deploy" / "systemd" / "musubi-api.service"
-_WORKER_ENV = "WEB_CONCURRENCY"  # the standard uvicorn/gunicorn worker-count signal
 
 
 def _execstart() -> str:
@@ -78,10 +77,6 @@ def test_guard_prototype_rejects_multi_worker() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="REQ-10: systemd ExecStart does not explicitly pin --workers 1 yet — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #410)",
-)
 def test_systemd_must_pin_single_worker() -> None:
     """The runtime must PIN one worker, not rely on uvicorn's implicit default."""
     assert _workers_in(_execstart()) == 1, (
@@ -106,45 +101,30 @@ def test_systemd_never_drifts_above_one_worker() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_create_app_has_no_web_concurrency_guard_today_control(
-    api_settings: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """TODAY-REALITY control (not xfail): create_app builds under WEB_CONCURRENCY=4, proving the
-    guard is absent so the red below fails for the right reason."""
-    monkeypatch.setenv(_WORKER_ENV, "4")
+def test_create_app_builds_without_web_concurrency_signal(api_settings: Settings) -> None:
+    """Feature preservation: with the default web_concurrency (1) the guard does not fire and
+    create_app builds normally. (Replaces the pre-fix guard-absent control.)"""
+    assert api_settings.web_concurrency == 1
     assert create_app(settings=api_settings) is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="REQ-10: create_app does not fail closed on WEB_CONCURRENCY>1 yet — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #410)",
-)
-def test_create_app_must_fail_closed_on_web_concurrency(
-    api_settings: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv(_WORKER_ENV, "4")
-    with pytest.raises((RuntimeError, ValueError)):
-        create_app(settings=api_settings)
+def test_create_app_must_fail_closed_on_web_concurrency(api_settings: Settings) -> None:
+    """create_app must refuse to build when the WEB_CONCURRENCY signal (Settings.web_concurrency,
+    which reads the WEB_CONCURRENCY env) is > 1. Driven through Settings — config never comes
+    from os.environ in app code."""
+    multi = api_settings.model_copy(update={"web_concurrency": 4})
+    with pytest.raises(RuntimeError):
+        create_app(settings=multi)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="REQ-10: Settings has no api_workers field rejecting >1 yet — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #410)",
-)
 def test_settings_must_reject_api_workers_gt_1(api_settings: Settings) -> None:
-    """Settings must carry an api_workers field that REJECTS >1 (not merely store it). The
-    field-presence assert fails today (no field); once the field exists, the behavioural check
-    proves it actually rejects 2 — a bare unconstrained int leaves this xfailing."""
-    assert "api_workers" in Settings.model_fields, "Settings has no api_workers field yet"
-    # reached only once the field exists: constructing with 2 must be rejected.
+    """Settings.api_workers must REJECT >1 (fail-closed), not merely store it."""
+    assert "api_workers" in Settings.model_fields, "Settings has no api_workers field"
     with pytest.raises(Exception):
         Settings.model_validate({**api_settings.model_dump(mode="python"), "api_workers": 2})
 
 
-def test_single_worker_config_still_boots(
-    api_settings: Settings, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Feature preservation: a legitimate single-worker signal must still boot. Green before and
-    after the fix."""
-    monkeypatch.setenv(_WORKER_ENV, "1")
-    assert create_app(settings=api_settings) is not None
+def test_single_worker_config_still_boots(api_settings: Settings) -> None:
+    """Feature preservation: a legitimate single-worker config must still boot."""
+    single = api_settings.model_copy(update={"web_concurrency": 1})
+    assert create_app(settings=single) is not None

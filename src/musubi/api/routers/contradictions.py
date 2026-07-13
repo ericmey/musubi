@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+import logging
+
+from fastapi import APIRouter, Depends, Query, Request
 from qdrant_client import QdrantClient, models
 
-from musubi.api.auth import require_auth
-from musubi.api.dependencies import get_qdrant_client
+from musubi.api.auth import require_auth, require_operator_scope
+from musubi.api.dependencies import get_qdrant_client, get_settings_dep
+from musubi.api.errors import APIError
 from musubi.api.responses import ContradictionListResponse, ContradictionPair
+from musubi.settings import Settings
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/contradictions", tags=["contradictions"])
 
@@ -18,14 +24,17 @@ router = APIRouter(prefix="/v1/contradictions", tags=["contradictions"])
     dependencies=[Depends(require_auth())],
 )
 async def list_contradictions(
+    request: Request,
     namespace: str | None = Query(None),
     qdrant: QdrantClient = Depends(get_qdrant_client),
+    settings: Settings = Depends(get_settings_dep),
 ) -> ContradictionListResponse:
     """Concept rows whose ``contradicts`` field is non-empty.
 
-    Cross-namespace by default (operator scope); namespace-scoped when
-    ``namespace`` is supplied. The data source is the concept plane
-    payload — concepts mark each other as contradicting during synthesis
+    Namespace-scoped when ``namespace`` is supplied (the route-level ``require_auth`` authorizes
+    the query namespace). Omitting the namespace is a cross-tenant fan-out and requires OPERATOR
+    scope (SEC-004) — never an all-tenant scroll under ordinary auth. The data source is the
+    concept plane payload — concepts mark each other as contradicting during synthesis
     (slice-lifecycle-synthesis).
     """
     scroll_filter: models.Filter | None = None
@@ -35,6 +44,10 @@ async def list_contradictions(
                 models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
             ]
         )
+    else:
+        # SEC-004: an omitted namespace scrolls every tenant's concepts. That fan-out must
+        # require operator scope, not the ordinary require_auth on the route.
+        require_operator_scope(request, settings=settings)
     try:
         records, _ = qdrant.scroll(
             collection_name="musubi_concept",
@@ -42,8 +55,20 @@ async def list_contradictions(
             limit=200,
             with_payload=True,
         )
-    except Exception:
-        return ContradictionListResponse(items=[])
+    except Exception as exc:
+        # SEC-004 / RET-007: a backend outage must surface as an error, never a clean-looking
+        # empty 200 that is indistinguishable from "no contradictions". The broad Exception is
+        # accepted only at this boundary (the alternative is a generic 500) — the original
+        # exception stays CHAINED (`from exc`) and LOG-VISIBLE with its traceback (Yua).
+        log.exception(
+            "contradictions backend scroll failed; returning 503",
+            extra={"namespace": namespace, "collection": "musubi_concept"},
+        )
+        raise APIError(
+            status_code=503,
+            code="BACKEND_UNAVAILABLE",
+            detail="contradictions backend unavailable",
+        ) from exc
 
     pairs: list[ContradictionPair] = []
     for rec in records:

@@ -22,7 +22,6 @@ from __future__ import annotations
 import io
 from typing import Any
 
-import pytest
 from starlette.testclient import TestClient
 
 from musubi.settings import Settings
@@ -45,10 +44,6 @@ def _multipart(namespace: str) -> dict[str, Any]:
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SEC-003: Form namespace bypasses write scope — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #408)",
-)
 def test_upload_cross_tenant_namespace_must_be_403(
     client: TestClient, api_settings: Settings
 ) -> None:
@@ -85,10 +80,6 @@ def test_upload_no_token_must_be_401(client: TestClient) -> None:
     assert r.status_code == 401, f"unauthenticated upload returned {r.status_code}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="SEC-003: Path namespace stats bypasses read scope — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #408)",
-)
 def test_namespace_stats_cross_tenant_must_be_403(
     client: TestClient, api_settings: Settings
 ) -> None:

@@ -3,14 +3,15 @@ title: "Slice: SEC-003 — namespace outside the query string bypasses scope aut
 slice_id: slice-sec-003-namespace-outside-query
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: aoi
 phase: "Security audit 2026-07-12 (Eric, discoverer)"
-tags: [section/slices, status/in-progress, type/slice, security, p0, auth, scope]
+tags: [section/slices, status/done, type/slice, security, p0, auth, scope]
 updated: 2026-07-12
-reviewed: false
+reviewed: true
+issue: 408
 depends-on: []
-blocks: [slice-auth-boundary-red-contract]
+blocks: [slice-auth-boundary-red-contract, slice-auth-boundary-phase-a]
 ---
 
 # SEC-003 (C2) — namespace outside the query string bypasses scope auth  ·  P0
@@ -66,7 +67,18 @@ Red tests + inventory + design. No production code; `src/musubi/**` FORBIDDEN.
 `forbidden_paths`:
 - `src/musubi/**` (auth is a frozen boundary; fix is ADR-gated / `slice-api-v*`)
 
+## Specs to implement
+
+- [[_slices/slice-sec-003-namespace-outside-query]] — closed by PR #403 (Phase A); the numbered Test Contract below resolves at #403 head (all passing).
+
 ## Test Contract (Yua)
+
+Closure (numbered, resolve at #403 head — all passing; `make tc-coverage` exit 0):
+1. `test_upload_cross_tenant_namespace_must_be_403` Form namespace scope enforced (SEC-003).
+2. `test_namespace_stats_cross_tenant_must_be_403` Path namespace scope enforced (SEC-003).
+3. `test_upload_own_namespace_still_succeeds` own-namespace upload preserved (control).
+4. `test_upload_no_token_must_be_401` no-token upload → 401 (control).
+
 
 `xfail(strict=True)` — asserts the secure behaviour, fails today, flips green when fixed.
 Synthetic content only.

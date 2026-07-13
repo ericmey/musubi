@@ -708,7 +708,11 @@ def test_contradictions_endpoint_responds(
     client: TestClient,
     auth: dict[str, str],
 ) -> None:
-    r = client.get("/v1/contradictions", headers=auth)
+    # SEC-004: omitting the namespace is a cross-tenant fan-out that now requires operator
+    # scope. An ordinary token reads its OWN namespace's contradictions (the happy path).
+    r = client.get(
+        "/v1/contradictions", params={"namespace": "eric/claude-code/concept"}, headers=auth
+    )
     assert r.status_code == 200
     assert "items" in r.json()
 
