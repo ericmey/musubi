@@ -73,6 +73,7 @@ expected_version, state, event_id, ...) is committed BEFORE the Qdrant mutation.
 import ast
 import asyncio
 import hashlib
+import json
 import sqlite3
 import subprocess
 import sys
@@ -465,9 +466,40 @@ class _RefCoordinator:
         return _qdrant_state(self._client, collection, object_id)
 
     def _intent_digest(self, i: _RefIntent) -> str:
-        """Canonical identity of the REQUESTED operation (Yua R10) - what an operation_key must map to.
-        A retry with the same key but a different intent (target/expected/namespace) is a conflict."""
-        canon = f"{i.collection}|{i.object_id}|{i.namespace}|{i.expected_version}|{i.target_state}"
+        """Canonical identity of the REQUESTED operation (Yua R10) - what an operation_key must map to. It
+        binds EVERY event/patch-affecting field, including actor + reason (who/why), via a collision-safe
+        canonical JSON encoding (NOT delimiter concatenation, which collides e.g. actor='a|b',reason='c'
+        vs actor='a',reason='b|c'). A retry with the same key but any different field is a conflict."""
+        fields: dict[str, object] = {
+            "collection": i.collection,
+            "object_id": i.object_id,
+            "namespace": i.namespace,
+            "expected_version": i.expected_version,
+            "target_state": i.target_state,
+            "actor": i.actor,
+            "reason": i.reason,
+        }
+        if self._mode == "digest_no_actor":  # WRONG: omits actor -> misattributes who (R10)
+            fields.pop("actor")
+        if self._mode == "digest_no_reason":  # WRONG: omits reason -> misattributes why (R10)
+            fields.pop("reason")
+        if (
+            self._mode == "delimiter_digest"
+        ):  # WRONG: delimiter concat -> collision-vulnerable (R10)
+            joined = "|".join(
+                str(v)
+                for v in (
+                    i.collection,
+                    i.object_id,
+                    i.namespace,
+                    i.expected_version,
+                    i.target_state,
+                    i.actor,
+                    i.reason,
+                )
+            )
+            return hashlib.sha256(joined.encode()).hexdigest()
+        canon = json.dumps(fields, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canon.encode()).hexdigest()
 
     def _write_pending(
@@ -830,6 +862,8 @@ def _intent(
     to_state: str,
     operation_key: str | None = None,
     expected_version: int | None = None,
+    actor: str = "t",
+    reason: str = "r",
 ) -> Any:
     return _api().TransitionIntent(
         collection=seed.collection,
@@ -837,8 +871,8 @@ def _intent(
         namespace=seed.namespace,
         expected_version=seed.version if expected_version is None else expected_version,
         target_state=to_state,
-        actor="t",
-        reason="r",
+        actor=actor,
+        reason=reason,
         operation_key=operation_key,
     )
 
@@ -1170,20 +1204,66 @@ def _check_r10(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         raise DefectStillPresent("an identical retry must produce EXACTLY ONE FINAL event")
     if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
         raise DefectStillPresent("the object must be at target after exactly one effective apply")
-    # (b) same key, DIFFERENT intent (different target) => operation_key_conflict; nothing changes.
-    n1 = calls["n"]
-    conflicting = _intent(seed, to_state="demoted", operation_key="op-r10")  # same key, new target
-    rc = coord.transition(conflicting)
-    if not isinstance(rc, Err) or getattr(rc.error, "code", None) != "operation_key_conflict":
-        raise DefectStillPresent(
-            "reusing an operation_key for a DIFFERENT intent must be an exact operation_key_conflict Err"
+
+    # (b-d) same key op-r10 but a DIFFERENT event-affecting field => exact operation_key_conflict, with
+    # NO apply / NO new row / NO event / NO object change. Yua: bind target AND actor AND reason.
+    def _expect_conflict(bad: Any, why: str) -> None:
+        before_calls = calls["n"]
+        rc = coord.transition(bad)
+        if not isinstance(rc, Err) or getattr(rc.error, "code", None) != "operation_key_conflict":
+            raise DefectStillPresent(
+                f"reusing an operation_key for a DIFFERENT {why} must be conflict"
+            )
+        if calls["n"] - before_calls != 0:
+            raise DefectStillPresent(f"an operation_key {why}-conflict must NOT apply anything")
+        if len(_outbox_for_object(db_path, seed.object_id)) != 1:
+            raise DefectStillPresent(
+                f"an operation_key {why}-conflict must NOT create a new outbox row"
+            )
+        if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+            raise DefectStillPresent(f"an operation_key {why}-conflict must not change the object")
+
+    _expect_conflict(_intent(seed, to_state="demoted", operation_key="op-r10"), "target")
+    _expect_conflict(
+        _intent(seed, to_state="matured", operation_key="op-r10", actor="other"), "actor"
+    )
+    _expect_conflict(
+        _intent(seed, to_state="matured", operation_key="op-r10", reason="other"), "reason"
+    )
+    # (e) delimiter-collision adversarial: (actor='a|b', reason='c') and (actor='a', reason='b|c') are the
+    # SAME under a naive '|' join but DIFFERENT operations - the canonical encoding must treat them as a
+    # conflict, not a replay (a delimiter_digest candidate collides them and replays -> caught here).
+    op = "op-r10-delim"
+    ra = coord.transition(
+        _intent(
+            seed,
+            to_state="matured",
+            operation_key=op,
+            expected_version=seed.version + 1,
+            actor="a|b",
+            reason="c",
         )
-    if calls["n"] - n1 != 0:
-        raise DefectStillPresent("an operation_key conflict must NOT apply anything")
-    if len(_outbox_for_object(db_path, seed.object_id)) != 1:
-        raise DefectStillPresent("an operation_key conflict must NOT create a new outbox row")
-    if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
-        raise DefectStillPresent("an operation_key conflict must not change the object")
+    )
+    if not isinstance(ra, Ok):
+        raise DefectStillPresent("the delimiter-adversarial first op must succeed")
+    before_calls = calls["n"]
+    rb = coord.transition(
+        _intent(
+            seed,
+            to_state="matured",
+            operation_key=op,
+            expected_version=seed.version + 1,
+            actor="a",
+            reason="b|c",
+        )
+    )
+    if not isinstance(rb, Err) or getattr(rb.error, "code", None) != "operation_key_conflict":
+        raise DefectStillPresent(
+            "two intents that collide under a naive '|' join must be an operation_key_conflict, "
+            "not a replay (the digest must use a collision-safe canonical encoding)"
+        )
+    if calls["n"] - before_calls != 0:
+        raise DefectStillPresent("the delimiter-collision conflict must NOT apply anything")
 
 
 # ---- R11: single active intent proven under a TWO-PROCESS begin race (Yua correction D) ------------ #
@@ -1685,7 +1765,16 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r3": (_check_r3, ["classify_all_terminal", "reconcile_no_apply", "reconcile_greedy"]),
     "r4": (_check_r4, ["classify_all_transient"]),
     "r8": (_check_r8, ["finalize_not_atomic"]),
-    "r10": (_check_r10, ["ignore_operation_key"]),
+    "r10": (
+        _check_r10,
+        [
+            "ignore_operation_key",
+            "trust_key_only",
+            "digest_no_actor",
+            "digest_no_reason",
+            "delimiter_digest",
+        ],
+    ),
     "r12": (_check_r12, ["warn_only_fence"]),
 }
 
