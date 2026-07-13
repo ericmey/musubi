@@ -25,6 +25,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -32,6 +33,11 @@ PROM_CONFIG = ROOT / "deploy" / "ansible" / "templates" / "prometheus.yml.j2"
 COMPOSE_TEMPLATE = ROOT / "deploy" / "ansible" / "templates" / "docker-compose.yml.j2"
 GROUP_VARS = ROOT / "deploy" / "ansible" / "group_vars" / "all.yml"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
+UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
+
+
+class DefectStillPresent(Exception):
+    """Raised when the live-proven Prometheus reload contract is absent."""
 
 
 def _load_prom_config() -> Any:
@@ -251,6 +257,55 @@ def test_deploy_playbook_renders_scrape_config() -> None:
         "deploy.yml must render qdrant.token.tpl.j2 so the systemd unit "
         "can authenticate against qdrant /metrics"
     )
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="update.yml atomically replaces the bind-mounted Prometheus config and does not verify the lifecycle-worker target after reload",
+)
+def test_update_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() -> None:
+    """An in-place update must reload the inode mounted by Prometheus and prove the
+    lifecycle-worker target stayed visible.
+
+    This regresses a production failure fixed in the operational ``hw-ansible``
+    source at commit ``8e4da88``. The 1Password source reconciliation must carry
+    that newer behavior forward instead of restoring the stale-inode failure.
+    """
+
+    play = yaml.safe_load(UPDATE_PLAYBOOK.read_text())[0]
+    prometheus_tasks = [
+        task
+        for task in play["tasks"]
+        if task.get("ansible.builtin.template", {}).get("src")
+        == "templates/prometheus.yml.j2"
+    ]
+    if len(prometheus_tasks) != 1:
+        raise DefectStillPresent(
+            f"expected exactly one Prometheus template task, got {len(prometheus_tasks)}"
+        )
+    if prometheus_tasks[0]["ansible.builtin.template"].get("unsafe_writes") is not True:
+        raise DefectStillPresent(
+            "Prometheus config replacement changes the bind-mounted inode; reload sees stale config"
+        )
+
+    handlers = play.get("handlers", [])
+    lifecycle_checks = [
+        handler
+        for handler in handlers
+        if "lifecycle-worker" in yaml.safe_dump(handler)
+        and "/api/v1/query" in yaml.safe_dump(handler)
+    ]
+    if len(lifecycle_checks) != 1:
+        raise DefectStillPresent(
+            "Prometheus reload has no bounded lifecycle-worker target verification"
+        )
+    check = lifecycle_checks[0]
+    if not check.get("listen"):
+        raise DefectStillPresent("lifecycle target verification is not attached to the reload event")
+    check_text = yaml.safe_dump(check)
+    if "retries:" not in check_text or "until:" not in check_text:
+        raise DefectStillPresent("lifecycle target verification is not bounded and asserted")
 
 
 def test_scrape_targets_qdrant_with_bearer_auth() -> None:

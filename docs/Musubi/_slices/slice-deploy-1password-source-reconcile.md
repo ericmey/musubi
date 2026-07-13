@@ -61,6 +61,7 @@ listed in `blocks`.
 5. `test_deploy_play_uses_runtime_secret_templates`
 6. `test_op_connect_inputs_are_root_only_and_secret_tasks_are_no_log`
 7. `test_ansible_templates_remain_parseable_controls`
+8. `test_update_preserves_prometheus_bind_inode_and_verifies_lifecycle_target`
 
 ## Work log
 
@@ -78,3 +79,9 @@ listed in `blocks`.
   clean. Status remains `in-progress`: independent review, check-mode diff,
   serial deployment, and runtime proof are still open; SEC-005 rotation remains
   forbidden.
+- 2026-07-13, codex-gpt5: Independent cross-repo review found that the candidate
+  omitted the production-proven Prometheus bind-inode and lifecycle-target
+  verification from the operational `hw-ansible` source at `8e4da88`. Added a
+  strict red before changing source. Issue #423 and `hw-ansible` issue #3 stay
+  open until both repositories converge and the actual laptop operator path is
+  check-mode reviewed.
