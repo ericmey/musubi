@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.0](https://github.com/ericmey/musubi/compare/v1.11.9...v1.12.0) (2026-07-13)
+
+
+### Features
+
+* **api:** expose RET-003 ranked and recent retrieval evidence ([#436](https://github.com/ericmey/musubi/issues/436)) ([a19d2cd](https://github.com/ericmey/musubi/commit/a19d2cdff07a8ea92abcbd6191e065f72175c1e8))
+
 ## [1.11.9](https://github.com/ericmey/musubi/compare/v1.11.8...v1.11.9) (2026-07-13)
 
 
