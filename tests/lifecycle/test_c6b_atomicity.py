@@ -74,13 +74,14 @@ import ast
 import asyncio
 import hashlib
 import json
+import math
 import sqlite3
 import subprocess
 import sys
 import time
 import warnings
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -418,15 +419,21 @@ class _RefReport:
 
 
 class _TransientQdrantError(RuntimeError):
-    """A transient/unknown Qdrant failure - keep the intent PENDING (retryable) (Yua B/J)."""
+    """A KNOWN-transient Qdrant failure - keep the intent PENDING (retryable) (Yua B/J)."""
 
     terminal = False
+    transient = True
 
 
 class _TerminalQdrantError(RuntimeError):
     """A proven-terminal Qdrant failure - ABANDON, never a FINAL event (Yua J)."""
 
     terminal = True
+
+
+class _UnknownQdrantError(RuntimeError):
+    """An UNKNOWN/unclassified Qdrant failure (Yua R15): NEVER terminal - retried like a transient and
+    kept PENDING, but recorded failure_class='unknown' for later R19 telemetry."""
 
 
 def _intended_patch(intent: _RefIntent) -> dict[str, object]:
@@ -457,6 +464,17 @@ def _canonical_patch_sha(patch: dict[str, object]) -> str:
 # production. The future source phase must surface the SAME positive value from Settings; there is no
 # None/unbounded option. A test overrides it with a small positive N via the pending_cap kwarg.
 DEFAULT_PENDING_CAP = 10_000
+
+# R15 bounded-backoff policy (frozen constants; the future source phase surfaces the same values). A
+# transient/unknown retry is paced by next_attempt_epoch = now + min(BASE * 2**(attempts-1), MAX). The
+# cap is what makes it BOUNDED; attempts is durable observability, NEVER a retry terminator.
+R15_BASE_BACKOFF = 1.0
+R15_MAX_BACKOFF = 300.0
+# the exponent at which BASE*2**exp already saturates MAX - used to cap the EXPONENT so huge durable
+# attempt counts return MAX without ever evaluating an enormous 2**n (overflow-safe).
+_R15_SATURATING_EXP = math.ceil(math.log2(R15_MAX_BACKOFF / R15_BASE_BACKOFF))
+_R15_FIXED_CLOCK = 1_000_000.0  # only used by the fixed_clock_default WRONG candidate
+_R15_WRONG_ABANDON_AT = 5  # attempt count at which the count-based-abandon WRONG candidates give up
 
 
 class _CapExceeded(Exception):
@@ -504,12 +522,18 @@ class _RefCoordinator:
         self._db = str(db_path)
         self._mode = mode
         self._checkpoint: Any = lambda _name: None
+        # R15 injectable clock. PRODUCTION-shaped default is real time.time; a test injects a controllable
+        # clock via this seam. fixed_clock_default (WRONG) freezes the DEFAULT to a constant.
+        self._now: Callable[[], float] = (
+            (lambda: _R15_FIXED_CLOCK) if self._mode == "fixed_clock_default" else time.time
+        )
         con = sqlite3.connect(self._db)
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_outbox (operation_key TEXT PRIMARY KEY, object_id TEXT,"
             " collection TEXT, target_state TEXT, expected_version INTEGER, patch_sha TEXT,"
             " patch_json TEXT,"
-            " intent_digest TEXT, state TEXT, event_id TEXT)"
+            " intent_digest TEXT, state TEXT, event_id TEXT,"
+            " attempts INTEGER DEFAULT 0, next_attempt_epoch REAL, failure_class TEXT)"
         )
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_events (event_id TEXT PRIMARY KEY, object_id TEXT,"
@@ -609,6 +633,77 @@ class _RefCoordinator:
         ):  # WRONG: '>' admits one PAST the cap (should reject AT the cap)
             return bool(count > self._pending_cap)
         return bool(count >= self._pending_cap)
+
+    def _backoff(self, attempts: int) -> float:
+        """Bounded exponential backoff (Yua R15): min(BASE * 2**(attempts-1), MAX). Overflow-safe - the
+        EXPONENT is capped first, so a huge durable attempts count saturates to MAX without ever
+        evaluating an enormous 2**n. unbounded_backoff drops the cap; exponent_overflow evaluates 2**n
+        directly (float-overflows on huge counts)."""
+        exp = max(0, attempts - 1)
+        if self._mode == "exponent_overflow_at_huge_attempts":
+            return float(R15_BASE_BACKOFF * (2**exp))  # WRONG: 2**9999 -> OverflowError on float()
+        if self._mode == "unbounded_backoff":  # WRONG: no MAX cap -> unbounded delay
+            capped_exp = min(exp, _R15_SATURATING_EXP)
+            return float(R15_BASE_BACKOFF * (2**capped_exp))
+        if exp >= _R15_SATURATING_EXP:  # CORRECT: saturate the exponent before computing the power
+            return R15_MAX_BACKOFF
+        return float(min(R15_BASE_BACKOFF * (2**exp), R15_MAX_BACKOFF))
+
+    def _persist_attempt(
+        self,
+        opk: str,
+        *,
+        reschedule: bool,
+        failure_class: str | None = None,
+        state: str | None = None,
+    ) -> None:
+        """R15: increment attempts and (re)schedule next_attempt_epoch (+ optional failure_class / state)
+        in ONE SQLite transaction, so a fault mid-persist NEVER advances attempts with a stale/missing
+        next_attempt_epoch. attempts_not_tracked skips the increment; non_atomic_attempt_schedule splits
+        it across two transactions (a fault between them leaves attempts advanced but the schedule stale)."""
+        now = self._now()
+        con = sqlite3.connect(self._db, isolation_level=None)
+        try:
+            row = con.execute(
+                "SELECT attempts FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+            ).fetchone()
+            base = (row[0] or 0) if row else 0
+            attempts = base + (0 if self._mode == "attempts_not_tracked" else 1)
+            nxt = (now + self._backoff(attempts)) if reschedule else None
+            tail_cols = "next_attempt_epoch=?"
+            tail: list[object] = [nxt]
+            if failure_class is not None:
+                tail_cols += ", failure_class=?"
+                tail.append(failure_class)
+            if state is not None:
+                tail_cols += ", state=?"
+                tail.append(state)
+            if self._mode == "non_atomic_attempt_schedule":
+                # WRONG: attempts lands in its OWN committed txn; a fault before the schedule write leaves
+                # attempts advanced with a stale next_attempt_epoch (caught by the atomic-under-fault case).
+                con.execute("BEGIN IMMEDIATE")
+                con.execute(
+                    "UPDATE lifecycle_outbox SET attempts=? WHERE operation_key=?", (attempts, opk)
+                )
+                con.execute("COMMIT")
+                self._checkpoint("after_attempts_before_schedule")
+                con.execute("BEGIN IMMEDIATE")
+                con.execute(
+                    f"UPDATE lifecycle_outbox SET {tail_cols} WHERE operation_key=?", (*tail, opk)
+                )
+                con.execute("COMMIT")
+            else:
+                con.execute("BEGIN IMMEDIATE")
+                self._checkpoint(
+                    "after_attempts_before_schedule"
+                )  # a fault here rolls back the WHOLE persist
+                con.execute(
+                    f"UPDATE lifecycle_outbox SET attempts=?, {tail_cols} WHERE operation_key=?",
+                    (attempts, *tail, opk),
+                )
+                con.execute("COMMIT")
+        finally:
+            con.close()
 
     def _write_pending(
         self, i: _RefIntent, opk: str, event_id: str, state: str = "PENDING"
@@ -888,12 +983,26 @@ class _RefCoordinator:
         finally:
             con.close()
 
-    def _classify_terminal(self, exc: Exception) -> bool:
+    def _classify(self, exc: Exception) -> str:
+        """3-way failure classification (Yua R15): 'terminal' (proven) -> ABANDON; 'transient' (known) or
+        'unknown' (unclassified) -> keep PENDING + retry. An unknown is NEVER terminal - unknown_is_terminal
+        is the wrong that abandons it. failure_class is recorded for later R19 telemetry."""
         if self._mode == "classify_all_terminal":
-            return True
+            return "terminal"
         if self._mode == "classify_all_transient":
-            return False
-        return bool(getattr(exc, "terminal", False))
+            return "transient"
+        if getattr(exc, "terminal", False):
+            return "terminal"
+        if getattr(exc, "transient", False):
+            return "transient"
+        if (
+            self._mode == "unknown_is_terminal"
+        ):  # WRONG: an unclassified failure abandoned as terminal
+            return "terminal"
+        return "unknown"
+
+    def _classify_terminal(self, exc: Exception) -> bool:
+        return self._classify(exc) == "terminal"
 
     # -- public API -------------------------------------------------------------------------------- #
     def transition(self, intent: _RefIntent) -> Any:
@@ -1003,6 +1112,14 @@ class _RefCoordinator:
             return Ok(value=_RefPending(operation_key=opk, event_id=event_id))
         return Ok(value=_RefFinal(operation_key=opk, event_id=event_id))
 
+    def _wrong_count_abandon(self, attempts_after: int) -> bool:
+        """Count-based termination WRONGs (Yua R15): abandon a transient/unknown once attempts crosses a
+        cap. This is precisely the behavior R15 forbids - transient/unknown are NEVER abandoned by count."""
+        return (
+            self._mode in ("abandon_after_n_attempts", "terminal_on_attempt_cap")
+            and attempts_after >= _R15_WRONG_ABANDON_AT
+        )
+
     def reconcile_once(self, *, limit: int = 100) -> _RefReport:
         # reconcile_greedy (WRONG): also claims already-FINAL rows and re-affirms the payload -> a second
         # reconcile makes extra set_payload calls (caught by R3's exactly-one/zero-apply instrumentation).
@@ -1011,18 +1128,39 @@ class _RefCoordinator:
             if self._mode == "reconcile_greedy"
             else "('PENDING','APPLIED')"
         )
+        now = self._now()
+        # backoff_ignored / early_skip (WRONG) claim not-due rows too; CORRECT filters to DUE rows only
+        # (next_attempt_epoch NULL or in the past), so a not-due row is never even scanned.
+        ignore_due = self._mode in ("backoff_ignored", "early_skip_increments_attempts")
         con = sqlite3.connect(self._db)
-        rows = con.execute(
+        select = (
             "SELECT operation_key,object_id,collection,target_state,expected_version,event_id,state,"
-            f"patch_json FROM lifecycle_outbox WHERE state IN {claim_states} LIMIT ?",
-            (limit,),
-        ).fetchall()
+            "patch_json,attempts,next_attempt_epoch FROM lifecycle_outbox WHERE state IN "
+        )
+        if ignore_due:
+            rows = con.execute(f"{select}{claim_states} LIMIT ?", (limit,)).fetchall()
+        else:
+            rows = con.execute(
+                f"{select}{claim_states} AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
+                "LIMIT ?",
+                (now, limit),
+            ).fetchall()
         con.close()
         fin = ab = pend = 0
-        for opk, oid, coll, tstate, ver, event_id, state, patch_json in rows:
+        for opk, oid, coll, tstate, ver, event_id, state, patch_json, attempts, next_epoch in rows:
             patch: dict[str, object] = (
                 json.loads(patch_json) if patch_json else {"state": tstate, "version": ver + 1}
             )
+            if self._mode == "scan_increments_attempts":
+                self._persist_attempt(
+                    opk, reschedule=False
+                )  # WRONG: bumps attempts just for scanning
+            not_due = next_epoch is not None and next_epoch > now
+            if not_due and self._mode == "early_skip_increments_attempts":
+                self._persist_attempt(opk, reschedule=False)  # WRONG: increments on a not-due SKIP
+                continue
+            if not_due and self._mode != "backoff_ignored":
+                continue  # CORRECT: a not-due row is a true no-op (no attempt, no increment)
             if state == "FINAL":  # only reachable under reconcile_greedy
                 self._apply_conditional(
                     opk, coll, oid, patch
@@ -1031,7 +1169,9 @@ class _RefCoordinator:
             if state == "APPLIED":
                 if self._mode == "reconcile_always_apply":
                     self._apply_conditional(opk, coll, oid, patch)  # WRONG: re-apply APPLIED (C3)
-                self._finalize(opk, event_id, oid, _NS, tstate)
+                self._finalize(
+                    opk, event_id, oid, _NS, tstate
+                )  # readback-only: NO attempts increment
                 fin += 1
                 continue
             if self._mode == "reconcile_no_apply":
@@ -1040,30 +1180,48 @@ class _RefCoordinator:
                 fin += 1
                 continue
             # Readback FIRST (C2 recovery): if the mutation is already durably applied (a crash after the
-            # Qdrant apply but before the APPLIED commit), recognize it and finalize WITHOUT re-applying.
+            # Qdrant apply but before the APPLIED commit), recognize it and finalize WITHOUT re-applying
+            # (readback-only finalization -> NO attempts increment).
             cur_ver, cur_st = self._cur(coll, oid)
             if self._mode != "reconcile_no_readback" and (cur_ver, cur_st) == (ver + 1, tstate):
                 self._mark(opk, "APPLIED")
                 self._finalize(opk, event_id, oid, _NS, tstate)
                 fin += 1
                 continue
+            # ACTUAL Qdrant apply attempt -> this is the ONLY place attempts increments (via _persist_attempt).
             try:
                 status = self._apply_conditional(opk, coll, oid, patch)
             except Exception as exc:
-                if self._classify_terminal(exc):
-                    self._mark(opk, "ABANDONED")
+                cls = self._classify(exc)
+                if cls == "terminal":
+                    self._persist_attempt(
+                        opk, reschedule=False, state="ABANDONED", failure_class="terminal"
+                    )
                     ab += 1
-                else:
+                elif self._wrong_count_abandon((attempts or 0) + 1):
+                    self._persist_attempt(  # WRONG: count-based abandon of a transient/unknown
+                        opk, reschedule=False, state="ABANDONED", failure_class=cls
+                    )
+                    ab += 1
+                else:  # transient OR unknown -> keep PENDING, increment + reschedule (durable, forever)
+                    self._persist_attempt(opk, reschedule=True, failure_class=cls)
                     pend += 1
                 continue
             if status == "fence":
-                self._mark(opk, "ABANDONED")
+                self._persist_attempt(
+                    opk, reschedule=False, state="ABANDONED", failure_class="terminal"
+                )
                 ab += 1
                 continue
-            if status == "corrupt":  # R13: recoverable, stays PENDING
+            if (
+                status == "corrupt"
+            ):  # R13: recoverable -> transient-like retry (durable, never abandoned)
+                self._persist_attempt(opk, reschedule=True, failure_class="transient")
                 pend += 1
                 continue
-            self._mark(opk, "APPLIED")  # PENDING -> APPLIED before the guarded FINAL txn
+            # confirmed: the attempt happened (increment) and cleared the schedule, then APPLIED -> FINAL.
+            self._persist_attempt(opk, reschedule=False)
+            self._mark(opk, "APPLIED")
             self._finalize(opk, event_id, oid, _NS, tstate)
             fin += 1
         return _RefReport(claimed=len(rows), finalized=fin, pending=pend, abandoned=ab)
@@ -1523,6 +1681,32 @@ def _fill_outbox(
 def _mark_row(db_path: Path, operation_key: str, state: str) -> None:
     con = sqlite3.connect(str(db_path))
     con.execute("UPDATE lifecycle_outbox SET state=? WHERE operation_key=?", (state, operation_key))
+    con.commit()
+    con.close()
+
+
+def _outbox_field(db_path: Path, operation_key: str, field: str) -> Any:
+    """Read one column of one outbox row (R15: attempts / next_attempt_epoch / failure_class / state)."""
+    if not Path(db_path).exists():
+        return None
+    con = sqlite3.connect(str(db_path))
+    try:
+        row = con.execute(
+            f"SELECT {field} FROM lifecycle_outbox WHERE operation_key=?", (operation_key,)
+        ).fetchone()
+        return row[0] if row else None
+    finally:
+        con.close()
+
+
+def _set_outbox(db_path: Path, operation_key: str, **fields: object) -> None:
+    """Directly set outbox columns (R15 test setup, e.g. seed attempts=9999 / a past next_attempt_epoch)."""
+    con = sqlite3.connect(str(db_path))
+    cols = ", ".join(f"{k}=?" for k in fields)
+    con.execute(
+        f"UPDATE lifecycle_outbox SET {cols} WHERE operation_key=?",
+        (*fields.values(), operation_key),
+    )
     con.commit()
     con.close()
 
@@ -2044,6 +2228,239 @@ def _check_r14(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         c.close()
 
 
+_R15_OP = "op-r15"
+
+
+def _r15_env(base: Path, name: str) -> tuple[QdrantClient, _Seed, Path, Any, dict[str, float]]:
+    """A fresh env + coordinator with an INJECTED mutable clock (deterministic backoff). The clock is a
+    dict so advancing clock['t'] moves 'now' forward past the backoff so a row becomes due again."""
+    c, s, d = _make_env(base / f"r15-{name}")
+    coord = _coordinator(c, d)
+    clock = {"t": 1_000.0}
+    coord._now = lambda: clock["t"]
+    return c, s, d, coord, clock
+
+
+def _r15_hold_pending(coord: Any, c: QdrantClient, s: _Seed, exc: Exception) -> Any:
+    """Drive the intent to a durable PENDING by failing the INITIAL synchronous apply (which must NOT
+    increment attempts)."""
+    _fail_set_payload(c, exc)
+    return coord.transition(_intent(s, to_state="matured", operation_key=_R15_OP))
+
+
+def _check_r15(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """Transient/unknown failures NEVER abandoned by attempt count (Yua R15): durable PENDING preserved,
+    attempts is observability only (increments once per DUE, CLAIMED, ACTUAL Qdrant attempt), bounded
+    overflow-safe backoff, atomic (attempts+schedule) persistence. Termination boundary is EXACTLY
+    {success -> FINAL, proven-terminal -> ABANDONED} - never attempt count. Each scenario is a fresh env."""
+    base = Path(db_path).parent
+    op = _R15_OP
+
+    # (1) N=50 successive transient reconciles -> still PENDING, attempts==50, never ABANDONED, no FINAL;
+    #     the INITIAL synchronous apply does NOT increment; backoff stays bounded <= MAX.
+    c, s, d, coord, clock = _r15_env(base, "n50")
+    try:
+        r0 = _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
+        if not (isinstance(r0, Ok) and isinstance(r0.value, _api().TransitionPending)):
+            raise DefectStillPresent("R15 setup: an initial transient apply must hold Ok(Pending)")
+        if _outbox_field(d, op, "attempts") != 0:
+            raise DefectStillPresent(
+                "R15 the INITIAL synchronous apply must NOT increment attempts"
+            )
+        for _ in range(50):
+            clock["t"] += 1_000.0  # advance past any backoff so the row is due
+            coord.reconcile_once()
+        if _outbox_field(d, op, "state") != "PENDING":
+            raise DefectStillPresent(
+                f"R15 a transient is NEVER abandoned by count; state={_outbox_field(d, op, 'state')} after 50"
+            )
+        if _outbox_field(d, op, "attempts") != 50:
+            raise DefectStillPresent(
+                f"R15 attempts must track exactly 50 due retries, got {_outbox_field(d, op, 'attempts')}"
+            )
+        if _events_for_object(d, s.object_id):
+            raise DefectStillPresent(
+                "R15 a never-succeeding transient must emit NO event / NO FINAL"
+            )
+        nxt = _outbox_field(d, op, "next_attempt_epoch")
+        if nxt is None or float(nxt) - clock["t"] > R15_MAX_BACKOFF + 1e-6:
+            raise DefectStillPresent(
+                f"R15 backoff must be BOUNDED <= {R15_MAX_BACKOFF}, got delay "
+                f"{None if nxt is None else float(nxt) - clock['t']}"
+            )
+    finally:
+        c.close()
+
+    # (2) overflow-safe huge count: seed attempts=9999, one transient -> attempts=10000, PENDING, bounded
+    #     delay - proving the semantic beyond N=50 with no enormous 2**n.
+    c, s, d, coord, clock = _r15_env(base, "huge")
+    try:
+        _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
+        _set_outbox(d, op, attempts=9999, next_attempt_epoch=None)
+        clock["t"] += 1_000.0
+        try:
+            coord.reconcile_once()
+        except OverflowError as e:
+            raise DefectStillPresent(
+                "R15 backoff must be overflow-safe at huge attempts (never evaluate 2**huge)"
+            ) from e
+        if _outbox_field(d, op, "attempts") != 10000 or _outbox_field(d, op, "state") != "PENDING":
+            raise DefectStillPresent(
+                "R15 attempts=9999 -> transient -> PENDING attempts=10000 (no hidden cap above 50)"
+            )
+        nxt = _outbox_field(d, op, "next_attempt_epoch")
+        if nxt is None or float(nxt) - clock["t"] > R15_MAX_BACKOFF + 1e-6:
+            raise DefectStillPresent("R15 huge-count backoff must saturate to <= MAX")
+    finally:
+        c.close()
+
+    # (3) an UNKNOWN failure is retried like a transient (PENDING, increments) and stays classifiable.
+    c, s, d, coord, clock = _r15_env(base, "unknown")
+    try:
+        _r15_hold_pending(coord, c, s, _UnknownQdrantError("?"))
+        clock["t"] += 1_000.0
+        coord.reconcile_once()
+        if _outbox_field(d, op, "state") != "PENDING":
+            raise DefectStillPresent("R15 an UNKNOWN failure must be kept PENDING, never ABANDONED")
+        if _outbox_field(d, op, "attempts") != 1:
+            raise DefectStillPresent(
+                "R15 an unknown reconcile attempt must increment attempts once"
+            )
+        if _outbox_field(d, op, "failure_class") != "unknown":
+            raise DefectStillPresent(
+                "R15 an unknown failure must stay classifiable 'unknown' (R19)"
+            )
+    finally:
+        c.close()
+
+    # (4) a BEFORE-DUE reconcile is a TRUE no-op: no Qdrant attempt, attempts + next_attempt_epoch unchanged.
+    c, s, d, coord, clock = _r15_env(base, "notdue")
+    try:
+        _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
+        clock["t"] += 1_000.0
+        coord.reconcile_once()  # attempts=1, rescheduled to clock+backoff(1) (in the FUTURE)
+        before = (_outbox_field(d, op, "attempts"), _outbox_field(d, op, "next_attempt_epoch"))
+        q_before = _qdrant_state(c, s.collection, s.object_id)
+        calls = _count_set_payload(c)
+        coord.reconcile_once()  # NOT due -> no-op
+        if calls["n"] != 0:
+            raise DefectStillPresent(
+                "R15 a before-due reconcile must NOT attempt Qdrant (0 set_payload)"
+            )
+        after = (_outbox_field(d, op, "attempts"), _outbox_field(d, op, "next_attempt_epoch"))
+        if after != before:
+            raise DefectStillPresent(
+                f"R15 before-due reconcile must be a true no-op: {before} -> {after}"
+            )
+        if _qdrant_state(c, s.collection, s.object_id) != q_before:
+            raise DefectStillPresent("R15 a before-due reconcile must not mutate Qdrant")
+    finally:
+        c.close()
+
+    # (5) eventual SUCCESS -> FINAL, next_attempt_epoch CLEARED, attempts PRESERVED (incl the success attempt).
+    c, s, d, coord, clock = _r15_env(base, "success")
+    try:
+        _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
+        for _ in range(3):
+            clock["t"] += 1_000.0
+            coord.reconcile_once()  # 3 transient -> attempts=3
+        _restore_set_payload(c)
+        clock["t"] += 1_000.0
+        coord.reconcile_once()  # success -> FINAL, attempts=4, next cleared
+        if _outbox_field(d, op, "state") != "FINAL":
+            raise DefectStillPresent("R15 eventual success must reach FINAL")
+        if _outbox_field(d, op, "next_attempt_epoch") is not None:
+            raise DefectStillPresent("R15 success must CLEAR next_attempt_epoch")
+        if _outbox_field(d, op, "attempts") != 4:
+            raise DefectStillPresent(
+                "R15 success must PRESERVE attempts (observability, incl success attempt)"
+            )
+        if _events_for_object(d, s.object_id) != 1:
+            raise DefectStillPresent("R15 eventual success must emit exactly one FINAL event")
+    finally:
+        c.close()
+
+    # (6) PROVEN-TERMINAL -> ABANDONED, next_attempt_epoch CLEARED, attempts PRESERVED (boundary's other side).
+    c, s, d, coord, clock = _r15_env(base, "terminal")
+    try:
+        _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
+        clock["t"] += 1_000.0
+        coord.reconcile_once()  # 1 transient -> attempts=1
+        _fail_set_payload(c, _TerminalQdrantError("boom"))
+        clock["t"] += 1_000.0
+        coord.reconcile_once()  # terminal -> ABANDONED, attempts=2
+        if _outbox_field(d, op, "state") != "ABANDONED":
+            raise DefectStillPresent("R15 a PROVEN-terminal failure must ABANDON")
+        if _outbox_field(d, op, "next_attempt_epoch") is not None:
+            raise DefectStillPresent("R15 ABANDONED must clear next_attempt_epoch")
+        if _outbox_field(d, op, "attempts") != 2:
+            raise DefectStillPresent("R15 ABANDONED must preserve attempts as observability")
+        if _events_for_object(d, s.object_id):
+            raise DefectStillPresent("R15 an ABANDONED intent must emit NO FINAL event")
+    finally:
+        c.close()
+
+    # (7) scheduling persistence is ATOMIC under injected failure: a fault mid-persist must NOT advance
+    #     attempts with a stale/missing next_attempt_epoch (the whole persist rolls back).
+    c, s, d, coord, clock = _r15_env(base, "atomic")
+    try:
+        _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
+        clock["t"] += 1_000.0
+        coord.reconcile_once()  # attempts=1
+        before_attempts = _outbox_field(d, op, "attempts")
+
+        def _fault(name: str) -> None:
+            if name == "after_attempts_before_schedule":
+                raise sqlite3.OperationalError("injected fault mid-persist")
+
+        coord._checkpoint = _fault
+        clock["t"] += 1_000.0
+        with suppress(sqlite3.OperationalError):
+            coord.reconcile_once()  # the fault propagates; a correct persist rolled BOTH writes back
+        if _outbox_field(d, op, "attempts") != before_attempts:
+            raise DefectStillPresent(
+                "R15 a fault mid-persist must NOT advance attempts with a stale schedule (atomic all-or-nothing)"
+            )
+    finally:
+        c.close()
+
+    # (8) readback-only finalization (C2 recovery) must NOT increment attempts.
+    c, s, d, coord, clock = _r15_env(base, "readback")
+    try:
+        _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
+        _restore_set_payload(c)
+        c.set_payload(  # simulate the mutation already durably applied (crash-after-apply)
+            collection_name=s.collection,
+            payload=_intended_patch(_intent(s, to_state="matured", operation_key=op)),
+            points=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=s.object_id)
+                    )
+                ]
+            ),
+        )
+        clock["t"] += 1_000.0
+        coord.reconcile_once()  # readback-only finalize
+        if _outbox_field(d, op, "attempts") != 0:
+            raise DefectStillPresent("R15 readback-only finalization must NOT increment attempts")
+        if _outbox_field(d, op, "state") != "FINAL":
+            raise DefectStillPresent("R15 readback-only recovery must reach FINAL")
+    finally:
+        c.close()
+
+    # (9) the DEFAULT clock is production-shaped real time.time (never a frozen constant).
+    c, s, d = _make_env(base / "r15-clock")
+    try:
+        coord = _coordinator(c, d)  # do NOT inject a clock
+        if abs(float(coord._now()) - time.time()) > 5.0:
+            raise DefectStillPresent(
+                "R15 the coordinator's DEFAULT clock must be real time.time (production-shaped)"
+            )
+    finally:
+        c.close()
+
+
 def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Idempotent replay: a PENDING op processed, then REPLAYED (duplicate delivery), yields EXACTLY ONE
     FINAL, ONE audit event, and ONE EFFECTIVE apply (measured by set_payload calls, not readback), leaving
@@ -2477,6 +2894,11 @@ _R14_REASON = (
     "limit; R14 needs a hard cap on GLOBAL non-terminal rows enforced atomically at admission - at the "
     "cap a fresh begin returns Err(cap_exceeded), Qdrant untouched, no row/event/marker."
 )
+_R15_REASON = (
+    "today a retried transient failure can be given up on (abandoned) by attempt count, losing a durable "
+    "intent; R15 needs transient/unknown failures kept PENDING forever with a durable attempts count "
+    "(observability only) + bounded overflow-safe backoff - abandoned ONLY on proven-terminal, never by count."
+)
 _R10_REASON = (
     "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
     "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
@@ -2508,6 +2930,13 @@ def test_r14_hard_pending_cap_admission_backpressure(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r14(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R15_REASON)
+def test_r15_transient_never_abandoned_by_attempt_count(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r15(*env)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
@@ -3036,6 +3465,22 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
         ],
     ),
     "r12": (_check_r12, ["warn_only_fence"]),
+    "r15": (
+        _check_r15,
+        [
+            "abandon_after_n_attempts",
+            "terminal_on_attempt_cap",
+            "unknown_is_terminal",
+            "attempts_not_tracked",
+            "unbounded_backoff",
+            "backoff_ignored",
+            "fixed_clock_default",
+            "scan_increments_attempts",
+            "early_skip_increments_attempts",
+            "non_atomic_attempt_schedule",
+            "exponent_overflow_at_huge_attempts",
+        ],
+    ),
     "r14": (
         _check_r14,
         [

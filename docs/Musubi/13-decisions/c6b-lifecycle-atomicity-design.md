@@ -114,7 +114,11 @@ Every SQL edge is a guarded `UPDATE ... WHERE state = <expected>` → idempotent
 - **Known terminal** (object-not-found, illegal transition, permanently-violated fence, invalid) →
   `ABANDONED` / `Err`. No FINAL event.
 - **Transient or unknown** (network, timeout, 5xx, client error of unknown kind) → stays `PENDING` /
-  `Ok(Pending)`. Retried by the reconciler with backoff + alert, indefinitely, within the hard cap.
+  `Ok(Pending)`. Retried by the reconciler with **bounded backoff** + a durable `attempts` count
+  (observability only) + alert, **indefinitely** — never abandoned by attempt count. The only
+  pending-depth bound is R14's **global hard cap**, which gates *storage admission* only
+  (`begin` → `Err(cap_exceeded)`); "within the hard cap" is an admission bound, **never** a retry
+  terminator. `attempts` is not a retry cap.
 - **No poison-row starvation:** one perpetually-transient row must NOT block other PENDING rows — the
   reconciler processes rows independently (per-row lease + backoff), never head-of-line-blocks the queue.
 

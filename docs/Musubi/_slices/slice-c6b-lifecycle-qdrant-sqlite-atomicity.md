@@ -62,7 +62,11 @@ A durable-intent transactional outbox spanning Qdrant + SQLite — [[13-decision
 - **Hard version fence + idempotent replay:** `expected_version` becomes a hard fence for the audited
   path (today warn-only), `event_id` is the idempotency key, guarded SQL edges make replay exactly-once.
 - **Lease-based reconciliation:** PENDING rows are claimed via an atomic guarded UPDATE; expired leases
-  (dead workers) are reclaimable; bounded attempts → ABANDONED.
+  (dead workers) are reclaimable. A transient/unknown failure is retried with **bounded backoff** and a
+  **durable `attempts` count** (observability only) — it is **never** abandoned by attempt count. Only a
+  **proven-terminal** classification → `ABANDONED`. `attempts` is not a retry cap: the only pending-depth
+  bound is R14's **global hard cap**, which gates *storage admission* (`begin` → `Err(cap_exceeded)`) and
+  never terminates a retry. "Within the hard cap" means admission only.
 
 ## Relationship to C6
 
