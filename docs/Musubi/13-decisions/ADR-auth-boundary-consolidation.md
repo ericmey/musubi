@@ -25,8 +25,10 @@ dependency (pre-handler); the **store/release** is a thin outer middleware (post
 that does NO lookup, authz, or body read — it only reads `request.state` and caches a
 successful response / releases ownership.
 
-**Every load-bearing claim below was proven against a live Starlette/FastAPI 0.136 app
-before writing this rev** (not asserted):
+**The FOUR PIPELINE claims below were proven against a live Starlette/FastAPI 0.136 app
+before writing this rev** (not asserted). **The multipart canonical-digest (D5) is NOT yet
+proven — it is an explicit spike item (see D5).** Scope the word "proven" to exactly these
+four:
 
 1. an **outer middleware sees `request.state` set by a route dependency**, after
    `call_next` → the split is possible. ✓ proven
@@ -183,7 +185,10 @@ structured fields. (Yua: the digest must distinguish different files; simply exe
 file from the hash would let two different uploads with the same form fields collide on the
 same idempotency key.) Multipart **part order cannot be a security convention** (FastAPI
 parses/spools independently); the design must not depend on `namespace` arriving before
-`file`. Spike item — the streaming-digest-vs-memory tradeoff needs a prototype.
+`file`. **STATUS: UNPROVEN.** Unlike the D3 pipeline claims, this digest design has NOT been
+prototyped — the streaming-chunked-SHA-256 + rewind/spool + per-route-limit behaviour and
+the "different files cannot collide" property must be demonstrated in a runnable spike
+before the D5 fix is authorized. Rev 3 does not claim it proven.
 
 ### D6 — identity is issuer + subject + presence (NOT jti)
 
