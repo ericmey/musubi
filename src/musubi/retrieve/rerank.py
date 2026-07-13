@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from musubi.embedding.base import EmbeddingError
 from musubi.embedding.tei import TEIRerankerClient
+from musubi.retrieve.warnings import RetrievalWarning, reranker_failed
 
 if TYPE_CHECKING:
     from musubi.retrieve.scoring import Hit
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RerankResult:
+    """The result of :func:`rerank`: the top-k ``hits`` plus a RET-007 ``reranker_failed`` warning
+    when the cross-encoder degraded and the ranking fell back to the fused (RRF) order."""
+
+    hits: list[Hit]
+    warnings: tuple[RetrievalWarning, ...] = ()
 
 
 async def rerank(
@@ -21,14 +31,18 @@ async def rerank(
     candidates: list[Hit],
     *,
     top_k: int,
-) -> list[Hit]:
+) -> RerankResult:
     """Score candidates via cross-encoder and return top-k.
 
     If candidate count <= 5, returns input list as-is (reranking is overkill
     for tiny result sets).
     """
     if len(candidates) <= 5:
-        return candidates[:top_k]
+        return RerankResult(hits=candidates[:top_k])
+
+    # A rerank degradation is not plane-specific; within a deep leg the candidates share one plane, so
+    # attribute the warning to that plane (candidates is non-empty here — len > 5).
+    plane = candidates[0].plane
 
     try:
         texts = [_extract_content(c) for c in candidates]
@@ -38,10 +52,10 @@ async def rerank(
             "Reranker failed (TEI down or timeout); falling back to hybrid-only. error=%s",
             exc,
         )
-        return candidates[:top_k]
+        return RerankResult(hits=candidates[:top_k], warnings=(reranker_failed(plane),))
     except Exception as exc:
         logger.error("Unexpected error in reranker: %s", exc, exc_info=True)
-        return candidates[:top_k]
+        return RerankResult(hits=candidates[:top_k], warnings=(reranker_failed(plane),))
 
     # Apply scores to new Hit instances (original is frozen)
     scored = [replace(c, rerank_score=score) for c, score in zip(candidates, scores, strict=True)]
@@ -52,7 +66,7 @@ async def rerank(
     # but also "return ranked[:top_k]".
     # Note: scoring.rank_hits will be called downstream on the reranked list.
     ranked = sorted(scored, key=lambda c: c.rerank_score or -1e9, reverse=True)
-    return ranked[:top_k]
+    return RerankResult(hits=ranked[:top_k])
 
 
 def _extract_content(hit: Hit) -> str:

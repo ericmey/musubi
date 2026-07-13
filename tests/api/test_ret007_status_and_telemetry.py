@@ -105,11 +105,6 @@ def test_total_failure_status_mapping_control(
     )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Telemetry cardinality: musubi_retrieval_warnings_total{warning,plane} must count each distinct (warning,plane) exactly once per request (deduped) and musubi_retrieval_errors_total{kind} once per failed request; neither metric exists yet",
-)
 def test_telemetry_per_request_cardinality(
     monkeypatch: pytest.MonkeyPatch, api_settings: Settings
 ) -> None:
@@ -144,9 +139,9 @@ def test_telemetry_per_request_cardinality(
     async def mock_degraded(*args: Any, **kwargs: Any) -> Any:
         class Envelope:
             def __init__(self) -> None:
-                self.results: list[Any] = [
-                    {"plane": "episodic", "object_id": "1", "namespace": "test/ns", "score": 1.0}
-                ]
+                # degraded-empty is enough to exercise the warning counter; a proper hit object isn't
+                # needed and a raw dict would break row packing.
+                self.results: list[Any] = []
                 # two STRUCTURED warnings with the SAME (code, plane) — the router must dedupe to +1
                 self.warnings = [
                     _FakeWarning("plane_timeout_episodic", "episodic"),

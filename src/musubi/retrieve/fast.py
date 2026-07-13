@@ -11,8 +11,15 @@ from typing import Any
 from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
-from musubi.retrieve.hybrid import HybridHit, QueryEmbeddingCache, RetrievalError, hybrid_search
+from musubi.retrieve.hybrid import (
+    HybridHit,
+    HybridSearchResult,
+    QueryEmbeddingCache,
+    RetrievalError,
+    hybrid_search,
+)
 from musubi.retrieve.scoring import SCORE_WEIGHTS, Hit, ScoreComponents, ScoreWeights, score
+from musubi.retrieve.warnings import RetrievalWarning, plane_error, plane_timeout
 from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
 
 _DEFAULT_STATES: tuple[LifecycleState, ...] = ("matured", "promoted")
@@ -47,7 +54,7 @@ class FastRetrieveResult:
     """Successful fast retrieval response."""
 
     results: list[FastHit]
-    warnings: list[str]
+    warnings: tuple[RetrievalWarning, ...]
     status_code: int = 200
     cache_hit: bool = False
 
@@ -163,26 +170,28 @@ async def run_fast_retrieve(
     )
 
     hits: list[HybridHit] = []
-    warnings: list[str] = []
+    warnings: list[RetrievalWarning] = []
     errors: list[RetrievalError] = []
     for collection_name, plane_result in plane_results:
+        # RET-007: one bounded warning language — a timed-out plane is plane_timeout_<plane>, any other
+        # leg failure is plane_error_<plane>, and a surviving leg threads up its own sparse warnings.
+        plane = collection_name.removeprefix("musubi_")
         if isinstance(plane_result, Ok):
-            hits.extend(plane_result.value)
-        elif plane_result.error.code == "plane_timeout":
-            warnings.append(f"plane: {collection_name} timed out")
+            hits.extend(plane_result.value.hits)
+            warnings.extend(plane_result.value.warnings)
+        elif "timeout" in plane_result.error.code:
+            warnings.append(plane_timeout(plane))
         else:
             errors.append(plane_result.error)
-            warnings.append(f"plane: {collection_name} failed ({plane_result.error.code})")
+            warnings.append(plane_error(plane))
 
     deduped = _dedupe(hits)
     if not deduped and errors:
         return Err(error=_map_error(errors[0]))
-    if not deduped and warnings and all("timed out" in warning for warning in warnings):
-        warnings = ["all planes timed out"] if len(warnings) == len(plane_results) else warnings
 
     result = FastRetrieveResult(
         results=_pack(deduped, now=timestamp, limit=limit, weights=weights),
-        warnings=warnings,
+        warnings=tuple(warnings),
     )
     if response_cache is not None:
         response_cache.put(cache_key, result, now=timestamp)
@@ -201,7 +210,7 @@ async def _query_one(
     cache: QueryEmbeddingCache,
     plane_timeout_s: float,
     sparse_timeout_s: float | None,
-) -> tuple[str, Result[list[HybridHit], RetrievalError]]:
+) -> tuple[str, Result[HybridSearchResult, RetrievalError]]:
     try:
         result = await asyncio.wait_for(
             hybrid_search(

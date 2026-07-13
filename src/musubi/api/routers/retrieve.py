@@ -50,7 +50,12 @@ from musubi.api.responses import RetrieveResponse, RetrieveResultRow
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import resolve_namespace_scope
 from musubi.embedding import Embedder, TEIRerankerClient
+from musubi.observability.retrieval_metrics import (
+    RETRIEVAL_ERRORS_TOTAL,
+    RETRIEVAL_WARNINGS_TOTAL,
+)
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
+from musubi.retrieve.warnings import dedupe
 from musubi.settings import Settings
 from musubi.store import collection_for_plane
 from musubi.types.common import Err
@@ -419,11 +424,21 @@ async def retrieve(
 
     if isinstance(orchestration_result, Err):
         retrieval_err = orchestration_result.error
+        # RET-007: one bounded error-counter increment per failed request.
+        RETRIEVAL_ERRORS_TOTAL.labels(kind=retrieval_err.kind).inc()
         status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
         raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
 
+    envelope = orchestration_result.value
+    # RET-007: count/flatten each DISTINCT (code, plane) exactly once per request. The orchestration
+    # boundary already dedupes; dedupe again here as defense-in-depth so the metric cardinality and the
+    # wire array hold regardless of the caller path.
+    warnings = dedupe(envelope.warnings)
+    for warning in warnings:
+        RETRIEVAL_WARNINGS_TOTAL.labels(warning=warning.code, plane=warning.plane).inc()
+
     rows: list[RetrieveResultRow] = []
-    for hit in orchestration_result.value:
+    for hit in envelope.results:
         rows.append(
             RetrieveResultRow(
                 object_id=hit.object_id,
@@ -447,6 +462,7 @@ async def retrieve(
         results=rows[: body.limit],
         mode=body.mode,
         limit=body.limit,
+        warnings=[warning.code for warning in warnings],
     )
 
 

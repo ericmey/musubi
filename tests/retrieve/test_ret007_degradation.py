@@ -22,6 +22,7 @@ import pytest
 
 from musubi.embedding.fake import FakeEmbedder
 from musubi.retrieve.blended import BlendedRetrievalQuery, run_blended_retrieve
+from musubi.retrieve.deep import DeepResult
 from musubi.retrieve.hybrid import hybrid_search
 from musubi.retrieve.rerank import rerank
 from musubi.retrieve.scoring import Hit
@@ -79,12 +80,18 @@ _SIMPLE_CODES = frozenset({"sparse_embedding_failed", "reranker_failed"})
 _PLANE_PREFIXES = ("plane_timeout_", "plane_error_")
 
 
-def _is_allowlisted(code: str) -> bool:
+def _is_allowlisted(warning: Any) -> bool:
+    # RET-007 impl migration (Yua 2026-07-13): warnings are now structured RetrievalWarning(code,
+    # plane), not strings. The stale string allowlist assertion reads `.code`/`.plane`.
+    if warning.plane not in _FIXED_PLANES:
+        return False
+    code = warning.code
     if code in _SIMPLE_CODES:
         return True
     for prefix in _PLANE_PREFIXES:
         if code.startswith(prefix):
-            return code[len(prefix) :] in _FIXED_PLANES
+            suffix = code[len(prefix) :]
+            return suffix in _FIXED_PLANES and suffix == warning.plane
     return False
 
 
@@ -103,7 +110,7 @@ async def test_control_healthy_zero_match() -> None:
         collection="musubi_episodic",
     )
     assert isinstance(result, Ok)
-    assert result.value == []
+    assert result.value.hits == []
 
 
 async def test_control_successful_rerank() -> None:
@@ -122,7 +129,7 @@ async def test_control_successful_rerank() -> None:
     reranker = MockSuccessReranker()
     result = await rerank(client=cast(Any, reranker), query_text="test", candidates=hits, top_k=5)
     assert reranker.call_count == 1
-    assert len(result) == 5 and result[0].rerank_score == 1.0
+    assert len(result.hits) == 5 and result.hits[0].rerank_score == 1.0
 
 
 async def test_control_successful_sparse() -> None:
@@ -135,7 +142,7 @@ async def test_control_successful_sparse() -> None:
         collection="musubi_episodic",
         sparse_weight=1.0,
     )
-    assert isinstance(result, Ok) and len(result.value) == 1
+    assert isinstance(result, Ok) and len(result.value.hits) == 1
 
 
 async def test_control_successful_blended(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,7 +164,7 @@ async def test_control_successful_blended(monkeypatch: pytest.MonkeyPatch) -> No
             lineage={},
             payload={},
         )
-        return Ok(value=[hit])
+        return Ok(value=DeepResult(hits=cast(Any, [hit])))
 
     monkeypatch.setattr("musubi.retrieve.blended.run_deep_retrieve", mock_run_deep)
     result = await run_blended_retrieve(
@@ -176,11 +183,6 @@ async def test_control_successful_blended(monkeypatch: pytest.MonkeyPatch) -> No
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="C5: hybrid_search swallows TimeoutError into Ok([]) instead of Err (BACKEND_UNAVAILABLE)",
-)
 async def test_c5_hybrid_timeout() -> None:
     result = await hybrid_search(
         client=cast(Any, MockQdrantClient(should_timeout=True)),
@@ -190,7 +192,7 @@ async def test_c5_hybrid_timeout() -> None:
         collection="musubi_episodic",
         timeout_s=0.1,
     )
-    if isinstance(result, Ok) and result.value == []:
+    if isinstance(result, Ok) and result.value.hits == []:
         raise DefectStillPresent("C5: hybrid_search swallowed TimeoutError and returned Ok([])")
     assert isinstance(result, Err)
     assert (
@@ -198,11 +200,6 @@ async def test_c5_hybrid_timeout() -> None:
     )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="H11: blended all-plane failure maps to Ok(empty) instead of an Err envelope (500 INTERNAL)",
-)
 async def test_h11_blended_all_plane_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     query = BlendedRetrievalQuery(
         namespace="test/blended", query_text="test", mode="blended", planes=["episodic", "curated"]
@@ -227,11 +224,6 @@ async def test_h11_blended_all_plane_failure(monkeypatch: pytest.MonkeyPatch) ->
     assert isinstance(result, Err)
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="M15: sparse timeout drops the sparse channel with no `sparse_embedding_failed` warning to the caller",
-)
 async def test_m15_sparse_timeout_silent_fallback() -> None:
     class TimeoutSparseEmbedder(FakeEmbedder):
         async def embed_sparse(self, texts: Any) -> Any:
@@ -245,19 +237,14 @@ async def test_m15_sparse_timeout_silent_fallback() -> None:
         collection="musubi_episodic",
         sparse_timeout_s=0.01,
     )
-    warnings = getattr(result, "warnings", []) if isinstance(result, Ok) else []
-    if isinstance(result, Ok) and "sparse_embedding_failed" not in warnings:
+    codes = [w.code for w in result.value.warnings] if isinstance(result, Ok) else []
+    if isinstance(result, Ok) and "sparse_embedding_failed" not in codes:
         raise DefectStillPresent(
             "M15: sparse timeout dropped the channel silently — no `sparse_embedding_failed` warning"
         )
-    assert isinstance(result, Err) or "sparse_embedding_failed" in getattr(result, "warnings", [])
+    assert isinstance(result, Err) or "sparse_embedding_failed" in codes
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="M15: reranker failure falls back to RRF silently with no `reranker_failed` warning",
-)
 async def test_m15_rerank_failure_silent_fallback() -> None:
     hits = [
         Hit(
@@ -275,18 +262,13 @@ async def test_m15_rerank_failure_silent_fallback() -> None:
     assert reranker.call_count == 1, "reranker must be called"
     # Contract: on reranker failure the caller must receive a `reranker_failed` warning. rerank()
     # returns a bare list today, carrying NO warning channel — the degradation is invisible.
-    warnings = getattr(result, "warnings", None)
-    if warnings is None or "reranker_failed" not in warnings:
+    codes = [w.code for w in result.warnings]
+    if "reranker_failed" not in codes:
         raise DefectStillPresent(
             "M15: reranker failure fell back to RRF silently — no `reranker_failed` warning surfaced"
         )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Partial-plane: M<N plane failure must surface a bounded plane_timeout_/plane_error_ code, not free-text",
-)
 async def test_partial_plane_failure_surfaces_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     query = BlendedRetrievalQuery(
         namespace="test/blended", query_text="test", mode="blended", planes=["episodic", "curated"]
@@ -314,7 +296,7 @@ async def test_partial_plane_failure_surfaces_warning(monkeypatch: pytest.Monkey
             lineage={},
             payload={},
         )
-        return Ok(value=[hit])
+        return Ok(value=DeepResult(hits=cast(Any, [hit])))
 
     monkeypatch.setattr("musubi.retrieve.blended.run_deep_retrieve", mock_run_deep)
     result = await run_blended_retrieve(
@@ -336,11 +318,6 @@ async def test_partial_plane_failure_surfaces_warning(monkeypatch: pytest.Monkey
         )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Healthy zero-match must carry NO warning; blended today emits free-text 'no hits in any plane'",
-)
 async def test_healthy_zero_match_has_no_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     """Contract §2: a healthy no-match is `200 OK` with `warnings == []`. Today blended appends the
     free-text 'no hits in any plane' warning, marking a healthy empty result as degraded."""
@@ -349,7 +326,7 @@ async def test_healthy_zero_match_has_no_warning(monkeypatch: pytest.MonkeyPatch
     )
 
     async def mock_run_deep(*args: Any, **kwargs: Any) -> Any:
-        return Ok(value=[])  # healthy plane, zero hits
+        return Ok(value=DeepResult(hits=[]))  # healthy plane, zero hits
 
     monkeypatch.setattr("musubi.retrieve.blended.run_deep_retrieve", mock_run_deep)
     result = await run_blended_retrieve(

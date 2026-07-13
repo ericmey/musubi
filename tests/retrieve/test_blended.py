@@ -14,7 +14,7 @@ import pytest
 
 from musubi.embedding.fake import FakeEmbedder
 from musubi.retrieve.blended import BlendedRetrievalQuery, run_blended_retrieve
-from musubi.retrieve.deep import DeepRetrievalLLM
+from musubi.retrieve.deep import DeepResult, DeepRetrievalLLM
 from musubi.retrieve.scoring import ScoreComponents, ScoredHit
 from musubi.types.common import Ok
 
@@ -60,10 +60,10 @@ async def test_merge_flattens_per_plane_lists() -> None:
         async def fake_deep(*args: Any, **kwargs: Any) -> Any:
             q = args[3]
             if "curated" in q.namespace:
-                return Ok(value=[hit1])
+                return Ok(value=DeepResult(hits=[hit1]))
             elif "episodic" in q.namespace:
-                return Ok(value=[hit2])
-            return Ok(value=[])
+                return Ok(value=DeepResult(hits=[hit2]))
+            return Ok(value=DeepResult(hits=[]))
 
         mock_deep.side_effect = fake_deep
 
@@ -107,10 +107,10 @@ async def test_content_dedup_hash_exact() -> None:
         async def fake_deep(*args: Any, **kwargs: Any) -> Any:
             q = args[3]
             if "curated" in q.namespace:
-                return Ok(value=[hit1])
+                return Ok(value=DeepResult(hits=[hit1]))
             elif "episodic" in q.namespace:
-                return Ok(value=[hit2])
-            return Ok(value=[])
+                return Ok(value=DeepResult(hits=[hit2]))
+            return Ok(value=DeepResult(hits=[]))
 
         mock_deep.side_effect = fake_deep
 
@@ -159,10 +159,10 @@ async def test_content_dedup_jaccard_plus_cosine_deep_only() -> None:
         async def fake_deep(*args: Any, **kwargs: Any) -> Any:
             q = args[3]
             if "curated" in q.namespace:
-                return Ok(value=[hit1])
+                return Ok(value=DeepResult(hits=[hit1]))
             elif "episodic" in q.namespace:
-                return Ok(value=[hit2])
-            return Ok(value=[])
+                return Ok(value=DeepResult(hits=[hit2]))
+            return Ok(value=DeepResult(hits=[]))
 
         mock_deep.side_effect = fake_deep
 
@@ -211,10 +211,10 @@ async def test_concept_dropped_when_promoted_curated_present() -> None:
         async def fake_deep(*args: Any, **kwargs: Any) -> Any:
             q = args[3]
             if "curated" in q.namespace:
-                return Ok(value=[hit_cur])
+                return Ok(value=DeepResult(hits=[hit_cur]))
             elif "concept" in q.namespace:
-                return Ok(value=[hit_con])
-            return Ok(value=[])
+                return Ok(value=DeepResult(hits=[hit_con]))
+            return Ok(value=DeepResult(hits=[]))
 
         mock_deep.side_effect = fake_deep
         query = BlendedRetrievalQuery(
@@ -244,8 +244,8 @@ async def test_concept_kept_when_promoted_curated_absent() -> None:
         async def fake_deep(*args: Any, **kwargs: Any) -> Any:
             q = args[3]
             if "concept" in q.namespace:
-                return Ok(value=[hit_con])
-            return Ok(value=[])
+                return Ok(value=DeepResult(hits=[hit_con]))
+            return Ok(value=DeepResult(hits=[]))
 
         mock_deep.side_effect = fake_deep
         query = BlendedRetrievalQuery(
@@ -281,7 +281,11 @@ async def test_superseded_dropped_when_superseder_present() -> None:
     with patch("musubi.retrieve.blended.run_deep_retrieve") as mock_deep:
 
         async def fake_deep(*args: Any, **kwargs: Any) -> Any:
-            return Ok(value=[hit_new, hit_old]) if "episodic" in args[3].namespace else Ok(value=[])
+            return (
+                Ok(value=DeepResult(hits=[hit_new, hit_old]))
+                if "episodic" in args[3].namespace
+                else Ok(value=DeepResult(hits=[]))
+            )
 
         mock_deep.side_effect = fake_deep
         query = BlendedRetrievalQuery(
@@ -305,7 +309,10 @@ async def test_superseded_kept_when_superseder_absent() -> None:
         score_components=ScoreComponents(0, 0, 0, 0, 0),
         payload={"lineage": {"superseded_by": {"object_id": "1"}}},
     )
-    with patch("musubi.retrieve.blended.run_deep_retrieve", return_value=Ok(value=[hit_old])):
+    with patch(
+        "musubi.retrieve.blended.run_deep_retrieve",
+        return_value=Ok(value=DeepResult(hits=[hit_old])),
+    ):
         query = BlendedRetrievalQuery(
             namespace="eric/claude-code", query_text="Q", planes=["episodic"]
         )
@@ -332,7 +339,10 @@ async def test_artifact_opted_in_surfaces_chunks() -> None:
         score_components=ScoreComponents(0, 0, 0, 0, 0),
         payload={},
     )
-    with patch("musubi.retrieve.blended.run_deep_retrieve", return_value=Ok(value=[hit_art])):
+    with patch(
+        "musubi.retrieve.blended.run_deep_retrieve",
+        return_value=Ok(value=DeepResult(hits=[hit_art])),
+    ):
         query = BlendedRetrievalQuery(
             namespace="eric/claude-code", query_text="Q", planes=["artifact"]
         )
@@ -355,7 +365,7 @@ async def test_blended_namespace_expands_to_tenant_presences() -> None:
     )
 
     with patch("musubi.retrieve.blended.run_deep_retrieve") as mock_deep:
-        mock_deep.return_value = Ok(value=[hit1])
+        mock_deep.return_value = Ok(value=DeepResult(hits=[hit1]))
         query = BlendedRetrievalQuery(namespace="eric/blended", query_text="Q")
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
@@ -402,8 +412,8 @@ async def test_one_plane_empty_merge_succeeds() -> None:
 
         async def fake_deep(*args: Any, **kwargs: Any) -> Any:
             if "curated" in args[3].namespace:
-                return Ok(value=[hit1])
-            return Ok(value=[])
+                return Ok(value=DeepResult(hits=[hit1]))
+            return Ok(value=DeepResult(hits=[]))
 
         mock_deep.side_effect = fake_deep
         query = BlendedRetrievalQuery(namespace="eric/claude-code", query_text="Q")
@@ -415,13 +425,16 @@ async def test_one_plane_empty_merge_succeeds() -> None:
 
 async def test_all_planes_empty_returns_empty_warning() -> None:
     """Bullet 16"""
-    with patch("musubi.retrieve.blended.run_deep_retrieve", return_value=Ok(value=[])):
+    with patch(
+        "musubi.retrieve.blended.run_deep_retrieve", return_value=Ok(value=DeepResult(hits=[]))
+    ):
         query = BlendedRetrievalQuery(namespace="eric/claude-code", query_text="Q")
         res = await run_blended_retrieve(
             cast(Any, None), FakeEmbedder(), cast(Any, FakeRerankerClient()), query
         )
         assert not res.unwrap().results
-        assert "no hits in any plane" in res.unwrap().warnings
+        # RET-007: a healthy all-empty result carries NO warning (degradation only).
+        assert res.unwrap().results == [] and not res.unwrap().warnings
 
 
 async def test_cross_tenant_blend_forbidden() -> None:

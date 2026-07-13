@@ -3,10 +3,10 @@ title: "Slice: RET-007 degradation propagation — IMPLEMENTATION (explicit enve
 slice_id: slice-ret007-degradation-impl
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: aoi
 phase: "Retrieval-audit 2026-07-13 — RET-007 implementation (Yua-authorized, explicit-envelope design)"
-tags: [section/slices, status/in-progress, type/slice, retrieval, degradation, observability]
+tags: [section/slices, status/in-review, type/slice, retrieval, degradation, observability]
 updated: 2026-07-13
 reviewed: false
 depends-on: [slice-ret007-degradation]
@@ -98,6 +98,37 @@ paths for the RET-007 additions. `check.py` still emits an advisory `⚠` for th
 two slices (it does not special-case done slices) — surfaced here rather than suppressed; it is
 advisory (exit 0), not an error, and does not modify the shared checker.
 
+## Yua implementation rulings (2026-07-13 — DRIFT-1/2/3 resolved)
+
+- **DRIFT-1 → Option C.** Keep global `Ok` pure. `hybrid_search` returns `Ok[HybridSearchResult]`
+  (warnings on `.value`, consistent with orchestration's `Ok[RetrievalEnvelope]`). The accepted
+  `test_ret007_degradation.py` is added to owns_paths and its two access lines migrate: M15 →
+  `result.value.warnings`, healthy control → `result.value.hits == []` (access migration, contract
+  preserved; red-proof it).
+- **DRIFT-2 → frozen structured `RetrievalWarning(code, plane)`, NOT a str subclass.** The inherited
+  string-allowlist assertion (`_is_allowlisted`) is the STALE contract — migrate it to read
+  `.code`/`.plane` and red-proof it. No metadata smuggled into `str`.
+- **DRIFT-3 → approved.** The four inherited red files join owns_paths SOLELY to flip their exact
+  xfails after the defect is green.
+- **`src/musubi/retrieve/warnings.py` authorized** as the type home (avoids a `hybrid.py` knot).
+- Invariants to preserve: zero-warning healthy shape; stable ordering/dedup; bounded telemetry labels.
+
+**DRIFT-4 (found during impl — reported in the SHA receipt, applying the DRIFT-1 precedent):** the
+accepted `test_m15_rerank_failure_silent_fallback` red reads `.warnings` directly off `rerank()`'s
+return, while the accepted `test_control_successful_rerank` indexes it as a list — the SAME
+shape/pattern DRIFT-1 resolved for hybrid. Applied the identical resolution: `rerank()` returns a
+frozen `RerankResult(hits, warnings)` carrying `reranker_failed` on the fallback path; migrated the
+control to `.hits` and the red to `.warnings` (red-proofed). `tests/retrieve/test_rerank.py` (the only
+downstream test of `rerank.py`) was NOT in the recorded owns_paths — added it, migrated its
+list-access to `.hits`. Also added `src/musubi/observability/retrieval_metrics.py` (the two bounded
+counters, under the owned `observability/`) and applied defensive router-side `dedupe()` so the
+per-request cardinality holds regardless of caller path.
+
+Added to `owns_paths` per the ruling: `src/musubi/retrieve/warnings.py` (NEW type home);
+`tests/retrieve/test_ret007_degradation.py`, `tests/api/test_ret007_http_warnings.py`,
+`tests/adapters/test_ret007_adapter_warnings.py`, `tests/sdk/test_ret007_sdk_warnings.py` (flip
+xfails / migrate the stale allowlist + access assertions only).
+
 ## Specs to implement
 
 - [[_slices/slice-ret007-degradation-impl]] — this implementation slice's contract is its
@@ -136,11 +167,11 @@ src in the red commits.
 
 ## Status
 
-**`in-progress`** (2026-07-13) — expanded red set landed (tests-first, zero src); implementation
-pending, so the slice stays `in-progress` (NOT `in-review`) until the source refactor lands and flips
-every red. The explicit-envelope source is authorized to follow in this slice after Yua accepts the
-reds (Yua 2026-07-13). Tracking Issue #422; depends-on the accepted red contract (#416); Hermes is a
-separate dependent slice (#417).
+**`in-review`** (2026-07-13) — the explicit-envelope SOURCE has landed and every RET-007 red flipped
+green (the reds and their access migrations are red-proofed). Full test suite green, mypy strict clean,
+ruff clean. Awaiting Yua's independent review of the source SHA before merge — no merge/deploy without
+it. Tracking Issue #422; depends-on the accepted red contract (#416); Hermes is a separate dependent
+slice (#417).
 
 spec-update: slice-ret007-degradation-impl — NEW implementation slice for RET-007; explicit typed
 success envelope (results + tuple[RetrievalWarning{code,plane}]); metadata survives fanout/dedup/

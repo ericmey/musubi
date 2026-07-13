@@ -13,7 +13,12 @@ from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
 from musubi.retrieve.fast import FastResponseCache, run_fast_retrieve
-from musubi.retrieve.hybrid import HybridHit, QueryEmbeddingCache, RetrievalError
+from musubi.retrieve.hybrid import (
+    HybridHit,
+    HybridSearchResult,
+    QueryEmbeddingCache,
+    RetrievalError,
+)
 from musubi.types.common import Err, Ok
 
 NAMESPACE = "tenant/presence/episodic"
@@ -90,8 +95,8 @@ def test_fast_response_cache_rejects_non_positive_ttl() -> None:
 async def test_fast_path_p50_under_150ms_on_10k_corpus(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
-        return Ok(value=_hits())
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
+        return Ok(value=HybridSearchResult(hits=_hits()))
 
     import musubi.retrieve.fast as fast
 
@@ -113,8 +118,8 @@ async def test_fast_path_p50_under_150ms_on_10k_corpus(
 
 @pytest.mark.asyncio
 async def test_fast_path_returns_results_in_score_desc(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
-        return Ok(value=_hits())
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
+        return Ok(value=HybridSearchResult(hits=_hits()))
 
     import musubi.retrieve.fast as fast
 
@@ -136,9 +141,9 @@ async def test_fast_path_returns_results_in_score_desc(monkeypatch: pytest.Monke
 async def test_fast_path_applies_namespace_filter(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         calls.append(kwargs)
-        return Ok(value=[])
+        return Ok(value=HybridSearchResult(hits=[]))
 
     import musubi.retrieve.fast as fast
 
@@ -160,9 +165,9 @@ async def test_fast_path_applies_namespace_filter(monkeypatch: pytest.MonkeyPatc
 async def test_fast_path_applies_state_matured_default(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, Any]] = []
 
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         calls.append(kwargs)
-        return Ok(value=[])
+        return Ok(value=HybridSearchResult(hits=[]))
 
     import musubi.retrieve.fast as fast
 
@@ -182,9 +187,9 @@ async def test_fast_path_applies_state_matured_default(monkeypatch: pytest.Monke
 
 @pytest.mark.asyncio
 async def test_fast_path_runs_planes_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         await asyncio.sleep(0.05)
-        return Ok(value=[])
+        return Ok(value=HybridSearchResult(hits=[]))
 
     import musubi.retrieve.fast as fast
 
@@ -208,10 +213,10 @@ async def test_fast_path_runs_planes_concurrently(monkeypatch: pytest.MonkeyPatc
 async def test_fast_path_timeout_on_one_plane_returns_partial_with_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         if kwargs["collection"] == "musubi_curated":
             await asyncio.sleep(0.05)
-        return Ok(value=[_hybrid_hit(kwargs["collection"], score=0.9)])
+        return Ok(value=HybridSearchResult(hits=[_hybrid_hit(kwargs["collection"], score=0.9)]))
 
     import musubi.retrieve.fast as fast
 
@@ -228,7 +233,7 @@ async def test_fast_path_timeout_on_one_plane_returns_partial_with_warning(
 
     assert isinstance(result, Ok)
     assert [hit.object_id for hit in result.value.results] == [COLLECTION]
-    assert result.value.warnings == ["plane: musubi_curated timed out"]
+    assert [w.code for w in result.value.warnings] == ["plane_timeout_curated"]
 
 
 @pytest.mark.asyncio
@@ -277,8 +282,8 @@ async def test_fast_path_qdrant_down_returns_503(monkeypatch: pytest.MonkeyPatch
 
 @pytest.mark.asyncio
 async def test_fast_path_empty_corpus_returns_empty_200(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
-        return Ok(value=[])
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
+        return Ok(value=HybridSearchResult(hits=[]))
 
     import musubi.retrieve.fast as fast
 
@@ -301,10 +306,10 @@ async def test_fast_path_empty_corpus_returns_empty_200(monkeypatch: pytest.Monk
 async def test_fast_path_response_cache_hits_within_30s(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         nonlocal calls
         calls += 1
-        return Ok(value=_hits())
+        return Ok(value=HybridSearchResult(hits=_hits()))
 
     import musubi.retrieve.fast as fast
 
@@ -339,10 +344,10 @@ async def test_fast_path_response_cache_hits_within_30s(monkeypatch: pytest.Monk
 async def test_fast_response_cache_expires_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = 0
 
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         nonlocal calls
         calls += 1
-        return Ok(value=_hits())
+        return Ok(value=HybridSearchResult(hits=_hits()))
 
     import musubi.retrieve.fast as fast
 
@@ -379,10 +384,10 @@ async def test_fast_path_response_cache_disabled_by_default(
 ) -> None:
     calls = 0
 
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         nonlocal calls
         calls += 1
-        return Ok(value=[])
+        return Ok(value=HybridSearchResult(hits=[]))
 
     import musubi.retrieve.fast as fast
 
@@ -405,9 +410,9 @@ async def test_fast_path_response_cache_disabled_by_default(
 async def test_fast_path_embedding_cache_always_on(monkeypatch: pytest.MonkeyPatch) -> None:
     caches: list[QueryEmbeddingCache | None] = []
 
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         caches.append(kwargs["cache"])
-        return Ok(value=[])
+        return Ok(value=HybridSearchResult(hits=[]))
 
     import musubi.retrieve.fast as fast
 
@@ -427,8 +432,10 @@ async def test_fast_path_embedding_cache_always_on(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.asyncio
 async def test_fast_path_snippet_max_200_chars(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
-        return Ok(value=[_hybrid_hit("long", score=1.0, content="x" * 250)])
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
+        return Ok(
+            value=HybridSearchResult(hits=[_hybrid_hit("long", score=1.0, content="x" * 250)])
+        )
 
     import musubi.retrieve.fast as fast
 
@@ -450,8 +457,12 @@ async def test_fast_path_snippet_max_200_chars(monkeypatch: pytest.MonkeyPatch) 
 async def test_fast_path_lineage_summary_present_not_hydrated(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
-        return Ok(value=[_hybrid_hit("lineage", score=1.0, promoted_to="curated-id")])
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
+        return Ok(
+            value=HybridSearchResult(
+                hits=[_hybrid_hit("lineage", score=1.0, promoted_to="curated-id")]
+            )
+        )
 
     import musubi.retrieve.fast as fast
 
@@ -474,7 +485,7 @@ async def test_fast_path_lineage_summary_present_not_hydrated(
 async def test_fast_path_empty_query_returns_typed_error_without_hybrid_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         raise AssertionError("empty query must return before hybrid search")
 
     import musubi.retrieve.fast as fast
@@ -498,7 +509,7 @@ async def test_fast_path_empty_query_returns_typed_error_without_hybrid_call(
 async def test_fast_path_invalid_limit_returns_typed_error_without_hybrid_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         raise AssertionError("invalid limit must return before hybrid search")
 
     import musubi.retrieve.fast as fast
@@ -570,9 +581,9 @@ async def test_fast_path_rejects_client_collection_mismatch() -> None:
 async def test_fast_path_all_planes_timeout_warns_all_planes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         await asyncio.sleep(0.05)
-        return Ok(value=[])
+        return Ok(value=HybridSearchResult(hits=[]))
 
     import musubi.retrieve.fast as fast
 
@@ -589,7 +600,9 @@ async def test_fast_path_all_planes_timeout_warns_all_planes(
 
     assert isinstance(result, Ok)
     assert result.value.results == []
-    assert result.value.warnings == ["all planes timed out"]
+    assert result.value.warnings and all(
+        w.code.startswith("plane_timeout_") for w in result.value.warnings
+    )
 
 
 @pytest.mark.asyncio
@@ -620,12 +633,14 @@ async def test_fast_path_unknown_hybrid_error_maps_to_503(
 async def test_fast_path_dedupes_same_object_id_by_highest_score(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         return Ok(
-            value=[
-                _hybrid_hit("same", score=0.1, content="low duplicate"),
-                _hybrid_hit("same", score=0.9, content="high duplicate"),
-            ]
+            value=HybridSearchResult(
+                hits=[
+                    _hybrid_hit("same", score=0.1, content="low duplicate"),
+                    _hybrid_hit("same", score=0.9, content="high duplicate"),
+                ]
+            )
         )
 
     import musubi.retrieve.fast as fast
@@ -649,20 +664,22 @@ async def test_fast_path_dedupes_same_object_id_by_highest_score(
 async def test_fast_path_defaults_plane_when_namespace_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[list[HybridHit]]:
+    async def fake_hybrid_search(*args: Any, **kwargs: Any) -> Ok[HybridSearchResult]:
         return Ok(
-            value=[
-                HybridHit(
-                    object_id="fallback",
-                    score=1.0,
-                    payload={
-                        "object_id": "fallback",
-                        "state": "matured",
-                        "updated_epoch": NOW,
-                        "content": "fallback content",
-                    },
-                )
-            ]
+            value=HybridSearchResult(
+                hits=[
+                    HybridHit(
+                        object_id="fallback",
+                        score=1.0,
+                        payload={
+                            "object_id": "fallback",
+                            "state": "matured",
+                            "updated_epoch": NOW,
+                            "content": "fallback content",
+                        },
+                    )
+                ]
+            )
         )
 
     import musubi.retrieve.fast as fast

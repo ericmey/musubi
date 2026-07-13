@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -26,6 +27,7 @@ from musubi.retrieve.deep import (
 )
 from musubi.retrieve.fast import run_fast_retrieve
 from musubi.retrieve.recent import run_recent_retrieve
+from musubi.retrieve.warnings import RetrievalWarning, dedupe, plane_error, plane_timeout
 from musubi.types.common import Err, LifecycleState, Ok, Result
 
 logger = logging.getLogger(__name__)
@@ -108,6 +110,20 @@ class RetrievalError(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+@dataclass(frozen=True)
+class RetrievalEnvelope:
+    """Explicit typed success value of :func:`retrieve`: the ranked ``results`` plus the aggregated,
+    deduped RET-007 degradation ``warnings``. Iterable over ``results`` so existing callers that only
+    walk the hits keep working (e.g. ``/v1/context``); NOT a list subclass and with NO
+    ``__getitem__``/``__len__``, so a ``[:limit]`` slice can never silently drop the warnings."""
+
+    results: list[RetrievalResult]
+    warnings: tuple[RetrievalWarning, ...] = ()
+
+    def __iter__(self) -> Iterator[RetrievalResult]:
+        return iter(self.results)
+
+
 async def retrieve(
     client: QdrantClient,
     embedder: Embedder,
@@ -116,7 +132,7 @@ async def retrieve(
     query: RetrievalQuery | dict[str, Any],
     llm: DeepRetrievalLLM | None = None,
     now: float | None = None,
-) -> Result[list[RetrievalResult], RetrievalError]:
+) -> Result[RetrievalEnvelope, RetrievalError]:
     """Execute the configured retrieval pipeline based on the query."""
 
     # Hand-instrumented span per [[09-operations/observability]] §
@@ -165,7 +181,7 @@ async def retrieve(
         # target concurrently and merges ranked results by score at
         # the end.
         if len(targets) == 1:
-            return await _run_single(
+            single = await _run_single(
                 client=client,
                 embedder=embedder,
                 reranker=reranker,
@@ -175,6 +191,13 @@ async def retrieve(
                 plane=targets[0][1],
                 now=now,
             )
+            if isinstance(single, Ok):
+                return Ok(
+                    value=RetrievalEnvelope(
+                        results=single.value.results, warnings=dedupe(single.value.warnings)
+                    )
+                )
+            return single
 
         # Fan out — one pipeline run per (namespace, plane) target.
         # Call `_run_single` directly rather than recursing through
@@ -206,9 +229,10 @@ async def retrieve(
         # it arrived from a later target in the gather order. Build a
         # {object_id → best hit} map, then materialise once at the end.
         best_by_id: dict[str, RetrievalResult] = {}
+        warnings: list[RetrievalWarning] = []
         transient_any = False
         internal_err: RetrievalError | None = None
-        for outcome in results_per_target:
+        for (_ns, plane), outcome in zip(targets, results_per_target, strict=True):
             # Client disconnect / server shutdown produces
             # CancelledError. Re-raise so the cancellation propagates
             # up through the request lifecycle — swallowing it to
@@ -217,19 +241,22 @@ async def retrieve(
             if isinstance(outcome, asyncio.CancelledError):
                 raise outcome
             if isinstance(outcome, Err):
-                # Per-plane failures: transient/timeout degrades per-
-                # plane; an internal error from *any* plane surfaces
-                # as a 5xx because the merged response would silently
-                # under-report.
+                # Per-plane failures degrade per-plane and surface as a bounded structured warning
+                # that PRESERVES which plane failed (the old `transient_any` boolean discarded this).
+                # An internal/bad_query error from *any* plane surfaces as a 5xx/4xx because the
+                # merged response would silently under-report.
                 if outcome.error.kind == "timeout":
                     transient_any = True
+                    warnings.append(plane_timeout(plane))
                     continue
                 if outcome.error.kind in ("internal", "bad_query"):
                     internal_err = outcome.error
                     break
+                warnings.append(plane_error(plane))
                 continue
             if isinstance(outcome, Ok):
-                for hit in outcome.value:
+                warnings.extend(outcome.value.warnings)
+                for hit in outcome.value.results:
                     current = best_by_id.get(hit.object_id)
                     if current is None or hit.score > current.score:
                         best_by_id[hit.object_id] = hit
@@ -245,7 +272,12 @@ async def retrieve(
             return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
 
         merged = sorted(best_by_id.values(), key=lambda r: r.score, reverse=True)
-        return Ok(value=merged[: parsed_query.limit])
+        # Dedupe warnings to distinct (code, plane) ONLY at the final request boundary.
+        return Ok(
+            value=RetrievalEnvelope(
+                results=merged[: parsed_query.limit], warnings=dedupe(tuple(warnings))
+            )
+        )
 
 
 async def _run_single(
@@ -258,14 +290,14 @@ async def _run_single(
     namespace: str,
     plane: str,
     now: float | None,
-) -> Result[list[RetrievalResult], RetrievalError]:
+) -> Result[RetrievalEnvelope, RetrievalError]:
     """Single-target pipeline dispatch. Extracted from :func:`retrieve`
     so cross-plane fanout can call it per target without re-parsing
     the query shape. Behaviour is identical to the pre-fanout code —
     a single call with ``planes=[plane]`` and the given namespace."""
 
     mode = parsed_query.mode
-    warnings: list[str] = []
+    warnings: list[RetrievalWarning] = []
     # Force single-plane, single-namespace for this leg. The input
     # `parsed_query.planes` may carry the full cross-plane list from
     # the top-level query; we use only the plane this leg owns.
@@ -309,10 +341,12 @@ async def _run_single(
 
             warnings.extend(b_res.value.warnings)
             return Ok(
-                value=_pack_scored_hits(
-                    b_res.value.results,
-                    warnings,
-                    include_payload=not getattr(parsed_query, "brief", False),
+                value=RetrievalEnvelope(
+                    results=_pack_scored_hits(
+                        b_res.value.results,
+                        include_payload=not getattr(parsed_query, "brief", False),
+                    ),
+                    warnings=tuple(warnings),
                 )
             )
 
@@ -348,9 +382,14 @@ async def _run_single(
             if isinstance(d_res, Err):
                 return Err(error=RetrievalError(kind="internal", detail=d_res.error.detail))
 
+            warnings.extend(d_res.value.warnings)
             return Ok(
-                value=_pack_scored_hits(
-                    d_res.value, warnings, include_payload=not getattr(parsed_query, "brief", False)
+                value=RetrievalEnvelope(
+                    results=_pack_scored_hits(
+                        d_res.value.hits,
+                        include_payload=not getattr(parsed_query, "brief", False),
+                    ),
+                    warnings=tuple(warnings),
                 )
             )
 
@@ -420,7 +459,7 @@ async def _run_single(
                         ),
                     )
                 )
-            return Ok(value=recent_results)
+            return Ok(value=RetrievalEnvelope(results=recent_results, warnings=tuple(warnings)))
 
         elif mode == "fast":
             # Fast timeout (400ms)
@@ -473,7 +512,7 @@ async def _run_single(
                         payload=hit.payload,
                     )
                 )
-            return Ok(value=results)
+            return Ok(value=RetrievalEnvelope(results=results, warnings=tuple(warnings)))
 
         else:
             return Err(error=RetrievalError(kind="bad_query", detail=f"Unknown mode: {mode}"))
@@ -485,9 +524,7 @@ async def _run_single(
         return Err(error=RetrievalError(kind="internal", detail=str(e)))
 
 
-def _pack_scored_hits(
-    hits: Sequence[Any], warnings: list[str], include_payload: bool
-) -> list[RetrievalResult]:
+def _pack_scored_hits(hits: Sequence[Any], include_payload: bool) -> list[RetrievalResult]:
     results = []
     for hit in hits:
         results.append(

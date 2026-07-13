@@ -131,7 +131,10 @@ async def context_pack(
         status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
         raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
 
-    candidates = [_candidate_from_hit(hit) for hit in orchestration_result.value]
+    envelope = orchestration_result.value
+    candidates = [_candidate_from_hit(hit) for hit in envelope.results]
+    # RET-007: thread the bounded degradation codes onto the pack so /v1/context is NOT a surface where
+    # degraded context is indistinguishable from healthy.
     return build_context_pack(
         candidates,
         ContextPackQuery(
@@ -141,6 +144,7 @@ async def context_pack(
             max_chars=body.max_chars,
             include_history=body.include_history,
         ),
+        warnings=[warning.code for warning in envelope.warnings],
     )
 
 

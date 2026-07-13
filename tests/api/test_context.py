@@ -181,11 +181,6 @@ def _post_context(client: TestClient, valid_token: str) -> Any:
     )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="/v1/context iterates the envelope and discards its warnings — a degraded context response is indistinguishable from a healthy one (no warnings on the wire)",
-)
 def test_context_degraded_response_carries_warnings(
     client: TestClient, valid_token: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

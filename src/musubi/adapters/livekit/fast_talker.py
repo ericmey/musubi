@@ -34,6 +34,9 @@ class FastTalker:
         self.cache = cache
         self._fast_limit = fast_limit
         self._match_threshold = match_threshold
+        #: RET-007 — the allowlisted degradation codes from the most recent retrieval, surfaced so the
+        #: agent can render a non-memory status message. Empty when the last retrieval was healthy.
+        self.last_warnings: list[str] = []
 
     async def get_context(self, query_text: str) -> list[dict[str, Any]]:
         """Return retrieval results for the live query — cache first,
@@ -54,5 +57,7 @@ class FastTalker:
             return []
         if not isinstance(response, dict):
             return []
+        warnings = response.get("warnings", [])
+        self.last_warnings = warnings if isinstance(warnings, list) else []
         results = response.get("results", [])
         return results if isinstance(results, list) else []

@@ -39,6 +39,8 @@ class SlowThinker:
         self.cache = cache
         self._deep_limit = deep_limit
         self._cache_ttl_s = cache_ttl_s
+        #: RET-007 — allowlisted degradation codes from the most recent pre-fetch (empty when healthy).
+        self.last_warnings: list[str] = []
         self._task: asyncio.Task[None] | None = None
 
     async def on_user_utterance_segment(self, transcript_so_far: str) -> None:
@@ -64,5 +66,7 @@ class SlowThinker:
         except Exception:
             log.warning("slow-thinker pre-fetch failed", exc_info=True)
             return
+        warnings = response.get("warnings", []) if isinstance(response, dict) else []
+        self.last_warnings = warnings if isinstance(warnings, list) else []
         results = response.get("results", []) if isinstance(response, dict) else []
         self.cache.put(transcript, results, ttl=self._cache_ttl_s)

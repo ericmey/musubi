@@ -19,8 +19,13 @@ import pytest
 
 from musubi.embedding.fake import FakeEmbedder
 from musubi.retrieve.blended import BlendedRetrievalQuery, run_blended_retrieve
-from musubi.retrieve.deep import run_deep_retrieve
-from musubi.retrieve.orchestration import NamespaceTarget, RetrievalQuery, RetrievalResult
+from musubi.retrieve.deep import DeepResult, run_deep_retrieve
+from musubi.retrieve.orchestration import (
+    NamespaceTarget,
+    RetrievalEnvelope,
+    RetrievalQuery,
+    RetrievalResult,
+)
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.types.common import Err, Ok
 
@@ -83,11 +88,6 @@ def _mk_result(object_id: str, plane: str, score: float) -> RetrievalResult:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Multi-target: a per-plane timeout is collapsed to a boolean and lost; the surviving-plane Ok carries no plane_timeout_<plane> warning",
-)
 async def test_multi_target_aggregates_warnings_no_loss(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two planes: episodic times out, curated succeeds with hits. Contract: Ok envelope with the
     surviving hits AND a `plane_timeout_episodic` warning that survived the cross-plane merge."""
@@ -96,11 +96,19 @@ async def test_multi_target_aggregates_warnings_no_loss(monkeypatch: pytest.Monk
     async def fake_run_single(*args: Any, plane: str, **kwargs: Any) -> Any:
         if plane == "episodic":
             return Err(error=orch.RetrievalError(kind="timeout", detail="episodic timed out"))
-        return Ok(value=[_mk_result("c1", "curated", 1.0)])
+        return Ok(value=RetrievalEnvelope(results=[_mk_result("c1", "curated", 1.0)]))
 
     monkeypatch.setattr("musubi.retrieve.orchestration._run_single", fake_run_single)
+    # Cross-plane fanout is driven by namespace_targets (set by the router), not by planes= alone.
     query = RetrievalQuery(
-        namespace="test", query_text="q", mode="deep", planes=["episodic", "curated"]
+        namespace="test",
+        query_text="q",
+        mode="deep",
+        planes=["episodic", "curated"],
+        namespace_targets=[
+            NamespaceTarget(namespace="test/a", plane="episodic"),
+            NamespaceTarget(namespace="test/b", plane="curated"),
+        ],
     )
     result = await run_orchestration_retrieve(
         client=cast(Any, _MockQdrant()),
@@ -122,11 +130,6 @@ async def test_multi_target_aggregates_warnings_no_loss(monkeypatch: pytest.Monk
         )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Per-request dedup: the SAME (code, plane) surfacing from multiple same-plane legs must be deduped to exactly ONE structured warning at the request boundary",
-)
 async def test_multi_target_dedupes_warnings_per_request(monkeypatch: pytest.MonkeyPatch) -> None:
     """A wildcard namespace fanned out onto THREE `episodic` legs: two time out, the third returns a
     hit. Contract: an Ok envelope with the surviving hit AND exactly ONE structured
@@ -137,7 +140,7 @@ async def test_multi_target_dedupes_warnings_per_request(monkeypatch: pytest.Mon
     async def fake_run_single(*args: Any, namespace: str, plane: str, **kwargs: Any) -> Any:
         # two same-plane legs time out; the third survives with a hit
         if namespace.endswith("/c"):
-            return Ok(value=[_mk_result("hit", "episodic", 1.0)])
+            return Ok(value=RetrievalEnvelope(results=[_mk_result("hit", "episodic", 1.0)]))
         return Err(error=orch.RetrievalError(kind="timeout", detail=f"{namespace} timed out"))
 
     monkeypatch.setattr("musubi.retrieve.orchestration._run_single", fake_run_single)
@@ -188,11 +191,6 @@ async def test_multi_target_dedupes_warnings_per_request(monkeypatch: pytest.Mon
         )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Envelope metadata must survive slice[:limit]: warnings are not attached to the sliced success value today",
-)
 async def test_envelope_warnings_survive_slice(monkeypatch: pytest.MonkeyPatch) -> None:
     """A degraded query returning MORE hits than the limit must still carry its warning after the
     `[:limit]` slice — the warning is envelope-level metadata, not a row that can be sliced away."""
@@ -201,11 +199,23 @@ async def test_envelope_warnings_survive_slice(monkeypatch: pytest.MonkeyPatch) 
     async def fake_run_single(*args: Any, plane: str, **kwargs: Any) -> Any:
         if plane == "episodic":
             return Err(error=orch.RetrievalError(kind="timeout", detail="episodic timed out"))
-        return Ok(value=[_mk_result(f"c{i}", "curated", float(10 - i)) for i in range(10)])
+        return Ok(
+            value=RetrievalEnvelope(
+                results=[_mk_result(f"c{i}", "curated", float(10 - i)) for i in range(10)]
+            )
+        )
 
     monkeypatch.setattr("musubi.retrieve.orchestration._run_single", fake_run_single)
     query = RetrievalQuery(
-        namespace="test", query_text="q", mode="deep", planes=["episodic", "curated"], limit=3
+        namespace="test",
+        query_text="q",
+        mode="deep",
+        planes=["episodic", "curated"],
+        limit=3,
+        namespace_targets=[
+            NamespaceTarget(namespace="test/a", plane="episodic"),
+            NamespaceTarget(namespace="test/b", plane="curated"),
+        ],
     )
     result = await run_orchestration_retrieve(
         client=cast(Any, _MockQdrant()),
@@ -228,11 +238,6 @@ async def test_envelope_warnings_survive_slice(monkeypatch: pytest.MonkeyPatch) 
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Structured RetrievalWarning must carry a bounded code + an explicit FIXED plane; today there is no structured warning at all",
-)
 async def test_partial_failure_warning_is_structured_and_bounded(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -250,7 +255,7 @@ async def test_partial_failure_warning_is_structured_and_bounded(
                 detail = "sim"
 
             return Err(error=FakeError())
-        return Ok(value=[_mk_result("1", "curated", 1.0)])
+        return Ok(value=DeepResult(hits=cast(Any, [_mk_result("1", "curated", 1.0)])))
 
     monkeypatch.setattr("musubi.retrieve.blended.run_deep_retrieve", mock_run_deep)
     result = await run_blended_retrieve(
@@ -278,11 +283,6 @@ async def test_partial_failure_warning_is_structured_and_bounded(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Direct deep path: a sparse-embedding timeout inside run_deep_retrieve drops the sparse channel with no `sparse_embedding_failed` warning on the deep result",
-)
 async def test_direct_deep_degradation_surfaces_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     class TimeoutSparseEmbedder(FakeEmbedder):
         async def embed_sparse(self, texts: Any) -> Any:

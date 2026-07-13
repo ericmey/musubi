@@ -11,8 +11,9 @@ from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
 from musubi.embedding.tei import TEIRerankerClient
-from musubi.retrieve.deep import DeepRetrievalLLM, RetrievalQuery, run_deep_retrieve
+from musubi.retrieve.deep import DeepResult, DeepRetrievalLLM, RetrievalQuery, run_deep_retrieve
 from musubi.retrieve.scoring import ScoredHit
+from musubi.retrieve.warnings import RetrievalWarning, plane_error, plane_timeout
 from musubi.types.common import Err, LifecycleState, Ok, Result
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ class BlendedRetrievalError:
 class BlendedResult:
     results: list[ScoredHit]
     planes_contributed: list[str]
-    warnings: list[str]
+    warnings: tuple[RetrievalWarning, ...]
 
 
 @dataclass(frozen=True)
@@ -136,31 +137,46 @@ async def run_blended_retrieve(
     results = await asyncio.gather(*coros, return_exceptions=True)
 
     planes_contributed = []
-    warnings = []
+    warnings: list[RetrievalWarning] = []
     all_hits: list[ScoredHit] = []
+    plane_failures = 0
 
     for (plane, ns), res in zip(expanded_namespaces, results, strict=True):
+        # RET-007: a failed plane leg becomes a bounded structured warning (plane_timeout_<plane> for
+        # a timeout, else plane_error_<plane>) — never free text. A plane that RAN (even with zero
+        # hits) is a healthy contributor and adds no warning.
         if isinstance(res, Exception):
-            warnings.append(f"plane {plane} ({ns}) failed: {res}")
+            warnings.append(plane_error(plane))
+            plane_failures += 1
             continue
         if isinstance(res, Err):
-            warnings.append(f"plane {plane} ({ns}) error: {res.error.code}")
+            code = getattr(res.error, "code", "")
+            warnings.append(plane_timeout(plane) if "timeout" in code else plane_error(plane))
+            plane_failures += 1
             continue
 
-        hits = cast(Ok[list[ScoredHit]], res).value
-        if hits:
-            planes_contributed.append(f"{plane}:{ns}")
-            all_hits.extend(hits)
+        deep_result = cast(Ok[DeepResult], res).value
+        # thread each surviving leg's own degradation warnings up (e.g. sparse_embedding_failed)
+        warnings.extend(deep_result.warnings)
+        planes_contributed.append(f"{plane}:{ns}")
+        all_hits.extend(deep_result.hits)
+
+    # H11: if EVERY plane failed (none ran successfully), that is a total failure — Err, not Ok(empty).
+    if plane_failures == len(expanded_namespaces) and not planes_contributed:
+        return Err(
+            error=BlendedRetrievalError(
+                code="all_planes_failed", detail="all planes failed in blended retrieval"
+            )
+        )
 
     if not all_hits:
-        if not planes_contributed and not warnings:
-            warnings.append("no hits in any plane")
-        elif not planes_contributed:
-            # Entirely failed
-            pass
-        else:
-            warnings.append("no hits in any plane")
-        return Ok(value=BlendedResult(results=[], planes_contributed=[], warnings=warnings))
+        # Healthy zero-match (planes ran, no hits) carries NO free-text warning — only genuine
+        # degradation warnings (a failed sibling plane, a sparse fallback) survive.
+        return Ok(
+            value=BlendedResult(
+                results=[], planes_contributed=planes_contributed, warnings=tuple(warnings)
+            )
+        )
 
     # 3. Content Dedup
     deduped_hits: list[ScoredHit] = []
@@ -239,7 +255,9 @@ async def run_blended_retrieve(
 
     return Ok(
         value=BlendedResult(
-            results=final_hits, planes_contributed=list(set(planes_contributed)), warnings=warnings
+            results=final_hits,
+            planes_contributed=list(set(planes_contributed)),
+            warnings=tuple(warnings),
         )
     )
 

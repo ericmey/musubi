@@ -116,11 +116,6 @@ def _degraded_reply() -> dict[str, object]:
     return reply
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="CLI _render() reads only 'groups' and ignores 'warnings' — the non-JSON path renders degraded context indistinguishably from healthy",
-)
 def test_context_nonjson_renders_warnings(runner: CliRunner, httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(method="POST", url=f"{_BASE}/context", json=_degraded_reply())
     result = runner.invoke(
