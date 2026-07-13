@@ -15,6 +15,9 @@ COMPOSE = TEMPLATES / "docker-compose.yml.j2"
 ENV = TEMPLATES / "env.production.j2"
 CONFIG = ANSIBLE / "config.yml"
 DEPLOY = ANSIBLE / "deploy.yml"
+BOOTSTRAP = ANSIBLE / "bootstrap.yml"
+UPDATE = ANSIBLE / "update.yml"
+RUNTIME_PLAYBOOKS = (CONFIG, DEPLOY, BOOTSTRAP, UPDATE)
 
 RED = pytest.mark.xfail(
     strict=True,
@@ -43,7 +46,7 @@ def test_prometheus_mounts_rendered_runtime_qdrant_token_read_only() -> None:
 
 @RED
 def test_material_musubi_secrets_are_not_rendered_to_persistent_files() -> None:
-    deployment_text = "\n".join(path.read_text() for path in (CONFIG, DEPLOY))
+    deployment_text = "\n".join(path.read_text() for path in RUNTIME_PLAYBOOKS)
     env_text = ENV.read_text()
 
     assert 'dest: "{{ musubi_config_dir }}/qdrant.token"' not in deployment_text
@@ -69,11 +72,12 @@ def test_deploy_play_uses_runtime_secret_templates() -> None:
     assert "templates/secrets.tpl.j2" in text
     assert "templates/qdrant.token.tpl.j2" in text
     assert "qdrant.token.j2" not in text
+    assert "community.docker.docker_compose_v2:" not in text
 
 
 @RED
 def test_op_connect_inputs_are_root_only_and_secret_tasks_are_no_log() -> None:
-    for playbook_path in (CONFIG, DEPLOY):
+    for playbook_path in RUNTIME_PLAYBOOKS:
         playbook = yaml.safe_load(playbook_path.read_text())
         play = playbook[0]
         preflight_text = yaml.safe_dump(play.get("pre_tasks", []))
@@ -84,7 +88,7 @@ def test_op_connect_inputs_are_root_only_and_secret_tasks_are_no_log() -> None:
 
 
 def test_ansible_templates_remain_parseable_controls() -> None:
-    for path in (CONFIG, DEPLOY):
+    for path in RUNTIME_PLAYBOOKS:
         parsed = yaml.safe_load(path.read_text())
         assert isinstance(parsed, list)
         assert parsed
