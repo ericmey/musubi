@@ -1,24 +1,31 @@
 """D3 spike — hybrid routed-dependency state + pure-ASGI send observer for idempotent JSON.
 
-Yua REV2 GO (2026-07-12T23:44). Design-only spike, ZERO src, on the isolated design worktree
-(branch slice/auth-boundary-design-spikes from Phase A a1c916e). Proves the storage/lease
-mechanics of the chosen hybrid:
+Yua REV2 GO (2026-07-12T23:44); real-stack correction (2026-07-13). Design-only spike, ZERO src,
+on the isolated design worktree (branch slice/auth-boundary-design-spikes from Phase A a1c916e).
 
-  - a ROUTED DEPENDENCY (here: modelled as route-declared eligibility + a lease acquired before
-    the app runs) sets authorized-identity + lease + cache-eligible state,
-  - a PURE ASGI SEND-OBSERVER (not @app.middleware, which is the lossy BaseHTTPMiddleware) wraps
-    `send`, captures the exact http.response.start (status + raw header list, duplicates intact)
-    and every http.response.body (exact bytes + more_body), and STORES only after a clean
-    terminal more_body=False AND 2xx AND eligible AND non-replay; the lease RELEASES in `finally`
-    on EVERY exit.
+The pipeline is a HYBRID: a PURE ASGI SEND-OBSERVER (not @app.middleware, which is the lossy
+BaseHTTPMiddleware) wraps `send`, captures the exact http.response.start (status + raw header
+list, duplicates intact) and every http.response.body (exact bytes + more_body), and STORES only
+after a clean terminal more_body=False AND 2xx AND eligible AND non-replay; the lease RELEASES on
+every exit. The eligibility/identity/lease and the REPLAY come from a routed dependency AFTER
+authz — see the real-stack section for the authoritative model and why the wrapper cannot replay.
 
-The apps under test are raw ASGI callables so send-failure and cancellation can be injected
-exactly. No FastAPI/Starlette response objects are needed for the mechanics (a separate test
-uses Starlette Response only to prove background-once + duplicate Set-Cookie shape).
+The raw-ASGI apps are used only to inject send-failure and cancellation exactly (the synthetic
+mechanics tier).
 
 REQUIRED ADVERSARIAL (Yua): a multi-body NON-streaming response whose intermediate event has
 more_body=True must STILL be cached (eligibility is route-declared; storage waits for the clean
 terminal event) — `more_body` ever being true must NOT exclude it.
+
+TWO TIERS, and the KEY design finding (Yua 2026-07-13):
+  - `SendObserver` + raw ASGI apps: SYNTHETIC MECHANICS ONLY — capture, store-gate, lease-release,
+    send-failure, cancellation, multi-frame, placement. Its pre-call_next replay is a
+    simplification, NOT the design.
+  - `StoreOnlyObserver` + `_auth_app`: the AUTHORITATIVE real-stack model. Replay CANNOT happen in
+    the outer wrapper: a safe replay needs the principal-bound identity that only exists after
+    routing + authz, and Musubi has no pre-route auth. So replay MUST live in the routed dependency
+    (post-authz); the outer wrapper is store-only. Controls prove no cross-principal / cross-
+    operation replay, no lookup/acquire on invalid-auth or foreign-namespace, and re-auth on replay.
 
     UV_PROJECT_ENVIRONMENT=/Users/ericmey/Projects/musubi/.venv uv run --no-sync \
       pytest tests/api/spikes/test_d3_asgi_send_observer.py -v
@@ -51,8 +58,13 @@ class _Capture:
 
 
 class SendObserver:
-    """Wraps `send`. Eligibility is ROUTE-DECLARED (never inferred from more_body). Stores only on
-    a clean terminal event; releases the lease on every exit."""
+    """SYNTHETIC MECHANICS ONLY — isolates the store-gate / capture / lease-release behaviour with
+    raw ASGI apps so send-failure and cancellation can be injected exactly. Its path-based
+    eligibility and its pre-`call_next` replay are a SIMPLIFICATION that does NOT model the auth
+    gate: doing the replay in the wrapper before call_next is the SEC-002 pre-auth replay bug. The
+    AUTHORITATIVE design — replay in the routed dependency AFTER authz, outer wrapper store-only —
+    is proven in the corrected real-stack section (`StoreOnlyObserver` + `_auth_app`) below. Use
+    this class only for the capture/gate/lease mechanics, never as the replay design."""
 
     def __init__(self, app: ASGIApp, *, eligible_paths: set[str]) -> None:
         self.app = app
@@ -294,8 +306,9 @@ def test_cancellation_not_cached_lease_released() -> None:
 
 
 def test_replay_serves_cache_without_reexecuting_or_reacquiring() -> None:
-    """Store then replay: the replay serves the cached bytes, does NOT re-acquire a lease, and
-    does NOT execute the handler (so side effects run once)."""
+    """SYNTHETIC store-then-serve MECHANIC only (no auth gate): the cache lookup serves the bytes
+    without re-executing the app. The AUTH-GATED replay (which must run post-authz, in the routed
+    dependency) is proven by the real-stack controls below — this test is NOT the replay design."""
     executions = {"n": 0}
 
     async def counting_app(scope: Scope, receive: Receive, send: Send) -> None:
@@ -394,78 +407,239 @@ def test_middleware_placement_determines_captured_bytes() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# D3-12 / D3-13 — the SAME observer wrapping a REAL pinned FastAPI app
+# D3-12/13 (CORRECTED) — real FastAPI: replay lives in the routed dependency
+# (post-authz); the outer observer is STORE-ONLY and reads dependency state.
+#
+# DESIGN FINDING (Yua 2026-07-13): the outer ASGI wrapper CANNOT replay before
+# the dependency. A safe replay requires the principal-bound identity, which only
+# exists AFTER routing + authz (a routed dependency). Musubi has no pre-route auth
+# middleware, so there is no authenticated pre-route state the wrapper could use.
+# Therefore replay MUST be performed by the dependency (post-authz); the outer
+# wrapper only STORES on a clean 2xx miss and RELEASES the lease. Doing the replay
+# in the wrapper before call_next is exactly the SEC-002 pre-auth replay bug.
 # --------------------------------------------------------------------------- #
 
 
-def _fastapi_app(counters: dict[str, int]) -> FastAPI:
-    """Real FastAPI app: a routed dependency sets request.state (scope['state']) and is counted;
-    one handler returns a dict, one returns a raw Response; one raises → real exception handler."""
+class Replay(Exception):
+    def __init__(self, status: int, headers: list[tuple[bytes, bytes]], body: bytes) -> None:
+        self.status = status
+        self.headers = headers
+        self.body = body
+
+
+class StoreOnlyObserver:
+    """Outer pure-ASGI wrapper. It NEVER authorizes, computes eligibility, acquires a lease, or
+    replays. It reads the idempotency decision the routed dependency wrote into
+    scope['state']['idem'] (post-authz) and stores the captured bytes only on a clean 2xx MISS;
+    it releases the lease the dependency acquired. Shares the cache dict with the dependency."""
+
+    def __init__(
+        self, app: ASGIApp, *, cache: dict[str, tuple[int, list[tuple[bytes, bytes]], bytes]]
+    ) -> None:
+        self.app = app
+        self.cache = cache
+        self.stored: list[str] = []
+        self.released: list[str] = []
+        self.acquired_seen: list[str] = []
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        cap = _Capture()
+
+        async def wrapped_send(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                cap.status = message["status"]
+                cap.headers = list(message["headers"])
+            elif message["type"] == "http.response.body":
+                cap.body += message.get("body", b"")
+                if not message.get("more_body", False):
+                    cap.terminal = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, wrapped_send)
+            state = scope.get("state", {}).get("idem")
+            if state and state.get("lease_owner"):
+                self.acquired_seen.append(state["lease_owner"])
+            if (
+                state
+                and state.get("eligible")
+                and not state.get("is_replay")
+                and cap.terminal
+                and cap.status is not None
+                and 200 <= cap.status < 300
+            ):
+                self.cache[state["identity"]] = (cap.status, cap.headers, cap.body)
+                self.stored.append(state["identity"])
+        finally:
+            state = scope.get("state", {}).get("idem")
+            if state and state.get("lease_owner"):
+                self.released.append(state["lease_owner"])
+
+
+def _auth_app(
+    cache: dict[str, tuple[int, list[tuple[bytes, bytes]], bytes]], counters: dict[str, int]
+) -> FastAPI:
+    """Real FastAPI app. authenticate (authn+authz) → idem (EDGE, post-authz) does identity +
+    lease + replay-on-hit. A route with only authenticate models 'eligible path without state'."""
     app = FastAPI()
 
-    async def idem_dependency(request: Request) -> None:
-        counters["dep"] += 1
-        request.state.idem_identity = "declared"  # dependency sets state (scope['state'])
+    async def authenticate(request: Request) -> str:
+        counters["auth"] += 1
+        auth = request.headers.get("authorization", "")
+        if not auth.startswith("Bearer tok-"):
+            raise HTTPException(status_code=401, detail="invalid token")
+        principal = auth[len("Bearer tok-") :]
+        ns = request.query_params.get("namespace")
+        if ns is not None and not ns.startswith(principal + "/"):
+            raise HTTPException(status_code=403, detail="foreign namespace")
+        return principal
 
-    @app.post("/eligible-dict", dependencies=[Depends(idem_dependency)])
-    async def eligible_dict() -> dict[str, int]:
+    async def idem(request: Request, principal: str = Depends(authenticate)) -> None:
+        key = request.headers.get("idempotency-key")
+        if key is None:
+            return
+        # principal- AND operation-bound identity — the route template is the operation.
+        identity = f"{principal}::{request.scope['route'].path}::{key}"
+        hit = cache.get(identity)
+        if hit is not None:
+            request.state.idem = {"is_replay": True}  # observer must NOT re-store
+            raise Replay(*hit)
+        counters["acquire"] += 1
+        request.state.idem = {
+            "eligible": True,
+            "identity": identity,
+            "lease_owner": f"lease:{identity}",
+            "is_replay": False,
+        }
+
+    @app.exception_handler(Replay)
+    async def _replay_handler(request: Request, exc: Replay) -> Response:
+        r = Response(content=exc.body, status_code=exc.status)
+        r.raw_headers = [*exc.headers, (b"x-idempotent-replay", b"true")]  # duplicates preserved
+        return r
+
+    @app.post("/dict", dependencies=[Depends(idem)])
+    async def dict_route() -> dict[str, int]:
         counters["dict_handler"] += 1
         return {"z": 1, "a": 2}
 
-    @app.post("/eligible-response", dependencies=[Depends(idem_dependency)])
-    async def eligible_response() -> Response:
+    @app.post("/resp", dependencies=[Depends(idem)])
+    async def resp_route() -> Response:
         counters["resp_handler"] += 1
         r = PlainTextResponse("col1,col2\n1,2\n", media_type="text/csv")
         r.set_cookie("s", "1")
         return r
 
-    @app.post("/boom", dependencies=[Depends(idem_dependency)])
-    async def boom() -> Response:
+    @app.post("/boom", dependencies=[Depends(idem)])
+    async def boom_route() -> Response:
         counters["boom_handler"] += 1
         raise HTTPException(status_code=503, detail="backend down")
+
+    @app.post("/no-idem", dependencies=[Depends(authenticate)])  # authenticated but NO idem dep
+    async def no_idem_route() -> dict[str, int]:
+        counters["no_idem_handler"] += 1
+        return {"ok": 1}
 
     return app
 
 
-def test_d3_12_real_fastapi_dict_and_response_capture_and_replay_byte_exact() -> None:
-    counters = {"dep": 0, "dict_handler": 0, "resp_handler": 0, "boom_handler": 0}
-    obs = SendObserver(
-        _fastapi_app(counters), eligible_paths={"/eligible-dict", "/eligible-response"}
+def _mk() -> tuple[dict[str, Any], dict[str, int], StoreOnlyObserver, TestClient]:
+    cache: dict[str, tuple[int, list[tuple[bytes, bytes]], bytes]] = {}
+    counters = dict.fromkeys(
+        ("auth", "acquire", "dict_handler", "resp_handler", "boom_handler", "no_idem_handler"), 0
     )
-    client = TestClient(obs)
+    obs = StoreOnlyObserver(_auth_app(cache, counters), cache=cache)
+    return cache, counters, obs, TestClient(obs, raise_server_exceptions=False)
 
-    for path, key, expect_ct in [
-        ("/eligible-dict", "d1", "application/json"),
-        ("/eligible-response", "r1", "text/csv"),
-    ]:
-        first = client.post(path, headers={"Idempotency-Key": key})
-        assert first.status_code == 200
-        assert first.headers.get("x-idempotent-replay") is None, "first call is not a replay"
-        replay = client.post(path, headers={"Idempotency-Key": key})
-        assert replay.headers.get("x-idempotent-replay") == "true", "second call is a replay"
-        assert replay.content == first.content, f"{path}: replay bytes must be identical"
-        assert replay.headers.get("content-type", "").startswith(expect_ct), (
-            "media type preserved on replay"
+
+def _auth(principal: str, key: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer tok-{principal}", "Idempotency-Key": key}
+
+
+def test_d3_12_dependency_drives_identity_lease_replay_dict_and_response() -> None:
+    """authorize→identity→lease→store handoff via scope state; replay is the DEPENDENCY's, and it
+    re-authenticates+re-authorizes every time (handler mutates only on the miss)."""
+    _cache, counters, obs, client = _mk()
+    for path, key, ct in [("/dict", "d1", "application/json"), ("/resp", "r1", "text/csv")]:
+        first = client.post(path, headers=_auth("eric", key))
+        assert first.status_code == 200 and first.headers.get("x-idempotent-replay") is None
+        replay = client.post(path, headers=_auth("eric", key))
+        assert replay.headers.get("x-idempotent-replay") == "true", (
+            "replay served by the dependency"
         )
-
-    # dependency + handlers each ran exactly ONCE (miss); replay never re-executed either.
-    assert counters["dep"] == 2, f"dependency ran once per distinct key, not on replay: {counters}"
-    assert counters["dict_handler"] == 1 and counters["resp_handler"] == 1, counters
-    # replay preserves the raw Set-Cookie from the Response handler
-    replay2 = client.post("/eligible-response", headers={"Idempotency-Key": "r1"})
-    assert any("s=1" in c for c in replay2.headers.get_list("set-cookie")), (
+        assert replay.content == first.content, "replay bytes identical"
+        assert replay.headers.get("content-type", "").startswith(ct), "media type preserved"
+    assert counters["auth"] == 4, (
+        "auth ran on EVERY request incl the two replays (re-auth on replay)"
+    )
+    assert counters["acquire"] == 2, "lease acquired once per identity (miss only), not on replay"
+    assert counters["dict_handler"] == 1 and counters["resp_handler"] == 1, (
+        "handler mutates only on miss"
+    )
+    assert obs.released == obs.acquired_seen and len(obs.released) == 2, (
+        "each acquired lease released"
+    )
+    r2 = client.post("/resp", headers=_auth("eric", "r1"))
+    assert any("s=1" in c for c in r2.headers.get_list("set-cookie")), (
         "Set-Cookie preserved on replay"
     )
 
 
-def test_d3_13_real_exception_handler_5xx_not_cached_lease_released() -> None:
-    counters = {"dep": 0, "dict_handler": 0, "resp_handler": 0, "boom_handler": 0}
-    obs = SendObserver(_fastapi_app(counters), eligible_paths={"/boom"})
-    client = TestClient(obs)
-    r = client.post("/boom", headers={"Idempotency-Key": "b1"})
-    assert r.status_code == 503, "real exception handler produced the 5xx"
-    assert obs.stored == [], "a 5xx from a real exception handler must not be cached"
-    assert obs.leases_released == ["lease:b1"], "lease released on the exception-handler path"
-    # a second identical request re-executes (nothing was cached) — proves no false replay
-    client.post("/boom", headers={"Idempotency-Key": "b1"})
-    assert counters["boom_handler"] == 2, "no cache → handler runs again, not served a stale replay"
+def test_d3_control_eligible_path_without_state_never_stores_or_acquires() -> None:
+    """A route with NO idem dependency writes no scope state → the observer stores nothing, sees
+    no lease, and never replays, even with an Idempotency-Key present."""
+    _cache, counters, obs, client = _mk()
+    r1 = client.post("/no-idem", headers=_auth("eric", "k"))
+    r2 = client.post("/no-idem", headers=_auth("eric", "k"))
+    assert r1.status_code == 200 and r2.status_code == 200
+    assert obs.stored == [] and obs.acquired_seen == [] and obs.released == []
+    assert counters["no_idem_handler"] == 2, "no state → no replay; the handler runs both times"
+
+
+def test_d3_control_invalid_auth_never_looks_up_or_acquires() -> None:
+    _cache, counters, obs, client = _mk()
+    # seed a cache entry under a valid principal first
+    client.post("/dict", headers=_auth("eric", "d1"))
+    before = dict(_cache)
+    r = client.post("/dict", headers={"Authorization": "Bearer BAD", "Idempotency-Key": "d1"})
+    assert r.status_code == 401, "invalid auth is rejected by the authn dependency"
+    assert counters["acquire"] == 1, "the idem dependency never ran (edge after failed authz)"
+    assert _cache == before and obs.stored == ["eric::/dict::d1"], "no store/lookup on the 401 path"
+
+
+def test_d3_control_foreign_namespace_never_looks_up_or_acquires() -> None:
+    _cache, counters, _obs, client = _mk()
+    client.post("/dict?namespace=eric/x", headers=_auth("eric", "d1"))  # authorized, stores
+    acquire_after_seed = counters["acquire"]
+    r = client.post("/dict?namespace=eric/x", headers=_auth("mallory", "d1"))  # foreign ns
+    assert r.status_code == 403, "foreign namespace rejected by authz before idem"
+    assert counters["acquire"] == acquire_after_seed, "idem dependency never ran on the 403 path"
+
+
+def test_d3_control_5xx_not_cached_lease_released() -> None:
+    _cache, counters, obs, client = _mk()
+    r = client.post("/boom", headers=_auth("eric", "b1"))
+    assert r.status_code == 503
+    assert obs.stored == [], "a real exception-handler 5xx is not cached"
+    assert obs.released == ["lease:eric::/boom::b1"], "lease released on the 5xx path"
+    client.post("/boom", headers=_auth("eric", "b1"))
+    assert counters["boom_handler"] == 2, "nothing cached → handler runs again (no false replay)"
+
+
+def test_d3_control_key_collision_across_principal_and_operation_does_not_replay() -> None:
+    """The anti-SEC-002 control: the SAME Idempotency-Key must NOT replay across a different
+    principal OR a different operation — identity is principal- and operation-bound."""
+    _cache, counters, _obs, client = _mk()
+    client.post("/dict", headers=_auth("eric", "shared"))  # store under eric::/dict::shared
+    # same key, DIFFERENT principal → different identity → miss → handler runs, NOT a replay
+    r_other_principal = client.post("/dict", headers=_auth("mallory", "shared"))
+    assert r_other_principal.headers.get("x-idempotent-replay") is None, "no cross-principal replay"
+    # same key + same principal, DIFFERENT operation (route) → different identity → miss
+    r_other_op = client.post("/resp", headers=_auth("eric", "shared"))
+    assert r_other_op.headers.get("x-idempotent-replay") is None, "no cross-operation replay"
+    assert counters["dict_handler"] == 2 and counters["resp_handler"] == 1, (
+        "each distinct identity executed"
+    )
