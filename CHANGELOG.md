@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.9](https://github.com/ericmey/musubi/compare/v1.11.8...v1.11.9) (2026-07-13)
+
+
+### Documentation
+
+* RET-004 Quality-Gate Evals Contract ([#428](https://github.com/ericmey/musubi/issues/428)) ([ef7f1b7](https://github.com/ericmey/musubi/commit/ef7f1b7f440a3902a3cf8d2b157811e46b8c93e0))
+
 ## [1.11.8](https://github.com/ericmey/musubi/compare/v1.11.7...v1.11.8) (2026-07-13)
 
 
