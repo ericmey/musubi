@@ -533,7 +533,8 @@ class _RefCoordinator:
             " collection TEXT, target_state TEXT, expected_version INTEGER, patch_sha TEXT,"
             " patch_json TEXT,"
             " intent_digest TEXT, state TEXT, event_id TEXT,"
-            " attempts INTEGER DEFAULT 0, next_attempt_epoch REAL, failure_class TEXT)"
+            " attempts INTEGER DEFAULT 0, next_attempt_epoch REAL, failure_class TEXT,"
+            " lease_owner TEXT, lease_expires_epoch REAL)"
         )
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_events (event_id TEXT PRIMARY KEY, object_id TEXT,"
@@ -639,11 +640,17 @@ class _RefCoordinator:
         EXPONENT is capped first, so a huge durable attempts count saturates to MAX without ever
         evaluating an enormous 2**n. unbounded_backoff drops the cap; exponent_overflow evaluates 2**n
         directly (float-overflows on huge counts)."""
+        if self._mode == "constant_backoff":  # WRONG: a flat delay - not exponential at all
+            return R15_BASE_BACKOFF
         exp = max(0, attempts - 1)
+        if (
+            self._mode == "wrong_exponent_origin"
+        ):  # WRONG: 2**attempts (off-by-one) -> backoff(1)=2 not 1
+            exp = attempts
         if self._mode == "exponent_overflow_at_huge_attempts":
             return float(R15_BASE_BACKOFF * (2**exp))  # WRONG: 2**9999 -> OverflowError on float()
         if self._mode == "unbounded_backoff":  # WRONG: no MAX cap -> unbounded delay
-            capped_exp = min(exp, _R15_SATURATING_EXP)
+            capped_exp = min(exp, _R15_SATURATING_EXP + 1)
             return float(R15_BASE_BACKOFF * (2**capped_exp))
         if exp >= _R15_SATURATING_EXP:  # CORRECT: saturate the exponent before computing the power
             return R15_MAX_BACKOFF
@@ -690,6 +697,21 @@ class _RefCoordinator:
                 con.execute("BEGIN IMMEDIATE")
                 con.execute(
                     f"UPDATE lifecycle_outbox SET {tail_cols} WHERE operation_key=?", (*tail, opk)
+                )
+                con.execute("COMMIT")
+            elif self._mode == "schedule_written_before_attempts":
+                # WRONG (mirror): the SCHEDULE lands in its own committed txn first; a fault before the
+                # attempts write leaves next_attempt_epoch advanced with a STALE attempts (the other torn
+                # order - caught only if the fault proof asserts BOTH fields, not attempts alone).
+                con.execute("BEGIN IMMEDIATE")
+                con.execute(
+                    f"UPDATE lifecycle_outbox SET {tail_cols} WHERE operation_key=?", (*tail, opk)
+                )
+                con.execute("COMMIT")
+                self._checkpoint("after_attempts_before_schedule")
+                con.execute("BEGIN IMMEDIATE")
+                con.execute(
+                    "UPDATE lifecycle_outbox SET attempts=? WHERE operation_key=?", (attempts, opk)
                 )
                 con.execute("COMMIT")
             else:
@@ -1131,7 +1153,11 @@ class _RefCoordinator:
         now = self._now()
         # backoff_ignored / early_skip (WRONG) claim not-due rows too; CORRECT filters to DUE rows only
         # (next_attempt_epoch NULL or in the past), so a not-due row is never even scanned.
-        ignore_due = self._mode in ("backoff_ignored", "early_skip_increments_attempts")
+        ignore_due = self._mode in (
+            "backoff_ignored",
+            "early_skip_increments_attempts",
+            "lease_claim_not_due",
+        )
         con = sqlite3.connect(self._db)
         select = (
             "SELECT operation_key,object_id,collection,target_state,expected_version,event_id,state,"
@@ -1159,8 +1185,20 @@ class _RefCoordinator:
             if not_due and self._mode == "early_skip_increments_attempts":
                 self._persist_attempt(opk, reschedule=False)  # WRONG: increments on a not-due SKIP
                 continue
+            if not_due and self._mode == "lease_claim_not_due":
+                # WRONG: claims/refreshes the lease for a not-due row (without touching Qdrant) - a before-
+                # due reconcile must have NO lease side effect either (caught only if the no-op asserts the
+                # lease fields, not just attempts/schedule).
+                con2 = sqlite3.connect(self._db)
+                con2.execute(
+                    "UPDATE lifecycle_outbox SET lease_owner=?, lease_expires_epoch=? WHERE operation_key=?",
+                    ("reconciler-A", now + 30.0, opk),
+                )
+                con2.commit()
+                con2.close()
+                continue
             if not_due and self._mode != "backoff_ignored":
-                continue  # CORRECT: a not-due row is a true no-op (no attempt, no increment)
+                continue  # CORRECT: a not-due row is a true no-op (no attempt, no increment, no lease)
             if state == "FINAL":  # only reachable under reconcile_greedy
                 self._apply_conditional(
                     opk, coll, oid, patch
@@ -2333,24 +2371,39 @@ def _check_r15(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     finally:
         c.close()
 
-    # (4) a BEFORE-DUE reconcile is a TRUE no-op: no Qdrant attempt, attempts + next_attempt_epoch unchanged.
+    # (4) the AT-DUE transient retry increments EXACTLY once and atomically moves next_attempt_epoch to
+    #     now + the EXPECTED formula delay; then a BEFORE-DUE reconcile is a TRUE no-op - no Qdrant attempt
+    #     AND no lease side effect: attempts, next_attempt_epoch, lease_owner, lease_expires_epoch all
+    #     unchanged (a scan/no-op cannot satisfy the at-due move).
     c, s, d, coord, clock = _r15_env(base, "notdue")
+    _fields = ("attempts", "next_attempt_epoch", "lease_owner", "lease_expires_epoch")
     try:
         _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
         clock["t"] += 1_000.0
-        coord.reconcile_once()  # attempts=1, rescheduled to clock+backoff(1) (in the FUTURE)
-        before = (_outbox_field(d, op, "attempts"), _outbox_field(d, op, "next_attempt_epoch"))
+        coord.reconcile_once()  # first at-due retry: attempts 0 -> 1
+        if _outbox_field(d, op, "attempts") != 1:
+            raise DefectStillPresent(
+                "R15 an at-due transient retry must increment attempts EXACTLY once"
+            )
+        nxt = _outbox_field(d, op, "next_attempt_epoch")
+        expected = clock["t"] + coord._backoff(1)
+        if nxt is None or abs(float(nxt) - expected) > 1e-6:
+            raise DefectStillPresent(
+                f"R15 an at-due retry must move next_attempt_epoch to now+delay ({expected}), got {nxt}"
+            )
+        before = tuple(_outbox_field(d, op, f) for f in _fields)
         q_before = _qdrant_state(c, s.collection, s.object_id)
         calls = _count_set_payload(c)
-        coord.reconcile_once()  # NOT due -> no-op
+        coord.reconcile_once()  # NOT due -> true no-op
         if calls["n"] != 0:
             raise DefectStillPresent(
                 "R15 a before-due reconcile must NOT attempt Qdrant (0 set_payload)"
             )
-        after = (_outbox_field(d, op, "attempts"), _outbox_field(d, op, "next_attempt_epoch"))
+        after = tuple(_outbox_field(d, op, f) for f in _fields)
         if after != before:
             raise DefectStillPresent(
-                f"R15 before-due reconcile must be a true no-op: {before} -> {after}"
+                f"R15 before-due reconcile must be a true no-op (incl NO lease side effect): "
+                f"{dict(zip(_fields, before))} -> {dict(zip(_fields, after))}"
             )
         if _qdrant_state(c, s.collection, s.object_id) != q_before:
             raise DefectStillPresent("R15 a before-due reconcile must not mutate Qdrant")
@@ -2400,14 +2453,15 @@ def _check_r15(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     finally:
         c.close()
 
-    # (7) scheduling persistence is ATOMIC under injected failure: a fault mid-persist must NOT advance
-    #     attempts with a stale/missing next_attempt_epoch (the whole persist rolls back).
+    # (7) scheduling persistence is ATOMIC under injected failure: a fault mid-persist must leave BOTH
+    #     attempts AND next_attempt_epoch unchanged (the whole persist rolls back) - either torn order
+    #     (attempts-first OR schedule-first) is caught by asserting the exact (attempts, schedule) tuple.
     c, s, d, coord, clock = _r15_env(base, "atomic")
     try:
         _r15_hold_pending(coord, c, s, _TransientQdrantError("t"))
         clock["t"] += 1_000.0
-        coord.reconcile_once()  # attempts=1
-        before_attempts = _outbox_field(d, op, "attempts")
+        coord.reconcile_once()  # attempts=1, scheduled
+        before = (_outbox_field(d, op, "attempts"), _outbox_field(d, op, "next_attempt_epoch"))
 
         def _fault(name: str) -> None:
             if name == "after_attempts_before_schedule":
@@ -2417,10 +2471,28 @@ def _check_r15(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         clock["t"] += 1_000.0
         with suppress(sqlite3.OperationalError):
             coord.reconcile_once()  # the fault propagates; a correct persist rolled BOTH writes back
-        if _outbox_field(d, op, "attempts") != before_attempts:
+        after = (_outbox_field(d, op, "attempts"), _outbox_field(d, op, "next_attempt_epoch"))
+        if after != before:
             raise DefectStillPresent(
-                "R15 a fault mid-persist must NOT advance attempts with a stale schedule (atomic all-or-nothing)"
+                f"R15 a fault mid-persist must leave BOTH attempts AND next_attempt_epoch unchanged "
+                f"(atomic all-or-nothing), got {before} -> {after}"
             )
+    finally:
+        c.close()
+
+    # (10) EXACT backoff formula (a constant delay or a wrong exponent origin passes a mere <= MAX check).
+    #      For BASE=1.0 / MAX=300.0: 1, 2, 4, 8, ... 256, then saturate to 300; huge count -> 300; and
+    #      overflow-safe at attempts=10000. A pure boundary check - no wall iterations.
+    c, s, d = _make_env(base / "r15-backoff")
+    try:
+        coord = _coordinator(c, d)
+        expected = {1: 1.0, 2: 2.0, 3: 4.0, 4: 8.0, 9: 256.0, 10: 300.0, 11: 300.0, 10000: 300.0}
+        for att, want in expected.items():
+            got = coord._backoff(att)
+            if abs(float(got) - want) > 1e-6:
+                raise DefectStillPresent(
+                    f"R15 backoff(attempts={att}) must equal {want} (BASE*2**(attempts-1) capped at MAX), got {got}"
+                )
     finally:
         c.close()
 
@@ -3478,6 +3550,10 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
             "scan_increments_attempts",
             "early_skip_increments_attempts",
             "non_atomic_attempt_schedule",
+            "schedule_written_before_attempts",
+            "lease_claim_not_due",
+            "constant_backoff",
+            "wrong_exponent_origin",
             "exponent_overflow_at_huge_attempts",
         ],
     ),
