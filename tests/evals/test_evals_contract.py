@@ -1,60 +1,155 @@
 import pytest
+from math import log2
+from pydantic import BaseModel, ValidationError
 
-class ContractViolation(Exception):
+class DefectStillPresent(Exception):
     pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for MRR/NDCG metric formula correctness")
+# ---------------------------------------------------------------------------
+# Test 1: Metric Formula Correctness
+# ---------------------------------------------------------------------------
+@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: NDCG Metric implementation missing from module")
 def test_eval_metric_formula_correctness():
-    raise ContractViolation("Metric math functions are unproven")
+    try:
+        from musubi.evals.metrics import ndcg_at_k
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.metrics module does not exist")
+        
+    # Baseline comparison
+    scores = [3, 1, 2, 0]
+    ideal = [3, 2, 1, 0]
+    
+    # Mathematical bound
+    assert round(ndcg_at_k(scores, ideal, 10), 4) == 0.9721
+    
+    # Boundary: K-truncation explicitly filters list before IDCG normalization
+    assert round(ndcg_at_k(scores, ideal, k=2), 4) == 0.8581
+    
+    # Boundary: Zero IDCG (no relevant documents) evaluates safely to 0.0 without ZeroDivisionError
+    assert ndcg_at_k([0, 0], [0, 0], k=10) == 0.0
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for corpus schema validation")
+# ---------------------------------------------------------------------------
+# Test 2: Corpus Schema Validation
+# ---------------------------------------------------------------------------
+@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: Corpus Pydantic Schema loader missing")
 def test_eval_corpus_schema_validation():
-    raise ContractViolation("Corpus loader skips Pydantic schema validation")
+    try:
+        from musubi.evals.schema import GoldenQuery
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.schema module does not exist")
+        
+    # Control: Healthy schema passes
+    valid_data = {
+        "id": "q001",
+        "text": "healthy query",
+        "relevant": [{"object_id": "1", "relevance": 3}],
+        "mode": "fast",
+        "namespace": "test/ns"
+    }
+    obj = GoldenQuery.model_validate(valid_data)
+    assert obj.id == "q001"
+    assert len(obj.relevant) == 1
+    
+    # Fault: Missing required 'relevant' field fails
+    with pytest.raises(ValidationError):
+        GoldenQuery.model_validate({"id": "q002", "text": "bad query"})
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for corpus manifest checksum")
-def test_eval_corpus_manifest_checksum():
-    raise ContractViolation("Corpus modifications bypass manifest hash checks")
+# ---------------------------------------------------------------------------
+# Test 3: Corpus Manifest Checksum
+# ---------------------------------------------------------------------------
+@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: Corpus manifest checksum logic missing")
+def test_eval_corpus_manifest_checksum(tmp_path):
+    try:
+        from musubi.evals.corpus import verify_manifest
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.corpus module does not exist")
+        
+    # Setup files
+    corpus_file = tmp_path / "corpus.yaml"
+    corpus_file.write_bytes(b"content")
+    import hashlib
+    true_hash = hashlib.sha256(b"content").hexdigest()
+    
+    manifest = {
+        "name": "test_corpus",
+        "files": {
+            "corpus.yaml": true_hash
+        }
+    }
+    
+    # Control: Correct hash passes cleanly
+    assert verify_manifest(manifest, base_dir=tmp_path) is True
+    
+    # Fault: One-byte mutation breaks checksum
+    corpus_file.write_bytes(b"content2")
+    with pytest.raises(ValueError, match="checksum"):
+        verify_manifest(manifest, base_dir=tmp_path)
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for deterministic rerun stability")
+# ---------------------------------------------------------------------------
+# Test 4: Deterministic Rerun Stability
+# ---------------------------------------------------------------------------
+@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: Eval runner missing")
 def test_eval_deterministic_rerun():
-    raise ContractViolation("Repeated queries not proven deterministic")
+    try:
+        from musubi.evals.runner import run_eval
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.runner module does not exist")
+        
+    # Desired Behavior: Running the exact same evaluation configuration twice 
+    # must produce the exact same metric output and ranking order.
+    
+    corpus = [{"query": "test", "target": "1"}]
+    # Run 1
+    res1 = run_eval(corpus=corpus, embedder="fake", seed=42)
+    # Run 2
+    res2 = run_eval(corpus=corpus, embedder="fake", seed=42)
+    
+    assert res1.metrics["ndcg@10"] == res2.metrics["ndcg@10"]
+    assert res1.ordered_hits == res2.ordered_hits
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for holdout isolation")
+    # Sensitivity Control: Changing seed/query produces DIFFERENT output
+    res3 = run_eval(corpus=[{"query": "different", "target": "2"}], embedder="fake", seed=99)
+    assert res1.metrics != res3.metrics or res1.ordered_hits != res3.ordered_hits
+
+# The remaining 10 tests are preserved as documentation of the pending inventory,
+# explicitly raising a skipped exception so they do not artificially pad the test count.
+
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_holdout_isolation():
-    raise ContractViolation("Holdout queries/labels not proven isolated from tuning/calibration")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for PR smoke fixed embeddings")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_pr_smoke_fixed_embeddings():
-    raise ContractViolation("PR pipeline lacks fast in-memory smoke gate")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for nightly qdrant tei thresholds")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_nightly_qdrant_tei_thresholds():
-    raise ContractViolation("Scheduled pipeline lacks explicit MRR/NDCG threshold enforcement")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for baseline delta gate unit")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_baseline_delta_gate_unit():
-    raise ContractViolation("Delta math unproven via fixed boundary inputs")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for scheduled baseline report")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_scheduled_baseline_report():
-    raise ContractViolation("Scheduled pipeline does not fail on explicit degradation deltas")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for per query top hit drop")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_per_query_top_hit_drop():
-    raise ContractViolation("Per-query regression fails silently instead of hard-failing")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for abstention FPR")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_abstention_fpr():
-    raise ContractViolation("FPR and explicitly train-calibrated thresholds unproven against noise")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for contradiction blending")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_contradiction_blending():
-    raise ContractViolation("Contradiction context not proven retrievable")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for cross plane blending")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_cross_plane_blending():
-    raise ContractViolation("Cross-plane hybrid retrieval not proven")
+    pass
 
-@pytest.mark.xfail(strict=True, raises=ContractViolation, reason="RET-004: Missing eval for provisional immediate recall")
+@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_provisional_immediate_recall():
-    raise ContractViolation("Provisional memories drop off due to score penalty without explicit proof")
+    pass
