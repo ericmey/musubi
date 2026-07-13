@@ -3,12 +3,12 @@ title: "Slice: RET-007 degradation propagation — IMPLEMENTATION (explicit enve
 slice_id: slice-ret007-degradation-impl
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: aoi
 phase: "Retrieval-audit 2026-07-13 — RET-007 implementation (Yua-authorized, explicit-envelope design)"
-tags: [section/slices, status/in-review, type/slice, retrieval, degradation, observability]
+tags: [section/slices, status/done, type/slice, retrieval, degradation, observability]
 updated: 2026-07-13
-reviewed: false
+reviewed: true
 depends-on: [slice-ret007-degradation]
 blocks: []
 issue: 422
@@ -16,9 +16,9 @@ issue: 422
 
 # Slice: RET-007 degradation propagation — IMPLEMENTATION (explicit envelope)
 
-Implements the ACCEPTED red contract (`slice-ret007-degradation`, #416, merged f79d2b2). Tests-first:
-this commit lands the EXPANDED red set; the source (the explicit-envelope refactor) follows in the
-same slice, flipping every red to green. No merge/deploy without Yua's independent review.
+Implemented the accepted red contract (`slice-ret007-degradation`, #416, merged `f79d2b2`).
+PR #424 merged the independently accepted implementation to `main` at `e474780`; Issue #422 is
+closed. Deployment and live fault-injection proof remain tracked outside this completed source slice.
 
 ## Locked design (Yua 2026-07-13)
 - **Explicit typed success envelope** through the retrieve internals: `results` (rows) + a
