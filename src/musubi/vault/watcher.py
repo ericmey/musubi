@@ -396,7 +396,16 @@ class VaultWatcher:
                         logger.info("Boot scan found drift in %s", rel_str)
                         evt = FileSystemEvent(str(path))
                         evt.event_type = "modified"
-                        await self._handle_event(rel_str, evt)
+                        # VAULT-002 fix: pass the ABSOLUTE path
+                        # to _handle_event so the inner
+                        # `path.relative_to(self.vault_root)`
+                        # succeeds. Previously we passed the
+                        # relative path string, which raised
+                        # ValueError inside _handle_event_inner
+                        # (line ~230) and was silently swallowed
+                        # by the `except ValueError: return` —
+                        # the file was never processed.
+                        await self._handle_event(str(path), evt)
                 except Exception as exc:
                     logger.error("Boot scan failed on path %s: %s", path, exc)
 
