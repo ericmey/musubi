@@ -3,12 +3,12 @@ title: "Slice: RET-007 — retrieval degradation propagation (C5+H11+M15)"
 slice_id: slice-ret007-degradation
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: aoi
 phase: "Retrieval-audit 2026-07-13 — degradation propagation red contract (Yua-authorized)"
-tags: [section/slices, status/in-review, type/slice, retrieval, degradation, observability]
+tags: [section/slices, status/done, type/slice, retrieval, degradation, observability]
 updated: 2026-07-13
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 issue: 416
@@ -19,9 +19,10 @@ issue: 416
 **Red contract — DOCS + TESTS ONLY, no `src/musubi/**`.** Transcribes Shiori's accepted contract
 (harem-ops `e9ef562`, `projects/active/hermes-musubi-provider/briefs/c5-h11-m15-degradation-contract.md`)
 into a rerunnable Musubi red contract. The fix (surface bounded warnings + total-failure errors up
-through core → router → schema → SDK → MCP → LiveKit → metrics) is a SEPARATE implementation slice,
-authorized only after Yua independently accepts this red contract and slice topology. Tracking Issue
-#416.
+through core → router → schema → SDK → MCP → LiveKit → metrics) is a SEPARATE implementation slice.
+**This red contract was ACCEPTED by Yua on 2026-07-13 at 870de16** (6 pass + 11 strict-xfail,
+tc-coverage 17/17, two-slice boundary accepted); the implementation slice is authorized to begin
+from it. Tracking Issue #416.
 
 ## The defect (contract §1)
 The retrieval stack conflates infrastructure failure with an empty result set: Qdrant/sparse timeouts
@@ -102,9 +103,10 @@ names the RET-007 contract defect). No missing bullet, no final-stack illusion.
 
 ## Status
 
-**`in-review`** (2026-07-13) — red contract landed (6 PASS + 11 strict-XFAIL). No `src`. Awaiting
-Yua's independent acceptance of the red contract + two-slice topology before the implementation slice
-is authorized. Tracking Issue #416; separate Hermes dependent Issue #417.
+**`done`** (2026-07-13) — red contract ACCEPTED by Yua at 870de16 (6 PASS + 11 strict-XFAIL,
+tc-coverage 17/17, zero src, two-slice boundary accepted). `done` is the pre-merge closure state (PR
+#419 + Issue #416 open until merge). The implementation slice (separate) is authorized from here; the
+Hermes provider is a separate dependent slice (Issue #417). Not merged/deployed.
 
 spec-update: slice-ret007-degradation — NEW red contract for C5/H11/M15 degradation propagation;
 two-slice topology (Musubi + separate Hermes); Conflicts A (free-text warnings) + B (healthy-zero
