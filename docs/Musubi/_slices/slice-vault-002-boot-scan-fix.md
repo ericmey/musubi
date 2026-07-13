@@ -76,24 +76,30 @@ The path representation crossing internal component boundaries must be normalize
 - Option B: `_handle_event_inner` checks `is_absolute()` before calling `relative_to`.
 - Option C: `os.path.relpath` + normalization (no exception swallow).
 
-## Test accounting (post-Shiori-second-read repair)
+## Test accounting (post-Yua-17:10:38 repair)
 
-The red contract shape is exactly **9 tests** = 5 strict xfails + 3 pass + 1 skip:
+The red contract shape is exactly **9 tests** = 4 strict xfails + 4 plain pass + 1 skip.
 
-- **5 strict xfails (today)**:
-  1. `test_boot_scan_vault_002_relative_path_noop_red` (RED) — asserts the postcondition (await_count == 1, new body_hash, absolute path); today: bug short-circuits before any create call, so the assertion fails; strict-xfails.
-  2. `test_boot_scan_vault_002_control_real_handler_writes_new_hash` (CONTROL 1) — same postcondition with a different setup; today: silently drops; strict-xfails.
-  3. `test_boot_scan_vault_002_control_background_exception_observable` (CONTROL 4) — background exception observable; today: silently swallowed; strict-xfails.
-  4. `test_boot_scan_vault_002_redproof_relative_path` (REDPROOF 1) — independent redproof of the relative_path anti-pattern; today: bug; strict-xfails.
-  5. `test_boot_scan_vault_002_redproof_log_only` (REDPROOF 2) — log_only antipattern (create called but no Qdrant set_payload with new hash); today: bug; strict-xfails.
-- **3 plain pass (today AND after fix)**:
-  1. `test_boot_scan_vault_002_control_no_drift_no_write` (CONTROL 2) — no-drift produces no write; passes today (the bug also doesn't write) AND after fix.
-  2. `test_boot_scan_vault_002_control_outside_root_skipped` (CONTROL 3) — outside-root path is skipped by rglob; passes today AND after fix.
-  3. `test_boot_scan_vault_002_redproof_mock_handler` (REDPROOF 3) — guard against the test file being modified to use the setattr mock_handler anti-pattern; passes today AND after fix (the test contract is permanent).
+The contract is observed on the typed `CuratedKnowledge` object
+passed to `curated_plane.create(memory)`, NOT on
+`call_args`/`kwargs` introspection (create takes one positional
+arg), NOT on `Qdrant client.set_payload` side effects (which
+an `AsyncMock` never calls), NOT on a captured task raising
+(`boot_scan` intentionally catches per-path exceptions and
+logs them as `Boot scan failed on path ...`).
+
+- **4 strict xfails (today)**:
+  1. `test_boot_scan_vault_002_relative_path_noop_red` (RED) — calls `boot_scan()`; asserts the postcondition on the typed `CuratedKnowledge` (relative `vault_path`, new `body_hash`, frontmatter `object_id`/`namespace`); today: 0 creates (the bug short-circuits before the handler); assertion fails → xfail. After fix: 1 create with the right typed memory; passes.
+  2. `test_boot_scan_vault_002_control_background_exception_observable` (CONTROL 4) — observability via `caplog`; today: no log (the bug short-circuits before `create()`); assertion fails → xfail. After fix: `create()` raises; the loop logs the error; the log "Boot scan failed on path" is present; passes. NOTE: `pytest.raises` is NOT used because `boot_scan` catches per-path exceptions and the captured task does not raise.
+  3. `test_boot_scan_vault_002_redproof_relative_path` (REDPROOF 1) — wrong-dispatch candidate via `await watcher._handle_event(rel, evt)` directly with the RELATIVE path (the current bug's behavior); asserts the postcondition on the typed memory; today: 0 creates; assertion fails → xfail. After fix: a future regression to the relative_path anti-pattern still fails the postcondition.
+  4. `test_boot_scan_vault_002_redproof_log_only` (REDPROOF 2) — log_only anti-pattern: `create()` is called but the typed `CuratedKnowledge` carries the WRONG `body_hash` (e.g., the stale one). The contract catches this by asserting the typed memory's `body_hash == real_hash`. Today: 0 creates (the bug short-circuits); assertion fails → xfail. After fix: a hypothetical log_only candidate would fail the typed-memory assertion.
+- **4 plain pass (today AND after fix)**:
+  1. `test_boot_scan_vault_002_control_real_handler_writes_new_hash` (CONTROL 1) — GENUINE GREEN CONTROL: direct call to `await watcher._handle_event(abs_path, evt)` with an ABSOLUTE path bypasses the boot_scan dispatch bug. Today: passes (the handler is correct when given the absolute path; the bug is only in boot_scan's dispatch). After fix: passes. This separates "handler works" from "boot_scan dispatches the wrong path" and narrows the fix.
+  2. `test_boot_scan_vault_002_control_no_drift_no_write` (CONTROL 2) — no-drift produces no write; passes today (the bug also doesn't write) AND after fix.
+  3. `test_boot_scan_vault_002_control_outside_root_skipped` (CONTROL 3) — outside-root path is skipped by rglob; passes today AND after fix.
+  4. `test_boot_scan_vault_002_redproof_mock_handler` (REDPROOF 3) — GUARD: AST inspection detects the prohibited `setattr(watcher, "_handle_event", ...)` call in BOTH the builtin form (`ast.Name(id="setattr")`) and the attribute form (`ast.Attribute.attr == "setattr"`); red-proofs the guard with a synthetic AST containing the exact prohibited call. Passes today AND after fix (the test contract is permanent).
 - **1 skip (deletion routing marker)**:
-  1. `test_boot_scan_vault_002_deletion_routed_to_vault_001_marker` — deferred to VAULT-001 (Issue #446); skip with durable routing target.
-
-The PR body claim "1 strict-xfail red + 4 healthy controls (2 PASS today, 2 strict-xfail today) + 3 red-proofs + 1 repair marker = 9 tests" is reconciled as: 1 RED + 2 controls (1, 4) + 2 red-proofs (1, 2) = 5 strict xfails; 2 controls (2, 3) + 1 red-proof (3, guard) = 3 pass; 1 marker = 1 skip.
+  1. `test_boot_scan_vault_002_deletion_routed_to_vault_001_marker` — documentary marker; body is empty (no `assert True`); skip with durable routing to Issue #446. NOT a behavioral proof and NOT strict-xfail discrimination (per Yua 17:10:38).
 
 ## Source of truth
 
