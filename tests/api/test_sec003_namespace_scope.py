@@ -31,8 +31,7 @@ UPLOAD = "/v1/artifacts"
 
 def _tenant_b(api_settings) -> str:
     """A valid token that is authorized ONLY on mallory/evil — never on eric/*."""
-    return mint_token(api_settings, scopes=["mallory/evil/artifact:rw"],
-                      presence="mallory/evil")
+    return mint_token(api_settings, scopes=["mallory/evil/artifact:rw"], presence="mallory/evil")
 
 
 def _multipart(namespace: str) -> dict:
@@ -47,11 +46,15 @@ def _multipart(namespace: str) -> dict:
 @pytest.mark.xfail(strict=True, reason="SEC-003: Form namespace bypasses write scope — fix pending")
 def test_upload_cross_tenant_namespace_must_be_403(client: TestClient, api_settings) -> None:
     # tenant B's token uploads INTO tenant A's namespace via the Form field
-    r = client.post(UPLOAD, files=_multipart("eric/claude-code/artifact"),
-                    headers={"Authorization": f"Bearer {_tenant_b(api_settings)}"})
+    r = client.post(
+        UPLOAD,
+        files=_multipart("eric/claude-code/artifact"),
+        headers={"Authorization": f"Bearer {_tenant_b(api_settings)}"},
+    )
     assert r.status_code == 403, (
         f"upload to a foreign namespace returned {r.status_code} — Form namespace was "
-        f"never authorized (auth read an empty query param)")
+        f"never authorized (auth read an empty query param)"
+    )
 
 
 def test_upload_own_namespace_still_succeeds(client: TestClient, api_settings) -> None:
@@ -59,12 +62,15 @@ def test_upload_own_namespace_still_succeeds(client: TestClient, api_settings) -
 
     NOT xfail — the fix must authorize the Form namespace, not forbid all uploads.
     """
-    token = mint_token(api_settings, scopes=["mallory/evil/artifact:rw"],
-                       presence="mallory/evil")
-    r = client.post(UPLOAD, files=_multipart("mallory/evil/artifact"),
-                    headers={"Authorization": f"Bearer {token}"})
+    token = mint_token(api_settings, scopes=["mallory/evil/artifact:rw"], presence="mallory/evil")
+    r = client.post(
+        UPLOAD,
+        files=_multipart("mallory/evil/artifact"),
+        headers={"Authorization": f"Bearer {token}"},
+    )
     assert r.status_code in (200, 201, 202), (
-        f"authorized own-namespace upload failed: {r.status_code} {r.text[:200]}")
+        f"authorized own-namespace upload failed: {r.status_code} {r.text[:200]}"
+    )
 
 
 def test_upload_no_token_must_be_401(client: TestClient) -> None:
@@ -72,16 +78,21 @@ def test_upload_no_token_must_be_401(client: TestClient) -> None:
     assert r.status_code == 401, f"unauthenticated upload returned {r.status_code}"
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-003: Path namespace stats bypasses read scope — fix pending")
+@pytest.mark.xfail(
+    strict=True, reason="SEC-003: Path namespace stats bypasses read scope — fix pending"
+)
 def test_namespace_stats_cross_tenant_must_be_403(client: TestClient, api_settings) -> None:
     # tenant B reads stats for tenant A's namespace; the value is a PATH param, so the
     # namespace_qs_param="namespace_path" query lookup is empty and auth checks nothing.
     path = "eric%2Fclaude-code%2Fepisodic"
-    r = client.get(f"/v1/namespaces/{path}/stats",
-                   headers={"Authorization": f"Bearer {_tenant_b(api_settings)}"})
+    r = client.get(
+        f"/v1/namespaces/{path}/stats",
+        headers={"Authorization": f"Bearer {_tenant_b(api_settings)}"},
+    )
     assert r.status_code == 403, (
         f"cross-tenant namespace stats returned {r.status_code} — Path namespace was "
-        f"never authorized")
+        f"never authorized"
+    )
 
 
 def test_namespace_stats_own_namespace_still_succeeds(client: TestClient, api_settings) -> None:
@@ -94,10 +105,8 @@ def test_namespace_stats_own_namespace_still_succeeds(client: TestClient, api_se
     target = "mallory/evil/episodic"
     token = mint_token(api_settings, scopes=[f"{target}:r"], presence="mallory/evil")
     path = target.replace("/", "%2F")
-    r = client.get(f"/v1/namespaces/{path}/stats",
-                   headers={"Authorization": f"Bearer {token}"})
-    assert r.status_code == 200, (
-        f"own-namespace stats failed: {r.status_code} {r.text[:200]}")
+    r = client.get(f"/v1/namespaces/{path}/stats", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, f"own-namespace stats failed: {r.status_code} {r.text[:200]}"
     body = r.json()
     assert body.get("namespace") == target, f"namespace echo wrong: {body.get('namespace')!r}"
     assert isinstance(body.get("counts"), dict), "counts must be a dict per NamespaceStats"

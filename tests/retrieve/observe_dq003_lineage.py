@@ -34,8 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import ALL_STATES, FRESH_STATES, Fixture, Musubi, Store  # noqa: E402
 
 ENV = Path.home() / ".musubi/musubi-mcp-aoi.env"
-OP_ENV = Path(os.environ.get("MUSUBI_OPERATOR_ENV",
-                             str(Path.home() / ".musubi/musubi-mcp-aoi-operator.env")))
+OP_ENV = Path(
+    os.environ.get("MUSUBI_OPERATOR_ENV", str(Path.home() / ".musubi/musubi-mcp-aoi-operator.env"))
+)
 NS = "aoi/command-chair/episodic"
 
 musubi = Musubi(ENV)
@@ -46,14 +47,21 @@ fix = Fixture(musubi, store, NS)
 def _op_env() -> tuple[str, str]:
     s = OP_ENV.read_text()
     import re
+
     url = re.search(r"(?m)^MUSUBI_API_URL=(.+)$", s).group(1).strip().rstrip("/")
     tok = re.search(r"(?m)^MUSUBI_TOKEN=(.+)$", s).group(1).strip()
     return url, tok
 
 
-def transition(object_id: str, to_state: str, *, actor: str, reason: str,
-               supersedes: list[str] | None = None,
-               superseded_by: str | None = None) -> tuple[int, dict]:
+def transition(
+    object_id: str,
+    to_state: str,
+    *,
+    actor: str,
+    reason: str,
+    supersedes: list[str] | None = None,
+    superseded_by: str | None = None,
+) -> tuple[int, dict]:
     """Operator-scoped lifecycle transition. Returns (status, body).
 
     NOTE: superseded_by is a REQUEST field the caller must set (writes_lifecycle.py:23).
@@ -62,12 +70,18 @@ def transition(object_id: str, to_state: str, *, actor: str, reason: str,
     not proof the linkage failed. Reciprocity is caller-owned here, not automatic.
     """
     url, tok = _op_env()
-    body = {"object_id": object_id, "to_state": to_state, "actor": actor, "reason": reason,
-            "supersedes": supersedes or []}
+    body = {
+        "object_id": object_id,
+        "to_state": to_state,
+        "actor": actor,
+        "reason": reason,
+        "supersedes": supersedes or [],
+    }
     if superseded_by is not None:
         body["superseded_by"] = superseded_by
-    req = urllib.request.Request(f"{url}/lifecycle/transition",
-                                 data=json.dumps(body).encode(), method="POST")
+    req = urllib.request.Request(
+        f"{url}/lifecycle/transition", data=json.dumps(body).encode(), method="POST"
+    )
     req.add_header("Authorization", f"Bearer {tok}")
     req.add_header("Content-Type", "application/json")
     try:
@@ -103,20 +117,33 @@ print()
 # straight to superseded from provisional (observed 2026-07-12: 400 "not permitted;
 # allowed from provisional: ['archived','matured']"). Mature A first, THEN supersede it.
 print("Transition: A provisional -> matured -> superseded; B supersedes A")
-m_status, _ = transition(a_oid, "matured", actor="aoi/operator", reason="DQ-003: mature A before supersession")
+m_status, _ = transition(
+    a_oid, "matured", actor="aoi/operator", reason="DQ-003: mature A before supersession"
+)
 line("A -> matured (required first hop)", m_status)
 time.sleep(1)
 # A -> superseded AND explicitly point A.superseded_by = B (the field I omitted before)
 status, body = transition(
-    a_oid, "superseded", actor="aoi/operator",
-    reason="DQ-003 lineage observation", superseded_by=b_oid)
+    a_oid,
+    "superseded",
+    actor="aoi/operator",
+    reason="DQ-003 lineage observation",
+    superseded_by=b_oid,
+)
 # B records the forward edge B.supersedes = [A]
 status_b, body_b = transition(
-    b_oid, "matured", actor="aoi/operator",
-    reason="DQ-003 lineage observation: B supersedes A", supersedes=[a_oid])
+    b_oid,
+    "matured",
+    actor="aoi/operator",
+    reason="DQ-003 lineage observation: B supersedes A",
+    supersedes=[a_oid],
+)
 line("A -> superseded", status, body.get("to_state", body.get("error", "")))
-line("B supersedes A", status_b,
-     (body_b.get("supersedes") if isinstance(body_b, dict) else body_b) or body_b.get("error", ""))
+line(
+    "B supersedes A",
+    status_b,
+    (body_b.get("supersedes") if isinstance(body_b, dict) else body_b) or body_b.get("error", ""),
+)
 time.sleep(2)
 print()
 
@@ -125,10 +152,15 @@ print("L1  Raw Qdrant payload")
 pa = store.payload(a_oid) or {}
 pb = store.payload(b_oid) or {}
 line("    A.state", pa.get("state"))
-line("    A.superseded_by (we requested = B)", pa.get("superseded_by"),
-     "reciprocal edge set" if pa.get("superseded_by") == b_oid
-     else "NOT persisted despite being requested" if not pa.get("superseded_by")
-     else f"set to {pa.get('superseded_by')}")
+line(
+    "    A.superseded_by (we requested = B)",
+    pa.get("superseded_by"),
+    "reciprocal edge set"
+    if pa.get("superseded_by") == b_oid
+    else "NOT persisted despite being requested"
+    if not pa.get("superseded_by")
+    else f"set to {pa.get('superseded_by')}",
+)
 line("    B.supersedes", pb.get("supersedes"))
 print()
 
@@ -136,13 +168,19 @@ print()
 print("L2  Ranked recall (default fresh states) — is superseded A hidden?")
 res_default = musubi.recall(NS, a_mark, mode="blended", limit=5, state_filter=FRESH_STATES)
 a_in_default = any(r.get("object_id") == a_oid for r in res_default)
-line("    A returned under FRESH_STATES?", a_in_default,
-     "hidden from default recall" if not a_in_default else "STILL VISIBLE though superseded")
+line(
+    "    A returned under FRESH_STATES?",
+    a_in_default,
+    "hidden from default recall" if not a_in_default else "STILL VISIBLE though superseded",
+)
 
 res_all = musubi.recall(NS, a_mark, mode="blended", limit=5, state_filter=ALL_STATES)
 a_in_all = any(r.get("object_id") == a_oid for r in res_all)
-line("    A returned including archive states?", a_in_all,
-     "reachable for lineage" if a_in_all else "unreachable even with archive states")
+line(
+    "    A returned including archive states?",
+    a_in_all,
+    "reachable for lineage" if a_in_all else "unreachable even with archive states",
+)
 print()
 
 # ── L3: can a CALLER see the lineage edge? ───────────────────────────────────
@@ -154,8 +192,11 @@ if row_a:
     # "no lineage field." Inspect the nested structure Yua pointed to.
     extra = row_a.get("extra") or {}
     nested = extra.get("lineage")
-    line("    row.extra.lineage present?", nested is not None,
-         "" if nested is not None else "no lineage in extra")
+    line(
+        "    row.extra.lineage present?",
+        nested is not None,
+        "" if nested is not None else "no lineage in extra",
+    )
     if isinstance(nested, dict):
         line("    extra.lineage.superseded_by", nested.get("superseded_by"))
         line("    extra.lineage.supersedes", nested.get("supersedes"))

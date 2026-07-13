@@ -37,7 +37,7 @@ from musubi.api.app import create_app
 from musubi.settings import Settings
 
 _SERVICE_FILE = Path(__file__).resolve().parents[2] / "deploy" / "systemd" / "musubi-api.service"
-_WORKER_ENV = "WEB_CONCURRENCY"          # the standard uvicorn/gunicorn worker-count signal
+_WORKER_ENV = "WEB_CONCURRENCY"  # the standard uvicorn/gunicorn worker-count signal
 
 
 def _execstart() -> str:
@@ -57,11 +57,13 @@ def _workers_in(execstart: str) -> int | None:
 # reference prototype of the guard (green) — the spec the fix should add
 # --------------------------------------------------------------------------- #
 
+
 def _reject_multi_worker(worker_count: int) -> None:
     if worker_count > 1:
         raise RuntimeError(
             f"idempotency cache is process-local; {worker_count} workers would tear it — "
-            f"pin a single worker or move to a shared backend (fail-closed)")
+            f"pin a single worker or move to a shared backend (fail-closed)"
+        )
 
 
 def test_guard_prototype_rejects_multi_worker() -> None:
@@ -75,12 +77,17 @@ def test_guard_prototype_rejects_multi_worker() -> None:
 # DEPLOYMENT contract
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.xfail(strict=True, reason="REQ-10: systemd ExecStart does not explicitly pin --workers 1 yet — fix pending")
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="REQ-10: systemd ExecStart does not explicitly pin --workers 1 yet — fix pending",
+)
 def test_systemd_must_pin_single_worker() -> None:
     """The runtime must PIN one worker, not rely on uvicorn's implicit default."""
     assert _workers_in(_execstart()) == 1, (
         "ExecStart must explicitly pin --workers 1 so the single-worker invariant is declared, "
-        "not left to uvicorn's default")
+        "not left to uvicorn's default"
+    )
 
 
 def test_systemd_never_drifts_above_one_worker() -> None:
@@ -90,12 +97,14 @@ def test_systemd_never_drifts_above_one_worker() -> None:
     n = _workers_in(_execstart())
     assert n is None or n == 1, (
         f"ExecStart pins --workers {n} > 1 while the idempotency cache is process-local — "
-        f"REQ-10 hole (each worker gets its own cache)")
+        f"REQ-10 hole (each worker gets its own cache)"
+    )
 
 
 # --------------------------------------------------------------------------- #
 # APP-CONFIG contract
 # --------------------------------------------------------------------------- #
+
 
 def test_create_app_has_no_web_concurrency_guard_today_control(
     api_settings: Settings, monkeypatch: pytest.MonkeyPatch
@@ -106,7 +115,10 @@ def test_create_app_has_no_web_concurrency_guard_today_control(
     assert create_app(settings=api_settings) is not None
 
 
-@pytest.mark.xfail(strict=True, reason="REQ-10: create_app does not fail closed on WEB_CONCURRENCY>1 yet — fix pending")
+@pytest.mark.xfail(
+    strict=True,
+    reason="REQ-10: create_app does not fail closed on WEB_CONCURRENCY>1 yet — fix pending",
+)
 def test_create_app_must_fail_closed_on_web_concurrency(
     api_settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -115,7 +127,9 @@ def test_create_app_must_fail_closed_on_web_concurrency(
         create_app(settings=api_settings)
 
 
-@pytest.mark.xfail(strict=True, reason="REQ-10: Settings has no api_workers field rejecting >1 yet — fix pending")
+@pytest.mark.xfail(
+    strict=True, reason="REQ-10: Settings has no api_workers field rejecting >1 yet — fix pending"
+)
 def test_settings_must_reject_api_workers_gt_1(api_settings: Settings) -> None:
     """Settings must carry an api_workers field that REJECTS >1 (not merely store it). The
     field-presence assert fails today (no field); once the field exists, the behavioural check

@@ -35,8 +35,7 @@ def _capture_body(ns: str = "eric/claude-code/episodic", content: str = "sec002 
 
 def _prime(client: TestClient, token: str, key: str, body: dict) -> None:
     """Legitimately populate the idempotency cache with an authenticated write."""
-    r = client.post(CAPTURE, json=body,
-                    headers={"Authorization": f"Bearer {token}", IDEM: key})
+    r = client.post(CAPTURE, json=body, headers={"Authorization": f"Bearer {token}", IDEM: key})
     assert r.status_code in (200, 201, 202), f"priming write failed: {r.status_code} {r.text[:200]}"
 
 
@@ -49,42 +48,55 @@ def test_no_bearer_must_not_replay(client: TestClient, valid_token: str) -> None
     # SECURE expectation: unauthenticated request is rejected, never served a cached 2xx
     assert r.status_code == 401, (
         f"unauthenticated replay returned {r.status_code} "
-        f"(replay={r.headers.get('X-Idempotent-Replay')}) — auth was bypassed")
+        f"(replay={r.headers.get('X-Idempotent-Replay')}) — auth was bypassed"
+    )
 
 
 @pytest.mark.xfail(strict=True, reason="SEC-002: replay served to INVALID bearer — fix pending")
 def test_invalid_bearer_must_not_replay(client: TestClient, valid_token: str) -> None:
     key, body = "sec002-badbearer", _capture_body()
     _prime(client, valid_token, key, body)
-    r = client.post(CAPTURE, json=body,
-                    headers={"Authorization": "Bearer not-a-real-token", IDEM: key})
+    r = client.post(
+        CAPTURE, json=body, headers={"Authorization": "Bearer not-a-real-token", IDEM: key}
+    )
     assert r.status_code == 401, (
-        f"invalid-bearer replay returned {r.status_code} — auth was bypassed")
+        f"invalid-bearer replay returned {r.status_code} — auth was bypassed"
+    )
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-002: one tenant replays another tenant's write — fix pending")
+@pytest.mark.xfail(
+    strict=True, reason="SEC-002: one tenant replays another tenant's write — fix pending"
+)
 def test_cross_tenant_must_not_replay(client: TestClient, api_settings, valid_token: str) -> None:
     key, body = "sec002-crosstenant", _capture_body()
-    _prime(client, valid_token, key, body)          # tenant A (eric/claude-code) writes
+    _prime(client, valid_token, key, body)  # tenant A (eric/claude-code) writes
     # tenant B: a VALID token for a DIFFERENT presence with no access to A's namespace
-    tenant_b = mint_token(api_settings, scopes=["mallory/evil/episodic:rw"],
-                          presence="mallory/evil")
-    prime = client.post(CAPTURE, json=body,
-                        headers={"Authorization": f"Bearer {valid_token}", IDEM: key})
-    leaked_id = prime.json().get("object_id") if prime.headers.get("content-type","").startswith("application/json") else None
-    r = client.post(CAPTURE, json=body,
-                    headers={"Authorization": f"Bearer {tenant_b}", IDEM: key})
+    tenant_b = mint_token(
+        api_settings, scopes=["mallory/evil/episodic:rw"], presence="mallory/evil"
+    )
+    prime = client.post(
+        CAPTURE, json=body, headers={"Authorization": f"Bearer {valid_token}", IDEM: key}
+    )
+    leaked_id = (
+        prime.json().get("object_id")
+        if prime.headers.get("content-type", "").startswith("application/json")
+        else None
+    )
+    r = client.post(CAPTURE, json=body, headers={"Authorization": f"Bearer {tenant_b}", IDEM: key})
     # SECURE (Yua): cross-tenant replay must be REFUSED (403), and must not DISCLOSE A's
     # cached body — absence of the replay header alone is not enough; the object_id and
     # body of A's write must not reach B.
     assert r.status_code == 403, (
-        f"cross-tenant replay returned {r.status_code} — B was authorized on A's write")
+        f"cross-tenant replay returned {r.status_code} — B was authorized on A's write"
+    )
     assert r.headers.get("X-Idempotent-Replay") != "true"
     if leaked_id is not None:
         assert leaked_id not in r.text, "tenant A's object_id leaked to tenant B"
 
 
-@pytest.mark.skip(reason="SEC-002 collision probe NOT YET VALID — see note. Do not cite as evidence.")
+@pytest.mark.skip(
+    reason="SEC-002 collision probe NOT YET VALID — see note. Do not cite as evidence."
+)
 def test_same_key_body_must_not_collide_across_routes(
     client: TestClient, api_settings, valid_token: str
 ) -> None:
@@ -112,8 +124,10 @@ def test_owner_can_replay_its_own_write(client: TestClient, valid_token: str) ->
     """
     key, body = "sec002-owner", _capture_body()
     _prime(client, valid_token, key, body)
-    r = client.post(CAPTURE, json=body,
-                    headers={"Authorization": f"Bearer {valid_token}", IDEM: key})
+    r = client.post(
+        CAPTURE, json=body, headers={"Authorization": f"Bearer {valid_token}", IDEM: key}
+    )
     assert r.status_code in (200, 201, 202)
     assert r.headers.get("X-Idempotent-Replay") == "true", (
-        "the original authenticated subject must still get its idempotent replay")
+        "the original authenticated subject must still get its idempotent replay"
+    )

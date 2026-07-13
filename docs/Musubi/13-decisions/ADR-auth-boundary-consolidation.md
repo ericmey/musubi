@@ -1,5 +1,6 @@
 ---
 title: "ADR: consolidated auth boundary — SEC-002/003/004 + IDEM-001"
+section: 13-decisions
 type: adr
 status: proposed
 owner: aoi

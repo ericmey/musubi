@@ -99,31 +99,44 @@ class Musubi:
         self._url = e["MUSUBI_API_URL"].rstrip("/")
         self._tok = e["MUSUBI_TOKEN"]
 
-    def _req(self, method: str, path: str, body: Optional[dict] = None,
-             query: Optional[dict] = None) -> dict:
+    def _req(
+        self, method: str, path: str, body: Optional[dict] = None, query: Optional[dict] = None
+    ) -> dict:
         url = f"{self._url}/{path.lstrip('/')}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
         req = urllib.request.Request(
-            url, data=json.dumps(body).encode() if body else None, method=method)
+            url, data=json.dumps(body).encode() if body else None, method=method
+        )
         req.add_header("Authorization", f"Bearer {self._tok}")
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=30) as r:
             return json.loads(r.read().decode() or "{}")
 
-    def write(self, namespace: str, content: str, *, importance: int = 5,
-              tags: Optional[list[str]] = None) -> str:
-        payload = self._req("POST", "/episodic", {
-            "namespace": namespace,
-            "content": content,
-            "tags": tags or ["kind:episode", "staleness:episodic"],
-            "importance": importance,
-        })
+    def write(
+        self, namespace: str, content: str, *, importance: int = 5, tags: Optional[list[str]] = None
+    ) -> str:
+        payload = self._req(
+            "POST",
+            "/episodic",
+            {
+                "namespace": namespace,
+                "content": content,
+                "tags": tags or ["kind:episode", "staleness:episodic"],
+                "importance": importance,
+            },
+        )
         return payload["object_id"]
 
-    def recall(self, namespace: str, query: str, *, mode: str = "blended",
-               limit: int = 5, state_filter: Optional[list[str]] = _SENTINEL  # type: ignore[assignment]
-               ) -> list[dict]:
+    def recall(
+        self,
+        namespace: str,
+        query: str,
+        *,
+        mode: str = "blended",
+        limit: int = 5,
+        state_filter: Optional[list[str]] = _SENTINEL,  # type: ignore[assignment]
+    ) -> list[dict]:
         """Raw ranked recall.
 
         ``state_filter=None`` means **send no filter** — i.e. exercise the SERVER
@@ -131,7 +144,11 @@ class Musubi:
         Passing the sentinel (the default) sends FRESH_STATES.
         """
         body: dict[str, Any] = {
-            "namespace": namespace, "query_text": query, "mode": mode, "limit": limit}
+            "namespace": namespace,
+            "query_text": query,
+            "mode": mode,
+            "limit": limit,
+        }
         if state_filter is not _SENTINEL and state_filter is not None:
             body["state_filter"] = state_filter
         elif state_filter is _SENTINEL:
@@ -171,7 +188,9 @@ class Store:
         )
         out = subprocess.run(
             ["ssh", "-o", "BatchMode=yes", self.host, remote],
-            capture_output=True, text=True, timeout=60,
+            capture_output=True,
+            text=True,
+            timeout=60,
         )
         if out.returncode != 0:
             raise RuntimeError(f"store read failed: {out.stderr.strip()[:200]}")
@@ -180,7 +199,7 @@ class Store:
     def payload(self, object_id: str) -> Optional[dict]:
         """The raw stored payload, with NO side effects. Returns None if absent."""
         script = (
-            'import os,json,urllib.request\n'
+            "import os,json,urllib.request\n"
             'k=os.environ["QDRANT_API_KEY"]\n'
             'r=urllib.request.Request("http://qdrant:6333/collections/%s/points/scroll",'
             'data=json.dumps({"limit":1,"with_payload":True,"filter":{"must":['
@@ -197,14 +216,15 @@ class Store:
         pl = self.payload(object_id)
         if pl is None:
             return Observation(key, None, "qdrant", note="object not found in store")
-        return Observation(key, pl.get(key), "qdrant",
-                           note="" if key in pl else "KEY ABSENT (not zero)")
+        return Observation(
+            key, pl.get(key), "qdrant", note="" if key in pl else "KEY ABSENT (not zero)"
+        )
 
     def count(self, collection: Optional[str] = None) -> Observation:
         """The TRUE point count. Not a paged API's ``limit`` handed back to you."""
         col = collection or self.collection
         script = (
-            'import os,json,urllib.request\n'
+            "import os,json,urllib.request\n"
             'k=os.environ["QDRANT_API_KEY"]\n'
             'r=urllib.request.Request("http://qdrant:6333/collections/%s")\n'
             'r.add_header("api-key",k)\n'
@@ -238,11 +258,40 @@ class Fixture:
     # write deduped into an existing memory, the FIXTURE FAILS LOUDLY. A probe that
     # cannot prove its own setup cannot prove anything else.
     _WORDS = (
-        "quorate", "lantern", "marmalade", "ferret", "tidal", "vellum", "orchard",
-        "granite", "lullaby", "turnstile", "cutlery", "obsidian", "domino", "kelp",
-        "registrar", "comet", "chalk", "hummingbird", "cellar", "brass", "semaphore",
-        "cobalt", "aqueduct", "filigree", "zephyr", "quarry", "meridian", "thistle",
-        "cantilever", "plumbago", "vestibule", "gantry", "isinglass", "wicket",
+        "quorate",
+        "lantern",
+        "marmalade",
+        "ferret",
+        "tidal",
+        "vellum",
+        "orchard",
+        "granite",
+        "lullaby",
+        "turnstile",
+        "cutlery",
+        "obsidian",
+        "domino",
+        "kelp",
+        "registrar",
+        "comet",
+        "chalk",
+        "hummingbird",
+        "cellar",
+        "brass",
+        "semaphore",
+        "cobalt",
+        "aqueduct",
+        "filigree",
+        "zephyr",
+        "quarry",
+        "meridian",
+        "thistle",
+        "cantilever",
+        "plumbago",
+        "vestibule",
+        "gantry",
+        "isinglass",
+        "wicket",
     )
 
     def _fresh_content(self, marker: str) -> str:
@@ -257,8 +306,7 @@ class Fixture:
         reading the fixture's own setup.
         """
         marker = f"hx{uuid.uuid4().hex[:10]}"
-        oid = self.musubi.write(
-            self.namespace, self._fresh_content(marker), importance=importance)
+        oid = self.musubi.write(self.namespace, self._fresh_content(marker), importance=importance)
 
         deadline = time.time() + 25
         pl: Optional[dict] = None
@@ -277,15 +325,18 @@ class Fixture:
             problems.append(f"version={ver} (expected 1 — this row is NOT new)")
         if (pl.get("access_count") or 0) != 0:
             problems.append(
-                f"access_count={pl.get('access_count')} (expected 0 — already accessed)")
+                f"access_count={pl.get('access_count')} (expected 0 — already accessed)"
+            )
         if (pl.get("reinforcement_count") or 0) != 0:
             problems.append(
                 f"reinforcement_count={pl.get('reinforcement_count')} (expected 0 — "
-                f"CAPTURE DEDUPED INTO AN EXISTING MEMORY)")
+                f"CAPTURE DEDUPED INTO AN EXISTING MEMORY)"
+            )
         if problems:
             raise RuntimeError(
-                f"SEED INVARIANT VIOLATED for {oid}: " + "; ".join(problems) +
-                ". The write returned an object that is not a new memory — most likely "
+                f"SEED INVARIANT VIOLATED for {oid}: "
+                + "; ".join(problems)
+                + ". The write returned an object that is not a new memory — most likely "
                 "semantic dedup reinforced an existing row. Any measurement taken against "
                 "this fixture would be measuring somebody else's history."
             )
@@ -309,7 +360,8 @@ class Fixture:
             marker = f"hx{uuid.uuid4().hex[:10]}"
             body = " ".join(random.sample(self._WORDS, 9))
             oid = self.musubi.write(
-                self.namespace, f"{anchor} {marker}: {body}.", importance=importance)
+                self.namespace, f"{anchor} {marker}: {body}.", importance=importance
+            )
             oids.append(oid)
         time.sleep(3.0)
         for oid in oids:
@@ -318,13 +370,13 @@ class Fixture:
                 raise RuntimeError(
                     f"SEED INVARIANT VIOLATED for {oid}: access={pl.get('access_count')} "
                     f"reinforcement={pl.get('reinforcement_count')} — capture deduped this "
-                    f"cohort; these are not {n} distinct memories.")
+                    f"cohort; these are not {n} distinct memories."
+                )
         if len(set(oids)) != n:
             raise RuntimeError(f"requested {n}, capture returned {len(set(oids))} distinct ids")
         return oids, anchor
 
-    def seed_exact(self, content: str, *, importance: int = 5,
-                   settle_s: float = 2.5) -> str:
+    def seed_exact(self, content: str, *, importance: int = 5, settle_s: float = 2.5) -> str:
         """Seed a memory with CALLER-SUPPLIED content, and still prove it is new.
 
         The grapheme/boundary probes need exact byte content (a cluster straddling index
@@ -358,7 +410,8 @@ class Fixture:
         if stored != content:
             problems.append(
                 "STORED CONTENT != REQUESTED — capture altered or deduped it. "
-                f"requested {len(content)} chars, stored {len(stored)}")
+                f"requested {len(content)} chars, stored {len(stored)}"
+            )
         if problems:
             raise RuntimeError(f"seed_exact INVARIANT VIOLATED for {oid}: " + "; ".join(problems))
         return oid
@@ -373,5 +426,6 @@ class Fixture:
         if len(set(oids)) != n:
             raise RuntimeError(
                 f"requested {n} fixtures; capture returned {len(set(oids))} distinct "
-                f"object_ids — dedup collapsed them. These are not {n} memories.")
+                f"object_ids — dedup collapsed them. These are not {n} memories."
+            )
         return oids

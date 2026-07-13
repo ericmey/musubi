@@ -70,7 +70,8 @@ def test_middleware_cannot_see_canonical_route() -> None:
     TestClient(_build_app(record)).post("/v1/items/42")
     # Pre-auth middleware: routing has NOT happened yet.
     assert record["mw_route"] is None, (
-        "middleware unexpectedly saw a route — if this changed, the pipeline order changed")
+        "middleware unexpectedly saw a route — if this changed, the pipeline order changed"
+    )
     # It only has the RAW concrete path — no template, no operation_id.
     assert record["mw_url_path"] == "/v1/items/42", record["mw_url_path"]
 
@@ -82,7 +83,9 @@ def test_dependency_sees_canonical_route_and_operation_id() -> None:
     assert record["dep_route_type"] == "APIRoute", record["dep_route_type"]
     # The canonical, param-independent identity:
     assert record["dep_path_format"] == "/v1/items/{item_id}", record["dep_path_format"]
-    assert record["dep_operation_id"] == "capture_episodic.bucket=capture", record["dep_operation_id"]
+    assert record["dep_operation_id"] == "capture_episodic.bucket=capture", record[
+        "dep_operation_id"
+    ]
 
 
 def test_raw_path_over_discriminates_same_endpoint() -> None:
@@ -95,7 +98,8 @@ def test_raw_path_over_discriminates_same_endpoint() -> None:
     TestClient(_build_app(r2)).post("/v1/items/2")
     assert r1["mw_url_path"] != r2["mw_url_path"], "raw paths differ (1 vs 2)"
     assert r1["dep_path_format"] == r2["dep_path_format"], (
-        "canonical template is identical — raw path over-discriminates the same endpoint")
+        "canonical template is identical — raw path over-discriminates the same endpoint"
+    )
 
 
 def test_app_exposes_path_format_and_operation_id_on_apiroute() -> None:
@@ -103,6 +107,8 @@ def test_app_exposes_path_format_and_operation_id_on_apiroute() -> None:
     dependency-level identity is a real API, not an accident of this test."""
     record: dict = {}
     app = _build_app(record)
-    route = next(r for r in app.routes if isinstance(r, APIRoute) and r.path == "/v1/items/{item_id}")
+    route = next(
+        r for r in app.routes if isinstance(r, APIRoute) and r.path == "/v1/items/{item_id}"
+    )
     assert route.path_format == "/v1/items/{item_id}"
     assert route.operation_id == "capture_episodic.bucket=capture"

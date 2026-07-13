@@ -36,7 +36,7 @@ from starlette.testclient import TestClient
 from musubi.api.idempotency import IdempotencyCache
 
 CAPTURE = "/v1/episodic"
-BATCH = "/v1/episodic/batch"          # a DIFFERENT operation_id, same key space today
+BATCH = "/v1/episodic/batch"  # a DIFFERENT operation_id, same key space today
 IDEM = "Idempotency-Key"
 REPLAY = "X-Idempotent-Replay"
 
@@ -48,7 +48,9 @@ def _capture_body(ns: str = "eric/claude-code/episodic", content: str = "idem001
 def _prime(client: TestClient, token: str, key: str, body: dict) -> None:
     """Legitimately populate the idempotency cache with an authenticated capture."""
     r = client.post(CAPTURE, json=body, headers={"Authorization": f"Bearer {token}", IDEM: key})
-    assert r.status_code in (200, 201, 202), f"priming capture failed: {r.status_code} {r.text[:200]}"
+    assert r.status_code in (200, 201, 202), (
+        f"priming capture failed: {r.status_code} {r.text[:200]}"
+    )
     # the priming write itself must NOT already be a replay — proves the cache started empty
     assert r.headers.get(REPLAY) != "true", "priming write was itself a replay — fixture is dirty"
 
@@ -57,8 +59,13 @@ def _prime(client: TestClient, token: str, key: str, body: dict) -> None:
 # (A) cross-endpoint replay
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.xfail(strict=True, reason="IDEM-001(A): key+body replays across DIFFERENT endpoints — fix pending")
-def test_same_key_body_must_not_replay_across_endpoints(client: TestClient, valid_token: str) -> None:
+
+@pytest.mark.xfail(
+    strict=True, reason="IDEM-001(A): key+body replays across DIFFERENT endpoints — fix pending"
+)
+def test_same_key_body_must_not_replay_across_endpoints(
+    client: TestClient, valid_token: str
+) -> None:
     key, body = "idem001-crossroute", _capture_body()
     _prime(client, valid_token, key, body)
     # SAME key + SAME body, DIFFERENT endpoint (batch). Auth is present and valid — this is
@@ -69,7 +76,8 @@ def test_same_key_body_must_not_replay_across_endpoints(client: TestClient, vali
     # validation error on the batch schema — never a cross-endpoint replay.
     assert r.headers.get(REPLAY) != "true", (
         f"cross-endpoint replay: {BATCH} was served {CAPTURE}'s cached response "
-        f"(status={r.status_code}, {REPLAY}={r.headers.get(REPLAY)}) — identity omits the endpoint")
+        f"(status={r.status_code}, {REPLAY}={r.headers.get(REPLAY)}) — identity omits the endpoint"
+    )
 
 
 def test_replay_on_same_endpoint_still_works(client: TestClient, valid_token: str) -> None:
@@ -78,15 +86,19 @@ def test_replay_on_same_endpoint_still_works(client: TestClient, valid_token: st
     replay. This control must stay green before AND after the fix."""
     key, body = "idem001-sameroute", _capture_body()
     _prime(client, valid_token, key, body)
-    r = client.post(CAPTURE, json=body, headers={"Authorization": f"Bearer {valid_token}", IDEM: key})
+    r = client.post(
+        CAPTURE, json=body, headers={"Authorization": f"Bearer {valid_token}", IDEM: key}
+    )
     assert r.status_code in (200, 201, 202), f"same-endpoint replay failed: {r.status_code}"
     assert r.headers.get(REPLAY) == "true", (
-        "same key+body on the SAME endpoint must replay — idempotency's core feature")
+        "same key+body on the SAME endpoint must replay — idempotency's core feature"
+    )
 
 
 # --------------------------------------------------------------------------- #
 # (B) the race — no in-flight lease. Deterministic, cache-unit level.
 # --------------------------------------------------------------------------- #
+
 
 def test_race_window_exists_two_concurrent_callers_both_miss() -> None:
     """TODAY-REALITY PROOF (not xfail): two callers looking up the same key BEFORE either
@@ -95,13 +107,17 @@ def test_race_window_exists_two_concurrent_callers_both_miss() -> None:
     cache = IdempotencyCache()
     body = _capture_body()
     first, _, _ = cache.lookup("idem001-race", body)
-    second, _, _ = cache.lookup("idem001-race", body)   # concurrent second caller, pre-store
+    second, _, _ = cache.lookup("idem001-race", body)  # concurrent second caller, pre-store
     assert first == "miss" and second == "miss", (
         f"expected the race window (miss, miss); got ({first}, {second}) — "
-        f"if this changed, a lease may now exist and the xfail below should XPASS")
+        f"if this changed, a lease may now exist and the xfail below should XPASS"
+    )
 
 
-@pytest.mark.xfail(strict=True, reason="IDEM-001(B): no in-flight lease — second concurrent caller gets a free miss — fix pending")
+@pytest.mark.xfail(
+    strict=True,
+    reason="IDEM-001(B): no in-flight lease — second concurrent caller gets a free miss — fix pending",
+)
 def test_second_concurrent_caller_must_not_get_free_miss() -> None:
     """SECURE CONTRACT: once a caller has claimed a key, a concurrent second caller with the
     same key must be told it is in-flight (so it waits/replays/409s), NOT handed a plain "miss"
@@ -109,19 +125,24 @@ def test_second_concurrent_caller_must_not_get_free_miss() -> None:
     fix. Fails today (there is no acquire; the second caller gets "miss")."""
     cache = IdempotencyCache()
     body = _capture_body()
-    claimed, _, _ = cache.lookup("idem001-lease", body)     # first caller claims
+    claimed, _, _ = cache.lookup("idem001-lease", body)  # first caller claims
     assert claimed == "miss", "first caller should see a miss (the key is unused)"
-    second, _, _ = cache.lookup("idem001-lease", body)      # concurrent second caller
+    second, _, _ = cache.lookup("idem001-lease", body)  # concurrent second caller
     assert second != "miss", (
         "no in-flight lease: a concurrent second caller for a claimed key also got 'miss' — "
-        "both callers execute the mutation (double write)")
+        "both callers execute the mutation (double write)"
+    )
 
 
 def test_conflict_still_detected_same_key_different_body() -> None:
     """Control: same key + DIFFERENT body must be a conflict, not a silent miss or a wrong-body
     replay. NOT xfail — must hold before and after the fix."""
     cache = IdempotencyCache()
-    cache.store("idem001-conflict", _capture_body(content="original"),
-                response_status=202, response_body={"object_id": "x"})
+    cache.store(
+        "idem001-conflict",
+        _capture_body(content="original"),
+        response_status=202,
+        response_body={"object_id": "x"},
+    )
     status, _, _ = cache.lookup("idem001-conflict", _capture_body(content="DIFFERENT"))
     assert status == "conflict", f"same key + different body must be 'conflict', got {status!r}"

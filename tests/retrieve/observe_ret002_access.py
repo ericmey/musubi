@@ -41,7 +41,7 @@ musubi = Musubi(ENV)
 store = Store()
 fix = Fixture(musubi, store, NS)
 
-rows: list[tuple[str, str, str]] = []   # (observation, observed, note)
+rows: list[tuple[str, str, str]] = []  # (observation, observed, note)
 
 
 def line(label: str, observed: object, note: str = "") -> None:
@@ -66,8 +66,11 @@ for mode in ("fast", "blended", "deep"):
             hits += 1
     time.sleep(1.5)
     after = store.observe(oid, "access_count").value
-    line(f"    mode={mode:<8} returned_to_caller={hits}/3", f"{before} -> {after}",
-         "MARKS" if after != before else "DOES NOT MARK")
+    line(
+        f"    mode={mode:<8} returned_to_caller={hits}/3",
+        f"{before} -> {after}",
+        "MARKS" if after != before else "DOES NOT MARK",
+    )
 print()
 
 # ── O2: deep WITHOUT lineage — Yua predicts no marking (hydration is skipped) ──
@@ -75,27 +78,45 @@ print("O2  deep with include_lineage=false (hydration skipped per deep.py:161)")
 oid, marker = fix.seed()
 before = store.observe(oid, "access_count").value
 for _ in range(3):
-    musubi._req("POST", "/retrieve", {                      # noqa: SLF001 - deliberate raw call
-        "namespace": NS, "query_text": marker, "mode": "deep", "limit": 5,
-        "state_filter": FRESH_STATES, "include_lineage": False,
-    })
+    musubi._req(
+        "POST",
+        "/retrieve",
+        {  # noqa: SLF001 - deliberate raw call
+            "namespace": NS,
+            "query_text": marker,
+            "mode": "deep",
+            "limit": 5,
+            "state_filter": FRESH_STATES,
+            "include_lineage": False,
+        },
+    )
 time.sleep(1.5)
 after = store.observe(oid, "access_count").value
-line("    deep include_lineage=false", f"{before} -> {after}",
-     "MARKS" if after != before else "DOES NOT MARK (hydration skipped)")
+line(
+    "    deep include_lineage=false",
+    f"{before} -> {after}",
+    "MARKS" if after != before else "DOES NOT MARK (hydration skipped)",
+)
 
 print("    deep with include_lineage=true")
 oid2, marker2 = fix.seed()
 b2 = store.observe(oid2, "access_count").value
 for _ in range(3):
-    musubi._req("POST", "/retrieve", {                      # noqa: SLF001
-        "namespace": NS, "query_text": marker2, "mode": "deep", "limit": 5,
-        "state_filter": FRESH_STATES, "include_lineage": True,
-    })
+    musubi._req(
+        "POST",
+        "/retrieve",
+        {  # noqa: SLF001
+            "namespace": NS,
+            "query_text": marker2,
+            "mode": "deep",
+            "limit": 5,
+            "state_filter": FRESH_STATES,
+            "include_lineage": True,
+        },
+    )
 time.sleep(1.5)
 a2 = store.observe(oid2, "access_count").value
-line("    deep include_lineage=true", f"{b2} -> {a2}",
-     "MARKS" if a2 != b2 else "DOES NOT MARK")
+line("    deep include_lineage=true", f"{b2} -> {a2}", "MARKS" if a2 != b2 else "DOES NOT MARK")
 print()
 
 # ── O3: does a DROPPED candidate get marked? (the over-marking question) ─────
@@ -126,10 +147,16 @@ else:
     line("    fixtures RETURNED to caller (limit=2)", len(seeded_returned), "")
     line("    fixtures MARKED", len(marked), "")
     line("    RETURNED and marked", len(seeded_returned & marked), "")
-    line("    NOT returned but MARKED anyway", len(marked - seeded_returned),
-         "*** OVER-MARKING ***" if (marked - seeded_returned) else "none")
-    line("    RETURNED but NOT marked", len(seeded_returned - marked),
-         "*** UNDER-MARKING ***" if (seeded_returned - marked) else "none")
+    line(
+        "    NOT returned but MARKED anyway",
+        len(marked - seeded_returned),
+        "*** OVER-MARKING ***" if (marked - seeded_returned) else "none",
+    )
+    line(
+        "    RETURNED but NOT marked",
+        len(seeded_returned - marked),
+        "*** UNDER-MARKING ***" if (seeded_returned - marked) else "none",
+    )
 print()
 
 print("=" * 96)

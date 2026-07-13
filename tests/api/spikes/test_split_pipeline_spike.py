@@ -122,8 +122,8 @@ def test_typed_replay_becomes_a_response() -> None:
 def test_middleware_distinguishes_hit_from_miss() -> None:
     app, events = _build_app()
     c = TestClient(app)
-    c.get("/w?hit=1")           # hit → replay, must NOT be cached
-    c.get("/w")                 # miss, 200 → cached
+    c.get("/w?hit=1")  # hit → replay, must NOT be cached
+    c.get("/w")  # miss, 200 → cached
     assert events["cached"] == [200], f"only the miss-success should cache: {events['cached']}"
 
 
@@ -131,15 +131,17 @@ def test_middleware_distinguishes_hit_from_miss() -> None:
 def test_store_gate_is_status_based_not_try_except() -> None:
     app, events = _build_app()
     c = TestClient(app, raise_server_exceptions=False)
-    c.get("/w")                 # 200 miss → cache
-    c.get("/boom")              # 500 → must NOT cache (HTTPException is a RESPONSE here)
-    c.get("/stream")            # streaming → must NOT cache
-    c.get("/w?hit=1")           # replay → must NOT cache
+    c.get("/w")  # 200 miss → cache
+    c.get("/boom")  # 500 → must NOT cache (HTTPException is a RESPONSE here)
+    c.get("/stream")  # streaming → must NOT cache
+    c.get("/w?hit=1")  # replay → must NOT cache
     assert events["cached"] == [200], (
-        f"only the 200 non-streaming non-replay response may be cached: {events['cached']}")
+        f"only the 200 non-streaming non-replay response may be cached: {events['cached']}"
+    )
     # ownership released on EVERY request (4), including the 500 and the streaming one
     assert len(events["released"]) == 4, (
-        f"ownership must release in finally on all paths: {len(events['released'])}/4")
+        f"ownership must release in finally on all paths: {len(events['released'])}/4"
+    )
 
 
 def test_streaming_detection_is_unsettled_isinstance_and_body_iterator_both_fail() -> None:
@@ -187,10 +189,14 @@ def test_streaming_detection_is_unsettled_isinstance_and_body_iterator_both_fail
     c.get("/j")
     assert seen["isinstance"] is False, "isinstance MISSES the wrapped stream (detector #1 fails)"
     assert seen["has_body_iterator"] is True, "body_iterator matches EVERYTHING (detector #2 fails)"
-    assert seen["type"] == "_StreamingResponse", "everything is _StreamingResponse under BaseHTTPMiddleware"
+    assert seen["type"] == "_StreamingResponse", (
+        "everything is _StreamingResponse under BaseHTTPMiddleware"
+    )
     # Content-Length happens to differ HERE, but this is a heuristic, not a proven contract:
     assert seen2["/j"] is not None, "this buffered response has Content-Length (heuristic only)"
-    assert seen2["/s"] is None, "this stream lacks it (heuristic only — NOT the production detector)"
+    assert seen2["/s"] is None, (
+        "this stream lacks it (heuristic only — NOT the production detector)"
+    )
 
 
 def test_500_is_a_response_not_an_exception() -> None:

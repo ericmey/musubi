@@ -37,15 +37,25 @@ def _seed_contradiction(qdrant: QdrantClient, namespace: str) -> str:
     # dimensionality must match the collection; read it off the live collection config
     info = qdrant.get_collection(CONCEPT)
     vparams = info.config.params.vectors
-    if isinstance(vparams, dict):                       # named vectors
+    if isinstance(vparams, dict):  # named vectors
         vector = {name: [0.0] * p.size for name, p in vparams.items()}
     else:
         vector = [0.0] * vparams.size
-    qdrant.upsert(CONCEPT, points=[models.PointStruct(
-        id=str(uuid.uuid4()), vector=vector,
-        payload={"object_id": oid, "namespace": namespace,
-                 "contradicts": [other], "state": "matured"},
-    )])
+    qdrant.upsert(
+        CONCEPT,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid4()),
+                vector=vector,
+                payload={
+                    "object_id": oid,
+                    "namespace": namespace,
+                    "contradicts": [other],
+                    "state": "matured",
+                },
+            )
+        ],
+    )
     return oid
 
 
@@ -71,7 +81,10 @@ def test_no_token_must_be_401(client: TestClient) -> None:
     assert r.status_code == 401, f"unauthenticated contradictions returned {r.status_code}"
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-004: ordinary token + omitted namespace scrolls the fleet — fix pending")
+@pytest.mark.xfail(
+    strict=True,
+    reason="SEC-004: ordinary token + omitted namespace scrolls the fleet — fix pending",
+)
 def test_ordinary_token_omitted_namespace_must_be_403(
     client: TestClient, api_settings, seeded: dict[str, str]
 ) -> None:
@@ -80,7 +93,8 @@ def test_ordinary_token_omitted_namespace_must_be_403(
     r = client.get(ROUTE, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 403, (
         f"omitted-namespace contradictions returned {r.status_code} for an ORDINARY token "
-        f"— a fleet-wide scroll under non-operator auth")
+        f"— a fleet-wide scroll under non-operator auth"
+    )
 
 
 def test_operator_omitted_namespace_succeeds_cross_namespace(
@@ -95,7 +109,8 @@ def test_operator_omitted_namespace_succeeds_cross_namespace(
     assert r.status_code == 200, f"operator fanout failed: {r.status_code} {r.text[:200]}"
     ids = {it["object_id"] for it in r.json().get("items", [])}
     assert seeded["a"] in ids and seeded["b"] in ids, (
-        "operator cross-namespace scroll must see BOTH namespaces' contradictions")
+        "operator cross-namespace scroll must see BOTH namespaces' contradictions"
+    )
 
 
 def test_ordinary_token_own_namespace_returns_only_own(
@@ -103,8 +118,7 @@ def test_ordinary_token_own_namespace_returns_only_own(
 ) -> None:
     ns = "eric/claude-code/concept"
     token = _ordinary(api_settings, ns)
-    r = client.get(ROUTE, params={"namespace": ns},
-                   headers={"Authorization": f"Bearer {token}"})
+    r = client.get(ROUTE, params={"namespace": ns}, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 200, f"own-namespace contradictions failed: {r.status_code}"
     got = {it["namespace"] for it in r.json().get("items", [])}
     # CONTROL (already passes): an authorized own-namespace read returns only own rows.
@@ -118,16 +132,22 @@ def test_ordinary_token_foreign_namespace_must_be_403(
 ) -> None:
     # token authorized on A, explicitly requests B's namespace
     token = _ordinary(api_settings, "eric/claude-code/concept")
-    r = client.get(ROUTE, params={"namespace": "mallory/evil/concept"},
-                   headers={"Authorization": f"Bearer {token}"})
+    r = client.get(
+        ROUTE,
+        params={"namespace": "mallory/evil/concept"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
     # CONTROL (already passes): supplying a FOREIGN namespace lands in the query where
     # require_auth sees it and correctly rejects. The leak is ONLY the omitted-namespace
     # path, not this one — an important narrowing of the vulnerability.
     assert r.status_code == 403, (
-        f"foreign-namespace contradictions returned {r.status_code} — expected 403")
+        f"foreign-namespace contradictions returned {r.status_code} — expected 403"
+    )
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-004/RET-007: backend failure must not become empty 200 — fix pending")
+@pytest.mark.xfail(
+    strict=True, reason="SEC-004/RET-007: backend failure must not become empty 200 — fix pending"
+)
 def test_backend_failure_must_not_be_empty_200(
     client: TestClient, api_settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -139,9 +159,13 @@ def test_backend_failure_must_not_be_empty_200(
 
     # patch the client the route uses so scroll raises
     monkeypatch.setattr(QdrantClient, "scroll", _boom, raising=True)
-    r = client.get(ROUTE, params={"namespace": "eric/claude-code/concept"},
-                   headers={"Authorization": f"Bearer {_ordinary(api_settings, 'eric/claude-code/concept')}"})
+    r = client.get(
+        ROUTE,
+        params={"namespace": "eric/claude-code/concept"},
+        headers={"Authorization": f"Bearer {_ordinary(api_settings, 'eric/claude-code/concept')}"},
+    )
     # SECURE: a backend outage is an error, never clean-looking empty data
     assert r.status_code >= 500, (
         f"backend failure returned {r.status_code} with body {r.text[:120]} — an outage "
-        f"was reported as empty success (RET-007 class)")
+        f"was reported as empty success (RET-007 class)"
+    )

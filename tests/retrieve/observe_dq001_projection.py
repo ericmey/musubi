@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import FRESH_STATES, Fixture, Musubi, Store  # noqa: E402
 
 ENV = Path.home() / ".musubi/musubi-mcp-aoi.env"
-NS = "aoi/command-chair/lifecycle"        # lifecycle plane: probes, not real memories
+NS = "aoi/command-chair/lifecycle"  # lifecycle plane: probes, not real memories
 NS_RECALL = "aoi/command-chair/episodic"  # ranked recall needs a retrievable plane
 
 musubi = Musubi(ENV)
@@ -57,7 +57,7 @@ print()
 print("O1  A memory whose load-bearing clause lives PAST character 300")
 print("    (this is the shape of every real lesson, retro and decision we write)")
 
-PAD = ("Context that matters but is not the conclusion. " * 8)  # ~380 chars of preamble
+PAD = "Context that matters but is not the conclusion. " * 8  # ~380 chars of preamble
 POINT = "THE SETTLED DECISION IS: DO NOT RELITIGATE THIS. The opposite is false."
 marker = f"dq{int(time.time())}"
 content = f"{marker}. {PAD} {POINT}"
@@ -75,35 +75,52 @@ if row is None:
 else:
     delivered = row.get("content") or ""
     line("    DELIVERED length (what the caller sees)", len(delivered))
-    line("    the point survives DELIVERY?", POINT in delivered,
-         "" if POINT in delivered else "*** THE CONCLUSION IS GONE ***")
-    line("    does the row DECLARE it was truncated?",
-         any(k in row for k in ("truncated", "full_length", "content_length")),
-         "no field says so" if not any(k in row for k in ("truncated", "full_length")) else "")
+    line(
+        "    the point survives DELIVERY?",
+        POINT in delivered,
+        "" if POINT in delivered else "*** THE CONCLUSION IS GONE ***",
+    )
+    line(
+        "    does the row DECLARE it was truncated?",
+        any(k in row for k in ("truncated", "full_length", "content_length")),
+        "no field says so" if not any(k in row for k in ("truncated", "full_length")) else "",
+    )
     line("    row keys returned to the caller", ",".join(sorted(row.keys())))
     print()
     print(f"    delivered ends: ...{delivered[-70:]!r}")
-    print(f"    the caller NEVER SEES:  {stored[len(delivered):len(delivered)+80]!r}")
+    print(f"    the caller NEVER SEES:  {stored[len(delivered) : len(delivered) + 80]!r}")
 print()
 
 # ── O2: is a SUPPLIED summary honoured? ──────────────────────────────────────
 print("O2  If the writer supplies a summary, does recall use it?")
 marker2 = f"dqs{int(time.time())}"
 body = f"{marker2}. " + ("Filler that buries the lede. " * 14) + " FINAL CLAUSE: the answer is 42."
-oid2 = musubi._req("POST", "/episodic", {                    # noqa: SLF001 - raw, deliberate
-    "namespace": NS_RECALL, "content": body,
-    "summary": "SUPPLIED SUMMARY: the answer is 42.",
-    "tags": ["kind:episode", "staleness:episodic"], "importance": 8,
-}).get("object_id")
+oid2 = musubi._req(
+    "POST",
+    "/episodic",
+    {  # noqa: SLF001 - raw, deliberate
+        "namespace": NS_RECALL,
+        "content": body,
+        "summary": "SUPPLIED SUMMARY: the answer is 42.",
+        "tags": ["kind:episode", "staleness:episodic"],
+        "importance": 8,
+    },
+).get("object_id")
 time.sleep(3)
 pl2 = store.payload(oid2) or {}
-line("    summary accepted and STORED?", "summary" in pl2,
-     f"stored={pl2.get('summary')!r}" if "summary" in pl2 else "the field is not persisted")
+line(
+    "    summary accepted and STORED?",
+    "summary" in pl2,
+    f"stored={pl2.get('summary')!r}" if "summary" in pl2 else "the field is not persisted",
+)
 res2 = musubi.recall(NS_RECALL, marker2, mode="blended", limit=5, state_filter=FRESH_STATES)
 row2 = next((r for r in res2 if r.get("object_id") == oid2), None)
 if row2:
-    line("    summary DELIVERED to the caller?", "summary" in row2,
-         "recall ignores it" if "summary" not in row2 else "")
+    line(
+        "    summary DELIVERED to the caller?",
+        "summary" in row2,
+        "recall ignores it" if "summary" not in row2 else "",
+    )
     line("    'the answer is 42' survives delivery?", "42" in (row2.get("content") or ""))
 print()
 
@@ -120,11 +137,17 @@ row3 = next((r for r in res3 if r.get("object_id") == oid3), None)
 if row3:
     d3 = row3.get("content") or ""
     line("    delivered length", len(d3))
-    line("    fraction of the memory the caller receives",
-         f"{100*len(d3)/max(1,len(stored3)):.1f}%")
-    line("    tail marker survives?", "TAIL MARKER PRESENT" in d3,
-         "*** the end of the memory is unreachable via recall ***"
-         if "TAIL MARKER PRESENT" not in d3 else "")
+    line(
+        "    fraction of the memory the caller receives",
+        f"{100 * len(d3) / max(1, len(stored3)):.1f}%",
+    )
+    line(
+        "    tail marker survives?",
+        "TAIL MARKER PRESENT" in d3,
+        "*** the end of the memory is unreachable via recall ***"
+        if "TAIL MARKER PRESENT" not in d3
+        else "",
+    )
 print()
 
 print("=" * 98)
@@ -180,24 +203,26 @@ if rowu:
     combining = "e\u0301"
     assert [ord(c) for c in combining] == [0x65, 0x301], "combining fixture must be decomposed"
     gm_c, body_c, _ = _straddle(combining)
-    assert body_c[299] == "e" and body_c[300] == "\u0301", \
+    assert body_c[299] == "e" and body_c[300] == "\u0301", (
         f"combining cut must straddle: got {body_c[299:301]!r}"
-    oid_c = fix.seed_exact(body_c, importance=6)               # invariant-checked
+    )
+    oid_c = fix.seed_exact(body_c, importance=6)  # invariant-checked
     res_c = musubi.recall(NS_RECALL, gm_c, mode="blended", limit=5, state_filter=FRESH_STATES)
     row_c = next((r for r in res_c if r.get("object_id") == oid_c), None)
     assert row_c is not None, "combining-mark fixture was not returned by recall"
     d_c = row_c.get("content") or ""
     assert len(d_c) == 300, f"expected a 300-char projection, got {len(d_c)}"
     combining_split = d_c.endswith("e") and not d_c.endswith("e\u0301")
-    assert combining_split, \
+    assert combining_split, (
         f"expected the accent CUT (delivered ends bare 'e'); got tail {d_c[-3:]!r}"
+    )
     line("    combining e+U+0301: accent CUT (asserted)", True, "'é' delivered as 'e'")
 
     # ZWJ family emoji — one grapheme, 5 code points with U+200D joiners
-    zwj = "\U0001F468\u200d\U0001F469\u200d\U0001F467"
+    zwj = "\U0001f468\u200d\U0001f469\u200d\U0001f467"
     gm_z, body_z, _ = _straddle(zwj)
-    assert body_z[299] == "\U0001F468", f"zwj cut must straddle: got {body_z[299]!r}"
-    oid_z = fix.seed_exact(body_z, importance=6)               # invariant-checked
+    assert body_z[299] == "\U0001f468", f"zwj cut must straddle: got {body_z[299]!r}"
+    oid_z = fix.seed_exact(body_z, importance=6)  # invariant-checked
     assert oid_z != oid_c, "grapheme fixtures must be distinct objects"
     res_z = musubi.recall(NS_RECALL, gm_z, mode="blended", limit=5, state_filter=FRESH_STATES)
     row_z = next((r for r in res_z if r.get("object_id") == oid_z), None)
@@ -218,16 +243,18 @@ print()
 # simply because it is past 300, which says nothing about the 1500 path.
 print("O6  First-lost character of the 300-char recall projection (zero-based index 300)")
 import uuid as _u6
+
 # zero_based_index 300 == the 301st ordinal character == first code point dropped by [:300]
 ZERO_BASED = 300
-ORDINAL = ZERO_BASED + 1   # 301
+ORDINAL = ZERO_BASED + 1  # 301
 mk = f"dq{_u6.uuid4().hex[:10]}"
 fact = "FACTHERE"
 # body layout: mk + "." + filler + fact ; fact's zero-based start index == len(mk)+1+len(filler)
 filler = "." * (ZERO_BASED - len(mk) - 1)
 body = f"{mk}.{filler}{fact} and the rest continues."
-assert body.index(fact) == ZERO_BASED, \
+assert body.index(fact) == ZERO_BASED, (
     f"fact must start at zero_based_index {ZERO_BASED} (ordinal char {ORDINAL}); starts at {body.index(fact)}"
+)
 o = fix.seed_exact(body, importance=8)
 r = musubi.recall(NS_RECALL, mk, mode="blended", limit=5, state_filter=FRESH_STATES)
 row = next((x for x in r if x.get("object_id") == o), None)
@@ -236,10 +263,14 @@ delivered = row.get("content") or ""
 assert len(delivered) == 300, f"expected 300-char projection, got {len(delivered)}"
 # the character at zero_based_index 299 (ordinal 300) is the LAST delivered; index 300 is lost
 assert delivered == body[:300], "delivered must equal the first 300 chars of the stored body"
-assert fact not in delivered, \
+assert fact not in delivered, (
     f"a fact starting at zero_based_index {ZERO_BASED} must be LOST by the [:300] cut"
-line(f"    fact at zero_based_index {ZERO_BASED} (ordinal char {ORDINAL}): LOST (asserted)",
-     True, "first character past the 300-char projection; caller never sees it")
+)
+line(
+    f"    fact at zero_based_index {ZERO_BASED} (ordinal char {ORDINAL}): LOST (asserted)",
+    True,
+    "first character past the 300-char projection; caller never sees it",
+)
 
 print()
 print("=" * 98)

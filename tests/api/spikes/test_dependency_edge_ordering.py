@@ -60,7 +60,7 @@ def _edge_app(order: list[str]) -> FastAPI:
 
     async def authz() -> dict:
         order.append(AUTHZ)
-        return {"principal": "eric/claude-code"}          # the validated AuthContext
+        return {"principal": "eric/claude-code"}  # the validated AuthContext
 
     async def idem(request: Request, ctx: dict = Depends(authz)) -> dict:
         order.append(IDEM)
@@ -79,12 +79,14 @@ def test_sibling_order_follows_declaration_and_is_fragile() -> None:
     idem_first: list[str] = []
     TestClient(_sibling_app(idem_first, idem_first=True)).post("/x")
     assert idem_first == [IDEM, AUTHZ], (
-        f"expected declaration order to drive execution, got {idem_first}")
+        f"expected declaration order to drive execution, got {idem_first}"
+    )
 
     authz_first: list[str] = []
     TestClient(_sibling_app(authz_first, idem_first=False)).post("/x")
     assert authz_first == [AUTHZ, IDEM], (
-        f"reversing the declaration reversed execution, got {authz_first}")
+        f"reversing the declaration reversed execution, got {authz_first}"
+    )
 
     # THE FRAGILITY, stated as an assertion: the SAME two dependencies produce OPPOSITE
     # orderings purely from list position. Relying on this to keep auth before idempotency is
@@ -97,7 +99,8 @@ def test_edge_forces_authz_before_idem_regardless_of_declaration() -> None:
     order: list[str] = []
     TestClient(_edge_app(order)).post("/x")
     assert order == [AUTHZ, IDEM], (
-        f"edge must run authz before idem even though idem is declared first, got {order}")
+        f"edge must run authz before idem even though idem is declared first, got {order}"
+    )
 
 
 def test_edge_passes_validated_principal_into_identity() -> None:
@@ -118,4 +121,5 @@ def test_edge_passes_validated_principal_into_identity() -> None:
 
     TestClient(app).post("/x")
     assert captured["principal"] == "eric/claude-code", (
-        "the idempotency dependency must receive the validated principal via the edge")
+        "the idempotency dependency must receive the validated principal via the edge"
+    )

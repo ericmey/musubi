@@ -10,6 +10,7 @@ up here automatically instead of being trusted to prose.
 
     python3 tests/api/sec003_route_inventory.py
 """
+
 from __future__ import annotations
 
 import re
@@ -56,7 +57,7 @@ for f in sorted(ROUTERS.glob("*.py")):
         seg_start = m.start()
         seg_end = defs[i + 1].start() if i + 1 < len(defs) else len(src)
         # only routes that actually depend on auth
-        head = src[max(0, seg_start - 400):seg_start]
+        head = src[max(0, seg_start - 400) : seg_start]
         if "require_auth" not in head and "require_operator" not in head:
             continue
         kind = classify(src, seg_start, seg_end, head)

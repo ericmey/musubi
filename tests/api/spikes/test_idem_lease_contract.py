@@ -39,6 +39,7 @@ from musubi.api.idempotency import IdempotencyCache
 # Reference implementation of the PROPOSED primitive (the spec, not src).
 # --------------------------------------------------------------------------- #
 
+
 @dataclass
 class _Lease:
     owner: str
@@ -57,8 +58,9 @@ class _LeaseCache:
     - `ttl_s`: a COMPLETED lease is replayable until this long after completion, then cleaned.
     """
 
-    def __init__(self, *, clock: Callable[[], float], stale_after_s: float = 30.0,
-                 ttl_s: float = 24 * 3600) -> None:
+    def __init__(
+        self, *, clock: Callable[[], float], stale_after_s: float = 30.0, ttl_s: float = 24 * 3600
+    ) -> None:
         self._clock = clock
         self._stale = stale_after_s
         self._ttl = ttl_s
@@ -75,7 +77,7 @@ class _LeaseCache:
                 return "acquired", None, None
             if lease.done:
                 return "hit", lease.response, lease.status
-            if now - lease.created_at > self._stale:              # reclaim a crashed owner
+            if now - lease.created_at > self._stale:  # reclaim a crashed owner
                 self._leases[identity] = _Lease(owner=owner, created_at=now)
                 return "acquired", None, None
             return "in_flight", None, None
@@ -98,7 +100,7 @@ class _LeaseCache:
             if lease.owner != owner:
                 raise PermissionError("release by non-owner")
             if lease.done:
-                return False                                       # completed leases are kept for replay
+                return False  # completed leases are kept for replay
             del self._leases[identity]
             return True
 
@@ -107,8 +109,11 @@ class _LeaseCache:
             self._cleanup_locked(self._clock())
 
     def _cleanup_locked(self, now: float) -> None:
-        expired = [k for k, v in self._leases.items()
-                   if v.done and v.completed_at is not None and now - v.completed_at > self._ttl]
+        expired = [
+            k
+            for k, v in self._leases.items()
+            if v.done and v.completed_at is not None and now - v.completed_at > self._ttl
+        ]
         for k in expired:
             del self._leases[k]
 
@@ -132,6 +137,7 @@ class _Clock:
 # --------------------------------------------------------------------------- #
 # Cache factories. Same property suite runs against BOTH.
 # --------------------------------------------------------------------------- #
+
 
 def _make_reference(clock: _Clock):
     return _LeaseCache(clock=clock, stale_after_s=30.0, ttl_s=100.0)
@@ -158,6 +164,7 @@ CACHES = [
 # --------------------------------------------------------------------------- #
 # The property suite — parametrized over reference + real.
 # --------------------------------------------------------------------------- #
+
 
 @pytest.mark.parametrize("make_cache", CACHES)
 def test_p1_acquire_returns_acquired(make_cache) -> None:
@@ -195,7 +202,7 @@ def test_p4_owner_only_store_and_release(make_cache) -> None:
 def test_p5_release_after_error_frees_slot(make_cache) -> None:
     c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
-    assert c.release(IDENT, owner="o1") is True          # handler raised/cancelled → release
+    assert c.release(IDENT, owner="o1") is True  # handler raised/cancelled → release
     assert c.acquire(IDENT, owner="o2")[0] == "acquired"
 
 
@@ -204,7 +211,7 @@ def test_p6_stale_inflight_is_reclaimable(make_cache) -> None:
     clock = _Clock()
     c = make_cache(clock)
     c.acquire(IDENT, owner="o1")
-    clock.advance(31.0)                                  # past stale window (30s)
+    clock.advance(31.0)  # past stale window (30s)
     assert c.acquire(IDENT, owner="o2")[0] == "acquired", "a crashed owner must not wedge the key"
 
 
@@ -214,9 +221,11 @@ def test_p7_completed_lease_expires_after_ttl(make_cache) -> None:
     c = make_cache(clock)
     c.acquire(IDENT, owner="o1")
     c.store(IDENT, owner="o1", response_status=202, response_body={"object_id": "x"})
-    assert c.acquire(IDENT, owner="o2")[0] == "hit"      # replayable within TTL
-    clock.advance(101.0)                                 # past ttl (100s)
-    assert c.acquire(IDENT, owner="o3")[0] == "acquired", "a completed lease must be cleaned after TTL"
+    assert c.acquire(IDENT, owner="o2")[0] == "hit"  # replayable within TTL
+    clock.advance(101.0)  # past ttl (100s)
+    assert c.acquire(IDENT, owner="o3")[0] == "acquired", (
+        "a completed lease must be cleaned after TTL"
+    )
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
@@ -224,13 +233,13 @@ def test_p8_bounded_waiter_never_double_executes(make_cache) -> None:
     c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     executed = []
-    for _ in range(5):                                   # bounded polls
+    for _ in range(5):  # bounded polls
         status, _, _ = c.acquire(IDENT, owner="w")
         if status == "hit":
             break
         if status == "in_flight":
             continue
-        executed.append(status)                          # "acquired" here == double execution
+        executed.append(status)  # "acquired" here == double execution
     assert executed == [], f"waiter double-acquired instead of waiting: {executed}"
 
 
@@ -244,13 +253,13 @@ def test_p9_real_concurrency_executes_exactly_once(make_cache) -> None:
     exec_lock = threading.Lock()
 
     def worker(i: int) -> None:
-        barrier.wait()                                   # force a simultaneous race
+        barrier.wait()  # force a simultaneous race
         try:
             if c.acquire(IDENT, owner=f"o{i}")[0] == "acquired":
                 with exec_lock:
                     executions.append(i)
                 c.store(IDENT, owner=f"o{i}", response_status=202, response_body={"object_id": "x"})
-        except Exception as exc:                         # missing/partial primitive: record, don't leak
+        except Exception as exc:  # missing/partial primitive: record, don't leak
             with exec_lock:
                 errors.append(repr(exc))
 
@@ -260,7 +269,9 @@ def test_p9_real_concurrency_executes_exactly_once(make_cache) -> None:
     for t in threads:
         t.join()
     assert not errors, f"lease primitive raised under concurrency: {errors[0]}"
-    assert len(executions) == 1, f"{n} concurrent callers executed {len(executions)} times, must be exactly 1"
+    assert len(executions) == 1, (
+        f"{n} concurrent callers executed {len(executions)} times, must be exactly 1"
+    )
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
@@ -280,7 +291,12 @@ def test_p10_clock_is_injected_not_wallclock(make_cache) -> None:
 # fail for the RIGHT reason.
 # --------------------------------------------------------------------------- #
 
+
 def test_real_cache_lacks_lease_primitive_today() -> None:
     c = IdempotencyCache()
-    assert not hasattr(c, "acquire"), "unexpected: acquire exists — the parametrized reds should XPASS"
-    assert not hasattr(c, "release"), "unexpected: release exists — the parametrized reds should XPASS"
+    assert not hasattr(c, "acquire"), (
+        "unexpected: acquire exists — the parametrized reds should XPASS"
+    )
+    assert not hasattr(c, "release"), (
+        "unexpected: release exists — the parametrized reds should XPASS"
+    )
