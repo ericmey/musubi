@@ -21,8 +21,13 @@ ROUTERS = Path(__file__).resolve().parents[2] / "src/musubi/api/routers"
 DEF = re.compile(r"async def (\w+)\(", re.M)
 
 
-def classify(src: str, start: int, end: int) -> str:
+def classify(src: str, start: int, end: int, head: str) -> str:
     body = src[start:end]
+    # Operator scope is declared on the DECORATOR (head), and it means the route does its
+    # OWN authorization — nullable namespace there is by design, not a fanout leak. Check
+    # this FIRST (Yua: nullable+operator must report operator-safe, not a SEC-004 lead).
+    if "require_operator" in head or "operator=True" in head:
+        return "operator-scoped (own authorization; nullable namespace by design -> safe)"
     if re.search(r"namespace\w*\s*[:=].*\bForm\b", body):
         return "FORM  (auth reads empty query -> AFFECTED)"
     if re.search(r"namespace\w*\s*[:=].*\bPath\b", body):
@@ -54,7 +59,7 @@ for f in sorted(ROUTERS.glob("*.py")):
         head = src[max(0, seg_start - 400):seg_start]
         if "require_auth" not in head and "require_operator" not in head:
             continue
-        kind = classify(src, seg_start, seg_end)
+        kind = classify(src, seg_start, seg_end, head)
         row = f"  {f.name:<22} {fn:<24} {kind}"
         (affected if "AFFECTED" in kind else safe).append(row)
 
