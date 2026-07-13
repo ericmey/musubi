@@ -116,6 +116,13 @@ mypy_path = "src"
 module = ["ksuid.*", "svix_ksuid.*", "ksuid", "qdrant_client.*", "tokenizers", "tokenizers.*"]
 ignore_missing_imports = true
 
+# The retrieval-observation scripts (tests/retrieve/observe_*.py) run standalone and import
+# their sibling `harness` module by bare name, which is not import-resolvable under the
+# package-based mypy path. This is a justified, targeted config (not a blanket ignore).
+[[tool.mypy.overrides]]
+module = ["harness"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
