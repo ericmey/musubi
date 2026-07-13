@@ -115,9 +115,7 @@ def _raw_upsert(
     return object_id
 
 
-def _find_row_by_object_id(
-    results: list[dict[str, Any]], object_id: str
-) -> dict[str, Any] | None:
+def _find_row_by_object_id(results: list[dict[str, Any]], object_id: str) -> dict[str, Any] | None:
     """Locate the exact returned row whose object_id matches the seed."""
     for row in results:
         if row.get("object_id") == object_id:
@@ -125,9 +123,7 @@ def _find_row_by_object_id(
     return None
 
 
-def _find_row_by_marker(
-    results: list[dict[str, Any]], marker: str
-) -> dict[str, Any] | None:
+def _find_row_by_marker(results: list[dict[str, Any]], marker: str) -> dict[str, Any] | None:
     """Locate the exact returned row whose content contains the marker."""
     for row in results:
         content = row.get("content") or row.get("summary") or ""
@@ -193,8 +189,13 @@ def test_retrieve_ranked_top_level_state_present_required_nullable(
     )
     # The key is present; the value may be null (legacy row) or a valid LifecycleState.
     assert row["state"] is None or row["state"] in {
-        "provisional", "matured", "promoted", "synthesized",
-        "demoted", "archived", "superseded",
+        "provisional",
+        "matured",
+        "promoted",
+        "synthesized",
+        "demoted",
+        "archived",
+        "superseded",
     }, f"state value not in LifecycleState; got {row['state']!r}"
 
 
@@ -635,8 +636,13 @@ def test_retrieve_recent_top_level_state_present(
         f"top-level `state` key missing on recent row; current shape: {sorted(row.keys())}"
     )
     assert row["state"] is None or row["state"] in {
-        "provisional", "matured", "promoted", "synthesized",
-        "demoted", "archived", "superseded",
+        "provisional",
+        "matured",
+        "promoted",
+        "synthesized",
+        "demoted",
+        "archived",
+        "superseded",
     }, f"state value not in LifecycleState; got {row['state']!r}"
 
 
@@ -888,18 +894,34 @@ def test_runtime_openapi_ranked_response_schema_required_with_five_components(
         elif name == "RankedScoreComponents":
             ranked_components = schema
 
-    assert ranked_response is not None, "RankedRetrieveResponse schema missing from runtime openapi.json"
+    assert ranked_response is not None, (
+        "RankedRetrieveResponse schema missing from runtime openapi.json"
+    )
     assert set(ranked_response.get("required", [])) == {"mode", "results", "limit"}, (
         f"RankedRetrieveResponse required must be [mode, results, limit]; got {ranked_response.get('required')}"
     )
     assert ranked_row is not None, "RankedResultRow schema missing from runtime openapi.json"
-    expected_row_required = {"plane", "object_id", "score", "score_kind", "state", "importance", "extra"}
+    expected_row_required = {
+        "plane",
+        "object_id",
+        "score",
+        "score_kind",
+        "state",
+        "importance",
+        "extra",
+    }
     assert set(ranked_row.get("required", [])) == expected_row_required, (
         f"RankedResultRow required must be {expected_row_required}; got {set(ranked_row.get('required', []))}"
     )
-    assert ranked_components is not None, "RankedScoreComponents schema missing from runtime openapi.json"
+    assert ranked_components is not None, (
+        "RankedScoreComponents schema missing from runtime openapi.json"
+    )
     assert set(ranked_components.get("properties", {}).keys()) == {
-        "relevance", "recency", "importance", "provenance", "reinforcement",
+        "relevance",
+        "recency",
+        "importance",
+        "provenance",
+        "reinforcement",
     }, (
         f"RankedScoreComponents must have exactly 5 properties; "
         f"got {set(ranked_components.get('properties', {}).keys())}"
@@ -930,19 +952,29 @@ def test_runtime_openapi_recent_response_schema_required_with_empty_components(
         elif name == "RecentScoreComponents":
             recent_components = schema
 
-    assert recent_response is not None, "RecentRetrieveResponse schema missing from runtime openapi.json"
+    assert recent_response is not None, (
+        "RecentRetrieveResponse schema missing from runtime openapi.json"
+    )
     assert set(recent_response.get("required", [])) == {"mode", "results", "limit"}, (
         f"RecentRetrieveResponse required must be [mode, results, limit]; got {recent_response.get('required')}"
     )
     assert recent_row is not None, "RecentResultRow schema missing from runtime openapi.json"
     expected_row_required = {
-        "plane", "object_id", "score", "score_kind", "state", "importance",
-        "provenance_score", "extra",
+        "plane",
+        "object_id",
+        "score",
+        "score_kind",
+        "state",
+        "importance",
+        "provenance_score",
+        "extra",
     }
     assert set(recent_row.get("required", [])) == expected_row_required, (
         f"RecentResultRow required must be {expected_row_required}; got {set(recent_row.get('required', []))}"
     )
-    assert recent_components is not None, "RecentScoreComponents schema missing from runtime openapi.json"
+    assert recent_components is not None, (
+        "RecentScoreComponents schema missing from runtime openapi.json"
+    )
     # RecentScoreComponents is exact {} (additionalProperties: false; no declared properties).
     assert recent_components.get("additionalProperties") is False, (
         f"RecentScoreComponents must have additionalProperties:false; "
@@ -1010,7 +1042,9 @@ def test_extra_score_components_path_preserved_for_all_modes(
     assert row_ranked is not None, (
         f"seeded row {object_id} not in ranked results; object_ids: {[r.get('object_id') for r in r_ranked_results]}"
     )
-    assert "extra" in row_ranked, f"ranked row missing `extra`; current shape: {sorted(row_ranked.keys())}"
+    assert "extra" in row_ranked, (
+        f"ranked row missing `extra`; current shape: {sorted(row_ranked.keys())}"
+    )
     assert "score_components" in row_ranked["extra"], (
         f"ranked row missing `extra.score_components`; extra: {list(row_ranked['extra'].keys())}"
     )
@@ -1027,7 +1061,9 @@ def test_extra_score_components_path_preserved_for_all_modes(
     assert row_recent is not None, (
         f"seeded row {object_id} not in recent results; object_ids: {[r.get('object_id') for r in r_recent_results]}"
     )
-    assert "extra" in row_recent, f"recent row missing `extra`; current shape: {sorted(row_recent.keys())}"
+    assert "extra" in row_recent, (
+        f"recent row missing `extra`; current shape: {sorted(row_recent.keys())}"
+    )
     assert "score_components" in row_recent["extra"], (
         f"recent row missing `extra.score_components`; extra: {list(row_recent['extra'].keys())}"
     )
