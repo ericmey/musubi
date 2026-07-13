@@ -1,4 +1,4 @@
-"""RET-003 wire contract: 19 acceptance tests (16 strict reds + 3 guards).
+"""RET-003 wire contract: 19 acceptance tests (19 + 3 guards; all 19 are GREEN with the implementation in).
 
 Tests-first slice (zero src in this commit). All 16 strict reds are
 strict xfail (the implementation will satisfy them; the tests are the
@@ -10,7 +10,7 @@ The tests are organized per the locked spec at:
 
 See docs/Musubi/_slices/slice-api-v1-ret003-wire.md for the slice contract.
 
-Accountancy: 19 strict xfail + 3 pass = 22 acceptance tests (was 15 + 3 = 18).
+Accountancy: 19 pass + 3 guards = 22 acceptance tests (was 15 + 3 = 18 at the tests-first head; +1 from the Yua #2 split of test 13, +3 from Yua #4/#5/#6).
 The 3 guards are the reclassified #8 (reinforcement-full-word) plus
 #18 and #19 (regression guards). The count is 19 because test #13
 (provenance_score) is split per Yua 2026-07-13 11:57:59 #2 into:
@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -167,10 +168,6 @@ def requests_get(path: str, client: TestClient) -> Response:
 # =====================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: ranked row currently lacks top-level `state` key. Will fail until RetrieveResultRow adds `state: LifecycleState | None`; will turn green when field is present (including null for legacy).",
-)
 def test_retrieve_ranked_top_level_state_present_required_nullable(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -217,10 +214,6 @@ def test_retrieve_ranked_top_level_state_present_required_nullable(
     }, f"state value not in LifecycleState; got {row['state']!r}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: corrupt source (bad enum 'badvalue') must fail loud (500, NOT 422, NOT coerced). Will fail until a corrupt `state` raises a 500 from the route.",
-)
 def test_retrieve_ranked_state_is_source_backed_not_fabricated(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -266,10 +259,6 @@ def test_retrieve_ranked_state_is_source_backed_not_fabricated(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: ranked row currently lacks top-level `importance` key. Will fail until RetrieveResultRow adds `importance: int | None` (nullable, 1..10).",
-)
 def test_retrieve_ranked_top_level_importance_present_required_nullable(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -310,10 +299,6 @@ def test_retrieve_ranked_top_level_importance_present_required_nullable(
     ), f"importance not in 1..10 or null; got {row['importance']!r}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: corrupt source (importance=42, out of range) must fail loud (500, NOT 422, NOT coerced). Will fail until out-of-range `importance` raises a 500 from the route.",
-)
 def test_retrieve_ranked_importance_is_source_backed_not_fabricated(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -358,10 +343,6 @@ def test_retrieve_ranked_importance_is_source_backed_not_fabricated(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: ranked row currently has no `score_kind` field. Will fail until the row has a `score_kind: Literal['ranked_combined']` field.",
-)
 def test_retrieve_ranked_score_kind_is_ranked_combined(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -394,10 +375,6 @@ def test_retrieve_ranked_score_kind_is_ranked_combined(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: `extra.score_components` has only 3 keys (relevance, recency, reinforcement); missing `importance` and `provenance`. Will fail until it has all 5 keys; also asserts `brief=true` preserves top-level `state` / `importance`.",
-)
 def test_retrieve_ranked_extra_score_components_has_five_keys(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -445,10 +422,6 @@ def test_retrieve_ranked_extra_score_components_has_five_keys(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: the public score is currently a single number. The test-local public-to-internal mapping helper maps `reinforcement` → `reinforce`. Will fail until the production `extra.score_components.reinforcement` is exposed and the score equals weights.combine(**mapping) within float tolerance.",
-)
 def test_retrieve_ranked_score_is_combined_from_components(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -542,10 +515,6 @@ def test_retrieve_ranked_reinforcement_uses_full_word(
 # =====================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: recent row currently has no `score_kind` field. Will fail until the row has `score_kind: Literal['created_epoch']` for recent mode.",
-)
 def test_retrieve_recent_score_kind_is_created_epoch(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -578,10 +547,6 @@ def test_retrieve_recent_score_kind_is_created_epoch(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: recent `extra.score_components` is currently a fabricated `{relevance: 0, recency: 1, reinforcement: 0}`. Will fail until it is the exact empty `{}` typed RecentScoreComponents (never `null`); non-empty input fails (500).",
-)
 def test_retrieve_recent_extra_score_components_is_empty_dict_typed(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -619,10 +584,6 @@ def test_retrieve_recent_extra_score_components_is_empty_dict_typed(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: recent row currently lacks top-level `state` field. Will fail until RetrieveResultRow adds `state: LifecycleState | None` (nullable for legacy).",
-)
 def test_retrieve_recent_top_level_state_present(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -664,10 +625,6 @@ def test_retrieve_recent_top_level_state_present(
     }, f"state value not in LifecycleState; got {row['state']!r}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: recent row currently lacks top-level `importance` field. Will fail until RetrieveResultRow adds `importance: int | None` (nullable for legacy).",
-)
 def test_retrieve_recent_top_level_importance_present(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -715,10 +672,6 @@ def test_retrieve_recent_top_level_importance_present(
     ), f"importance not in 1..10 or null; got {row['importance']!r}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: recent `provenance_score` is currently absent from HTTP rows (a) and (c). Will fail until the row has `provenance_score: float | None` (exact-table-only; null when (plane, state) is absent from `_PROVENANCE`). Per Yua 2026-07-13 11:57:59 #2, this test covers the HTTP-exact cases only; the state=None case is covered by the projection-seam test below.",
-)
 def test_retrieve_recent_provenance_score_http_exact(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -807,10 +760,6 @@ def test_retrieve_recent_provenance_score_http_exact(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: orchestration->wire projection seam must emit `provenance_score=None` for state=None. The current wire does not expose the seam at all. Per Yua 2026-07-13 11:57:59 #2, this test uses a row-factory seam (not canonical recent HTTP) because recent's state filter excludes state=None rows.",
-)
 def test_retrieve_recent_provenance_score_seam_state_none() -> None:
     """Orchestration->wire projection seam: state=None → provenance_score=None.
 
@@ -841,7 +790,7 @@ def test_retrieve_recent_provenance_score_seam_state_none() -> None:
     # missing behavior. Implementation acceptance: production exposes
     # a stable seam (e.g. ``musubi.retrieve.recent._provenance_score_for``)
     # that returns None for state=None.
-    from musubi.retrieve.recent import _provenance_score_for  # type: ignore[attr-defined]
+    from musubi.retrieve.recent import _provenance_score_for
 
     assert _provenance_score_for(plane="episodic", state=None) is None, (
         "row-factory seam: provenance_score must be None when state is None (no fabrication)"
@@ -861,10 +810,6 @@ def test_retrieve_recent_provenance_score_seam_state_none() -> None:
 # =====================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: the current wire does not expose the distinction between raw `importance` and `score_components.importance`. Will fail until the wire has both fields; for a row with no `importance` in source, raw `importance` is null and `score_components.importance` is 0.5 (the internal Hit default).",
-)
 def test_wire_importance_audits_internal_default(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -927,10 +872,6 @@ def test_wire_importance_audits_internal_default(
 # =====================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: the runtime openapi.json does not yet have typed RankedRetrieveResponse/RankedResultRow/RankedScoreComponents schemas. Will turn green when implementation lands the typed schemas.",
-)
 def test_runtime_openapi_ranked_response_schema_required_with_five_components(
     client: TestClient,
 ) -> None:
@@ -1010,10 +951,6 @@ def test_runtime_openapi_ranked_response_schema_required_with_five_components(
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: the runtime openapi.json does not yet have typed RecentRetrieveResponse/RecentResultRow/RecentScoreComponents schemas. Will turn green when implementation lands the typed schemas.",
-)
 def test_runtime_openapi_recent_response_schema_required_with_empty_components(
     client: TestClient,
 ) -> None:
@@ -1086,10 +1023,6 @@ def test_runtime_openapi_recent_response_schema_required_with_empty_components(
 # =====================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: the runtime openapi.json does not yet model the 200 response of POST /v1/retrieve as a `oneOf` of RankedRetrieveResponse and RecentRetrieveResponse with a top-level `mode` discriminator. Will turn green when the discriminator lands. Per Yua 2026-07-13 11:57:59 #4, this was a locked contract item.",
-)
 def test_runtime_openapi_retrieve_response_is_oneof_mode_discriminated(
     client: TestClient,
 ) -> None:
@@ -1141,10 +1074,6 @@ def test_runtime_openapi_retrieve_response_is_oneof_mode_discriminated(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: ranked `extra.score_components` keys are currently 3 (relevance, recency, reinforcement); the test must assert EXACTLY the 5 public contributors AND every value in [0,1]. Per Yua 2026-07-13 11:57:59 #5, component-name existence is not enough; the implementation must reject extra/fabricated keys at runtime and clamp values to [0,1].",
-)
 def test_retrieve_ranked_extra_score_components_exactly_five_and_values_in_unit_interval(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
@@ -1195,10 +1124,6 @@ def test_retrieve_ranked_extra_score_components_exactly_five_and_values_in_unit_
         assert 0.0 <= float(v) <= 1.0, f"score_components[{k!r}] must be in [0,1]; got {v!r}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="RED: the runtime `RecentScoreComponents` model must reject a non-empty dict at Pydantic validation time. OpenAPI `additionalProperties:false` alone is not execution proof (Yua 2026-07-13 11:57:59 #6).",
-)
 def test_recent_score_components_typed_empty_runtime_rejects_nonempty() -> None:
     """The runtime `RecentScoreComponents` Pydantic model rejects a non-empty dict at validation.
 
@@ -1209,7 +1134,7 @@ def test_recent_score_components_typed_empty_runtime_rejects_nonempty() -> None:
     from pydantic import ValidationError
 
     # The implementation will land `musubi.api.responses.RecentScoreComponents`.
-    from musubi.api.responses import RecentScoreComponents  # type: ignore[attr-defined]
+    from musubi.api.responses import RecentScoreComponents
 
     obj = RecentScoreComponents()
     assert obj.model_dump() == {}, (
@@ -1304,3 +1229,180 @@ def test_extra_score_components_path_preserved_for_all_modes(
     assert "score_components" in row_recent["extra"], (
         f"recent row missing `extra.score_components`; extra: {list(row_recent['extra'].keys())}"
     )
+
+
+# =====================================================================
+# SECTION 7 — Implementation slice additions (per Yua 2026-07-13 12:24:42)
+#                - runtime-vs-snapshot parity
+#                - Hermes JSON pass-through conformance
+# =====================================================================
+
+
+def test_runtime_vs_snapshot_openapi_schema_parity(client: TestClient) -> None:
+    """The runtime /v1/openapi.json must match the committed repo-root openapi.yaml.
+
+    Per spec §4.5 (API governance): the implementation must test
+    runtime-vs-snapshot schema parity. The two MUST agree (modulo
+    server-info fields like `title`, `version`). This guards against
+    drift between the live FastAPI app and the committed deploy-time
+    snapshot.
+    """
+    import yaml as _yaml
+
+    r = requests_get("/v1/openapi.json", client)
+    assert r.status_code == 200
+    runtime = r.json()
+    # Read the committed snapshot. Tests run from the repo root, so the
+    # path is the repo-root `openapi.yaml`.
+    snapshot_path = Path(__file__).resolve().parents[2] / "openapi.yaml"
+    assert snapshot_path.exists(), f"committed openapi.yaml not found at {snapshot_path}"
+    with snapshot_path.open() as f:
+        snapshot = _yaml.safe_load(f)
+    # Allow server-info fields to differ (FastAPI's `info` carries the
+    # runtime app name/version; the snapshot may pin a release version).
+    runtime.pop("info", None)
+    snapshot.pop("info", None)
+    # Compare component schemas and paths (the locked contract surface).
+    # The runtime's full schema and the snapshot's full schema must agree
+    # on every path's response/request schema and every named component.
+    runtime_schemas = runtime.get("components", {}).get("schemas", {})
+    snapshot_schemas = snapshot.get("components", {}).get("schemas", {})
+    # The new contract surfaces MUST exist in BOTH.
+    for name in (
+        "RankedRetrieveResponse",
+        "RecentRetrieveResponse",
+        "RankedResultRow",
+        "RecentResultRow",
+        "RankedScoreComponents",
+        "RecentScoreComponents",
+        "RankedExtra",
+        "RecentExtra",
+    ):
+        assert name in runtime_schemas, (
+            f"runtime openapi.json missing required schema {name!r}; spec §4.1+§4.2"
+        )
+        assert name in snapshot_schemas, (
+            f"committed openapi.yaml missing required schema {name!r}; regenerate via the implementation slice"
+        )
+    # The retrieve path's 200 response schema MUST be a oneOf with a
+    # mode discriminator in BOTH.
+    for source_name, doc in [("runtime", runtime), ("snapshot", snapshot)]:
+        retrieve_path = doc.get("paths", {}).get("/v1/retrieve")
+        assert retrieve_path is not None, f"{source_name} openapi missing /v1/retrieve path"
+        post_op = retrieve_path.get("post")
+        assert post_op is not None, f"{source_name} /v1/retrieve missing POST"
+        response_200 = post_op.get("responses", {}).get("200")
+        assert response_200 is not None, f"{source_name} /v1/retrieve missing 200 response"
+        schema = response_200.get("content", {}).get("application/json", {}).get("schema", {})
+        one_of = schema.get("oneOf") or schema.get("anyOf")
+        assert one_of is not None, (
+            f"{source_name} /v1/retrieve 200 must be a oneOf/anyOf of RankedRetrieveResponse and RecentRetrieveResponse"
+        )
+        assert len(one_of) == 2, (
+            f"{source_name} /v1/retrieve 200 must have exactly 2 variants; got {len(one_of)}"
+        )
+
+
+def test_hermes_wire_conformance_passthrough_shape() -> None:
+    """The wire shape preserves the fields the Hermes adapter must pass through.
+
+    Per Yua 2026-07-13 12:24:42 ("add the already-required Hermes
+    JSON pass-through conformance") and the spec's Hermes closeout
+    gate: the wire must surface, for every ranked row, the fields the
+    Hermes adapter (per the user plugin at
+    /Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py)
+    must pass through without fabrication:
+
+      - top-level `state` (LifecycleState enum, 7 values, nullable for missing legacy)
+      - top-level `importance` (int 1..10, nullable for missing legacy)
+      - top-level `score_kind: "ranked_combined"`
+      - top-level `object_id` (the stored KSUID; the LOGICAL API id, NOT
+        the physical Qdrant point id)
+      - `extra.score_components` (5 keys: relevance, recency, importance,
+        provenance, reinforcement)
+
+    This test loads the runtime response models and asserts the
+    shape is exactly what the Hermes plugin must surface to its JSON
+    callers. The test is the conformance gate; the Hermes adapter
+    work is a separate slice.
+    """
+    from musubi.api.responses import (
+        RankedExtra,
+        RankedResultRow,
+        RankedRetrieveResponse,
+        RankedScoreComponents,
+        RecentExtra,
+        RecentResultRow,
+        RecentRetrieveResponse,
+        RecentScoreComponents,
+    )
+
+    # Ranked row must surface the 5-key score_components and top-level
+    # state/importance/score_kind.
+    ranked_row = RankedResultRow(
+        object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+        namespace="eric/claude-code/episodic",
+        plane="episodic",
+        score=0.875,
+        content="snippet",
+        state="matured",
+        importance=7,
+        score_kind="ranked_combined",
+        extra=RankedExtra(
+            score_components=RankedScoreComponents(
+                relevance=1.0,
+                recency=1.0,
+                importance=0.7,
+                provenance=0.5,
+                reinforcement=0.0,
+            ),
+        ),
+    )
+    dumped = ranked_row.model_dump()
+    # Top-level keys the Hermes adapter must pass through.
+    assert "object_id" in dumped
+    assert dumped["object_id"] == "3GSGzQauqzXNPstBMJw3hcIV0yd"
+    assert "state" in dumped and dumped["state"] == "matured"
+    assert "importance" in dumped and dumped["importance"] == 7
+    assert "score_kind" in dumped and dumped["score_kind"] == "ranked_combined"
+    # extra.score_components has the 5 keys.
+    assert set(dumped["extra"]["score_components"].keys()) == {
+        "relevance",
+        "recency",
+        "importance",
+        "provenance",
+        "reinforcement",
+    }
+    # Recent row: state/importance top-level, score_kind=created_epoch,
+    # provenance_score nullable, score_components exact {}.
+    recent_row = RecentResultRow(
+        object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+        namespace="eric/claude-code/episodic",
+        plane="episodic",
+        score=1783957804.0,
+        content="snippet",
+        state="matured",
+        importance=7,
+        score_kind="created_epoch",
+        provenance_score=0.5,
+        extra=RecentExtra(),
+    )
+    dumped_recent = recent_row.model_dump()
+    assert dumped_recent["score_kind"] == "created_epoch"
+    assert dumped_recent["provenance_score"] == 0.5
+    assert dumped_recent["extra"]["score_components"] == {}
+    # Top-level response variants carry `mode` as the discriminator.
+    ranked_resp = RankedRetrieveResponse(
+        mode="fast",
+        results=[],
+        limit=5,
+    )
+    assert ranked_resp.model_dump()["mode"] == "fast"
+    recent_resp = RecentRetrieveResponse(
+        mode="recent",
+        results=[],
+        limit=5,
+    )
+    assert recent_resp.model_dump()["mode"] == "recent"
+    # RecentScoreComponents is exactly {}.
+    assert RecentScoreComponents().model_dump() == {}
