@@ -117,10 +117,13 @@ def get_idempotency_cache() -> IdempotencyCache:
 # --------------------------------------------------------------------------- #
 
 
+_DIGEST_LEN = 32  # SHA-256
+
+
 @dataclass
 class _LeaseEntry:
     owner: str
-    digest: bytes | None
+    digest: bytes  # non-optional: every eligible idempotent request carries a canonical digest
     created_at: float
     done: bool = False
     completed_at: float | None = None
@@ -155,6 +158,12 @@ class IdempotencyLeaseCache:
         ttl_s: float = _DEFAULT_TTL_S,
         max_entries: int = 10_000,
     ) -> None:
+        if max_entries <= 0:
+            raise ValueError("max_entries must be > 0")
+        if stale_after_s <= 0:
+            raise ValueError("stale_after_s must be > 0")
+        if ttl_s <= 0:
+            raise ValueError("ttl_s must be > 0")
         self._clock = clock
         self._stale = stale_after_s
         self._ttl = ttl_s
@@ -162,10 +171,18 @@ class IdempotencyLeaseCache:
         self._entries: OrderedDict[Any, _LeaseEntry] = OrderedDict()
         self._lock = threading.Lock()
 
-    def acquire(
-        self, identity: Any, owner: str, *, digest: bytes | None = None
-    ) -> tuple[str, Any, int | None]:
-        """Atomic gate. Returns ``(status, response_body, response_status)``."""
+    @staticmethod
+    def _require_digest(digest: bytes) -> None:
+        if not isinstance(digest, bytes) or len(digest) != _DIGEST_LEN:
+            raise TypeError(
+                f"digest must be {_DIGEST_LEN} bytes (SHA-256); got {type(digest).__name__}"
+            )
+
+    def acquire(self, identity: Any, owner: str, *, digest: bytes) -> tuple[str, Any, int | None]:
+        """Atomic gate. Returns ``(status, response_body, response_status)``. ``digest`` is the
+        canonical request digest (mandatory) — a malformed/omitted digest raises and NO lease is
+        created."""
+        self._require_digest(digest)
         now = self._clock()
         with self._lock:
             self._cleanup_locked(now)
@@ -173,10 +190,9 @@ class IdempotencyLeaseCache:
             if entry is None:
                 self._entries[identity] = _LeaseEntry(owner=owner, digest=digest, created_at=now)
                 self._entries.move_to_end(identity)
-                self._evict_locked()
                 return "acquired", None, None
             if entry.done:
-                if digest is not None and entry.digest is not None and entry.digest != digest:
+                if entry.digest != digest:
                     # same identity, DIFFERENT body — conflict; do NOT touch the lease (no leak).
                     return "conflict", None, None
                 self._entries.move_to_end(identity)  # LRU touch on replay
@@ -188,7 +204,8 @@ class IdempotencyLeaseCache:
             return "in_flight", None, None
 
     def store(self, identity: Any, owner: str, *, response_status: int, response_body: Any) -> None:
-        """Complete the caller's lease with its response. Owner-only; raises otherwise."""
+        """Complete the caller's lease with its response. Owner-only; raises otherwise. Marks the
+        entry newest-by-COMPLETION and evicts oldest completed entries beyond ``max_entries``."""
         with self._lock:
             entry = self._entries.get(identity)
             if entry is None or entry.owner != owner or entry.done:
@@ -197,6 +214,8 @@ class IdempotencyLeaseCache:
             entry.completed_at = self._clock()
             entry.response_status = response_status
             entry.response_body = response_body
+            self._entries.move_to_end(identity)  # newest-by-completion at the tail
+            self._evict_completed_locked()
 
     def release(self, identity: Any, owner: str) -> bool:
         """Release an INCOMPLETE lease (error / cancel path). Owner-only; raises on a mismatched
@@ -225,13 +244,14 @@ class IdempotencyLeaseCache:
         for k in expired:
             del self._entries[k]
 
-    def _evict_locked(self) -> None:
-        # Bounded memory: evict the OLDEST COMPLETED entry when over capacity. An in-flight lease
-        # is NEVER evicted (dropping it would lose the lease → double execution).
-        while len(self._entries) > self._max:
-            victim = next((k for k, v in self._entries.items() if v.done), None)
-            if victim is None:
-                break  # everything is in-flight; accept temporary over-cap rather than drop a lease
+    def _evict_completed_locked(self) -> None:
+        # Bound the COMPLETED (stored-response) set to max_entries, evicting the OLDEST by
+        # completion first (completed entries are move_to_end'd on store, so their OrderedDict
+        # order is completion order). In-flight leases are NEVER counted or evicted — dropping a
+        # live lease would lose it and allow double execution. Runs on store (the only place the
+        # completed set grows), so it converges even when acquire traffic stops.
+        completed = [k for k, v in self._entries.items() if v.done]
+        for victim in completed[: max(0, len(completed) - self._max)]:
             del self._entries[victim]
 
 
