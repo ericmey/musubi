@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,10 +20,6 @@ VAULT_EXAMPLE = ANSIBLE / "vault.example.yml"
 SECRETS_TEMPLATE = TEMPLATES / "secrets.tpl.j2"
 QDRANT_TEMPLATE = TEMPLATES / "qdrant.token.tpl.j2"
 RUNTIME_PLAYBOOKS = (CONFIG, DEPLOY, BOOTSTRAP, UPDATE)
-
-
-class DefectStillPresent(Exception):
-    """Raised when an op-run task cannot receive its Connect credentials."""
 
 
 def test_systemd_renders_qdrant_token_to_runtime_directory_before_compose() -> None:
@@ -105,7 +100,7 @@ def test_op_connect_inputs_are_root_only_and_secret_tasks_are_no_log() -> None:
         assert "no_log: true" in preflight_text
 
         for task in play.get("tasks", []):
-            command = task.get("ansible.builtin.command")
+            command = task.get("ansible.builtin.command") or task.get("ansible.builtin.shell")
             if command and "/usr/bin/op run" in str(command):
                 assert task.get("no_log") is True
 
@@ -127,11 +122,6 @@ def test_op_connect_inputs_are_root_only_and_secret_tasks_are_no_log() -> None:
     ]
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="deploy/update op-run tasks check connect.env but never source it, so Connect authentication variables do not reach the command",
-)
 def test_ansible_op_run_tasks_source_the_root_only_connect_environment() -> None:
     op_run_tasks: list[dict[str, object]] = []
     for playbook_path in (DEPLOY, UPDATE):
@@ -141,17 +131,13 @@ def test_ansible_op_run_tasks_source_the_root_only_connect_environment() -> None
             if module and "/usr/bin/op run" in str(module):
                 op_run_tasks.append(task)
 
-    if not op_run_tasks:
-        raise DefectStillPresent("no deploy/update op-run tasks found")
+    assert op_run_tasks
     for task in op_run_tasks:
         shell = task.get("ansible.builtin.shell")
         shell_text = str(shell or "")
-        if "/etc/musubi/connect.env" not in shell_text or "set -a" not in shell_text:
-            raise DefectStillPresent(
-                f"{task.get('name')} invokes op run without exporting connect.env"
-            )
-        if task.get("no_log") is not True:
-            raise DefectStillPresent(f"{task.get('name')} may expose Connect credentials")
+        assert "/etc/musubi/connect.env" in shell_text
+        assert "set -a" in shell_text
+        assert task.get("no_log") is True
 
 
 def test_ansible_templates_remain_parseable_controls() -> None:

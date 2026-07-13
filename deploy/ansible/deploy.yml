@@ -85,21 +85,25 @@
         state: absent
 
     - name: Pull missing pinned images
-      ansible.builtin.command:
+      ansible.builtin.shell:
         cmd: >-
-          /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
+          set -a && . /etc/musubi/connect.env && set +a &&
+          exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
           /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
           pull --policy missing
+        executable: /bin/bash
       changed_when: true
       no_log: true
 
     - name: Start inference and storage services and wait for healthy
-      ansible.builtin.command:
+      ansible.builtin.shell:
         cmd: >-
-          /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
+          set -a && . /etc/musubi/connect.env && set +a &&
+          exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
           /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
           up -d --pull missing --remove-orphans --wait --wait-timeout 300
           qdrant tei-dense tei-sparse tei-reranker ollama
+        executable: /bin/bash
       changed_when: true
       no_log: true
 

@@ -61,7 +61,7 @@ def test_update_playbook_parses() -> None:
 def test_update_pull_policy_is_always() -> None:
     """The key difference from deploy.yml (policy=missing)."""
     for task in _tasks(_play()):
-        command = task.get("ansible.builtin.command")
+        command = task.get("ansible.builtin.command") or task.get("ansible.builtin.shell")
         if command and " compose " in str(command) and " pull" in str(command):
             assert "/usr/bin/op run" in str(command)
             assert "--policy always" in str(command)
@@ -71,7 +71,7 @@ def test_update_pull_policy_is_always() -> None:
 
 def test_update_compose_up_uses_pull_never_and_recreate_always() -> None:
     for task in _tasks(_play()):
-        command = task.get("ansible.builtin.command")
+        command = task.get("ansible.builtin.command") or task.get("ansible.builtin.shell")
         if not command or "--force-recreate" not in str(command):
             continue
         assert "/usr/bin/op run" in str(command)
@@ -109,7 +109,8 @@ def test_update_renders_production_env_before_recreate() -> None:
     recreate_indices = [
         idx
         for idx, task in enumerate(tasks)
-        if "--force-recreate" in str(task.get("ansible.builtin.command") or "")
+        if "--force-recreate"
+        in str(task.get("ansible.builtin.command") or task.get("ansible.builtin.shell") or "")
     ]
     assert recreate_indices, "update.yml has no per-service compose recreate task"
     assert env_indices[0] < recreate_indices[0], (
@@ -174,7 +175,7 @@ def test_update_writes_upgrade_history() -> None:
     assert "core_image" in text
     assert "services" in text
     for task in _tasks(_play()):
-        command = task.get("ansible.builtin.command")
+        command = task.get("ansible.builtin.command") or task.get("ansible.builtin.shell")
         if not command or "--force-recreate" not in str(command):
             continue
         notify = task.get("notify") or []

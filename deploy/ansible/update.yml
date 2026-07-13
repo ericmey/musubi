@@ -122,22 +122,26 @@
       # `always` a `musubi_core_image` bump of the floating `:v2` tag
       # would no-op because the old digest-backed image is already
       # present locally.
-      ansible.builtin.command:
+      ansible.builtin.shell:
         cmd: >-
-          /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
+          set -a && . /etc/musubi/connect.env && set +a &&
+          exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
           /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml pull
           --policy always
           {{ changed_services | join(' ') }}
+        executable: /bin/bash
       changed_when: true
       no_log: true
 
     - name: Recreate only the services the operator named
-      ansible.builtin.command:
+      ansible.builtin.shell:
         cmd: >-
-          /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
+          set -a && . /etc/musubi/connect.env && set +a &&
+          exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
           /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
           up -d --pull never --no-deps --force-recreate --wait --wait-timeout 300
           {{ changed_services | join(' ') }}
+        executable: /bin/bash
       changed_when: true
       no_log: true
       notify:
