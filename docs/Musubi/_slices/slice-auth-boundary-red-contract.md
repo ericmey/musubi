@@ -9,7 +9,7 @@ phase: "Security audit 2026-07-12 (Eric, discoverer) — Yua router/reviewer"
 tags: [section/slices, status/in-progress, type/slice, security, p0, auth, idempotency]
 updated: 2026-07-12
 reviewed: false
-depends-on: [slice-sec-002-idempotency-replay-auth, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
+depends-on: [slice-sec-002-idempotency-auth-bypass, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
 blocks: []
 ---
 

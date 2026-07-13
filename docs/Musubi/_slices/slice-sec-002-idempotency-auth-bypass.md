@@ -10,7 +10,7 @@ tags: [section/slices, status/in-progress, type/slice, security, p0, auth, idemp
 updated: 2026-07-12
 reviewed: false
 depends-on: []
-blocks: []
+blocks: [slice-auth-boundary-red-contract]
 ---
 
 # SEC-002 (C1) — idempotency replay bypasses authentication  ·  P0
@@ -84,3 +84,10 @@ version bump, but it IS an auth-path change and needs the security-lane ADR.
 ## Status
 Red tests written and failing (documenting the hole). No fix. Awaiting security-lane
 approval and the auth-boundary owner.
+
+## Lane disposition (2026-07-12)
+Canonical lane is now [[_slices/slice-auth-boundary-red-contract]] (branch `slice/adr-auth-boundary`),
+which consolidates and RUNS this slice's reds — this slice is a live dependency of it, not
+superseded. The standalone branch `slice/sec-002-idempotency-auth-bypass` (tip `3ca89bc`) is a
+direct ANCESTOR of the consolidated branch: **0 unique commits, nothing to cherry-pick.**
+Retire-pending; do not delete yet (per Yua process-hygiene REQ 21:52).

@@ -10,7 +10,7 @@ tags: [section/slices, status/in-progress, type/slice, security, p0, auth, scope
 updated: 2026-07-12
 reviewed: false
 depends-on: []
-blocks: []
+blocks: [slice-auth-boundary-red-contract]
 ---
 
 # SEC-004 (C3) — contradictions omitted-namespace scrolls the whole fleet  ·  P0
@@ -84,3 +84,10 @@ failure must surface as an error, not as empty data.
 
 ## Status
 Red tests written and failing (documenting the holes). No fix. Awaiting security-lane ADR.
+
+## Lane disposition (2026-07-12)
+Canonical lane is now [[_slices/slice-auth-boundary-red-contract]] (branch `slice/adr-auth-boundary`),
+which consolidates and RUNS this slice's reds — this slice is a live dependency of it, not
+superseded. The standalone branch `slice/sec-004-contradictions-fleet-scroll` (tip `4031ec0`) is
+a direct ANCESTOR of the consolidated branch: **0 unique commits, nothing to cherry-pick.**
+Retire-pending; do not delete yet (per Yua process-hygiene REQ 21:52).
