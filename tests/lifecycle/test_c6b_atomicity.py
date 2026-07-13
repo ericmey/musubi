@@ -72,10 +72,12 @@ expected_version, state, event_id, ...) is committed BEFORE the Qdrant mutation.
 
 import ast
 import asyncio
+import fcntl
 import hashlib
 import json
 import logging
 import math
+import os
 import secrets
 import sqlite3
 import subprocess
@@ -420,6 +422,30 @@ class _RefReport:
     failed: int = 0
 
 
+@dataclass(frozen=True)
+class _RefRollbackDone:
+    """R20 success: the outbox schema was reversed (DROP TABLE lifecycle_outbox committed) and the deploy
+    handoff completed while the EX barrier was held through cutover. generation is the durable quiescence
+    generation the rollback ran under."""
+
+    generation: int
+    kind: str = "rolled_back"
+
+
+@dataclass(frozen=True)
+class _RefCleanupReport:
+    """R20 terminal-row cleanup outcome (Yua correction 5): deleted this batch, still-eligible remaining
+    (age below cutoff, past the batch), and the total terminal rows."""
+
+    deleted: int = 0
+    remaining_eligible: int = 0
+    terminal_total: int = 0
+
+
+class _CleanupConfigError(Exception):
+    """R20 config-boundary validation: cutoff must be positive-finite, batch a positive int."""
+
+
 class _TransientQdrantError(RuntimeError):
     """A KNOWN-transient Qdrant failure - keep the intent PENDING (retryable) (Yua B/J)."""
 
@@ -500,6 +526,17 @@ _ALLOWED_METRIC_NAMES = frozenset(
     {"musubi_lifecycle_outbox_pending", "musubi_lifecycle_outbox_mutation_failures_total"}
 )
 
+# R20 rollback/maintenance barrier (Yua 2026-07-13, v3 + 5 corrections). A rollback quiesces the system
+# behind a cross-process fcntl.flock barrier on a STABLE per-DB lock file (`<db_path>.maintlock`, fixed
+# path, O_CREAT|O_RDWR 0o600, NEVER unlinked/replaced mid-window). Barrier-aware admission/reconcile take
+# LOCK_SH for the FULL operation + recheck durable maintenance_active AFTER the lock (closing the
+# check-to-lock race); rollback takes LOCK_EX (drains in-flight shared holders, blocks new ones) held
+# through BEGIN IMMEDIATE + recheck + count + DROP + deploy-handoff, released ONLY after cutover. The
+# lock is OS-released on fd close (crash-safe). No old/new-binary interop (correction 1): a pre-barrier
+# process does not take the lock; the deploy sequence stops all pre-barrier processes and starts the old
+# target only AFTER schema reversal at cutover.
+_MAINTLOCK_SUFFIX = ".maintlock"
+
 
 class _LogCapture(logging.Handler):
     """Capture LogRecords emitted by the coordinator's logger (the caplog-equivalent for R19)."""
@@ -572,6 +609,14 @@ class _RefCoordinator:
         self._qdrant_path = str(qdrant_path) if qdrant_path is not None else None
         self._db = str(db_path)
         self._mode = mode
+        # R20 barrier: a STABLE per-DB lock file beside the DB (fixed path, never unlinked mid-window).
+        self._maintlock = str(db_path) + _MAINTLOCK_SUFFIX
+        # local_flag_only (WRONG): the maintenance state lives in an in-MEMORY flag on this instance
+        # instead of the durable lifecycle_control row, so a peer process/instance never observes it.
+        self._local_maint = False
+        # deploy-handoff seam (R20): a test injects a failing handoff to exercise handoff_failed. Default
+        # succeeds. It runs AFTER the DROP+COMMIT while the EX barrier is still held (before cutover).
+        self._deploy_handoff: Callable[[], bool] = lambda: True
         self._checkpoint: Any = lambda _name: None
         # R15 injectable clock. PRODUCTION-shaped default is real time.time; a test injects a controllable
         # clock via this seam. fixed_clock_default (WRONG) freezes the DEFAULT to a constant.
@@ -585,11 +630,23 @@ class _RefCoordinator:
             " patch_json TEXT,"
             " intent_digest TEXT, state TEXT, event_id TEXT,"
             " attempts INTEGER DEFAULT 0, next_attempt_epoch REAL, failure_class TEXT,"
-            " lease_owner TEXT, lease_expires_epoch REAL)"
+            " lease_owner TEXT, lease_expires_epoch REAL,"
+            # R20 additive: the terminal timestamp (set when a row -> FINAL/ABANDONED); NULL for
+            # nonterminal rows and for pre-migration terminal rows whose age is unknown (preserved).
+            " terminal_epoch REAL)"
         )
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_events (event_id TEXT PRIMARY KEY, object_id TEXT,"
             " namespace TEXT, to_state TEXT)"
+        )
+        # R20 additive single-row control table: the DURABLE quiescence state a rollback sets before it
+        # waits for the EX barrier, and every barrier-aware reader rechecks under LOCK_SH.
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS lifecycle_control (id INTEGER PRIMARY KEY CHECK(id=1),"
+            " maintenance_active INTEGER DEFAULT 0, generation INTEGER DEFAULT 0)"
+        )
+        con.execute(
+            "INSERT OR IGNORE INTO lifecycle_control (id, maintenance_active, generation) VALUES (1,0,0)"
         )
         # test-local EFFECTIVE-APPLY success markers (Yua R22): one durable row per op/target written at
         # the POST-READBACK-success boundary (not the pre-set_payload attempt), so the parent can assert
@@ -616,6 +673,88 @@ class _RefCoordinator:
                 warnings.simplefilter("ignore")
                 self._client = QdrantClient(path=self._qdrant_path)
         return self._client
+
+    # -- R20 rollback/maintenance barrier ---------------------------------------------------------- #
+    def _maintenance_active(self) -> bool:
+        """The DURABLE maintenance flag every barrier-aware reader rechecks under LOCK_SH. local_flag_only
+        (WRONG) reads an in-MEMORY flag instead, so a peer process/instance never observes the quiesce."""
+        if self._mode == "local_flag_only":
+            return self._local_maint
+        con = sqlite3.connect(self._db)
+        try:
+            row = con.execute(
+                "SELECT maintenance_active FROM lifecycle_control WHERE id=1"
+            ).fetchone()
+        finally:
+            con.close()
+        return bool(row[0]) if row else False
+
+    def _set_maintenance(self, active: bool, *, bump_generation: bool) -> int:
+        """Set the maintenance flag (durably) and optionally bump the quiescence generation. Returns the
+        current generation. local_flag_only (WRONG) keeps maintenance_active in memory (generation stays
+        durable) so the quiesce is invisible cross-process."""
+        con = sqlite3.connect(self._db)
+        try:
+            if self._mode == "local_flag_only":
+                self._local_maint = active  # WRONG: not durable
+                if bump_generation:
+                    con.execute("UPDATE lifecycle_control SET generation=generation+1 WHERE id=1")
+            elif bump_generation:
+                con.execute(
+                    "UPDATE lifecycle_control SET maintenance_active=?, generation=generation+1 "
+                    "WHERE id=1",
+                    (int(active),),
+                )
+            else:
+                con.execute(
+                    "UPDATE lifecycle_control SET maintenance_active=? WHERE id=1", (int(active),)
+                )
+            con.commit()
+            gen = con.execute("SELECT generation FROM lifecycle_control WHERE id=1").fetchone()[0]
+        finally:
+            con.close()
+        return int(gen)
+
+    @contextmanager
+    def _barrier_admit(self, *, role: str) -> Iterator[bool]:
+        """Barrier-aware admission (Yua R20): hold LOCK_SH for the FULL operation, then recheck durable
+        maintenance AFTER the lock, and REFUSE (yield False) + release if active - so a new reader never
+        streams past a quiescing writer and the check-to-lock race is closed. TRANSPARENT when no
+        maintenance is active (yields True). role='admission' (transition) | 'reconcile'."""
+        mode = self._mode
+        if mode == "old_binary_ignores_lock":
+            # WRONG: a pre-barrier reader that never takes LOCK_SH -> a rollback's LOCK_EX cannot drain
+            # it, so it can mutate concurrently with (or after) the schema drop.
+            yield True
+            return
+        # worker_stopped_but_admission_live (WRONG): only reconcilers are quiesced; admission ignores the
+        # maintenance flag and keeps admitting through the window.
+        skip_recheck = mode == "worker_stopped_but_admission_live" and role == "admission"
+        fd = os.open(self._maintlock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            if mode == "check_active_before_shared_only":
+                # WRONG: recheck maintenance BEFORE taking LOCK_SH, so a rollback that activates between
+                # this stale check and the (later) shared lock slips this reader in past the drain.
+                active = self._maintenance_active()
+                self._checkpoint("active_checked_before_lock")  # test injects activation HERE
+                fcntl.flock(fd, fcntl.LOCK_SH)
+                yield not active
+                return
+            fcntl.flock(fd, fcntl.LOCK_SH)  # blocks while a rollback holds LOCK_EX (the drain)
+            self._checkpoint(
+                "shared_lease_acquired"
+            )  # test injects activation HERE (correct rechecks)
+            if not skip_recheck and self._maintenance_active() and mode != "starving_new_readers":
+                # CORRECT: refuse + release the shared lease.
+                yield False
+                return
+            # starving_new_readers (WRONG): PROCEED holding LOCK_SH even though maintenance is active.
+            yield True
+            # after the operation completes, while LOCK_SH is STILL held (before the finally releases it):
+            # a two-process drain proof uses this to mark that its in-flight critical section has ended.
+            self._checkpoint("before_shared_release")
+        finally:
+            os.close(fd)
 
     def _key(self, i: _RefIntent) -> str:
         return (
@@ -817,6 +956,10 @@ class _RefCoordinator:
             if state is not None:
                 tail_cols += ", state=?"
                 tail.append(state)
+                # R20: an ABANDONED disposition is terminal - stamp its age in the same write.
+                if state in ("FINAL", "ABANDONED"):
+                    tail_cols += ", terminal_epoch=?"
+                    tail.append(now)
             if release:
                 tail_cols += ", lease_owner=NULL, lease_expires_epoch=NULL"
             if self._mode == "non_atomic_attempt_schedule":
@@ -946,6 +1089,11 @@ class _RefCoordinator:
         nonowner_release drops the guard on the releasing write. release_in_separate_txn splits them."""
         sets = "state=?"
         params: list[object] = [state]
+        # R20: stamp the terminal timestamp in the SAME write that makes the row terminal, so cleanup can
+        # find it by age. Nonterminal writes (e.g. APPLIED) leave terminal_epoch untouched (NULL).
+        if state in ("FINAL", "ABANDONED"):
+            sets += ", terminal_epoch=?"
+            params.append(self._now())
         drop = release and self._mode == "nonowner_release"
         guard, gp = self._owner_guard(owner, drop=drop)
         con = sqlite3.connect(self._db)
@@ -1195,9 +1343,9 @@ class _RefCoordinator:
             )
             self._checkpoint("inside_finalize_after_event_insert")  # R8 fault point
             cur = con.execute(
-                f"UPDATE lifecycle_outbox SET state='FINAL'{release} "
+                f"UPDATE lifecycle_outbox SET state='FINAL', terminal_epoch=?{release} "
                 f"WHERE operation_key=? AND state='APPLIED'{guard}",
-                (opk, *gp),
+                (self._now(), opk, *gp),
             )
             if cur.rowcount != 1:
                 # owner path: a non-owner (or non-APPLIED) FINAL matches zero rows -> silent no-op (roll
@@ -1296,6 +1444,14 @@ class _RefCoordinator:
 
     # -- public API -------------------------------------------------------------------------------- #
     def transition(self, intent: _RefIntent) -> Any:
+        # R20: admission holds LOCK_SH for the FULL operation + rechecks durable maintenance. TRANSPARENT
+        # when no maintenance is active (each test owns its DB, so the per-DB lock file never contends).
+        with self._barrier_admit(role="admission") as admitted:
+            if not admitted:
+                return Err(error=_RefError(code="maintenance_active"))
+            return self._transition_locked(intent)
+
+    def _transition_locked(self, intent: _RefIntent) -> Any:
         # ignore_operation_key (WRONG): mint a fresh key each call -> a caller retry becomes a second
         # operation instead of the same one (caught by R10).
         opk = generate_ksuid() if self._mode == "ignore_operation_key" else self._key(intent)
@@ -1411,6 +1567,14 @@ class _RefCoordinator:
         )
 
     def reconcile_once(self, *, limit: int = 100) -> _RefReport:
+        # R20: the reconciler is a barrier-aware reader too - it holds LOCK_SH for the pass and rechecks
+        # durable maintenance, quiescing (empty no-op report) while a rollback is draining/active.
+        with self._barrier_admit(role="reconcile") as admitted:
+            if not admitted:
+                return _RefReport()
+            return self._reconcile_locked(limit=limit)
+
+    def _reconcile_locked(self, *, limit: int = 100) -> _RefReport:
         # reconcile_greedy (WRONG): also claims already-FINAL rows and re-affirms the payload -> a second
         # reconcile makes extra set_payload calls (caught by R3's exactly-one/zero-apply instrumentation).
         claim_states = (
@@ -1599,6 +1763,262 @@ class _RefCoordinator:
         self._observe_pending()  # R19: emit the no-label pending-depth gauge
         reported = len(rows) if self._mode == "report_claimed_as_selected" else claimed
         return _RefReport(claimed=reported, finalized=fin, pending=pend, abandoned=ab)
+
+    # -- R20 rollback / maintenance lifecycle / terminal cleanup ------------------------------------ #
+    def _count_nonterminal(self) -> int:
+        con = sqlite3.connect(self._db)
+        try:
+            return int(
+                con.execute(
+                    "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED')"
+                ).fetchone()[0]
+            )
+        finally:
+            con.close()
+
+    def rollback(self, *, expected_generation: int) -> Any:
+        """R20 rollback (Yua v3 + 5 corrections): reverse the outbox schema behind the EXCLUSIVE barrier,
+        refusing while ANY nonterminal (PENDING/APPLIED/leased) row exists and quiescing admission FIRST.
+        Sequence: (1) DURABLY set maintenance_active=1 + bump generation BEFORE waiting for EX
+        (correction 2); (2) acquire LOCK_EX (drain in-flight LOCK_SH holders, block new ones);
+        (3) BEGIN IMMEDIATE; (4) recheck generation==expected else Err(rollback_refused_stale_generation);
+        (5) count PENDING/APPLIED, if>0 Err(rollback_refused_nonterminal) dropping NOTHING (maintenance
+        STAYS active - correction 4); (6) else DROP TABLE lifecycle_outbox + COMMIT; (7) deploy-handoff
+        with EX STILL held, then release EX at cutover. Handoff failure -> Err(handoff_failed), stays
+        quiesced, no auto-release."""
+        mode = self._mode
+        # check_before_quiesce (WRONG): sample the backlog BEFORE quiescing + before EX; a live admission
+        # that lands after this sample but before the drop is invisible and destroyed.
+        presample = self._count_nonterminal() if mode == "check_before_quiesce" else None
+        # (1) durable quiesce + generation bump BEFORE the drain (correction 2).
+        new_gen = self._set_maintenance(True, bump_generation=True)
+        # replaced_lock_inode (WRONG): swap the lock inode so the EX below is on a NEW inode and provides
+        # NO mutual exclusion against in-flight LOCK_SH holders (and path-probes) on the old inode.
+        if mode == "replaced_lock_inode":
+            with suppress(FileNotFoundError):
+                os.unlink(self._maintlock)
+        fd = os.open(self._maintlock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            self._checkpoint(
+                "rollback_pre_lock"
+            )  # a drain proof rendezvouses here (imported + quiesced)
+            # (2) drain barrier. ack_without_drain / in_flight_old_generation (WRONG) use LOCK_EX|NB and
+            # proceed even when they cannot drain, so an in-flight reader is never waited out.
+            if mode in ("ack_without_drain", "in_flight_old_generation"):
+                with suppress(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX)  # blocks until every in-flight LOCK_SH holder drains
+            self._checkpoint("ex_acquired")
+            con = sqlite3.connect(self._db, isolation_level=None)
+            try:
+                # (3) ONE write transaction spanning recheck + count + drop.
+                con.execute("BEGIN IMMEDIATE")
+                # (4) generation fence: only the rollback whose bump is still current may proceed.
+                cur_gen = con.execute(
+                    "SELECT generation FROM lifecycle_control WHERE id=1"
+                ).fetchone()[0]
+                stale = expected_generation != new_gen or cur_gen != new_gen
+                if stale and mode != "stale_quiescence_generation":
+                    con.execute("COMMIT")
+                    return Err(error=_RefError(code="rollback_refused_stale_generation"))
+                # (5) nonterminal fence. check_before_quiesce uses its stale presample.
+                nonterminal = presample if presample is not None else self._count_nonterminal()
+                if mode == "rollback_ignores_nonterminal":
+                    nonterminal = 0  # WRONG: ignore live intents and drop anyway (data loss)
+                if nonterminal > 0:
+                    con.execute(
+                        "COMMIT"
+                    )  # dropped NOTHING; maintenance STAYS active (correction 4)
+                    if mode == "clears_maintenance_on_refuse":
+                        # WRONG: a refused rollback must LEAVE maintenance active (only abort_maintenance
+                        # clears it); clearing it here lets admission resume behind a stalled rollback.
+                        self._set_maintenance(False, bump_generation=False)
+                    return Err(error=_RefError(code="rollback_refused_nonterminal"))
+                # (6) reverse the schema atomically.
+                if mode == "check_then_drop_without_single_txn":
+                    # WRONG: the count and the drop are NOT one transaction - closing the count txn opens
+                    # a gap with NO write lock, so a racing admission can commit a row that the following
+                    # drop then destroys. (CORRECT holds one write lock across the count AND the drop, so a
+                    # racing admission is blocked, not lost.)
+                    con.execute("COMMIT")
+                    self._checkpoint(
+                        "rollback_before_drop"
+                    )  # the vulnerable gap (no write lock held)
+                    con.execute("BEGIN IMMEDIATE")
+                else:
+                    self._checkpoint(
+                        "rollback_before_drop"
+                    )  # inside the single BEGIN IMMEDIATE txn
+                con.execute("DROP TABLE lifecycle_outbox")
+                con.execute("COMMIT")
+            finally:
+                con.close()
+            # (7) deploy-handoff while the EX barrier is STILL held (before cutover).
+            if mode == "release_barrier_before_deploy":
+                os.close(
+                    fd
+                )  # WRONG: release EX BEFORE the handoff -> admission can run before cutover
+                fd = -1
+            if not self._deploy_handoff():
+                if mode == "releases_on_handoff_failure":
+                    self._set_maintenance(False, bump_generation=False)  # WRONG: resume on failure
+                # CORRECT: stay quiesced, hold the barrier, no auto-release.
+                return Err(error=_RefError(code="handoff_failed"))
+            # success cutover: clear maintenance, then release EX (fd close in finally).
+            self._set_maintenance(False, bump_generation=False)
+            return Ok(value=_RefRollbackDone(generation=new_gen))
+        finally:
+            if fd >= 0:
+                os.close(fd)
+
+    def abort_maintenance(self, *, expected_generation: int) -> Any:
+        """R20 correction 4: the ONLY path that clears a maintenance window left active by a refused
+        rollback. Under LOCK_EX, recheck generation==expected, then clear maintenance_active."""
+        fd = os.open(self._maintlock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            con = sqlite3.connect(self._db, isolation_level=None)
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                cur_gen = con.execute(
+                    "SELECT generation FROM lifecycle_control WHERE id=1"
+                ).fetchone()[0]
+                if cur_gen != expected_generation:
+                    con.execute("COMMIT")
+                    return Err(error=_RefError(code="abort_refused_stale_generation"))
+                con.execute("UPDATE lifecycle_control SET maintenance_active=0 WHERE id=1")
+                con.execute("COMMIT")
+            finally:
+                con.close()
+            return Ok(value=_RefRollbackDone(generation=expected_generation, kind="aborted"))
+        finally:
+            os.close(fd)
+
+    def backfill_terminal_epoch(self) -> int:
+        """R20 migration: stamp terminal_epoch for PRE-EXISTING terminal rows whose age is known (their
+        patch's updated_epoch). Rows with no known age keep terminal_epoch NULL and are PRESERVED by
+        cleanup (missing age is not a licence to delete)."""
+        con = sqlite3.connect(self._db)
+        n = 0
+        try:
+            rows = con.execute(
+                "SELECT operation_key, patch_json FROM lifecycle_outbox "
+                "WHERE state IN ('FINAL','ABANDONED') AND terminal_epoch IS NULL"
+            ).fetchall()
+            for opk, pj in rows:
+                age: object = None
+                with suppress(Exception):
+                    age = json.loads(pj).get("updated_epoch") if pj else None
+                if isinstance(age, (int, float)) and not isinstance(age, bool):
+                    con.execute(
+                        "UPDATE lifecycle_outbox SET terminal_epoch=? WHERE operation_key=?",
+                        (float(age), opk),
+                    )
+                    n += 1
+            con.commit()
+        finally:
+            con.close()
+        return n
+
+    def cleanup_terminal(self, *, cutoff_epoch: object, batch_limit: object) -> _RefCleanupReport:
+        """R20 terminal-row retention (Yua correction 5): ONE atomic CTE DELETE of the OLDEST eligible
+        terminal rows (FINAL/ABANDONED, non-null age, age < cutoff), ORDER BY terminal_epoch, operation_key
+        (deterministic tiebreak), LIMIT batch, with the eligibility predicate REPEATED on the outer DELETE.
+        Preserves young terminal rows, NULL-age terminal rows, and EVERY nonterminal (PENDING/APPLIED/
+        leased) row. Validates cutoff positive-finite + batch positive-int; idempotent."""
+        mode = self._mode
+        if (
+            isinstance(cutoff_epoch, bool)
+            or not isinstance(cutoff_epoch, (int, float))
+            or not math.isfinite(cutoff_epoch)
+            or cutoff_epoch <= 0
+        ):
+            raise _CleanupConfigError(f"cutoff_epoch must be positive-finite, got {cutoff_epoch!r}")
+        if isinstance(batch_limit, bool) or not isinstance(batch_limit, int) or batch_limit <= 0:
+            raise _CleanupConfigError(f"batch_limit must be a positive int, got {batch_limit!r}")
+
+        def _counts(con: Any) -> tuple[int, int]:
+            terminal_total = int(
+                con.execute(
+                    "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED')"
+                ).fetchone()[0]
+            )
+            remaining = int(
+                con.execute(
+                    "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED') "
+                    "AND terminal_epoch IS NOT NULL AND terminal_epoch < ?",
+                    (cutoff_epoch,),
+                ).fetchone()[0]
+            )
+            return remaining, terminal_total
+
+        con = sqlite3.connect(self._db, isolation_level=None)
+        try:
+            if mode == "no_cleanup":  # WRONG: never deletes anything
+                remaining, terminal_total = _counts(con)
+                return _RefCleanupReport(0, remaining, terminal_total)
+            op = ">=" if mode == "cleanup_deletes_young_terminal" else "<"
+            order = (
+                "ORDER BY terminal_epoch"  # WRONG (nondeterministic_tie): no operation_key tiebreak
+                if mode == "nondeterministic_tie"
+                else "ORDER BY terminal_epoch, operation_key"
+            )
+            limit = "" if mode == "cleanup_unbounded_batch" else " LIMIT ?"
+            state_in = "" if mode == "delete_nonterminal" else " AND state IN ('FINAL','ABANDONED')"
+            if mode == "null_terminal_epoch":
+                # WRONG: treat a missing age as ancient (COALESCE(...,0)) instead of PRESERVING it, so
+                # NULL-age terminal rows are swept even though their age is unknown.
+                notnull = ""
+                age_col = "COALESCE(terminal_epoch, 0)"
+            else:
+                notnull = " AND terminal_epoch IS NOT NULL"
+                age_col = "terminal_epoch"
+            if mode == "outer_predicate_missing":
+                # WRONG: the inner subquery is a bare state-terminal batch selector and the outer DELETE
+                # OMITS the repeated eligibility predicate, so NULL-age / young rows that sort into the
+                # oldest batch are deleted (the outer predicate is the load-bearing safety filter).
+                inner = "SELECT operation_key FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED')"
+                sql = (
+                    f"DELETE FROM lifecycle_outbox WHERE operation_key IN ({inner} {order}{limit}) "
+                    "RETURNING operation_key"
+                )
+                params: list[object] = [] if not limit else [batch_limit]
+                deleted = len(con.execute(sql, params).fetchall())
+                remaining, terminal_total = _counts(con)
+                return _RefCleanupReport(deleted, remaining, terminal_total)
+            inner_where = f"1=1{state_in}{notnull} AND {age_col} {op} ?"
+            inner_sql = (
+                f"SELECT operation_key FROM lifecycle_outbox WHERE {inner_where} {order}{limit}"
+            )
+            inner_params: list[object] = [cutoff_epoch, *([] if not limit else [batch_limit])]
+            if mode == "non_atomic_cleanup_select_delete":
+                # WRONG: the SELECT (batch) and the DELETE are NOT one atomic statement, and the DELETE is
+                # re-scoped to EVERY eligible row instead of the atomically-selected batch (the batch bound
+                # is lost), so it can delete far more than the batch it claims.
+                con.execute("BEGIN")
+                con.execute(inner_sql, inner_params).fetchall()  # the "selected" batch (discarded)
+                deleted = len(
+                    con.execute(
+                        f"DELETE FROM lifecycle_outbox WHERE {inner_where} RETURNING operation_key",
+                        [cutoff_epoch],
+                    ).fetchall()
+                )
+                con.execute("COMMIT")
+                remaining, terminal_total = _counts(con)
+                return _RefCleanupReport(deleted, remaining, terminal_total)
+            # CORRECT: one atomic CTE DELETE; the eligibility predicate is REPEATED on the outer DELETE.
+            outer_where = f"{state_in}{notnull} AND {age_col} {op} ?"
+            sql = (
+                f"DELETE FROM lifecycle_outbox WHERE operation_key IN ({inner_sql})"
+                f" AND 1=1{outer_where} RETURNING operation_key"
+            )
+            params = [*inner_params, cutoff_epoch]
+            deleted = len(con.execute(sql, params).fetchall())
+            remaining, terminal_total = _counts(con)
+            return _RefCleanupReport(deleted, remaining, terminal_total)
+        finally:
+            con.close()
 
 
 class _CandidateApi:
@@ -2099,6 +2519,122 @@ def _set_outbox(db_path: Path, operation_key: str, **fields: object) -> None:
 
 def _set_checkpoint(coord: Any, hook: Any) -> None:
     coord._checkpoint = hook
+
+
+# ---- R20 rollback/maintenance/cleanup test helpers ------------------------------------------------- #
+
+
+def _control_generation(db_path: Path) -> int:
+    con = sqlite3.connect(str(db_path))
+    try:
+        return int(con.execute("SELECT generation FROM lifecycle_control WHERE id=1").fetchone()[0])
+    finally:
+        con.close()
+
+
+def _control_active(db_path: Path) -> bool:
+    con = sqlite3.connect(str(db_path))
+    try:
+        return bool(
+            con.execute("SELECT maintenance_active FROM lifecycle_control WHERE id=1").fetchone()[0]
+        )
+    finally:
+        con.close()
+
+
+def _set_control(
+    db_path: Path, *, active: int | None = None, generation: int | None = None
+) -> None:
+    con = sqlite3.connect(str(db_path))
+    try:
+        if active is not None:
+            con.execute("UPDATE lifecycle_control SET maintenance_active=? WHERE id=1", (active,))
+        if generation is not None:
+            con.execute("UPDATE lifecycle_control SET generation=? WHERE id=1", (generation,))
+        con.commit()
+    finally:
+        con.close()
+
+
+def _table_exists(db_path: Path, table: str) -> bool:
+    con = sqlite3.connect(str(db_path))
+    try:
+        return bool(
+            con.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ).fetchone()[0]
+        )
+    finally:
+        con.close()
+
+
+def _seed_outbox_row(
+    db_path: Path,
+    *,
+    opk: str,
+    oid: str,
+    collection: str,
+    state: str,
+    terminal_epoch: float | None = None,
+    updated_epoch: float | None = None,
+) -> None:
+    """Insert a single outbox row in a chosen state / age directly (R20 cleanup + rollback setup). The
+    optional updated_epoch is embedded in patch_json so the migration backfill can source it."""
+    patch = {"state": "matured", "version": 2}
+    if updated_epoch is not None:
+        patch["updated_epoch"] = updated_epoch
+    con = sqlite3.connect(str(db_path))
+    try:
+        con.execute(
+            "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
+            "expected_version,patch_sha,patch_json,intent_digest,state,event_id,terminal_epoch) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                opk,
+                oid,
+                collection,
+                "matured",
+                1,
+                "sha",
+                json.dumps(patch, sort_keys=True, separators=(",", ":")),
+                f"dig-{opk}",
+                state,
+                f"ev-{opk}",
+                terminal_epoch,
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+
+def _outbox_states(db_path: Path) -> list[str]:
+    if not _table_exists(db_path, "lifecycle_outbox"):
+        return []
+    con = sqlite3.connect(str(db_path))
+    try:
+        return sorted(
+            r[0] for r in con.execute("SELECT operation_key FROM lifecycle_outbox").fetchall()
+        )
+    finally:
+        con.close()
+
+
+def _probe_barrier_free(maintlock: str) -> bool:
+    """A tiny out-of-process probe: open the lock PATH and try LOCK_EX|LOCK_NB. Returns True if the
+    exclusive lock was acquired (the barrier is FREE), False if BlockingIOError (a holder is inside). Run
+    from a child so it is a genuine cross-process observation (flock is per open-file-description)."""
+    src = (
+        "import os, fcntl, sys\n"
+        f"fd = os.open({maintlock!r}, os.O_CREAT | os.O_RDWR, 0o600)\n"
+        "try:\n"
+        "    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+        "    sys.exit(0)\n"  # acquired -> FREE
+        "except BlockingIOError:\n"
+        "    sys.exit(3)\n"  # blocked -> HELD
+    )
+    proc = subprocess.run([sys.executable, "-c", src], capture_output=True, timeout=30, check=False)
+    return proc.returncode == 0
 
 
 # ---- check helpers (the actual behavioral assertions; run by both the xfail reds and the harness) -- #
@@ -4743,6 +5279,506 @@ def test_r22_two_process_race_one_winner_mutates_loser_fenced(tmp_path: Path) ->
     _check_r22(tmp_path)
 
 
+# ---- R20: rollback-refuses-nonterminal + maintenance lifecycle + terminal-row cleanup -------------- #
+
+
+def _err_code(res: Any) -> Any:
+    return getattr(getattr(res, "error", None), "code", None)
+
+
+def _check_r20(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """R20 in-memory contract (Yua v3 + 5 corrections): rollback refuses while ANY nonterminal row exists
+    (dropping nothing, leaving maintenance ACTIVE), quiesces admission durably, fences on a stale
+    generation, holds the EX barrier through the deploy handoff, stays quiesced on handoff failure, and
+    the terminal-row cleanup is a bounded, deterministic, atomic CTE that preserves young / NULL-age /
+    every nonterminal row. Each sub-scenario runs on its own isolated DB (its own maintlock)."""
+    base = db_path.parent
+    coll = seed.collection
+
+    def _bogus(opk: str) -> Any:
+        return _api().TransitionIntent(
+            collection=coll,
+            object_id="r20bogus0000000000000000000",
+            namespace=_NS,
+            expected_version=1,
+            target_state="matured",
+            actor="t",
+            reason="r",
+            operation_key=opk,
+        )
+
+    # (A) refuse-on-nonterminal: a live PENDING intent blocks the drop; maintenance STAYS active.
+    dba = base / "r20_refuse.db"
+    coord = _coordinator(client, dba)
+    _seed_outbox_row(
+        dba, opk="p1", oid="obj-A0000000000000000000000", collection=coll, state="PENDING"
+    )
+    res = coord.rollback(expected_generation=_control_generation(dba) + 1)
+    if _err_code(res) != "rollback_refused_nonterminal":
+        raise DefectStillPresent(
+            f"rollback must REFUSE while a nonterminal row exists, got {res!r}"
+        )
+    if not _table_exists(dba, "lifecycle_outbox") or "p1" not in _outbox_states(dba):
+        raise DefectStillPresent(
+            "a refused rollback must drop NOTHING (the live intent must survive)"
+        )
+    if not _control_active(dba):
+        raise DefectStillPresent("a refused rollback must LEAVE maintenance active (correction 4)")
+
+    # (B) lifecycle: active maintenance refuses new admission; abort_maintenance clears it.
+    coord2 = _coordinator(client, dba)
+    admit = coord2.transition(_bogus("op-admitB"))
+    if _err_code(admit) != "maintenance_active":
+        raise DefectStillPresent(
+            f"admission during active maintenance must Err(maintenance_active), got {admit!r}"
+        )
+    aborted = coord2.abort_maintenance(expected_generation=_control_generation(dba))
+    if not isinstance(aborted, Ok) or _control_active(dba):
+        raise DefectStillPresent(f"abort_maintenance must clear the window, got {aborted!r}")
+
+    # (C) generation fence: a stale expected_generation refuses and drops nothing.
+    dbc = base / "r20_gen.db"
+    coord = _coordinator(client, dbc)
+    _seed_outbox_row(
+        dbc,
+        opk="t1",
+        oid="obj-C0000000000000000000000",
+        collection=coll,
+        state="FINAL",
+        terminal_epoch=1.0,
+    )
+    _set_control(dbc, generation=5)  # a competing rollback already advanced the generation
+    res = coord.rollback(expected_generation=1)
+    if _err_code(res) != "rollback_refused_stale_generation":
+        raise DefectStillPresent(f"a stale expected_generation must refuse, got {res!r}")
+    if not _table_exists(dbc, "lifecycle_outbox"):
+        raise DefectStillPresent("a generation-fenced rollback must drop NOTHING")
+
+    # (D) the check-to-lock race: maintenance activated inside the admission window must still be caught
+    # by the post-lock recheck (a stale pre-lock check would slip the reader in past the drain).
+    dbd = base / "r20_checkorder.db"
+    coord = _coordinator(client, dbd)
+
+    def _activate(name: str) -> None:
+        if name in ("shared_lease_acquired", "active_checked_before_lock"):
+            _set_control(dbd, active=1)
+
+    coord._checkpoint = _activate
+    res = coord.transition(_bogus("op-D"))
+    if _err_code(res) != "maintenance_active":
+        raise DefectStillPresent(
+            f"maintenance activated in the check-to-lock window must be caught by the post-lock recheck "
+            f"(Err maintenance_active), got {res!r}"
+        )
+
+    # (E) success: only-terminal rows -> DROP; the EX barrier is HELD through the deploy handoff; cutover
+    # clears maintenance.
+    dbe = base / "r20_success.db"
+    coord = _coordinator(client, dbe)
+    _seed_outbox_row(
+        dbe,
+        opk="t1",
+        oid="obj-E1000000000000000000000",
+        collection=coll,
+        state="FINAL",
+        terminal_epoch=1.0,
+    )
+    _seed_outbox_row(
+        dbe,
+        opk="t2",
+        oid="obj-E2000000000000000000000",
+        collection=coll,
+        state="ABANDONED",
+        terminal_epoch=2.0,
+    )
+    probe: dict[str, bool | None] = {"free": None}
+
+    def _handoff() -> bool:
+        probe["free"] = _probe_barrier_free(coord._maintlock)
+        return True
+
+    coord._deploy_handoff = _handoff
+    res = coord.rollback(expected_generation=_control_generation(dbe) + 1)
+    if not isinstance(res, Ok):
+        raise DefectStillPresent(f"rollback over only-terminal rows must succeed, got {res!r}")
+    if _table_exists(dbe, "lifecycle_outbox"):
+        raise DefectStillPresent("a successful rollback must DROP lifecycle_outbox")
+    if probe["free"] is not False:
+        raise DefectStillPresent(
+            "the EX barrier must be HELD through the deploy handoff (no admission before cutover)"
+        )
+    if _control_active(dbe):
+        raise DefectStillPresent("a successful rollback must clear maintenance at cutover")
+
+    # (F) handoff failure: stay QUIESCED, no auto-resume.
+    dbf = base / "r20_handoff.db"
+    coord = _coordinator(client, dbf)
+    _seed_outbox_row(
+        dbf,
+        opk="t1",
+        oid="obj-F1000000000000000000000",
+        collection=coll,
+        state="FINAL",
+        terminal_epoch=1.0,
+    )
+    coord._deploy_handoff = lambda: False
+    res = coord.rollback(expected_generation=_control_generation(dbf) + 1)
+    if _err_code(res) != "handoff_failed":
+        raise DefectStillPresent(f"a failed deploy handoff must Err(handoff_failed), got {res!r}")
+    if not _control_active(dbf):
+        raise DefectStillPresent(
+            "after a failed handoff the system must stay QUIESCED (maintenance active), not resume"
+        )
+
+    # (G1) cleanup: bounded, atomic, deterministic; preserves young / NULL-age / every nonterminal row.
+    dbg = base / "r20_cleanup.db"
+    coord = _coordinator(client, dbg)
+    for opk, te, st in (
+        ("c10", 10.0, "FINAL"),
+        ("c20", 20.0, "FINAL"),
+        ("c30", 30.0, "FINAL"),
+        ("cyoung", 1000.0, "FINAL"),
+        ("cnull", None, "FINAL"),
+    ):
+        _seed_outbox_row(
+            dbg, opk=opk, oid=f"obj-{opk:0<22}"[:26], collection=coll, state=st, terminal_epoch=te
+        )
+    # a nonterminal row that (contrived) carries a terminal_epoch, so ONLY the state filter protects it.
+    _seed_outbox_row(
+        dbg,
+        opk="clive",
+        oid="obj-clive0000000000000000000",
+        collection=coll,
+        state="PENDING",
+        terminal_epoch=5.0,
+    )
+    rep = coord.cleanup_terminal(cutoff_epoch=100.0, batch_limit=2)
+    survivors = set(_outbox_states(dbg))
+    for must_live in ("clive", "cyoung", "cnull", "c30"):
+        if must_live not in survivors:
+            raise DefectStillPresent(
+                f"cleanup must PRESERVE {must_live} (nonterminal / young / NULL-age / past-the-batch)"
+            )
+    if getattr(rep, "deleted", None) != 2:
+        raise DefectStillPresent(f"cleanup must delete EXACTLY the batch (2), got {rep!r}")
+    if {"c10", "c20"} & survivors:
+        raise DefectStillPresent("cleanup must delete the two OLDEST eligible terminal rows")
+    if getattr(rep, "remaining_eligible", None) != 1:
+        raise DefectStillPresent(f"cleanup must report 1 still-eligible row (c30), got {rep!r}")
+
+    # (G2) deterministic tie-break: equal terminal_epoch -> operation_key decides, not scan order.
+    dbt = base / "r20_tie.db"
+    coord = _coordinator(client, dbt)
+    for opk in ("zzz", "aaa", "mmm"):  # inserted so scan order (zzz) != operation_key order (aaa)
+        _seed_outbox_row(
+            dbt,
+            opk=opk,
+            oid=f"obj-tie-{opk}00000000000000000"[:26],
+            collection=coll,
+            state="FINAL",
+            terminal_epoch=50.0,
+        )
+    coord.cleanup_terminal(cutoff_epoch=100.0, batch_limit=1)
+    if "aaa" in set(_outbox_states(dbt)):
+        raise DefectStillPresent(
+            "a terminal_epoch tie must break on operation_key (delete 'aaa'), not on scan/insertion order"
+        )
+
+    # (H) config validation (correct for every candidate; the boundary must reject junk).
+    dbh = base / "r20_config.db"
+    coord = _coordinator(client, dbh)
+    for bad_cut in (0, -1.0, float("inf"), float("nan"), "x", True):
+        try:
+            coord.cleanup_terminal(cutoff_epoch=bad_cut, batch_limit=5)
+        except _CleanupConfigError:
+            pass
+        else:
+            raise DefectStillPresent(f"cleanup must reject cutoff_epoch={bad_cut!r}")
+    for bad_batch in (0, -1, 2.5, "x", True):
+        try:
+            coord.cleanup_terminal(cutoff_epoch=100.0, batch_limit=bad_batch)
+        except _CleanupConfigError:
+            pass
+        else:
+            raise DefectStillPresent(f"cleanup must reject batch_limit={bad_batch!r}")
+
+    # (I) migration backfill: stamp terminal_epoch from a known age; unknown age stays NULL (preserved).
+    dbi = base / "r20_backfill.db"
+    coord = _coordinator(client, dbi)
+    _seed_outbox_row(
+        dbi,
+        opk="b1",
+        oid="obj-b10000000000000000000000",
+        collection=coll,
+        state="FINAL",
+        terminal_epoch=None,
+        updated_epoch=42.0,
+    )
+    _seed_outbox_row(
+        dbi,
+        opk="b2",
+        oid="obj-b20000000000000000000000",
+        collection=coll,
+        state="FINAL",
+        terminal_epoch=None,
+        updated_epoch=None,
+    )
+    if coord.backfill_terminal_epoch() != 1:
+        raise DefectStillPresent("backfill must stamp exactly the terminal rows whose age is known")
+    if _outbox_field(dbi, "b1", "terminal_epoch") != 42.0:
+        raise DefectStillPresent("backfill must set terminal_epoch from the row's updated_epoch")
+    if _outbox_field(dbi, "b2", "terminal_epoch") is not None:
+        raise DefectStillPresent("a terminal row with no known age must stay NULL (preserved)")
+
+    # (J) count->drop atomicity: a racing admission in a non-atomic count->drop gap must NOT be silently
+    # destroyed. The CORRECT single txn holds the write lock across the count AND the drop, so a racing
+    # insert is BLOCKED (never commits); check_then_drop_without_single_txn opens a lockless gap where the
+    # insert commits and is then dropped.
+    dbj = base / "r20_atomicdrop.db"
+    coord = _coordinator(client, dbj)
+    _seed_outbox_row(
+        dbj,
+        opk="t1",
+        oid="obj-J1000000000000000000000",
+        collection=coll,
+        state="FINAL",
+        terminal_epoch=1.0,
+    )
+    inj: dict[str, bool] = {"ok": False}
+
+    def _inject(name: str) -> None:
+        if name != "rollback_before_drop":
+            return
+        try:
+            c2 = sqlite3.connect(
+                str(dbj), timeout=0
+            )  # timeout=0: fail fast if the row lock is held
+            c2.execute(
+                "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
+                "expected_version,patch_sha,patch_json,intent_digest,state,event_id) VALUES "
+                "('race','obj-race00000000000000000000',?,'matured',1,'s','{}','d','PENDING','ev')",
+                (coll,),
+            )
+            c2.commit()
+            c2.close()
+            inj["ok"] = True
+        except sqlite3.OperationalError:
+            inj["ok"] = False
+
+    coord._checkpoint = _inject
+    coord.rollback(expected_generation=_control_generation(dbj) + 1)
+    if inj["ok"] and not (_table_exists(dbj, "lifecycle_outbox") and "race" in _outbox_states(dbj)):
+        raise DefectStillPresent(
+            "a count->drop gap let a racing admission commit and then destroyed it (non-atomic rollback)"
+        )
+
+
+# ---- R20: DETERMINISTIC NO-SLEEP TWO-PROCESS DRAIN PROOF (the key novelty) -------------------------- #
+#
+# A real in-flight reader (child B) enters its barrier-aware critical section holding LOCK_SH and PARKS at
+# a file barrier (writes B.inside, waits for `go`) - it never sleeps-to-hope, it waits for a definite
+# rendezvous. The parent proves NON-OVERLAP deterministically with a LOCK_EX|LOCK_NB PROBE: while B holds
+# LOCK_SH, fcntl.flock(LOCK_EX|LOCK_NB) MUST raise BlockingIOError (exclusive unavailable). A concurrent
+# rollback (child C) is then required to DRAIN B: it must reach its post-lock point ("ex_acquired") only
+# AFTER B has left (B.inside removed at LOCK_SH release). old_binary_ignores_lock lets the parent probe
+# SUCCEED (B never took LOCK_SH); ack_without_drain / in_flight_old_generation / replaced_lock_inode reach
+# "ex_acquired" while B is still inside (B.inside present -> C.leaked); check_before_quiesce drains but
+# drops on a STALE presample -> destroys B's committed intent. No sleeps gate the discriminators - every
+# catch is a durable file/lock fact, deterministic across runs.
+
+_R20_DRAIN_OBJECT = "r20drain00000000000000000000"
+
+
+def _r20_reader_child_source(*, mode: str, db_path: Path, coll: str, barrier_dir: Path) -> str:
+    """Child B: a barrier-aware admission that holds LOCK_SH for the whole transition. Its Qdrant apply is
+    forced transient (stays PENDING). It marks B.inside on entry to the critical section, PARKS until the
+    parent writes `go`, commits its durable intent, and clears B.inside just before releasing LOCK_SH."""
+    return (
+        "import os, time, warnings\n"
+        "from qdrant_client import QdrantClient\n"
+        "from tests.lifecycle.test_c6b_atomicity import "
+        "_RefCoordinator as _Coord, _RefIntent as _Intent, _TransientQdrantError\n"
+        f"_bd = {str(barrier_dir)!r}\n"
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        "    _client = QdrantClient(':memory:')\n"
+        "def _boom(*a, **k):\n"
+        "    raise _TransientQdrantError('hold pending')\n"
+        "_client.set_payload = _boom\n"
+        f"_c = _Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})\n"
+        "def _cp(name):\n"
+        "    if name == 'before_pending_commit':\n"
+        "        open(os.path.join(_bd, 'B.inside'), 'w').close()\n"
+        f"        for _ in range(int({_RACE_BARRIER_TIMEOUT!r} / 0.01)):\n"
+        "            if os.path.exists(os.path.join(_bd, 'go')): break\n"
+        "            time.sleep(0.01)\n"
+        "    if name == 'before_shared_release':\n"
+        "        try:\n"
+        "            os.unlink(os.path.join(_bd, 'B.inside'))\n"
+        "        except FileNotFoundError:\n"
+        "            pass\n"
+        "_c._checkpoint = _cp\n"
+        f"_c.transition(_Intent(collection={coll!r}, object_id={_R20_DRAIN_OBJECT!r}, "
+        f"namespace={_NS!r}, expected_version=1, target_state='matured', actor='t', reason='r', "
+        "operation_key='op-drainB'))\n"
+        "os._exit(0)\n"
+    )
+
+
+def _r20_rollback_child_source(*, mode: str, db_path: Path, barrier_dir: Path) -> str:
+    """Child C: a rollback that MUST drain B. At its post-lock point it flags C.leaked iff an in-flight
+    reader (B.inside) is still inside - i.e. it took/represented an exclusive barrier without draining."""
+    return (
+        "import os, warnings\n"
+        "from qdrant_client import QdrantClient\n"
+        "from tests.lifecycle.test_c6b_atomicity import "
+        "_RefCoordinator as _Coord, _control_generation\n"
+        f"_bd = {str(barrier_dir)!r}\n"
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        "    _client = QdrantClient(':memory:')\n"
+        f"_c = _Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})\n"
+        "def _cp(name):\n"
+        "    if name == 'rollback_pre_lock':\n"
+        "        open(os.path.join(_bd, 'C.quiesced'), 'w').close()\n"
+        "    if name == 'ex_acquired' and os.path.exists(os.path.join(_bd, 'B.inside')):\n"
+        "        open(os.path.join(_bd, 'C.leaked'), 'w').close()\n"
+        "_c._checkpoint = _cp\n"
+        f"_gen = _control_generation({str(db_path)!r})\n"
+        "_c.rollback(expected_generation=_gen + 1)\n"
+        "os._exit(0)\n"
+    )
+
+
+def _check_r20_drain(base: Path) -> None:
+    """DETERMINISTIC no-sleep drain proof (Yua R20 key novelty): a rollback's exclusive barrier must NOT
+    overlap an in-flight barrier-aware admission's LOCK_SH critical section, and must not destroy its
+    committed intent. Proven with a LOCK_EX|LOCK_NB probe (must raise BlockingIOError while B is inside),
+    a leak flag (C reaches its post-lock point while B is still inside), and B's intent surviving the race.
+    """
+    _api()  # xfail today (coordinator absent)
+    mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
+    base.mkdir(parents=True, exist_ok=True)
+    db_path = base / "lifecycle.db"
+    bdir = base / "barrier"
+    bdir.mkdir(parents=True, exist_ok=True)
+    maintlock = str(db_path) + _MAINTLOCK_SUFFIX
+    coll = str(collection_for_plane("episodic"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _RefCoordinator(client=QdrantClient(":memory:"), db_path=db_path, mode=mode)  # schema
+
+    b = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _r20_reader_child_source(mode=mode, db_path=db_path, coll=coll, barrier_dir=bdir),
+        ]
+    )
+    # rendezvous: wait until B has entered its LOCK_SH critical section and PARKED (a definite condition,
+    # not a timing guess). If B dies or never parks, the reader never held the barrier.
+    inside = bdir / "B.inside"
+    deadline = time.time() + _RACE_BARRIER_TIMEOUT
+    while not inside.exists():
+        if b.poll() is not None or time.time() > deadline:
+            raise DefectStillPresent(
+                "the in-flight admission never reached its LOCK_SH critical section"
+            )
+        time.sleep(0.01)
+
+    # THE deterministic drain proof: exclusive must be UNAVAILABLE while B holds LOCK_SH.
+    pfd = os.open(maintlock, os.O_CREAT | os.O_RDWR, 0o600)
+    probe_free = False
+    try:
+        fcntl.flock(pfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        probe_free = True  # acquired EX while B is inside -> the barrier did not hold
+    except BlockingIOError:
+        probe_free = False
+    finally:
+        os.close(pfd)
+
+    # a concurrent rollback must DRAIN B before it acts. B stays parked (holding LOCK_SH, B.inside present)
+    # until the parent releases it, so a NON-draining rollback deterministically reaches its post-lock
+    # point WHILE B is inside (-> C.leaked) BEFORE B is ever released. A CORRECT (blocking-LOCK_EX)
+    # rollback cannot reach that point until B releases, so it never leaks; it makes NO progress here, so
+    # the poll runs to its bound exactly once (for the correct candidate) - a definite terminal condition,
+    # not a timing guess: a leak is proven by a durable file, its absence by a drained blocking-lock.
+    leaked = bdir / "C.leaked"
+    quiesced = bdir / "C.quiesced"
+    c = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            _r20_rollback_child_source(mode=mode, db_path=db_path, barrier_dir=bdir),
+        ]
+    )
+    # wait until C has imported + durably quiesced and is at its lock boundary (a definite rendezvous, not
+    # a timing guess). The module import in the child dominates and is what the generous barrier timeout
+    # covers.
+    qdeadline = time.time() + _RACE_BARRIER_TIMEOUT
+    while not quiesced.exists() and c.poll() is None and time.time() < qdeadline:
+        time.sleep(0.01)
+    # from the lock boundary the discriminator is a handful of syscalls: a non-draining rollback reaches
+    # its post-lock point (C.leaked) essentially immediately; a correct blocking-LOCK_EX rollback makes NO
+    # progress until B releases. A short bound past the rendezvous cleanly separates the two.
+    ldeadline = time.time() + 3.0
+    while not leaked.exists() and c.poll() is None and time.time() < ldeadline:
+        time.sleep(0.005)
+    (bdir / "go").write_text("1")  # release B: commit its intent, then release LOCK_SH
+    b.wait(timeout=90)
+    c.wait(timeout=90)
+
+    if probe_free:
+        raise DefectStillPresent(
+            "LOCK_EX was acquired while an in-flight LOCK_SH admission was inside its critical section - "
+            "the barrier did not hold (a reader that never took the shared lease is not drainable)"
+        )
+    if (bdir / "C.leaked").exists():
+        raise DefectStillPresent(
+            "the rollback reached its post-lock disposition WHILE an in-flight admission was still inside "
+            "- it did not drain the shared holder (ack_without_drain / in_flight_old_generation / "
+            "replaced_lock_inode)"
+        )
+    if not _table_exists(db_path, "lifecycle_outbox"):
+        raise DefectStillPresent(
+            "a rollback dropped the outbox while a live admission's intent was committing (data loss)"
+        )
+    rows = _outbox_for_object(db_path, _R20_DRAIN_OBJECT)
+    if not any(r["state"] in ("PENDING", "APPLIED") for r in rows):
+        raise DefectStillPresent(
+            "the in-flight admission's durable intent was destroyed by a racing rollback (data loss)"
+        )
+
+
+_R20_REASON = (
+    "today there is no rollback/maintenance barrier or terminal-row retention, so a schema rollback cannot "
+    "refuse on a live intent, durably quiesce admission, hold its barrier through the deploy cutover, or "
+    "bound/deterministically clean terminal rows; R20 needs rollback-refuses-nonterminal (drop nothing, "
+    "stay quiesced - correction 4), a generation-fenced maintenance lifecycle, and an atomic age-bounded "
+    "cleanup CTE that preserves young / NULL-age / every nonterminal row."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R20_REASON)
+def test_r20_rollback_refuses_nonterminal_maintenance_lifecycle_and_cleanup(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r20(*env)
+
+
+_R20_DRAIN_REASON = (
+    "today there is no cross-process flock barrier, so a schema rollback cannot drain in-flight admissions; "
+    "R20 needs a LOCK_SH admission barrier that an exclusive rollback drains - no LOCK_EX overlap while a "
+    "shared holder is inside (proven by a LOCK_EX|LOCK_NB probe raising BlockingIOError) and no destruction "
+    "of a committing intent - with two real processes, deterministic, no sleeps."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R20_DRAIN_REASON)
+def test_r20_two_process_drain_barrier_no_overlap(tmp_path: Path) -> None:
+    _check_r20_drain(tmp_path)
+
+
 # ---- committed, RERUNNABLE red-proof harness (Yua evidence rule) ----------------------------------- #
 
 _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
@@ -4858,6 +5894,29 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
             "cap_before_retry",  # gates before idempotency -> falsely rejects a same-key retry
         ],
     ),
+    "r20": (
+        _check_r20,
+        [
+            "rollback_ignores_nonterminal",  # drops despite a live PENDING/APPLIED intent (data loss)
+            "clears_maintenance_on_refuse",  # a refused rollback must stay quiesced, not resume
+            "local_flag_only",  # maintenance in-memory, not the durable control row
+            "starving_new_readers",  # proceeds under LOCK_SH when active instead of refusing
+            "worker_stopped_but_admission_live",  # only reconcilers quiesced; admission stays live
+            "stale_quiescence_generation",  # accepts a generation != expected
+            "check_active_before_shared_only",  # rechecks before the shared lock -> a slip-through race
+            "release_barrier_before_deploy",  # releases EX before the handoff -> admits before cutover
+            "releases_on_handoff_failure",  # resumes on handoff failure instead of staying quiesced
+            "delete_nonterminal",  # cleanup drops a nonterminal row (data loss)
+            "cleanup_deletes_young_terminal",  # deletes terminal rows at/after the cutoff (too young)
+            "cleanup_unbounded_batch",  # ignores batch_limit
+            "no_cleanup",  # a no-op cleanup
+            "null_terminal_epoch",  # sweeps NULL-age terminal rows instead of preserving them
+            "non_atomic_cleanup_select_delete",  # select then delete not bound to the atomic batch
+            "outer_predicate_missing",  # outer DELETE drops the repeated eligibility predicate
+            "nondeterministic_tie",  # ORDER BY terminal_epoch only, no operation_key tiebreak
+            "check_then_drop_without_single_txn",  # count and drop in separate txns -> a racing loss
+        ],
+    ),
 }
 
 
@@ -4898,6 +5957,16 @@ _CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r16race": (_check_r16_race, ["select_then_update", "lease_overshoot_ttl"]),
     "r17reclaim": (_check_r17_reclaim, ["reclaim_reapplies_after_readback"]),
     "r22": (_check_r22, ["non_atomic_cas"]),
+    "r20drain": (
+        _check_r20_drain,
+        [
+            "old_binary_ignores_lock",  # never takes LOCK_SH -> the probe acquires EX while B is inside
+            "ack_without_drain",  # LOCK_EX|NB -> reaches disposition while an in-flight holder is inside
+            "in_flight_old_generation",  # does not wait out an old-generation in-flight holder
+            "replaced_lock_inode",  # swaps the lock inode -> no exclusion vs old-inode holders
+            "check_before_quiesce",  # samples the backlog before EX -> drops a drained-window commit
+        ],
+    ),
 }
 
 
