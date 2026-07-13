@@ -14,7 +14,31 @@ supersedes: []
 # ADR — Consolidated auth boundary: authenticate early, authorize + replay AFTER parsed values
 
 **Discoverer of all four defects: Eric.** Source-confirmed and routed by Yua. Design: Aoi.
-**Status: PROPOSED (rev 2) — no `src/` changes until approved and a slice owner is assigned.**
+**Status: PROPOSED (rev 3) — no `src/` changes until approved and a slice owner is assigned.**
+
+## Rev 3 — split pipeline (Yua's "option 1 MODIFIED"), every step PROVEN executable
+
+Yua's correction to rev 2: a dependency can lookup/lock/replay *before* the handler, but it
+**cannot capture the serialized handler response afterward** — storing the response needs a
+step that runs *after* `call_next`. So the pipeline splits: the **security decision** is a
+dependency (pre-handler); the **store/release** is a thin outer middleware (post-handler)
+that does NO lookup, authz, or body read — it only reads `request.state` and caches a
+successful response / releases ownership.
+
+**Every load-bearing claim below was proven against a live Starlette/FastAPI 0.136 app
+before writing this rev** (not asserted):
+
+1. an **outer middleware sees `request.state` set by a route dependency**, after
+   `call_next` → the split is possible. ✓ proven
+2. a **typed `Replay` exception raised in the dependency reaches the middleware AS a
+   response** (via the existing exception-handler infra), carrying
+   `X-Idempotent-Replay: true`. ✓ proven
+3. the middleware can **distinguish hit/miss/status/streaming** to decide what to store. ✓
+4. **the store gate must be `2xx && non-streaming && non-replay`, NOT try/except** — because
+   `HTTPException(500)` is converted to a **500 response**, not propagated as an exception,
+   so an exception-keyed gate would cache a 500. Ownership is released in `finally` (always;
+   success, error, or cancel), cache written only on success. ✓ proven (a bug I would have
+   shipped, caught by running it)
 
 ## Rev 2 — the contradiction Yua caught, and its resolution
 
@@ -77,40 +101,59 @@ named authorized-fanout dependency — never an implicit all-tenant scroll. The 
 namespace lacks an explicit authorization source. Yua's point stands: per-route
 declaration must not be hand-rolled logic a new route can forget.
 
-### D3 — idempotency replay is a DEPENDENCY AFTER authz, not a middleware
+### D3 — SPLIT pipeline: security decision in a dependency, store/release in a thin middleware
 
-This is the correction. The replay check becomes a dependency that runs **after** D2 has
-authorized the parsed request:
+The replay check is a **dependency** (it can short-circuit before the handler); the store is
+a **thin outer middleware** (only it can see the serialized response after `call_next`).
+Neither the middleware does authz/lookup, nor the dependency captures the response.
 
 ```
-Depends(authenticate)              # D1: principal on request.state, or 401
-  → Depends(authorize(...))        # D2: parsed namespace, or 403
-    → Depends(idempotent_replay)   # D3: identity+op known HERE; lookup; short-circuit if hit
-      → handler                    # miss: execute, then store keyed by identity+op
+[outer store middleware]  ← post-handler ONLY: read request.state, cache on 2xx success, release ownership
+  └─ [authn middleware]   D1: validate any presented bearer, attach principal (or 401 on protected routes)
+       └─ route:
+          Depends(authorize(parsed namespace, access))         D2: 403 if unauthorized
+            → Depends(idempotent_replay)                        D3: identity+op known HERE
+                 hit  → raise Replay(cached_response)   ─┐  (typed, caught by exception handler)
+                 miss → acquire in-flight, write authorized idem_ctx to request.state
+                   → handler                              │
+          (Replay/handler response flows back OUT) ───────┘
+  ← store middleware: if request.state.idem_ctx AND 2xx AND not streaming AND not replay → cache; ALWAYS release
 ```
 
-`idempotent_replay` has, at this point, the authenticated principal AND the authorized
-operation. It keys the cache on the **identity tuple** (D6) + normalized route template +
-method + authorized namespace + `Idempotency-Key`, looks up, and:
-- **hit** → short-circuits with the cached response (typed exception caught by the existing
-  handler, or the custom-APIRoute return path).
-- **miss** → the handler runs; the response is stored under the same identity key.
+**(a) Optional early authn middleware (D1).** Validates a *presented* bearer and attaches
+`request.state.principal`. It does NOT force auth — **public routes with no bearer stay
+public** (health/docs); protected routes require the principal via their authz dependency.
+This avoids the "global authn 401s `/health`" failure Yua flagged. Explicit public-route
+list is part of the spec (health, docs, openapi.json, metrics if public).
 
-Because this dependency only ever runs *after* authn+authz, an unauthenticated or
-cross-tenant request is refused (401/403) and **never reaches lookup**. Cache identity
-(D6) is defense-in-depth on top of that, not the gate.
+**(b) Parsed route-native authz (D2).** As above; **consumes** the validated
+`request.state.principal` — `require_auth`/`authorize` does NOT re-decode or re-validate the
+token, only checks scope against the parsed namespace.
 
-**Two implementation shapes to compare in the spike:**
+**(c) Shared idempotency dependency (D3).** Runs after authz, so identity + authorized
+operation are known. Computes the canonical hash (D5), checks the cache / acquires in-flight
+ownership. **Hit** → `raise Replay(response)` (typed; caught by the existing `APIError`-style
+handler → becomes a real response). **Miss** → writes `request.state.idem_ctx =
+{identity_key, in_flight_token}` and proceeds to the handler.
 
-| | (1) shared dependency + typed replay exception | (2) custom `APIRoute` pipeline |
-| --- | --- | --- |
-| mechanism | `Depends(idempotent_replay)` raises `IdempotentReplay(response)`, caught by an exception handler | subclass `APIRoute`; run authn→authz→replay in `get_route_handler`, return before handler |
-| pros | minimal; uses existing exception-handler infra; explicit per-route deps are greppable | central, uniform, cannot be forgotten on a new route |
-| cons | must be declared on every idempotent route (mitigated by the D2 CI check) | more machinery; harder to unit-test in isolation; changes routing internals |
-| testability | high (dependency is directly callable) | medium |
+**(d) Thin store middleware.** After `call_next`: if `request.state.idem_ctx` is set AND the
+response is **2xx AND non-streaming AND not a replay**, store it under the identity key. It
+performs **no lookup, no authz, no body read**. Ownership is released in a `finally` on
+**every** path — success, error response, or client cancel — so a crashed/cancelled request
+never leaves a stuck in-flight marker and never caches a failed or streaming response.
 
-**Recommendation: (1)** with the D2 CI enforcement, because it is smaller and directly
-testable; escalate to (2) only if the CI check proves insufficient in practice.
+**Why the gate is status-based, not exception-based (proven):** `HTTPException(500)` is
+converted by FastAPI into a **500 response**, not propagated as an exception, so a
+try/except store gate would cache the 500. The gate keys on `2xx && non-streaming &&
+not-replay`; release is unconditional (`finally`).
+
+Because D3 runs only after D1+D2, an unauthenticated or cross-tenant request is refused
+(401/403) and **never reaches lookup**. Cache identity (D6) is defense-in-depth on top.
+
+**Shape chosen: option 1 MODIFIED (dependency + thin store middleware).** The custom
+`APIRoute` option is **rejected unless a spike proves** it can insert between dependency
+resolution and the endpoint without reimplementing FastAPI internals — a bar the split
+pipeline clears today with proven primitives.
 
 ### D4 — IDEM-001 concurrency, PHASED
 
@@ -121,20 +164,26 @@ Phase it:
   in-process atomic ownership** of the miss→execute→store window, **enforced under a
   single-worker deployment**. A concurrent same-identity miss in one process waits on an
   in-process lock or gets 409/425 — never double-executes. This closes the P0 without a new
-  datastore.
+  datastore. **Single-worker is not a comment — it is enforced and CONFIG-TESTED:** a
+  startup assertion (or a test that fails if `workers > 1` while multi-process idempotency
+  is unimplemented) so the safety assumption cannot silently regress when someone scales the
+  deployment.
 - **Phase 1 (separate decision):** durable **cross-process** ownership for multi-worker.
   Requires choosing a real CAS/lock store (Postgres advisory locks / Redis / etc. — a
   distinct ADR). Do NOT ship multi-worker idempotency until Phase 1 lands.
 
 ### D5 — bound the body materialization (DoS)
 
-The hash step must not read an unbounded upload into memory. Enforce a **max body size**
-before hashing (413 over the limit), and define a **canonical hash** that does not require
-spooling a large multipart file into memory — e.g. hash only the small structured fields +
-a streamed digest of the file part, or exempt large multipart uploads from body-hash
-idempotency and rely on the identity+route+key tuple. Multipart **part order cannot be a
-security convention** (FastAPI parses/spools independently); the design must not depend on
-`namespace` arriving before `file`. Spike item.
+The hash step must not read an unbounded upload into memory. Enforce a **max body size
+per route** (not a single global limit — an upload route and a small JSON write have
+different legitimate ceilings; 413 over the route's limit), and define a **canonical hash**
+that **still distinguishes two different files** without holding the whole upload in RAM —
+a **streamed digest** of the file part (chunked SHA-256) combined with a hash of the small
+structured fields. (Yua: the digest must distinguish different files; simply exempting the
+file from the hash would let two different uploads with the same form fields collide on the
+same idempotency key.) Multipart **part order cannot be a security convention** (FastAPI
+parses/spools independently); the design must not depend on `namespace` arriving before
+`file`. Spike item — the streaming-digest-vs-memory tradeoff needs a prototype.
 
 ### D6 — identity is issuer + subject + presence (NOT jti)
 
@@ -142,6 +191,13 @@ Yua's correction: **`jti` is per-token and rotates; it is not rotation-stable.**
 identity is `(issuer, subject, presence)` so a legitimate token refresh for the same
 principal still replays its own write. `jti` may be recorded in structured logs for audit
 but is **not** part of the cache key. Chosen explicitly.
+
+**Validate the tuple's internal consistency** (Yua): `issuer`, `subject`, and `presence`
+must be mutually consistent per the token contract — e.g. `presence` must be the
+subject's declared presence, not an arbitrary claim — so a token cannot present a
+`(issuer, subject)` it owns with a `presence` it does not, and thereby key into another
+principal's idempotency slot. The identity tuple is validated as a unit in D1, not trusted
+field-by-field.
 
 This also resolves the rev-1 strategy comparison: "exact-token fingerprint" (A) is rejected
 precisely because it keys on the rotating secret; **(B) principal (issuer+subject+presence)
@@ -171,6 +227,38 @@ Nullable fanout (contradictions):
 
 Every arrow is a real FastAPI dependency edge that runs in that order — no step consumes a
 decision that has not yet been made.
+
+### Exact lifecycle sequences (hit / miss-success / miss-error / cancel) — Yua required
+
+```
+IDEMPOTENT WRITE — HIT:
+  authn-mw(principal) → authorize(403?) → idempotent_replay: lookup HIT
+    → raise Replay(cached) → exception handler → 2xx + X-Idempotent-Replay:true
+  → store-mw: idem_ctx set? yes, but replay=true → DO NOT re-store; release nothing (no lock acquired on a hit)
+
+IDEMPOTENT WRITE — MISS, SUCCESS:
+  authn-mw → authorize → idempotent_replay: lookup MISS → ACQUIRE in-flight(identity_key)
+    → request.state.idem_ctx = {identity_key, token} → handler → 2xx
+  → store-mw: idem_ctx set, 2xx, non-streaming, non-replay → STORE(identity_key, response)
+    → finally: RELEASE in-flight(token)
+
+IDEMPOTENT WRITE — MISS, HANDLER ERROR (4xx/5xx):
+  ... → ACQUIRE → handler raises/returns 5xx (as a RESPONSE)
+  → store-mw: idem_ctx set but status not 2xx → DO NOT store
+    → finally: RELEASE in-flight(token)   (nothing cached; next attempt re-executes)
+
+CANCEL / DISCONNECT before response:
+  ... → ACQUIRE → client disconnects mid-handler
+  → store-mw finally (runs on the cancellation/exception path): RELEASE in-flight(token)
+    (no stuck marker; no cache)
+
+CONCURRENT MISS (same identity, Phase 0 single-worker):
+  req1: ACQUIRE ok → handler running
+  req2: ACQUIRE fails (in-flight held) → 409/425 (or bounded wait for req1's result)
+```
+
+The store middleware's **release is in `finally`** on all four paths; **cache write is
+guarded by 2xx + non-streaming + non-replay**. Proven against a live app.
 
 ## Error / status compatibility
 
