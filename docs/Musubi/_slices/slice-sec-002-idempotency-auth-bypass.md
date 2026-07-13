@@ -10,7 +10,7 @@ tags: [section/slices, status/in-progress, type/slice, security, p0, auth, idemp
 updated: 2026-07-12
 reviewed: false
 depends-on: []
-blocks: [slice-auth-boundary-red-contract]
+blocks: [slice-auth-boundary-red-contract, slice-idempotency-phase-b]
 ---
 
 # SEC-002 (C1) — idempotency replay bypasses authentication  ·  P0

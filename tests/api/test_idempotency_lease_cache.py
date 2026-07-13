@@ -1,7 +1,7 @@
 """IdempotencyLeaseCache — Phase B behaviours beyond the lease property suite.
 
-The 10-property lease contract (owner uniqueness, stale reclaim, TTL, cancellation release,
-exactly-once concurrency, injected clock) is proven by
+The 10-property lease contract (owner uniqueness, no time-based live-lease reclaim, completed-lease
+TTL, cancellation release, exactly-once concurrency, injected clock) is proven by
 ``tests/api/spikes/test_idem_lease_contract.py`` against the real cache. This file adds the
 Phase-B-specific behaviours Yua flagged for the cache-rewrite review: digest conflict without a
 lease leak, mandatory digest, bounded eviction of the COMPLETED set (which converges even when
@@ -204,9 +204,7 @@ def test_deterministic_concurrency_exactly_one_acquires() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    "kwargs", [{"max_entries": 0}, {"ttl_s": 0}, {"max_entries": -1}]
-)
+@pytest.mark.parametrize("kwargs", [{"max_entries": 0}, {"ttl_s": 0}, {"max_entries": -1}])
 def test_pathological_config_rejected(kwargs: dict[str, float]) -> None:
     with pytest.raises(ValueError):
         IdempotencyLeaseCache(clock=_Clock(), **kwargs)  # type: ignore[arg-type]

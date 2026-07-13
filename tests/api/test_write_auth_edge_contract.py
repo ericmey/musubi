@@ -63,7 +63,12 @@ def _all_body_param_names(dependant: Any) -> list[str]:
 
 def _valid_body(path: str) -> dict[str, Any]:
     if path == "/v1/episodic":
-        return {"namespace": f"{NS}/episodic", "content": "x", "tags": ["kind:episode"], "importance": 3}
+        return {
+            "namespace": f"{NS}/episodic",
+            "content": "x",
+            "tags": ["kind:episode"],
+            "importance": 3,
+        }
     if path == "/v1/episodic/batch":
         return {"namespace": f"{NS}/episodic", "items": [{"content": "x"}]}
     return {  # /v1/curated
@@ -90,10 +95,14 @@ def _tok(api_settings: Settings, subject_ns: str) -> str:
 
 def test_each_capture_route_parses_body_exactly_once(app_factory: FastAPI) -> None:
     routes = _post_capture_routes(app_factory)
-    assert len(routes) == 3, f"expected exactly 3 body-derived captures, got {[r.path for r in routes]}"
+    assert len(routes) == 3, (
+        f"expected exactly 3 body-derived captures, got {[r.path for r in routes]}"
+    )
     for r in routes:
         names = _all_body_param_names(r.dependant)  # across the whole dependency tree
-        assert len(names) == 1, f"{r.path}: must parse the body exactly once, got body_params={names}"
+        assert len(names) == 1, (
+            f"{r.path}: must parse the body exactly once, got body_params={names}"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -108,14 +117,18 @@ def test_no_token_is_401_no_mutation(client: TestClient, path: str) -> None:
 
 
 @pytest.mark.parametrize("path", sorted(CAPTURE_PATHS))
-def test_foreign_namespace_is_403_no_mutation(client: TestClient, api_settings: Settings, path: str) -> None:
+def test_foreign_namespace_is_403_no_mutation(
+    client: TestClient, api_settings: Settings, path: str
+) -> None:
     token = _tok(api_settings, "mallory/evil")  # authorized ONLY on mallory/evil
     r = client.post(path, json=_valid_body(path), headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 403, f"{path}: cross-tenant capture must be 403, got {r.status_code}"
 
 
 @pytest.mark.parametrize("path", sorted(CAPTURE_PATHS))
-def test_malformed_body_is_422_envelope(client: TestClient, api_settings: Settings, path: str) -> None:
+def test_malformed_body_is_422_envelope(
+    client: TestClient, api_settings: Settings, path: str
+) -> None:
     token = _tok(api_settings, NS)
     r = client.post(path, json={"unexpected": 1}, headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 422, f"{path}: malformed body must be 422, got {r.status_code}"
@@ -125,13 +138,17 @@ def test_malformed_body_is_422_envelope(client: TestClient, api_settings: Settin
     )
 
 
-def test_created_at_operator_guard_still_enforced(client: TestClient, api_settings: Settings) -> None:
+def test_created_at_operator_guard_still_enforced(
+    client: TestClient, api_settings: Settings
+) -> None:
     """created_at override is operator-only; a non-operator token must be 403 — proving the guard
     still sees request.state.auth after auth moves into the dependency."""
     token = _tok(api_settings, NS)
     body = {**_valid_body("/v1/episodic"), "created_at": "2020-01-01T00:00:00Z"}
     r = client.post("/v1/episodic", json=body, headers={"Authorization": f"Bearer {token}"})
-    assert r.status_code == 403, f"non-operator created_at override must be 403, got {r.status_code}"
+    assert r.status_code == 403, (
+        f"non-operator created_at override must be 403, got {r.status_code}"
+    )
 
 
 def test_openapi_requestbody_material_fields_stable(app_factory: FastAPI) -> None:
@@ -145,7 +162,9 @@ def test_openapi_requestbody_material_fields_stable(app_factory: FastAPI) -> Non
     }
     for path, must_have in expected_required.items():
         rb = spec["paths"][path]["post"].get("requestBody")
-        assert rb is not None and rb.get("required") is True, f"{path}: requestBody must be required"
+        assert rb is not None and rb.get("required") is True, (
+            f"{path}: requestBody must be required"
+        )
         ref = rb["content"]["application/json"]["schema"]["$ref"].rsplit("/", 1)[-1]
         model = spec["components"]["schemas"][ref]
         assert must_have <= set(model.get("required", [])), (

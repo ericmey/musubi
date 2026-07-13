@@ -10,7 +10,7 @@ tags: [section/slices, status/in-progress, type/slice, security, p0, auth, idemp
 updated: 2026-07-12
 reviewed: false
 depends-on: [slice-sec-002-idempotency-auth-bypass, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
-blocks: []
+blocks: [slice-idempotency-phase-b]
 ---
 
 # Auth-boundary red-contract — the first test-only commit  ·  P0

@@ -13,12 +13,19 @@ depends-on: [slice-auth-boundary-red-contract, slice-sec-002-idempotency-auth-by
 blocks: []
 ---
 
-# Phase B — routed post-authz idempotency pipeline  ·  P0 (SEC-002 + IDEM-001)
+# Slice: Phase B — routed post-authz idempotency pipeline (SEC-002 + IDEM-001)
 
-Narrow source authorization from Yua (REQ 2026-07-13T00:17), stacked on the **frozen** Phase A
-branch `slice/auth-boundary-phase-a` / PR #403 @ `a1c916e`. Replaces the pre-auth idempotency
-middleware (the SEC-002 bug) with the routed **post-authz** pipeline proven by the accepted D3
-design spikes.
+**P0 · SEC-002 + IDEM-001.** Narrow source authorization from Yua (REQ 2026-07-13T00:17), stacked
+on the **frozen** Phase A branch `slice/auth-boundary-phase-a` / PR #403 @ `a1c916e`. Replaces the
+pre-auth idempotency middleware (the SEC-002 bug) with the routed **post-authz** pipeline proven by
+the accepted D3 design spikes.
+
+## Specs to implement
+
+- [[_slices/slice-idempotency-phase-b]] — this remediation's contract is defined by its own
+  `## Test Contract` below (the SEC-002 / IDEM-001 / REQ-5 red-contract), not a separate product
+  spec; the slice is the canonical home for the closure matrix. Related security findings:
+  [[_slices/slice-sec-002-idempotency-auth-bypass]], [[_slices/slice-auth-boundary-red-contract]].
 
 ## Evidence (do not orphan)
 
@@ -164,6 +171,57 @@ fixed tests-first, each red demonstrated failing against `b5ad26c` before the fi
 spec-update: slice-idempotency-phase-b — live leases fail closed, freed only by owned request exit;
 no time-based reclaim; durable cross-process crash recovery is a named future store concern (Yua
 2026-07-13T01:48, T02:09).
+
+## Test Contract
+
+Every bullet maps to a passing test (verified mechanically by `make tc-coverage
+SLICE=slice-idempotency-phase-b`). Grouped by the contract they close.
+
+SEC-002 — replay must never bypass authentication:
+1. `test_no_bearer_must_not_replay` no bearer + known key + same body → 401, never a cached 2xx.
+2. `test_invalid_bearer_must_not_replay` invalid bearer → 401, never a replay.
+3. `test_cross_tenant_must_not_replay` a different tenant → 403, no disclosure of A's write.
+4. `test_owner_can_replay_its_own_write` the authenticated original subject still replays.
+
+IDEM-001 — identity binds the operation; the race is closed by an in-flight lease:
+5. `test_same_key_body_must_not_replay_across_endpoints` same key+body on a different route ≠ replay.
+6. `test_replay_on_same_endpoint_still_works` same key+body on the same route still replays.
+7. `test_in_flight_lease_closes_the_race_second_caller_is_not_a_free_miss` the lease closes the race.
+8. `test_conflict_still_detected_same_key_different_body` same key + different body → conflict.
+
+Pipeline behaviour on the real capture routes:
+9. `test_owner_replay_is_byte_exact_same_object_id` replay serves the exact cached bytes.
+10. `test_real_route_concurrency_mutation_runs_exactly_once` 12 concurrent identical requests → `create` runs once.
+11. `test_no_replay_across_routes` identity binds the route.
+12. `test_no_replay_across_principals` identity binds the principal.
+13. `test_no_replay_across_namespaces` identity binds the authorized namespace.
+
+Store-only observer contract (release on every exit; no DoS; faithful store):
+14. `test_observer_does_not_buffer_ineligible_stream` an ineligible stream + key is NOT buffered (B1).
+15. `test_observer_stores_on_clean_2xx_then_replayable` clean 2xx stores a replayable entry.
+16. `test_observer_releases_on_non_2xx` a non-2xx releases the lease.
+17. `test_observer_store_failure_after_send_is_swallowed_and_retry_reexecutes` post-send store failure is swallowed (req 5).
+
+Lease cache invariants:
+18. `test_in_flight_lease_is_never_reclaimed_by_elapsed_time` a live lease is never reclaimed by time (B2).
+19. `test_digest_conflict_without_lease_leak` a digest conflict acquires no lease.
+20. `test_bounded_eviction_keeps_newest_completed` the completed set is bounded, newest kept.
+21. `test_idempotency_key_expires_after_ttl` a completed entry expires at the TTL boundary.
+
+Option A body-auth dependency edge:
+22. `test_every_eligible_capture_route_carries_idempotency_dependency` all 3 captures carry the edge.
+23. `test_handler_unreachable_without_authorized_write` no handler is reachable without the edge.
+
+REQ-5 — faithful replay (raw headers, exact bytes, media type):
+24. `test_replay_preserves_set_cookie` replay preserves Set-Cookie.
+25. `test_replay_preserves_exact_body_bytes` replay preserves exact bytes.
+26. `test_non_json_response_is_idempotent_and_keeps_media` non-JSON 2xx is cached with its media type.
+
+**Test Contract Closure state: ✓ satisfied** — `make tc-coverage SLICE=slice-idempotency-phase-b`
+reports 26 bullets, 26 ✓ passing, 0 missing (exit 0). No skipped/xfail bullets, no named deferrals:
+every contract case is closed by a live passing test. (The two related security-finding slices
+linked above carry prose checklists, not `test_`-named bullets, so they contribute 0 tracked
+bullets — this slice is the closure home.)
 
 ## Verification gate
 
