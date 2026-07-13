@@ -3,14 +3,15 @@ title: "Slice: SEC-004 — contradictions omitted-namespace scrolls the whole fl
 slice_id: slice-sec-004-contradictions-fleet-scroll
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: aoi
 phase: "Security audit 2026-07-12 (Eric, discoverer)"
-tags: [section/slices, status/in-progress, type/slice, security, p0, auth, scope]
+tags: [section/slices, status/done, type/slice, security, p0, auth, scope]
 updated: 2026-07-12
-reviewed: false
+reviewed: true
+issue: 409
 depends-on: []
-blocks: [slice-auth-boundary-red-contract]
+blocks: [slice-auth-boundary-red-contract, slice-auth-boundary-phase-a]
 ---
 
 # SEC-004 (C3) — contradictions omitted-namespace scrolls the whole fleet  ·  P0
@@ -58,7 +59,18 @@ FORBIDDEN.
 `forbidden_paths`:
 - `src/musubi/**` (auth boundary; ADR-gated fix)
 
+## Specs to implement
+
+- [[_slices/slice-sec-004-contradictions-fleet-scroll]] — closed by PR #403 (Phase A); the numbered Test Contract below resolves at #403 head (all passing).
+
 ## Test Contract (Yua's six)
+
+Closure (numbered, resolve at #403 head — all passing; `make tc-coverage` exit 0):
+1. `test_ordinary_token_omitted_namespace_must_be_403` omitted namespace requires operator (SEC-004).
+2. `test_backend_failure_must_not_be_empty_200` backend failure → 5xx not empty 200 (SEC-004/RET-007).
+3. `test_operator_omitted_namespace_succeeds_cross_namespace` operator fanout preserved (control).
+4. `test_no_token_must_be_401` no-token → 401 (control).
+
 
 `xfail(strict=True)` for the holes; plain asserts for the controls. Synthetic content only.
 
