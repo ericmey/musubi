@@ -49,8 +49,11 @@ routes only**. Implement:
 - `src/musubi/api/idempotency_observer.py` — **NEW**: store-only pure-ASGI response observer.
 - `src/musubi/api/idempotency_dependency.py` — **NEW**: routed post-authz idempotency dependency
   (+ route eligibility registration).
-- `src/musubi/api/routers/writes_episodic.py`, `writes_curated.py`, `writes_concept.py` — register
-  eligibility + (pending drift resolution) authz-as-dependency-edge. **Not Phase A files.**
+- `src/musubi/api/write_auth.py` — **NEW**: shared `AuthorizedWrite` dependency types.
+- `src/musubi/api/routers/writes_episodic.py`, `writes_curated.py` — the body-derived capture
+  routes only: the `AuthorizedWrite` edge + idempotency dependency; drop in-handler
+  `_check_body_scope`. **Not Phase A files.** (`writes_concept.py` is query-derived and OUT of
+  scope — see the named follow-up.)
 
 `owns_paths` (tests):
 - `tests/api/test_idempotency_contract.py` — **NEW**: transcribed D3 identity/order contracts +
@@ -109,7 +112,11 @@ out of Phase B scope** — recorded here as a NAMED follow-up decision, not a si
 are mutations on existing objects (not JSON captures), authorize a query-derived namespace via
 route-level `require_auth`, and would integrate through a simpler `Depends(require_auth)` edge (no
 body-derived parse). Whether they become idempotent-eligible is a **Phase B-follow-up inventory
-decision** to be made explicitly, tracked against this slice.
+decision** to be made explicitly.
+
+**Tracking home:** to be filed as a dedicated GitHub Issue ("follow-up: query-derived idempotent
+eligibility inventory") and linked here on creation; this named prose is the temporary placeholder
+until that issue exists (per Yua 2026-07-13T00:36).
 
 ## Additional required reds (Yua 2026-07-13T00:30)
 
@@ -129,4 +136,7 @@ temporarily retarget → main for exact-SHA evidence, then restore base to
 acceptance + green. Merge order: #402 → main, retarget/recheck #403 → main, then Phase B → main.
 
 ## Status
-Branch created; reporting design drift before coding the dependency.
+Design drift resolved (Option A approved, Yua 2026-07-13T00:27); feasibility gates + inventory
+proven; required reds landed (106f19c). Proceeding with the authorized Phase B src implementation
+in reviewable commits (AuthorizedWrite edge → idempotency dependency → lease/digest cache →
+store-only observer → named app.py wiring), flipping the SEC-002 / IDEM-001 / lease reds.
