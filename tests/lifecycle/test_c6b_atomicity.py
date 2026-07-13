@@ -36,16 +36,40 @@ The contract is 22 behavior-shaped strict-xfail reds (R1-R22) + 3 guards (G1/G2/
   Defect closure (green ONLY when slice-h5-unify-state-mutation migrates every path):
     G1  mechanical AST guard: NO direct `state`-writing `set_payload` outside the coordinator
 
-This file, tranche 1: **G1** (closure-gate) + its rule-discrimination proof. The Phase-1 behavior reds
-R1-R22 + G2/G3 require the coordinator/outbox + in-memory-Qdrant harness and land in the next tranche.
+Tranche 1: **G1** (closure-gate) + its rule-discrimination proof (pure AST over src).
+Tranche 2 (in progress): the Phase-1 behavior harness + reds, starting with **R1**. These drive the
+future `LifecycleTransitionCoordinator` against an in-memory Qdrant + a real SQLite outbox. Each red is
+strict-xfail today because the coordinator is unbuilt, but its decorator names the SPECIFIC defect it
+targets and its assertion discriminates that behavior — so a WRONG coordinator leaves its own red
+unflipped (proven at red-proof), not a single shared "coordinator absent" reason.
+
+**Assumed Phase-1 coordinator surface** (documented here for Yua to confirm at source authorization):
+`LifecycleTransitionCoordinator(client=<qdrant>, db_path=<shared events+outbox sqlite>)` with
+`.transition(collection, object_id, namespace, expected_version, to_state, actor, reason, operation_key)
+-> Result[TransitionOutcome, TransitionError]` and `.reconcile()`. A durable `lifecycle_outbox` row
+(operation_key PRIMARY KEY, object_id, collection, target_state, expected_version, state, event_id, ...)
+is committed BEFORE the Qdrant mutation. Tests inspect that table + Qdrant state directly.
 
     uv run pytest tests/lifecycle/test_c6b_atomicity.py -v
 """
 
 import ast
+import asyncio
+import sqlite3
+import warnings
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
+from qdrant_client import QdrantClient
+
+from musubi.embedding import FakeEmbedder
+from musubi.planes.episodic import EpisodicPlane
+from musubi.store import bootstrap
+from musubi.store.names import collection_for_plane
+from musubi.types.episodic import EpisodicMemory
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "musubi"
 
@@ -290,3 +314,142 @@ def test_g1_rule_discriminates_state_dataflow_from_unrelated_payloads() -> None:
     assert not _state_writing_setpayload_sites(false_assoc), (
         "must NOT flag an unrelated enrichment set_payload just because the function computes state"
     )
+
+
+# ============================================================================
+# TRANCHE 2 - Phase-1 behavior harness + reds (drive the future coordinator)
+# ============================================================================
+
+_NS = "eric/claude-code/episodic"
+
+
+@dataclass
+class _Seed:
+    collection: str
+    object_id: str
+    namespace: str
+    version: int
+
+
+@pytest.fixture
+def qdrant() -> Iterator[QdrantClient]:
+    """In-memory Qdrant with the canonical collection layout bootstrapped (one per test)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        client = QdrantClient(":memory:")
+    bootstrap(client)
+    try:
+        yield client
+    finally:
+        client.close()
+
+
+@pytest.fixture
+def seeded(qdrant: QdrantClient) -> _Seed:
+    """A provisional episodic object to transition (real create via the plane + FakeEmbedder)."""
+    plane = EpisodicPlane(client=qdrant, embedder=FakeEmbedder())
+    obj = asyncio.run(plane.create(EpisodicMemory(namespace=_NS, content="c6b-seed")))
+    return _Seed(
+        collection=str(collection_for_plane("episodic")),
+        object_id=str(obj.object_id),
+        namespace=_NS,
+        version=int(obj.version),
+    )
+
+
+@pytest.fixture
+def db_path(tmp_path: Path) -> Path:
+    return tmp_path / "lifecycle.db"
+
+
+class _TransientQdrantError(RuntimeError):
+    """A transient/unknown Qdrant failure - the coordinator must keep the intent PENDING (retryable),
+    never ABANDON it and never emit a FINAL audit (Yua corrections B/J)."""
+
+    terminal = False
+
+
+class _TerminalQdrantError(RuntimeError):
+    """A proven-terminal Qdrant failure - the coordinator must ABANDON (never a FINAL event) (Yua J)."""
+
+    terminal = True
+
+
+def _fail_set_payload(client: QdrantClient, exc: Exception) -> None:
+    def _boom(*_a: object, **_k: object) -> None:
+        raise exc
+
+    client.set_payload = _boom  # type: ignore[assignment]
+
+
+def _coordinator(client: QdrantClient, db_path: Path) -> Any:
+    """Import-guard: the reds drive the future coordinator. Absent today -> DefectStillPresent, so the
+    xfail fires for each red's OWN named reason (the specific behavior it asserts is unreachable)."""
+    try:
+        from musubi.lifecycle.coordinator import (  # type: ignore[import-untyped]
+            LifecycleTransitionCoordinator,
+        )
+    except ImportError as e:
+        raise DefectStillPresent(
+            "LifecycleTransitionCoordinator is not implemented (Phase-1 coordinator/outbox source)"
+        ) from e
+    return LifecycleTransitionCoordinator(client=client, db_path=Path(db_path))
+
+
+def _outbox_rows(db_path: Path) -> list[dict[str, object]]:
+    """Read the durable outbox directly (empty if the table does not exist yet)."""
+    if not Path(db_path).exists():
+        return []
+    con = sqlite3.connect(str(db_path))
+    try:
+        try:
+            cur = con.execute(
+                "SELECT operation_key, object_id, state, event_id FROM lifecycle_outbox"
+            )
+        except sqlite3.OperationalError:
+            return []  # table absent
+        return [
+            {"operation_key": r[0], "object_id": r[1], "state": r[2], "event_id": r[3]}
+            for r in cur.fetchall()
+        ]
+    finally:
+        con.close()
+
+
+# R1 - durable PENDING intent committed BEFORE the Qdrant mutation ------------------------------------ #
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="today transition() mutates Qdrant FIRST and records the audit only after, writing no PENDING "
+    "outbox intent - so a mutation that faults (or the process dies) leaves NO durable record that the "
+    "transition was even attempted. R1 requires a committed PENDING intent to exist before the mutation.",
+)
+def test_r1_durable_intent_persisted_before_qdrant_mutation(
+    qdrant: QdrantClient,
+    seeded: _Seed,
+    db_path: Path,
+) -> None:
+    coord = _coordinator(qdrant, db_path)  # DefectStillPresent (xfail) until the coordinator exists
+    _fail_set_payload(qdrant, _TransientQdrantError("injected transient during apply"))
+    # Drive a transition whose Qdrant mutation will fault. Regardless of the returned outcome, a durable
+    # intent for this operation MUST already be committed (it was written before the mutation).
+    coord.transition(
+        collection=seeded.collection,
+        object_id=seeded.object_id,
+        namespace=seeded.namespace,
+        expected_version=seeded.version,
+        to_state="matured",
+        actor="t",
+        reason="r1",
+        operation_key="op-r1",
+    )
+    rows = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r1"]
+    if not rows:
+        raise DefectStillPresent(
+            "no durable PENDING intent was persisted before the Qdrant mutation "
+            "(a mutate-first coordinator leaves no record when the mutation faults)"
+        )
+    if rows[0]["state"] not in ("PENDING", "APPLIED", "FINAL"):
+        raise DefectStillPresent(f"intent row in unexpected state {rows[0]['state']!r}")
