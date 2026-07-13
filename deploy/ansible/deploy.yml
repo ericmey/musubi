@@ -2,7 +2,39 @@
 - name: Deploy Musubi container stack
   hosts: musubi
   become: true
+  pre_tasks:
+    - name: Inspect 1Password Connect environment file
+      ansible.builtin.stat:
+        path: /etc/musubi/connect.env
+      register: musubi_connect_env
+      changed_when: false
+      no_log: true
+
+    - name: Require root-only 1Password Connect environment file
+      ansible.builtin.assert:
+        that:
+          - musubi_connect_env.stat.exists
+          - (musubi_connect_env.stat.pw_name | default("")) == "root"
+          - (musubi_connect_env.stat.mode | default("")) == "0600"
+        fail_msg: "1Password Connect preflight failed"
+      no_log: true
+
+    - name: Require the 1Password CLI runtime
+      ansible.builtin.command: /usr/bin/op --version
+      changed_when: false
+      check_mode: false
+      no_log: true
+
   tasks:
+    - name: Render non-secret production environment
+      ansible.builtin.template:
+        src: templates/env.production.j2
+        dest: "{{ musubi_config_dir }}/.env.production"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      no_log: true
+
     - name: Render docker-compose anchor
       ansible.builtin.template:
         src: templates/docker-compose.yml.j2
@@ -22,43 +54,54 @@
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0644"
-      notify: reload prometheus
 
-    - name: Render Qdrant bearer-token file for Prometheus
-      # Mounted read-only into the prometheus container at
-      # /etc/prometheus/qdrant.token; referenced by the qdrant scrape
-      # job's `authorization.credentials_file`. Chown to UID 65534
-      # (`nobody`) because the official prom/prometheus image runs as
-      # that user — bind mounts preserve host UID/GID, so the file
-      # must be readable by 65534 specifically. Mode 0400 grants
-      # owner-only read.
+    - name: Render op-run reference template
       ansible.builtin.template:
-        src: templates/qdrant.token.j2
-        dest: "{{ musubi_config_dir }}/qdrant.token"
-        owner: "65534"
-        group: "65534"
-        mode: "0400"
-      notify: reload prometheus
+        src: templates/secrets.tpl.j2
+        dest: "{{ musubi_config_dir }}/secrets.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render Qdrant op-inject reference template
+      ansible.builtin.template:
+        src: templates/qdrant.token.tpl.j2
+        dest: "{{ musubi_config_dir }}/qdrant.token.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Install 1Password-backed Musubi systemd unit
+      ansible.builtin.template:
+        src: templates/musubi.service.j2
+        dest: /etc/systemd/system/musubi.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Remove legacy persistent Qdrant scrape token
+      ansible.builtin.file:
+        path: "{{ musubi_config_dir }}/qdrant.token"
+        state: absent
 
     - name: Pull missing pinned images
-      community.docker.docker_compose_v2_pull:
-        project_src: "{{ musubi_config_dir }}"
-        policy: missing
+      ansible.builtin.command:
+        cmd: >-
+          /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
+          /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
+          pull --policy missing
+      changed_when: true
+      no_log: true
 
-    - name: Start inference + storage services (everything except core) and wait for healthy
-      community.docker.docker_compose_v2:
-        project_src: "{{ musubi_config_dir }}"
-        state: present
-        pull: missing
-        remove_orphans: true
-        wait: true
-        wait_timeout: 300
-        services:
-          - qdrant
-          - tei-dense
-          - tei-sparse
-          - tei-reranker
-          - ollama
+    - name: Start inference and storage services and wait for healthy
+      ansible.builtin.command:
+        cmd: >-
+          /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
+          /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
+          up -d --pull missing --remove-orphans --wait --wait-timeout 300
+          qdrant tei-dense tei-sparse tei-reranker ollama
+      changed_when: true
+      no_log: true
 
     - name: Ensure the LLM model is pulled into Ollama
       # Idempotent: `ollama pull` no-ops if the model is already present.
@@ -69,18 +112,12 @@
       register: ollama_pull
       changed_when: "'pulling' in (ollama_pull.stdout | default(''))"
 
-    - name: Start Musubi Core now that inference is up
-      community.docker.docker_compose_v2:
-        project_src: "{{ musubi_config_dir }}"
-        state: present
-        pull: missing
-        remove_orphans: true
-
-    - name: Ensure Musubi systemd unit is enabled
+    - name: Reload systemd and start the 1Password-backed stack
       ansible.builtin.systemd_service:
         name: musubi
+        daemon_reload: true
         enabled: true
-        state: started
+        state: restarted
 
     - name: Check Core health
       ansible.builtin.uri:
@@ -91,20 +128,3 @@
       register: core_health
       until: core_health.status == 200
       changed_when: false
-
-  handlers:
-    - name: reload prometheus
-      # `kill -s HUP` is the zero-downtime reload signal — the container
-      # stays up, Prometheus re-reads `prometheus.yml` in place. Cheaper
-      # than the HTTP `/-/reload` path because it has no in-container
-      # tooling dependency. The prometheus container may not be running
-      # yet on a first-deploy run (it starts after this handler is
-      # registered but before flush), so swallow a "not running" exit.
-      ansible.builtin.command:
-        cmd: docker compose -f {{ musubi_config_dir }}/docker-compose.yml kill -s HUP prometheus
-      register: prometheus_reload
-      failed_when:
-        - prometheus_reload.rc != 0
-        - "'no such service' not in (prometheus_reload.stderr | default(''))"
-        - "'not running' not in (prometheus_reload.stderr | default(''))"
-      changed_when: prometheus_reload.rc == 0

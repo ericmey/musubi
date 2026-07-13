@@ -5,6 +5,9 @@ services:
     image: {{ musubi_core_image }}
     env_file:
       - .env.production
+    environment:
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
     ports:
       - "{{ musubi_core_port }}:{{ musubi_core_port }}"
     volumes:
@@ -33,6 +36,9 @@ services:
     image: {{ musubi_core_image }}
     env_file:
       - .env.production
+    environment:
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
     command: ["python", "-m", "musubi.lifecycle.runner"]
     volumes:
       - /var/lib/musubi/vault:/var/lib/musubi/vault
@@ -54,9 +60,8 @@ services:
   qdrant:
     image: {{ musubi_qdrant_image }}
     environment:
-      # Qdrant reads its API key from config OR env. Env wins. Keeps the
-      # value out of the mounted config and in the ansible-vault instead.
-      QDRANT__SERVICE__API_KEY: "{{ vault_qdrant_api_key }}"
+      # Injected at runtime by op-run from 1Password Connect.
+      QDRANT__SERVICE__API_KEY: "${QDRANT_API_KEY}"
     volumes:
       - /var/lib/musubi/qdrant-storage:/qdrant/storage
       # Snapshots live in /qdrant/snapshots inside the container (default
@@ -154,7 +159,7 @@ services:
     image: {{ musubi_prometheus_image }}
     volumes:
       - /etc/musubi/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - /etc/musubi/qdrant.token:/etc/prometheus/qdrant.token:ro
+      - /run/musubi-secrets/qdrant.token:/etc/prometheus/qdrant.token:ro
       - /var/lib/musubi/prometheus-data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"

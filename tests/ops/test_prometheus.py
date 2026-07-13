@@ -35,11 +35,7 @@ DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
 
 
 def _load_prom_config() -> Any:
-    # `prometheus.yml.j2` has no Jinja placeholders inside scrape blocks
-    # today, but tolerate them in case a future change adds one.
-    rendered = PROM_CONFIG.read_text()
-    rendered = rendered.replace("{{ vault_qdrant_api_key }}", "x")
-    return yaml.safe_load(rendered)
+    return yaml.safe_load(PROM_CONFIG.read_text())
 
 
 def _load(path: Path) -> Any:
@@ -140,7 +136,6 @@ def _render_compose() -> dict[str, Any]:
         "{{ musubi_node_exporter_image }}": "prom/node-exporter:test",
         "{{ musubi_core_port }}": "8100",
         "{{ musubi_ollama_model }}": "qwen3:4b",
-        "{{ vault_qdrant_api_key }}": "x",
     }
     for k, v in tokens.items():
         rendered = rendered.replace(k, v)
@@ -252,16 +247,16 @@ def test_deploy_playbook_renders_scrape_config() -> None:
     assert "templates/prometheus.yml.j2" in text, (
         "deploy.yml must render prometheus.yml.j2 (not copy a static file)"
     )
-    assert "templates/qdrant.token.j2" in text, (
-        "deploy.yml must render qdrant.token.j2 so the prometheus container "
+    assert "templates/qdrant.token.tpl.j2" in text, (
+        "deploy.yml must render qdrant.token.tpl.j2 so the systemd unit "
         "can authenticate against qdrant /metrics"
     )
 
 
 def test_scrape_targets_qdrant_with_bearer_auth() -> None:
     """Qdrant 1.17 requires Authorization: Bearer <api-key> on /metrics.
-    Prometheus uses authorization.credentials_file pointing at a file
-    rendered from `vault_qdrant_api_key` so the scrape config itself
+    Prometheus uses authorization.credentials_file pointing at a tmpfs file
+    rendered by the systemd `op inject` boundary so the scrape config itself
     stays secret-free."""
     cfg = _load_prom_config()
     jobs = {j["job_name"]: j for j in cfg["scrape_configs"]}

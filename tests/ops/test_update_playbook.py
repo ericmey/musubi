@@ -61,31 +61,24 @@ def test_update_playbook_parses() -> None:
 def test_update_pull_policy_is_always() -> None:
     """The key difference from deploy.yml (policy=missing)."""
     for task in _tasks(_play()):
-        module = task.get("community.docker.docker_compose_v2_pull")
-        if module:
-            assert module.get("policy") == "always", (
-                f"pull policy must be 'always', got {module.get('policy')!r}"
-            )
+        command = task.get("ansible.builtin.command")
+        if command and " compose " in str(command) and " pull" in str(command):
+            assert "/usr/bin/op run" in str(command)
+            assert "--policy always" in str(command)
             return
-    raise AssertionError("update.yml has no docker_compose_v2_pull task")
+    raise AssertionError("update.yml has no op-run compose pull task")
 
 
 def test_update_compose_up_uses_pull_never_and_recreate_always() -> None:
     for task in _tasks(_play()):
-        module = task.get("community.docker.docker_compose_v2")
-        if not module:
+        command = task.get("ansible.builtin.command")
+        if not command or "--force-recreate" not in str(command):
             continue
-        # The pull-skipping compose-up task is the one with `services:` set.
-        if "services" not in module:
-            continue
-        assert module.get("pull") == "never", (
-            "compose up must not double-pull; the earlier _pull task handled it"
-        )
-        assert module.get("recreate") == "always", (
-            "compose up must force recreate to pick up digest changes"
-        )
+        assert "/usr/bin/op run" in str(command)
+        assert "--pull never" in str(command)
+        assert "--no-deps" in str(command)
         return
-    raise AssertionError("update.yml has no per-service docker_compose_v2 task")
+    raise AssertionError("update.yml has no per-service op-run compose recreate task")
 
 
 def test_update_recreates_only_named_services_with_core_default() -> None:
@@ -96,7 +89,7 @@ def test_update_recreates_only_named_services_with_core_default() -> None:
     defaults = vars_.get("changed_services")
     assert defaults == ["core"], f"default changed_services should be ['core'], got {defaults!r}"
     text = UPDATE_PLAYBOOK.read_text()
-    assert "{{ changed_services }}" in text, (
+    assert "{{ changed_services | join(' ') }}" in text, (
         "compose up must reference the changed_services variable"
     )
 
@@ -116,7 +109,7 @@ def test_update_renders_production_env_before_recreate() -> None:
     recreate_indices = [
         idx
         for idx, task in enumerate(tasks)
-        if "services" in (task.get("community.docker.docker_compose_v2") or {})
+        if "--force-recreate" in str(task.get("ansible.builtin.command") or "")
     ]
     assert recreate_indices, "update.yml has no per-service compose recreate task"
     assert env_indices[0] < recreate_indices[0], (
@@ -168,14 +161,14 @@ def test_update_writes_upgrade_history() -> None:
     assert "core_image" in text
     assert "services" in text
     for task in _tasks(_play()):
-        module = task.get("community.docker.docker_compose_v2")
-        if not module or "services" not in module:
+        command = task.get("ansible.builtin.command")
+        if not command or "--force-recreate" not in str(command):
             continue
         notify = task.get("notify") or []
         assert "Ensure upgrade-history log directory exists" in notify
         assert "Append an upgrade-history entry" in notify
         return
-    raise AssertionError("update.yml has no per-service compose recreate task")
+    raise AssertionError("update.yml has no per-service op-run compose recreate task")
 
 
 def test_update_playbook_does_not_lower_deploys_digest_pin_behaviour() -> None:
@@ -183,8 +176,8 @@ def test_update_playbook_does_not_lower_deploys_digest_pin_behaviour() -> None:
     that flips deploy.yml to `always` as a shortcut would remove update.yml's
     reason to exist."""
     deploy_text = DEPLOY_PLAYBOOK.read_text()
-    assert "policy: missing" in deploy_text
-    assert "policy: always" not in deploy_text, (
+    assert "pull --policy missing" in deploy_text
+    assert "--policy always" not in deploy_text, (
         "deploy.yml uses `missing`; `always` belongs to update.yml"
     )
 

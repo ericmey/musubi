@@ -2,8 +2,31 @@
 - name: Refresh Musubi runtime configuration
   hosts: musubi
   become: true
+  pre_tasks:
+    - name: Inspect 1Password Connect environment file
+      ansible.builtin.stat:
+        path: /etc/musubi/connect.env
+      register: musubi_connect_env
+      changed_when: false
+      no_log: true
+
+    - name: Require root-only 1Password Connect environment file
+      ansible.builtin.assert:
+        that:
+          - musubi_connect_env.stat.exists
+          - (musubi_connect_env.stat.pw_name | default("")) == "root"
+          - (musubi_connect_env.stat.mode | default("")) == "0600"
+        fail_msg: "1Password Connect preflight failed"
+      no_log: true
+
+    - name: Require the 1Password CLI runtime
+      ansible.builtin.command: /usr/bin/op --version
+      changed_when: false
+      check_mode: false
+      no_log: true
+
   tasks:
-    - name: Render production environment
+    - name: Render non-secret production environment
       ansible.builtin.template:
         src: templates/env.production.j2
         dest: "{{ musubi_config_dir }}/.env.production"
@@ -22,7 +45,46 @@
         mode: "0640"
       notify: Restart Musubi stack
 
+    - name: Render op-run reference template
+      ansible.builtin.template:
+        src: templates/secrets.tpl.j2
+        dest: "{{ musubi_config_dir }}/secrets.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      notify: Restart Musubi stack
+
+    - name: Render Qdrant op-inject reference template
+      ansible.builtin.template:
+        src: templates/qdrant.token.tpl.j2
+        dest: "{{ musubi_config_dir }}/qdrant.token.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      notify: Restart Musubi stack
+
+    - name: Install 1Password-backed Musubi systemd unit
+      ansible.builtin.template:
+        src: templates/musubi.service.j2
+        dest: /etc/systemd/system/musubi.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify:
+        - Reload systemd
+        - Restart Musubi stack
+
+    - name: Remove legacy persistent Qdrant scrape token
+      ansible.builtin.file:
+        path: "{{ musubi_config_dir }}/qdrant.token"
+        state: absent
+      notify: Restart Musubi stack
+
   handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
     - name: Restart Musubi stack
       ansible.builtin.systemd_service:
         name: musubi

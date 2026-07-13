@@ -28,6 +28,9 @@ Prometheus container mount `/etc/musubi/qdrant.token`.
 
 - `deploy/ansible/**`
 - `tests/ops/test_1password_connect_deploy.py`
+- `tests/ops/test_ansible.py`
+- `tests/ops/test_update_playbook.py`
+- `tests/ops/test_prometheus.py`
 - `docs/Musubi/_slices/slice-deploy-1password-source-reconcile.md`
 - `docs/Musubi/_inbox/locks/slice-deploy-1password-source-reconcile.lock`
 
@@ -64,3 +67,7 @@ listed in `blocks`.
 - 2026-07-13, codex-gpt5: Claimed issue #423 after live, value-free proof of
   source/deployment drift. First commit is the red contract; no deployment or
   credential rotation is authorized by this slice.
+- 2026-07-13, codex-gpt5: Expanded ownership to the existing deployment
+  contract tests whose persistent-secret/module assumptions change with the
+  accepted 1Password runtime model. Targeted update semantics and Prometheus
+  authentication remain asserted through the `op run`/tmpfs boundary.

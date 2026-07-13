@@ -3,6 +3,30 @@
   hosts: musubi
   become: true
   pre_tasks:
+    # Connect is a manually provisioned host prerequisite. Prove it before
+    # package, driver, firewall, user, or filesystem mutations begin.
+    - name: Inspect 1Password Connect environment file
+      ansible.builtin.stat:
+        path: /etc/musubi/connect.env
+      register: musubi_connect_env
+      changed_when: false
+      no_log: true
+
+    - name: Require root-only 1Password Connect environment file
+      ansible.builtin.assert:
+        that:
+          - musubi_connect_env.stat.exists
+          - (musubi_connect_env.stat.pw_name | default("")) == "root"
+          - (musubi_connect_env.stat.mode | default("")) == "0600"
+        fail_msg: "1Password Connect preflight failed"
+      no_log: true
+
+    - name: Require the 1Password CLI runtime
+      ansible.builtin.command: /usr/bin/op --version
+      changed_when: false
+      check_mode: false
+      no_log: true
+
     # ---- Prereqs for adding third-party apt sources ---------------------
     - name: Install prerequisites for adding third-party apt repos
       ansible.builtin.apt:
@@ -175,7 +199,7 @@
         group: "{{ musubi_service_group }}"
         mode: "0640"
 
-    - name: Render production environment
+    - name: Render non-secret production environment
       ansible.builtin.template:
         src: templates/env.production.j2
         dest: "{{ musubi_config_dir }}/.env.production"
@@ -183,6 +207,27 @@
         group: "{{ musubi_service_group }}"
         mode: "0640"
       no_log: true
+
+    - name: Render op-run reference template
+      ansible.builtin.template:
+        src: templates/secrets.tpl.j2
+        dest: "{{ musubi_config_dir }}/secrets.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render Qdrant op-inject reference template
+      ansible.builtin.template:
+        src: templates/qdrant.token.tpl.j2
+        dest: "{{ musubi_config_dir }}/qdrant.token.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Remove legacy persistent Qdrant scrape token
+      ansible.builtin.file:
+        path: "{{ musubi_config_dir }}/qdrant.token"
+        state: absent
 
     - name: Install Musubi systemd unit
       ansible.builtin.template:

@@ -104,12 +104,14 @@ def test_playbook_idempotent_on_clean_vm() -> None:
     idempotent_modules = {
         "ansible.builtin.apt",
         "ansible.builtin.apt_repository",
+        "ansible.builtin.assert",
         "ansible.builtin.copy",
         "ansible.builtin.file",
         "ansible.builtin.get_url",
         "ansible.builtin.group",
         "ansible.builtin.lineinfile",
         "ansible.builtin.service",
+        "ansible.builtin.stat",
         "ansible.builtin.systemd_service",
         "ansible.builtin.template",
         "ansible.builtin.uri",
@@ -184,7 +186,7 @@ def test_update_playbook_respects_digest_pins() -> None:
     assert isinstance(deploy_playbook, list)
     playbook_text = yaml.safe_dump(deploy_playbook)
 
-    assert "community.docker.docker_compose_v2_pull" in playbook_text
-    assert "policy: missing" in playbook_text
-    assert "pull: missing" in playbook_text
-    assert "pull: always" not in playbook_text
+    assert "/usr/bin/op run" in playbook_text
+    assert "pull --policy missing" in playbook_text
+    assert "up -d --pull missing" in playbook_text
+    assert "--policy always" not in playbook_text
