@@ -29,17 +29,23 @@ Yua 15:12 corrections:
      durably routed to Issue #446.
   3. VAULT-002 is INDEPENDENT of C6b/ART-001/VAULT-001.
 
-Test accounting (post-Yua-17:10:38 repair):
-  - 4 strict xfails (today): RED + 3 red-proofs/discriminations
-  - 4 plain pass (today AND after fix): 4 healthy controls/guards
-  - 1 skip: the VAULT-001 deletion routing marker
+Test accounting (post-Yua-17:20:42 repair):
+  - 2 source reds (xfail): boot-scan write + exception observability
+  - 6 plain-pass controls/discriminators
+  - 1 documentary skip
   - Total: 9 tests
 
 The contract is observed on the typed `CuratedKnowledge` object
 passed to `curated_plane.create(memory)`, NOT on call_args/kwargs
-introspection, NOT on Qdrant client.set_payload side effects,
-NOT on a captured task raising (the boot_scan loop intentionally
-catches per-path exceptions and logs them).
+introspection (create takes one positional arg), NOT on Qdrant
+client.set_payload side effects (which an AsyncMock never calls),
+NOT on a captured task raising (boot_scan intentionally catches
+per-path exceptions and logs them as `Boot scan failed on path`).
+
+The body_hash for the postcondition is computed via a single
+helper `_read_and_hash_body` that calls the real
+`parse_frontmatter` and hashes the returned body exactly. No
+hand-duplicated parsing semantics.
 """
 
 from __future__ import annotations
@@ -55,6 +61,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from musubi.types.curated import CuratedKnowledge
+from musubi.vault.frontmatter import parse_frontmatter
 from musubi.vault.watcher import VaultWatcher
 
 # =============================================================
@@ -62,7 +69,25 @@ from musubi.vault.watcher import VaultWatcher
 # =============================================================
 
 
-def _write_md_with_frontmatter(root: Path, rel: str, *, body: str = "test body content") -> Path:
+def _read_and_hash_body(path: Path) -> str:
+    """Read the file, call the REAL parse_frontmatter, hash
+    the body exactly. No hand-duplicated parsing semantics.
+
+    parse_frontmatter strips the trailing newline; the body
+    hash is sha256(body.encode('utf-8')) where body is the
+    parse_frontmatter output (no trailing \\n).
+    """
+    content = path.read_text(encoding="utf-8")
+    _, body = parse_frontmatter(content)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def _write_md_with_frontmatter(
+    root: Path,
+    rel: str,
+    *,
+    body: str = "test body content",
+) -> Path:
     """Write a real markdown file with a real CuratedFrontmatter shape."""
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -82,15 +107,10 @@ def _write_md_with_frontmatter(root: Path, rel: str, *, body: str = "test body c
     return p
 
 
-def _capture_scan_task(
-    watcher: VaultWatcher,
-) -> list[Any]:
+def _capture_scan_task(watcher: VaultWatcher) -> list[Any]:
     """Capture the boot_scan task by wrapping the watcher's
     self._loop.create_task. Saves the ORIGINAL create_task first
     so the wrapper delegates to it (avoids recursion).
-
-    Returns the captured-tasks list. The caller MUST await each
-    captured task to deterministically complete the scan.
     """
     loop = watcher._loop
     assert loop is not None  # nosec B101
@@ -98,9 +118,6 @@ def _capture_scan_task(
     original_create_task = loop.create_task
 
     def capture(coro: Any) -> Any:
-        # Delegate to the ORIGINAL create_task (saved BEFORE
-        # the monkeypatch on watcher._loop). Using watcher._loop
-        # would recurse into the wrapper.
         t = original_create_task(coro)
         captured.append(t)
         return t
@@ -119,14 +136,11 @@ def _assert_typed_memory(
     expected_namespace: str = "aoi/command-chair/curated",
 ) -> None:
     """Assert the typed CuratedKnowledge object carries the
-    post-fix contract: relative vault_path, exact new body_hash,
-    and the frontmatter's object_id/namespace.
-
-    The handler does `rel_path = str(path.relative_to(vault_root))`
-    and constructs `CuratedKnowledge(vault_path=rel_path, ...)`.
-    So `memory.vault_path` is the RELATIVE form under vault_root,
-    NOT the absolute form. The postcondition contract is the
-    relative form.
+    post-fix contract. The handler does `rel_path = path.relative_to(
+    vault_root)` and constructs `CuratedKnowledge(vault_path=rel_path,
+    ...)`. So `memory.vault_path` is the RELATIVE form under
+    vault_root, NOT the absolute form. The postcondition
+    contract is the relative form.
 
     The typed object is what `curated_plane.create(memory)`
     receives — not a tuple, not a dict, not (path, payload).
@@ -140,51 +154,28 @@ def _assert_typed_memory(
         f"{memory.vault_path!r}"
     )
     assert memory.body_hash == expected_body_hash, (
-        f"memory.body_hash must be the new (real) hash "
-        f"{expected_body_hash!r}, got {memory.body_hash!r}"
+        f"memory.body_hash must be {expected_body_hash!r}, got {memory.body_hash!r}"
     )
     assert memory.object_id == expected_object_id, (
-        f"memory.object_id must be from the frontmatter "
-        f"{expected_object_id!r}, got {memory.object_id!r}"
+        f"memory.object_id must be {expected_object_id!r}, got {memory.object_id!r}"
     )
     assert memory.namespace == expected_namespace, (
-        f"memory.namespace must be from the frontmatter "
-        f"{expected_namespace!r}, got {memory.namespace!r}"
+        f"memory.namespace must be {expected_namespace!r}, got {memory.namespace!r}"
     )
 
 
-# =============================================================
-# Red contract: 1 strict-xfail RED + 3 plain-pass controls +
-# 1 strict-xfail control (caplog) + 3 red-proofs (2 xfail +
-# 1 pass) + 1 skip marker = 9 tests
-# =============================================================
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason="VAULT-002 RED: the current relative-path bug short-circuits boot_scan before the handler reaches curated_plane.create(memory). Asserts the postcondition on the typed CuratedKnowledge object (relative vault_path, new body_hash, frontmatter object_id/namespace). Today: 0 creates; postcondition not met. Flips to green when the fix lands.",
-)
-@pytest.mark.asyncio
-async def test_boot_scan_vault_002_relative_path_noop_red(
+def _make_watcher(
     tmp_path: Path,
-) -> None:
-    """RED 1/4: boot_scan relative-path bug. Postcondition on typed memory.
-
-    Asserts the POSTCONDITION (real handler reaches
-    `curated_plane.create(memory)` with a typed
-    `CuratedKnowledge` whose `vault_path` is the relative form
-    under vault_root, whose `body_hash` is the new (real) hash,
-    and whose `object_id`/`namespace` come from the frontmatter).
-    Today: the bug short-circuits before any create call, so
-    the postcondition is not met -> assertion fails -> xfail.
+    rel: str,
+    stale_hash: str,
+) -> tuple[VaultWatcher, MagicMock]:
+    """Create an isolated watcher + curated_plane mock. Each
+    redproof uses its OWN watcher (no shared state) so the
+    wrong/correct candidates are independent.
     """
-    rel = "aoi/command-chair/curated/test-vault-002.md"
-    _write_md_with_frontmatter(tmp_path, rel, body="red body content")
-    real_hash = hashlib.sha256(b"red body content" + b"\n").hexdigest()
-
     client = MagicMock()
     point = MagicMock()
-    point.payload = {"vault_path": rel, "body_hash": "stale_old_hash_different_from_real"}
+    point.payload = {"vault_path": rel, "body_hash": stale_hash}
     client.scroll.return_value = ([point], None)
 
     curated_plane = MagicMock()
@@ -195,6 +186,37 @@ async def test_boot_scan_vault_002_relative_path_noop_red(
     write_log.consume_if_exists.return_value = False
 
     watcher = VaultWatcher(tmp_path, curated_plane, write_log, debounce_sec=0.001)
+    return watcher, curated_plane
+
+
+# =============================================================
+# Source reds (2 strict xfails) + 6 plain-pass + 1 skip = 9
+# =============================================================
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="VAULT-002 RED: the current relative-path bug short-circuits boot_scan before the handler reaches curated_plane.create(memory). The postcondition is observed on the typed CuratedKnowledge (relative vault_path, body_hash via real parse_frontmatter, frontmatter object_id/namespace). Today: 0 creates; postcondition not met. Flips to green when the fix lands.",
+)
+@pytest.mark.asyncio
+async def test_boot_scan_vault_002_relative_path_noop_red(
+    tmp_path: Path,
+) -> None:
+    """RED 1/2 (source red): boot_scan relative-path bug.
+
+    Asserts the POSTCONDITION on the typed `CuratedKnowledge`
+    object passed to `curated_plane.create(memory)`. The
+    body_hash is computed by the single shared helper
+    `_read_and_hash_body` that calls the real
+    `parse_frontmatter` (no hand-duplicated parsing).
+    Today: 0 creates; postcondition not met. After fix:
+    1 create with the typed memory; passes.
+    """
+    rel = "aoi/command-chair/curated/test-vault-002.md"
+    path = _write_md_with_frontmatter(tmp_path, rel, body="red body content")
+    real_hash = _read_and_hash_body(path)
+
+    watcher, curated_plane = _make_watcher(tmp_path, rel, "stale_old_hash_different_from_real")
     watcher._loop = asyncio.get_running_loop()
 
     captured = _capture_scan_task(watcher)
@@ -203,9 +225,7 @@ async def test_boot_scan_vault_002_relative_path_noop_red(
     await captured[0]
 
     # POSTCONDITION 1: the real handler was reached and called
-    # curated_plane.create with a typed CuratedKnowledge. Today:
-    # 0 (the bug silently drops the file before the handler).
-    # After fix: 1.
+    # curated_plane.create with a typed CuratedKnowledge.
     assert curated_plane.create.await_count == 1, (
         "Real handler must call curated_plane.create exactly once "
         "with a typed CuratedKnowledge. Today: silently drops "
@@ -213,9 +233,7 @@ async def test_boot_scan_vault_002_relative_path_noop_red(
     )
 
     # POSTCONDITION 2: the typed memory carries the post-fix
-    # contract (relative vault_path, new body_hash, frontmatter
-    # object_id/namespace). Observed on the typed object, NOT
-    # on call_args/kwargs (create takes one positional arg).
+    # contract.
     _assert_typed_memory(
         curated_plane.create.call_args.args[0],
         expected_vault_path=rel,
@@ -227,58 +245,29 @@ async def test_boot_scan_vault_002_relative_path_noop_red(
 async def test_boot_scan_vault_002_control_real_handler_writes_new_hash(
     tmp_path: Path,
 ) -> None:
-    """CONTROL 1: genuine green control. Direct call to the
+    """CONTROL 1: GENUINE GREEN CONTROL. Direct call to the
     PUBLIC handler seam (`_handle_event`) with an ABSOLUTE path
     proves the handler is correct when given a proper path
     (the bug is in boot_scan's dispatch, not the handler).
 
-    Today: passes (the handler correctly does `relative_to` on
-    an already-absolute-under-vault_root path and reaches
-    `create` with a typed CuratedKnowledge). After fix: passes.
-
-    This separates "handler works" from "boot_scan dispatches
-    the right path" and narrows the fix scope: the fix is in
-    boot_scan's dispatch, not in the handler.
+    Today: passes. After fix: passes. Separates "handler
+    works" from "boot_scan dispatches the wrong path".
     """
     rel = "aoi/command-chair/curated/test-vault-002-control1.md"
     abs_path = _write_md_with_frontmatter(tmp_path, rel, body="control 1 body")
-    # parse_frontmatter strips the trailing newline; the body
-    # hash is sha256 of the body string exactly as returned.
-    real_hash = hashlib.sha256(b"control 1 body").hexdigest()
+    real_hash = _read_and_hash_body(abs_path)
 
-    client = MagicMock()
-    point = MagicMock()
-    point.payload = {"vault_path": rel, "body_hash": "stale_old_hash"}
-    client.scroll.return_value = ([point], None)
-
-    curated_plane = MagicMock()
-    curated_plane._client = client
-    curated_plane.create = AsyncMock()
-
-    write_log = MagicMock()
-    write_log.consume_if_exists.return_value = False
-
-    watcher = VaultWatcher(tmp_path, curated_plane, write_log, debounce_sec=0.001)
+    watcher, curated_plane = _make_watcher(tmp_path, rel, "stale_old_hash")
     watcher._loop = asyncio.get_running_loop()
 
-    # Direct call to the PUBLIC handler seam with an ABSOLUTE
-    # path (the post-fix dispatch). The handler does
-    # `rel_path = path.relative_to(vault_root)` correctly and
-    # calls `curated_plane.create(memory)`.
     from watchdog.events import FileSystemEvent
 
     evt = FileSystemEvent(str(abs_path))
     evt.event_type = "modified"
     await watcher._handle_event(str(abs_path), evt)
 
-    # The handler is correct when given the absolute path:
-    # 1 create with the typed CuratedKnowledge carrying the
-    # post-fix contract.
     assert curated_plane.create.await_count == 1, (
-        "Direct call to _handle_event with an absolute path must "
-        "result in exactly 1 create call. The handler is correct "
-        "when given the right path; the bug is only in boot_scan's "
-        "dispatch (passing the relative path)."
+        "Direct call to _handle_event with an absolute path must result in exactly 1 create call."
     )
     _assert_typed_memory(
         curated_plane.create.call_args.args[0],
@@ -291,34 +280,18 @@ async def test_boot_scan_vault_002_control_real_handler_writes_new_hash(
 async def test_boot_scan_vault_002_control_no_drift_no_write(
     tmp_path: Path,
 ) -> None:
-    """CONTROL 2: no-drift performs no write (healthy control; passes today AND after fix)."""
+    """CONTROL 2: no-drift performs no write (passes today AND after fix)."""
     rel = "aoi/command-chair/curated/test-vault-002-control2.md"
-    _write_md_with_frontmatter(tmp_path, rel, body="control 2 body")
-    # parse_frontmatter strips the trailing newline.
-    real_hash = hashlib.sha256(b"control 2 body").hexdigest()
+    path = _write_md_with_frontmatter(tmp_path, rel, body="control 2 body")
+    real_hash = _read_and_hash_body(path)
 
-    client = MagicMock()
-    point = MagicMock()
-    point.payload = {"vault_path": rel, "body_hash": real_hash}  # MATCHES
-    client.scroll.return_value = ([point], None)
-
-    curated_plane = MagicMock()
-    curated_plane._client = client
-    curated_plane.create = AsyncMock()
-
-    write_log = MagicMock()
-    write_log.consume_if_exists.return_value = False
-
-    watcher = VaultWatcher(tmp_path, curated_plane, write_log, debounce_sec=0.001)
+    watcher, curated_plane = _make_watcher(tmp_path, rel, real_hash)  # MATCHES
     watcher._loop = asyncio.get_running_loop()
     captured = _capture_scan_task(watcher)
     watcher.boot_scan()
     assert len(captured) == 1
     await captured[0]
 
-    # No drift => no write. PASSES today (the current code
-    # also doesn't write because the same path drops on
-    # relative_to OR the matching hash check).
     assert curated_plane.create.await_count == 0
 
 
@@ -326,12 +299,7 @@ async def test_boot_scan_vault_002_control_no_drift_no_write(
 async def test_boot_scan_vault_002_control_outside_root_skipped(
     tmp_path: Path,
 ) -> None:
-    """CONTROL 3: outside-root absolute path is skipped (no write).
-
-    Passes today AND after fix (the rglob is bounded by
-    vault_root, and the outside file is never seen by the
-    scan loop).
-    """
+    """CONTROL 3: outside-root path is skipped by rglob (passes today AND after fix)."""
     rel = "aoi/command-chair/curated/test-vault-002-control3.md"
     _write_md_with_frontmatter(tmp_path, rel, body="control 3 body")
 
@@ -345,56 +313,37 @@ async def test_boot_scan_vault_002_control_outside_root_skipped(
         encoding="utf-8",
     )
 
-    client = MagicMock()
-    point = MagicMock()
-    point.payload = {"vault_path": rel, "body_hash": "old"}
-    client.scroll.return_value = ([point], None)
-
-    curated_plane = MagicMock()
-    curated_plane._client = client
-    curated_plane.create = AsyncMock()
-
-    write_log = MagicMock()
-    write_log.consume_if_exists.return_value = False
-
-    vault_root = tmp_path
-    watcher = VaultWatcher(vault_root, curated_plane, write_log, debounce_sec=0.001)
+    watcher, curated_plane = _make_watcher(tmp_path, rel, "old")
     watcher._loop = asyncio.get_running_loop()
     captured = _capture_scan_task(watcher)
     watcher.boot_scan()
     assert len(captured) == 1
     await captured[0]
 
-    # The file outside vault_root is rglob'd under tmp_path
-    # only; the boot_scan loop does not see outside_dir, so the
-    # outside file is never processed. The healthy control is
-    # "no write happens for outside-root files" -- already true
-    # today, AND must remain true after the fix.
     assert curated_plane.create.await_count == 0
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="VAULT-002 CONTROL 4: background exception OBSERVABILITY. boot_scan intentionally catches per-path exceptions and logs 'Boot scan failed on path ...'; the captured task does NOT raise. Today: the bug short-circuits before create(), so no log is produced. After fix: create() raises, the loop logs the error, the log is observable via caplog. Strict xfail flips to green when the log is present.",
+    reason="VAULT-002 CONTROL 4: background exception OBSERVABILITY. boot_scan intentionally catches per-path exceptions and logs 'Boot scan failed on path ...'; the captured task does NOT raise. Today: the bug short-circuits before create(), so no log is produced. After fix: create() raises; the loop logs; the log is observable via caplog. Strict xfail flips to green when the log is present.",
 )
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_control_background_exception_observable(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """CONTROL 4: background exception OBSERVABILITY via caplog.
+    """RED 2/2 (source red): background exception OBSERVABILITY via caplog.
 
     boot_scan INTENTIONALLY catches per-path exceptions and
     logs them as `logger.error("Boot scan failed on path %s:
-    %s", path, exc)`. The captured task does NOT raise. So
-    `pytest.raises` would not fire.
+    %s", path, exc)`. The captured task does NOT raise.
 
     Observability is proved via caplog: the log record must
-    contain the exact PII-safe boundary
-    ("Boot scan failed on path") after the fix lands. Today:
-    the bug short-circuits before create() (no log produced)
-    -> assertion fails -> xfail. After fix: create() raises;
-    the loop logs the error; the log is present -> pass.
+    contain the exact PII-safe boundary ("Boot scan failed on
+    path") after the fix lands. Today: the bug short-
+    circuits before create() (no log produced) -> assertion
+    fails -> xfail. After fix: create() raises; the loop logs
+    the error; the log is present -> pass.
     """
     rel = "aoi/command-chair/curated/test-vault-002-control4.md"
     _write_md_with_frontmatter(tmp_path, rel, body="control 4 body")
@@ -420,21 +369,12 @@ async def test_boot_scan_vault_002_control_background_exception_observable(
     watcher = VaultWatcher(tmp_path, curated_plane, write_log, debounce_sec=0.001)
     watcher._loop = asyncio.get_running_loop()
 
-    # The logger name in src/musubi/vault/watcher.py is the
-    # module logger `musubi.vault.watcher`. caplog needs
-    # propagate=True (default) and the right level.
     with caplog.at_level(logging.ERROR, logger="musubi.vault.watcher"):
         captured = _capture_scan_task(watcher)
         watcher.boot_scan()
         assert len(captured) == 1
-        # The captured task does NOT raise (boot_scan catches
-        # per-path). We just await it for completion.
         await captured[0]
 
-    # Observability via caplog: the exact PII-safe log boundary
-    # must be present after the fix. Today: no log (the bug
-    # short-circuits before create()). After fix: the log is
-    # present because create() raised and the loop logged it.
     log_text = caplog.text
     assert "Boot scan failed on path" in log_text, (
         f"boot_scan must log 'Boot scan failed on path ...' on a "
@@ -446,147 +386,145 @@ async def test_boot_scan_vault_002_control_background_exception_observable(
 
 
 # =============================================================
-# Red-proof (3 candidates that MUST be caught)
+# Plain-pass discriminators (3 red-proofs converted from xfail
+# to plain pass; each proves a wrong candidate is rejected and
+# a correct candidate is accepted by the SAME postcondition
+# helper)
 # =============================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="VAULT-002 REDPROOF 1: the relative_path anti-pattern (calling _handle_event with the relative path) is caught by the postcondition on the typed CuratedKnowledge. Today: the anti-pattern is the current bug; relative path is silently dropped. After fix: the anti-pattern is still wrong (boot_scan is fixed, but a future regression to the anti-pattern is caught).",
-)
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_redproof_relative_path(
     tmp_path: Path,
 ) -> None:
-    """Red-proof 1/2: the relative_path anti-pattern is caught at the handler seam.
+    """Plain-pass discriminator for the relative_path anti-pattern.
 
-    Builds a test-local wrong-dispatch candidate: call
-    `watcher._handle_event(rel_str, evt)` directly with the
-    RELATIVE path (this is the current bug's behavior in
-    boot_scan). The postcondition on the typed memory is
-    NOT met (the handler's `relative_to` raises and silently
-    returns). Today: 0 creates; the postcondition assertion
-    fails -> xfail. After fix: a regression to the
-    relative_path anti-pattern would still fail the
-    postcondition (this test catches the regression even if
-    boot_scan is later modified).
+    Builds TWO isolated watchers (no shared state):
+      - WRONG candidate: call `await wrong_watcher._handle_event(
+        rel, evt)` with the RELATIVE path (the current bug's
+        behavior in boot_scan). The handler's `relative_to`
+        raises ValueError and silently returns; create is
+        NOT called. The postcondition helper, when called on
+        the missing memory, raises AssertionError — the wrong
+        dispatch is REJECTED.
+      - CORRECT candidate: call `await correct_watcher._handle_
+        event(str(abs_path), evt)` with the ABSOLUTE path
+        (the post-fix dispatch). The handler correctly does
+        `relative_to`, calls `create(memory)`, and the
+        typed memory carries the post-fix contract. The
+        postcondition helper PASSES — the correct dispatch is
+        ACCEPTED.
 
-    The postcondition is observed on the typed
-    `CuratedKnowledge` object, NOT on call_args/kwargs.
+    Same postcondition helper, both candidates, isolated
+    watchers. Today: passes (both wrong-rejection and
+    correct-acceptance work as expected). After fix: passes
+    (the postcondition is unchanged).
     """
     rel = "aoi/command-chair/curated/test-vault-002-redproof1.md"
     abs_path = _write_md_with_frontmatter(tmp_path, rel, body="redproof 1 body")
-    real_hash = hashlib.sha256(b"redproof 1 body" + b"\n").hexdigest()
+    real_hash = _read_and_hash_body(abs_path)
 
-    client = MagicMock()
-    point = MagicMock()
-    point.payload = {"vault_path": rel, "body_hash": "stale_hash"}
-    client.scroll.return_value = ([point], None)
+    wrong_watcher, wrong_plane = _make_watcher(tmp_path, rel, "stale_hash")
+    correct_watcher, correct_plane = _make_watcher(tmp_path, rel, "stale_hash")
+    wrong_watcher._loop = asyncio.get_running_loop()
+    correct_watcher._loop = asyncio.get_running_loop()
 
-    curated_plane = MagicMock()
-    curated_plane._client = client
-    curated_plane.create = AsyncMock()
-
-    write_log = MagicMock()
-    write_log.consume_if_exists.return_value = False
-
-    watcher = VaultWatcher(tmp_path, curated_plane, write_log, debounce_sec=0.001)
-    watcher._loop = asyncio.get_running_loop()
-
-    # WRONG dispatch candidate: pass the RELATIVE path (the
-    # current bug's behavior in boot_scan). The handler's
-    # `rel_path = path.relative_to(vault_root)` raises ValueError
-    # because the path is already relative -> silently returns.
     from watchdog.events import FileSystemEvent
 
     evt = FileSystemEvent(str(abs_path))
     evt.event_type = "modified"
-    await watcher._handle_event(rel, evt)  # the wrong dispatch
 
-    # POSTCONDITION (typed memory): the wrong dispatch must
-    # NOT result in a create with the right data. The handler
-    # silently returns. Today: 0 creates; assertion fails ->
-    # xfail. A future fix that reverts to the wrong dispatch
-    # would still fail this test.
-    assert curated_plane.create.await_count == 1, (
-        f"Wrong-dispatch (relative path) anti-pattern: the "
-        f"handler's `relative_to` raises ValueError and "
-        f"silently returns, so 0 creates are produced. The "
-        f"contract catches this by asserting 1 create with "
-        f"the typed memory (relative vault_path, new "
-        f"body_hash). Today: 0 (the bug). Got "
-        f"{curated_plane.create.await_count}."
-    )
+    # WRONG dispatch: relative path. Handler's relative_to
+    # raises ValueError; silently returns; create is not called.
+    await wrong_watcher._handle_event(rel, evt)
+    # The wrong dispatch is REJECTED: the postcondition helper
+    # raises AssertionError because no create was made.
+    wrong_call = wrong_plane.create.call_args
+    with pytest.raises(AssertionError, match=r"must receive a typed CuratedKnowledge"):
+        _assert_typed_memory(
+            wrong_call.args[0] if wrong_call else None,
+            expected_vault_path=rel,
+            expected_body_hash=real_hash,
+        )
+
+    # CORRECT dispatch: absolute path. Handler's relative_to
+    # succeeds; create is called with the typed memory.
+    await correct_watcher._handle_event(str(abs_path), evt)
+    assert correct_plane.create.await_count == 1
+    # The correct dispatch is ACCEPTED: the postcondition
+    # helper passes.
     _assert_typed_memory(
-        curated_plane.create.call_args.args[0],
+        correct_plane.create.call_args.args[0],
         expected_vault_path=rel,
         expected_body_hash=real_hash,
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="VAULT-002 REDPROOF 2: the log_only anti-pattern (curated_plane.create is called but the typed CuratedKnowledge carries the WRONG body_hash, e.g., the stale one) is caught by the typed-memory postcondition. Today: the relative_path bug short-circuits before any create call, so the assertion fails -> xfail. After fix: a hypothetical log_only candidate (e.g., create() called with the stale body_hash) would fail the typed-memory assertion, proving the contract catches it.",
-)
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_redproof_log_only(
     tmp_path: Path,
 ) -> None:
-    """Red-proof 2/2: the log_only anti-pattern is caught on the typed memory.
+    """Plain-pass candidate proof for the log_only anti-pattern.
 
-    The "log_only" anti-pattern: a candidate that calls
-    `curated_plane.create(memory)` but constructs the
-    `CuratedKnowledge` with the WRONG `body_hash` (e.g., the
-    stale one, or a fabricated one) — i.e., the call is made
-    but the typed payload does not carry the new real hash.
+    The log_only anti-pattern: a candidate that constructs
+    `CuratedKnowledge` with a WRONG `body_hash` (e.g., the
+    stale one) and passes it to `curated_plane.create(memory)`.
+    The contract catches this via the typed-memory
+    postcondition: the memory's `body_hash` must equal the
+    new (real) hash.
 
-    The red contract catches this by asserting the typed
-    `CuratedKnowledge` carries the NEW body_hash (the post-
-    fix contract). This is observed on the typed object, NOT
-    on `client.set_payload` (which the AsyncMock never calls).
+    This test INSTANTIATES the wrong candidate (no
+    speculation). It builds:
+      - CORRECT memory: typed `CuratedKnowledge` with the
+        real body_hash
+      - WRONG candidate: `correct.model_copy(update={"body_hash":
+        "stale_hash"})` — a fabricated wrong body_hash
 
-    Today: the relative_path bug short-circuits before any
-    create call, so the assertion fails -> xfail. After fix:
-    a hypothetical log_only candidate (create called with
-    the stale body_hash) would fail the typed-memory
-    assertion; the contract catches it.
+    The SAME `_assert_typed_memory` helper is called on both:
+      - The wrong candidate's body_hash is "stale_hash" — the
+        helper raises AssertionError on the body_hash
+        assertion.
+      - The correct candidate's body_hash equals real_hash —
+        the helper passes.
+
+    Today: passes (no source dependency; this is a pure
+    typed-memory discrimination). After fix: passes.
     """
     rel = "aoi/command-chair/curated/test-vault-002-redproof2.md"
-    _write_md_with_frontmatter(tmp_path, rel, body="redproof 2 body")
-    real_hash = hashlib.sha256(b"redproof 2 body" + b"\n").hexdigest()
+    path = _write_md_with_frontmatter(tmp_path, rel, body="redproof 2 body")
+    real_hash = _read_and_hash_body(path)
+    content_body = "redproof 2 body"
 
-    client = MagicMock()
-    point = MagicMock()
-    point.payload = {"vault_path": rel, "body_hash": "stale_hash"}
-    client.scroll.return_value = ([point], None)
-
-    curated_plane = MagicMock()
-    curated_plane._client = client
-    curated_plane.create = AsyncMock()
-
-    write_log = MagicMock()
-    write_log.consume_if_exists.return_value = False
-
-    watcher = VaultWatcher(tmp_path, curated_plane, write_log, debounce_sec=0.001)
-    watcher._loop = asyncio.get_running_loop()
-    captured = _capture_scan_task(watcher)
-    watcher.boot_scan()
-    await captured[0]
-
-    # POSTCONDITION: the typed CuratedKnowledge passed to
-    # create() must carry the NEW body_hash, not the stale
-    # one. The log_only anti-pattern (create called with the
-    # stale hash) would fail this assertion. Today: 0 creates
-    # (the bug short-circuits); assertion fails -> xfail.
-    assert curated_plane.create.await_count == 1, (
-        "Redproof 2 (log_only): the real handler must call "
-        "create() exactly once. Today: 0 (the bug). After fix: 1."
+    # CORRECT typed memory (what a correct candidate would pass)
+    correct_memory = CuratedKnowledge(
+        object_id="ck0000000000000000000000000",
+        namespace="aoi/command-chair/curated",
+        vault_path=rel,
+        body_hash=real_hash,
+        title="test vault-002 file",
+        content=content_body,
     )
-    memory = curated_plane.create.call_args.args[0]
+
+    # WRONG candidate: a log_only antipattern that uses the
+    # stale body_hash (or any fabricated wrong one).
+    wrong_memory = correct_memory.model_copy(update={"body_hash": "stale_hash"})
+
+    # The wrong candidate is REJECTED: the postcondition helper
+    # raises AssertionError specifically on the body_hash
+    # boundary.
+    with pytest.raises(AssertionError, match=r"memory\.body_hash must be"):
+        _assert_typed_memory(
+            wrong_memory,
+            expected_vault_path=rel,
+            expected_body_hash=real_hash,
+        )
+
+    # The correct candidate is ACCEPTED: the postcondition
+    # helper passes.
     _assert_typed_memory(
-        memory,
+        correct_memory,
         expected_vault_path=rel,
-        expected_body_hash=real_hash,  # not "stale_hash"
+        expected_body_hash=real_hash,
     )
 
 
@@ -595,25 +533,18 @@ async def test_boot_scan_vault_002_redproof_log_only(
 # `setattr(watcher, "_handle_event", AsyncMock())` parses as
 # `ast.Name(id="setattr")`, NOT `ast.Attribute`. The guard
 # must detect BOTH the builtin (`ast.Name`) and attribute
-# (`ast.Attribute`) forms.
+# (`ast.Attribute`) forms. Red-proofs the guard with a
+# synthetic AST.
 def test_boot_scan_vault_002_redproof_mock_handler() -> None:
-    """Red-proof 3/4: guard against the setattr mock_handler anti-pattern.
+    """Plain-pass GUARD against the setattr mock_handler anti-pattern.
 
     The red contract must NOT use `setattr(watcher,
     "_handle_event", AsyncMock())` to mock the handler. The
-    test must use the create_task capture pattern. If this
-    assertion fails, the test was modified to use the
-    vacuous mock_handler pattern.
+    test must use the create_task capture pattern.
 
-    The guard detects BOTH the builtin `setattr(...)` form
-    (parses as `ast.Name(id="setattr")`) and the attribute
-    form `obj.setattr(...)` (parses as `ast.Attribute`).
-    Both are prohibited call patterns.
-
-    The red-proof of the guard: a synthetic AST containing
-    the prohibited builtin `setattr(watcher, ...)` call is
-    walked with the SAME detection logic; the guard catches
-    it. This proves the guard is not vacuous.
+    The guard detects BOTH the builtin form (ast.Name) and
+    the attribute form (ast.Attribute). Red-proofs the guard
+    with a synthetic AST containing the prohibited call.
     """
     import ast as _ast
 
@@ -623,13 +554,10 @@ def test_boot_scan_vault_002_redproof_mock_handler() -> None:
     with open(src, encoding="utf-8") as f:
         tree = _ast.parse(f.read())
 
-    def _walk_for_setattr(
-        root: _ast.AST,
-    ) -> bool:
+    def _walk_for_setattr(root: _ast.AST) -> bool:
         """Walk the AST looking for any Call to setattr where
         the first arg is a Name with id="watcher" and the
         second arg is a Constant with value="_handle_event".
-
         Detects BOTH the builtin form (ast.Name) and the
         attribute form (ast.Attribute).
         """
@@ -637,14 +565,10 @@ def test_boot_scan_vault_002_redproof_mock_handler() -> None:
             if not isinstance(node, _ast.Call):
                 continue
             func = node.func
-            is_setattr = False
-            if (isinstance(func, _ast.Attribute) and func.attr == "setattr") or (
+            is_setattr = (isinstance(func, _ast.Attribute) and func.attr == "setattr") or (
                 isinstance(func, _ast.Name) and func.id == "setattr"
-            ):
-                is_setattr = True
-            if not is_setattr:
-                continue
-            if len(node.args) < 2:
+            )
+            if not is_setattr or len(node.args) < 2:
                 continue
             first, second = node.args[0], node.args[1]
             is_watcher = isinstance(first, _ast.Name) and first.id == "watcher"
@@ -654,21 +578,17 @@ def test_boot_scan_vault_002_redproof_mock_handler() -> None:
         return False
 
     # ASSERTION 1: the test file itself does NOT contain the
-    # prohibited call. (Today: passes; the test file uses
-    # create_task capture, not setattr.)
+    # prohibited call.
     assert not _walk_for_setattr(tree), (
         "The red contract must NOT use setattr(watcher, "
         "'_handle_event', AsyncMock()) to mock the handler "
         "(builtin OR attribute form). The test must use task "
-        "capture from create_task. If this fails, the test "
-        "was modified to use the vacuous mock_handler pattern."
+        "capture from create_task."
     )
 
     # ASSERTION 2 (red-proof of the guard): a synthetic AST
     # containing the EXACT prohibited builtin form is caught
-    # by the SAME detection logic. This proves the guard is
-    # not vacuous (i.e., it actually detects the anti-pattern
-    # it claims to reject).
+    # by the SAME detection logic.
     synthetic_src = (
         "from unittest.mock import AsyncMock\nsetattr(watcher, '_handle_event', AsyncMock())\n"
     )
@@ -676,23 +596,13 @@ def test_boot_scan_vault_002_redproof_mock_handler() -> None:
     assert _walk_for_setattr(synthetic_tree), (
         "Red-proof of the guard: a synthetic AST containing "
         "the prohibited builtin setattr(watcher, ...) call "
-        "must be caught by the detection logic. If this "
-        "fails, the guard is vacuous and does not actually "
-        "detect the anti-pattern it claims to reject."
+        "must be caught by the detection logic."
     )
 
 
 # =============================================================
-# DELETION routing marker (skip with durable routing to #446)
+# Documentary skip (deletion routing marker to Issue #446)
 # =============================================================
-# Per Yua 15:12: the existing test_boot_scan_archives_removed_files
-# is vacuous (async slow_scroll on a sync scroll; assert True
-# passes). The deletion expectation is durably routed to
-# VAULT-001 / Issue #446, NOT to be implemented in this slice.
-# This marker exists only as a documentary record of the
-# routing. It is NOT a strict-xfail discrimination and NOT
-# behavioral proof (per Yua 17:10:38: 'do not count it as
-# behavioral proof or strict-xfail discrimination').
 
 
 @pytest.mark.skip(
@@ -707,9 +617,9 @@ def test_boot_scan_vault_002_redproof_mock_handler() -> None:
 def test_boot_scan_vault_002_deletion_routed_to_vault_001_marker() -> None:
     """Documentary marker only. Skipped with durable routing to Issue #446.
 
-    This test body is empty by design: the skip marker is the
-    only assertion. The slice doc's "Out of owns_paths"
-    section is the durable record of the routing. Per Yua
-    17:10:38: do not count this as behavioral proof or
-    strict-xfail discrimination.
+    Body is empty by design. The skip marker is the only
+    assertion. The slice doc's "Out of owns_paths" section
+    is the durable record of the routing. Per Yua 17:10:38:
+    do not count as behavioral proof or strict-xfail
+    discrimination.
     """
