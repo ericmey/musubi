@@ -171,9 +171,12 @@ class IdempotencyLeaseCache:
     - ``"conflict"`` — a completed response with a DIFFERENT digest exists (same key, different
       body); NO lease is acquired (no leak) — the caller returns 409.
 
-    **No time-based reclaim of a live lease.** An in-flight lease is freed ONLY by its owner —
-    ``store`` (success) or ``release`` (error/cancel). It is deliberately NOT reclaimed after any
-    elapsed-time window: this cache is process-local and single-worker (REQ-10), so a process crash
+    **No time-based reclaim of a live lease.** An in-flight lease is transitioned ONLY by its owner:
+    ``store`` atomically COMPLETES it and RETAINS the entry as the replay cache (it does NOT free or
+    delete the entry), while ``release`` REMOVES an incomplete entry on a non-stored exit
+    (error / cancel / non-2xx / a store that itself failed). A live lease is deliberately NOT
+    reclaimed after any elapsed-time window: this cache is process-local and single-worker (REQ-10),
+    so a process crash
     destroys the whole cache — a time-based "crash recovery" reclaim could never recover crash state
     and would only let a legitimately SLOW live request be re-executed into a duplicate mutation.
     Fail closed on a hung owner (the key 409s until the process restarts) is strictly safer than a

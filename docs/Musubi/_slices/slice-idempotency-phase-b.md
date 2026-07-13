@@ -17,7 +17,7 @@ blocks: []
 # Slice: Phase B — routed post-authz idempotency pipeline (SEC-002 + IDEM-001)
 
 **P0 · SEC-002 + IDEM-001.** Narrow source authorization from Yua (REQ 2026-07-13T00:17), stacked
-on the **frozen** Phase A branch `slice/auth-boundary-phase-a` / PR #403 @ `a1c916e`. Replaces the
+on the accepted Phase A branch `slice/auth-boundary-phase-a` / PR #403 @ `36c3bf5`. Replaces the
 pre-auth idempotency middleware (the SEC-002 bug) with the routed **post-authz** pipeline proven by
 the accepted D3 design spikes.
 
@@ -155,8 +155,10 @@ fixed tests-first, each red demonstrated failing against `b5ad26c` before the fi
   this cache is **process-local and single-worker**, so a process crash destroys the whole cache —
   a time-based reclaim can never recover crash state and only lets a legitimately SLOW live request
   be re-executed into a **duplicate mutation**. Removed the time-based reclaim and the
-  `stale_after_s` knob entirely. **New invariant:** a live in-flight lease is freed ONLY by its
-  owner's request exit — `store` (success) or `release` (error/cancel); a hung owner fails closed
+  `stale_after_s` knob entirely. **New invariant:** an in-flight lease is transitioned ONLY by its
+  owner — `store` atomically COMPLETES it and RETAINS the entry as the replay cache (it does NOT
+  free/delete it), while `release` REMOVES an incomplete entry on a non-stored exit
+  (error/cancel/non-2xx/store-failure); a hung owner fails closed
   (the key 409s until the process restarts), which is strictly safer than a double write. Only
   COMPLETED entries expire (after `ttl_s`). **Durable, cross-process crash recovery remains a named
   FUTURE store concern** (`slice-api-v0-write-distributed-idempotency`) — not this in-memory
@@ -170,8 +172,9 @@ fixed tests-first, each red demonstrated failing against `b5ad26c` before the fi
   `plane.create` call count == 1 and all retries are visible in_flight 409s. Red-proven by bypassing
   the acquire gate (every retry reaches `create`).
 
-spec-update: slice-idempotency-phase-b — live leases fail closed, freed only by owned request exit;
-no time-based reclaim; durable cross-process crash recovery is a named future store concern (Yua
+spec-update: slice-idempotency-phase-b — an in-flight lease is transitioned only by its owner (store
+completes+retains the replay entry; release removes an incomplete entry on a non-stored exit); no
+time-based reclaim; durable cross-process crash recovery is a named future store concern (Yua
 2026-07-13T01:48, T02:09).
 
 ## Test Contract
