@@ -98,9 +98,9 @@ Thresholds are hand-tuned on initial seed queries — they'll shift as the golde
 ## Tooling
 
 ```bash
-uv run -m musubi.evals run --corpus household-2026-04 --mode fast
-uv run -m musubi.evals run --corpus household-2026-04 --mode deep
-uv run -m musubi.evals compare --before main --after pr-123
+uv run python -m musubi.evals run --corpus household-2026-04 --mode fast # (proposed)
+uv run python -m musubi.evals run --corpus household-2026-04 --mode deep # (proposed)
+uv run python -m musubi.evals compare --before main --after pr-123       # (proposed)
 ```
 
 `eval compare` diffs two runs and reports:
