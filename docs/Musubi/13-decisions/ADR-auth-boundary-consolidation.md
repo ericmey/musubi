@@ -35,11 +35,13 @@ four:
 2. a **typed `Replay` exception raised in the dependency reaches the middleware AS a
    response** (via the existing exception-handler infra), carrying
    `X-Idempotent-Replay: true`. ✓ proven
-3. the middleware can **distinguish hit/miss/status/streaming** to decide what to store — and
-   the spike CORRECTED the detector: under `BaseHTTPMiddleware` every response is wrapped as
-   `_StreamingResponse`, so `isinstance` misses real streams and `body_iterator` matches
-   everything; the proven discriminator is **absence of `Content-Length`**. ✓ (rev-3's
-   original `isinstance` guess was wrong; the committed spike caught it)
+3. the middleware can **distinguish hit vs miss and read the status** to decide what to store.
+   ✓ proven — BUT **streaming detection is UNSETTLED**: the spike disproved `isinstance`
+   (everything is wrapped as `_StreamingResponse` under BaseHTTPMiddleware), and my
+   follow-on "absence of Content-Length" guess is ALSO only a heuristic (Yua: a buffered or
+   transform-middleware response may omit Content-Length; a StreamingResponse may set it;
+   header manipulation could make a stream look cacheable). **No proven stream detector yet
+   — see D3 cacheability contract.** Do not treat streaming detection as solved.
 4. **the store gate must be `2xx && non-streaming && non-replay`, NOT try/except** — because
    `HTTPException(500)` is converted to a **500 response**, not propagated as an exception,
    so an exception-keyed gate would cache a 500. Ownership is released in `finally` (always;
@@ -147,6 +149,22 @@ response is **2xx AND non-streaming AND not a replay**, store it under the ident
 performs **no lookup, no authz, no body read**. Ownership is released in a `finally` on
 **every** path — success, error response, or client cancel — so a crashed/cancelled request
 never leaves a stuck in-flight marker and never caches a failed or streaming response.
+
+**Streaming / cacheability is an EXPLICIT CONTRACT, not a header heuristic (Yua, UNSETTLED).**
+`isinstance(StreamingResponse)` is disproven (everything wraps to `_StreamingResponse` under
+BaseHTTPMiddleware); "absence of Content-Length" is ALSO only a heuristic (buffered/transform
+responses may omit it; a stream may set it; a header can be manipulated). So cacheability is
+NOT inferred from the response shape. Two candidate mechanisms for the spike to settle:
+  (i)  a **route-level cacheability declaration** — only routes explicitly registered as
+       idempotent-JSON are cache-eligible; anything else (streams, SSE, downloads) is never
+       cached regardless of headers; OR
+  (ii) an **ASGI send-wrapper** that observes `http.response.body`'s `more_body` flag
+       directly (the true streaming signal at the protocol level) without lossy Response
+       reconstruction.
+Adversarial tests REQUIRED before this is proven: buffered 2xx WITHOUT Content-Length stays
+eligible if the route contract says cacheable; a stream WITH an explicit Content-Length is
+NEVER cached; GZip/transform middleware; 204; multi-frame bodies; background-task + duplicate
+headers. Until those pass, claim 3's streaming half is UNSETTLED.
 
 **Why the gate is status-based, not exception-based (proven):** `HTTPException(500)` is
 converted by FastAPI into a **500 response**, not propagated as an exception, so a
