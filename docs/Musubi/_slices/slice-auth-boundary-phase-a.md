@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice, security, p0, auth]
 updated: 2026-07-13
 reviewed: true
 depends-on: [slice-auth-boundary-red-contract, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
-blocks: []
+blocks: [slice-idempotency-phase-b]
 issue: 410
 ---
 

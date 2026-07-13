@@ -3,14 +3,15 @@ title: "Slice: SEC-002 — idempotency replay bypasses authentication"
 slice_id: slice-sec-002-idempotency-auth-bypass
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: aoi
 phase: "Security audit 2026-07-12 (Eric, discoverer)"
-tags: [section/slices, status/in-progress, type/slice, security, p0, auth, idempotency]
+tags: [section/slices, status/done, type/slice, security, p0, auth, idempotency]
 updated: 2026-07-12
-reviewed: false
+reviewed: true
+issue: 407
 depends-on: []
-blocks: [slice-auth-boundary-red-contract]
+blocks: [slice-auth-boundary-red-contract, slice-idempotency-phase-b]
 ---
 
 # SEC-002 (C1) — idempotency replay bypasses authentication  ·  P0
@@ -55,7 +56,18 @@ approved. `src/musubi/**` is FORBIDDEN in this slice.
 - `src/musubi/**` (esp. `src/musubi/api/`, `src/musubi/auth/`, `openapi.yaml`) — frozen;
   the fix is an ADR-gated change owned by `slice-api-v*`
 
+## Specs to implement
+
+- [[_slices/slice-sec-002-idempotency-auth-bypass]] — closed by PR #404 (Phase B); the numbered Test Contract below resolves at #404 head (all passing).
+
 ## Test Contract (Yua's required cases)
+
+Closure (numbered, resolve at #404 head — all passing; `make tc-coverage` exit 0):
+1. `test_no_bearer_must_not_replay` no-bearer replay → 401 (SEC-002).
+2. `test_invalid_bearer_must_not_replay` invalid-bearer replay → 401 (SEC-002).
+3. `test_cross_tenant_must_not_replay` cross-tenant replay → 403, no disclosure (SEC-002).
+4. `test_owner_can_replay_its_own_write` owner replay preserved (control).
+
 
 Red tests, currently `xfail(strict=True)` — they assert the SECURE behaviour, so they
 fail today and will pass once the fix lands. Do NOT use live sensitive content.

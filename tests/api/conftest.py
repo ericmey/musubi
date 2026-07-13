@@ -158,14 +158,16 @@ def client(app_factory: object) -> Iterator[TestClient]:
 def _reset_global_middleware_state() -> Iterator[None]:
     """Reset process-wide rate-limit + idempotency caches between tests
     so one test's burst doesn't leak ceilings into the next."""
-    from musubi.api.idempotency import _GLOBAL_CACHE
+    from musubi.api.idempotency import _GLOBAL_CACHE, _GLOBAL_LEASE_CACHE
     from musubi.api.rate_limit import _GLOBAL_LIMITER
 
     _GLOBAL_LIMITER.reset_for_test()
     _GLOBAL_CACHE._entries.clear()
+    _GLOBAL_LEASE_CACHE._entries.clear()
     yield
     _GLOBAL_LIMITER.reset_for_test()
     _GLOBAL_CACHE._entries.clear()
+    _GLOBAL_LEASE_CACHE._entries.clear()
 
 
 # ---------------------------------------------------------------------------

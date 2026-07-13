@@ -3,14 +3,15 @@
 ``create_app(settings=None)`` is the production + test entry point.
 Middleware order matters:
 
-1. **Correlation ID** — read ``X-Request-Id`` if present, mint one
+1. **Idempotency observer** (outermost) — a store-only ASGI observer for the routed post-authz
+   idempotency pipeline. It does NOT decide replay: the routed dependency
+   (:mod:`musubi.api.idempotency_dependency`) runs AFTER authentication + namespace authz and
+   raises :class:`Replay` on a hit (served byte-exact with ``X-Idempotent-Replay: true``), 409s a
+   conflict/in-flight, and on an acquired miss publishes a lease the observer completes + releases.
+   This replaced the pre-auth idempotency cache that caused SEC-002/IDEM-001.
+2. **Correlation ID** — read ``X-Request-Id`` if present, mint one
    otherwise. Echo on the response. Available to log lines via
    ``request.state.correlation_id``.
-2. **Idempotency cache** — for write endpoints carrying an
-   ``Idempotency-Key`` header, hit the cache before invoking the
-   handler. Cache hits return the original response with
-   ``X-Idempotent-Replay: true``; same key + different body is a
-   ``CONFLICT`` 409.
 3. **Rate limit** — per-token bucketed counter on write endpoints.
    Reads the bucket name from each route's ``operation_id`` (a
    ``"<name>.bucket=<bucket>"`` suffix). Operator-scoped tokens get a
@@ -35,7 +36,8 @@ from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 
 from musubi.api.errors import APIError, api_error_handler, error_response
-from musubi.api.idempotency import IdempotencyCache, get_idempotency_cache
+from musubi.api.idempotency_dependency import Replay
+from musubi.api.idempotency_observer import IdempotencyObserver
 from musubi.api.rate_limit import DEFAULT_BUCKETS, RateLimiter, get_rate_limiter
 from musubi.api.routers import (
     artifacts,
@@ -69,7 +71,6 @@ from musubi.settings import Settings
 log = logging.getLogger(__name__)
 
 _CORRELATION_HEADER = "X-Request-Id"
-_IDEMPOTENCY_HEADER = "Idempotency-Key"
 _WRITE_METHODS = frozenset({"POST", "PATCH", "DELETE", "PUT"})
 
 
@@ -235,54 +236,21 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        """Apply rate-limit + idempotency middleware around ``call_next``.
+        """Apply the write-side rate limit around ``call_next``.
 
-        Both apply only to write methods. Read endpoints pass straight
-        through (the rate-limit + idempotency ceilings are write-side
-        per the canonical-api spec)."""
+        Read endpoints pass straight through (the rate-limit ceilings are write-side per the
+        canonical-api spec). Idempotency is NO LONGER handled here: the pre-auth cache path was
+        removed in Phase B (SEC-002/IDEM-001) in favour of the routed post-authz idempotency
+        dependency (:mod:`musubi.api.idempotency_dependency`) plus the store-only observer
+        (:class:`~musubi.api.idempotency_observer.IdempotencyObserver`), which run AFTER
+        authentication + namespace authz and bind identity to the validated principal + operation."""
         if request.method not in _WRITE_METHODS:
             return await call_next(request)
 
-        cache: IdempotencyCache = get_idempotency_cache()
         limiter: RateLimiter = get_rate_limiter()
         bearer = _bearer_from(request)
         operator = _is_operator(request)
 
-        # ------ Idempotency ------
-        idem_key = request.headers.get(_IDEMPOTENCY_HEADER)
-        body_bytes: bytes | None = None
-        if idem_key:
-            body_bytes = await request.body()
-            try:
-                body_for_hash = json.loads(body_bytes) if body_bytes else None
-            except json.JSONDecodeError:
-                body_for_hash = body_bytes.decode("utf-8", errors="replace")
-            status, cached_body, cached_status = cache.lookup(idem_key, body_for_hash)
-            if status == "hit" and cached_body is not None and cached_status is not None:
-                resp = Response(
-                    content=json.dumps(cached_body).encode("utf-8"),
-                    status_code=cached_status,
-                    media_type="application/json",
-                )
-                resp.headers["X-Idempotent-Replay"] = "true"
-                return resp
-            if status == "conflict":
-                return error_response(
-                    status_code=409,
-                    detail="Idempotency-Key reused with a different body",
-                    code="CONFLICT",
-                    hint="use a fresh key, or send the original body",
-                )
-            # Re-attach the consumed body so downstream parsing works.
-            if body_bytes is not None:
-                _captured_body = body_bytes
-
-                async def _replay() -> dict[str, object]:
-                    return {"type": "http.request", "body": _captured_body, "more_body": False}
-
-                request._receive = _replay
-
-        # ------ Rate limit ------
         bucket_name = _bucket_for_path(request.url.path, request.method)
         bucket = DEFAULT_BUCKETS.get(bucket_name, DEFAULT_BUCKETS["default"])
         token_key = limiter.token_key(bearer)
@@ -304,34 +272,25 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         response: Response = await call_next(request)
         response.headers["X-RateLimit-Limit"] = str(limit_cap)
         response.headers["X-RateLimit-Remaining"] = str(remaining)
-
-        # ------ Idempotency cache store (after success) ------
-        if idem_key and 200 <= response.status_code < 300:
-            try:
-                resp_bytes = b""
-                async for chunk in response.body_iterator:  # type: ignore[attr-defined]
-                    resp_bytes += chunk
-                resp_body = json.loads(resp_bytes) if resp_bytes else {}
-                cache.store(
-                    idem_key,
-                    body_for_hash if idem_key else None,
-                    response_status=response.status_code,
-                    response_body=resp_body if isinstance(resp_body, dict) else {},
-                )
-                rebuilt: Response = Response(
-                    content=resp_bytes,
-                    status_code=response.status_code,
-                    media_type=response.media_type,
-                    headers=dict(response.headers),
-                )
-                response = rebuilt
-            except (AttributeError, json.JSONDecodeError):
-                # Streaming responses or non-JSON; skip caching but
-                # don't fail the request.
-                pass
         return response
 
     app.add_exception_handler(APIError, api_error_handler)
+
+    @app.exception_handler(Replay)
+    async def _idempotency_replay_handler(_request: Request, exc: Replay) -> Response:
+        """Serve a byte-exact idempotent replay. The handler is NOT executed — the routed
+        dependency raised :class:`Replay` on a cache hit. The cached ``raw_headers`` tuple is never
+        mutated; the replay marker is added on a fresh header list."""
+        completed = exc.completed
+        response = Response(content=completed.body, status_code=completed.status)
+        response.raw_headers = [*completed.raw_headers, (b"x-idempotent-replay", b"true")]
+        return response
+
+    # Mount the store-only idempotency observer OUTERMOST (Starlette wraps the most-recently-added
+    # middleware last, so it sees the exact terminal response the client receives). It stores a
+    # completed 2xx and releases the lease established by the routed idempotency dependency; it is a
+    # no-op for every request that did not acquire a lease (reads, replays, conflicts, non-idem).
+    app.add_middleware(IdempotencyObserver)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_handler(_request: Request, exc: RequestValidationError) -> Response:

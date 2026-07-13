@@ -3,26 +3,18 @@
 Yua req 5 (21:18): "preserve raw duplicate headers, cookies, media type, background task
 semantics, and exact response bytes — no lossy Response reconstruction."
 
-These reds run against the REAL middleware: a custom write route is mounted on a real
-`create_app` instance (every POST goes through the idempotency middleware in app.py), primed
-with an Idempotency-Key, then replayed. Each red asserts the SECURE/faithful behaviour and
-FAILS today because the current pipeline is lossy:
+These run against the REAL pipeline: a custom write route carrying the routed idempotency
+dependency is mounted on a real `create_app` instance (so the store-only observer wraps it),
+primed with an Idempotency-Key, then replayed.
 
-  store  (app.py ~296): reads the body, `json.loads` it to a dict, `cache.store(response_body=
-          dict)`, and rebuilds with `headers=dict(response.headers)` — the dict() COLLAPSES
-          duplicate headers, and only a JSON dict body is kept.
-  replay (app.py ~250): `Response(json.dumps(cached_body), media_type="application/json")` +
-          only `X-Idempotent-Replay` — so it FORCES json media, RE-SERIALISES the bytes, and
-          carries NONE of the original headers/cookies. Non-JSON 2xx is not cached at all, so it
-          silently RE-EXECUTES on the "replay".
-
-Observed on the real path (documented in the reds):
-  cookie sess=secret -> gone on replay · X-Multi:['one','two'] -> ['one'] on first, [] on replay
-  body {"z":1,"a":2} -> {"z": 1, "a": 2} (bytes changed) · text/csv 2xx -> never cached, re-runs
-
-`xfail(strict=True)` on the holes; plain controls for what must stay true (a normal JSON replay
-still works; a background task runs exactly once and is NOT re-run on replay). Tests/docs only,
-no src.
+The OLD pre-auth middleware was lossy — it `json.loads`'d the body to a dict, stored the dict,
+and rebuilt the replay with `Response(json.dumps(dict), media_type="application/json")` +
+`headers=dict(response.headers)`: that FORCED json media, RE-SERIALISED the bytes, COLLAPSED
+duplicate headers, dropped cookies, and never cached a non-JSON 2xx at all (so it re-executed on
+the "replay"). Every one of those holes is CLOSED by the Phase B observer, which captures the
+exact ``raw_headers`` tuple and the exact response bytes and replays them verbatim — so the reds
+below (formerly `xfail`) now pass, and the controls (a normal JSON replay works; a background task
+runs exactly once and is NOT re-run on replay) still hold. Tests/docs only, no src.
 
     uv run pytest tests/api/test_req5_response_fidelity.py -v
 """
@@ -32,21 +24,47 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-import pytest
+from fastapi import Depends, Request
 from starlette.background import BackgroundTask
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 from starlette.testclient import TestClient
 
 from musubi.api.app import create_app
+from musubi.api.idempotency_dependency import make_idempotency_dependency
+from musubi.api.write_auth import AuthorizedWrite
+from musubi.auth.tokens import AuthContext
 from musubi.settings import Settings
 
 IDEM = "Idempotency-Key"
 REPLAY = "X-Idempotent-Replay"
 
+_FAKE_AUTH = AuthContext(
+    subject="fidelity",
+    issuer="https://auth.test",
+    audience="musubi",
+    scopes=("fidelity/ns:rw",),
+    presence="fidelity/agent",
+    token_id="t",
+)
+
+
+async def _fidelity_authz(request: Request) -> AuthorizedWrite[dict[str, Any]]:
+    """A trivial AuthorizedWrite edge for the fidelity routes — these tests exercise RESPONSE
+    faithfulness, not body-derived authz, so the auth/namespace are synthetic and the idempotency
+    dependency (which Depends on this) drives the observer against an empty body."""
+    return AuthorizedWrite(auth=_FAKE_AUTH, namespace="fidelity/ns", body={})
+
 
 def _client_with(api_settings: Settings, route: str, handler: Callable[..., Any]) -> TestClient:
     app = create_app(settings=api_settings)
-    app.add_api_route(route, handler, methods=["POST"])
+    # Carry the routed idempotency dependency so the store-only observer completes/replays this
+    # route (the Phase B pipeline is per-route via the dependency, not blanket middleware).
+    app.add_api_route(
+        route,
+        handler,
+        methods=["POST"],
+        dependencies=[Depends(make_idempotency_dependency(_fidelity_authz))],
+    )
     return TestClient(app)
 
 
@@ -62,9 +80,6 @@ def _prime_and_replay(client: TestClient, route: str, key: str) -> tuple[Any, An
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=True, reason="REQ-5: replay drops Set-Cookie — lossy rebuild, fix pending"
-)
 def test_replay_preserves_set_cookie(api_settings: Settings) -> None:
     async def h() -> Response:
         r = JSONResponse({"ok": 1})
@@ -79,7 +94,6 @@ def test_replay_preserves_set_cookie(api_settings: Settings) -> None:
     )
 
 
-@pytest.mark.xfail(strict=True, reason="REQ-5: replay drops custom response headers — fix pending")
 def test_replay_preserves_custom_header(api_settings: Settings) -> None:
     async def h() -> Response:
         r = JSONResponse({"ok": 1})
@@ -92,10 +106,6 @@ def test_replay_preserves_custom_header(api_settings: Settings) -> None:
     assert replay.headers.get("x-trace") == "abc123", "replay dropped a custom header"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="REQ-5: dict(headers) collapses duplicate headers even on the first response — fix pending",
-)
 def test_first_response_preserves_duplicate_headers(api_settings: Settings) -> None:
     async def h() -> Response:
         r = JSONResponse({"ok": 1})
@@ -110,9 +120,6 @@ def test_first_response_preserves_duplicate_headers(api_settings: Settings) -> N
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="REQ-5: replay re-serialises the body, changing the bytes — fix pending"
-)
 def test_replay_preserves_exact_body_bytes(api_settings: Settings) -> None:
     # compact separators + non-sorted keys; a re-serialisation will change the bytes.
     async def h() -> Response:
@@ -126,10 +133,6 @@ def test_replay_preserves_exact_body_bytes(api_settings: Settings) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="REQ-5: non-JSON 2xx is not cached — replay re-executes and loses media type — fix pending",
-)
 def test_non_json_response_is_idempotent_and_keeps_media(api_settings: Settings) -> None:
     runs = {"n": 0}
 

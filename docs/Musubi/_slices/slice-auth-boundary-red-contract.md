@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice, security, p0, auth, idempotency]
 updated: 2026-07-13
 reviewed: true
 depends-on: [slice-sec-002-idempotency-auth-bypass, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
-blocks: [slice-auth-boundary-phase-a]
+blocks: [slice-auth-boundary-phase-a, slice-idempotency-phase-b]
 issue: 406
 ---
 

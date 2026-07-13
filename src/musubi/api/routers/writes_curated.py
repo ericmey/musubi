@@ -6,30 +6,17 @@ from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from qdrant_client import QdrantClient, models
 
-from musubi.api.auth import require_auth
+from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import get_curated_plane, get_qdrant_client, get_settings_dep
-from musubi.api.errors import APIError, ErrorCode
+from musubi.api.errors import APIError
+from musubi.api.idempotency_dependency import IdempotentContext, make_idempotency_dependency
 from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
-from musubi.auth import AuthRequirement, authenticate_request
+from musubi.api.write_auth import AuthorizedWrite
 from musubi.lifecycle.transitions import transition
 from musubi.planes.curated import CuratedPlane
 from musubi.settings import Settings
-from musubi.types.common import Err, Ok
+from musubi.types.common import Ok
 from musubi.types.curated import CuratedKnowledge
-
-
-def _check_body_scope(request: Request, namespace: str, settings: Settings) -> None:
-    requirement = AuthRequirement(namespace=namespace, access="w")
-    result = authenticate_request(
-        request,  # type: ignore[arg-type]
-        requirement,
-        settings=settings,
-    )
-    if isinstance(result, Err):
-        err = result.error
-        code: ErrorCode = err.code  # type: ignore[assignment]
-        raise APIError(status_code=err.status_code, code=code, detail=err.detail)
-
 
 router = APIRouter(prefix="/v1/curated", tags=["curated-writes"])
 
@@ -77,6 +64,19 @@ _FORBIDDEN_PATCH_FIELDS = {"state", "version", "object_id", "namespace", "vault_
 _PATCHABLE_FIELDS = set(PatchCuratedRequest.model_fields)
 
 
+async def authorized_curated_create(
+    request: Request,
+    body: CuratedCreateRequest = Body(...),
+    settings: Settings = Depends(get_settings_dep),
+) -> AuthorizedWrite[CuratedCreateRequest]:
+    authorize_namespace(request, body.namespace, settings=settings, access="w")
+    return AuthorizedWrite(auth=request.state.auth, namespace=body.namespace, body=body)
+
+
+# Routed post-authz idempotency edge (see writes_episodic for the full rationale).
+_idem_curated_create = make_idempotency_dependency(authorized_curated_create)
+
+
 @router.post(
     "",
     response_model=CuratedCreateResponse,
@@ -84,12 +84,10 @@ _PATCHABLE_FIELDS = set(PatchCuratedRequest.model_fields)
     operation_id="create_curated.bucket=capture",
 )
 async def create_curated(
-    request: Request,
-    body: CuratedCreateRequest = Body(...),
+    ctx: IdempotentContext = Depends(_idem_curated_create),
     plane: CuratedPlane = Depends(get_curated_plane),
-    settings: Settings = Depends(get_settings_dep),
 ) -> CuratedCreateResponse:
-    _check_body_scope(request, body.namespace, settings)
+    body = ctx.body  # single parsed body; namespace already authorized by the dependency edge
     saved = await plane.create(
         CuratedKnowledge(
             namespace=body.namespace,
