@@ -1094,6 +1094,16 @@ def test_discrimination_abstention_fpr() -> None:
     with pytest.raises(ValueError, match="Config version mutated"):
         _assert_abstention_fpr(wrong_check_mutates_version)
 
+    def wrong_check_bad_fn_only(
+        config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
+    ) -> MockEvalReport:
+        rep = correct_check(config, results)
+        rep.fast_fnr = 1.0  # Deliberately ruin FNR
+        return rep
+
+    with pytest.raises(ValueError, match="Fast FNR exact mismatch 1"):
+        _assert_abstention_fpr(wrong_check_bad_fn_only)
+
 
 # The remaining 2 tests are preserved as documentation of the pending inventory,
 # explicitly raising a skipped exception so they do not artificially pad the test count.
