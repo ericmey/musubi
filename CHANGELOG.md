@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.0](https://github.com/ericmey/musubi/compare/v1.12.0...v1.13.0) (2026-07-13)
+
+
+### Features
+
+* **vault:** VAULT-002 boot_scan relative-path contract+implementation ([#445](https://github.com/ericmey/musubi/issues/445)) ([3b730a0](https://github.com/ericmey/musubi/commit/3b730a03e9151adaa12dc3837f3c9235d23efe61))
+
 ## [1.12.0](https://github.com/ericmey/musubi/compare/v1.11.9...v1.12.0) (2026-07-13)
 
 
