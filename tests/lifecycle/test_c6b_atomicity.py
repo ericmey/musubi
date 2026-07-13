@@ -70,6 +70,7 @@ expected_version, state, event_id, ...) is committed BEFORE the Qdrant mutation.
 
 import ast
 import asyncio
+import os
 import sqlite3
 import warnings
 from collections.abc import Iterator
@@ -78,12 +79,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 
 from musubi.embedding import FakeEmbedder
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
 from musubi.store.names import collection_for_plane
+from musubi.types.common import Err, Ok
 from musubi.types.episodic import EpisodicMemory
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "musubi"
@@ -391,10 +393,35 @@ class _TerminalQdrantError(RuntimeError):
 
 
 def _fail_set_payload(client: QdrantClient, exc: Exception) -> None:
+    if not hasattr(client, "_orig_set_payload"):
+        client._orig_set_payload = client.set_payload  # type: ignore[attr-defined]
+
     def _boom(*_a: object, **_k: object) -> None:
         raise exc
 
     client.set_payload = _boom  # type: ignore[assignment]
+
+
+def _restore_set_payload(client: QdrantClient) -> None:
+    orig = getattr(client, "_orig_set_payload", None)
+    if orig is not None:
+        client.set_payload = orig  # type: ignore[method-assign]
+
+
+def _qdrant_state(client: QdrantClient, collection: str, object_id: str) -> tuple[object, object]:
+    """(version, state) of the object in Qdrant, or (None, None) if absent."""
+    points, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
+        ),
+        limit=1,
+        with_payload=True,
+    )
+    if not points:
+        return (None, None)
+    payload = points[0].payload or {}
+    return (payload.get("version"), payload.get("state"))
 
 
 def _api() -> Any:
@@ -505,3 +532,113 @@ def test_r1_durable_intent_persisted_before_qdrant_mutation(
         )
     if _final_event_exists(db_path, rows[0]["event_id"]):
         raise DefectStillPresent("no FINAL lifecycle event may exist for a still-PENDING operation")
+
+
+# R2 - SQLite unavailable at begin => Qdrant UNTOUCHED + Err ------------------------------------------- #
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="today transition() mutates Qdrant BEFORE any durable write, so a SQLite failure cannot "
+    "prevent the mutation - the ordering guarantee (durable intent first) does not exist yet.",
+)
+def test_r2_sqlite_unavailable_blocks_qdrant_mutation(
+    qdrant: QdrantClient,
+    seeded: _Seed,
+    db_path: Path,
+) -> None:
+    coord = _coordinator(qdrant, db_path)  # xfail until the coordinator exists
+    before = _qdrant_state(qdrant, seeded.collection, seeded.object_id)
+    os.chmod(
+        db_path, 0
+    )  # make the shared events+outbox DB unwritable => the PENDING write must fail
+    try:
+        try:
+            res = coord.transition(_intent(seeded, to_state="matured", operation_key="op-r2"))
+        except Exception as exc:
+            raise DefectStillPresent(
+                f"begin must return Err when the durable intent cannot be persisted, it raised: {exc!r}"
+            ) from exc
+    finally:
+        os.chmod(db_path, 0o644)
+    after = _qdrant_state(qdrant, seeded.collection, seeded.object_id)
+    if before != after:
+        raise DefectStillPresent(
+            f"Qdrant was mutated despite the durable intent write being unavailable: {before} -> {after}"
+        )
+    if not isinstance(res, Err):
+        raise DefectStillPresent(
+            "SQLite unavailable at begin must yield Err (no future mutation), not a silent Ok/Pending"
+        )
+
+
+# R3 - transient Qdrant failure => Ok(Pending), no FINAL, reconciler later completes ------------------- #
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="today a Qdrant failure returns a terminal Err with no durable intent and no reconciler, so a "
+    "TRANSIENT failure cannot become a recoverable Ok(Pending) that a later reconcile completes.",
+)
+def test_r3_transient_failure_is_ok_pending_then_reconciles(
+    qdrant: QdrantClient,
+    seeded: _Seed,
+    db_path: Path,
+) -> None:
+    coord = _coordinator(qdrant, db_path)  # xfail until the coordinator exists
+    _fail_set_payload(qdrant, _TransientQdrantError("injected transient during apply"))
+    res = coord.transition(_intent(seeded, to_state="matured", operation_key="op-r3"))
+    if not isinstance(res, Ok):
+        raise DefectStillPresent("a transient Qdrant failure must return Ok(Pending), not Err")
+    outcome = res.value
+    if type(outcome).__name__ != "TransitionPending":
+        raise DefectStillPresent(
+            f"a transient failure outcome must be TransitionPending, got {type(outcome).__name__}"
+        )
+    if getattr(outcome, "operation_key", None) != "op-r3" or not getattr(outcome, "event_id", None):
+        raise DefectStillPresent("TransitionPending must carry operation_key + event_id")
+    rows = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r3"]
+    if not rows or rows[0]["state"] != "PENDING":
+        raise DefectStillPresent("the intent must remain PENDING after a transient failure")
+    if _final_event_exists(db_path, rows[0]["event_id"]):
+        raise DefectStillPresent("no FINAL event may exist while the op is transient-PENDING")
+    # Qdrant recovers; a reconciliation pass must complete the durable intent to FINAL.
+    _restore_set_payload(qdrant)
+    coord.reconcile_once(limit=10)
+    rows2 = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r3"]
+    if not rows2 or rows2[0]["state"] != "FINAL":
+        raise DefectStillPresent(
+            "reconcile_once must finalize a recovered PENDING op (it stayed "
+            f"{rows2[0]['state'] if rows2 else 'absent'!r})"
+        )
+
+
+# R4 - proven-terminal failure => Err + ABANDONED, never a FINAL event -------------------------------- #
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="today a Qdrant failure returns a bare terminal Err with no durable ABANDONED record and no "
+    "terminal-vs-transient classification, so a proven-terminal failure cannot be distinguished/recorded.",
+)
+def test_r4_terminal_failure_is_err_abandoned_no_final(
+    qdrant: QdrantClient,
+    seeded: _Seed,
+    db_path: Path,
+) -> None:
+    coord = _coordinator(qdrant, db_path)  # xfail until the coordinator exists
+    _fail_set_payload(qdrant, _TerminalQdrantError("injected terminal (proven)"))
+    res = coord.transition(_intent(seeded, to_state="matured", operation_key="op-r4"))
+    if not isinstance(res, Err):
+        raise DefectStillPresent("a proven-terminal failure must return Err (no future mutation)")
+    rows = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r4"]
+    if not rows or rows[0]["state"] != "ABANDONED":
+        raise DefectStillPresent(
+            f"a proven-terminal failure must mark the intent ABANDONED, got "
+            f"{rows[0]['state'] if rows else 'no row'!r}"
+        )
+    if _final_event_exists(db_path, rows[0]["event_id"]):
+        raise DefectStillPresent("ABANDONED must never create a FINAL lifecycle event")
