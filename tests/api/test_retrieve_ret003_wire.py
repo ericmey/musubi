@@ -10,7 +10,7 @@ The tests are organized per the locked spec at:
 
 See docs/Musubi/_slices/slice-api-v1-ret003-wire.md for the slice contract.
 
-Accountancy: 16 strict xfail + 3 pass = 19 acceptance tests (not 18).
+Accountancy: 19 strict xfail + 3 pass = 22 acceptance tests (was 15 + 3 = 18).
 The 3 guards are the reclassified #8 (reinforcement-full-word) plus
 #18 and #19 (regression guards). The count is 19 because test #13
 (provenance_score) is split per Yua 2026-07-13 11:57:59 #2 into:
