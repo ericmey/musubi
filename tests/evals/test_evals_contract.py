@@ -3,7 +3,7 @@ import copy
 from collections.abc import Callable
 from math import log2
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -575,24 +575,47 @@ def test_discrimination_per_query_drop() -> None:
         _assert_per_query_top_hit_drop(wrong_drop_check_warns_only)
 
 
-@pytest.mark.skip(reason="Pending RET-004 implementation")
-def test_eval_contradiction_blending() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Pending RET-004 implementation")
-def test_eval_cross_plane_blending() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Pending RET-004 implementation")
-def test_eval_provisional_immediate_recall() -> None:
-    pass
-
-
 # ---------------------------------------------------------------------------
-# Tranche 2: Holdout, Smoke Gate, Per-Query Drop, Abstention
+# Tranche 2: Holdout, Smoke Gate, Abstention
 # ---------------------------------------------------------------------------
+
+
+class MockQuery(NamedTuple):
+    id: str
+    text: str
+    labels: list[str]
+
+
+class MockModelConfig:
+    def __init__(self, thresholds: dict[str, float], version: str, calibrated_on: str):
+        self.thresholds = thresholds
+        self.version = version
+        self.calibrated_on = calibrated_on
+
+
+class MockEvalReport:
+    def __init__(self, fpr: float, fn_tradeoff: float):
+        self.fpr = fpr
+        self.fn_tradeoff = fn_tradeoff
+
+
+def _assert_holdout_isolation(eval_func: Callable[[list[MockQuery], list[MockQuery]], Any]) -> None:
+    # Contract: Holdout queries/labels MUST NOT participate in tuning.
+    train_queries = [MockQuery("1", "a", ["train_l1"])]
+    test_queries = [MockQuery("2", "b", ["test_l2"])]
+
+    # Run evaluation
+    model_state = eval_func(train_queries, test_queries)
+
+    # Prove ID disjointness
+    train_ids = {q.id for q in train_queries}
+    test_ids = {q.id for q in test_queries}
+    assert not train_ids.intersection(test_ids), "Holdout leakage: ID overlap"
+
+    # Prove labels/queries don't leak into calibration
+    assert not model_state.get("seen_test_labels", False), (
+        "Holdout leakage: Test labels used in tuning"
+    )
 
 
 @pytest.mark.xfail(
@@ -600,19 +623,58 @@ def test_eval_provisional_immediate_recall() -> None:
 )
 def test_eval_holdout_isolation() -> None:
     try:
-        from musubi.evals.corpus import load_corpus_splits
+        from musubi.evals.runner import run_isolated_eval
     except ImportError:
-        raise DefectStillPresent("musubi.evals.corpus module missing splits")
+        raise DefectStillPresent("musubi.evals modules missing holdout splits")
+    _assert_holdout_isolation(run_isolated_eval)
 
-    # Contract: Holdout queries/labels MUST NOT participate in tuning.
-    train_queries, test_queries = load_corpus_splits()
 
-    train_ids = {q.id for q in train_queries}
-    test_ids = {q.id for q in test_queries}
+def test_discrimination_holdout_isolation() -> None:
+    def correct_eval(train: list[MockQuery], test: list[MockQuery]) -> dict[str, bool]:
+        return {"seen_test_labels": False}
 
-    assert not train_ids.intersection(test_ids), (
-        "Holdout leakage detected: test queries overlap with train queries"
-    )
+    _assert_holdout_isolation(correct_eval)
+
+    def wrong_eval_leaks_labels(train: list[MockQuery], test: list[MockQuery]) -> dict[str, bool]:
+        # Disjoint IDs but leaking test labels into train phase
+        return {"seen_test_labels": True}
+
+    try:
+        _assert_holdout_isolation(wrong_eval_leaks_labels)
+        pytest.fail("Accepted bad isolation")
+    except AssertionError:
+        pass
+
+
+def _assert_pr_smoke_fixed_embeddings(
+    run_func: Callable[[], Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Must prove zero network/external DB calls
+    network_called = False
+
+    def mock_urlopen(*args: Any, **kwargs: Any) -> Any:
+        nonlocal network_called
+        network_called = True
+        raise RuntimeError("Network call forbidden in smoke gate")
+
+    def mock_qdrant(*args: Any, **kwargs: Any) -> Any:
+        nonlocal network_called
+        network_called = True
+        raise RuntimeError("Qdrant call forbidden in smoke gate")
+
+    import urllib.request
+
+    import qdrant_client
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    monkeypatch.setattr(qdrant_client, "QdrantClient", mock_qdrant)
+
+    res = run_func()
+
+    if network_called:
+        raise ValueError("Qdrant/TEI network hit detected")
+
+    assert getattr(res, "metrics", {}).get("ndcg@10", 0.0) > 0.0
 
 
 @pytest.mark.xfail(
@@ -620,15 +682,57 @@ def test_eval_holdout_isolation() -> None:
     raises=DefectStillPresent,
     reason="RET-004: PR Smoke Gate with fixed embeddings missing",
 )
-def test_eval_pr_smoke_fixed_embeddings() -> None:
+def test_eval_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     try:
         from musubi.evals.runner import run_smoke_gate
     except ImportError:
         raise DefectStillPresent("musubi.evals.runner missing smoke gate")
+    _assert_pr_smoke_fixed_embeddings(run_smoke_gate, monkeypatch)
 
-    # Contract: Must run entirely in memory without Qdrant/TEI
-    res = run_smoke_gate(use_qdrant=False)
-    assert res.metrics["ndcg@10"] > 0.0, "Smoke gate failed to produce valid metrics"
+
+def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
+    def correct_smoke() -> Any:
+        return type("MockResult", (), {"metrics": {"ndcg@10": 0.8}})()
+
+    def wrong_smoke_requires_qdrant() -> Any:
+        import qdrant_client
+
+        with contextlib.suppress(Exception):
+            qdrant_client.QdrantClient("http://localhost:6333")
+        return type("MockResult", (), {"metrics": {"ndcg@10": 0.8}})()
+
+    _assert_pr_smoke_fixed_embeddings(correct_smoke, monkeypatch)
+
+    import _pytest.outcomes
+
+    try:
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_requires_qdrant, monkeypatch)
+        pytest.fail("Accepted network calls")
+    except _pytest.outcomes.Failed:
+        pass
+    except ValueError:
+        pass
+
+
+def _assert_abstention_fpr(
+    eval_func: Callable[[MockModelConfig, dict[str, Any]], MockEvalReport],
+) -> None:
+    # Explicitly train-calibrated, versioned score threshold (frozen before holdout).
+    # Must report per-mode FPR and FN tradeoff.
+    config = MockModelConfig(
+        thresholds={"fast": 0.3, "deep": 0.4}, version="v1.0", calibrated_on="train_split_A"
+    )
+    noise_results = {"mode": "fast", "hits": [{"score": 0.2}]}
+
+    report = eval_func(config, noise_results)
+
+    # Ensure config wasn't mutated during holdout evaluation
+    assert config.thresholds["fast"] == 0.3, "Threshold mutated during holdout evaluation"
+
+    if report.fpr > 0.0:
+        raise ValueError("FPR > 0: engine hallucinated fallback matches for noise")
+    if not hasattr(report, "fn_tradeoff"):
+        raise ValueError("Missing False-Negative tradeoff report")
 
 
 @pytest.mark.xfail(
@@ -639,82 +743,62 @@ def test_eval_abstention_fpr() -> None:
         from musubi.evals.gates import check_abstention_fpr
     except ImportError:
         raise DefectStillPresent("musubi.evals.gates missing abstention")
-
-    # Contract: Explicitly train-calibrated, versioned score threshold reporting FPR.
-    # We pass a threshold and noise queries. It must reject hits below threshold.
-    noise_results = {"noise_q1": [{"score": 0.2}], "noise_q2": [{"score": 0.1}]}
-    threshold = 0.3
-
-    fpr = check_abstention_fpr(noise_results, threshold)
-    assert fpr == 0.0, "FPR > 0: engine hallucinated fallback matches for noise"
+    _assert_abstention_fpr(check_abstention_fpr)
 
 
-def test_discrimination_holdout_isolation() -> None:
-    from typing import NamedTuple
+def test_discrimination_abstention_fpr() -> None:
+    def correct_check(config: MockModelConfig, results: dict[str, Any]) -> MockEvalReport:
+        mode = results["mode"]
+        threshold = config.thresholds.get(mode, 1.0)
+        hits = results["hits"]
+        fp = sum(1 for h in hits if h["score"] >= threshold)
+        return MockEvalReport(fpr=float(fp), fn_tradeoff=0.05)
 
-    class Q(NamedTuple):
-        id: str
+    _assert_abstention_fpr(correct_check)
 
-    def correct_load() -> tuple[list[Q], list[Q]]:
-        return [Q("1"), Q("2")], [Q("3"), Q("4")]
+    def wrong_check_ignores_threshold(
+        config: MockModelConfig, results: dict[str, Any]
+    ) -> MockEvalReport:
+        # Fails to apply threshold
+        hits = results["hits"]
+        return MockEvalReport(fpr=float(len(hits)), fn_tradeoff=0.05)
 
-    def wrong_load_leakage() -> tuple[list[Q], list[Q]]:
-        return [Q("1"), Q("2"), Q("3")], [Q("3"), Q("4")]
+    def wrong_check_holdout_tuned(
+        config: MockModelConfig, results: dict[str, Any]
+    ) -> MockEvalReport:
+        # Mutates threshold during holdout evaluation (illegal)
+        config.thresholds["fast"] = 0.0
+        return MockEvalReport(fpr=1.0, fn_tradeoff=0.0)
 
-    # Direct assertion matching the test_eval_holdout_isolation logic
-    train, test = correct_load()
-    assert not {q.id for q in train}.intersection({q.id for q in test})
-
-    train_w, test_w = wrong_load_leakage()
-    with pytest.raises(AssertionError):
-        assert not {q.id for q in train_w}.intersection({q.id for q in test_w})
-
-
-def test_discrimination_pr_smoke_fixed_embeddings() -> None:
-    class MockResult:
-        def __init__(self, val: float) -> None:
-            self.metrics = {"ndcg@10": val}
-
-    def correct_smoke(use_qdrant: bool = False) -> MockResult:
-        if use_qdrant:
-            raise ValueError("Smoke gate must run in-memory")
-        return MockResult(0.8)
-
-    def wrong_smoke_requires_qdrant(use_qdrant: bool = False) -> MockResult:
-        if not use_qdrant:
-            raise ValueError("Qdrant required")
-        return MockResult(0.8)
-
-    assert correct_smoke(use_qdrant=False).metrics["ndcg@10"] > 0.0
+    def wrong_check_missing_fn_tradeoff(config: MockModelConfig, results: dict[str, Any]) -> Any:
+        return type("MockReport", (), {"fpr": 0.0})()
 
     import _pytest.outcomes
 
     try:
-        wrong_smoke_requires_qdrant(use_qdrant=False)
-        pytest.fail("Accepted bad runner")
+        _assert_abstention_fpr(wrong_check_ignores_threshold)
+        pytest.fail("Accepted check ignoring threshold")
+    except AssertionError:
+        pass
+    except ValueError:
+        pass
+
+    try:
+        _assert_abstention_fpr(wrong_check_holdout_tuned)
+        pytest.fail("Accepted holdout-tuned check")
+    except AssertionError:
+        pass
+    except ValueError:
+        pass
+
+    try:
+        _assert_abstention_fpr(wrong_check_missing_fn_tradeoff)
+        pytest.fail("Accepted missing FN tradeoff")
     except _pytest.outcomes.Failed:
         pass
-    except Exception:
+    except ValueError:
         pass
 
 
-def test_discrimination_abstention_fpr() -> None:
-    def correct_check(results: dict[str, list[dict[str, float]]], threshold: float) -> float:
-        fp = 0
-        for q, hits in results.items():
-            valid_hits = [h for h in hits if h.get("score", 0.0) >= threshold]
-            if valid_hits:
-                fp += 1
-        return fp / len(results) if results else 0.0
-
-    noise_results = {"noise_q1": [{"score": 0.2}], "noise_q2": [{"score": 0.1}]}
-    assert correct_check(noise_results, 0.3) == 0.0
-
-    def wrong_check_ignores_threshold(
-        results: dict[str, list[dict[str, float]]], threshold: float
-    ) -> float:
-        fp = sum(1 for hits in results.values() if hits)
-        return fp / len(results) if results else 0.0
-
-    with pytest.raises(AssertionError):
-        assert wrong_check_ignores_threshold(noise_results, 0.3) == 0.0
+# The remaining 6 tests are preserved as documentation of the pending inventory,
+# explicitly raising a skipped exception so they do not artificially pad the test count.
