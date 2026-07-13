@@ -11,10 +11,10 @@ updated: 2026-07-13
 reviewed: false
 issue: 423
 depends-on: []
-blocks: [sec-005-credential-rotation]
+blocks: []
 ---
 
-# Reconcile 1Password Connect deployment source
+# Slice: reconcile 1Password Connect deployment source
 
 Production partially reflects unmerged commit `db4f554` from
 `feat/musubi-1password-connect`, while current `main` still owns the older
@@ -29,7 +29,7 @@ Prometheus container mount `/etc/musubi/qdrant.token`.
 - `deploy/ansible/**`
 - `tests/ops/test_1password_connect_deploy.py`
 - `docs/Musubi/_slices/slice-deploy-1password-source-reconcile.md`
-- `docs/Musubi/_inbox/locks/deploy-1password-source-reconcile.lock`
+- `docs/Musubi/_inbox/locks/slice-deploy-1password-source-reconcile.lock`
 
 `forbidden_paths`:
 
@@ -39,6 +39,10 @@ Prometheus container mount `/etc/musubi/qdrant.token`.
 
 The old branch is evidence, not a merge target. Transcribe its intended design
 onto current `main` and preserve every newer deployment change.
+
+This slice is a prerequisite for the separately governed SEC-005 credential
+rotation, but that rotation is not a Musubi slice-DAG node and is therefore not
+listed in `blocks`.
 
 ## Specs to implement
 
