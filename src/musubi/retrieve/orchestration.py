@@ -30,7 +30,7 @@ from musubi.retrieve.deep import (
     RetrievalQuery as DeepRetrievalQuery,
 )
 from musubi.retrieve.fast import run_fast_retrieve
-from musubi.retrieve.recent import run_recent_retrieve
+from musubi.retrieve.recent import _provenance_score_for, run_recent_retrieve
 from musubi.retrieve.warnings import (
     RetrievalWarning,
     dedupe,
@@ -103,6 +103,23 @@ class RetrievalQuery(BaseModel):
 
 
 class RetrievalResult(BaseModel):
+    """Internal orchestration-layer projection of one retrieval hit.
+
+    The router reads `state` and `importance` from dedicated fields
+    (not from `payload`, which is optional and may be `None` for
+    `brief=true`). The orchestration layer populates `state` and
+    `importance` from the source row BEFORE payload projection (per
+    spec §2.3 / §4.6 / §6.6 invalid source semantics: present-valid
+    → exact, missing → null, present-invalid → raise server
+    integrity error → 500).
+
+    `score_components` is a flat dict of all 5 contributor names (the
+    public `reinforcement` name, NOT the internal `reinforce`). The
+    router projects this to `extra.score_components` for ranked mode
+    (typed `RankedScoreComponents`) or to `extra.score_components: {}`
+    for recent mode (typed `RecentScoreComponents`).
+    """
+
     object_id: str
     namespace: str
     plane: str
@@ -112,6 +129,18 @@ class RetrievalResult(BaseModel):
     score_components: dict[str, float]
     lineage: dict[str, Any]
     payload: dict[str, Any] | None = None
+    # RET-003: top-level source-backed state/importance. The
+    # orchestrator extracts these from the source row's payload
+    # BEFORE the optional payload projection (so `brief=true`
+    # preserves them). Source-backed: present-valid → exact,
+    # missing → null, present-invalid → 500 (not coerced).
+    state: LifecycleState | None = None
+    importance: int | None = None
+    # RET-003 recent: exact-table-only provenance_score (None if
+    # state missing or (plane, state) absent from `_PROVENANCE`).
+    # Ranked does NOT use this; ranked uses `score_components["provenance"]`
+    # which may legitimately be 0.1 from `_LOW_PROVENANCE_STATES`.
+    provenance_score: float | None = None
 
 
 class RetrievalError(BaseModel):
@@ -516,28 +545,39 @@ async def _run_single(
             recent_results: list[RetrievalResult] = []
             for recent_hit in r_res.value.results:
                 stored_namespace = recent_hit.payload.get("namespace")
+                raw_state = recent_hit.payload.get("state")
+                raw_importance = recent_hit.payload.get("importance")
+                # RET-003: provenance_score is exact-table-only via
+                # `_provenance_score_for(plane, state)`. Returns None
+                # when state is None or (plane, state) is absent from
+                # the explicit lookup table. NOT `scoring._provenance`
+                # (which floors unknowns to 0.1).
+                recent_plane = str(recent_hit.payload.get("plane", plane))
+                prov_score = _provenance_score_for(plane=recent_plane, state=raw_state)
                 recent_results.append(
                     RetrievalResult(
                         object_id=recent_hit.object_id,
                         namespace=str(stored_namespace) if stored_namespace else target_namespace,
-                        plane=str(recent_hit.payload.get("plane", plane)),
+                        plane=recent_plane,
                         title=recent_hit.payload.get("title"),
                         snippet=recent_hit.snippet,
                         # Recent has no relevance scoring; row order is
                         # the signal. Score = created_epoch so cross-target
                         # merge in the fanout preserves newest-first.
                         score=recent_hit.created_epoch,
-                        score_components={
-                            "relevance": 0.0,
-                            "recency": 1.0,
-                            "reinforcement": 0.0,
-                        },
+                        # RET-003 recent: `score_components` is the
+                        # exact empty {} (typed `RecentScoreComponents`).
+                        # Not `null`; not a fabricated 3-key dict.
+                        score_components={},
                         lineage=_summarize_lineage(recent_hit.payload),
                         payload=(
                             recent_hit.payload
                             if not getattr(parsed_query, "brief", False)
                             else None
                         ),
+                        state=raw_state if raw_state is not None else None,
+                        importance=raw_importance if raw_importance is not None else None,
+                        provenance_score=prov_score,
                     )
                 )
             return Ok(value=RetrievalEnvelope(results=recent_results, warnings=tuple(warnings)))
@@ -580,6 +620,8 @@ async def _run_single(
                 # rows whose stored namespace differs from the leg's
                 # request — preserve provenance instead of overwriting.
                 stored_namespace = hit.payload.get("namespace")
+                raw_state = hit.payload.get("state")
+                raw_importance = hit.payload.get("importance")
                 results.append(
                     RetrievalResult(
                         object_id=hit.object_id,
@@ -591,10 +633,14 @@ async def _run_single(
                         score_components={
                             "relevance": hit.score_components.relevance,
                             "recency": hit.score_components.recency,
+                            "importance": hit.score_components.importance,
+                            "provenance": hit.score_components.provenance,
                             "reinforcement": hit.score_components.reinforce,
                         },
                         lineage=hit.lineage_summary,
                         payload=hit.payload,
+                        state=raw_state if raw_state is not None else None,
+                        importance=raw_importance if raw_importance is not None else None,
                     )
                 )
             return Ok(value=RetrievalEnvelope(results=results, warnings=tuple(warnings)))
@@ -612,21 +658,36 @@ async def _run_single(
 def _pack_scored_hits(hits: Sequence[Any], include_payload: bool) -> list[RetrievalResult]:
     results = []
     for hit in hits:
+        # Extract source-backed `state` and `importance` BEFORE the
+        # optional payload projection (per spec §6.6: present-valid
+        # → exact, missing → null, present-invalid → raise). Invalid
+        # values are caught at the Pydantic response layer (LifecycleState
+        # literal + int 1..10); a bad enum / out-of-range value fails
+        # the response validation → 500 (server integrity, NOT 422).
+        payload = hit.payload
+        raw_state = payload.get("state")
+        raw_importance = payload.get("importance")
         results.append(
             RetrievalResult(
                 object_id=hit.object_id,
-                namespace=hit.payload.get("namespace", ""),
+                namespace=payload.get("namespace", ""),
                 plane=hit.plane,
-                title=hit.payload.get("title"),
-                snippet=_snippet(hit.payload, max_chars=300),
+                title=payload.get("title"),
+                snippet=_snippet(payload, max_chars=300),
                 score=hit.score,
                 score_components={
                     "relevance": hit.score_components.relevance,
                     "recency": hit.score_components.recency,
+                    "importance": hit.score_components.importance,
+                    "provenance": hit.score_components.provenance,
+                    # Public boundary uses `reinforcement` (full word).
+                    # Internal `ScoreComponents.reinforce` is unchanged.
                     "reinforcement": hit.score_components.reinforce,
                 },
-                lineage=_summarize_lineage(hit.payload),
-                payload=hit.payload if include_payload else None,
+                lineage=_summarize_lineage(payload),
+                payload=payload if include_payload else None,
+                state=raw_state if raw_state is not None else None,
+                importance=raw_importance if raw_importance is not None else None,
             )
         )
     return results

@@ -46,7 +46,17 @@ from musubi.api.dependencies import (
     get_settings_dep,
 )
 from musubi.api.errors import APIError, ErrorCode
-from musubi.api.responses import RetrieveResponse, RetrieveResultRow
+from musubi.api.responses import (
+    RankedExtra,
+    RankedResultRow,
+    RankedRetrieveResponse,
+    RankedScoreComponents,
+    RecentExtra,
+    RecentResultRow,
+    RecentRetrieveResponse,
+    RecentScoreComponents,
+    RetrieveResponse,
+)
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import resolve_namespace_scope
 from musubi.embedding import Embedder, TEIRerankerClient
@@ -380,7 +390,18 @@ async def retrieve(
     pattern_had_wildcards = any("*" in ns for ns, _ in targets)
     targets = _expand_wildcard_targets(qdrant, targets)
     if pattern_had_wildcards and not targets:
-        return RetrieveResponse(results=[], mode=body.mode, limit=body.limit)
+        # Wildcard early-return: empty results for the requested mode.
+        if body.mode == "recent":
+            return RecentRetrieveResponse(
+                results=[],
+                mode="recent",
+                limit=body.limit,
+            )
+        return RankedRetrieveResponse(
+            results=[],
+            mode=body.mode,
+            limit=body.limit,
+        )
 
     for target_namespace, _plane in targets:
         scope_result = resolve_namespace_scope(context, namespace=target_namespace, access="r")
@@ -426,28 +447,77 @@ async def retrieve(
     # The envelope's warnings are already deduped, fail-closed (allowlisted only), and counted at the
     # orchestration boundary — the router just flattens the bounded codes onto the wire.
     envelope = orchestration_result.value
-    rows: list[RetrieveResultRow] = []
+    rows: list[RankedResultRow | RecentResultRow] = []
     for hit in envelope.results:
-        rows.append(
-            RetrieveResultRow(
-                object_id=hit.object_id,
-                score=hit.score,
-                plane=hit.plane,
-                content=hit.snippet,
-                namespace=hit.namespace,
-                # `title` is top-level for curated/concept/artifact (None
-                # for episodic — no stable title field on that plane).
-                # Consumers with a UI shouldn't have to reach into `extra`
-                # for a universal display field.
-                title=hit.title,
-                extra={
-                    "score_components": hit.score_components,
-                    "lineage": hit.lineage,
-                },
+        if body.mode == "recent":
+            # Recent row: exact empty `score_components: {}` (typed
+            # `RecentScoreComponents`), top-level `score_kind="created_epoch"`,
+            # top-level nullable `provenance_score` from the exact-table-only
+            # helper. state/importance from `hit.state`/`hit.importance`
+            # (orchestration populates these BEFORE the optional payload
+            # projection, so brief=true preserves them).
+            recent_extra = RecentExtra(
+                score_components=RecentScoreComponents(),
+                lineage=hit.lineage,
             )
-        )
+            rows.append(
+                RecentResultRow(
+                    object_id=hit.object_id,
+                    score=hit.score,
+                    plane=hit.plane,
+                    content=hit.snippet,
+                    namespace=hit.namespace,
+                    title=hit.title,
+                    state=hit.state,
+                    importance=hit.importance,
+                    score_kind="created_epoch",
+                    provenance_score=hit.provenance_score,
+                    extra=recent_extra,
+                )
+            )
+        else:
+            # Ranked row: 5-key `score_components` (typed
+            # `RankedScoreComponents`), top-level `score_kind="ranked_combined"`,
+            # top-level nullable `state`/`importance` from source-backed
+            # extraction (orchestration populates these before payload
+            # projection; brief=true preserves them). If
+            # `hit.score_components` is missing any of the 5 keys (e.g. the
+            # recent branch fed through here by accident), Pydantic raises
+            # ValidationError → 500 (server integrity, NOT 422).
+            ranked_components = RankedScoreComponents(
+                relevance=hit.score_components["relevance"],
+                recency=hit.score_components["recency"],
+                importance=hit.score_components["importance"],
+                provenance=hit.score_components["provenance"],
+                reinforcement=hit.score_components["reinforcement"],
+            )
+            ranked_extra = RankedExtra(
+                score_components=ranked_components,
+                lineage=hit.lineage,
+            )
+            rows.append(
+                RankedResultRow(
+                    object_id=hit.object_id,
+                    score=hit.score,
+                    plane=hit.plane,
+                    content=hit.snippet,
+                    namespace=hit.namespace,
+                    title=hit.title,
+                    state=hit.state,
+                    importance=hit.importance,
+                    score_kind="ranked_combined",
+                    extra=ranked_extra,
+                )
+            )
 
-    return RetrieveResponse(
+    if body.mode == "recent":
+        return RecentRetrieveResponse(
+            results=rows[: body.limit],
+            mode="recent",
+            limit=body.limit,
+            warnings=[warning.code for warning in envelope.warnings],
+        )
+    return RankedRetrieveResponse(
         results=rows[: body.limit],
         mode=body.mode,
         limit=body.limit,

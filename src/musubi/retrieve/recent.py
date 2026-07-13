@@ -22,6 +22,36 @@ from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
 
 logger = logging.getLogger(__name__)
 
+
+def _provenance_score_for(plane: str, state: LifecycleState | None) -> float | None:
+    """Exact-table-only lookup for recent-mode `provenance_score`.
+
+    Per spec §3.3 (Yua 2026-07-13 09:49:53 #7): recent's `provenance_score`
+    is exact-table-only. Returns `None` when:
+      - `state is None` (legacy row without lifecycle state)
+      - `(plane, state)` is absent from the explicit lookup table
+
+    DOES NOT call `scoring._provenance` (which floors unknowns to 0.1).
+    The ranked branch continues to use `scoring._provenance` for the
+    actual `extra.score_components["provenance"]` value (which may
+    legitimately be 0.1 for `_LOW_PROVENANCE_STATES`).
+
+    Args:
+        plane: the row's source plane (e.g. "episodic", "curated").
+        state: the row's source LifecycleState, or None for legacy.
+
+    Returns:
+        The explicit table value if the pair is found; None otherwise.
+    """
+    if state is None:
+        return None
+    # Lazy import to avoid an import cycle: scoring imports types
+    # which import common; recent only needs the table constant.
+    from musubi.retrieve.scoring import _PROVENANCE
+
+    return _PROVENANCE.get((plane, state))
+
+
 # Recent mode includes `provisional` by default — different from fast/deep
 # (which default to matured+promoted). Recent is "what just happened";
 # excluding the freshest tier defeats the use case. Spec'd in
