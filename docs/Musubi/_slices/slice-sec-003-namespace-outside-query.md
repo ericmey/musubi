@@ -44,6 +44,13 @@ Auth CAN see the namespace (query param) — NOT affected:
 | `POST /v1/artifacts` (`upload_artifact`) | `writes_artifact.py:37` | `Form(...)` | require_auth(access="w") sees empty query → `ns=None`; write-scope defanged on multipart upload |
 | `GET /v1/namespaces/{namespace_path}/stats` (`namespace_stats`) | `namespaces.py:58` | `Path(...)` | passes `namespace_qs_param="namespace_path"`, but the value is a PATH param; query `?namespace_path=` is empty → auth checks nothing |
 
+**Mechanical evidence:** `tests/api/sec003_route_inventory.py` scans every router and
+classifies each `require_auth` route by namespace source — a new Form/Path/Body route
+appears there automatically, so a future addition cannot hide behind prose. Current run:
+2 AFFECTED (upload_artifact FORM, namespace_stats PATH), and it additionally flags 2
+NULLABLE-query routes for SEC-004 scope (`contradictions.list_contradictions`,
+`lifecycle.list_events`).
+
 Adjacent (checked, reported separately): `contradictions.py` uses
 `namespace: str | None = Query(None)` — nullable-namespace fanout is **SEC-004 (C3)**, not
 this slice.

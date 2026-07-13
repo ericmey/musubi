@@ -84,6 +84,25 @@ def test_namespace_stats_cross_tenant_must_be_403(client: TestClient, api_settin
         f"never authorized")
 
 
+def test_namespace_stats_own_namespace_still_succeeds(client: TestClient, api_settings) -> None:
+    """Feature preservation (declared in the Test Contract): a token scoped EXACTLY to the
+    target namespace must read its own stats and get a well-formed body.
+
+    NOT xfail — the fix must authorize the Path namespace, not forbid all stats. Token is
+    scoped to exactly the namespace being read (read access), nothing broader.
+    """
+    target = "mallory/evil/episodic"
+    token = mint_token(api_settings, scopes=[f"{target}:r"], presence="mallory/evil")
+    path = target.replace("/", "%2F")
+    r = client.get(f"/v1/namespaces/{path}/stats",
+                   headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, (
+        f"own-namespace stats failed: {r.status_code} {r.text[:200]}")
+    body = r.json()
+    assert body.get("namespace") == target, f"namespace echo wrong: {body.get('namespace')!r}"
+    assert isinstance(body.get("counts"), dict), "counts must be a dict per NamespaceStats"
+
+
 def test_namespace_stats_no_token_must_be_401(client: TestClient) -> None:
     path = "eric%2Fclaude-code%2Fepisodic"
     r = client.get(f"/v1/namespaces/{path}/stats")
