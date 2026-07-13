@@ -3,12 +3,12 @@ title: "Slice: auth-boundary red-contract — SEC-002/003/004 + IDEM-001 consoli
 slice_id: slice-auth-boundary-red-contract
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: aoi
 phase: "Security audit 2026-07-12/13 (Eric, discoverer) — Yua router/reviewer"
-tags: [section/slices, status/in-review, type/slice, security, p0, auth, idempotency]
+tags: [section/slices, status/done, type/slice, security, p0, auth, idempotency]
 updated: 2026-07-13
-reviewed: false
+reviewed: true
 depends-on: [slice-sec-002-idempotency-auth-bypass, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
 blocks: []
 issue: 406
@@ -142,7 +142,7 @@ behind an in-flight lease.
 
 ## Status
 
-**`in-review`** (2026-07-13) — red contract landed; `src` was authorized by the router and the fix
+**`done`** (2026-07-13) — red contract landed and accepted; `src` was authorized by the router and the fix
 implemented + accepted downstream (Phase A #403, Phase B #404). The reds here stay strict-xfail at
 #402 head (each reason now names its closing slice); they flip green at their closing PR's head.
 Closed by PR #402. Tracking Issue #406.
