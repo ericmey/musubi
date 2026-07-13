@@ -52,11 +52,20 @@ def _op_env() -> tuple[str, str]:
 
 
 def transition(object_id: str, to_state: str, *, actor: str, reason: str,
-               supersedes: list[str] | None = None) -> tuple[int, dict]:
-    """Operator-scoped lifecycle transition. Returns (status, body)."""
+               supersedes: list[str] | None = None,
+               superseded_by: str | None = None) -> tuple[int, dict]:
+    """Operator-scoped lifecycle transition. Returns (status, body).
+
+    NOTE: superseded_by is a REQUEST field the caller must set (writes_lifecycle.py:23).
+    My first DQ-003 script never passed it, then reported A.superseded_by=None as a
+    "broken one-directional edge." Yua caught it: that was the mutation I DIDN'T request,
+    not proof the linkage failed. Reciprocity is caller-owned here, not automatic.
+    """
     url, tok = _op_env()
     body = {"object_id": object_id, "to_state": to_state, "actor": actor, "reason": reason,
             "supersedes": supersedes or []}
+    if superseded_by is not None:
+        body["superseded_by"] = superseded_by
     req = urllib.request.Request(f"{url}/lifecycle/transition",
                                  data=json.dumps(body).encode(), method="POST")
     req.add_header("Authorization", f"Bearer {tok}")
@@ -97,10 +106,11 @@ print("Transition: A provisional -> matured -> superseded; B supersedes A")
 m_status, _ = transition(a_oid, "matured", actor="aoi/operator", reason="DQ-003: mature A before supersession")
 line("A -> matured (required first hop)", m_status)
 time.sleep(1)
+# A -> superseded AND explicitly point A.superseded_by = B (the field I omitted before)
 status, body = transition(
     a_oid, "superseded", actor="aoi/operator",
-    reason="DQ-003 lineage observation", supersedes=[])
-# the supersedes edge is set on B; mark A superseded and point A.superseded_by -> B
+    reason="DQ-003 lineage observation", superseded_by=b_oid)
+# B records the forward edge B.supersedes = [A]
 status_b, body_b = transition(
     b_oid, "matured", actor="aoi/operator",
     reason="DQ-003 lineage observation: B supersedes A", supersedes=[a_oid])
@@ -115,8 +125,10 @@ print("L1  Raw Qdrant payload")
 pa = store.payload(a_oid) or {}
 pb = store.payload(b_oid) or {}
 line("    A.state", pa.get("state"))
-line("    A.superseded_by", pa.get("superseded_by"),
-     "" if pa.get("superseded_by") else "not set on A's payload")
+line("    A.superseded_by (we requested = B)", pa.get("superseded_by"),
+     "reciprocal edge set" if pa.get("superseded_by") == b_oid
+     else "NOT persisted despite being requested" if not pa.get("superseded_by")
+     else f"set to {pa.get('superseded_by')}")
 line("    B.supersedes", pb.get("supersedes"))
 print()
 
@@ -137,10 +149,18 @@ print()
 print("L3  Does the returned row expose the lineage edge to the caller?")
 row_a = next((r for r in res_all if r.get("object_id") == a_oid), None)
 if row_a:
-    has_lineage = any(k in row_a for k in ("lineage", "superseded_by", "supersedes"))
-    line("    row carries a lineage field?", has_lineage,
-         "caller cannot see A was superseded" if not has_lineage else "")
-    line("    row keys", ",".join(sorted(row_a.keys())))
+    # HTTP puts lineage at extra.lineage (orchestration.py:518 _summarize_lineage),
+    # NOT at top level. My first probe checked top-level keys and wrongly concluded
+    # "no lineage field." Inspect the nested structure Yua pointed to.
+    extra = row_a.get("extra") or {}
+    nested = extra.get("lineage")
+    line("    row.extra.lineage present?", nested is not None,
+         "" if nested is not None else "no lineage in extra")
+    if isinstance(nested, dict):
+        line("    extra.lineage.superseded_by", nested.get("superseded_by"))
+        line("    extra.lineage.supersedes", nested.get("supersedes"))
+    line("    top-level row keys", ",".join(sorted(row_a.keys())))
+    line("    extra keys", ",".join(sorted(extra.keys())))
 else:
     line("    A not retrievable at all", "-", "lineage unobservable from the wire")
 print()
