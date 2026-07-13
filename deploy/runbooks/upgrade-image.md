@@ -156,10 +156,12 @@ immediately — do not wait for alarms to fire.
 
 ```bash
 # Find the previous value of musubi_core_image:
+git -C ~/musubi switch main
+git -C ~/musubi pull --ff-only
 git -C ~/musubi log -p -- deploy/ansible/group_vars/all.yml | head -40
 # Revert the bump commit:
 git -C ~/musubi revert --no-edit <bump-commit-sha>
-git -C ~/musubi push origin HEAD:main
+git -C ~/musubi push origin main
 # Re-run deploy with the older digest:
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
  deploy/ansible/deploy.yml --ask-vault-pass
