@@ -32,7 +32,7 @@ from typing import Any
 
 import pytest
 
-from musubi.api.idempotency import IdempotencyCache, IdempotencyLeaseCache
+from musubi.api.idempotency import CompletedResponse, IdempotencyCache, IdempotencyLeaseCache
 
 # --------------------------------------------------------------------------- #
 # Reference implementation of the PROPOSED primitive (the spec, not src).
@@ -45,8 +45,7 @@ class _Lease:
     created_at: float
     done: bool = False
     completed_at: float | None = None
-    response: dict[str, Any] | None = None
-    status: int | None = None
+    response: CompletedResponse | None = None
 
 
 class _LeaseCache:
@@ -68,32 +67,29 @@ class _LeaseCache:
 
     def acquire(
         self, identity: object, owner: str, *, digest: bytes
-    ) -> tuple[str, dict[str, Any] | None, int | None]:
+    ) -> tuple[str, CompletedResponse | None]:
         now = self._clock()
         with self._lock:
             self._cleanup_locked(now)
             lease = self._leases.get(identity)
             if lease is None:
                 self._leases[identity] = _Lease(owner=owner, created_at=now)
-                return "acquired", None, None
+                return "acquired", None
             if lease.done:
-                return "hit", lease.response, lease.status
+                return "hit", lease.response
             if now - lease.created_at > self._stale:  # reclaim a crashed owner
                 self._leases[identity] = _Lease(owner=owner, created_at=now)
-                return "acquired", None, None
-            return "in_flight", None, None
+                return "acquired", None
+            return "in_flight", None
 
-    def store(
-        self, identity: object, owner: str, *, response_status: int, response_body: dict[str, Any]
-    ) -> None:
+    def store(self, identity: object, owner: str, *, response: CompletedResponse) -> None:
         with self._lock:
             lease = self._leases.get(identity)
             if lease is None or lease.owner != owner or lease.done:
                 raise PermissionError("store by non-owner or after completion")
             lease.done = True
             lease.completed_at = self._clock()
-            lease.response = response_body
-            lease.status = response_status
+            lease.response = response
 
     def release(self, identity: object, owner: str) -> bool:
         with self._lock:
@@ -123,6 +119,7 @@ class _LeaseCache:
 
 IDENT = ("idem-key-1", "bodyhash-abc", "POST /v1/episodic", "eric/claude-code")
 _D = bytes(32)  # a fixed SHA-256-length digest (mandatory on acquire)
+_R = CompletedResponse(status=202, raw_headers=(), body=b"x")
 
 
 class _Clock:
@@ -180,9 +177,9 @@ def test_p2_second_acquire_is_in_flight(make_cache: Callable[[_Clock], Any]) -> 
 def test_p3_owner_store_then_replay_is_hit(make_cache: Callable[[_Clock], Any]) -> None:
     c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1", digest=_D)
-    c.store(IDENT, owner="o1", response_status=202, response_body={"object_id": "x"})
-    status, body, code = c.acquire(IDENT, owner="o2", digest=_D)
-    assert status == "hit" and body == {"object_id": "x"} and code == 202
+    c.store(IDENT, owner="o1", response=_R)
+    status, completed = c.acquire(IDENT, owner="o2", digest=_D)
+    assert status == "hit" and completed == _R
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
@@ -192,7 +189,7 @@ def test_p4_owner_only_store_and_release(make_cache: Callable[[_Clock], Any]) ->
     with pytest.raises(PermissionError):
         c.release(IDENT, owner="o2")
     with pytest.raises(PermissionError):
-        c.store(IDENT, owner="o2", response_status=202, response_body={})
+        c.store(IDENT, owner="o2", response=_R)
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
@@ -219,7 +216,7 @@ def test_p7_completed_lease_expires_after_ttl(make_cache: Callable[[_Clock], Any
     clock = _Clock()
     c = make_cache(clock)
     c.acquire(IDENT, owner="o1", digest=_D)
-    c.store(IDENT, owner="o1", response_status=202, response_body={"object_id": "x"})
+    c.store(IDENT, owner="o1", response=_R)
     assert c.acquire(IDENT, owner="o2", digest=_D)[0] == "hit"  # replayable within TTL
     clock.advance(101.0)  # past ttl (100s)
     assert c.acquire(IDENT, owner="o3", digest=_D)[0] == "acquired", (
@@ -233,7 +230,7 @@ def test_p8_bounded_waiter_never_double_executes(make_cache: Callable[[_Clock], 
     c.acquire(IDENT, owner="o1", digest=_D)
     executed = []
     for _ in range(5):  # bounded polls
-        status, _, _ = c.acquire(IDENT, owner="w", digest=_D)
+        status, _ = c.acquire(IDENT, owner="w", digest=_D)
         if status == "hit":
             break
         if status == "in_flight":
@@ -257,7 +254,7 @@ def test_p9_real_concurrency_executes_exactly_once(make_cache: Callable[[_Clock]
             if c.acquire(IDENT, owner=f"o{i}", digest=_D)[0] == "acquired":
                 with exec_lock:
                     executions.append(i)
-                c.store(IDENT, owner=f"o{i}", response_status=202, response_body={"object_id": "x"})
+                c.store(IDENT, owner=f"o{i}", response=_R)
         except Exception as exc:  # missing/partial primitive: record, don't leak
             with exec_lock:
                 errors.append(repr(exc))

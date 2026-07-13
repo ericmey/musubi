@@ -15,11 +15,15 @@ from typing import Any
 import pytest
 from fastapi import Depends, FastAPI, Request
 from starlette.datastructures import Headers
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
 from starlette.testclient import TestClient
 
 from musubi.api.errors import APIError, api_error_handler
-from musubi.api.idempotency import IdempotencyLeaseCache, get_idempotency_lease_cache
+from musubi.api.idempotency import (
+    CompletedResponse,
+    IdempotencyLeaseCache,
+    get_idempotency_lease_cache,
+)
 from musubi.api.idempotency_dependency import (
     IdempotentContext,
     Replay,
@@ -63,8 +67,8 @@ def _app(cache: IdempotencyLeaseCache) -> FastAPI:
 
     @app.exception_handler(Replay)
     async def _replay(request: Request, exc: Replay) -> Response:
-        r = JSONResponse(exc.response_body, status_code=exc.response_status or 200)
-        r.headers["X-Idempotent-Replay"] = "true"
+        r = Response(content=exc.completed.body, status_code=exc.completed.status)
+        r.raw_headers = [*exc.completed.raw_headers, (b"x-idempotent-replay", b"true")]
         return r
 
     @app.post("/v1/episodic", operation_id=OP)
@@ -154,7 +158,9 @@ def test_different_body_same_identity_is_409_conflict() -> None:
     )
     cache.acquire(_expected_identity("k"), "o1", digest=digest_a)
     cache.store(
-        _expected_identity("k"), "o1", response_status=202, response_body={"object_id": "x"}
+        _expected_identity("k"),
+        "o1",
+        response=CompletedResponse(status=202, raw_headers=(), body=b"stored"),
     )
     c = _client(cache)
     r = c.post(
@@ -172,7 +178,13 @@ def test_same_digest_is_replay_served_without_executing() -> None:
     digest = canonical_digest(body, "application/json")
     cache.acquire(_expected_identity("k"), "o1", digest=digest)
     cache.store(
-        _expected_identity("k"), "o1", response_status=202, response_body={"object_id": "cached"}
+        _expected_identity("k"),
+        "o1",
+        response=CompletedResponse(
+            status=202,
+            raw_headers=((b"content-type", b"application/json"),),
+            body=b'{"object_id":"cached"}',
+        ),
     )
     c = _client(cache)
     r = c.post(
@@ -193,8 +205,10 @@ class _SpyCache:
     def __init__(self) -> None:
         self.released: list[tuple[Any, str]] = []
 
-    def acquire(self, identity: Any, owner: str, *, digest: bytes) -> tuple[str, Any, int | None]:
-        return "acquired", None, None
+    def acquire(
+        self, identity: Any, owner: str, *, digest: bytes
+    ) -> tuple[str, CompletedResponse | None]:
+        return "acquired", None
 
     def release(self, identity: Any, owner: str) -> bool:
         self.released.append((identity, owner))

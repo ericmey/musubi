@@ -25,9 +25,34 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 _DEFAULT_TTL_S = 24 * 3600
+
+# The four exhaustive acquire outcomes. Typed so callers handle every case and an unknown status
+# can never fall through as "acquired".
+AcquireStatus = Literal["acquired", "in_flight", "hit", "conflict"]
+
+
+@dataclass(frozen=True)
+class CompletedResponse:
+    """An immutable captured 2xx response, stored for replay. ``raw_headers`` preserves duplicate
+    headers exactly; ``body`` is the exact response bytes. All fields are immutable, so the cached
+    value can never be mutated by a caller and a replay exposes no shared mutable reference."""
+
+    status: int
+    raw_headers: tuple[tuple[bytes, bytes], ...]
+    body: bytes
+
+
+@dataclass(frozen=True)
+class IdempotencyRequestState:
+    """The per-request idempotency decision the dependency publishes for the store-only observer.
+    Frozen so neither side can mutate it after the dependency establishes it."""
+
+    identity: tuple[Any, ...]
+    owner: str
+    digest: bytes
 
 
 @dataclass
@@ -127,8 +152,7 @@ class _LeaseEntry:
     created_at: float
     done: bool = False
     completed_at: float | None = None
-    response_status: int | None = None
-    response_body: Any = None
+    response: CompletedResponse | None = None
 
 
 class IdempotencyLeaseCache:
@@ -178,10 +202,12 @@ class IdempotencyLeaseCache:
                 f"digest must be {_DIGEST_LEN} bytes (SHA-256); got {type(digest).__name__}"
             )
 
-    def acquire(self, identity: Any, owner: str, *, digest: bytes) -> tuple[str, Any, int | None]:
-        """Atomic gate. Returns ``(status, response_body, response_status)``. ``digest`` is the
-        canonical request digest (mandatory) — a malformed/omitted digest raises and NO lease is
-        created."""
+    def acquire(
+        self, identity: Any, owner: str, *, digest: bytes
+    ) -> tuple[AcquireStatus, CompletedResponse | None]:
+        """Atomic gate. Returns ``(status, completed_response)``; the response is populated only on
+        a ``"hit"``. ``digest`` is the canonical request digest (mandatory) — a malformed/omitted
+        digest raises and NO lease is created."""
         self._require_digest(digest)
         now = self._clock()
         with self._lock:
@@ -190,30 +216,30 @@ class IdempotencyLeaseCache:
             if entry is None:
                 self._entries[identity] = _LeaseEntry(owner=owner, digest=digest, created_at=now)
                 self._entries.move_to_end(identity)
-                return "acquired", None, None
+                return "acquired", None
             if entry.done:
                 if entry.digest != digest:
                     # same identity, DIFFERENT body — conflict; do NOT touch the lease (no leak).
-                    return "conflict", None, None
+                    return "conflict", None
                 self._entries.move_to_end(identity)  # LRU touch on replay
-                return "hit", entry.response_body, entry.response_status
+                return "hit", entry.response
             # in-flight: reclaim only if the owner is stale (crashed), else block.
             if now - entry.created_at > self._stale:
                 self._entries[identity] = _LeaseEntry(owner=owner, digest=digest, created_at=now)
-                return "acquired", None, None
-            return "in_flight", None, None
+                return "acquired", None
+            return "in_flight", None
 
-    def store(self, identity: Any, owner: str, *, response_status: int, response_body: Any) -> None:
-        """Complete the caller's lease with its response. Owner-only; raises otherwise. Marks the
-        entry newest-by-COMPLETION and evicts oldest completed entries beyond ``max_entries``."""
+    def store(self, identity: Any, owner: str, *, response: CompletedResponse) -> None:
+        """Complete the caller's lease with its immutable response. Owner-only; raises otherwise.
+        Marks the entry newest-by-COMPLETION and evicts oldest completed entries beyond
+        ``max_entries``."""
         with self._lock:
             entry = self._entries.get(identity)
             if entry is None or entry.owner != owner or entry.done:
                 raise PermissionError("idempotency store by a non-owner or after completion")
             entry.done = True
             entry.completed_at = self._clock()
-            entry.response_status = response_status
-            entry.response_body = response_body
+            entry.response = response
             self._entries.move_to_end(identity)  # newest-by-completion at the tail
             self._evict_completed_locked()
 
@@ -264,8 +290,11 @@ def get_idempotency_lease_cache() -> IdempotencyLeaseCache:
 
 
 __all__ = [
+    "AcquireStatus",
+    "CompletedResponse",
     "IdempotencyCache",
     "IdempotencyLeaseCache",
+    "IdempotencyRequestState",
     "get_idempotency_cache",
     "get_idempotency_lease_cache",
 ]

@@ -16,12 +16,14 @@ import threading
 
 import pytest
 
-from musubi.api.idempotency import IdempotencyLeaseCache
+from musubi.api.idempotency import CompletedResponse, IdempotencyLeaseCache
 
 ID = ("issuer", "subject", "presence", "POST", "/v1/episodic", "eric/claude-code/episodic", "k1")
 DIGEST_A = b"A" * 32
 DIGEST_B = b"B" * 32
 _D = bytes(32)
+_RX = CompletedResponse(status=202, raw_headers=(), body=b"x")
+_RORIG = CompletedResponse(status=202, raw_headers=(), body=b"orig")
 
 
 class _Clock:
@@ -43,9 +45,9 @@ class _Clock:
 def test_same_identity_same_digest_replays() -> None:
     c = IdempotencyLeaseCache(clock=_Clock())
     assert c.acquire(ID, "o1", digest=DIGEST_A)[0] == "acquired"
-    c.store(ID, "o1", response_status=202, response_body={"object_id": "x"})
-    status, body, code = c.acquire(ID, "o2", digest=DIGEST_A)
-    assert status == "hit" and body == {"object_id": "x"} and code == 202
+    c.store(ID, "o1", response=_RX)
+    status, completed = c.acquire(ID, "o2", digest=DIGEST_A)
+    assert status == "hit" and completed == _RX
 
 
 def test_digest_conflict_without_lease_leak() -> None:
@@ -53,7 +55,7 @@ def test_digest_conflict_without_lease_leak() -> None:
     the conflicting body still conflicts (not 'acquired'), and the original digest still replays."""
     c = IdempotencyLeaseCache(clock=_Clock())
     c.acquire(ID, "o1", digest=DIGEST_A)
-    c.store(ID, "o1", response_status=202, response_body={"object_id": "x"})
+    c.store(ID, "o1", response=_RX)
     assert c.acquire(ID, "o2", digest=DIGEST_B)[0] == "conflict", "different body must conflict"
     assert c.acquire(ID, "o3", digest=DIGEST_B)[0] == "conflict", "conflict must not leak a lease"
     assert c.acquire(ID, "o4", digest=DIGEST_A)[0] == "hit", "the original digest still replays"
@@ -62,10 +64,10 @@ def test_digest_conflict_without_lease_leak() -> None:
 def test_conflict_does_not_mutate_the_stored_response() -> None:
     c = IdempotencyLeaseCache(clock=_Clock())
     c.acquire(ID, "o1", digest=DIGEST_A)
-    c.store(ID, "o1", response_status=202, response_body={"object_id": "orig"})
+    c.store(ID, "o1", response=_RORIG)
     c.acquire(ID, "o2", digest=DIGEST_B)  # conflict
-    _s, body, _c = c.acquire(ID, "o3", digest=DIGEST_A)
-    assert body == {"object_id": "orig"}, "a conflict must not overwrite the stored response"
+    _s, completed = c.acquire(ID, "o3", digest=DIGEST_A)
+    assert completed == _RORIG, "a conflict must not overwrite the stored response"
 
 
 def test_digest_is_mandatory_omission_and_bad_shape_cannot_create_a_lease() -> None:
@@ -92,7 +94,11 @@ def test_bounded_eviction_keeps_newest_completed() -> None:
     for i in range(5):
         ident = ("p", f"k{i}")
         c.acquire(ident, f"o{i}", digest=_D)
-        c.store(ident, f"o{i}", response_status=202, response_body={"i": i})
+        c.store(
+            ident,
+            f"o{i}",
+            response=CompletedResponse(status=202, raw_headers=(), body=str(i).encode()),
+        )
     assert c.acquire(("p", "k0"), "n", digest=_D)[0] == "acquired", "oldest completed evicted"
     assert c.acquire(("p", "k1"), "n", digest=_D)[0] == "acquired", (
         "second-oldest completed evicted"
@@ -112,7 +118,11 @@ def test_all_inflight_burst_then_store_converges_to_max() -> None:
     for i in range(
         5
     ):  # then store all — eviction converges the completed set here, no more acquires
-        c.store(("p", f"b{i}"), f"o{i}", response_status=202, response_body={"i": i})
+        c.store(
+            ("p", f"b{i}"),
+            f"o{i}",
+            response=CompletedResponse(status=202, raw_headers=(), body=str(i).encode()),
+        )
     # exactly the 2 newest-by-completion (b3, b4) survive; the rest are gone.
     for i in range(3):
         assert c.acquire(("p", f"b{i}"), "n", digest=_D)[0] == "acquired", f"b{i} must be evicted"
@@ -121,7 +131,11 @@ def test_all_inflight_burst_then_store_converges_to_max() -> None:
     for i in range(5):
         c2.acquire(("p", f"b{i}"), f"o{i}", digest=_D)
     for i in range(5):
-        c2.store(("p", f"b{i}"), f"o{i}", response_status=202, response_body={"i": i})
+        c2.store(
+            ("p", f"b{i}"),
+            f"o{i}",
+            response=CompletedResponse(status=202, raw_headers=(), body=str(i).encode()),
+        )
     assert c2.acquire(("p", "b3"), "n", digest=_D)[0] == "hit", "b3 (newest-1) must survive"
     assert c2.acquire(("p", "b4"), "n", digest=_D)[0] == "hit", "b4 (newest) must survive"
 
@@ -131,7 +145,7 @@ def test_eviction_never_drops_an_in_flight_lease() -> None:
     c.acquire(("p", "inflight"), "owner", digest=_D)  # in-flight, NOT stored
     for i in range(5):  # push many completed entries past the budget
         c.acquire(("p", f"done{i}"), f"o{i}", digest=_D)
-        c.store(("p", f"done{i}"), f"o{i}", response_status=202, response_body={})
+        c.store(("p", f"done{i}"), f"o{i}", response=_RX)
     assert c.acquire(("p", "inflight"), "other", digest=_D)[0] == "in_flight", (
         "an in-flight lease must never be evicted"
     )
@@ -149,7 +163,11 @@ def test_deterministic_concurrency_exactly_one_acquires() -> None:
         if c.acquire(("p", "race"), f"o{i}", digest=DIGEST_A)[0] == "acquired":
             with lock:
                 acquired.append(i)
-            c.store(("p", "race"), f"o{i}", response_status=202, response_body={"i": i})
+            c.store(
+                ("p", "race"),
+                f"o{i}",
+                response=CompletedResponse(status=202, raw_headers=(), body=str(i).encode()),
+            )
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
     for t in threads:

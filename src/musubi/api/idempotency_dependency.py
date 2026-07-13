@@ -29,7 +29,12 @@ from typing import Any
 from fastapi import Depends, Request
 
 from musubi.api.errors import APIError
-from musubi.api.idempotency import IdempotencyLeaseCache, get_idempotency_lease_cache
+from musubi.api.idempotency import (
+    CompletedResponse,
+    IdempotencyLeaseCache,
+    IdempotencyRequestState,
+    get_idempotency_lease_cache,
+)
 from musubi.api.write_auth import AuthorizedWrite
 
 _DIGEST_DOMAIN = b"musubi-idem-json-v1"
@@ -54,11 +59,10 @@ class IdempotentContext:
 
 class Replay(Exception):
     """Raised on an idempotency HIT so the registered exception handler serves the cached response
-    (byte-exact) without executing the handler."""
+    (byte-exact) without executing the handler. Carries the immutable :class:`CompletedResponse`."""
 
-    def __init__(self, response_status: int | None, response_body: Any) -> None:
-        self.response_status = response_status
-        self.response_body = response_body
+    def __init__(self, completed: CompletedResponse) -> None:
+        self.completed = completed
 
 
 def canonical_digest(body_bytes: bytes, content_type: str) -> bytes:
@@ -105,9 +109,10 @@ def make_idempotency_dependency(
             16
         )  # collision-resistant PER REQUEST; never derived from identity
 
-        status, body, code = cache.acquire(identity, owner, digest=digest)
+        status, completed = cache.acquire(identity, owner, digest=digest)
         if status == "hit":
-            raise Replay(code, body)
+            assert completed is not None  # a hit always carries the stored response
+            raise Replay(completed)
         if status == "conflict":
             raise APIError(
                 status_code=409,
@@ -120,16 +125,17 @@ def make_idempotency_dependency(
                 code="CONFLICT",
                 detail="a request with this Idempotency-Key is already in flight; retry",
             )
+        if status != "acquired":  # fail closed: an unknown status must NEVER execute the handler
+            raise APIError(
+                status_code=500, code="INTERNAL", detail="unexpected idempotency acquire status"
+            )
 
         # acquired: establish the observer-visible lease state. If that fails for any reason,
         # release the lease so an acquired-but-unpublished slot can never leak.
         try:
-            request.state.idem = {
-                "identity": identity,
-                "owner": owner,
-                "digest": digest,
-                "eligible": True,
-            }
+            request.state.idem = IdempotencyRequestState(
+                identity=identity, owner=owner, digest=digest
+            )
         except BaseException:
             cache.release(identity, owner)
             raise
