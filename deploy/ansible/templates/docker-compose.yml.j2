@@ -5,6 +5,9 @@ services:
     image: {{ musubi_core_image }}
     env_file:
       - .env.production
+    environment:
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
     ports:
       - "{{ musubi_core_port }}:{{ musubi_core_port }}"
     volumes:
@@ -33,17 +36,30 @@ services:
     image: {{ musubi_core_image }}
     env_file:
       - .env.production
+    environment:
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+      QDRANT_API_KEY: ${QDRANT_API_KEY}
     command: ["python", "-m", "musubi.lifecycle.runner"]
+    # `/metrics` exposition for Prometheus scrape — see
+    # docs/Musubi/09-operations/observability.md § Lifecycle metrics.
+    # Internal-only: Prometheus reaches it via the compose network.
+    # No host port-bind. Override via env LIFECYCLE_METRICS_PORT.
+    expose:
+      - "8101"
     volumes:
       - /var/lib/musubi/vault:/var/lib/musubi/vault
       - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
       - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
       - /var/log/musubi:/var/log/musubi
-    # The core image ships a HEALTHCHECK against :8100. The worker doesn't
-    # serve HTTP, so inherit would always report unhealthy. Disable and rely
-    # on `restart: unless-stopped` + log surveillance instead.
+    # The core image ships a HEALTHCHECK against :8100. The worker exposes
+    # `/metrics` on :8101 instead — use that for liveness signal so
+    # `restart: unless-stopped` actually fires when the scrape server dies.
     healthcheck:
-      disable: true
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8101/metrics', timeout=2).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on:
       qdrant:
         condition: service_healthy
@@ -54,9 +70,8 @@ services:
   qdrant:
     image: {{ musubi_qdrant_image }}
     environment:
-      # Qdrant reads its API key from config OR env. Env wins. Keeps the
-      # value out of the mounted config and in the ansible-vault instead.
-      QDRANT__SERVICE__API_KEY: "{{ vault_qdrant_api_key }}"
+      # Injected at runtime by op-run from 1Password Connect.
+      QDRANT__SERVICE__API_KEY: "${QDRANT_API_KEY}"
     volumes:
       - /var/lib/musubi/qdrant-storage:/qdrant/storage
       # Snapshots live in /qdrant/snapshots inside the container (default
@@ -154,7 +169,7 @@ services:
     image: {{ musubi_prometheus_image }}
     volumes:
       - /etc/musubi/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - /etc/musubi/qdrant.token:/etc/prometheus/qdrant.token:ro
+      - /run/musubi-secrets/qdrant.token:/etc/prometheus/qdrant.token:ro
       - /var/lib/musubi/prometheus-data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"

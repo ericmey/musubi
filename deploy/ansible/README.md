@@ -74,7 +74,8 @@ ANSIBLE_VAULT_PASSWORD_FILE=~/ansible/.vault_pass \
  deploy/ansible/<playbook>.yml
 ```
 
-Where `<playbook>` is one of `bootstrap`, `config`, `deploy`, `health`.
+Where `<playbook>` is one of `bootstrap`, `config`, `deploy`, `update`, or
+`health`.
 
 Dry-run first whenever possible:
 
@@ -101,6 +102,28 @@ ansible-playbook \
 
 The real `bootstrap.yml`, `config.yml`, and `deploy.yml` need the encrypted
 vault — they must run from the ansible control host.
+
+## Runtime secrets (1Password Connect)
+
+The JWT signing key and Qdrant API key are not Ansible-vault variables and are
+never rendered into `.env.production` or a persistent token file. The workload
+host must have the 1Password CLI at `/usr/bin/op` and a root-owned `0600`
+`/etc/musubi/connect.env` containing the Connect endpoint and read-only token.
+Every runtime playbook fails closed when that file is absent or has the wrong
+owner or mode.
+
+The committed templates contain references, not credential values:
+
+- `secrets.tpl` is resolved by `op run` into the Compose process environment.
+- `qdrant.token.tpl` is resolved by `op inject` into
+  `/run/musubi-secrets/qdrant.token` on each systemd start.
+- `musubi.service` owns the render-before-start ordering and removes the runtime
+  directory automatically when the unit stops.
+
+Provision `connect.env` through the fleet's root-only host bootstrap path before
+running Musubi bootstrap. Do not add the Connect token to inventory variables,
+Ansible vault, command output, diffs, or this repository. Updating either
+1Password item takes effect only after `systemctl restart musubi`.
 
 ## Why this split
 

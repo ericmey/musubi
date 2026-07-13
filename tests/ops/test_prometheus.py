@@ -32,14 +32,11 @@ PROM_CONFIG = ROOT / "deploy" / "ansible" / "templates" / "prometheus.yml.j2"
 COMPOSE_TEMPLATE = ROOT / "deploy" / "ansible" / "templates" / "docker-compose.yml.j2"
 GROUP_VARS = ROOT / "deploy" / "ansible" / "group_vars" / "all.yml"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
+UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
 
 
 def _load_prom_config() -> Any:
-    # `prometheus.yml.j2` has no Jinja placeholders inside scrape blocks
-    # today, but tolerate them in case a future change adds one.
-    rendered = PROM_CONFIG.read_text()
-    rendered = rendered.replace("{{ vault_qdrant_api_key }}", "x")
-    return yaml.safe_load(rendered)
+    return yaml.safe_load(PROM_CONFIG.read_text())
 
 
 def _load(path: Path) -> Any:
@@ -140,7 +137,6 @@ def _render_compose() -> dict[str, Any]:
         "{{ musubi_node_exporter_image }}": "prom/node-exporter:test",
         "{{ musubi_core_port }}": "8100",
         "{{ musubi_ollama_model }}": "qwen3:4b",
-        "{{ vault_qdrant_api_key }}": "x",
     }
     for k, v in tokens.items():
         rendered = rendered.replace(k, v)
@@ -187,6 +183,26 @@ def test_node_exporter_has_udev_mount_and_flag() -> None:
         "node-exporter must be told where to find udev data in the container; "
         "the bind mount alone is insufficient"
     )
+
+
+def test_lifecycle_worker_metrics_survive_source_reconciliation() -> None:
+    compose = _render_compose()
+    worker = compose["services"]["lifecycle-worker"]
+    expose = worker.get("expose") or []
+    healthcheck = worker.get("healthcheck") or {}
+    jobs = {job["job_name"]: job for job in _load_prom_config()["scrape_configs"]}
+
+    assert "8101" in [str(port) for port in expose]
+    assert healthcheck.get("disable") is not True
+    assert "8101/metrics" in str(healthcheck)
+    lifecycle = jobs.get("lifecycle-worker")
+    assert lifecycle is not None
+    targets = [
+        target
+        for static in lifecycle.get("static_configs", [])
+        for target in static.get("targets", [])
+    ]
+    assert "lifecycle-worker:8101" in targets
 
 
 def test_prometheus_mounts_scrape_config_readonly() -> None:
@@ -252,16 +268,76 @@ def test_deploy_playbook_renders_scrape_config() -> None:
     assert "templates/prometheus.yml.j2" in text, (
         "deploy.yml must render prometheus.yml.j2 (not copy a static file)"
     )
-    assert "templates/qdrant.token.j2" in text, (
-        "deploy.yml must render qdrant.token.j2 so the prometheus container "
+    assert "templates/qdrant.token.tpl.j2" in text, (
+        "deploy.yml must render qdrant.token.tpl.j2 so the systemd unit "
         "can authenticate against qdrant /metrics"
     )
 
 
+def test_update_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() -> None:
+    """An in-place update must reload the inode mounted by Prometheus and prove the
+    lifecycle-worker target stayed visible.
+
+    This regresses a production failure fixed in the operational ``hw-ansible``
+    source at commit ``8e4da88``. The 1Password source reconciliation must carry
+    that newer behavior forward instead of restoring the stale-inode failure.
+    """
+
+    play = yaml.safe_load(UPDATE_PLAYBOOK.read_text())[0]
+    prometheus_tasks = [
+        task
+        for task in play["tasks"]
+        if task.get("ansible.builtin.template", {}).get("src") == "templates/prometheus.yml.j2"
+    ]
+    assert len(prometheus_tasks) == 1
+    assert prometheus_tasks[0]["ansible.builtin.template"].get("unsafe_writes") is True
+
+    handlers = play.get("handlers", [])
+    lifecycle_checks = [
+        handler
+        for handler in handlers
+        if "lifecycle-worker" in yaml.safe_dump(handler)
+        and "/api/v1/query" in yaml.safe_dump(handler)
+    ]
+    assert len(lifecycle_checks) == 1
+    check = lifecycle_checks[0]
+    assert check.get("listen")
+    check_text = yaml.safe_dump(check)
+    assert "retries:" in check_text
+    assert "until:" in check_text
+
+
+def test_deploy_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() -> None:
+    play = yaml.safe_load(DEPLOY_PLAYBOOK.read_text())[0]
+    prometheus_tasks = [
+        task
+        for task in play["tasks"]
+        if task.get("ansible.builtin.template", {}).get("src") == "templates/prometheus.yml.j2"
+    ]
+    assert len(prometheus_tasks) == 1
+    prom_task = prometheus_tasks[0]
+    assert prom_task["ansible.builtin.template"].get("unsafe_writes") is True
+    assert prom_task.get("notify")
+
+    handlers = play.get("handlers", [])
+    lifecycle_checks = [
+        handler
+        for handler in handlers
+        if "lifecycle-worker" in yaml.safe_dump(handler)
+        and "/api/v1/query" in yaml.safe_dump(handler)
+    ]
+    assert len(lifecycle_checks) == 1
+    check = lifecycle_checks[0]
+    check_text = yaml.safe_dump(check)
+    assert check.get("listen")
+    assert "retries:" in check_text
+    assert "until:" in check_text
+
+
 def test_scrape_targets_qdrant_with_bearer_auth() -> None:
     """Qdrant 1.17 requires Authorization: Bearer <api-key> on /metrics.
-    Prometheus uses authorization.credentials_file pointing at a file
-    rendered from `vault_qdrant_api_key` so the scrape config itself
+    Prometheus uses authorization.credentials_file pointing at a tmpfs file
+    rendered by the systemd `op inject` boundary so the scrape config itself
     stays secret-free."""
     cfg = _load_prom_config()
     jobs = {j["job_name"]: j for j in cfg["scrape_configs"]}

@@ -21,9 +21,9 @@
 # `Authorization: Bearer <api-key>`. Qdrant 1.17 accepts either an
 # `api-key:` header or the Bearer form; Prometheus only natively
 # supports the Bearer form, so that's what we use. The token file is
-# rendered separately by `deploy/ansible/deploy.yml` from the
-# `vault_qdrant_api_key` variable and mounted into the container at
-# `/etc/prometheus/qdrant.token` (mode 0640, root:musubi).
+# rendered at service start by `op inject` from a committed `op://` reference
+# template into `/run/musubi-secrets/qdrant.token`, then mounted into the
+# container at `/etc/prometheus/qdrant.token` (mode 0400, UID 65534).
 #
 # Visualization, alerting, and trace collection live on shiori per ADR 0033.
 # Local Grafana/Loki/Tempo/Alertmanager were planned by slice-ops-observability
@@ -63,6 +63,16 @@ scrape_configs:
     static_configs:
       - targets: ["core:8100"]
 
+  # Lifecycle worker — `musubi_lifecycle_job_duration_seconds`,
+  # `musubi_lifecycle_job_errors_total`, plus any future lifecycle-side
+  # gauges. Exposed on :8101 via stdlib HTTP server started by
+  # `musubi.observability.scrape_server.start_metrics_server`.
+  # Internal compose network only — no auth.
+  - job_name: lifecycle-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["lifecycle-worker:8101"]
+
   # TEI — each embedder/reranker exposes its own /metrics on port 80
   # (batch latency, queue depth, GPU utilisation).
   - job_name: tei-dense
@@ -95,8 +105,8 @@ scrape_configs:
       - targets: ["localhost:9090"]
 
   # Qdrant — vector storage. Native Prometheus endpoint at /metrics; auth
-  # required. Bearer credentials come from a file rendered by ansible from
-  # `vault_qdrant_api_key`.
+  # required. Bearer credentials come from the tmpfs file rendered by
+  # `musubi.service` before Compose starts.
   - job_name: qdrant
     metrics_path: /metrics
     authorization:
