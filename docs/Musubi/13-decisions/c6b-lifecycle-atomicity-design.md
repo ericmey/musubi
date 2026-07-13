@@ -146,20 +146,28 @@ rule (a `set_payload` in a function that writes a `state` field), NOT the raw li
 `set_payload` sites named in the ruling write **non-state** fields and are correctly excluded (verified
 2026-07-13): `maturation.py:893` writes `tags/importance/topics` ("non-state enrichment", per its own
 docstring), `synthesis.py:718` writes `contradicts`, `demotion.py:380` writes the reinforcement clock.
-The actual **state-writing** `set_payload` sites are:
+The actual **state-writing TRANSITION** `set_payload` sites (G1 covers post-create transitions only —
+Yua repair 3) are **6 sites across 6 files**:
 
 - **5 plane `transition()` methods** — `planes/episodic/plane.py:812`, `planes/concept/plane.py:436`,
   `planes/thoughts/plane.py:488`, `planes/artifact/plane.py:295`, `planes/curated/plane.py:449` (each
   `set_payload`s `state`+`version` and emits its own event), called by `lifecycle/promotion.py`,
   `lifecycle/demotion.py` (×5), `api/routers/writes_concept.py` (×2).
 - **`lifecycle/transitions.py:252`** — the canonical path.
-- **`planes/curated/plane.py:224` (`create`)** — writes an initial `state` on object creation (a
-  create-without-atomic-audit boundary case; whether H5 routes creates through the coordinator is an H5
-  scope call).
 
-So **7 state-writing sites across 6 files** — the G1 guard enumerates exactly these. (demotion's state
-changes go through the plane `transition()` methods, already covered; its direct `set_payload` is
-non-state.)
+**Out of G1's transition scope (repair 3):** `planes/curated/plane.py:224` (`create`) writes an INITIAL
+state on creation — a capture/create-atomicity concern (M9 / a deliberately-approved C6b extension), NOT
+forced through the transition coordinator. The scanner excludes `create` functions. (Only curated's
+create writes `state=` explicitly; other planes' creates carry state as a typed-model default and are
+correctly not flagged — so scoping to transitions avoids an inconsistent partial-create rule.)
+
+**The G1 scanner** (repairs 1–4, `tests/lifecycle/test_c6b_atomicity.py`): (1) exempts exactly the
+canonical relative path `lifecycle/coordinator.py`, not a basename; (2) a **per-call taint fixpoint**
+ties a `state` write to the SPECIFIC `set_payload` payload via dataflow, so a function that computes state
+AND separately writes an unrelated enrichment `set_payload` is NOT flagged (the false-association
+repair 2); (3) excludes creates; (4) a green **present-denominator control** pins the exact 6 current
+bypasses so a silently-vanishing site fails loudly (red-proofed: blinding the scanner to one plane makes
+the control fail `missing=…`).
 
 **Decision:** C6b does NOT migrate all of these in-scope (too large). C6b **depends on a concrete H5
 unification slice** ([[_slices/slice-h5-unify-state-mutation]], Issue TBD) that routes ALL state mutation

@@ -33,9 +33,11 @@ bypasses any coordinator and can produce mutation-without-audit:
   `set_payload`s `state`+`version` and emits its own `LifecycleEvent`), called by
   `lifecycle/promotion.py`, `lifecycle/demotion.py` (×5), `api/routers/writes_concept.py` (×2).
 - **`lifecycle/transitions.py:252`** — the canonical path.
-- **`planes/curated/plane.py:224` (`create`)** — initial-state write on creation (boundary case).
 
-7 state-writing sites across 6 files — the C6b G1 guard enumerates exactly these.
+6 state-writing TRANSITION sites across 6 files — the C6b G1 guard's present-denominator control pins
+exactly these. **Out of scope here:** `planes/curated/plane.py:224` (`create`) is an INITIAL-state write
+(capture/create atomicity, M9 / a deliberately-approved C6b extension), not a transition — H5 does NOT
+force it through the transition coordinator.
 
 ## Scope
 
