@@ -25,7 +25,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,10 +33,6 @@ COMPOSE_TEMPLATE = ROOT / "deploy" / "ansible" / "templates" / "docker-compose.y
 GROUP_VARS = ROOT / "deploy" / "ansible" / "group_vars" / "all.yml"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
 UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
-
-
-class DefectStillPresent(Exception):
-    """Raised when deployed observability was dropped during source reconciliation."""
 
 
 def _load_prom_config() -> Any:
@@ -190,11 +185,6 @@ def test_node_exporter_has_udev_mount_and_flag() -> None:
     )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="the source candidate drops the deployed lifecycle-worker metrics endpoint, healthcheck, and Prometheus scrape job",
-)
 def test_lifecycle_worker_metrics_survive_source_reconciliation() -> None:
     compose = _render_compose()
     worker = compose["services"]["lifecycle-worker"]
@@ -202,20 +192,17 @@ def test_lifecycle_worker_metrics_survive_source_reconciliation() -> None:
     healthcheck = worker.get("healthcheck") or {}
     jobs = {job["job_name"]: job for job in _load_prom_config()["scrape_configs"]}
 
-    if "8101" not in [str(port) for port in expose]:
-        raise DefectStillPresent("lifecycle-worker no longer exposes its metrics port")
-    if healthcheck.get("disable") is True or "8101/metrics" not in str(healthcheck):
-        raise DefectStillPresent("lifecycle-worker metrics healthcheck was replaced by disable:true")
+    assert "8101" in [str(port) for port in expose]
+    assert healthcheck.get("disable") is not True
+    assert "8101/metrics" in str(healthcheck)
     lifecycle = jobs.get("lifecycle-worker")
-    if lifecycle is None:
-        raise DefectStillPresent("Prometheus no longer has a lifecycle-worker scrape job")
+    assert lifecycle is not None
     targets = [
         target
         for static in lifecycle.get("static_configs", [])
         for target in static.get("targets", [])
     ]
-    if "lifecycle-worker:8101" not in targets:
-        raise DefectStillPresent(f"unexpected lifecycle-worker targets: {targets!r}")
+    assert "lifecycle-worker:8101" in targets
 
 
 def test_prometheus_mounts_scrape_config_readonly() -> None:

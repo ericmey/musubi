@@ -63,6 +63,16 @@ scrape_configs:
     static_configs:
       - targets: ["core:8100"]
 
+  # Lifecycle worker — `musubi_lifecycle_job_duration_seconds`,
+  # `musubi_lifecycle_job_errors_total`, plus any future lifecycle-side
+  # gauges. Exposed on :8101 via stdlib HTTP server started by
+  # `musubi.observability.scrape_server.start_metrics_server`.
+  # Internal compose network only — no auth.
+  - job_name: lifecycle-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["lifecycle-worker:8101"]
+
   # TEI — each embedder/reranker exposes its own /metrics on port 80
   # (batch latency, queue depth, GPU utilisation).
   - job_name: tei-dense
