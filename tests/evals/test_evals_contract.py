@@ -29,7 +29,7 @@ def _assert_ndcg_at_k(ndcg_impl: Callable[[list[int], list[int], int], float]) -
     assert round(ndcg_impl(scores, ideal, 10), 4) == 0.9721
 
     # 2. K-truncation assertion
-    assert round(ndcg_impl(scores, ideal, 2), 4) == 0.8581
+    assert round(ndcg_impl(scores, ideal, 2), 4) == 0.8581, "K-truncation mismatch"
 
     # 3. Zero IDCG protection
     assert ndcg_impl([0, 0], [0, 0], 10) == 0.0
@@ -67,7 +67,7 @@ def test_discrimination_ndcg_at_k() -> None:
         idcg = dcg(sorted(ideal_scores, reverse=True))
         return dcg(scores) / idcg if idcg > 0 else 0.0
 
-    with pytest.raises(AssertionError, match="assert "):
+    with pytest.raises(AssertionError, match="K-truncation mismatch"):
         _assert_ndcg_at_k(wrong_ndcg_ignores_k)
 
     # Fault: Zero IDCG raises ZeroDivisionError
@@ -223,7 +223,9 @@ def _assert_deterministic_rerun(
     # Sensitivity: Different corpus MUST produce different result
     corpus_b: list[dict[str, Any]] = [{"query": "test_B", "target": "2"}]
     res3 = run_eval_func(corpus_b, "fake", 42)
-    assert res1.metrics != res3.metrics or res1.ordered_hits != res3.ordered_hits
+    assert res1.metrics != res3.metrics or res1.ordered_hits != res3.ordered_hits, (
+        "Sensitivity mismatch"
+    )
 
 
 @pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: Eval runner missing")
@@ -249,7 +251,7 @@ def test_discrimination_deterministic_rerun() -> None:
     def wrong_constant_runner(corpus: list[dict[str, Any]], embedder: str, seed: int) -> EvalResult:
         return EvalResult({"ndcg@10": float(seed)}, [str(seed)])
 
-    with pytest.raises(AssertionError, match="assert "):
+    with pytest.raises(AssertionError, match="Sensitivity mismatch"):
         _assert_deterministic_rerun(wrong_constant_runner)
 
 
@@ -709,13 +711,15 @@ def test_discrimination_holdout_isolation() -> None:
 def _assert_pr_smoke_fixed_embeddings(
     run_func: Callable[[list[dict[str, Any]]], Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Fixture 1: Perfect ordering (doc1 is relevant, doc2 is not)
     fixed_corpus_1 = [
         {"id": "doc1", "text": "alpha", "embedding": [0.1, 0.2], "relevance": 1},
         {"id": "doc2", "text": "beta", "embedding": [0.3, 0.4], "relevance": 0},
     ]
+    # Fixture 2: Imperfect ordering (doc4 is not relevant but returned first, doc3 is relevant but second)
     fixed_corpus_2 = [
-        {"id": "doc3", "text": "gamma", "embedding": [0.5, 0.6], "relevance": 1},
         {"id": "doc4", "text": "delta", "embedding": [0.7, 0.8], "relevance": 0},
+        {"id": "doc3", "text": "gamma", "embedding": [0.5, 0.6], "relevance": 1},
     ]
     import hashlib
     import json
@@ -744,9 +748,14 @@ def _assert_pr_smoke_fixed_embeddings(
         raise ValueError("Qdrant/TEI network hit detected")
 
     assert getattr(res1_a, "corpus_checksum", "") == hash_1, "Checksum mismatch fix 1"
+    # Independent metric derivation: fixture 1 returns perfectly ordered (doc1 then doc2).
+    # IDCG for [1, 0] = 1/log2(2) = 1.0. DCG for perfectly ranked [1, 0] = 1.0. NDCG = 1.0.
     assert getattr(res1_a, "metrics", {}).get("ndcg@10", 0.0) == 1.0, "Metrics mismatch fix 1"
     assert getattr(res1_a, "metrics", {}) == getattr(res1_b, "metrics", {}), (
         "Metrics non-deterministic"
+    )
+    assert getattr(res1_a, "ordered_hits", []) == getattr(res1_b, "ordered_hits", []), (
+        "Ranking non-deterministic"
     )
 
     # Fixture 2
@@ -756,9 +765,17 @@ def _assert_pr_smoke_fixed_embeddings(
         raise ValueError("Qdrant/TEI network hit detected")
 
     assert getattr(res2_a, "corpus_checksum", "") == hash_2, "Checksum mismatch fix 2"
-    assert getattr(res2_a, "metrics", {}).get("ndcg@10", 0.0) == 0.8, "Metrics mismatch fix 2"
+    # Fixture 2 returns [doc4, doc3] where doc3 is relevant (score 1) and doc4 is not (score 0).
+    # Ideal ranking = [1, 0]. IDCG = 1.0
+    # Actual ranking = [0, 1]. DCG = 1/log2(3) = ~0.6309
+    assert abs(getattr(res2_a, "metrics", {}).get("ndcg@10", 0.0) - 0.6309) < 0.001, (
+        "Metrics mismatch fix 2"
+    )
     assert getattr(res2_a, "metrics", {}) == getattr(res2_b, "metrics", {}), (
         "Metrics non-deterministic"
+    )
+    assert getattr(res2_a, "ordered_hits", []) == getattr(res2_b, "ordered_hits", []), (
+        "Ranking non-deterministic"
     )
 
 
@@ -779,10 +796,24 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
     def correct_smoke(corpus: list[dict[str, Any]]) -> Any:
         import hashlib
         import json
+        from math import log2
 
         h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
-        m = 1.0 if any(d["id"] == "doc1" for d in corpus) else 0.8
-        return type("MockResult", (), {"metrics": {"ndcg@10": m}, "corpus_checksum": h})()
+        # Mocking an engine that just returns the corpus IDs in the order they were provided
+        ordered = [d["id"] for d in corpus]
+        relevances = [d["relevance"] for d in corpus]
+
+        def dcg(rels: list[int]) -> float:
+            return float(sum((2**r - 1) / log2(i + 2) for i, r in enumerate(rels)))
+
+        idcg = dcg(sorted(relevances, reverse=True))
+        ndcg = dcg(relevances) / idcg if idcg > 0 else 0.0
+
+        return type(
+            "MockResult",
+            (),
+            {"metrics": {"ndcg@10": ndcg}, "corpus_checksum": h, "ordered_hits": ordered},
+        )()
 
     def wrong_smoke_requires_qdrant(corpus: list[dict[str, Any]]) -> Any:
         import contextlib
@@ -798,21 +829,25 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
         import json
 
         h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
-        return type("MockResult", (), {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": h})()
+        ordered = [d["id"] for d in corpus]
+        return type(
+            "MockResult",
+            (),
+            {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": h, "ordered_hits": ordered},
+        )()
 
     def wrong_smoke_wrong_hash(corpus: list[dict[str, Any]]) -> Any:
-        m = 1.0 if any(d["id"] == "doc1" for d in corpus) else 0.8
-        return type("MockResult", (), {"metrics": {"ndcg@10": m}, "corpus_checksum": "bad_hash"})()
+        res = correct_smoke(corpus)
+        res.corpus_checksum = "bad_hash"
+        return res
 
     def wrong_smoke_nondeterministic(corpus: list[dict[str, Any]]) -> Any:
-        import hashlib
-        import json
         import random
 
-        h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
-        return type(
-            "MockResult", (), {"metrics": {"ndcg@10": random.random()}, "corpus_checksum": h}
-        )()
+        res = correct_smoke(corpus)
+        res.ordered_hits = res.ordered_hits.copy()
+        random.shuffle(res.ordered_hits)
+        return res
 
     _assert_pr_smoke_fixed_embeddings(correct_smoke, monkeypatch)
 
@@ -825,7 +860,7 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(AssertionError, match="Checksum mismatch fix 1"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_hash, monkeypatch)
 
-    with pytest.raises(AssertionError, match="Metrics non-deterministic|Metrics mismatch fix 1"):
+    with pytest.raises(AssertionError, match="Ranking non-deterministic"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_nondeterministic, monkeypatch)
 
 
@@ -871,6 +906,9 @@ def _assert_abstention_fpr(
 
     r1 = eval_func(config1, test_data1)
 
+    if config1.thresholds != (("fast", 0.5), ("deep", 0.8)):
+        raise ValueError("Config threshold mutated")
+
     if r1.version != "v1.0":
         raise ValueError("Version mismatch")
     if r1.calibrated_on != "train_split_A":
@@ -898,6 +936,9 @@ def _assert_abstention_fpr(
     }
 
     r2 = eval_func(config2, test_data2)
+
+    if config2.thresholds != (("fast", 0.2), ("deep", 0.5)):
+        raise ValueError("Config threshold mutated")
 
     if r2.version != "v1.1":
         raise ValueError("Version mismatch")
@@ -986,6 +1027,15 @@ def test_discrimination_abstention_fpr() -> None:
 
     with pytest.raises(ValueError, match="Calibration mismatch"):
         _assert_abstention_fpr(wrong_check_calibration_mismatch)
+
+    def wrong_check_mutates_threshold(
+        config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
+    ) -> MockEvalReport:
+        object.__setattr__(config, "thresholds", (("fast", 0.0), ("deep", 0.0)))
+        return correct_check(config, results)
+
+    with pytest.raises(ValueError, match="Config threshold mutated"):
+        _assert_abstention_fpr(wrong_check_mutates_threshold)
 
 
 # The remaining 2 tests are preserved as documentation of the pending inventory,
