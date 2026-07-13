@@ -1,5 +1,5 @@
 ---
-title: "C6b: lifecycle Qdrant↔SQLite atomicity — design (durable-intent outbox, for Yua's ruling)"
+title: "C6b: lifecycle Qdrant↔SQLite atomicity — design v2 (durable-intent outbox + coordinator)"
 section: 13-decisions
 type: adr
 status: proposed
@@ -11,172 +11,205 @@ updated: 2026-07-13
 supersedes: []
 ---
 
-# C6b: lifecycle Qdrant↔SQLite atomicity — design (durable-intent outbox, for Yua's ruling)
+# C6b: lifecycle Qdrant↔SQLite atomicity — design v2 (durable-intent outbox + coordinator)
 
-**Author:** Aoi · 2026-07-13 · **Status:** PROPOSED — design choices + red inventory for Yua's ruling
-BEFORE any source (Issue #437). Slice: [[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]. C6
-durability is accepted + merged-pending ([[13-decisions/c6-lifecycle-durability-options]]); this ADR
-settles the cross-store atomicity C6 explicitly did **not** close, and specifies the behavior-shaped red
-contract to be written once the architecture is ruled.
+**Author:** Aoi · 2026-07-13 · **Status:** PROPOSED v2 — revised for Yua's fork rulings + corrections A–J
+(2026-07-13). Slice: [[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] (Issue #437). Direction
+(durable-intent outbox) ACCEPTED; this v2 is the contract that makes the outbox truthful across callers,
+retries, bypass paths, and long-term operation. Zero source until the red contract is encoded + reviewed.
 
-## The gap (verified against `src/musubi/lifecycle/transitions.py`)
+## The gap (verified against `src/musubi/lifecycle/transitions.py` + the plane layer)
 
-`transition()` (l.133-286): reads current state/version from Qdrant → checks legality + version →
-builds `new_payload` + `event` → **`client.set_payload(...)` mutates Qdrant FIRST (l.252-256)** → **then
-`sink.record(event)` (l.267-268)**. Two independent failure/crash windows:
+`transition()` mutates Qdrant FIRST (`set_payload`, l.252-256) then records the audit (l.267-268) — two
+failure/crash windows: mutation-without-audit, and `expected_version` is warn-only "last writer wins"
+(l.180-187). C6 durable-on-accept closes neither. **And `transitions.py` is not the only mutation path
+(correction G).**
 
-1. **Crash/kill between the Qdrant commit and the audit write** → mutation-without-audit (the mutation
-   happened; the audit never landed). C6's durable-on-accept does NOT close this — it only guarantees an
-   *accepted* audit is not lost, not that the audit and the mutation are atomic.
-2. **`expected_version` is warn-only (l.180-187: "last writer wins")** — a stale writer (or a replay)
-   silently clobbers a newer state. An outbox that *replays* mutations makes this actively dangerous.
+## Fork rulings (Yua 2026-07-13)
 
-The docstring's "we retry the sink write on flush; the mutation is idempotent" is the same false-retry
-claim C6 already disproved on the sink side; here it also papers over the atomicity gap.
+1. **Boundary:** a distinct **`LifecycleTransitionCoordinator`** public API, backed by a distinct
+   **`LifecycleOutbox`** and a **shared SQLite event+outbox store** (same DB). begin/finalize do NOT go
+   on `LifecycleEventSink`; `record(event)` stays a standalone FINAL-append for no-mutation audits.
+   **`finalize` inserts the FINAL lifecycle event AND marks the outbox row FINAL in ONE SQLite
+   transaction.**
+2. **Hard version fence is canonical for ALL state transitions** — never sink-dependent warn-only.
+3. **Separate `lifecycle_outbox` table in the SAME DB.**
+4. **Hard configurable cap:** at cap, `begin` returns Err and Qdrant is untouched. Alert-only rejected.
+5. **One mandatory reconciliation job in `lifecycle-runner`** — startup + periodic, deployment/
+   readiness-gated. No optional second daemon/path.
 
-## Core finding — does `record(event)` stay a final-append primitive? **NO.**
+## API + outcome semantics (correction A)
 
-Durable-intent-before-mutation is **unachievable with a pure final-append `record()`**: to survive a
-crash between the mutation and the audit, the audit *intent* must be durable **before** the Qdrant
-mutation, and confirmed **after**. That is inherently a two-call boundary. Recommendation:
+`LifecycleTransitionCoordinator.transition(intent) -> Result[TransitionOutcome, TransitionError]`:
 
-- **Add a begin/finalize outbox API** on the sink (names for ruling):
-  - `begin_transition(intent) -> Result[PendingHandle, LifecycleOutboxError]` — writes a **PENDING**
-    outbox row and COMMITS it, before any Qdrant mutation. Durable intent.
-  - `finalize_transition(handle, outcome) -> Result[None, LifecycleOutboxError]` — after the Qdrant
-    mutation, marks the row **APPLIED→FINAL** (success) or leaves it **PENDING** (mutation failed,
-    retryable) or **ABANDONED** (fence stale / illegal on replay).
-- **`record(event)` REMAINS** — as (a) the primitive for audit events with **no external mutation**
-  (pure state-machine appends that have no atomicity partner) and (b) the internal "append a FINAL row"
-  that `finalize_transition` calls. So C6's contract is untouched; `transitions.py` migrates from
-  `record()` to `begin/finalize`.
+- **`Ok(Final(result))`** — synchronous completion: Qdrant mutation confirmed by readback AND the atomic
+  FINAL transaction committed.
+- **`Ok(Pending(operation_key, event_id))`** — durable intent committed, mutation NOT yet confirmed
+  (transient/unknown Qdrant failure). The reconciliation job will complete it. **HTTP maps this to 202;
+  internal callers MUST branch on Final vs Pending.**
+- **`Err(TransitionError)`** — ONLY when NO future mutation will occur: `begin` failed (SQLite down / cap
+  hit), or a proven terminal condition (fence violated, illegal transition, invalid) → terminal abandon.
 
-**Alternative considered + rejected:** keep `record()` final-append and bolt a separate reconcile pass
-that infers missing audits from Qdrant. Rejected — it cannot distinguish "mutation applied, audit lost"
-from "mutation never happened" without a durable pre-mutation intent, so it can neither replay safely nor
-avoid false audits. The intent row is load-bearing.
+A transient Qdrant failure MUST NOT return ordinary `Err` while the worker may still mutate — that is the
+false-terminal bug A forbids.
 
-## State machine (outbox row)
+## State machine (corrections B, F, J)
 
 ```
-        begin_transition                 finalize(applied)
-  ∅ ─────────────────▶ PENDING ───────────────────────▶ APPLIED ──▶ FINAL
-                          │  ▲                                         (terminal, audit-true)
-       finalize(failed)   │  │ reconciliation replay/confirm
-       (mutation refused) │  │
-                          ▼  │
-                    (stays PENDING, retryable)
-                          │
-       fence stale / illegal-on-replay
-                          ▼
-                      ABANDONED  (terminal; audited as not-applied, PII-free reason code)
+  ∅ ──begin──▶ PENDING ──qdrant apply (conditional)──▶ APPLIED ──atomic FINAL txn──▶ FINAL
+                 │ ▲                                      │  (insert FINAL event +      (terminal;
+   transient/    │ │ reconcile: readback-confirm          │   mark outbox FINAL,        mutation confirmed
+   unknown fail  │ │ (version+state+patch SHA)            │   ONE txn)                  AT finalize time)
+   → stays       │ │                                      │
+   PENDING       ▼ │                          crash before atomic txn → reconcile redoes it (idempotent)
+   (retry+alert  (retry indefinitely
+    indefinitely, within the hard CAP)
+    within cap)   │
+                  │ proven terminal only (fence stale / illegal / invalid)
+                  ▼
+              ABANDONED   (terminal; PII-free reason code; NEVER writes a FINAL lifecycle event)
 ```
 
-- **PENDING** — intent durable; Qdrant outcome unknown/unconfirmed. The only state that is retryable.
-- **APPLIED** — Qdrant mutation CONFIRMED committed (by version+payload readback). Audit-true.
-- **FINAL** — terminal success; the C6 durable audit row is written exactly here (or APPLIED collapses
-  to FINAL when `finalize` runs inline and confirms).
-- **ABANDONED** — terminal non-apply; the intent could not/should not be applied. Audited as not-applied.
+- **PENDING** — durable intent; Qdrant outcome unknown/unconfirmed. The only retryable state.
+- **APPLIED** — Qdrant mutation CONFIRMED by readback (exact version + state + canonical patch SHA), but
+  the atomic FINAL transaction not yet committed.
+- **FINAL** — the ONE SQLite transaction (insert FINAL `LifecycleEvent` + mark outbox FINAL) committed.
+  **FINAL means the mutation was confirmed AT FINALIZATION TIME — not eternal current equality** (a later
+  transition may move the object past this version).
+- **ABANDONED** — PROVEN terminal (fence/illegal/invalid) ONLY. **Never** from transient N-attempts
+  (correction B). **Never** creates a FINAL lifecycle event.
 
-Guarded transitions only (SQL `UPDATE ... WHERE state = <expected>`), so every edge is idempotent.
+Every SQL edge is a guarded `UPDATE ... WHERE state = <expected>` → idempotent.
 
-## Crash matrix (the invariant: a FINAL audit ⟺ a confirmed Qdrant mutation)
+## Idempotency + single active intent (corrections C, D, E)
 
-| # | crash point | on restart, reconciliation must… | forbidden |
+- **`operation_key UNIQUE` (correction C):** an `event_id` minted inside each call is insufficient — a
+  CALLER retry mints a new `event_id` and would create a second intent. `operation_key` is either a
+  caller-supplied idempotency key OR the canonical transition identity (SHA of
+  collection+object_id+from_version+to_state+patch). `begin` with an existing `operation_key` REUSES the
+  live intent. Test: the same logical request twice ⇒ one operation, one FINAL, one event.
+- **One nonterminal intent per `(collection, object_id)` (correction D):** a partial-unique guard
+  (`UNIQUE(collection, object_id) WHERE state IN ('PENDING','APPLIED')`). Concurrent `begin`s serialize —
+  the second reuses (same operation_key) or is rejected (`Err: active_intent_exists`) until the first
+  resolves. Prevents a later v3 from hiding a crash-applied v2 before reconciliation. **No next
+  transition while an active intent is unresolved.**
+- **Server-side conditional apply + full readback (correction E):** the Qdrant apply is conditional on
+  the expected version (a `set_payload` with a filter that matches only `version == expected` for that
+  object/namespace). Success requires READBACK of the exact object/namespace + target **version + state +
+  canonical intended-patch SHA** — **not version alone**.
+
+## Crash matrix (correction F — expanded; invariant: FINAL ⟺ confirmed-at-finalize mutation)
+
+| # | crash point | reconciliation must… | forbidden |
 |---|---|---|---|
-| C1 | after PENDING, **before** Qdrant | query Qdrant; if not applied and fence valid → **replay** the mutation, else **ABANDON** | a FINAL row with no matching mutation |
-| C2 | after Qdrant, **before** finalize | query Qdrant; version+payload match → **APPLIED→FINAL** | losing the audit (the C6b hole) / leaving it PENDING forever |
-| C3 | after FINAL | no-op (terminal) | double-apply / duplicate FINAL |
-| C4 | mid-reconciliation | lease reclaim (below); resume | two workers finalizing the same row |
+| C1 | after PENDING, before Qdrant | readback; not applied & fence valid → replay; proven-terminal → ABANDONED | FINAL with no matching mutation |
+| C2 | after Qdrant apply, before APPLIED mark | readback confirms (version+state+SHA) → mark APPLIED | losing the audit / re-applying |
+| C3 | after APPLIED, before the atomic FINAL txn | redo the atomic FINAL txn (idempotent on event_id) | duplicate/again mutate |
+| C4 | after FINAL | no-op (terminal) | double FINAL |
+| C5 | mid-reconciliation | lease reclaim (expired lease), resume | two workers finalizing one row |
+| C6 | network/client retry mid-apply | idempotent via operation_key + conditional apply | duplicate apply |
 
-## The 12 must-settle points → decisions
+## Failure classification (correction J)
 
-1. **Durable intent before any Qdrant mutation** — YES; `begin_transition` commits PENDING first.
-2. **pending/applied/final state machine** — as above (+ ABANDONED terminal).
-3. **Full crash matrix** — C1–C4 above; the aggregate invariant is FINAL ⟺ confirmed mutation.
-4. **Idempotent replay / event_id** — `event_id` is the idempotency key; Qdrant `set_payload` to the
-   same target payload is idempotent; guarded SQL state edges make replay exactly-once (one FINAL row).
-5. **Expected-version fencing / concurrency** — **DECISION for ruling:** promote `expected_version` from
-   warn-only to a **hard fence for audited transitions** — `begin_transition` refuses (Err + ABANDONED)
-   when `current_version != expected_version`, and the mutation is version-conditional, so a stale
-   *replay* cannot clobber a newer state. (Changes today's "last writer wins" for the audited path;
-   legacy warn-only stays available only for the no-audit `record()` path. Flag for compat review.)
-6. **SQLite unavailable ⇒ no Qdrant mutation** — guaranteed by ordering: PENDING commit precedes the
-   mutation; if the PENDING write fails, `transition()` returns Err and never calls `set_payload`.
-7. **Qdrant failure ⇒ durable retryable intent, no false final audit** — the PENDING row persists
-   (retryable); NO APPLIED/FINAL is written; caller gets `Err(retryable=True, durable_intent=True)`;
-   reconciliation later replays.
-8. **Reconciliation worker leases/recovery** — a worker claims PENDING rows older than a threshold via
-   an atomic guarded UPDATE setting `lease_owner`/`lease_expires_at`; only the holder resolves the row;
-   an **expired** lease (dead worker) is reclaimable. Bounded attempts → ABANDONED with a PII-free code
-   after N tries.
-9. **Caller Result semantics** — `transition()`/`begin`/`finalize` return `Result[T, E]` (AGENTS.md
-   l.105 — never raise at the boundary); the error carries `retryable` + `durable_intent` so a caller
-   learns the audit intent survived a Qdrant failure.
-10. **Bounded backpressure / telemetry / PII** — the pending backlog is durable in SQLite (not RAM), so
-    "bounded" = a `musubi_lifecycle_outbox_pending` gauge + reconciliation-lag/attempt counters, all
-    **no-label / PII-free** (codes only, never namespace/object_id/reason). **Optional backpressure:**
-    `begin_transition` may refuse new transitions (Err, bounded) once pending depth exceeds a cap —
-    flagged for ruling (default: alert-only, do not refuse).
-11. **Migration / rollback** — **DECISION for ruling:** a **separate `lifecycle_outbox` table**
-    (`event_id PK, object_id, collection, intended_payload, expected_version, state, attempts,
-    lease_owner, lease_expires_at, created_epoch, updated_epoch`) rather than overloading
-    `lifecycle_events` — keeps C6's clean FINAL-audit table separate from in-flight outbox state.
-    Migration is additive (CREATE TABLE IF NOT EXISTS); rollback must **drain PENDING first** (cannot
-    drop the table with live intents) — the rollback path is itself a red.
-12. **`record()` final-append vs begin/complete** — **begin/finalize required; `record()` retained** for
-    the no-mutation path (see Core finding). Do not assume record() suffices.
+- **Known terminal** (object-not-found, illegal transition, permanently-violated fence, invalid) →
+  `ABANDONED` / `Err`. No FINAL event.
+- **Transient or unknown** (network, timeout, 5xx, client error of unknown kind) → stays `PENDING` /
+  `Ok(Pending)`. Retried by the reconciler with backoff + alert, indefinitely, within the hard cap.
+- **No poison-row starvation:** one perpetually-transient row must NOT block other PENDING rows — the
+  reconciler processes rows independently (per-row lease + backoff), never head-of-line-blocks the queue.
 
-## Behavior-shaped RED INVENTORY (to be written on ruling; strict-xfail against current no-outbox code)
+## Content + observability (corrections I + fork 4)
 
-Fixtures: in-memory Qdrant (`QdrantClient(":memory:")`, seeded object), real SQLite outbox+sink, fault
-injectors for `set_payload` (Qdrant) and the PENDING write (SQLite), a crash subprocess whose crash point
-is env-selected, and a reconciliation entrypoint. Every wait/join/subprocess bounded so a regression
-fails rather than hangs.
+- **Store a minimal deterministic target patch + SHA (correction I):** the outbox row holds the specific
+  target fields (state, version, lineage keys) + a canonical SHA — NOT an arbitrary full payload.
+  **Outbox content NEVER enters logs or metric labels.**
+- **Metrics** (bounded / PII-free, codes only): `musubi_lifecycle_outbox_pending` (gauge, no labels,
+  the cap backstop), `..._reconciled_total`, `..._abandoned_total`, `..._mutation_failures_total`
+  (low-cardinality `{class="terminal|transient"}` at most — never object/namespace/reason).
+- **Hard cap (fork 4):** `begin` returns `Err(cap_exceeded)` with Qdrant untouched once pending depth ≥
+  the configured cap.
 
-Reds (≈13):
-- R1 `test_durable_intent_persisted_before_qdrant_mutation` — PENDING row exists for `event_id` even when
-  the Qdrant mutation is faulted (today: no pre-mutation intent).
-- R2 `test_sqlite_unavailable_blocks_qdrant_mutation` — fault the PENDING write ⇒ Qdrant version
-  UNCHANGED + Err (today: Qdrant mutates before any sink write).
-- R3 `test_qdrant_failure_leaves_retryable_pending_not_final` — fault `set_payload` ⇒ PENDING persists,
-  NO FINAL audit, `Err(retryable, durable_intent)` (today: Err with the audit never recorded).
-- R4 `test_crash_after_intent_before_qdrant_no_false_final` — subprocess crash at C1; reconcile applies+
-  finalizes OR abandons — never a FINAL without a matching mutation.
-- R5 `test_crash_after_qdrant_before_finalize_recovers_audit` — subprocess crash at C2; reconcile
-  detects the applied mutation and finalizes (the C6b hole: today the audit is lost).
-- R6 `test_idempotent_replay_single_final_row` — replay a PENDING twice ⇒ exactly one FINAL row + one
-  effective apply.
-- R7 `test_expected_version_hard_fence_blocks_stale_replay` — a replay whose `expected_version` no longer
-  matches is ABANDONED, not applied over the newer state (today: warn-only clobber).
-- R8 `test_reconciliation_lease_prevents_double_processing` — two concurrent reconcilers ⇒ a row is
-  resolved exactly once.
-- R9 `test_reconciliation_reclaims_expired_lease` — a dead worker's expired lease is reclaimed and the
-  row still finalizes.
-- R10 `test_transition_error_flags_durable_intent_on_qdrant_failure` — caller Result carries
-  `retryable`/`durable_intent` on Qdrant failure.
-- R11 `test_outbox_pending_metric_bounded_and_pii_free` — pending depth observable via a no-label metric;
-  reconciliation decrements it; no namespace/object_id/reason in metric or log.
-- R12 `test_no_false_final_audit_invariant_across_crash_matrix` — aggregate: FINAL rows ⟺ confirmed
-  mutations across C1–C3.
-- R13 `test_outbox_schema_migration_additive_and_rollback_drains_pending` — migration is additive;
-  rollback refuses/drains while PENDING rows exist.
+## Migration / rollback (correction H)
 
-Guards (green): callsite inventory (transition() is the only begin/finalize caller) + AST "Result
-consumed" for `begin`/`finalize` (extends C6 item 8).
+- Additive `CREATE TABLE IF NOT EXISTS lifecycle_outbox (operation_key UNIQUE, event_id, collection,
+  object_id, target_patch, patch_sha, expected_version, state, attempts, next_attempt_epoch, lease_owner,
+  lease_expires_epoch, created_epoch, updated_epoch)` in the SAME DB as `lifecycle_events`; partial-unique
+  guard on `(collection,object_id) WHERE state IN ('PENDING','APPLIED')`.
+- **Rollback refuses while ANY nonterminal (PENDING/APPLIED/leased) row exists**, and **stops the
+  reconciliation worker first.** Terminal rows (FINAL/ABANDONED) get a **retention/cleanup** policy so
+  they don't grow forever.
 
-Red-proof plan: a temporary minimal outbox (begin→PENDING commit, version-conditional `set_payload`,
-finalize→FINAL, a single-pass reconcile with leases) flips all reds to `XPASS(strict)`; source restored,
+## Structural blind spot — every mutation path (correction G)
+
+**Verified: `transitions.py` is NOT the only state-mutation path.** Direct `state` mutation via
+`set_payload` (or a plane's own `transition`) exists in:
+
+- **5 plane `transition()` methods** — `planes/{episodic,concept,thoughts,artifact,curated}/plane.py`
+  (each `set_payload`s `state`+`version` and emits its own event), called by `promotion.py`,
+  `demotion.py` (×5), `api/routers/writes_concept.py` (×2).
+- **Direct lifecycle `set_payload` of `state`** — `lifecycle/maturation.py:893`,
+  `lifecycle/synthesis.py:718`, `lifecycle/demotion.py:380`, plus the canonical `transitions.py:252`.
+
+**Decision:** C6b does NOT migrate all of these in-scope (too large). C6b **depends on a concrete H5
+unification slice** ([[_slices/slice-h5-unify-state-mutation]], Issue TBD) that routes ALL state mutation
+through `LifecycleTransitionCoordinator`; **C6b atomicity closure is BLOCKED on H5.** C6b ships:
+
+- a **mechanical guard red** (AST/rg) that FORBIDS direct `state`-writing `set_payload` outside the
+  coordinator — it is **RED today** (it lists the ≥8 current violators) and flips green only when H5
+  lands. C6b must NOT claim atomicity for the maturation/API canonical paths alone.
+
+## Behavior-shaped RED INVENTORY v2 (to encode; strict-xfail vs current no-outbox code)
+
+Fixtures: in-memory Qdrant (`QdrantClient(":memory:")`, seeded object), real shared SQLite (events +
+outbox), fault injectors for the conditional `set_payload` (transient vs terminal) and the PENDING write,
+an env-selected crash subprocess (C1/C2/C3), a reconciliation entrypoint, bounded waits/joins.
+
+Reds:
+- R1 durable PENDING intent committed BEFORE the Qdrant mutation.
+- R2 SQLite unavailable at `begin` ⇒ Qdrant UNTOUCHED + `Err`.
+- R3 **transient** Qdrant failure ⇒ `Ok(Pending(operation_key,event_id))`, NO FINAL, reconciler
+  completes later.
+- R4 **terminal** Qdrant/fence failure ⇒ `Err`/`ABANDONED`, NO FINAL event (J).
+- R5 crash C1 ⇒ reconcile replays or abandons; never a false FINAL.
+- R6 crash C2 ⇒ reconcile readback-confirms, marks APPLIED→FINAL; audit recovered (the C6b hole).
+- R7 crash C3 (after APPLIED, before atomic FINAL txn) ⇒ reconcile redoes the txn; exactly one FINAL.
+- R8 finalize atomicity ⇒ FINAL event insert + outbox→FINAL in ONE txn (inject mid-txn failure ⇒ neither
+  persists) (fork 1).
+- R9 idempotent replay ⇒ replaying a PENDING twice yields one FINAL + one effective apply.
+- R10 `operation_key` idempotency across CALLER retries ⇒ same logical request twice = one operation/
+  FINAL/event (C).
+- R11 single active intent per `(collection,object_id)` ⇒ concurrent begins serialize/reuse/reject; never
+  two nonterminal intents (D).
+- R12 hard expected-version fence ⇒ stale expected ⇒ Err/abandon, mutation not applied; stale replay
+  abandons rather than clobbers (fork 2, E).
+- R13 conditional apply + full readback ⇒ success requires version+state+patch-SHA readback, not version
+  alone (E).
+- R14 hard cap ⇒ at pending cap, `begin` ⇒ `Err(cap_exceeded)`, Qdrant untouched (fork 4).
+- R15 transient failure NEVER ABANDONED by attempt count ⇒ N transient failures keep it PENDING (B).
+- R16 reconciliation lease prevents double-processing; R17 expired-lease reclaim (fork 5).
+- R18 no poison-row starvation ⇒ one stuck transient row does not block other PENDING rows (J).
+- R19 outbox content never in logs/metric labels; row stores minimal patch + SHA, not arbitrary payload
+  (I).
+- R20 rollback refuses on any nonterminal row + stops the worker first; terminal-row cleanup exists (H).
+- R21 caller outcome is three-way (Final/Pending/Err) at the coordinator boundary; Pending carries the
+  operation/event id (A).
+
+Guards:
+- G1 **mechanical AST/rg guard: NO direct `state`-writing `set_payload` outside
+  `LifecycleTransitionCoordinator`** — RED today (lists the ≥8 violators); flips green only under H5
+  (G).
+- G2 callsite inventory: `coordinator.transition(` callsites are exactly the reviewed set.
+- G3 AST "Result consumed": no caller may drop the three-way `TransitionOutcome`.
+
+Red-proof plan: a temporary minimal coordinator+outbox (begin→PENDING commit; conditional set_payload;
+readback; atomic finalize; single-pass reconcile with leases; classified failures) flips R1–R21 to
+`XPASS(strict)`; a temporary migration of the ≥8 violators (or a scoped stub) flips G1; source restored,
 zero `src/` committed.
 
-## Open choices flagged for Yua's ruling
+## Dependencies
 
-1. **API names/shape** — `begin_transition`/`finalize_transition` on the sink, vs a separate
-   `LifecycleOutbox` object, vs `record_pending`/`record_final`.
-2. **Expected-version → hard fence** for the audited path (changes "last writer wins"). Recommend yes.
-3. **Separate `lifecycle_outbox` table** vs columns on `lifecycle_events`. Recommend separate.
-4. **Backpressure**: refuse-on-cap vs alert-only. Recommend alert-only default.
-5. **Reconciliation driver**: in-process daemon (like C6's flusher, but durable-backed) vs an
-   externally-triggered sweep. Recommend externally-triggered + a thin optional daemon.
+- **Blocks:** the C6 source slice — [[_slices/slice-c6-lifecycle-event-loss]].
+- **Blocked by (NEW):** [[_slices/slice-h5-unify-state-mutation]] — C6b atomicity cannot be claimed
+  closed until all state mutation routes through the coordinator. G1 stays RED until H5.
 
-No source, no host, no merge until these are ruled.
+No source, host, or merge until the red contract is encoded, red-proofed, and reviewed.

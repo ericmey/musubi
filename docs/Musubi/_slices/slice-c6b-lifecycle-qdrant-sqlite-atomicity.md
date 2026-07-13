@@ -9,7 +9,7 @@ phase: "Lifecycle-audit 2026-07-13 — C6b atomicity design + red contract"
 tags: [section/slices, status/in-progress, type/slice, lifecycle, audit, atomicity]
 updated: 2026-07-13
 reviewed: false
-depends-on: []
+depends-on: ["[[_slices/slice-h5-unify-state-mutation]]"]
 blocks: ["[[_slices/slice-c6-lifecycle-event-loss]]"]
 issue: 437
 ---
@@ -23,12 +23,14 @@ The concrete follow-on that C6's durability work explicitly does **not** close. 
 authorized/merged before C6b has a design + red contract, because the transition `Err` semantics after a
 committed Qdrant mutation are otherwise undefined.
 
-**Design + exact red inventory:** [[13-decisions/c6b-lifecycle-atomicity-design]] — a durable-intent
-outbox (PENDING→APPLIED→FINAL / ABANDONED), begin/finalize API (record() stays for the no-mutation
-path), full crash matrix, hard version fence, lease-based reconciliation. Returned to Yua for an
-architecture ruling BEFORE the red contract is encoded (the C6 rhythm: memo → ruling → contract), because
-three forks — begin/finalize vs final-append, hard-fence vs warn-only, separate outbox table vs columns —
-change what every red asserts.
+**Design + exact red inventory (v2, ruling applied):** [[13-decisions/c6b-lifecycle-atomicity-design]] —
+a durable-intent outbox behind a distinct **`LifecycleTransitionCoordinator`** boundary (+ a distinct
+`LifecycleOutbox`, shared SQLite events+outbox DB); `record()` stays a standalone FINAL-append for the
+no-mutation path. Three-way caller outcome `Ok(Final)` / `Ok(Pending)` / `Err` (transient Qdrant failure
+is Pending, never a false terminal Err); `operation_key` idempotency across caller retries; one active
+intent per `(collection,object_id)`; hard canonical version fence + server-side conditional apply with
+full readback; expanded crash matrix C1–C6; hard cap; one mandatory reconciliation job. Revised per Yua's
+fork rulings + corrections A–J (2026-07-13).
 
 ## The gap (verified against `src/musubi/lifecycle/transitions.py`)
 
@@ -72,20 +74,32 @@ A durable-intent transactional outbox spanning Qdrant + SQLite — [[13-decision
 
 Decision context: [[13-decisions/c6-lifecycle-durability-options]] (§ "Boundary — what C6 closes vs C6b").
 
-## Test Contract (behavior-shaped red inventory — to be encoded on ruling)
+## Test Contract (behavior-shaped red inventory v2 — being encoded)
 
 Full inventory + fixtures + red-proof plan: [[13-decisions/c6b-lifecycle-atomicity-design]] § "Behavior-shaped
-RED INVENTORY". ≈13 strict-xfail reds against the current no-outbox `transition()` — durable-intent-before-
-mutation (R1), sqlite-blocks-qdrant (R2), qdrant-failure-retryable-not-final (R3), crash matrix C1/C2
-(R4/R5), idempotent replay (R6), hard version fence (R7), reconciliation lease + expired-lease reclaim
-(R8/R9), caller Result durable-intent flag (R10), bounded PII-free pending metric (R11), the FINAL⟺mutation
-invariant (R12), migration/rollback (R13) — plus green callsite + AST "Result consumed" guards. Fixtures:
-in-memory Qdrant (`QdrantClient(":memory:")`), real SQLite outbox+sink, `set_payload`/PENDING-write fault
-injectors, an env-selected crash subprocess, a reconciliation entrypoint. Not yet written: the three design
-forks change what each red asserts, so the contract follows Yua's ruling.
+RED INVENTORY v2". 21 strict-xfail reds (R1–R21) against the current no-outbox path + 3 guards:
+durable-intent-before-mutation (R1), sqlite-blocks-qdrant (R2), transient⇒Ok(Pending) (R3),
+terminal⇒Err/ABANDONED-no-FINAL (R4), crash matrix C1/C2/C3 (R5/R6/R7), finalize one-txn atomicity (R8),
+idempotent replay (R9), operation_key caller-retry idempotency (R10), single active intent (R11), hard
+version fence (R12), conditional apply + full readback (R13), hard cap (R14), transient-never-abandoned
+(R15), lease + expired-reclaim (R16/R17), no poison-row starvation (R18), PII-free minimal-patch content
+(R19), rollback-refuses-nonterminal (R20), three-way caller outcome (R21). Guards: **G1 — RED today —
+AST/rg forbidding direct `state`-writing `set_payload` outside the coordinator** (enumerates the ≥8
+bypass violators; flips green only under [[_slices/slice-h5-unify-state-mutation]]); G2 coordinator
+callsite inventory; G3 AST "TransitionOutcome consumed". Fixtures: in-memory Qdrant
+(`QdrantClient(":memory:")`), real shared SQLite events+outbox, transient/terminal `set_payload` +
+PENDING-write fault injectors, env-selected crash subprocess (C1/C2/C3), reconciliation entrypoint.
+
+## Structural dependency — H5 (correction G)
+
+`transitions.py` is not the only mutation path: 5 plane `transition()` methods + direct `set_payload`
+of `state` in maturation/synthesis/demotion bypass any coordinator. C6b **depends on**
+[[_slices/slice-h5-unify-state-mutation]] (Issue #439) to route ALL state mutation through the
+coordinator; **C6b atomicity closure is blocked on H5**, and guard G1 stays RED until H5 lands. C6b does
+NOT claim atomicity for the canonical maturation/API paths alone.
 
 ## Status
 
-**`in-progress`** (2026-07-13) — claimed by aoi (Issue #437, lock in `_inbox/locks/`). Design + exact red
-inventory delivered ([[13-decisions/c6b-lifecycle-atomicity-design]]); returned to Yua for an architecture
-ruling before the red contract is encoded and before any source. #433 stays C6 only.
+**`in-progress`** (2026-07-13) — claimed by aoi (Issue #437, lock in `_inbox/locks/`). Direction accepted
++ design revised to v2 for Yua's fork rulings + corrections A–J. Now encoding the 21-red + 3-guard
+behavior contract (zero src). Blocked-by H5 (#439) for closure; blocks C6 (#433 stays C6 only).
