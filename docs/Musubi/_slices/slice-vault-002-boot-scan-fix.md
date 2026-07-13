@@ -33,7 +33,7 @@ blocks: []
 ## Out of owns_paths (intentionally not claimed by this slice)
 
 - `tests/vault/test_watcher_boot_scan.py` (overlaps with `slice-ops-hardening-suite`; that file is owned by the hardening slice, NOT by this slice; the VAULT-002 red contract adds a new test file, `test_watcher_boot_scan_vault_002.py`, instead of modifying the existing one)
-- The vacuous `test_boot_scan_archives_removed_files` (formerly in `tests/vault/test_watcher_boot_scan.py`) was REMOVED in the prior commit because its deletion expectation belongs to VAULT-001, not VAULT-002. The deletion handling is routed to a separate VAULT-001 issue / slice.
+- The vacuous `test_boot_scan_archives_removed_files` (formerly in `tests/vault/test_watcher_boot_scan.py`) was REMOVED in the gateway-cleanup successor (commit b6a56c2) because its deletion expectation belongs to VAULT-001, not VAULT-002. The deletion handling is durably routed to **Issue #446** (VAULT-001: ghost rows (known_hashes minus disk) are not reconciled), NOT claimed by this slice.
 
 ## Forbidden paths
 
@@ -76,15 +76,24 @@ The path representation crossing internal component boundaries must be normalize
 - Option B: `_handle_event_inner` checks `is_absolute()` before calling `relative_to`.
 - Option C: `os.path.relpath` + normalization (no exception swallow).
 
-## Acceptance requirement
+## Test accounting (post-Shiori-second-read repair)
 
-- The red contract test strict-xfails on the current `main` head (boot_scan relative-path bug).
-- The 4 healthy controls pass on the current `main` head.
-- The 3 red-proof candidates either strict-xfail or FAIL the test (proving the contract is meaningful).
-- The repair of `test_boot_scan_archives_removed_files` routes its deletion expectation to VAULT-001 (separate named xfail/issue only if needed).
-- ZERO src/ changes in this PR; src changes land in a separate follow-up slice.
-- Lint clean: `ruff check`, `ruff format --check`, `mypy`.
-- CI green on the exact head.
+The red contract shape is exactly **9 tests** = 5 strict xfails + 3 pass + 1 skip:
+
+- **5 strict xfails (today)**:
+  1. `test_boot_scan_vault_002_relative_path_noop_red` (RED) — asserts the postcondition (await_count == 1, new body_hash, absolute path); today: bug short-circuits before any create call, so the assertion fails; strict-xfails.
+  2. `test_boot_scan_vault_002_control_real_handler_writes_new_hash` (CONTROL 1) — same postcondition with a different setup; today: silently drops; strict-xfails.
+  3. `test_boot_scan_vault_002_control_background_exception_observable` (CONTROL 4) — background exception observable; today: silently swallowed; strict-xfails.
+  4. `test_boot_scan_vault_002_redproof_relative_path` (REDPROOF 1) — independent redproof of the relative_path anti-pattern; today: bug; strict-xfails.
+  5. `test_boot_scan_vault_002_redproof_log_only` (REDPROOF 2) — log_only antipattern (create called but no Qdrant set_payload with new hash); today: bug; strict-xfails.
+- **3 plain pass (today AND after fix)**:
+  1. `test_boot_scan_vault_002_control_no_drift_no_write` (CONTROL 2) — no-drift produces no write; passes today (the bug also doesn't write) AND after fix.
+  2. `test_boot_scan_vault_002_control_outside_root_skipped` (CONTROL 3) — outside-root path is skipped by rglob; passes today AND after fix.
+  3. `test_boot_scan_vault_002_redproof_mock_handler` (REDPROOF 3) — guard against the test file being modified to use the setattr mock_handler anti-pattern; passes today AND after fix (the test contract is permanent).
+- **1 skip (deletion routing marker)**:
+  1. `test_boot_scan_vault_002_deletion_routed_to_vault_001_marker` — deferred to VAULT-001 (Issue #446); skip with durable routing target.
+
+The PR body claim "1 strict-xfail red + 4 healthy controls (2 PASS today, 2 strict-xfail today) + 3 red-proofs + 1 repair marker = 9 tests" is reconciled as: 1 RED + 2 controls (1, 4) + 2 red-proofs (1, 2) = 5 strict xfails; 2 controls (2, 3) + 1 red-proof (3, guard) = 3 pass; 1 marker = 1 skip.
 
 ## Source of truth
 

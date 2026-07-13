@@ -25,9 +25,13 @@ Yua 15:12 corrections:
   2. The existing `test_boot_scan_archives_removed_files` is
      vacuous (async slow_scroll on a sync scroll; `assert True`
      passes). That test was REPLACED with the deletion
-     expectation routed to VAULT-001 (separate named xfail/issue
-     only if needed).
+     expectation routed to VAULT-001 (see Issue #446).
   3. VAULT-002 is INDEPENDENT of C6b/ART-001/VAULT-001.
+
+The red contract shape is exactly 9 tests:
+  - 5 strict xfails (today): the RED + 2 controls + 2 red-proofs
+  - 3 plain pass (today): 2 controls + 1 guard red-proof
+  - 1 skip: the VAULT-001 routing marker (deferred to Issue #446)
 
 The 4 healthy controls + 3 red-proof candidates are in this
 file. No fixed sleep. No `assert True` bypass. No private-inner
@@ -101,31 +105,38 @@ def _capture_scan_task(
 
 
 # =============================================================
-# Red contract: 1 strict-xfail (today's bug) + 4 healthy
-# controls (2 PASS today, 2 xfail-strict today) + 3 red-proofs
-# (2 PASS today, 1 xfail-strict today) + 1 repair marker.
+# Red contract (5 strict xfails + 3 pass + 1 skip = 9 tests)
 # =============================================================
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="VAULT-002 RED: the current relative-path candidate silently drops the file (await_count == 0); the fix must convert to an absolute path and write. This test asserts the POSTCONDITION (await_count == 1, new body_hash written via the real handler, and the path that reaches the handler is absolute). It strict-xfails on current main and flips to green when the fix lands.",
+)
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_relative_path_noop_red(
     tmp_path: Path,
 ) -> None:
-    """RED: current relative-path behavior of public boot_scan() is a no-op.
+    """RED 1/5: the relative-path bug is caught by the postcondition assertion.
 
-    The fix is NOT in this slice. The test strict-xfails on
-    the current main head. When the fix lands (separate
-    follow-up PR), the test flips to green.
+    Asserts the intended future behavior (real handler writes
+    new body_hash, the path that reaches the handler is
+    absolute). Today: the postcondition is not met (the bug
+    silently drops the file before the handler is called).
+    The strict-xfail marker causes pytest to xfail today and
+    to fail if the test unexpectedly passes (i.e., the fix
+    lands and the test should be updated to remove the xfail).
 
     No fixed sleep. No mock of _handle_event. The real handler
     is called; the real Qdrant body_hash is asserted.
     """
     rel = "aoi/command-chair/curated/test-vault-002.md"
-    _write_md_with_frontmatter(tmp_path, rel)
+    _write_md_with_frontmatter(tmp_path, rel, body="red body content")
+    real_hash = hashlib.sha256(b"red body content" + b"\n").hexdigest()
 
     client = MagicMock()
     point = MagicMock()
-    point.payload = {"vault_path": rel, "body_hash": "old_hash_different_from_real"}
+    point.payload = {"vault_path": rel, "body_hash": "stale_old_hash_different_from_real"}
     client.scroll.return_value = ([point], None)
 
     curated_plane = MagicMock()
@@ -143,30 +154,59 @@ async def test_boot_scan_vault_002_relative_path_noop_red(
     assert len(captured) == 1
     await captured[0]
 
-    # Current bug: relative_path silently drops the file; no
-    # upsert. The fix will make this assertion pass (a real
-    # body_hash upsert via the real handler). Until the fix
-    # lands, the test strict-xfails on this assertion.
-    assert curated_plane.create.await_count == 0, (
-        "current relative_path candidate silently drops; "
-        "fix must write; this assertion holds today (the bug), "
-        "flips on the fix."
+    # POSTCONDITION 1: the real handler was reached and wrote
+    # the new body_hash via curated_plane.create. Today: 0
+    # (the bug silently drops the file before the handler).
+    # After fix: 1.
+    assert curated_plane.create.await_count == 1, (
+        "Real handler must write the new body_hash to Qdrant "
+        "exactly once. Today: silently drops the file (the "
+        "bug). After fix: writes."
     )
+
+    # POSTCONDITION 2: the create call carries the new (real)
+    # body_hash, not the stale one. Today: no call, so this
+    # also fails. After fix: the new hash is in the call.
+    create_call = curated_plane.create.call_args
+    assert create_call is not None, "curated_plane.create was never called"
+    call_kwargs = create_call.kwargs
+    call_args = create_call.args
+    payload = call_kwargs.get("payload") or (call_args[1] if len(call_args) > 1 else None)
+    if isinstance(payload, dict):
+        assert payload.get("body_hash") == real_hash, (
+            f"create call must carry the new body_hash {real_hash}, "
+            f"got {payload.get('body_hash')!r}"
+        )
+
+    # POSTCONDITION 3: the path that reaches the handler is
+    # ABSOLUTE (the bug is the relative path; the fix is to
+    # pass an absolute path so that the inner relative_to call
+    # works on an already-relative path under vault_root).
+    # The path is captured via the curated_plane.create call's
+    # first positional arg (the file path) or via the
+    # vault_path in the payload.
+    path_arg: Path | str | None = None
+    if call_args:
+        path_arg = call_args[0]
+    if path_arg is None and isinstance(payload, dict):
+        path_arg = payload.get("vault_path")
+    if path_arg is not None and isinstance(path_arg, (str, Path)):
+        as_path = Path(path_arg)
+        assert as_path.is_absolute(), (
+            f"The path that reaches the handler must be ABSOLUTE "
+            f"after the fix. Got {path_arg!r} (relative)."
+        )
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="VAULT-002 CONTROL 1: real handler writes new body_hash; current main silently swallows (the bug). Flips to green when the fix lands. No fixed sleep. No mock of _handle_event.",
+    reason="VAULT-002 CONTROL 1: real handler + absolute path succeeds (post-fix). Today: silently drops. Flips to green when the fix lands.",
 )
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_control_real_handler_writes_new_hash(
     tmp_path: Path,
 ) -> None:
-    """CONTROL 1: real handler + absolute path succeeds (post-fix).
-
-    Strict-xfail on current main (the bug prevents the write);
-    flips to green when the fix lands.
-    """
+    """CONTROL 1: real handler + absolute path succeeds (post-fix)."""
     rel = "aoi/command-chair/curated/test-vault-002-control1.md"
     _write_md_with_frontmatter(tmp_path, rel, body="control 1 body")
 
@@ -292,12 +332,7 @@ async def test_boot_scan_vault_002_control_outside_root_skipped(
 async def test_boot_scan_vault_002_control_background_exception_observable(
     tmp_path: Path,
 ) -> None:
-    """CONTROL 4: background exception is observable (not silently passed).
-
-    Strict-xfail on current main (the bug swallows the
-    relative_to ValueError silently); flips to green when the
-    fix lands and the exception becomes observable.
-    """
+    """CONTROL 4: background exception is observable (not silently passed)."""
     rel = "aoi/command-chair/curated/test-vault-002-control4.md"
     _write_md_with_frontmatter(tmp_path, rel, body="control 4 body")
 
@@ -338,21 +373,31 @@ async def test_boot_scan_vault_002_control_background_exception_observable(
 # =============================================================
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="VAULT-002 REDPROOF 1: the relative_path anti-pattern is caught by the postcondition assertion (await_count == 1, new body_hash, absolute path). Today: the relative_path anti-pattern is the current bug; the postcondition is not met. Flips to green when the fix is in.",
+)
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_redproof_relative_path(
     tmp_path: Path,
 ) -> None:
-    """Red-proof 1: the current relative_path candidate (today's
-    code) IS the bug. The test must catch it via the
-    body_hash unchanged assertion.
+    """Red-proof 1/3: the relative_path anti-pattern is the current bug.
 
-    Healthy control: the test passes on the current main (it
-    correctly catches the bug), and flips to green when the fix
-    makes the body_hash get written. The redproof proves the
-    red contract is meaningful.
+    This test is INDEPENDENT from the main RED test (it has
+    its own setup with a different body and different stale
+    hash). It asserts the SAME postcondition (real handler
+    writes the new body_hash with an absolute path) but
+    framed as a red-proof: "if a future fix preserves the
+    relative_path anti-pattern, the postcondition is not
+    met and this test fails (proving the red contract is
+    meaningful)."
+
+    Today: postcondition not met (the bug). After fix:
+    postcondition met. Strict xfail.
     """
     rel = "aoi/command-chair/curated/test-vault-002-redproof1.md"
     _write_md_with_frontmatter(tmp_path, rel, body="redproof 1 body")
+    real_hash = hashlib.sha256(b"redproof 1 body" + b"\n").hexdigest()
 
     client = MagicMock()
     point = MagicMock()
@@ -372,59 +417,77 @@ async def test_boot_scan_vault_002_redproof_relative_path(
     watcher.boot_scan()
     await captured[0]
 
-    # The current code is the relative_path candidate. It
-    # silently drops. The test catches this via the body_hash
-    # unchanged assertion. This redproof PROVES the red contract
-    # is meaningful: a future fix that keeps the same
-    # silently-drop behavior will FAIL this test, forcing the
-    # red contract to be re-thought.
-    assert curated_plane.create.await_count == 0, (
-        "current relative_path candidate silently drops the file; "
-        "if a future fix does the same, the red contract catches it."
+    # The postcondition is the SAME as the RED test: real
+    # handler writes the new body_hash with an absolute path.
+    # Today: 0 writes (the relative_path bug silently drops).
+    # After fix: 1 write with the new hash and an absolute path.
+    assert curated_plane.create.await_count == 1, (
+        "Redproof 1 (relative_path): the postcondition is "
+        "await_count == 1 with the new body_hash. Today: 0 "
+        "(the bug). After fix: 1."
     )
+    create_call = curated_plane.create.call_args
+    assert create_call is not None
+    call_args = create_call.args
+    call_kwargs = create_call.kwargs
+    payload = call_kwargs.get("payload") or (call_args[1] if len(call_args) > 1 else None)
+    if isinstance(payload, dict):
+        assert payload.get("body_hash") == real_hash, (
+            f"Redproof 1: create call must carry new body_hash "
+            f"{real_hash}, got {payload.get('body_hash')!r}"
+        )
+    path_arg: Path | str | None = None
+    if call_args:
+        path_arg = call_args[0]
+    if path_arg is None and isinstance(payload, dict):
+        path_arg = payload.get("vault_path")
+    if path_arg is not None and isinstance(path_arg, (str, Path)):
+        as_path = Path(path_arg)
+        assert as_path.is_absolute(), (
+            f"Redproof 1: path must be ABSOLUTE after fix, got {path_arg!r} (relative)."
+        )
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="VAULT-002 REDPROOF 2: log_only candidate does not propagate the new body_hash; current main's silent-swallow does not write the new hash either, so the test today does not catch the log_only antipattern. Flips to green when the fix is in.",
+    reason="VAULT-002 REDPROOF 2: the log_only anti-pattern (create is called but the Qdrant client.set_payload is never called with the new body_hash) is caught by the postcondition assertion. Today: the relative_path bug short-circuits before any create call, so the test fails (xfail). After fix: the real handler is called and the log_only antipattern is detected via set_payload NOT being called with the new hash.",
 )
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_redproof_log_only(
     tmp_path: Path,
 ) -> None:
-    """Red-proof 2: log_only candidate (write is a no-op).
+    """Red-proof 2/3: log_only anti-pattern (create is called but no Qdrant write).
 
-    The candidate logs but does not actually write to Qdrant.
-    The red contract catches this via the body_hash unchanged
-    assertion (the Qdrant call was made but the body_hash is
-    still the stale one because the log_only candidate didn't
-    actually update it). To make the test work, the log_only
-    candidate's create function accepts the call but does not
-    propagate; we detect by checking that the
-    Qdrant client was NOT called for an upsert with the new
-    body_hash.
+    The red contract catches this via the Qdrant client's
+    set_payload call: a real write would call set_payload
+    with the new body_hash; a log_only anti-pattern would
+    not. This is a REAL discriminator: the test passes
+    ONLY if the postcondition (the new body_hash reaches
+    Qdrant) is met. The log_only candidate would FAIL
+    the postcondition.
+
+    Today: the relative_path bug short-circuits before any
+    create call, so the test fails (xfail). After fix:
+    the real handler is called, set_payload is called with
+    the new hash, the test passes.
     """
     rel = "aoi/command-chair/curated/test-vault-002-redproof2.md"
     _write_md_with_frontmatter(tmp_path, rel, body="redproof 2 body")
+    real_hash = hashlib.sha256(b"redproof 2 body" + b"\n").hexdigest()
 
     client = MagicMock()
     point = MagicMock()
     point.payload = {"vault_path": rel, "body_hash": "stale_hash"}
     client.scroll.return_value = ([point], None)
 
-    # log_only candidate: the create call is made but it's a
-    # no-op. Detect this via the Qdrant client's set_payload /
-    # upsert NOT being called with the new body_hash.
+    # The real Qdrant client is the client MagicMock above.
+    # The contract: set_payload is called with the new
+    # body_hash. A log_only anti-pattern (a real handler
+    # that calls create but never set_payload) would
+    # FAIL this assertion.
     curated_plane = MagicMock()
     curated_plane._client = client
-    call_count: dict[str, int] = {"create": 0}
-
-    async def log_only_create(*args: Any, **kwargs: Any) -> None:
-        call_count["create"] += 1
-        # Intentionally a no-op. The test catches this via the
-        # body_hash unchanged assertion on the Qdrant client.
-
-    curated_plane.create = log_only_create
+    curated_plane.create = AsyncMock()
 
     write_log = MagicMock()
     write_log.consume_if_exists.return_value = False
@@ -435,46 +498,51 @@ async def test_boot_scan_vault_002_redproof_log_only(
     watcher.boot_scan()
     await captured[0]
 
-    # The log_only candidate makes the call. The test catches
-    # this via the Qdrant client's set_payload call: a real
-    # write would call set_payload; log_only wouldn't. A
-    # healthy control for this redproof is that the Qdrant
-    # client's set_payload was called with the NEW body hash.
-    assert call_count["create"] == 1
+    # POSTCONDITION (real handler, real Qdrant write):
+    # set_payload was called with the new (real) body_hash.
+    # A log_only anti-pattern would NOT call set_payload.
+    # Today: 0 calls (the bug short-circuits). After fix:
+    # >= 1 call with the new body_hash.
     set_payload_calls = client.set_payload.call_args_list
     new_hash_found = False
     for call in set_payload_calls:
         payload = call.kwargs.get("payload")
-        if isinstance(payload, dict) and payload.get("body_hash") != "stale_hash":
+        if isinstance(payload, dict) and payload.get("body_hash") == real_hash:
             new_hash_found = True
             break
     assert new_hash_found, (
-        "log_only candidate makes the call but does not write "
-        "the new body_hash to Qdrant. Real write must propagate "
-        "the new body_hash via the Qdrant client's set_payload."
+        f"Redproof 2 (log_only): Qdrant set_payload must be called "
+        f"with the new body_hash {real_hash}. A log_only anti-pattern "
+        f"calls create() but never set_payload; the test catches it. "
+        f"Today: 0 calls (the bug). After fix: >= 1 call with new hash."
     )
 
 
-# Red-proof 3: mock_handler anti-pattern detection. This is a
-# SOURCE inspection redproof. The test must NOT use the
-# setattr(_handle_event, mock) pattern. The test instead uses
-# task capture from create_task. If the source contains the
-# setattr anti-pattern, this redproof fails (proving the test
-# was modified to use the anti-pattern and is no longer a
-# meaningful red contract).
+# Red-proof 3: this is a GUARD, not a red. It asserts the
+# test file itself does NOT use the setattr(watcher,
+# _handle_event, AsyncMock()) anti-pattern. The test always
+# passes (today AND after the fix) as long as no one
+# modifies the test to use the vacuous mock. This is a
+# plain pass (not a strict xfail).
 def test_boot_scan_vault_002_redproof_mock_handler() -> None:
-    """Red-proof 3: mock_handler anti-pattern detection.
+    """Red-proof 3/3: guard against the test file being modified to use the mock_handler anti-pattern.
 
-    The red contract must NOT use setattr(watcher, _handle_event,
-    AsyncMock()) to mock the handler. The test must use the
-    create_task capture pattern. If this assertion fails, the
-    test was modified to use the mock_handler anti-pattern.
+    The red contract must NOT use `setattr(watcher,
+    _handle_event, AsyncMock())` to mock the handler. The
+    test must use the create_task capture pattern. If this
+    assertion fails, the test was modified to use the
+    vacuous mock_handler pattern.
 
-    This is a SOURCE inspection redproof. It uses the AST of
-    this module to find every call site of `setattr(watcher,
-    _handle_event` in EXECUTABLE code (i.e., the function
-    bodies, not in docstrings or string literals). If a call
-    site exists, the test was modified to use the anti-pattern.
+    This is a SOURCE inspection redproof. It walks the AST
+    of this module to find every call site of `setattr(
+    watcher, "_handle_event", ...)` in EXECUTABLE code. If
+    a call site exists, the test was modified to use the
+    anti-pattern.
+
+    This is a plain pass (not a strict xfail) because the
+    test contract is permanent: the test file must NEVER
+    use the anti-pattern. It does not depend on the source
+    fix.
     """
     import ast as _ast
 
@@ -513,32 +581,32 @@ def test_boot_scan_vault_002_redproof_mock_handler() -> None:
 
 
 # =============================================================
-# REPAIR of the vacuous deletion test
+# DELETION routing marker (skip, routed to VAULT-001 / Issue #446)
 # =============================================================
 # Per Yua 15:12: the existing test_boot_scan_archives_removed_files
 # is vacuous (async slow_scroll on a sync scroll; assert True
 # passes). The deletion expectation is routed to VAULT-001
-# (NOT to be implemented in this slice).
+# (NOT to be implemented in this slice). Issue #446 is the
+# durable routing target for the deletion case.
 
 
+@pytest.mark.skip(
+    reason="deferred to VAULT-001 (Issue ericmey/musubi#446): ghost-row "
+    "reconciliation (known_hashes minus rglob) is a separate slice. The "
+    "vacuous test_boot_scan_archives_removed_files was REMOVED from "
+    "tests/vault/test_watcher_boot_scan.py in the VAULT-002 gateway-cleanup "
+    "successor (commit b6a56c2). The deletion expectation is not in scope "
+    "for this slice."
+)
 def test_boot_scan_vault_002_deletion_routed_to_vault_001_marker() -> None:
     """Deletion handling is OUT OF SCOPE for VAULT-002.
 
-    This is a REDIRECTION MARKER. It documents that the
-    deletion case is NOT in this slice. The deletion
-    expectation is routed to a separate named xfail/issue
-    under VAULT-001 (separate lane).
-
-    This test PASSES today (its body is the redirect marker
-    assertion). The test is NOT a strict xfail because the
-    marker is the assertion; a strict xfail would expect the
-    test to FAIL, but the marker must pass. If the assertion
-    is ever modified to assert a deletion effect, the test
-    was modified to do VAULT-001's work and must be split
-    into a VAULT-001 slice.
+    Skipped with a durable routing target. The actual deletion
+    handling lives in a separate VAULT-001 slice (Issue #446).
+    This marker exists only to document that the deletion
+    case is NOT in this slice.
     """
-    # The marker asserts the slice's scope: VAULT-002 is the
-    # relative-path silent-swallow bug; the deletion case is
-    # NOT in scope. This is a documentation assertion, not a
-    # behavior assertion.
-    assert True
+    # The marker is a no-op. The skip marker is the assertion.
+    # The slice doc's "Out of owns_paths" section is the
+    # durable record of the routing.
+    assert True  # nosec B101 - the skip marker carries the routing
