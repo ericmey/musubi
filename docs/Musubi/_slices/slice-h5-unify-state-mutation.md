@@ -9,8 +9,8 @@ phase: "Lifecycle-audit 2026-07-13 — H5 mutation-path unification (C6b depende
 tags: [section/slices, status/ready, type/slice, lifecycle, atomicity, refactor]
 updated: 2026-07-13
 reviewed: false
-depends-on: []
-blocks: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
+depends-on: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
+blocks: []
 issue: 439
 ---
 
@@ -38,13 +38,14 @@ Migrate all of the above to `LifecycleTransitionCoordinator`. The mechanical gua
 ([[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] guard G1: AST/rg forbidding direct
 `state`-writing `set_payload` outside the coordinator) flips green when this slice lands.
 
-## Relationship
+## Relationship (acyclic — no circular dependency)
 
-- **Blocks:** [[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] closure — C6b cannot claim
-  atomicity until every state mutation routes through the coordinator.
-- **Depends on:** the coordinator API existing (C6b source). So H5 and C6b source are co-dependent: C6b
-  defines the coordinator; H5 makes it the *only* door. Sequencing to be settled at C6b source
-  authorization.
+- **Depends on:** [[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] **Phase 1** — H5 consumes the
+  `LifecycleTransitionCoordinator` API that C6b Phase 1 defines + implements.
+- **Gates C6b closure (not a frontmatter `blocks` edge — that would be circular):** C6b Phase 1 lands
+  with C6b still OPEN; H5 then migrates every mutation path; C6b's guard G1 (and G2/G3 for the migrated
+  callers) go green; only THEN can C6b close as a defect. This "closure gate" is a documented state, not a
+  DAG edge, per Yua's no-circular-dependency ruling (2026-07-13).
 
 ## Status
 

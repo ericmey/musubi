@@ -193,23 +193,40 @@ Reds:
 - R20 rollback refuses on any nonterminal row + stops the worker first; terminal-row cleanup exists (H).
 - R21 caller outcome is three-way (Final/Pending/Err) at the coordinator boundary; Pending carries the
   operation/event id (A).
+- R22 **two DIFFERENT requested transitions race on one object** (e.g. v1→matured vs v1→demoted): exactly
+  one wins (creates the intent + applies); the loser **cannot mutate and cannot overwrite the winner's
+  intent** — it is fenced/rejected (`Err: active_intent_exists` or stale-fence abandon), never a silent
+  lost-update. Distinct from R11 (concurrent begins of the *same* operation) — this proves the
+  single-active-intent guard + hard fence together defeat a genuine two-writer conflict (Yua 2026-07-13).
 
 Guards:
 - G1 **mechanical AST/rg guard: NO direct `state`-writing `set_payload` outside
   `LifecycleTransitionCoordinator`** — RED today (lists the ≥8 violators); flips green only under H5
-  (G).
+  (G). **Closure-gate, not Phase-1 acceptance.**
 - G2 callsite inventory: `coordinator.transition(` callsites are exactly the reviewed set.
 - G3 AST "Result consumed": no caller may drop the three-way `TransitionOutcome`.
 
+## Phase-1 acceptance vs defect closure (Yua sequencing 2026-07-13 — no circular dependency)
+
+The red contract **labels each item**:
+
+- **Phase-1 source acceptance** — R1–R22, G2, G3. These flip to `XPASS(strict)` when the
+  `LifecycleTransitionCoordinator` + `LifecycleOutbox` (Phase 1) is implemented. C6b Phase 1 may land with
+  **C6b still OPEN** on this evidence.
+- **Defect closure** — **G1** only. It stays RED through Phase 1 and flips green **only when
+  [[_slices/slice-h5-unify-state-mutation]] (Issue #439)** migrates every mutation path onto the
+  coordinator. C6b closes as a defect only then.
+
 Red-proof plan: a temporary minimal coordinator+outbox (begin→PENDING commit; conditional set_payload;
-readback; atomic finalize; single-pass reconcile with leases; classified failures) flips R1–R21 to
-`XPASS(strict)`; a temporary migration of the ≥8 violators (or a scoped stub) flips G1; source restored,
-zero `src/` committed.
+readback; atomic finalize; single-pass reconcile with leases; classified failures) flips R1–R22 to
+`XPASS(strict)`; G1 is red-proofed separately by a temporary scoped migration of the violators; source
+restored, zero `src/` committed.
 
-## Dependencies
+## Dependencies (acyclic)
 
-- **Blocks:** the C6 source slice — [[_slices/slice-c6-lifecycle-event-loss]].
-- **Blocked by (NEW):** [[_slices/slice-h5-unify-state-mutation]] — C6b atomicity cannot be claimed
-  closed until all state mutation routes through the coordinator. G1 stays RED until H5.
+- **C6b `blocks`:** the C6 source slice [[_slices/slice-c6-lifecycle-event-loss]] **and**
+  [[_slices/slice-h5-unify-state-mutation]] (H5 consumes C6b's coordinator API).
+- **H5 `depends-on` C6b**, not the reverse — so no cycle. C6b **closure** is gated by H5 via the G1
+  closure-gate (a documented state, NOT a DAG edge).
 
 No source, host, or merge until the red contract is encoded, red-proofed, and reviewed.
