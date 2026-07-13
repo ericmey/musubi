@@ -51,10 +51,10 @@ class SlowThinker:
         self._status = status
         self._task: asyncio.Task[None] | None = None
 
-    def _publish(self, warnings: list[str]) -> None:
+    def _publish(self, warnings: list[str], generation: int) -> None:
         self.last_warnings = list(warnings)
         if self._status is not None:
-            self._status.publish(self.last_warnings)
+            self._status.publish(generation, self.last_warnings)
 
     async def on_user_utterance_segment(self, transcript_so_far: str) -> None:
         """Cancel any in-flight pre-fetch, then start a new one with
@@ -65,6 +65,9 @@ class SlowThinker:
         self._task = asyncio.create_task(self._prefetch(transcript_so_far))
 
     async def _prefetch(self, transcript: str) -> None:
+        # Allocate the generation at the START so a slow request that completes AFTER a newer request
+        # cannot clobber the newer one's status.
+        generation = self._status.begin() if self._status is not None else 0
         try:
             response = await self.client.retrieve(
                 namespace=self.namespace,
@@ -80,10 +83,10 @@ class SlowThinker:
             log.warning("slow-thinker pre-fetch failed", exc_info=True)
             # RET-007: a total pre-fetch failure is a visible impairment on the agent channel, not a
             # silent no-op that leaves a stale status from the previous turn.
-            self._publish([RETRIEVAL_UNAVAILABLE])
+            self._publish([RETRIEVAL_UNAVAILABLE], generation)
             return
         warnings = response.get("warnings", []) if isinstance(response, dict) else []
-        self._publish(warnings if isinstance(warnings, list) else [])
+        self._publish(warnings if isinstance(warnings, list) else [], generation)
         results = response.get("results", []) if isinstance(response, dict) else []
         # Cache the warnings WITH the results so a later Fast Talker cache-hit preserves the status.
         self.cache.put(transcript, results, ttl=self._cache_ttl_s, warnings=self.last_warnings)

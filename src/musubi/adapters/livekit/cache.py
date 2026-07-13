@@ -23,16 +23,32 @@ class RetrievalStatus:
     """The ONE authoritative agent-facing retrieval status for the current turn (RET-007 Blocker 4).
 
     Both the Slow Thinker (pre-fetch) and the Fast Talker (speech turn) publish to it on EVERY
-    retrieval — success, degraded, or total failure — so the most recent retrieval wins (current-turn
-    semantics). A Slow Thinker total failure is therefore visible immediately (not only in its own
-    ``last_warnings``), and a later healthy Fast Talker turn clears it with no stale carry-over.
+    retrieval — success, degraded, or total failure. To get correct current-turn semantics under
+    OVERLAP (requests can complete out of order — an older slow request may finish after a newer fast
+    one), publication is guarded by a monotonic GENERATION: a caller allocates a generation with
+    :meth:`begin` at retrieval START, and :meth:`publish` only takes effect if that generation is not
+    older than the last one published. So a stale (older) completion can never clobber the status of
+    the context actually delivered, while a newer completion (healthy or degraded) always wins.
+
+    All mutation is synchronous (no ``await`` inside), so under asyncio's single-threaded scheduling
+    ``begin``/``publish`` are atomic and no lock is needed.
     """
 
     def __init__(self) -> None:
         self.warnings: list[str] = []
+        self._counter = 0
+        self._published_generation = 0
 
-    def publish(self, warnings: list[str]) -> None:
-        self.warnings = list(warnings)
+    def begin(self) -> int:
+        """Allocate a monotonically increasing generation at the START of a retrieval."""
+        self._counter += 1
+        return self._counter
+
+    def publish(self, generation: int, warnings: list[str]) -> None:
+        """Publish ``warnings`` only if ``generation`` is not older than the last published one."""
+        if generation >= self._published_generation:
+            self._published_generation = generation
+            self.warnings = list(warnings)
 
 
 @dataclass(frozen=True)
