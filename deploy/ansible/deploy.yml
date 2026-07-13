@@ -42,6 +42,7 @@
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0640"
+      diff: false
 
     - name: Render Prometheus scrape config
       # Prometheus mounts this file read-only at

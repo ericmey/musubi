@@ -43,6 +43,7 @@
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0640"
+      diff: false
       notify: Restart Musubi stack
 
     - name: Render op-run reference template

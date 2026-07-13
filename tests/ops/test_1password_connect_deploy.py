@@ -140,6 +140,19 @@ def test_ansible_op_run_tasks_source_the_root_only_connect_environment() -> None
         assert task.get("no_log") is True
 
 
+def test_check_mode_never_diffs_the_legacy_compose_secret() -> None:
+    for playbook_path in RUNTIME_PLAYBOOKS:
+        play = yaml.safe_load(playbook_path.read_text())[0]
+        compose_tasks = [
+            task
+            for task in play.get("tasks", [])
+            if task.get("ansible.builtin.template", {}).get("src")
+            == "templates/docker-compose.yml.j2"
+        ]
+        assert len(compose_tasks) == 1
+        assert compose_tasks[0].get("diff") is False
+
+
 def test_ansible_templates_remain_parseable_controls() -> None:
     for path in RUNTIME_PLAYBOOKS:
         parsed = yaml.safe_load(path.read_text())

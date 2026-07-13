@@ -198,6 +198,7 @@
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0640"
+      diff: false
 
     - name: Render non-secret production environment
       ansible.builtin.template:
