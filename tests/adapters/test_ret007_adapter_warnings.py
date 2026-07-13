@@ -15,8 +15,6 @@ for this red.
 
 from typing import Any, cast
 
-import pytest
-
 from musubi.adapters.livekit.cache import ContextCache
 from musubi.adapters.livekit.fast_talker import FastTalker
 from musubi.adapters.livekit.slow_thinker import SlowThinker
@@ -51,11 +49,6 @@ class _WarningClient:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="MCP: _do_search extracts res['results'] and discards `warnings` — no degradation note reaches the LLM string",
-)
 async def test_mcp_adapter_surfaces_warnings() -> None:
     out = await _do_search(
         cast(Any, _WarningClient()), namespace="test/ns", query="q", limit=5, planes=["episodic"]
@@ -72,11 +65,6 @@ async def test_mcp_adapter_surfaces_warnings() -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="LiveKit FastTalker: get_context returns response['results'] only; warnings are discarded, never reach ChatContext",
-)
 async def test_livekit_fast_talker_surfaces_warnings() -> None:
     ft = FastTalker(client=cast(Any, _WarningClient()), namespace="test/ns", cache=ContextCache())
     await ft.get_context("q")
@@ -89,11 +77,6 @@ async def test_livekit_fast_talker_surfaces_warnings() -> None:
         )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="LiveKit SlowThinker: _prefetch caches response['results'] only; warnings are discarded before ChatContext",
-)
 async def test_livekit_slow_thinker_surfaces_warnings() -> None:
     st = SlowThinker(client=cast(Any, _WarningClient()), namespace="test/ns", cache=ContextCache())
     await st._prefetch("q")

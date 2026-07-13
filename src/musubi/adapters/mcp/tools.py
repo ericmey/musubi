@@ -316,9 +316,21 @@ async def _do_search(
     except Exception as e:
         return f"Error: {e}"
     rows: list[dict[str, Any]] = res.get("results") or []
+    # RET-007: surface degradation to the LLM as a strict fixed-prefix system note instead of
+    # discarding the response's `warnings` — otherwise the model treats degraded recall as complete.
+    raw_warnings = res.get("warnings")
+    degraded = (
+        f"[SYSTEM: Retrieval degraded: {', '.join(str(w) for w in raw_warnings)}]"
+        if isinstance(raw_warnings, list) and raw_warnings
+        else None
+    )
     if not rows:
-        return f"No memories matched {query!r}."
-    lines: list[str] = [f"{len(rows)} result(s) for {query!r}:", ""]
+        base = f"No memories matched {query!r}."
+        return f"{degraded}\n{base}" if degraded else base
+    lines: list[str] = []
+    if degraded:
+        lines.extend([degraded, ""])
+    lines.extend([f"{len(rows)} result(s) for {query!r}:", ""])
     for hit in rows:
         plane = hit.get("plane") or "memory"
         score = hit.get("score")

@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 
+from musubi.retrieve.warnings import RetrievalWarning
 from musubi.settings import Settings
 from musubi.types.common import Ok
 
@@ -23,11 +24,6 @@ class DefectStillPresent(Exception):
     """Raised when the current code still exhibits the contract-forbidden defect."""
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Wire-shape: api/routers/retrieve.py drops the internal `warnings` array at the HTTP boundary",
-)
 def test_http_wire_shape_drops_warnings(
     monkeypatch: pytest.MonkeyPatch, api_settings: Settings
 ) -> None:
@@ -54,7 +50,7 @@ def test_http_wire_shape_drops_warnings(
         class MockOrchResult:
             def __init__(self) -> None:
                 self.results: list[Any] = []
-                self.warnings = ["sparse_embedding_failed"]
+                self.warnings = [RetrievalWarning("sparse_embedding_failed", "episodic")]
 
             def __iter__(self) -> Any:
                 return iter(self.results)
@@ -100,11 +96,6 @@ def test_http_wire_shape_drops_warnings(
     assert data["warnings"] == ["sparse_embedding_failed"]
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="Telemetry: musubi_retrieval_warnings_total (labelled exactly {warning, plane}) + musubi_retrieval_errors_total do not exist yet (contract §6)",
-)
 def test_telemetry_bounded_labels() -> None:
     """Both required metrics must exist, and `musubi_retrieval_warnings_total` must carry EXACTLY the
     bounded label set `{warning, plane}` (contract §6) — never a raw-exception-text or free-text

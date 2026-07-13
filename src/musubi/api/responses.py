@@ -53,6 +53,10 @@ class RetrieveResponse(BaseModel):
     results: list[RetrieveResultRow]
     mode: str
     limit: int
+    #: RET-007 — additive, default-empty. Bounded degradation codes (e.g. ``plane_timeout_episodic``,
+    #: ``sparse_embedding_failed``) surfaced from a degraded 200 so clients can tell degraded from
+    #: healthy. A healthy response carries ``[]``.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ContradictionPair(BaseModel):

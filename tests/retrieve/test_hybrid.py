@@ -278,7 +278,7 @@ async def test_cache_cleared_on_model_version_change() -> None:
 
 
 @pytest.mark.asyncio
-async def test_hybrid_timeout_returns_partial_results() -> None:
+async def test_hybrid_timeout_returns_err() -> None:
     spy = _SpyQdrantClient(delay_s=0.05)
     result = await hybrid_search(
         _client(spy),
@@ -289,8 +289,9 @@ async def test_hybrid_timeout_returns_partial_results() -> None:
         timeout_s=0.001,
     )
 
-    assert isinstance(result, Ok)
-    assert result.value == []
+    # RET-007 C5 migration: a query timeout is now an Err (was silently swallowed to Ok([])).
+    assert isinstance(result, Err)
+    assert "timeout" in str(result.error.detail).lower()
 
 
 @pytest.mark.asyncio
@@ -332,7 +333,7 @@ async def test_results_deduped_within_single_collection() -> None:
     _client_spy, result = await _call(client=spy)
 
     assert isinstance(result, Ok)
-    assert [hit.object_id for hit in result.value] == ["same"]
+    assert [hit.object_id for hit in result.value.hits] == ["same"]
 
 
 @pytest.mark.asyncio

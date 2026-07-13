@@ -20,9 +20,10 @@ from musubi.planes.artifact.plane import ArtifactPlane
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
-from musubi.retrieve.hybrid import HybridHit, hybrid_search
+from musubi.retrieve.hybrid import HybridHit, HybridSearchResult, hybrid_search
 from musubi.retrieve.rerank import rerank
 from musubi.retrieve.scoring import Hit, ScoredHit, rank_hits
+from musubi.retrieve.warnings import RetrievalWarning
 from musubi.store.names import collection_for_plane
 from musubi.types.common import Err, LifecycleState, Ok, Result, utc_now
 
@@ -33,6 +34,15 @@ logger = logging.getLogger(__name__)
 class DeepRetrievalError:
     code: str
     detail: str
+
+
+@dataclass(frozen=True)
+class DeepResult:
+    """The success value of :func:`run_deep_retrieve`: ranked ``hits`` plus any RET-007 degradation
+    ``warnings`` threaded up from the hybrid legs (e.g. ``sparse_embedding_failed``)."""
+
+    hits: list[ScoredHit]
+    warnings: tuple[RetrievalWarning, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -61,7 +71,7 @@ async def run_deep_retrieve(
     reranker: TEIRerankerClient,
     query: RetrievalQuery,
     llm: DeepRetrievalLLM | None = None,
-) -> Result[list[ScoredHit], DeepRetrievalError]:
+) -> Result[DeepResult, DeepRetrievalError]:
     """Execute deep-path retrieval.
 
     Orchestrates hybrid_search -> rerank -> LLM expansion -> score -> lineage.
@@ -106,17 +116,21 @@ async def run_deep_retrieve(
     if errors:
         return Err(error=DeepRetrievalError(code=errors[0].code, detail=errors[0].detail))
 
-    # Merge and dedup hits
+    # Merge and dedup hits; thread each leg's RET-007 degradation warnings up (e.g. a sparse-embedding
+    # timeout that fell back to dense-only surfaces sparse_embedding_failed).
     merged: dict[str, HybridHit] = {}
+    warnings: list[RetrievalWarning] = []
     for res in results:
-        for hit in cast(Ok[list[HybridHit]], res).value:
+        ok = cast(Ok[HybridSearchResult], res)
+        warnings.extend(ok.value.warnings)
+        for hit in ok.value.hits:
             previous = merged.get(hit.object_id)
             if previous is None or hit.score > previous.score:
                 merged[hit.object_id] = hit
 
     hybrid_hits = list(merged.values())
     if not hybrid_hits:
-        return Ok(value=[])
+        return Ok(value=DeepResult(hits=[], warnings=tuple(warnings)))
 
     # 3. Convert to Hit
     hits: list[Hit] = []
@@ -145,12 +159,14 @@ async def run_deep_retrieve(
 
     # 4. Rerank
     # Use the original query text for reranking to preserve strict relevance scoring
-    reranked_hits = await rerank(
+    rerank_result = await rerank(
         client=reranker,
         query_text=query.query_text,
         candidates=hits,
         top_k=query.limit,
     )
+    reranked_hits = rerank_result.hits
+    warnings.extend(rerank_result.warnings)
 
     # 5. Score
     now = utc_now().timestamp()
@@ -171,7 +187,7 @@ async def run_deep_retrieve(
                 final_scored.append(cast(ScoredHit, hydrated_res))
         scored = final_scored
 
-    return Ok(value=scored)
+    return Ok(value=DeepResult(hits=scored, warnings=tuple(warnings)))
 
 
 async def _hydrate_one(
@@ -289,4 +305,10 @@ async def _hydrate_one(
     return replace(hit, payload=new_payload)
 
 
-__all__ = ["DeepRetrievalError", "DeepRetrievalLLM", "RetrievalQuery", "run_deep_retrieve"]
+__all__ = [
+    "DeepResult",
+    "DeepRetrievalError",
+    "DeepRetrievalLLM",
+    "RetrievalQuery",
+    "run_deep_retrieve",
+]

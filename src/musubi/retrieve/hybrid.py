@@ -13,6 +13,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
 from musubi.embedding.base import Embedder
+from musubi.retrieve.warnings import RetrievalWarning, sparse_embedding_failed
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, collection_has_sparse
 from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result, family_of
 
@@ -38,9 +39,20 @@ class RetrievalError:
 
 
 @dataclass(frozen=True, slots=True)
+class HybridSearchResult:
+    """The success value of :func:`hybrid_search`: the ranked ``hits`` plus any RET-007 degradation
+    ``warnings`` (e.g. a sparse-embedding timeout that fell back to dense-only). Warnings ride on the
+    ``Ok`` value — global ``Ok`` stays pure (per the RET-007 ruling)."""
+
+    hits: list[HybridHit]
+    warnings: tuple[RetrievalWarning, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class _QueryEmbedding:
     dense: list[float]
     sparse: dict[int, float]
+    sparse_degraded: bool = False
 
 
 class QueryEmbeddingCache:
@@ -98,7 +110,7 @@ async def hybrid_search(
     cache: QueryEmbeddingCache | None = None,
     timeout_s: float | None = None,
     sparse_timeout_s: float | None = None,
-) -> Result[list[HybridHit], RetrievalError]:
+) -> Result[HybridSearchResult, RetrievalError]:
     """Run one hybrid query against one Qdrant collection."""
 
     if not query:
@@ -129,6 +141,13 @@ async def hybrid_search(
     )
     if isinstance(encoding, Err):
         return encoding
+
+    # RET-007 (M15): a sparse-embedding timeout degrades this leg to dense-only. Surface it as a
+    # structured warning on the success value instead of dropping the channel silently.
+    plane = collection.removeprefix("musubi_")
+    warnings: tuple[RetrievalWarning, ...] = (
+        (sparse_embedding_failed(plane),) if encoding.value.sparse_degraded else ()
+    )
 
     resolved_prefetch_limit = (
         prefetch_limit if prefetch_limit is not None else _prefetch_limit_from_settings()
@@ -162,7 +181,14 @@ async def hybrid_search(
             timeout_s=timeout_s,
         )
     except TimeoutError:
-        return Ok(value=[])
+        # RET-007 C5: a query timeout is a backend failure, NOT an empty result set. Swallowing it
+        # into Ok([]) hides degradation as a healthy zero-match — return an Err instead.
+        return Err(
+            error=RetrievalError(
+                code="qdrant_timeout",
+                detail=f"hybrid query to {collection} exceeded its timeout",
+            )
+        )
     except Exception as exc:
         return Err(
             error=RetrievalError(
@@ -171,7 +197,7 @@ async def hybrid_search(
             )
         )
 
-    return Ok(value=_hits_from_response(response))
+    return Ok(value=HybridSearchResult(hits=_hits_from_response(response), warnings=warnings))
 
 
 async def hybrid_search_many(
@@ -190,7 +216,7 @@ async def hybrid_search_many(
     cache: QueryEmbeddingCache | None = None,
     timeout_s: float | None = None,
     sparse_timeout_s: float | None = None,
-) -> Result[list[HybridHit], RetrievalError]:
+) -> Result[HybridSearchResult, RetrievalError]:
     """Fan out hybrid search across collections in parallel, then dedupe by object id."""
 
     if len(clients) != len(collections):
@@ -228,14 +254,17 @@ async def hybrid_search_many(
         return Err(error=errors[0])
 
     merged: dict[str, HybridHit] = {}
+    warnings: list[RetrievalWarning] = []
     for result in results:
-        for hit in cast(Ok[list[HybridHit]], result).value:
+        ok = cast(Ok[HybridSearchResult], result)
+        warnings.extend(ok.value.warnings)
+        for hit in ok.value.hits:
             previous = merged.get(hit.object_id)
             if previous is None or hit.score > previous.score:
                 merged[hit.object_id] = hit
 
     hits = sorted(merged.values(), key=lambda hit: (-hit.score, hit.object_id))
-    return Ok(value=hits[:limit])
+    return Ok(value=HybridSearchResult(hits=hits[:limit], warnings=tuple(warnings)))
 
 
 def _prefetch_limit_from_settings() -> int:
@@ -277,6 +306,7 @@ async def _encode_query(
 
     dense_vector: list[float] = []
     sparse_vector: dict[int, float] = {}
+    sparse_degraded = False
 
     if dense_task is not None:
         try:
@@ -294,6 +324,7 @@ async def _encode_query(
             sparse_vector = (await sparse_task)[0]
         except TimeoutError:
             sparse_vector = {}
+            sparse_degraded = True
         except Exception as exc:
             return Err(
                 error=RetrievalError(
@@ -302,7 +333,9 @@ async def _encode_query(
                 )
             )
 
-    embedding = _QueryEmbedding(dense=dense_vector, sparse=sparse_vector)
+    embedding = _QueryEmbedding(
+        dense=dense_vector, sparse=sparse_vector, sparse_degraded=sparse_degraded
+    )
     if cache is not None and dense_vector and sparse_vector:
         cache.put(query, embedding)
     return Ok(value=embedding)
@@ -439,6 +472,7 @@ def _hits_from_response(response: Any) -> list[HybridHit]:
 __all__ = [
     "HYBRID_PREFETCH_LIMIT",
     "HybridHit",
+    "HybridSearchResult",
     "QueryEmbeddingCache",
     "RetrievalError",
     "hybrid_search",
