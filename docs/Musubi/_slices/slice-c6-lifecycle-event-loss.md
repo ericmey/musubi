@@ -48,11 +48,12 @@ AND two additional loss paths were found.
   exception-suppressed. This is the **common** loss case (most records only append; the buffer rarely
   hits 100 within a request).
 - **Shutdown path:** `close()` → final `flush()`, which discards via the `_closed` early-return.
-- **Callers assume fire-and-forget.** `transitions.py:250-268`: the Qdrant mutation `set_payload`
-  **commits first**, then `if sink is not None: sink.record(event)` runs with **no try/except**, then
-  the transition returns `Ok`. Audit is a best-effort side-effect AFTER a committed mutation — so a
-  silent background-flush failure leaves the mutation done and the audit erased with nobody informed.
-  Consumers (`reflection.py` via `read_all()`) then operate on an incomplete audit trail.
+- **Callers assume fire-and-forget** (this is the C6b atomicity boundary, NOT a sink loss path C6
+  closes). `transitions.py:250-268`: the Qdrant mutation `set_payload` **commits first**, then
+  `if sink is not None: sink.record(event)` runs with **no try/except**, then the transition returns
+  `Ok`. Audit is best-effort AFTER a committed mutation. Making the SINK durable (this slice) does NOT
+  make the two stores atomic — see "What C6 does NOT close" below. Consumers (`reflection.py` via
+  `read_all()`) operate on whatever the sink persisted.
 
 ## Desired contract (each red is strict-xfail against today)
 
@@ -72,24 +73,44 @@ AND two additional loss paths were found.
   At this head the reds are strict-xfail (each reason names the observed defect) and the control
   passes, so `make tc-coverage SLICE=slice-c6-lifecycle-event-loss` exits 0.
 
+## What C6 does NOT close (C6b — atomicity)
+
+Making the sink durable does NOT make Qdrant + SQLite atomic. `transitions.py:250-268` commits the
+Qdrant mutation FIRST, then records; a crash between the mutation commit and even a durable-on-accept
+audit still leaves **mutation-without-audit**. Closing that needs a transactional-outbox / two-phase /
+idempotent-replay pattern spanning both stores — tracked as **C6b (or an H5/H7 dependency)**, not this
+slice. Design-options + the durability recommendation: `docs/Musubi/13-decisions/c6-lifecycle-durability-options.md`.
+
 ## Test Contract
 
-`tests/lifecycle/test_c6_event_loss.py` (deterministic — the background daemon is disabled via
-`flush_every_s=3600`; every flush is explicit; a `_FailNThenReal` fault injector controls write
-failure):
+`tests/lifecycle/test_c6_event_loss.py` — deterministic (background daemon disabled via
+`flush_every_s=3600`; a `_FailNThenReal` fault injector; all joins/waits bounded by `_JOIN_TIMEOUT` so
+a regression fails instead of hanging CI). Metric named before source:
+`musubi_lifecycle_event_write_failures_total` (bounded, no labels), asserted via the shared
+`default_registry` scrape delta — never a private attribute.
 
 Control (green now + post-fix):
-1. `test_concurrent_record_and_flush_no_loss_no_dup` — lock-protected append/drain is race-free.
+1. `test_concurrent_record_and_flush_no_loss_no_dup` — lock-protected append/drain is race-free under
+   a SUCCESSFUL write (insufficient alone; the failing-write race is red #5).
 
-Reds (strict-xfail; flip to PASS with the source fix, red-proofed to flip):
+Reds (strict-xfail; each red-proofed to flip green under the minimal fix):
 2. `test_failed_flush_preserves_events_for_retry` — a failed flush must not discard the batch.
 3. `test_successful_retry_writes_each_event_exactly_once` — retry yields each event exactly once.
 4. `test_close_does_not_silently_discard_buffered_events` — shutdown persists the buffer.
-5. `test_sustained_failure_retains_bounded_not_lost` — sustained failure retains (bounded, named), not lost.
-6. `test_swallowed_flush_failure_is_observable` — a suppressed flush failure leaves an observable signal.
+5. `test_failing_write_race_preserves_a_and_b` — batch A failing while B is appended preserves A+B
+   (order/cardinality, no loss/dup) — deterministic Event barrier, bounded joins.
+6. `test_accepted_events_survive_abrupt_crash` — a subprocess `os._exit` without close()/flush() leaves
+   accepted events durable (durable-on-accept).
+7. `test_sustained_failure_bounded_backpressure_no_silent_loss` — sustained failure applies backpressure
+   (record refuses, not silent accept-then-lose) and loses no accepted event.
+8. `test_swallowed_flush_failure_observable_metric_and_log` — a suppressed failure increments the shared
+   `musubi_lifecycle_event_write_failures_total` and logs a PII-free ERROR (asserted via registry delta
+   + caplog, not a private attribute).
 
-**Closure at this head:** 1 passed + 5 xfailed; ruff/mypy/check.py clean; zero `src/musubi`.
-Red-proofed: simulating the write-before-clear / retain-on-failure fix flips red #2 to 3/3 green.
+**Closure at this head:** 1 passed + 7 xfailed; ruff/mypy/check.py clean; zero `src/musubi`.
+Red-proofed: a temporary minimal fix (write-before-clear + retain + durable-on-accept + backpressure +
+counter/log + close-drain) flips ALL 7 reds green (7 XPASS) while the control stays green; source
+restored, nothing committed to `src/`.
 
 ## Status
 
