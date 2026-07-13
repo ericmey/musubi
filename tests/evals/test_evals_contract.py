@@ -1106,23 +1106,42 @@ def test_discrimination_abstention_fpr() -> None:
 
 
 def _assert_contradiction_blending(
-    eval_func: Callable[[list[dict[str, Any]], str], dict[str, Any]],
+    eval_func: Callable[[list[dict[str, Any]], str], list[dict[str, Any]]],
 ) -> None:
-    # Fixture: Query with two contradictory facts
-    corpus = [
-        {"id": "doc_pro", "text": "X is safe.", "plane": "curated"},
-        {"id": "doc_con", "text": "X is dangerous.", "plane": "curated"},
-        {"id": "doc_summary", "text": "X is debated.", "plane": "curated"},
+    corpus_con = [
+        {"id": "doc_pro", "text": "X is safe.", "base_score": 0.9},
+        {"id": "doc_con", "text": "X is dangerous.", "base_score": 0.85},
+        {"id": "doc_other", "text": "X was discovered in 1990.", "base_score": 0.7},
     ]
-    query = "Is X safe?"
-    res = eval_func(corpus, query)
-    hits = res.get("top_ids", [])
+    corpus_ctrl = [
+        {"id": "doc_pro", "text": "X is safe.", "base_score": 0.9},
+        {"id": "doc_agree", "text": "X is secure.", "base_score": 0.85},
+        {"id": "doc_other", "text": "X was discovered in 1990.", "base_score": 0.7},
+    ]
 
-    if "doc_pro" not in hits[:5] or "doc_con" not in hits[:5]:
+    res_con = eval_func(corpus_con, "Is X safe?")
+    res_ctrl = eval_func(corpus_ctrl, "Is X safe?")
+
+    ctrl_dict = {r["id"]: r for r in res_ctrl}
+    if ctrl_dict["doc_pro"].get("contradiction_penalty", 0.0) > 0.0:
+        raise ValueError("Control penalty applied incorrectly")
+
+    con_dict = {r["id"]: r for r in res_con}
+
+    top_5 = [r["id"] for r in res_con[:5]]
+    if "doc_pro" not in top_5 or "doc_con" not in top_5:
         raise ValueError("Contradictory facts not in top-K context")
 
-    if hits and hits[0] in ("doc_pro", "doc_con"):
-        raise ValueError("Contradictory top hit not penalized")
+    if con_dict["doc_pro"].get("contradiction_penalty", 0.0) <= 0.0:
+        raise ValueError("doc_pro not penalized")
+    if con_dict["doc_con"].get("contradiction_penalty", 0.0) <= 0.0:
+        raise ValueError("doc_con not penalized")
+
+    if con_dict["doc_other"].get("contradiction_penalty", 0.0) > 0.0:
+        raise ValueError("Penalize-all detected")
+
+    if con_dict["doc_pro"]["score"] >= ctrl_dict["doc_pro"]["score"]:
+        raise ValueError("Score did not decrease vs control")
 
 
 @pytest.mark.xfail(
@@ -1137,58 +1156,102 @@ def test_eval_contradiction_blending() -> None:
 
 
 def test_discrimination_contradiction_blending() -> None:
-    def correct_check(corpus: list[dict[str, Any]], query: str) -> dict[str, Any]:
-        return {"top_ids": ["doc_summary", "doc_pro", "doc_con"]}
+    def correct_check(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+        has_con = any(d["id"] == "doc_con" for d in corpus)
+        res = []
+        for d in corpus:
+            pen = 0.1 if has_con and d["id"] in ("doc_pro", "doc_con") else 0.0
+            res.append(
+                {"id": d["id"], "score": d["base_score"] - pen, "contradiction_penalty": pen}
+            )
+        res.sort(key=lambda x: x["score"], reverse=True)
+        return res
 
-    def wrong_picks_pro(corpus: list[dict[str, Any]], query: str) -> dict[str, Any]:
-        return {"top_ids": ["doc_pro", "doc_summary", "doc_con"]}
+    def wrong_ignore_penalty(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+        return [
+            {"id": d["id"], "score": d["base_score"], "contradiction_penalty": 0.0} for d in corpus
+        ]
 
-    def wrong_drops_con(corpus: list[dict[str, Any]], query: str) -> dict[str, Any]:
-        return {"top_ids": ["doc_summary", "doc_pro"]}
+    def wrong_drop_one(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+        c = [d for d in corpus if d["id"] != "doc_con"]
+        return correct_check(c, query)
+
+    def wrong_penalize_all(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+        has_con = any(d["id"] == "doc_con" for d in corpus)
+        res = []
+        for d in corpus:
+            pen = 0.1 if has_con else 0.0
+            res.append(
+                {"id": d["id"], "score": d["base_score"] - pen, "contradiction_penalty": pen}
+            )
+        return res
+
+    def wrong_hardcode(corpus: list[dict[str, Any]], query: str) -> list[dict[str, Any]]:
+        # Always applies penalty to doc_pro, even on control
+        res = []
+        for d in corpus:
+            pen = 0.1 if d["id"] == "doc_pro" else 0.0
+            res.append(
+                {"id": d["id"], "score": d["base_score"] - pen, "contradiction_penalty": pen}
+            )
+        return res
 
     _assert_contradiction_blending(correct_check)
 
-    with pytest.raises(ValueError, match="Contradictory top hit not penalized"):
-        _assert_contradiction_blending(wrong_picks_pro)
+    with pytest.raises(ValueError, match="doc_pro not penalized"):
+        _assert_contradiction_blending(wrong_ignore_penalty)
 
     with pytest.raises(ValueError, match="Contradictory facts not in top-K context"):
-        _assert_contradiction_blending(wrong_drops_con)
+        _assert_contradiction_blending(wrong_drop_one)
+
+    with pytest.raises(ValueError, match="Penalize-all detected"):
+        _assert_contradiction_blending(wrong_penalize_all)
+
+    with pytest.raises(ValueError, match="Control penalty applied incorrectly"):
+        _assert_contradiction_blending(wrong_hardcode)
 
 
 def _assert_cross_plane_blending(
-    eval_func: Callable[[list[dict[str, Any]], list[dict[str, Any]], str], list[dict[str, Any]]],
+    eval_func: Callable[
+        [list[dict[str, Any]], list[dict[str, Any]], dict[str, float]], list[dict[str, Any]]
+    ],
 ) -> None:
-    # Fixtures for two planes
     curated = [
-        {"id": "c1", "text": "canon info"},
-        {"id": "dup1", "text": "shared info"},
+        {"id": "c1", "score": 0.8},
+        {"id": "dup1", "score": 0.6},
     ]
     episodic = [
-        {"id": "e1", "text": "recent event"},
-        {"id": "dup1", "text": "shared info"},
+        {"id": "e1", "score": 0.9},
+        {"id": "dup1", "score": 0.7},
     ]
-    query = "canon and recent info"
 
-    res = eval_func(curated, episodic, query)
+    res1 = eval_func(curated, episodic, {"curated": 1.0, "episodic": 0.5})
+    res2 = eval_func(curated, episodic, {"curated": 0.5, "episodic": 1.0})
 
-    ids = [r["id"] for r in res]
-    if "c1" not in ids or "e1" not in ids:
+    r1_dict = {r["id"]: r for r in res1}
+    r2_dict = {r["id"]: r for r in res2}
+
+    if "c1" not in r1_dict or "e1" not in r1_dict:
         raise ValueError("Missing multi-plane hits")
 
-    if ids.count("dup1") > 1:
-        raise ValueError("Naive concat: double-count detected")
+    if abs(r1_dict["dup1"]["score"] - 0.6) > 0.001:
+        raise ValueError("Double-count boost or wrong math")
+    if abs(r2_dict["dup1"]["score"] - 0.7) > 0.001:
+        raise ValueError("Double-count boost or wrong math")
 
-    if "dup1" not in ids:
-        raise ValueError("Missing duplicated hit")
+    if abs(r1_dict["c1"]["score"] - 0.8) > 0.001:
+        raise ValueError("Wrong score math")
+    if abs(r1_dict["e1"]["score"] - 0.45) > 0.001:
+        raise ValueError("Wrong score math")
 
-    # Check provenance
-    provs = {r["id"]: r.get("provenance", []) for r in res}
-    if "curated" not in provs.get("c1", []):
-        raise ValueError("Missing provenance for c1")
-    if "episodic" not in provs.get("e1", []):
-        raise ValueError("Missing provenance for e1")
-    if not {"curated", "episodic"}.issubset(set(provs.get("dup1", []))):
-        raise ValueError("Missing blended provenance for dup1")
+    order1 = [r["id"] for r in res1]
+    order2 = [r["id"] for r in res2]
+    if order1 == order2:
+        raise ValueError("Ordering unaffected by weights")
+
+    provs = r1_dict["dup1"].get("provenance", [])
+    if "curated" not in provs or "episodic" not in provs:
+        raise ValueError("Missing blended provenance")
 
 
 @pytest.mark.xfail(
@@ -1203,43 +1266,76 @@ def test_eval_cross_plane_blending() -> None:
 
 
 def test_discrimination_cross_plane_blending() -> None:
-    def correct_check(cur: list[Any], epi: list[Any], q: str) -> list[dict[str, Any]]:
-        return [
-            {"id": "c1", "provenance": ["curated"]},
-            {"id": "e1", "provenance": ["episodic"]},
-            {"id": "dup1", "provenance": ["curated", "episodic"]},
-        ]
+    def correct_check(cur: list[Any], epi: list[Any], w: dict[str, float]) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for d in cur:
+            merged[d["id"]] = {
+                "id": d["id"],
+                "score": d["score"] * w.get("curated", 1.0),
+                "provenance": ["curated"],
+            }
+        for d in epi:
+            ns = d["score"] * w.get("episodic", 1.0)
+            if d["id"] in merged:
+                merged[d["id"]]["score"] = max(merged[d["id"]]["score"], ns)
+                merged[d["id"]]["provenance"].append("episodic")
+            else:
+                merged[d["id"]] = {"id": d["id"], "score": ns, "provenance": ["episodic"]}
+        res = list(merged.values())
+        res.sort(key=lambda x: x["score"], reverse=True)
+        return res
 
-    def wrong_single_plane(cur: list[Any], epi: list[Any], q: str) -> list[dict[str, Any]]:
-        return [
-            {"id": "c1", "provenance": ["curated"]},
-            {"id": "dup1", "provenance": ["curated"]},
-        ]
+    def wrong_single_plane(
+        cur: list[Any], epi: list[Any], w: dict[str, float]
+    ) -> list[dict[str, Any]]:
+        return correct_check(cur, [], w)
 
-    def wrong_naive_concat(cur: list[Any], epi: list[Any], q: str) -> list[dict[str, Any]]:
-        return [
-            {"id": "c1", "provenance": ["curated"]},
-            {"id": "dup1", "provenance": ["curated"]},
-            {"id": "e1", "provenance": ["episodic"]},
-            {"id": "dup1", "provenance": ["episodic"]},
-        ]
+    def wrong_unweighted(
+        cur: list[Any], epi: list[Any], w: dict[str, float]
+    ) -> list[dict[str, Any]]:
+        return correct_check(cur, epi, {"curated": 1.0, "episodic": 1.0})
 
-    def wrong_no_provenance(cur: list[Any], epi: list[Any], q: str) -> list[dict[str, Any]]:
-        return [
-            {"id": "c1"},
-            {"id": "e1"},
-            {"id": "dup1"},
-        ]
+    def wrong_double_count_boost(
+        cur: list[Any], epi: list[Any], w: dict[str, float]
+    ) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for d in cur:
+            merged[d["id"]] = {
+                "id": d["id"],
+                "score": d["score"] * w.get("curated", 1.0),
+                "provenance": ["curated"],
+            }
+        for d in epi:
+            ns = d["score"] * w.get("episodic", 1.0)
+            if d["id"] in merged:
+                merged[d["id"]]["score"] += ns
+                merged[d["id"]]["provenance"].append("episodic")
+            else:
+                merged[d["id"]] = {"id": d["id"], "score": ns, "provenance": ["episodic"]}
+        res = list(merged.values())
+        res.sort(key=lambda x: x["score"], reverse=True)
+        return res
+
+    def wrong_no_provenance(
+        cur: list[Any], epi: list[Any], w: dict[str, float]
+    ) -> list[dict[str, Any]]:
+        res = correct_check(cur, epi, w)
+        for r in res:
+            r["provenance"] = ["curated"]
+        return res
 
     _assert_cross_plane_blending(correct_check)
 
     with pytest.raises(ValueError, match="Missing multi-plane hits"):
         _assert_cross_plane_blending(wrong_single_plane)
 
-    with pytest.raises(ValueError, match="Naive concat: double-count detected"):
-        _assert_cross_plane_blending(wrong_naive_concat)
+    with pytest.raises(ValueError, match=r"Wrong score math|Double-count boost"):
+        _assert_cross_plane_blending(wrong_unweighted)
 
-    with pytest.raises(ValueError, match="Missing provenance"):
+    with pytest.raises(ValueError, match="Double-count boost"):
+        _assert_cross_plane_blending(wrong_double_count_boost)
+
+    with pytest.raises(ValueError, match="Missing blended provenance"):
         _assert_cross_plane_blending(wrong_no_provenance)
 
 
