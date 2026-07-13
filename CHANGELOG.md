@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.7](https://github.com/ericmey/musubi/compare/v1.11.6...v1.11.7) (2026-07-13)
+
+
+### Bug Fixes
+
+* **deploy:** target main for image bump and rollback ([#415](https://github.com/ericmey/musubi/issues/415)) ([cb8f4a0](https://github.com/ericmey/musubi/commit/cb8f4a08dd694e3545f5c7048f6a8640475316c7))
+
 ## [1.11.6](https://github.com/ericmey/musubi/compare/v1.11.5...v1.11.6) (2026-07-11)
 
 
