@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.8](https://github.com/ericmey/musubi/compare/v1.11.7...v1.11.8) (2026-07-13)
+
+
+### Bug Fixes
+
+* **deploy:** reconcile 1Password Connect source ([#425](https://github.com/ericmey/musubi/issues/425)) ([e7cc1ae](https://github.com/ericmey/musubi/commit/e7cc1aeabc52e6cd27f46c393e91bc398f90ca67))
+
 ## [1.11.7](https://github.com/ericmey/musubi/compare/v1.11.6...v1.11.7) (2026-07-13)
 
 

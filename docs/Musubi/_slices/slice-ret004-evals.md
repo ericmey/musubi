@@ -5,7 +5,7 @@ issue: 430
 section: _slices
 type: slice
 status: ready
-owner: shiori
+owner: unassigned
 phase: "Retrieval"
 tags: [section/slices, status/ready, type/slice]
 updated: 2026-07-13
@@ -18,7 +18,7 @@ blocks: []
 
 > Defines the versioned corpus, executable quality metrics, CI pipelines, and explicit behavior thresholds required to replace the skipped retrieval testing placeholders.
 
-**Phase:** Retrieval · **Status:** `ready` · **Owner:** `shiori`
+**Phase:** Retrieval · **Status:** `ready` · **Owner:** `unassigned`
 
 ## Specs to implement
 
@@ -28,6 +28,8 @@ blocks: []
 
 - `docs/Musubi/05-retrieval/evals.md`
 - `docs/Musubi/_slices/slice-ret004-evals.md`
+- `docs/Musubi/_slices/slice-retrieval-hybrid.md`
+- `docs/Musubi/_slices/slice-retrieval-scoring.md`
 - `src/musubi/evals/`
 - `tests/evals/`
 - `tests/retrieve/test_scoring.py`
@@ -35,6 +37,8 @@ blocks: []
 - `tests/retrieve/test_rerank.py`
 - `tests/retrieve/test_orchestration.py`
 - `.github/workflows/evals.yml`
+
+*(Note: The four test files and two parent slice documents listed above intentionally overlap with completed slices / RET007. This is a deliberate transfer of path ownership into this slice for the duration of the evaluation implementation).*
 
 ## Acceptance Matrix (Red Contracts)
 
