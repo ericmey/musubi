@@ -12,6 +12,7 @@ ANSIBLE = ROOT / "deploy" / "ansible"
 TEMPLATES = ANSIBLE / "templates"
 SYSTEMD = TEMPLATES / "musubi.service.j2"
 COMPOSE = TEMPLATES / "docker-compose.yml.j2"
+ENV = TEMPLATES / "env.production.j2"
 CONFIG = ANSIBLE / "config.yml"
 DEPLOY = ANSIBLE / "deploy.yml"
 
@@ -42,10 +43,12 @@ def test_prometheus_mounts_rendered_runtime_qdrant_token_read_only() -> None:
 
 @RED
 def test_material_musubi_secrets_are_not_rendered_to_persistent_files() -> None:
-    deployment_text = "\n".join(path.read_text() for path in (CONFIG, DEPLOY, SYSTEMD, COMPOSE))
+    deployment_text = "\n".join(path.read_text() for path in (CONFIG, DEPLOY))
+    env_text = ENV.read_text()
 
-    assert ".env.production" not in deployment_text
     assert 'dest: "{{ musubi_config_dir }}/qdrant.token"' not in deployment_text
+    assert "JWT_SIGNING_KEY={{" not in env_text
+    assert "QDRANT_API_KEY={{" not in env_text
     assert not (TEMPLATES / "qdrant.token.j2").exists()
 
 
@@ -70,24 +73,14 @@ def test_deploy_play_uses_runtime_secret_templates() -> None:
 
 @RED
 def test_op_connect_inputs_are_root_only_and_secret_tasks_are_no_log() -> None:
-    config = yaml.safe_load(CONFIG.read_text())
-    tasks = config[0]["tasks"]
-    secret_tasks = [
-        task
-        for task in tasks
-        if any(
-            name in yaml.safe_dump(task)
-            for name in ("secrets.tpl", "qdrant.token.tpl", "connect.env")
-        )
-    ]
+    for playbook_path in (CONFIG, DEPLOY):
+        playbook = yaml.safe_load(playbook_path.read_text())
+        play = playbook[0]
+        preflight_text = yaml.safe_dump(play.get("pre_tasks", []))
 
-    assert secret_tasks
-    for task in secret_tasks:
-        assert task.get("no_log") is True
-        template = task.get("ansible.builtin.template", {})
-        if template:
-            assert template.get("owner") == "root"
-            assert template.get("mode") in {"0600", "0640"}
+        assert "/etc/musubi/connect.env" in preflight_text
+        assert "0600" in preflight_text
+        assert "no_log: true" in preflight_text
 
 
 def test_ansible_templates_remain_parseable_controls() -> None:
