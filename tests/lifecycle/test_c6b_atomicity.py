@@ -440,8 +440,9 @@ class _RefCoordinator:
     ) -> None:
         self._client = client
         # LAZY on-disk Qdrant (R22): a two-process race passes a qdrant_path; Qdrant is opened only when a
-        # process actually reads/applies, so the loser (rejected at begin) never opens it and the winner
-        # holds the single-writer lock alone.
+        # process actually reads/applies. An active_intent loser (rejected at begin) never opens it; a
+        # version_fence loser DOES lazy-open it and issues a zero-match conditional attempt (its readback
+        # shows the winner's target), so it never mutates.
         self._qdrant_path = str(qdrant_path) if qdrant_path is not None else None
         self._db = str(db_path)
         self._mode = mode
@@ -455,6 +456,13 @@ class _RefCoordinator:
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_events (event_id TEXT PRIMARY KEY, object_id TEXT,"
             " namespace TEXT, to_state TEXT)"
+        )
+        # test-local EFFECTIVE-APPLY success markers (Yua R22): one durable row per op/target written at
+        # the POST-READBACK-success boundary (not the pre-set_payload attempt), so the parent can assert
+        # exactly one effective apply belongs to the winner. non_atomic_cas produces two.
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS lifecycle_apply_markers (operation_key TEXT, object_id TEXT,"
+            " target_state TEXT)"
         )
         if self._mode not in ("no_unique_index", "non_atomic_cas"):
             # ATOMIC single-active-intent (Yua R11): a DB-enforced partial unique index, NOT a
@@ -582,13 +590,23 @@ class _RefCoordinator:
         finally:
             con.close()
 
+    def _mark_apply_success(self, opk: str, object_id: str, target_state: str) -> None:
+        con = sqlite3.connect(self._db)
+        con.execute(
+            "INSERT INTO lifecycle_apply_markers (operation_key, object_id, target_state) VALUES (?,?,?)",
+            (opk, object_id, target_state),
+        )
+        con.commit()
+        con.close()
+
     def _apply_conditional(
-        self, collection: str, object_id: str, target_state: str, expected_version: int
+        self, opk: str, collection: str, object_id: str, target_state: str, expected_version: int
     ) -> bool:
         """Server-side conditional: the expected version is IN the set_payload filter (object_id AND
         version == expected), so a stale version matches zero points and does not apply. Then readback the
         actual payload to confirm the fence held and the exact patch landed (Yua repair 5). The
-        warn_only_fence mode (WRONG) drops the version condition -> a stale writer clobbers (R12/R22)."""
+        warn_only_fence mode (WRONG) drops the version condition -> a stale writer clobbers (R12/R22). On a
+        POST-READBACK success it writes a durable effective-apply marker for opk/target (Yua R22)."""
         must: list[models.Condition] = [
             models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))
         ]
@@ -605,9 +623,14 @@ class _RefCoordinator:
             points=models.Filter(must=must),
         )
         ver, st = self._cur(collection, object_id)
-        if non_atomic:
-            return st == target_state  # ignores the version fence (non-atomic CAS)
-        return ver == expected_version + 1 and st == target_state
+        ok = (
+            st == target_state
+            if non_atomic
+            else (ver == expected_version + 1 and st == target_state)
+        )
+        if ok:
+            self._mark_apply_success(opk, object_id, target_state)  # post-readback-success boundary
+        return ok
 
     def _finalize(
         self, opk: str, event_id: str, object_id: str, namespace: str, target_state: str
@@ -713,7 +736,11 @@ class _RefCoordinator:
                 return Err(error=_RefError(code="durable_begin_failed"))
         try:
             applied = self._apply_conditional(
-                intent.collection, intent.object_id, intent.target_state, intent.expected_version
+                opk,
+                intent.collection,
+                intent.object_id,
+                intent.target_state,
+                intent.expected_version,
             )
             if not applied:
                 if self._mode != "mutate_first":
@@ -757,13 +784,13 @@ class _RefCoordinator:
         for opk, oid, coll, tstate, ver, event_id, state in rows:
             if state == "FINAL":  # only reachable under reconcile_greedy
                 self._apply_conditional(
-                    coll, oid, tstate, ver
+                    opk, coll, oid, tstate, ver
                 )  # WRONG: re-affirm -> extra apply call
                 continue
             if state == "APPLIED":
                 if self._mode == "reconcile_always_apply":
                     self._apply_conditional(
-                        coll, oid, tstate, ver
+                        opk, coll, oid, tstate, ver
                     )  # WRONG: re-apply an APPLIED row (C3)
                 self._finalize(opk, event_id, oid, _NS, tstate)
                 fin += 1
@@ -784,7 +811,7 @@ class _RefCoordinator:
                 fin += 1
                 continue
             try:
-                applied = self._apply_conditional(coll, oid, tstate, ver)
+                applied = self._apply_conditional(opk, coll, oid, tstate, ver)
             except Exception as exc:
                 if self._classify_terminal(exc):
                     self._mark(opk, "ABANDONED")
@@ -971,12 +998,49 @@ def _outbox_for_object(db_path: Path, object_id: str) -> list[dict[str, object]]
     try:
         try:
             cur = con.execute(
-                "SELECT operation_key,state,event_id FROM lifecycle_outbox WHERE object_id=?",
+                "SELECT operation_key,state,event_id,target_state FROM lifecycle_outbox "
+                "WHERE object_id=?",
                 (object_id,),
             )
         except sqlite3.OperationalError:
             return []
-        return [{"operation_key": r[0], "state": r[1], "event_id": r[2]} for r in cur.fetchall()]
+        return [
+            {"operation_key": r[0], "state": r[1], "event_id": r[2], "target_state": r[3]}
+            for r in cur.fetchall()
+        ]
+    finally:
+        con.close()
+
+
+def _event_to_state(db_path: Path, event_id: object) -> object:
+    if event_id is None or not Path(db_path).exists():
+        return None
+    con = sqlite3.connect(str(db_path))
+    try:
+        try:
+            cur = con.execute("SELECT to_state FROM lifecycle_events WHERE event_id=?", (event_id,))
+        except sqlite3.OperationalError:
+            return None
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        con.close()
+
+
+def _apply_markers(db_path: Path, object_id: str) -> list[tuple[object, object]]:
+    """The durable effective-apply success markers (operation_key, target_state) for an object."""
+    if not Path(db_path).exists():
+        return []
+    con = sqlite3.connect(str(db_path))
+    try:
+        try:
+            cur = con.execute(
+                "SELECT operation_key,target_state FROM lifecycle_apply_markers WHERE object_id=?",
+                (object_id,),
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [(r[0], r[1]) for r in cur.fetchall()]
     finally:
         con.close()
 
@@ -1812,13 +1876,19 @@ def test_r8_finalize_transaction_is_atomic(env: tuple[QdrantClient, _Seed, Path]
 # Yua rejected the sequential version. This is a real race: two OS processes with DIFFERENT operation
 # keys, DIFFERENT targets, the SAME expected_version, on ONE object, over a SHARED ON-DISK Qdrant + SQLite,
 # synchronized at before_pending_commit. Exactly one wins the atomic begin (partial unique index) and
-# ACTUALLY mutates the on-disk Qdrant (the winner lazy-opens it - the loser, rejected at begin, never
-# does, so no single-writer-lock contention); the loser exits active_intent_exists. Proven: exactly one
-# FINAL row, one effective mutation to the WINNER's target, one audit event, no overwrite. Wrong
-# candidates: no_unique_index (naive check-then-insert) and non_atomic_cas (no index + non-atomic apply)
-# -> both begins accepted -> two winners / two rows (caught).
+# ACTUALLY mutates the on-disk Qdrant (the winner lazy-opens it). The loser is rejected either at begin
+# (active_intent_exists - never opens Qdrant) OR at the version fence (version_fence_violation - it DOES
+# lazy-open Qdrant and issues a zero-match conditional attempt, so its readback shows the winner's target
+# and it never mutates). Each child exits with an op-DISTINCT winner code so the parent correlates the
+# winning op to the single FINAL row, its audit event to_state, the single effective-apply marker, and the
+# exact Qdrant target/version - a loser that overwrote-then-abandoned while the other finalized cannot
+# pass. Wrong candidate: non_atomic_cas ONLY (index off AND fence off -> the real lost update / two
+# effective applies). R11 owns the naive-check-then-insert (no_unique_index) proof; in R22 the index and
+# the fence are belt-and-suspenders, so removing only the index is caught by the fence and is not an R22
+# discriminator.
 
-_R22_WIN = 31
+_R22_WIN_A = 31  # op-a22 (-> matured) won
+_R22_WIN_B = 34  # op-b22 (-> demoted) won
 _R22_CONFLICT = 32
 _R22_FENCE = 33
 
@@ -1831,6 +1901,7 @@ def _r22_child_source(
     seed: _Seed,
     target: str,
     op_key: str,
+    win_code: int,
     barrier_dir: Path,
 ) -> str:
     return (
@@ -1847,7 +1918,7 @@ def _r22_child_source(
         f"namespace={seed.namespace!r}, expected_version={seed.version}, target_state={target!r}, "
         f"actor='t', reason='r', operation_key={op_key!r}))\n"
         "code = getattr(getattr(_res, 'error', None), 'code', None)\n"
-        f"os._exit({_R22_WIN} if isinstance(_res, Ok) else "
+        f"os._exit({win_code} if isinstance(_res, Ok) else "
         f"({_R22_CONFLICT} if code in ('active_intent_exists', 'operation_key_conflict') else "
         f"({_R22_FENCE} if code == 'version_fence_violation' else 99)))\n"
     )
@@ -1864,6 +1935,8 @@ def _check_r22(base: Path) -> None:
     _RefCoordinator(
         db_path=db_path, qdrant_path=qdrant_path, mode=mode
     )  # create outbox schema+index
+    # op-a22 -> matured (win code _R22_WIN_A); op-b22 -> demoted (win code _R22_WIN_B).
+    specs = (("matured", "op-a22", _R22_WIN_A), ("demoted", "op-b22", _R22_WIN_B))
     procs = [
         subprocess.Popen(
             [
@@ -1876,38 +1949,56 @@ def _check_r22(base: Path) -> None:
                     seed=seed,
                     target=target,
                     op_key=op_key,
+                    win_code=win_code,
                     barrier_dir=barrier_dir,
                 ),
             ]
         )
-        for target, op_key in (("matured", "op-a22"), ("demoted", "op-b22"))
+        for target, op_key, win_code in specs
     ]
     codes = [p.wait(timeout=120) for p in procs]
-    # EXACTLY ONE winner; the loser is rejected either at begin (active_intent_exists, concurrent) or at
-    # the fence (version_fence_violation, if the winner fully finalized first) - both are valid "loser
-    # cannot overwrite" outcomes (Yua: exact fence/conflict Err). Two winners = the lost-update / double-
-    # operation race a naive check-then-insert or non-atomic CAS produces.
-    if codes.count(_R22_WIN) != 1 or (codes.count(_R22_CONFLICT) + codes.count(_R22_FENCE)) != 1:
+    # EXACTLY ONE winner (identified by its op-distinct code); the loser is rejected at begin
+    # (active_intent_exists) OR at the fence (version_fence_violation) - both valid "cannot overwrite".
+    wins = [c for c in codes if c in (_R22_WIN_A, _R22_WIN_B)]
+    losers = [c for c in codes if c in (_R22_CONFLICT, _R22_FENCE)]
+    if len(wins) != 1 or len(losers) != 1:
         raise DefectStillPresent(
             f"exactly one transition must WIN + mutate and the other be fenced/conflict-rejected; got "
-            f"exit codes {codes} (two {_R22_WIN} = both accepted = lost-update / double-operation race)"
+            f"exit codes {codes} (two winners = the lost-update / double-operation race)"
         )
+    winner_op, winner_target = (
+        ("op-a22", "matured") if wins[0] == _R22_WIN_A else ("op-b22", "demoted")
+    )
+    # CORRELATE the winning op to the single FINAL row, its event, its effective-apply marker, and Qdrant.
     rows = _outbox_for_object(db_path, seed.object_id)
     finals = [r for r in rows if r["state"] == "FINAL"]
-    if (
-        len(finals) != 1
-    ):  # the loser may leave an ABANDONED row, but NEVER a second FINAL (no overwrite)
+    if len(finals) != 1:  # a loser may leave an ABANDONED row, but NEVER a second FINAL
         raise DefectStillPresent(
-            f"exactly ONE FINAL outbox row must exist (no double operation), got {[r['state'] for r in rows]}"
+            f"exactly ONE FINAL outbox row must exist, got {[(r['operation_key'], r['state']) for r in rows]}"
+        )
+    if finals[0]["operation_key"] != winner_op or finals[0]["target_state"] != winner_target:
+        raise DefectStillPresent(
+            f"the single FINAL must belong to the WINNING op {winner_op}->{winner_target}, "
+            f"got {finals[0]['operation_key']}->{finals[0]['target_state']}"
         )
     if _events_for_object(db_path, seed.object_id) != 1:
         raise DefectStillPresent("exactly ONE audit event must exist for the object")
+    if _event_to_state(db_path, finals[0]["event_id"]) != winner_target:
+        raise DefectStillPresent("the single audit event's to_state must equal the winner's target")
+    markers = _apply_markers(db_path, seed.object_id)
+    if markers != [(winner_op, winner_target)]:
+        raise DefectStillPresent(
+            f"exactly ONE effective-apply success must exist and match the winner "
+            f"{(winner_op, winner_target)}; got {markers} (two = the lost-update)"
+        )
     client = _open_ondisk_qdrant(qdrant_path)
     try:
-        ver, st = _qdrant_state(client, seed.collection, seed.object_id)
-        if ver != seed.version + 1 or st not in ("matured", "demoted"):
+        if _qdrant_state(client, seed.collection, seed.object_id) != (
+            seed.version + 1,
+            winner_target,
+        ):
             raise DefectStillPresent(
-                f"exactly ONE effective mutation to the winner's target (matured|demoted); got {st}/{ver}"
+                f"Qdrant must equal the EXACT winner target {winner_target}/v{seed.version + 1}"
             )
     finally:
         client.close()
