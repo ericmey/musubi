@@ -344,14 +344,17 @@ class Fixture:
             time.sleep(settle_s)
         if pl is None:
             raise RuntimeError(f"seed_exact: {oid} never appeared in the store")
+        # STRICT. Yua: seed_exact violated the harness's own rule — "absent is not zero" —
+        # by accepting version None and coercing missing access/reinforcement to 0. The
+        # key must be PRESENT and EXACT, or the fixture is not proven new; a payload that
+        # simply omits these fields is unknown, not clean.
         problems = []
-        if pl.get("version") not in (1, None):
-            problems.append(f"version={pl.get('version')} (not new)")
-        if (pl.get("access_count") or 0) != 0:
-            problems.append(f"access_count={pl.get('access_count')}")
-        if (pl.get("reinforcement_count") or 0) != 0:
-            problems.append(f"reinforcement_count={pl.get('reinforcement_count')} (DEDUPED)")
-        stored = pl.get("content") or ""
+        for key, want in (("version", 1), ("access_count", 0), ("reinforcement_count", 0)):
+            if key not in pl:
+                problems.append(f"{key} ABSENT (required present == {want})")
+            elif pl[key] != want:
+                problems.append(f"{key}={pl[key]} (required == {want})")
+        stored = pl.get("content")
         if stored != content:
             problems.append(
                 "STORED CONTENT != REQUESTED — capture altered or deduped it. "

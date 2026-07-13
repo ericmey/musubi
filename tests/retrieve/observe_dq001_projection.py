@@ -210,24 +210,36 @@ if rowu:
 
 # ── O6: key fact at exactly 301 / 1501 / end ─────────────────────────────────
 print()
-print("O6  A load-bearing fact placed at char 301 and 1501 (via seed_exact, asserted)")
+# O6 measures the RECALL PROJECTION cut (300-char). Terminology is explicit because I
+# got it wrong: Python slice [:300] KEEPS zero-based indices 0..299 (ordinal chars 1..300)
+# and DROPS from zero-based index 300 onward — i.e. the 301st ordinal character is the
+# first one lost. NOTE: this is the recall projection only. It does NOT exercise Ollama's
+# 1500-char INPUT truncation (DQ-002) — a fact at zero_based_index 1500 is absent here
+# simply because it is past 300, which says nothing about the 1500 path.
+print("O6  First-lost character of the 300-char recall projection (zero-based index 300)")
 import uuid as _u6
-for pos, label in ((301, "char 301 (just past the 300 cut)"),
-                   (1501, "char 1501 (past the 1500 LLM-input budget)")):
-    mk = f"dq{_u6.uuid4().hex[:10]}"          # uuid marker, not timestamp (collision-proof)
-    fact = f"FACTAT{pos}"
-    filler = "." * (pos - len(mk) - 1)   # fact index = len(mk)+1+len(filler) == pos
-    body = f"{mk}.{filler}{fact} and the rest continues."
-    assert body.index(fact) == pos, f"fact must sit at char {pos}, sits at {body.index(fact)}"
-    o = fix.seed_exact(body, importance=8)     # invariant-checked, byte-exact, no bypass
-    r = musubi.recall(NS_RECALL, mk, mode="blended", limit=5, state_filter=FRESH_STATES)
-    row = next((x for x in r if x.get("object_id") == o), None)
-    assert row is not None, f"O6 fixture at {pos} not returned by recall"
-    delivered = row.get("content") or ""
-    lost = fact not in delivered
-    assert lost, (f"expected the fact at char {pos} to be LOST (delivered len "
-                  f"{len(delivered)}), but it survived")
-    line(f"    fact at {label}: LOST (asserted)", True, "caller never sees it")
+# zero_based_index 300 == the 301st ordinal character == first code point dropped by [:300]
+ZERO_BASED = 300
+ORDINAL = ZERO_BASED + 1   # 301
+mk = f"dq{_u6.uuid4().hex[:10]}"
+fact = "FACTHERE"
+# body layout: mk + "." + filler + fact ; fact's zero-based start index == len(mk)+1+len(filler)
+filler = "." * (ZERO_BASED - len(mk) - 1)
+body = f"{mk}.{filler}{fact} and the rest continues."
+assert body.index(fact) == ZERO_BASED, \
+    f"fact must start at zero_based_index {ZERO_BASED} (ordinal char {ORDINAL}); starts at {body.index(fact)}"
+o = fix.seed_exact(body, importance=8)
+r = musubi.recall(NS_RECALL, mk, mode="blended", limit=5, state_filter=FRESH_STATES)
+row = next((x for x in r if x.get("object_id") == o), None)
+assert row is not None, "O6 fixture not returned by recall"
+delivered = row.get("content") or ""
+assert len(delivered) == 300, f"expected 300-char projection, got {len(delivered)}"
+# the character at zero_based_index 299 (ordinal 300) is the LAST delivered; index 300 is lost
+assert delivered == body[:300], "delivered must equal the first 300 chars of the stored body"
+assert fact not in delivered, \
+    f"a fact starting at zero_based_index {ZERO_BASED} must be LOST by the [:300] cut"
+line(f"    fact at zero_based_index {ZERO_BASED} (ordinal char {ORDINAL}): LOST (asserted)",
+     True, "first character past the 300-char projection; caller never sees it")
 
 print()
 print("=" * 98)
