@@ -486,27 +486,56 @@ class _RefCoordinator:
         con.commit()
         con.close()
 
+    def _row_for_key(self, opk: str) -> tuple[str, str] | None:
+        con = sqlite3.connect(self._db)
+        try:
+            cur = con.execute(
+                "SELECT state, event_id FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+            )
+            row = cur.fetchone()
+            return (row[0], row[1]) if row else None
+        finally:
+            con.close()
+
+    def _active_intent_for_object(
+        self, collection: str, object_id: str, exclude_opk: str
+    ) -> str | None:
+        con = sqlite3.connect(self._db)
+        try:
+            cur = con.execute(
+                "SELECT operation_key FROM lifecycle_outbox WHERE collection=? AND object_id=? "
+                "AND state IN ('PENDING','APPLIED') AND operation_key != ?",
+                (collection, object_id, exclude_opk),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+        finally:
+            con.close()
+
     def _apply_conditional(
         self, collection: str, object_id: str, target_state: str, expected_version: int
     ) -> bool:
         """Server-side conditional: the expected version is IN the set_payload filter (object_id AND
         version == expected), so a stale version matches zero points and does not apply. Then readback the
-        actual payload to confirm the fence held and the exact patch landed (Yua repair 5)."""
+        actual payload to confirm the fence held and the exact patch landed (Yua repair 5). The
+        warn_only_fence mode (WRONG) drops the version condition -> a stale writer clobbers (R12/R22)."""
+        must: list[models.Condition] = [
+            models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))
+        ]
+        if self._mode != "warn_only_fence":
+            must.append(
+                models.FieldCondition(
+                    key="version", match=models.MatchValue(value=expected_version)
+                )
+            )
         self._client.set_payload(
             collection_name=collection,
             payload={"state": target_state, "version": expected_version + 1},
-            points=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                    models.FieldCondition(
-                        key="version", match=models.MatchValue(value=expected_version)
-                    ),
-                ]
-            ),
+            points=models.Filter(must=must),
         )
         ver, st = self._cur(collection, object_id)
+        if self._mode == "warn_only_fence":
+            return st == target_state  # ignores the version fence
         return ver == expected_version + 1 and st == target_state
 
     def _finalize(
@@ -569,7 +598,24 @@ class _RefCoordinator:
 
     # -- public API -------------------------------------------------------------------------------- #
     def transition(self, intent: _RefIntent) -> Any:
-        opk = self._key(intent)
+        # ignore_operation_key (WRONG): mint a fresh key each call -> a caller retry becomes a second
+        # operation instead of the same one (caught by R10).
+        opk = generate_ksuid() if self._mode == "ignore_operation_key" else self._key(intent)
+        # operation_key idempotency (R10): an existing row for this key short-circuits to its outcome.
+        if self._mode not in ("ignore_operation_key",):
+            existing = self._row_for_key(opk)
+            if existing is not None:
+                state, ev = existing
+                if state == "FINAL":
+                    return Ok(value=_RefFinal(operation_key=opk, event_id=ev))
+                if state == "ABANDONED":
+                    return Err(error=_RefError(code="terminal_apply_failure"))
+                return Ok(value=_RefPending(operation_key=opk, event_id=ev))  # in-flight: reuse
+        # single active intent per (collection,object_id) (R11/D): a DIFFERENT op's nonterminal row rejects.
+        if self._mode != "no_single_intent":
+            other = self._active_intent_for_object(intent.collection, intent.object_id, opk)
+            if other is not None:
+                return Err(error=_RefError(code="active_intent_exists"))
         event_id = generate_ksuid()
         if self._mode != "mutate_first":
             try:
@@ -835,6 +881,24 @@ def _outbox_rows(db_path: Path, operation_key: str) -> list[dict[str, object]]:
         con.close()
 
 
+def _outbox_for_object(db_path: Path, object_id: str) -> list[dict[str, object]]:
+    """Every outbox row for an object (to count operations/active-intents regardless of operation_key)."""
+    if not Path(db_path).exists():
+        return []
+    con = sqlite3.connect(str(db_path))
+    try:
+        try:
+            cur = con.execute(
+                "SELECT operation_key,state,event_id FROM lifecycle_outbox WHERE object_id=?",
+                (object_id,),
+            )
+        except sqlite3.OperationalError:
+            return []
+        return [{"operation_key": r[0], "state": r[1], "event_id": r[2]} for r in cur.fetchall()]
+    finally:
+        con.close()
+
+
 def _final_event_count(db_path: Path, event_id: object) -> int:
     if event_id is None or not Path(db_path).exists():
         return 0
@@ -1047,6 +1111,154 @@ def test_r4_terminal_failure_is_err_abandoned_no_final(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r4(*env)
+
+
+# ---- R10-R12 + R22: operation_key idempotency, single active intent, hard fence, two-tx race ------- #
+
+
+def _check_r10(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """operation_key idempotency across CALLER retries: the same logical request twice = one operation,
+    one FINAL, one event, one effective apply (Yua correction C)."""
+    coord = _coordinator(client, db_path)
+    intent = _intent(seed, to_state="matured", operation_key="op-r10")
+    r1 = coord.transition(intent)
+    if not isinstance(r1, Ok):
+        raise DefectStillPresent("the first transition must succeed")
+    calls = _count_set_payload(client)
+    n0 = calls["n"]
+    r2 = coord.transition(intent)  # a caller RETRY with the SAME operation_key
+    if calls["n"] - n0 != 0:
+        raise DefectStillPresent("a retried operation_key must NOT trigger a second Qdrant apply")
+    if not isinstance(r2, Ok) or getattr(r2.value, "operation_key", None) != "op-r10":
+        raise DefectStillPresent(
+            "the retry must return the SAME completed operation (idempotent Ok)"
+        )
+    rows = _outbox_for_object(db_path, seed.object_id)
+    if len(rows) != 1 or rows[0]["state"] != "FINAL":
+        raise DefectStillPresent(
+            f"a retried operation must leave EXACTLY ONE FINAL row, got {[r['state'] for r in rows]}"
+        )
+    if _final_event_count(db_path, rows[0]["event_id"]) != 1:
+        raise DefectStillPresent("a retried operation must produce EXACTLY ONE FINAL event")
+    if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+        raise DefectStillPresent("the object must be at target after exactly one effective apply")
+
+
+def _check_r11(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """One nonterminal intent per (collection,object_id): while op-a is in-flight (PENDING), a DIFFERENT
+    op-b on the same object is rejected, never a second nonterminal intent (Yua correction D)."""
+    coord = _coordinator(client, db_path)
+    _fail_set_payload(client, _TransientQdrantError("hold op-a PENDING"))
+    ra = coord.transition(_intent(seed, to_state="matured", operation_key="op-a"))
+    if not isinstance(ra, Ok):  # Ok(Pending): op-a is a live, nonterminal intent
+        raise DefectStillPresent("op-a should be Ok(Pending) after a transient failure")
+    _restore_set_payload(client)
+    rb = coord.transition(_intent(seed, to_state="demoted", operation_key="op-b"))
+    if not isinstance(rb, Err) or getattr(rb.error, "code", None) != "active_intent_exists":
+        raise DefectStillPresent(
+            "a second nonterminal intent on the same object must be rejected (Err active_intent_exists)"
+        )
+    nonterminal = [
+        r
+        for r in _outbox_for_object(db_path, seed.object_id)
+        if r["state"] in ("PENDING", "APPLIED")
+    ]
+    if len(nonterminal) != 1:
+        raise DefectStillPresent(
+            f"there must be EXACTLY ONE nonterminal intent per object, got {len(nonterminal)}"
+        )
+    if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version, "provisional"):
+        raise DefectStillPresent("the rejected op-b must not have mutated the object")
+
+
+def _check_r12(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """Hard version fence: a stale expected_version is refused (Err), the mutation is NOT applied, and the
+    intent is ABANDONED - never a warn-only last-writer-wins clobber (Yua fork 2 / correction E)."""
+    coord = _coordinator(client, db_path)
+    before = _qdrant_state(client, seed.collection, seed.object_id)
+    stale = _intent(
+        seed, to_state="matured", operation_key="op-r12", expected_version=seed.version - 1
+    )
+    res = coord.transition(stale)
+    if not isinstance(res, Err):
+        raise DefectStillPresent("a stale expected_version must be REFUSED (Err), not applied")
+    after = _qdrant_state(client, seed.collection, seed.object_id)
+    if after != before:
+        raise DefectStillPresent(
+            f"a fenced-out transition must NOT mutate Qdrant: {before} -> {after}"
+        )
+    rows = _outbox_rows(db_path, "op-r12")
+    if not rows or rows[0]["state"] != "ABANDONED":
+        raise DefectStillPresent("a fence violation must leave the intent ABANDONED")
+    if _final_event_count(db_path, rows[0]["event_id"]):
+        raise DefectStillPresent("a fenced-out transition must never emit a FINAL event")
+
+
+def _check_r22(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """Two DIFFERENT requested transitions race on one object: exactly one wins; the loser (stale
+    expected) cannot mutate and cannot overwrite the winner's result (Yua R22)."""
+    coord = _coordinator(client, db_path)
+    ra = coord.transition(_intent(seed, to_state="matured", operation_key="op-a22"))
+    if not isinstance(ra, Ok):
+        raise DefectStillPresent("the first (winning) transition must succeed")
+    if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+        raise DefectStillPresent("the winner must land its mutation (matured/v+1)")
+    # the loser requests a DIFFERENT target from the now-STALE version
+    rb = coord.transition(
+        _intent(seed, to_state="demoted", operation_key="op-b22", expected_version=seed.version)
+    )
+    if not isinstance(rb, Err):
+        raise DefectStillPresent("the losing (stale) transition must be REFUSED, not applied")
+    ver, st = _qdrant_state(client, seed.collection, seed.object_id)
+    if (ver, st) != (seed.version + 1, "matured"):
+        raise DefectStillPresent(
+            f"the loser must not mutate/overwrite the winner; object is {st}/{ver}, expected matured/v+1"
+        )
+    rows_b = _outbox_rows(db_path, "op-b22")
+    if rows_b and rows_b[0]["state"] == "FINAL":
+        raise DefectStillPresent("the loser must never reach FINAL")
+
+
+_R10_REASON = (
+    "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
+    "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
+)
+_R11_REASON = (
+    "today nothing enforces one active intent per object, so two in-flight transitions on one object can "
+    "both mutate and a later one can hide a crash-applied earlier one; R11 needs the second rejected."
+)
+_R12_REASON = (
+    "today expected_version is warn-only (last writer wins), so a stale writer clobbers; R12 needs a hard "
+    "fence: stale expected => Err + ABANDONED, mutation not applied."
+)
+_R22_REASON = (
+    "today two different transitions on one object can both apply (lost update); R22 needs exactly one "
+    "winner with the loser fenced out, never overwriting the winner or reaching FINAL."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
+def test_r10_operation_key_idempotent_across_caller_retries(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r10(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R11_REASON)
+def test_r11_single_active_intent_per_object(env: tuple[QdrantClient, _Seed, Path]) -> None:
+    _check_r11(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R12_REASON)
+def test_r12_hard_version_fence_refuses_stale(env: tuple[QdrantClient, _Seed, Path]) -> None:
+    _check_r12(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R22_REASON)
+def test_r22_two_different_transitions_race_loser_cannot_overwrite(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r22(*env)
 
 
 # ---- R5-R8: crash matrix + finalize atomicity (Yua locked ruling) --------------------------------- #
@@ -1375,6 +1587,10 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r3": (_check_r3, ["classify_all_terminal", "reconcile_no_apply", "reconcile_greedy"]),
     "r4": (_check_r4, ["classify_all_transient"]),
     "r8": (_check_r8, ["finalize_not_atomic"]),
+    "r10": (_check_r10, ["ignore_operation_key"]),
+    "r11": (_check_r11, ["no_single_intent"]),
+    "r12": (_check_r12, ["warn_only_fence"]),
+    "r22": (_check_r22, ["warn_only_fence"]),
 }
 
 
