@@ -78,6 +78,25 @@ class Settings(BaseSettings):
     # Core service
     # ------------------------------------------------------------------
     brain_port: int = Field(default=8100, ge=1, le=65535)
+    api_workers: int = Field(
+        default=1,
+        ge=1,
+        le=1,
+        description=(
+            "API worker count. Pinned to 1 (fail-closed): the idempotency cache is in-memory "
+            "and process-local, so >1 worker would tear it silently. A multi-worker deployment "
+            "must first move the cache to a shared backend."
+        ),
+    )
+    web_concurrency: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Reads the standard WEB_CONCURRENCY uvicorn/gunicorn worker signal. Uncapped here so "
+            "the value is visible; create_app REJECTS >1 (process-local idempotency cache). "
+            "Routing config through Settings keeps os.environ out of app code."
+        ),
+    )
     vault_path: Path = Field(description="Host path to the Obsidian vault mount.")
     artifact_blob_path: Path = Field(description="Host path to content-addressed blobs.")
     lifecycle_sqlite_path: Path = Field(description="Host path to lifecycle-work sqlite.")

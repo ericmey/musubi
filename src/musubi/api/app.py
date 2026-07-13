@@ -155,6 +155,17 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
 
         settings = _get_settings()
 
+    # REQ-10: single-worker invariant, fail-closed. The idempotency cache is process-local, so
+    # more than one worker tears it silently. `WEB_CONCURRENCY` is the standard uvicorn/gunicorn
+    # launch signal — read through Settings (keeping raw environment reads out of app code) and rejected
+    # here so a multi-worker boot fails loudly instead of running a torn cache. (Settings.
+    # api_workers guards the config side; the systemd unit pins --workers 1.)
+    if settings.web_concurrency > 1:
+        raise RuntimeError(
+            f"WEB_CONCURRENCY={settings.web_concurrency} > 1, but the idempotency cache is "
+            f"process-local — run a single worker or move to a shared cache (fail-closed)."
+        )
+
     # Wire structured JSON logging on root + uvicorn so the JSON-logs
     # contract from [[09-operations/observability]] § Logs is actually
     # honoured in container output. Idempotent — tests calling
