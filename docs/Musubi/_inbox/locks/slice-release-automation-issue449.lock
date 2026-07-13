@@ -1,0 +1,13 @@
+{
+  "agent": "tama",
+  "branch": "slice/release-automation-issue449",
+  "timestamp": "2026-07-13T18:55:00Z",
+  "reason": "Issue #449 release-automation tests/docs/design only. Four corrected contracts per Yua 2026-07-13 18:51:31: (A) one authoritative signed tag publish per release tag; (B) auto-pin consumes the signed immutable tag digest, never the moving main tag; (C) main and release channels are explicitly distinct in generated metadata/docs; (D) a design-only reproducibility boundary that treats cache as performance, not input, and does not require main/tag byte equality. No source/workflow/deploy changes. No live GitHub Actions calls. No production/host contact.",
+  "owns_paths": [
+    "docs/Musubi/_slices/slice-release-automation-issue449.md",
+    "docs/Musubi/_inbox/locks/slice-release-automation-issue449.lock",
+    "tests/release/test_release_automation_issue449.py"
+  ],
+  "sid": "slice-release-automation-issue449",
+  "scope": "Release-automation tests/docs/design only. 4 self-proving red contracts + 3 discrimination tests + 4 legitimate controls. No source/workflow/deploy changes. No live GitHub Actions. No production/host contact. No merge. Aoi R20 will be a separate independent second read after this bounded first commit."
+}
