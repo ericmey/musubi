@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query, Request
 from qdrant_client import QdrantClient, models
 
@@ -10,6 +12,8 @@ from musubi.api.dependencies import get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError
 from musubi.api.responses import ContradictionListResponse, ContradictionPair
 from musubi.settings import Settings
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/contradictions", tags=["contradictions"])
 
@@ -53,7 +57,13 @@ async def list_contradictions(
         )
     except Exception as exc:
         # SEC-004 / RET-007: a backend outage must surface as an error, never a clean-looking
-        # empty 200 that is indistinguishable from "no contradictions".
+        # empty 200 that is indistinguishable from "no contradictions". The broad Exception is
+        # accepted only at this boundary (the alternative is a generic 500) — the original
+        # exception stays CHAINED (`from exc`) and LOG-VISIBLE with its traceback (Yua).
+        log.exception(
+            "contradictions backend scroll failed; returning 503",
+            extra={"namespace": namespace, "collection": "musubi_concept"},
+        )
         raise APIError(
             status_code=503,
             code="BACKEND_UNAVAILABLE",
