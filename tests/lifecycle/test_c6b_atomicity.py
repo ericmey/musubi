@@ -75,6 +75,7 @@ import asyncio
 import hashlib
 import json
 import math
+import secrets
 import sqlite3
 import subprocess
 import sys
@@ -476,6 +477,22 @@ _R15_SATURATING_EXP = math.ceil(math.log2(R15_MAX_BACKOFF / R15_BASE_BACKOFF))
 _R15_FIXED_CLOCK = 1_000_000.0  # only used by the fixed_clock_default WRONG candidate
 _R15_WRONG_ABANDON_AT = 5  # attempt count at which the count-based-abandon WRONG candidates give up
 
+# R16/R17 reconciliation-lease policy. A worker atomically CLAIMS a due, unleased-or-expired row with a
+# fresh per-claim owner token valid for DEFAULT_LEASE_TTL; only the current owner may commit disposition.
+# TTL injection is a CONTRACT SEAM only here - a future source phase must surface a positive-finite value
+# from Settings (a SEPARATE source decision; Settings is NOT implied/authorized now).
+DEFAULT_LEASE_TTL = 30.0
+
+
+def _validate_lease_ttl(ttl: object) -> float:
+    """Config-boundary validation (Yua R16): a positive, FINITE lease TTL. bool is an int subclass, so
+    reject it explicitly; reject non-numbers, <= 0, NaN, and inf."""
+    if isinstance(ttl, bool) or not isinstance(ttl, (int, float)):
+        raise TypeError(f"lease_ttl must be a real number (not bool), got {type(ttl).__name__}")
+    if not math.isfinite(ttl) or ttl <= 0:
+        raise ValueError(f"lease_ttl must be positive and finite, got {ttl}")
+    return float(ttl)
+
 
 class _CapExceeded(Exception):
     """Internal sentinel: the atomic admission found the non-terminal backlog at/over the cap (Yua R14).
@@ -509,10 +526,15 @@ class _RefCoordinator:
         qdrant_path: Path | None = None,
         mode: str = "correct",
         pending_cap: int = DEFAULT_PENDING_CAP,
+        lease_ttl: float = DEFAULT_LEASE_TTL,
     ) -> None:
         self._pending_cap = _validate_pending_cap(
             pending_cap
         )  # Yua R14: positive-int, no unbounded
+        self._lease_ttl = _validate_lease_ttl(lease_ttl)  # Yua R16: positive-finite
+        self._reused_token: str | None = (
+            None  # only the reuse_owner_ABA wrong replays a prior token
+        )
         self._client = client
         # LAZY on-disk Qdrant (R22): a two-process race passes a qdrant_path; Qdrant is opened only when a
         # process actually reads/applies. An active_intent loser (rejected at begin) never opens it; a
@@ -656,6 +678,81 @@ class _RefCoordinator:
             return R15_MAX_BACKOFF
         return float(min(R15_BASE_BACKOFF * (2**exp), R15_MAX_BACKOFF))
 
+    def _new_token(self) -> str:
+        """A FRESH cryptographically-strong per-CLAIM owner token (Yua R16): the generation/ABA fence.
+        NOT derived from operation data, NOT reused. shared_static_owner_token / reuse_owner_ABA are the
+        wrongs that break freshness."""
+        if self._mode == "shared_static_owner_token":
+            return "SHARED-STATIC-TOKEN"  # WRONG: every worker shares one token -> no exclusivity
+        if self._mode == "reuse_owner_ABA" and self._reused_token is not None:
+            return self._reused_token  # WRONG: replays a prior token -> a stale owner can ABA-match
+        tok = secrets.token_hex(16)
+        self._reused_token = tok  # remembered ONLY so the reuse_owner_ABA wrong can replay it
+        return tok
+
+    def _expiry_clause(self) -> tuple[str, bool]:
+        """The WHERE fragment deciding which leases a claim may take (Yua R16/R17 boundary): a valid lease
+        (lease_expires_epoch > now) is exclusive; an expired one (<= now) is reclaimable. Returns
+        (sql_fragment, needs_now_param)."""
+        if self._mode in ("ignore_unexpired_owner", "reclaim_before_expiry"):
+            return "", False  # WRONG: claim even a VALID unexpired lease
+        if self._mode == "never_reclaim":
+            return " AND lease_owner IS NULL", False  # WRONG: never reclaims an EXPIRED lease
+        op = (
+            "<" if self._mode == "strict_lt_equality_bug" else "<="
+        )  # boundary: == now is reclaimable
+        return f" AND (lease_owner IS NULL OR lease_expires_epoch {op} ?)", True
+
+    def _claim(self, con: Any, opk: str, now: float, token: str) -> bool:
+        """Atomic guarded claim (Yua R16): ONE committed UPDATE over a due, unleased-or-expired row.
+        rowcount==1 IS ownership. select_then_update does a NON-atomic check-then-write (a race window)."""
+        if self._mode == "ttl_zero":
+            expiry = now  # WRONG: the lease expires immediately (== now) -> not exclusive
+        elif self._mode == "ttl_unbounded":
+            expiry = math.inf  # WRONG: the lease never expires -> a crashed owner is stuck forever
+        else:
+            expiry = now + self._lease_ttl
+        due_sql = (
+            ""
+            if self._mode in ("claim_without_due_filter", "backoff_ignored")
+            else " AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?)"
+        )
+        exp_sql, exp_needs_now = self._expiry_clause()
+        if self._mode == "select_then_update":
+            row = con.execute(
+                "SELECT lease_owner, lease_expires_epoch FROM lifecycle_outbox WHERE operation_key=?",
+                (opk,),
+            ).fetchone()
+            owner, exp = (row[0], row[1]) if row else (None, None)
+            claimable = owner is None or (exp is not None and exp <= now)
+            self._checkpoint("after_claim_check_before_write")  # the race window
+            if not claimable:
+                return False
+            con.execute(
+                "UPDATE lifecycle_outbox SET lease_owner=?, lease_expires_epoch=? WHERE operation_key=?",
+                (token, expiry, opk),
+            )
+            return True
+        params: list[object] = [token, expiry, opk]
+        if due_sql:
+            params.append(now)
+        if exp_needs_now:
+            params.append(now)
+        cur = con.execute(
+            "UPDATE lifecycle_outbox SET lease_owner=?, lease_expires_epoch=? WHERE operation_key=? "
+            f"AND state IN ('PENDING','APPLIED'){due_sql}{exp_sql}",
+            params,
+        )
+        return bool(cur.rowcount == 1)
+
+    def _owner_guard(self, owner: str | None, *, drop: bool = False) -> tuple[str, list[object]]:
+        """The owner-guard WHERE fragment for a post-claim disposition (Yua R16): only the CURRENT owner
+        may write. `drop` (set by the wrong candidates at a specific write site) omits the guard so a
+        non-owner write succeeds."""
+        if owner is None or drop:
+            return "", []
+        return " AND lease_owner=?", [owner]
+
     def _persist_attempt(
         self,
         opk: str,
@@ -663,12 +760,16 @@ class _RefCoordinator:
         reschedule: bool,
         failure_class: str | None = None,
         state: str | None = None,
+        owner: str | None = None,
+        release: bool = False,
     ) -> None:
         """R15: increment attempts and (re)schedule next_attempt_epoch (+ optional failure_class / state)
         in ONE SQLite transaction, so a fault mid-persist NEVER advances attempts with a stale/missing
-        next_attempt_epoch. attempts_not_tracked skips the increment; non_atomic_attempt_schedule splits
-        it across two transactions (a fault between them leaves attempts advanced but the schedule stale)."""
+        next_attempt_epoch. R16: when `owner` is given the write is owner-guarded, and `release` clears the
+        lease atomically in the SAME transaction. attempts_not_tracked skips the increment;
+        non_atomic_attempt_schedule / schedule_written_before_attempts split it across two transactions."""
         now = self._now()
+        guard, gp = self._owner_guard(owner, drop=(release and self._mode == "nonowner_release"))
         con = sqlite3.connect(self._db, isolation_level=None)
         try:
             row = con.execute(
@@ -685,18 +786,22 @@ class _RefCoordinator:
             if state is not None:
                 tail_cols += ", state=?"
                 tail.append(state)
+            if release:
+                tail_cols += ", lease_owner=NULL, lease_expires_epoch=NULL"
             if self._mode == "non_atomic_attempt_schedule":
                 # WRONG: attempts lands in its OWN committed txn; a fault before the schedule write leaves
                 # attempts advanced with a stale next_attempt_epoch (caught by the atomic-under-fault case).
                 con.execute("BEGIN IMMEDIATE")
                 con.execute(
-                    "UPDATE lifecycle_outbox SET attempts=? WHERE operation_key=?", (attempts, opk)
+                    f"UPDATE lifecycle_outbox SET attempts=? WHERE operation_key=?{guard}",
+                    (attempts, opk, *gp),
                 )
                 con.execute("COMMIT")
                 self._checkpoint("after_attempts_before_schedule")
                 con.execute("BEGIN IMMEDIATE")
                 con.execute(
-                    f"UPDATE lifecycle_outbox SET {tail_cols} WHERE operation_key=?", (*tail, opk)
+                    f"UPDATE lifecycle_outbox SET {tail_cols} WHERE operation_key=?{guard}",
+                    (*tail, opk, *gp),
                 )
                 con.execute("COMMIT")
             elif self._mode == "schedule_written_before_attempts":
@@ -705,13 +810,15 @@ class _RefCoordinator:
                 # order - caught only if the fault proof asserts BOTH fields, not attempts alone).
                 con.execute("BEGIN IMMEDIATE")
                 con.execute(
-                    f"UPDATE lifecycle_outbox SET {tail_cols} WHERE operation_key=?", (*tail, opk)
+                    f"UPDATE lifecycle_outbox SET {tail_cols} WHERE operation_key=?{guard}",
+                    (*tail, opk, *gp),
                 )
                 con.execute("COMMIT")
                 self._checkpoint("after_attempts_before_schedule")
                 con.execute("BEGIN IMMEDIATE")
                 con.execute(
-                    "UPDATE lifecycle_outbox SET attempts=? WHERE operation_key=?", (attempts, opk)
+                    f"UPDATE lifecycle_outbox SET attempts=? WHERE operation_key=?{guard}",
+                    (attempts, opk, *gp),
                 )
                 con.execute("COMMIT")
             else:
@@ -720,8 +827,8 @@ class _RefCoordinator:
                     "after_attempts_before_schedule"
                 )  # a fault here rolls back the WHOLE persist
                 con.execute(
-                    f"UPDATE lifecycle_outbox SET attempts=?, {tail_cols} WHERE operation_key=?",
-                    (attempts, *tail, opk),
+                    f"UPDATE lifecycle_outbox SET attempts=?, {tail_cols} WHERE operation_key=?{guard}",
+                    (attempts, *tail, opk, *gp),
                 )
                 con.execute("COMMIT")
         finally:
@@ -782,10 +889,40 @@ class _RefCoordinator:
             con.close()
         self._checkpoint("after_pending_commit")
 
-    def _mark(self, opk: str, state: str) -> None:
+    def _mark(
+        self, opk: str, state: str, *, owner: str | None = None, release: bool = False
+    ) -> None:
+        """Set state; when `owner` is given the write is owner-guarded (only the current lease owner may
+        change state); when `release` is set it clears the lease atomically in the SAME write (Yua R16).
+        nonowner_release drops the guard on the releasing write. release_in_separate_txn splits them."""
+        sets = "state=?"
+        params: list[object] = [state]
+        drop = release and self._mode == "nonowner_release"
+        guard, gp = self._owner_guard(owner, drop=drop)
         con = sqlite3.connect(self._db)
-        con.execute("UPDATE lifecycle_outbox SET state=? WHERE operation_key=?", (state, opk))
-        con.commit()
+        if release and self._mode == "release_in_separate_txn":
+            # WRONG: the state change and the lease release are NOT one transaction - a fault between them
+            # leaves a terminal row still holding its lease (or a released lease on a non-disposed row).
+            con.execute(
+                f"UPDATE lifecycle_outbox SET {sets} WHERE operation_key=?{guard}",
+                (*params, opk, *gp),
+            )
+            con.commit()
+            self._checkpoint("after_state_before_release")
+            con.execute(
+                f"UPDATE lifecycle_outbox SET lease_owner=NULL, lease_expires_epoch=NULL "
+                f"WHERE operation_key=?{guard}",
+                (opk, *gp),
+            )
+            con.commit()
+        else:
+            if release:
+                sets += ", lease_owner=NULL, lease_expires_epoch=NULL"
+            con.execute(
+                f"UPDATE lifecycle_outbox SET {sets} WHERE operation_key=?{guard}",
+                (*params, opk, *gp),
+            )
+            con.commit()
         con.close()
 
     def _row_for_key(self, opk: str) -> tuple[str, str, str] | None:
@@ -917,11 +1054,20 @@ class _RefCoordinator:
         return status
 
     def _finalize(
-        self, opk: str, event_id: str, object_id: str, namespace: str, target_state: str
+        self,
+        opk: str,
+        event_id: str,
+        object_id: str,
+        namespace: str,
+        target_state: str,
+        owner: str | None = None,
     ) -> None:
         """Atomic FINAL: insert the FINAL lifecycle event AND mark the outbox FINAL in ONE txn. The
         outbox update is GUARDED on the exact APPLIED state (`WHERE state='APPLIED'`, exactly one row) so
-        a PENDING row can never jump straight to FINAL (Yua R8 forward guard)."""
+        a PENDING row can never jump straight to FINAL (Yua R8 forward guard). R16: when `owner` is given
+        the FINAL update is ALSO owner-guarded and CLEARS the lease atomically; a non-owner FINAL matches
+        zero rows -> a silent no-op (no FINAL, no event committed). finalize_without_owner_guard /
+        stale_owner_finalizes drop the owner guard so a non-owner CAN finalize."""
         if self._mode in ("finalize_dup_event_on_replay", "finalize_rekey_on_replay"):
             # These candidates keep the STABLE event on the FIRST finalize (so R9's first phase passes) and
             # only misbehave on a REPLAYED finalize (an event for this op already exists).
@@ -980,6 +1126,9 @@ class _RefCoordinator:
             con.commit()
             con.close()
             return
+        drop = self._mode in ("finalize_without_owner_guard", "stale_owner_finalizes")
+        guard, gp = self._owner_guard(owner, drop=drop)
+        release = ", lease_owner=NULL, lease_expires_epoch=NULL" if owner is not None else ""
         con = sqlite3.connect(self._db)
         try:
             con.execute("BEGIN")
@@ -990,14 +1139,19 @@ class _RefCoordinator:
             )
             self._checkpoint("inside_finalize_after_event_insert")  # R8 fault point
             cur = con.execute(
-                "UPDATE lifecycle_outbox SET state='FINAL' WHERE operation_key=? AND state='APPLIED'",
-                (opk,),
+                f"UPDATE lifecycle_outbox SET state='FINAL'{release} "
+                f"WHERE operation_key=? AND state='APPLIED'{guard}",
+                (opk, *gp),
             )
             if cur.rowcount != 1:
+                # owner path: a non-owner (or non-APPLIED) FINAL matches zero rows -> silent no-op (roll
+                # back the event insert too). owner=None path keeps the strict R8 forward guard (raise).
                 con.execute("ROLLBACK")
-                raise RuntimeError(
-                    f"finalize guard: expected exactly one APPLIED row for {opk}, updated {cur.rowcount}"
-                )
+                if owner is None:
+                    raise RuntimeError(
+                        f"finalize guard: expected exactly one APPLIED row for {opk}, updated {cur.rowcount}"
+                    )
+                return
             con.execute("COMMIT")
         except Exception:
             con.execute("ROLLBACK")
@@ -1157,6 +1311,8 @@ class _RefCoordinator:
             "backoff_ignored",
             "early_skip_increments_attempts",
             "lease_claim_not_due",
+            "claim_without_due_filter",
+            "report_claimed_as_selected",
         )
         con = sqlite3.connect(self._db)
         select = (
@@ -1172,7 +1328,7 @@ class _RefCoordinator:
                 (now, limit),
             ).fetchall()
         con.close()
-        fin = ab = pend = 0
+        fin = ab = pend = claimed = 0
         for opk, oid, coll, tstate, ver, event_id, state, patch_json, attempts, next_epoch in rows:
             patch: dict[str, object] = (
                 json.loads(patch_json) if patch_json else {"state": tstate, "version": ver + 1}
@@ -1197,24 +1353,42 @@ class _RefCoordinator:
                 con2.commit()
                 con2.close()
                 continue
-            if not_due and self._mode != "backoff_ignored":
+            if not_due and self._mode not in ("backoff_ignored", "claim_without_due_filter"):
                 continue  # CORRECT: a not-due row is a true no-op (no attempt, no increment, no lease)
-            if state == "FINAL":  # only reachable under reconcile_greedy
+            if (
+                state == "FINAL"
+            ):  # only reachable under reconcile_greedy (claimed BELOW; FINAL isn't leased)
                 self._apply_conditional(
                     opk, coll, oid, patch
                 )  # WRONG: re-affirm -> extra apply call
                 continue
+            # R16: atomically CLAIM the (durable) lease before any Qdrant work; only the current owner
+            # processes. rowcount==1 is ownership; a valid unexpired owner (or a lost claim race) -> skip.
+            token = self._new_token()
+            self._checkpoint("before_claim")  # two-process race barrier (both reach the claim)
+            cc = sqlite3.connect(self._db)
+            got = self._claim(cc, opk, now, token)
+            cc.commit()
+            cc.close()
+            if not got:
+                continue
+            claimed += 1
+            self._checkpoint(
+                "after_claim_before_qdrant"
+            )  # durable-claim barrier (R16) / crash point (R17)
             if state == "APPLIED":
                 if self._mode == "reconcile_always_apply":
                     self._apply_conditional(opk, coll, oid, patch)  # WRONG: re-apply APPLIED (C3)
                 self._finalize(
-                    opk, event_id, oid, _NS, tstate
-                )  # readback-only: NO attempts increment
+                    opk, event_id, oid, _NS, tstate, owner=token
+                )  # readback-only: no increment
                 fin += 1
                 continue
             if self._mode == "reconcile_no_apply":
-                self._mark(opk, "APPLIED")
-                self._finalize(opk, event_id, oid, _NS, tstate)  # WRONG: finalize without applying
+                self._mark(opk, "APPLIED", owner=token)
+                self._finalize(
+                    opk, event_id, oid, _NS, tstate, owner=token
+                )  # WRONG: finalize without applying
                 fin += 1
                 continue
             # Readback FIRST (C2 recovery): if the mutation is already durably applied (a crash after the
@@ -1222,8 +1396,8 @@ class _RefCoordinator:
             # (readback-only finalization -> NO attempts increment).
             cur_ver, cur_st = self._cur(coll, oid)
             if self._mode != "reconcile_no_readback" and (cur_ver, cur_st) == (ver + 1, tstate):
-                self._mark(opk, "APPLIED")
-                self._finalize(opk, event_id, oid, _NS, tstate)
+                self._mark(opk, "APPLIED", owner=token)
+                self._finalize(opk, event_id, oid, _NS, tstate, owner=token)
                 fin += 1
                 continue
             # ACTUAL Qdrant apply attempt -> this is the ONLY place attempts increments (via _persist_attempt).
@@ -1233,36 +1407,56 @@ class _RefCoordinator:
                 cls = self._classify(exc)
                 if cls == "terminal":
                     self._persist_attempt(
-                        opk, reschedule=False, state="ABANDONED", failure_class="terminal"
+                        opk,
+                        reschedule=False,
+                        state="ABANDONED",
+                        failure_class="terminal",
+                        owner=token,
+                        release=True,
                     )
                     ab += 1
                 elif self._wrong_count_abandon((attempts or 0) + 1):
                     self._persist_attempt(  # WRONG: count-based abandon of a transient/unknown
-                        opk, reschedule=False, state="ABANDONED", failure_class=cls
+                        opk,
+                        reschedule=False,
+                        state="ABANDONED",
+                        failure_class=cls,
+                        owner=token,
+                        release=True,
                     )
                     ab += 1
                 else:  # transient OR unknown -> keep PENDING, increment + reschedule (durable, forever)
-                    self._persist_attempt(opk, reschedule=True, failure_class=cls)
+                    self._persist_attempt(
+                        opk, reschedule=True, failure_class=cls, owner=token, release=True
+                    )
                     pend += 1
                 continue
             if status == "fence":
                 self._persist_attempt(
-                    opk, reschedule=False, state="ABANDONED", failure_class="terminal"
+                    opk,
+                    reschedule=False,
+                    state="ABANDONED",
+                    failure_class="terminal",
+                    owner=token,
+                    release=True,
                 )
                 ab += 1
                 continue
             if (
                 status == "corrupt"
             ):  # R13: recoverable -> transient-like retry (durable, never abandoned)
-                self._persist_attempt(opk, reschedule=True, failure_class="transient")
+                self._persist_attempt(
+                    opk, reschedule=True, failure_class="transient", owner=token, release=True
+                )
                 pend += 1
                 continue
-            # confirmed: the attempt happened (increment) and cleared the schedule, then APPLIED -> FINAL.
-            self._persist_attempt(opk, reschedule=False)
-            self._mark(opk, "APPLIED")
-            self._finalize(opk, event_id, oid, _NS, tstate)
+            # confirmed: the attempt happened (increment) + hold the lease through APPLIED, release at FINAL.
+            self._persist_attempt(opk, reschedule=False, owner=token)
+            self._mark(opk, "APPLIED", owner=token)
+            self._finalize(opk, event_id, oid, _NS, tstate, owner=token)
             fin += 1
-        return _RefReport(claimed=len(rows), finalized=fin, pending=pend, abandoned=ab)
+        reported = len(rows) if self._mode == "report_claimed_as_selected" else claimed
+        return _RefReport(claimed=reported, finalized=fin, pending=pend, abandoned=ab)
 
 
 class _CandidateApi:
@@ -1275,10 +1469,19 @@ class _CandidateApi:
         self.TransitionPending = _RefPending
 
     def LifecycleTransitionCoordinator(
-        self, *, client: Any, db_path: Path, pending_cap: int = DEFAULT_PENDING_CAP
+        self,
+        *,
+        client: Any,
+        db_path: Path,
+        pending_cap: int = DEFAULT_PENDING_CAP,
+        lease_ttl: float = DEFAULT_LEASE_TTL,
     ) -> _RefCoordinator:
         return _RefCoordinator(
-            client=client, db_path=db_path, mode=self._mode, pending_cap=pending_cap
+            client=client,
+            db_path=db_path,
+            mode=self._mode,
+            pending_cap=pending_cap,
+            lease_ttl=lease_ttl,
         )
 
 
@@ -1340,10 +1543,13 @@ def env(tmp_path: Path) -> Iterator[tuple[QdrantClient, _Seed, Path]]:
 
 
 def _coordinator(
-    client: QdrantClient, db_path: Path, pending_cap: int = DEFAULT_PENDING_CAP
+    client: QdrantClient,
+    db_path: Path,
+    pending_cap: int = DEFAULT_PENDING_CAP,
+    lease_ttl: float = DEFAULT_LEASE_TTL,
 ) -> Any:
     return _api().LifecycleTransitionCoordinator(
-        client=client, db_path=Path(db_path), pending_cap=pending_cap
+        client=client, db_path=Path(db_path), pending_cap=pending_cap, lease_ttl=lease_ttl
     )
 
 
@@ -2533,6 +2739,257 @@ def _check_r15(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         c.close()
 
 
+def _r16_pending(coord: Any, c: QdrantClient, s: _Seed, opk: str) -> None:
+    """Create a durable PENDING outbox row for the REAL seed object (its initial apply held transient)."""
+    _fail_set_payload(c, _TransientQdrantError("t"))
+    coord.transition(_intent(s, to_state="matured", operation_key=opk))
+    _restore_set_payload(c)
+
+
+def _check_r16(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """Valid-lease exclusivity (Yua R16): a worker atomically CLAIMS a due, unleased-or-expired row (one
+    guarded UPDATE, rowcount==1 IS ownership); an unexpired owner is exclusive; every post-claim
+    disposition is owner-guarded and clears the lease atomically; `claimed` counts successful claims, not
+    scanned rows; lease_ttl is positive-finite. Each scenario is a fresh env with an injected clock."""
+    base = Path(db_path).parent
+    T = 5_000.0
+
+    # (1) `claimed` on a MIXED batch: one claimable due row (A), one validly-leased row (B), one not-due
+    #     row (C). CORRECT claims only A -> claimed==1, finalized==1; a scanned count would report 3.
+    c, s, d = _make_env(base / "r16-claimed")
+    try:
+        coord = _coordinator(c, d)
+        coord._now = lambda: T
+        _r16_pending(coord, c, s, "op-A")  # A: PENDING, due, unleased -> claim + apply -> FINAL
+        others = _fill_outbox(d, s.collection, pending=2, tag="mb")
+        _set_outbox(
+            d, others[0], lease_owner="other-worker", lease_expires_epoch=T + 1_000.0
+        )  # B valid lease
+        _set_outbox(d, others[1], next_attempt_epoch=T + 1_000.0)  # C not-due
+        rep = coord.reconcile_once()
+        if rep.claimed != 1:
+            raise DefectStillPresent(
+                f"R16 `claimed` must count SUCCESSFUL guarded claims (1), not scanned rows; got {rep.claimed}"
+            )
+        if (rep.finalized, rep.pending, rep.abandoned) != (1, 0, 0):
+            raise DefectStillPresent(
+                f"R16 mixed batch: exactly finalized=1/pending=0/abandoned=0; got "
+                f"{(rep.finalized, rep.pending, rep.abandoned)}"
+            )
+        if _outbox_field(d, others[0], "lease_owner") != "other-worker":
+            raise DefectStillPresent(
+                "R16 a validly-leased row (B) must be left untouched by another worker"
+            )
+    finally:
+        c.close()
+
+    # (2) a CLAIMED lease is EXCLUSIVE (expires > now) AND BOUNDED (<= now+ttl); a second owner cannot
+    #     re-claim a validly-leased row.
+    c, s, d = _make_env(base / "r16-exclusive")
+    try:
+        coord = _coordinator(c, d, lease_ttl=30.0)
+        coord._now = lambda: T
+        _r16_pending(coord, c, s, "op-x")
+        token = coord._new_token()
+        cc = sqlite3.connect(str(d))
+        got = coord._claim(cc, "op-x", T, token)
+        cc.commit()
+        cc.close()
+        if not got:
+            raise DefectStillPresent("R16 a due, unleased row must be claimable")
+        exp = _outbox_field(d, "op-x", "lease_expires_epoch")
+        if exp is None or not (T < float(exp) <= T + 30.0 + 1e-6):
+            raise DefectStillPresent(
+                f"R16 a claimed lease must be EXCLUSIVE (expires>now) AND BOUNDED (<=now+ttl); got {exp} at {T}"
+            )
+        if _outbox_field(d, "op-x", "lease_owner") != token:
+            raise DefectStillPresent("R16 the claim must record the owner token")
+        cc = sqlite3.connect(str(d))
+        got2 = coord._claim(cc, "op-x", T, coord._new_token())
+        cc.commit()
+        cc.close()
+        if got2:
+            raise DefectStillPresent(
+                "R16 a validly-leased row must NOT be re-claimable by another owner"
+            )
+    finally:
+        c.close()
+
+    # (3) a NON-owner cannot FINALIZE a leased row (owner guard); a shared/static token collides and gets
+    #     through, a dropped guard gets through.
+    c, s, d = _make_env(base / "r16-nonowner-finalize")
+    try:
+        coord = _coordinator(c, d)
+        coord._now = lambda: T
+        _r16_pending(coord, c, s, "op-nf")
+        owner_a = coord._new_token()
+        _set_outbox(d, "op-nf", state="APPLIED", lease_owner=owner_a, lease_expires_epoch=T + 30.0)
+        ev = _outbox_field(d, "op-nf", "event_id")
+        coord._finalize("op-nf", ev, s.object_id, s.namespace, "matured", owner=coord._new_token())
+        if _outbox_field(d, "op-nf", "state") == "FINAL":
+            raise DefectStillPresent("R16 a NON-owner must NOT be able to finalize a leased row")
+    finally:
+        c.close()
+
+    # (4) a NON-owner cannot RELEASE another owner's lease.
+    c, s, d = _make_env(base / "r16-nonowner-release")
+    try:
+        coord = _coordinator(c, d)
+        coord._now = lambda: T
+        _r16_pending(coord, c, s, "op-nr")
+        owner_a = coord._new_token()
+        _set_outbox(d, "op-nr", lease_owner=owner_a, lease_expires_epoch=T + 30.0)
+        coord._mark("op-nr", "PENDING", owner=coord._new_token(), release=True)
+        if _outbox_field(d, "op-nr", "lease_owner") != owner_a:
+            raise DefectStillPresent("R16 a NON-owner must NOT release/clear another owner's lease")
+    finally:
+        c.close()
+
+    # (5) disposition state change + lease release are ONE owner-guarded transaction: a fault between them
+    #     must not leave a terminal row still holding its lease.
+    c, s, d = _make_env(base / "r16-release-atomic")
+    try:
+        coord = _coordinator(c, d)
+        coord._now = lambda: T
+        _r16_pending(coord, c, s, "op-ra")
+        owner_a = coord._new_token()
+        _set_outbox(d, "op-ra", lease_owner=owner_a, lease_expires_epoch=T + 30.0)
+
+        def _fault(name: str) -> None:
+            if name == "after_state_before_release":
+                raise sqlite3.OperationalError("fault between state and release")
+
+        coord._checkpoint = _fault
+        with suppress(sqlite3.OperationalError):
+            coord._mark("op-ra", "ABANDONED", owner=owner_a, release=True)
+        if (
+            _outbox_field(d, "op-ra", "state") == "ABANDONED"
+            and _outbox_field(d, "op-ra", "lease_owner") is not None
+        ):
+            raise DefectStillPresent(
+                "R16 a fault mid-disposition must not leave a terminal row still holding its lease "
+                "(state + release must be one transaction)"
+            )
+    finally:
+        c.close()
+
+    # (6) config boundary: lease_ttl must be positive and FINITE.
+    c, s, d = _make_env(base / "r16-ttl-config")
+    try:
+        for bad in (True, 0, -1, float("inf"), float("nan"), "x", None):
+            try:
+                _coordinator(c, d, lease_ttl=bad)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            raise DefectStillPresent(f"R16 lease_ttl validation must reject {bad!r}")
+    finally:
+        c.close()
+
+
+_R16_RACE_WIN = (
+    61  # this process won the guarded claim (exits at the post-claim/pre-Qdrant barrier)
+)
+_R16_RACE_LOSE = 62  # this process lost the claim (rowcount 0) and processed nothing
+
+
+def _r16_race_child_source(*, mode: str, db_path: Path, opk: str, barrier_dir: Path) -> str:
+    """A child that races the atomic claim on ONE due, unleased row. It exits WIN if it claims (durably,
+    before any Qdrant work) or LOSE if the claim's rowcount is 0. Two WINs means the claim was not atomic."""
+
+    def one(fn: str, tag: str) -> str:
+        return (
+            f"def {fn}():\n"
+            f"    open(_os.path.join(_bd, {tag!r} + '.' + str(_os.getpid())), 'w').close()\n"
+            f"    for _ in range(int({_RACE_BARRIER_TIMEOUT!r} / 0.02)):\n"
+            f"        if len([f for f in _os.listdir(_bd) if f.startswith({tag!r})]) >= 2: return\n"
+            "        _time.sleep(0.02)\n"
+            "    raise SystemExit('barrier timeout')\n"
+        )
+
+    return (
+        "import os, warnings\n"
+        "import os as _os, time as _time\n"
+        f"_bd = {str(barrier_dir)!r}\n"
+        "from qdrant_client import QdrantClient\n"
+        "from tests.lifecycle.test_c6b_atomicity import _RefCoordinator as _Coord\n"
+        + one("_await_before_claim", "beforeclaim")
+        + one("_await_claim2", "claim2")
+        + "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        "    _client = QdrantClient(':memory:')\n"
+        f"_c = _Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})\n"
+        "def _cp(name):\n"
+        "    if name == 'before_claim': _await_before_claim()\n"
+        "    if name == 'after_claim_check_before_write': _await_claim2()\n"
+        f"    if name == 'after_claim_before_qdrant': os._exit({_R16_RACE_WIN})\n"
+        "_c._checkpoint = _cp\n"
+        "_c.reconcile_once()\n"
+        f"os._exit({_R16_RACE_LOSE})\n"
+    )
+
+
+def _check_r16_race(base: Path) -> None:
+    """Deterministic TWO-PROCESS claim race (Yua R16 item 2/3): two workers race the guarded claim on ONE
+    due, unleased row. Exactly ONE claims (WIN) and one loses (LOSE); the durable claim is observed by the
+    loser (its rowcount is 0). The row's exact snapshot shows only the winner's claim - one owner, PENDING,
+    attempts 0, next_attempt NULL, no event/marker. select_then_update admits BOTH (two WINs)."""
+    _api()  # xfail today
+    mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
+    base.mkdir(parents=True, exist_ok=True)
+    db_path = base / "lifecycle.db"
+    barrier_dir = base / "barrier"
+    barrier_dir.mkdir(parents=True, exist_ok=True)
+    collection = str(collection_for_plane("episodic"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _RefCoordinator(client=QdrantClient(":memory:"), db_path=db_path, mode=mode)  # schema
+    opk = _fill_outbox(db_path, collection, pending=1, tag="race16")[
+        0
+    ]  # one due, unleased PENDING row
+    before = tuple(
+        _outbox_field(db_path, opk, f)
+        for f in ("state", "attempts", "next_attempt_epoch", "lease_owner")
+    )
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _r16_race_child_source(
+                    mode=mode, db_path=db_path, opk=opk, barrier_dir=barrier_dir
+                ),
+            ]
+        )
+        for _ in range(2)
+    ]
+    codes = [p.wait(timeout=90) for p in procs]
+    if sorted(codes) != [_R16_RACE_WIN, _R16_RACE_LOSE]:
+        raise DefectStillPresent(
+            f"exactly ONE worker must claim (WIN) and one lose (LOSE); got exit codes {codes} "
+            f"(two {_R16_RACE_WIN} = both claimed = a non-atomic check-then-update)"
+        )
+    owner = _outbox_field(db_path, opk, "lease_owner")
+    if owner is None:
+        raise DefectStillPresent("R16 after the race the row must hold EXACTLY the winner's lease")
+    after = tuple(
+        _outbox_field(db_path, opk, f) for f in ("state", "attempts", "next_attempt_epoch")
+    )
+    if after != before[:3]:
+        raise DefectStillPresent(
+            f"R16 the loser must change NOTHING beyond the winner's claim: {before[:3]} -> {after}"
+        )
+    events = 0
+    con = sqlite3.connect(str(db_path))
+    try:
+        events = con.execute("SELECT COUNT(*) FROM lifecycle_events").fetchone()[0]
+    finally:
+        con.close()
+    if events != 0:
+        raise DefectStillPresent(
+            "R16 the winner exits pre-Qdrant; no FINAL event may exist after the race"
+        )
+
+
 def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Idempotent replay: a PENDING op processed, then REPLAYED (duplicate delivery), yields EXACTLY ONE
     FINAL, ONE audit event, and ONE EFFECTIVE apply (measured by set_payload calls, not readback), leaving
@@ -2971,6 +3428,12 @@ _R15_REASON = (
     "intent; R15 needs transient/unknown failures kept PENDING forever with a durable attempts count "
     "(observability only) + bounded overflow-safe backoff - abandoned ONLY on proven-terminal, never by count."
 )
+_R16_REASON = (
+    "today nothing leases a reconciliation row, so two workers can process the same intent concurrently; "
+    "R16 needs an atomic guarded claim (one committed UPDATE, rowcount==1 = ownership) of a due, "
+    "unleased-or-expired row, an exclusive unexpired owner, and owner-guarded dispositions that clear the "
+    "lease atomically - `claimed` counts successful claims, and lease_ttl is positive-finite."
+)
 _R10_REASON = (
     "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
     "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
@@ -3011,6 +3474,13 @@ def test_r15_transient_never_abandoned_by_attempt_count(
     _check_r15(*env)
 
 
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R16_REASON)
+def test_r16_valid_lease_exclusive_processing(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r16(*env)
+
+
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
 def test_r10_operation_key_idempotent_across_caller_retries(
     env: tuple[QdrantClient, _Seed, Path],
@@ -3033,6 +3503,18 @@ _R14_RACE_REASON = (
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R14_RACE_REASON)
 def test_r14_two_process_admission_race_holds_cap(tmp_path: Path) -> None:
     _check_r14_race(tmp_path)
+
+
+_R16_RACE_REASON = (
+    "today a reconciliation claim is not atomic across processes, so two workers can both check a row as "
+    "claimable and both take it (a check-then-update race) -> concurrent double-processing; R16 needs ONE "
+    "committed guarded UPDATE where rowcount==1 is ownership, so exactly one worker claims and one loses."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R16_RACE_REASON)
+def test_r16_two_process_claim_race_one_owner(tmp_path: Path) -> None:
+    _check_r16_race(tmp_path)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R12_REASON)
@@ -3537,6 +4019,20 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
         ],
     ),
     "r12": (_check_r12, ["warn_only_fence"]),
+    "r16": (
+        _check_r16,
+        [
+            "claim_without_due_filter",
+            "ignore_unexpired_owner",
+            "shared_static_owner_token",
+            "nonowner_release",
+            "finalize_without_owner_guard",
+            "release_in_separate_txn",
+            "ttl_zero",
+            "ttl_unbounded",
+            "report_claimed_as_selected",
+        ],
+    ),
     "r15": (
         _check_r15,
         [
@@ -3605,6 +4101,7 @@ _CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r7": (_check_r7, ["reconcile_always_apply"]),
     "r11": (_check_r11, ["no_unique_index"]),
     "r14race": (_check_r14_race, ["check_then_insert_race"]),
+    "r16race": (_check_r16_race, ["select_then_update"]),
     "r22": (_check_r22, ["non_atomic_cas"]),
 }
 
