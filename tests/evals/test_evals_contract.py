@@ -241,7 +241,6 @@ def test_discrimination_deterministic_rerun() -> None:
     def wrong_constant_runner(corpus: list[dict[str, Any]], embedder: str, seed: int) -> EvalResult:
         return EvalResult({"ndcg@10": float(seed)}, [str(seed)])
 
-
     try:
         _assert_deterministic_rerun(wrong_constant_runner)
         pytest.fail("Accepted bad constant runner")
