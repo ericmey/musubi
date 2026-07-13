@@ -11,12 +11,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run PR Smoke Gate
+      - name: Install uv and deps
         run: |
-          # The wiring logic here to invoke run_smoke_gate
-          echo "Smoke gate running..."
-          # python -c "from musubi.evals.runner import run_smoke_gate; ..."
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          uv pip install -e .
+      - name: Run PR Smoke Gate
+        if: github.event_name == 'pull_request'
+        run: |
+          uv run python -m musubi.evals smoke --data-dir tests/evals/data
+      - name: Run Scheduled Baseline Report
+        if: github.event_name == 'schedule'
+        run: |
+          uv run python -m musubi.evals scheduled --data-dir tests/evals/data
