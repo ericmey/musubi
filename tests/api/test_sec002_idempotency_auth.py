@@ -18,20 +18,25 @@ Run:  pytest tests/api/test_sec002_idempotency_auth.py -v
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from starlette.testclient import TestClient
 
+from musubi.settings import Settings
 from tests.api.conftest import mint_token
 
 CAPTURE = "/v1/episodic"
 IDEM = "Idempotency-Key"
 
 
-def _capture_body(ns: str = "eric/claude-code/episodic", content: str = "sec002 probe") -> dict:
+def _capture_body(
+    ns: str = "eric/claude-code/episodic", content: str = "sec002 probe"
+) -> dict[str, Any]:
     return {"namespace": ns, "content": content, "tags": ["kind:episode"], "importance": 3}
 
 
-def _prime(client: TestClient, token: str, key: str, body: dict) -> None:
+def _prime(client: TestClient, token: str, key: str, body: dict[str, Any]) -> None:
     """Legitimately populate the idempotency cache with an authenticated write."""
     r = client.post(CAPTURE, json=body, headers={"Authorization": f"Bearer {token}", IDEM: key})
     assert r.status_code in (200, 201, 202), f"priming write failed: {r.status_code} {r.text[:200]}"
@@ -65,7 +70,9 @@ def test_invalid_bearer_must_not_replay(client: TestClient, valid_token: str) ->
 @pytest.mark.xfail(
     strict=True, reason="SEC-002: one tenant replays another tenant's write — fix pending"
 )
-def test_cross_tenant_must_not_replay(client: TestClient, api_settings, valid_token: str) -> None:
+def test_cross_tenant_must_not_replay(
+    client: TestClient, api_settings: Settings, valid_token: str
+) -> None:
     key, body = "sec002-crosstenant", _capture_body()
     _prime(client, valid_token, key, body)  # tenant A (eric/claude-code) writes
     # tenant B: a VALID token for a DIFFERENT presence with no access to A's namespace
@@ -96,7 +103,7 @@ def test_cross_tenant_must_not_replay(client: TestClient, api_settings, valid_to
     reason="SEC-002 collision probe NOT YET VALID — see note. Do not cite as evidence."
 )
 def test_same_key_body_must_not_collide_across_routes(
-    client: TestClient, api_settings, valid_token: str
+    client: TestClient, api_settings: Settings, valid_token: str
 ) -> None:
     """PLACEHOLDER — my first collision probe was WRONG and I will not fake it.
 

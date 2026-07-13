@@ -19,30 +19,35 @@ Run:  uv run pytest tests/api/spikes/test_split_pipeline_spike.py -v
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from fastapi import Depends, FastAPI, HTTPException, Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.testclient import TestClient
 
 
 class Replay(Exception):
-    def __init__(self, payload: dict, status: int = 200) -> None:
+    def __init__(self, payload: dict[str, Any], status: int = 200) -> None:
         self.payload = payload
         self.status = status
 
 
-def _build_app() -> tuple[FastAPI, dict]:
+def _build_app() -> tuple[FastAPI, dict[str, Any]]:
     """A minimal split-pipeline app. `events` records what the store-mw decided."""
     app = FastAPI()
-    events: dict = {"cached": [], "released": []}
+    events: dict[str, list[Any]] = {"cached": [], "released": []}
 
     @app.exception_handler(Replay)
-    async def _on_replay(request: Request, exc: Replay):
+    async def _on_replay(request: Request, exc: Replay) -> Response:
         r = JSONResponse(exc.payload, status_code=exc.status)
         r.headers["X-Idempotent-Replay"] = "true"
         return r
 
     @app.middleware("http")
-    async def store_mw(request: Request, call_next):
+    async def store_mw(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         # thin outer store middleware — NO lookup, authz, or body read
         try:
             resp = await call_next(request)
@@ -72,15 +77,15 @@ def _build_app() -> tuple[FastAPI, dict]:
             raise Replay({"cached": "from-dependency"})
 
     @app.get("/w", dependencies=[Depends(acquire), Depends(replay_dep)])
-    def w():
+    def w() -> dict[str, bool]:
         return {"fresh": True}
 
     @app.get("/boom", dependencies=[Depends(acquire)])
-    def boom():
+    def boom() -> Response:
         raise HTTPException(status_code=500, detail="handler failed")
 
     @app.get("/stream", dependencies=[Depends(acquire)])
-    def stream():
+    def stream() -> StreamingResponse:
         return StreamingResponse((b"x" for _ in range(3)), media_type="text/plain")
 
     return app, events
@@ -89,19 +94,21 @@ def _build_app() -> tuple[FastAPI, dict]:
 # ── Claim 1 — middleware sees dependency-set state after call_next ────────────
 def test_middleware_sees_dependency_state_after_call_next() -> None:
     app = FastAPI()
-    seen: dict = {}
+    seen: dict[str, Any] = {}
 
     @app.middleware("http")
-    async def outer(request: Request, call_next):
+    async def outer(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         resp = await call_next(request)
         seen["value"] = getattr(request.state, "idem_ctx", "<MISSING>")
         return resp
 
-    def dep(request: Request):
+    def dep(request: Request) -> None:
         request.state.idem_ctx = "captured-by-dependency"
 
     @app.get("/probe", dependencies=[Depends(dep)])
-    def probe():
+    def probe() -> dict[str, bool]:
         return {"ok": True}
 
     TestClient(app).get("/probe")
@@ -155,11 +162,11 @@ def test_streaming_detection_is_unsettled_isinstance_and_body_iterator_both_fail
       - Content-Length: present on buffered, absent on this stream — but that is a
         HEURISTIC, not a contract (a transform can drop it; a stream can set it).
     The real design is a route cacheability contract / ASGI more_body observer (ADR D3)."""
-    seen: dict = {}
+    seen: dict[str, Any] = {}
     app = FastAPI()
 
     @app.middleware("http")
-    async def mw(request: Request, call_next):
+    async def mw(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         resp = await call_next(request)
         seen["isinstance"] = isinstance(resp, StreamingResponse)
         seen["has_body_iterator"] = hasattr(resp, "body_iterator")
@@ -167,18 +174,20 @@ def test_streaming_detection_is_unsettled_isinstance_and_body_iterator_both_fail
         return resp
 
     @app.get("/s")
-    def s():
+    def s() -> StreamingResponse:
         return StreamingResponse((b"x" for _ in range(3)), media_type="text/plain")
 
-    seen2: dict = {}
+    seen2: dict[str, Any] = {}
 
     @app.get("/j")
-    def j():
+    def j() -> dict[str, bool]:
         return {"ok": True}
 
     # re-instrument to capture content-length for BOTH a stream and a buffered response
     @app.middleware("http")
-    async def mw2(request: Request, call_next):
+    async def mw2(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         resp = await call_next(request)
         seen2[request.url.path] = resp.headers.get("content-length")
         return resp

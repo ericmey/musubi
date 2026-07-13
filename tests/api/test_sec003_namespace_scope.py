@@ -20,21 +20,23 @@ Synthetic content only.
 from __future__ import annotations
 
 import io
+from typing import Any
 
 import pytest
 from starlette.testclient import TestClient
 
+from musubi.settings import Settings
 from tests.api.conftest import mint_token
 
 UPLOAD = "/v1/artifacts"
 
 
-def _tenant_b(api_settings) -> str:
+def _tenant_b(api_settings: Settings) -> str:
     """A valid token that is authorized ONLY on mallory/evil — never on eric/*."""
     return mint_token(api_settings, scopes=["mallory/evil/artifact:rw"], presence="mallory/evil")
 
 
-def _multipart(namespace: str) -> dict:
+def _multipart(namespace: str) -> dict[str, Any]:
     return {
         "namespace": (None, namespace),
         "title": (None, "sec003 probe"),
@@ -44,7 +46,9 @@ def _multipart(namespace: str) -> dict:
 
 
 @pytest.mark.xfail(strict=True, reason="SEC-003: Form namespace bypasses write scope — fix pending")
-def test_upload_cross_tenant_namespace_must_be_403(client: TestClient, api_settings) -> None:
+def test_upload_cross_tenant_namespace_must_be_403(
+    client: TestClient, api_settings: Settings
+) -> None:
     # tenant B's token uploads INTO tenant A's namespace via the Form field
     r = client.post(
         UPLOAD,
@@ -57,7 +61,7 @@ def test_upload_cross_tenant_namespace_must_be_403(client: TestClient, api_setti
     )
 
 
-def test_upload_own_namespace_still_succeeds(client: TestClient, api_settings) -> None:
+def test_upload_own_namespace_still_succeeds(client: TestClient, api_settings: Settings) -> None:
     """Feature preservation: an authorized upload to one's OWN namespace must work.
 
     NOT xfail — the fix must authorize the Form namespace, not forbid all uploads.
@@ -81,7 +85,9 @@ def test_upload_no_token_must_be_401(client: TestClient) -> None:
 @pytest.mark.xfail(
     strict=True, reason="SEC-003: Path namespace stats bypasses read scope — fix pending"
 )
-def test_namespace_stats_cross_tenant_must_be_403(client: TestClient, api_settings) -> None:
+def test_namespace_stats_cross_tenant_must_be_403(
+    client: TestClient, api_settings: Settings
+) -> None:
     # tenant B reads stats for tenant A's namespace; the value is a PATH param, so the
     # namespace_qs_param="namespace_path" query lookup is empty and auth checks nothing.
     path = "eric%2Fclaude-code%2Fepisodic"
@@ -95,7 +101,9 @@ def test_namespace_stats_cross_tenant_must_be_403(client: TestClient, api_settin
     )
 
 
-def test_namespace_stats_own_namespace_still_succeeds(client: TestClient, api_settings) -> None:
+def test_namespace_stats_own_namespace_still_succeeds(
+    client: TestClient, api_settings: Settings
+) -> None:
     """Feature preservation (declared in the Test Contract): a token scoped EXACTLY to the
     target namespace must read its own stats and get a well-formed body.
 

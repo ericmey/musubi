@@ -29,6 +29,9 @@ no src.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import pytest
 from starlette.background import BackgroundTask
 from starlette.responses import JSONResponse, PlainTextResponse, Response
@@ -41,13 +44,13 @@ IDEM = "Idempotency-Key"
 REPLAY = "X-Idempotent-Replay"
 
 
-def _client_with(api_settings: Settings, route: str, handler) -> TestClient:
+def _client_with(api_settings: Settings, route: str, handler: Callable[..., Any]) -> TestClient:
     app = create_app(settings=api_settings)
     app.add_api_route(route, handler, methods=["POST"])
     return TestClient(app)
 
 
-def _prime_and_replay(client: TestClient, route: str, key: str) -> tuple:
+def _prime_and_replay(client: TestClient, route: str, key: str) -> tuple[Any, Any]:
     h = {IDEM: key}
     first = client.post(route, headers=h)
     replay = client.post(route, headers=h)

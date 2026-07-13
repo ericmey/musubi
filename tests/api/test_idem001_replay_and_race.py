@@ -30,6 +30,8 @@ proofs that must always hold. All content synthetic; no live memory.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -41,11 +43,13 @@ IDEM = "Idempotency-Key"
 REPLAY = "X-Idempotent-Replay"
 
 
-def _capture_body(ns: str = "eric/claude-code/episodic", content: str = "idem001 probe") -> dict:
+def _capture_body(
+    ns: str = "eric/claude-code/episodic", content: str = "idem001 probe"
+) -> dict[str, Any]:
     return {"namespace": ns, "content": content, "tags": ["kind:episode"], "importance": 3}
 
 
-def _prime(client: TestClient, token: str, key: str, body: dict) -> None:
+def _prime(client: TestClient, token: str, key: str, body: dict[str, Any]) -> None:
     """Legitimately populate the idempotency cache with an authenticated capture."""
     r = client.post(CAPTURE, json=body, headers={"Authorization": f"Bearer {token}", IDEM: key})
     assert r.status_code in (200, 201, 202), (

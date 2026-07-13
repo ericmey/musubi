@@ -19,11 +19,13 @@ All content synthetic; no live memory.
 from __future__ import annotations
 
 import uuid
+from typing import Any, cast
 
 import pytest
 from qdrant_client import QdrantClient, models
 from starlette.testclient import TestClient
 
+from musubi.settings import Settings
 from tests.api.conftest import mint_token
 
 ROUTE = "/v1/contradictions"
@@ -37,16 +39,18 @@ def _seed_contradiction(qdrant: QdrantClient, namespace: str) -> str:
     # dimensionality must match the collection; read it off the live collection config
     info = qdrant.get_collection(CONCEPT)
     vparams = info.config.params.vectors
+    vector: dict[str, list[float]] | list[float]
     if isinstance(vparams, dict):  # named vectors
         vector = {name: [0.0] * p.size for name, p in vparams.items()}
     else:
+        assert vparams is not None
         vector = [0.0] * vparams.size
     qdrant.upsert(
         CONCEPT,
         points=[
             models.PointStruct(
                 id=str(uuid.uuid4()),
-                vector=vector,
+                vector=cast("Any", vector),
                 payload={
                     "object_id": oid,
                     "namespace": namespace,
@@ -68,11 +72,11 @@ def seeded(qdrant: QdrantClient) -> dict[str, str]:
     }
 
 
-def _ordinary(api_settings, ns: str) -> str:
+def _ordinary(api_settings: Settings, ns: str) -> str:
     return mint_token(api_settings, scopes=[f"{ns}:r"], presence=ns.rsplit("/", 1)[0])
 
 
-def _operator(api_settings) -> str:
+def _operator(api_settings: Settings) -> str:
     return mint_token(api_settings, scopes=["operator", "**:r"], presence="ops/operator")
 
 
@@ -86,7 +90,7 @@ def test_no_token_must_be_401(client: TestClient) -> None:
     reason="SEC-004: ordinary token + omitted namespace scrolls the fleet — fix pending",
 )
 def test_ordinary_token_omitted_namespace_must_be_403(
-    client: TestClient, api_settings, seeded: dict[str, str]
+    client: TestClient, api_settings: Settings, seeded: dict[str, str]
 ) -> None:
     # ordinary token, NO ?namespace= — currently scrolls every tenant's concepts
     token = _ordinary(api_settings, "eric/claude-code/concept")
@@ -98,7 +102,7 @@ def test_ordinary_token_omitted_namespace_must_be_403(
 
 
 def test_operator_omitted_namespace_succeeds_cross_namespace(
-    client: TestClient, api_settings, seeded: dict[str, str]
+    client: TestClient, api_settings: Settings, seeded: dict[str, str]
 ) -> None:
     """Operator + omitted namespace is the legitimate cross-namespace case (feature).
 
@@ -114,7 +118,7 @@ def test_operator_omitted_namespace_succeeds_cross_namespace(
 
 
 def test_ordinary_token_own_namespace_returns_only_own(
-    client: TestClient, api_settings, seeded: dict[str, str]
+    client: TestClient, api_settings: Settings, seeded: dict[str, str]
 ) -> None:
     ns = "eric/claude-code/concept"
     token = _ordinary(api_settings, ns)
@@ -128,7 +132,7 @@ def test_ordinary_token_own_namespace_returns_only_own(
 
 
 def test_ordinary_token_foreign_namespace_must_be_403(
-    client: TestClient, api_settings, seeded: dict[str, str]
+    client: TestClient, api_settings: Settings, seeded: dict[str, str]
 ) -> None:
     # token authorized on A, explicitly requests B's namespace
     token = _ordinary(api_settings, "eric/claude-code/concept")
@@ -149,11 +153,11 @@ def test_ordinary_token_foreign_namespace_must_be_403(
     strict=True, reason="SEC-004/RET-007: backend failure must not become empty 200 — fix pending"
 )
 def test_backend_failure_must_not_be_empty_200(
-    client: TestClient, api_settings, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, api_settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # force the qdrant scroll to raise; the handler currently swallows it -> items=[] 200
 
-    def _boom(*a, **k):
+    def _boom(*a: object, **k: object) -> Any:
         raise RuntimeError("qdrant is down")
 
     # patch the client the route uses so scroll raises

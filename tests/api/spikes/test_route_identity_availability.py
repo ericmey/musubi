@@ -33,16 +33,22 @@ Tests/docs only. No src. Synthetic app; no Musubi imports needed for the mechani
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from fastapi import Depends, FastAPI, Request
 from fastapi.routing import APIRoute
+from starlette.responses import Response
 from starlette.testclient import TestClient
 
 
-def _build_app(record: dict) -> FastAPI:
+def _build_app(record: dict[str, Any]) -> FastAPI:
     app = FastAPI()
 
     @app.middleware("http")
-    async def pre_auth_mw(request: Request, call_next):
+    async def pre_auth_mw(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
         # This is the stage Musubi's idempotency/rate-limit middleware runs at.
         record["mw_route"] = request.scope.get("route")
         record["mw_url_path"] = request.url.path
@@ -59,14 +65,14 @@ def _build_app(record: dict) -> FastAPI:
         operation_id="capture_episodic.bucket=capture",
         dependencies=[Depends(capture_identity)],
     )
-    async def handler(item_id: str) -> dict:
+    async def handler(item_id: str) -> dict[str, Any]:
         return {"item_id": item_id}
 
     return app
 
 
 def test_middleware_cannot_see_canonical_route() -> None:
-    record: dict = {}
+    record: dict[str, Any] = {}
     TestClient(_build_app(record)).post("/v1/items/42")
     # Pre-auth middleware: routing has NOT happened yet.
     assert record["mw_route"] is None, (
@@ -77,7 +83,7 @@ def test_middleware_cannot_see_canonical_route() -> None:
 
 
 def test_dependency_sees_canonical_route_and_operation_id() -> None:
-    record: dict = {}
+    record: dict[str, Any] = {}
     TestClient(_build_app(record)).post("/v1/items/42")
     # A dependency runs AFTER routing → the APIRoute is on the scope.
     assert record["dep_route_type"] == "APIRoute", record["dep_route_type"]
@@ -92,8 +98,8 @@ def test_raw_path_over_discriminates_same_endpoint() -> None:
     """Two requests to the SAME endpoint with different path params have DIFFERENT url.path but
     the SAME path_format — proving the raw path (all the middleware has) is the wrong identity:
     it would treat two calls to one endpoint as two different endpoints."""
-    r1: dict = {}
-    r2: dict = {}
+    r1: dict[str, Any] = {}
+    r2: dict[str, Any] = {}
     TestClient(_build_app(r1)).post("/v1/items/1")
     TestClient(_build_app(r2)).post("/v1/items/2")
     assert r1["mw_url_path"] != r2["mw_url_path"], "raw paths differ (1 vs 2)"
@@ -105,7 +111,7 @@ def test_raw_path_over_discriminates_same_endpoint() -> None:
 def test_app_exposes_path_format_and_operation_id_on_apiroute() -> None:
     """Static control: the attributes the fix relies on exist on FastAPI's APIRoute, so the
     dependency-level identity is a real API, not an accident of this test."""
-    record: dict = {}
+    record: dict[str, Any] = {}
     app = _build_app(record)
     route = next(
         r for r in app.routes if isinstance(r, APIRoute) and r.path == "/v1/items/{item_id}"

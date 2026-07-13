@@ -25,6 +25,7 @@ secrets beyond the test signing key. Tests/docs only, no src.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any, TypeGuard
 
 import jwt
 import pytest
@@ -35,7 +36,7 @@ from musubi.types.common import Ok
 from tests.api.conftest import _TEST_ISSUER, mint_token
 
 
-def _is_ok(result) -> bool:
+def _is_ok(result: object) -> TypeGuard[Ok[Any]]:
     return isinstance(result, Ok)
 
 

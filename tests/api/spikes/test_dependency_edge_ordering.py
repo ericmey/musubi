@@ -27,6 +27,8 @@ Tests/docs only. No src. Synthetic app.
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import Depends, FastAPI, Request
 from starlette.testclient import TestClient
 
@@ -47,7 +49,7 @@ def _sibling_app(order: list[str], *, idem_first: bool) -> FastAPI:
     deps = [Depends(idem), Depends(authz)] if idem_first else [Depends(authz), Depends(idem)]
 
     @app.post("/x", dependencies=deps)
-    async def handler() -> dict:
+    async def handler() -> dict[str, Any]:
         return {}
 
     return app
@@ -58,17 +60,17 @@ def _edge_app(order: list[str]) -> FastAPI:
     prove the edge — not the declaration order — decides execution."""
     app = FastAPI()
 
-    async def authz() -> dict:
+    async def authz() -> dict[str, Any]:
         order.append(AUTHZ)
         return {"principal": "eric/claude-code"}  # the validated AuthContext
 
-    async def idem(request: Request, ctx: dict = Depends(authz)) -> dict:
+    async def idem(request: Request, ctx: dict[str, Any] = Depends(authz)) -> dict[str, Any]:
         order.append(IDEM)
         request.state.identity_principal = ctx["principal"]  # identity built FROM validated auth
         return ctx
 
     @app.post("/x", dependencies=[Depends(idem)])
-    async def handler() -> dict:
+    async def handler() -> dict[str, Any]:
         return {}
 
     return app
@@ -107,16 +109,16 @@ def test_edge_passes_validated_principal_into_identity() -> None:
     """Beyond ordering: the edge DELIVERS the authorized principal to the idempotency layer, so
     the replay identity is built from validated auth — not from unverified request fields."""
     app = FastAPI()
-    captured: dict = {}
+    captured: dict[str, Any] = {}
 
-    async def authz() -> dict:
+    async def authz() -> dict[str, Any]:
         return {"principal": "eric/claude-code"}
 
-    async def idem(request: Request, ctx: dict = Depends(authz)) -> None:
+    async def idem(request: Request, ctx: dict[str, Any] = Depends(authz)) -> None:
         captured["principal"] = ctx["principal"]
 
     @app.post("/x", dependencies=[Depends(idem)])
-    async def handler() -> dict:
+    async def handler() -> dict[str, Any]:
         return {}
 
     TestClient(app).post("/x")

@@ -29,6 +29,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 
@@ -45,7 +46,7 @@ class _Lease:
     created_at: float
     done: bool = False
     completed_at: float | None = None
-    response: dict | None = None
+    response: dict[str, Any] | None = None
     status: int | None = None
 
 
@@ -63,10 +64,12 @@ class _LeaseCache:
         self._clock = clock
         self._stale = stale_after_s
         self._ttl = ttl_s
-        self._leases: dict = {}
+        self._leases: dict[object, _Lease] = {}
         self._lock = threading.Lock()
 
-    def acquire(self, identity, owner: str) -> tuple[str, dict | None, int | None]:
+    def acquire(
+        self, identity: object, owner: str
+    ) -> tuple[str, dict[str, Any] | None, int | None]:
         now = self._clock()
         with self._lock:
             self._cleanup_locked(now)
@@ -81,7 +84,9 @@ class _LeaseCache:
                 return "acquired", None, None
             return "in_flight", None, None
 
-    def store(self, identity, owner: str, *, response_status: int, response_body: dict) -> None:
+    def store(
+        self, identity: object, owner: str, *, response_status: int, response_body: dict[str, Any]
+    ) -> None:
         with self._lock:
             lease = self._leases.get(identity)
             if lease is None or lease.owner != owner or lease.done:
@@ -91,7 +96,7 @@ class _LeaseCache:
             lease.response = response_body
             lease.status = response_status
 
-    def release(self, identity, owner: str) -> bool:
+    def release(self, identity: object, owner: str) -> bool:
         with self._lock:
             lease = self._leases.get(identity)
             if lease is None:
@@ -138,11 +143,11 @@ class _Clock:
 # --------------------------------------------------------------------------- #
 
 
-def _make_reference(clock: _Clock):
+def _make_reference(clock: _Clock) -> _LeaseCache:
     return _LeaseCache(clock=clock, stale_after_s=30.0, ttl_s=100.0)
 
 
-def _make_real(clock: _Clock):
+def _make_real(clock: _Clock) -> IdempotencyCache:
     # The real target. It has no clock-injecting lease API today; when it grows one to the SAME
     # contract, these parametrizations flip. If the constructor cannot take a clock yet, the
     # property still exercises acquire()/store()/release() which do not exist -> xfail.
@@ -166,20 +171,20 @@ CACHES = [
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p1_acquire_returns_acquired(make_cache) -> None:
+def test_p1_acquire_returns_acquired(make_cache: Callable[[_Clock], Any]) -> None:
     c = make_cache(_Clock())
     assert c.acquire(IDENT, owner="o1")[0] == "acquired"
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p2_second_acquire_is_in_flight(make_cache) -> None:
+def test_p2_second_acquire_is_in_flight(make_cache: Callable[[_Clock], Any]) -> None:
     c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     assert c.acquire(IDENT, owner="o2")[0] == "in_flight"
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p3_owner_store_then_replay_is_hit(make_cache) -> None:
+def test_p3_owner_store_then_replay_is_hit(make_cache: Callable[[_Clock], Any]) -> None:
     c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     c.store(IDENT, owner="o1", response_status=202, response_body={"object_id": "x"})
@@ -188,7 +193,7 @@ def test_p3_owner_store_then_replay_is_hit(make_cache) -> None:
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p4_owner_only_store_and_release(make_cache) -> None:
+def test_p4_owner_only_store_and_release(make_cache: Callable[[_Clock], Any]) -> None:
     c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     with pytest.raises(PermissionError):
@@ -198,7 +203,7 @@ def test_p4_owner_only_store_and_release(make_cache) -> None:
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p5_release_after_error_frees_slot(make_cache) -> None:
+def test_p5_release_after_error_frees_slot(make_cache: Callable[[_Clock], Any]) -> None:
     c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     assert c.release(IDENT, owner="o1") is True  # handler raised/cancelled → release
@@ -206,7 +211,7 @@ def test_p5_release_after_error_frees_slot(make_cache) -> None:
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p6_stale_inflight_is_reclaimable(make_cache) -> None:
+def test_p6_stale_inflight_is_reclaimable(make_cache: Callable[[_Clock], Any]) -> None:
     clock = _Clock()
     c = make_cache(clock)
     c.acquire(IDENT, owner="o1")
@@ -215,7 +220,7 @@ def test_p6_stale_inflight_is_reclaimable(make_cache) -> None:
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p7_completed_lease_expires_after_ttl(make_cache) -> None:
+def test_p7_completed_lease_expires_after_ttl(make_cache: Callable[[_Clock], Any]) -> None:
     clock = _Clock()
     c = make_cache(clock)
     c.acquire(IDENT, owner="o1")
@@ -228,7 +233,7 @@ def test_p7_completed_lease_expires_after_ttl(make_cache) -> None:
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p8_bounded_waiter_never_double_executes(make_cache) -> None:
+def test_p8_bounded_waiter_never_double_executes(make_cache: Callable[[_Clock], Any]) -> None:
     c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     executed = []
@@ -243,7 +248,7 @@ def test_p8_bounded_waiter_never_double_executes(make_cache) -> None:
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p9_real_concurrency_executes_exactly_once(make_cache) -> None:
+def test_p9_real_concurrency_executes_exactly_once(make_cache: Callable[[_Clock], Any]) -> None:
     c = make_cache(_Clock())
     n = 12
     barrier = threading.Barrier(n)
@@ -274,7 +279,7 @@ def test_p9_real_concurrency_executes_exactly_once(make_cache) -> None:
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p10_clock_is_injected_not_wallclock(make_cache) -> None:
+def test_p10_clock_is_injected_not_wallclock(make_cache: Callable[[_Clock], Any]) -> None:
     """Stale/TTL must key off the INJECTED monotonic clock, so behaviour is deterministic and
     testable. Proven by holding the clock still: a fresh in-flight lease is NOT reclaimed when
     zero injected time has passed, regardless of real wall-clock elapsed."""
