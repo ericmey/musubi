@@ -154,6 +154,34 @@
       until: core_health.status == 200
       changed_when: false
 
+    # A pin change is not proof that the recreated container converged. Read
+    # the actual image after the targeted update and fail closed on a stale or
+    # downgraded Core/lifecycle worker.
+    - name: Inspect recreated containers
+      community.docker.docker_container_info:
+        name: "musubi-{{ item }}-1"
+      loop: "{{ changed_services }}"
+      register: recreated_container_info
+      when: not ansible_check_mode
+
+    - name: Assert core-image services match pinned digest
+      ansible.builtin.assert:
+        that:
+          - item.container.Config.Image == musubi_core_image
+        fail_msg: >-
+          Service {{ item.item }} is not running the pinned image.
+          Recreate did not converge.
+        success_msg: "Service {{ item.item }} is running the pinned image."
+      loop: "{{ recreated_container_info.results }}"
+      when:
+        - not ansible_check_mode
+        - item.item in ['core', 'lifecycle-worker']
+      loop_control:
+        label: "{{ item.item }}"
+      # docker_container_info contains the full environment, including
+      # secret-valued variables. Never echo the loop item into operator logs.
+      no_log: true
+
   handlers:
     - name: reload prometheus
       ansible.builtin.command:
