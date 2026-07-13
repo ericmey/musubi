@@ -4,10 +4,10 @@ slice_id: slice-ret004-evals
 issue: 430
 section: _slices
 type: slice
-status: ready
-owner: unassigned
+status: in-progress
+owner: gemini-3-1
 phase: "Retrieval"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-07-13
 reviewed: false
 depends-on: ["[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-scoring]]"]
@@ -18,7 +18,7 @@ blocks: []
 
 > Defines the versioned corpus, executable quality metrics, CI pipelines, and explicit behavior thresholds required to replace the skipped retrieval testing placeholders.
 
-**Phase:** Retrieval · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** Retrieval · **Status:** `in-progress` · **Owner:** `gemini-3-1`
 
 ## Specs to implement
 
