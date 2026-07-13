@@ -710,6 +710,8 @@ class _RefCoordinator:
             expiry = now  # WRONG: the lease expires immediately (== now) -> not exclusive
         elif self._mode == "ttl_unbounded":
             expiry = math.inf  # WRONG: the lease never expires -> a crashed owner is stuck forever
+        elif self._mode == "lease_overshoot_ttl":
+            expiry = now + self._lease_ttl + 0.5  # WRONG: a lease that outlasts the configured TTL
         else:
             expiry = now + self._lease_ttl
         due_sql = (
@@ -2960,6 +2962,10 @@ _R16_RACE_WIN = (
     61  # this process won the guarded claim (exits at the post-claim/pre-Qdrant barrier)
 )
 _R16_RACE_LOSE = 62  # this process lost the claim (rowcount 0) and processed nothing
+# a DETERMINISTIC injected claim clock for the race children, so the winner's lease expiry is EXACTLY
+# _R16_RACE_CLOCK + DEFAULT_LEASE_TTL - the parent asserts that exact bound with no real-time slack, which
+# reliably red-proofs a lease that outlasts the configured TTL (lease_overshoot_ttl).
+_R16_RACE_CLOCK = 5_000_000.0
 
 
 def _r16_race_child_source(*, mode: str, db_path: Path, opk: str, barrier_dir: Path) -> str:
@@ -2996,6 +3002,7 @@ def _r16_race_child_source(*, mode: str, db_path: Path, opk: str, barrier_dir: P
         "def _write_count():\n"
         "    open(_os.path.join(_bd, 'count.' + str(_os.getpid())), 'w').write(str(_calls['n']))\n"
         f"_c = _Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})\n"
+        f"_c._now = lambda: {_R16_RACE_CLOCK!r}\n"  # DETERMINISTIC claim clock -> exact expiry bound
         "def _cp(name):\n"
         "    if name == 'before_claim': _await_before_claim()\n"
         "    if name == 'after_claim_check_before_write': _await_claim2()\n"
@@ -3040,7 +3047,6 @@ def _check_r16_race(base: Path) -> None:
         for _ in range(2)
     ]
     codes = [p.wait(timeout=90) for p in procs]
-    parent_now = time.time()
     if sorted(codes) != [_R16_RACE_WIN, _R16_RACE_LOSE]:
         raise DefectStillPresent(
             f"exactly ONE worker must claim (WIN) and one lose (LOSE); got exit codes {codes} "
@@ -3076,14 +3082,14 @@ def _check_r16_race(base: Path) -> None:
         raise DefectStillPresent(
             "R16 after the race exactly the winner's fresh, non-null owner must be set"
         )
-    if (
-        exp is None
-        or not math.isfinite(float(exp))
-        or not (parent_now < float(exp) <= parent_now + DEFAULT_LEASE_TTL + 1.0)
-    ):
+    # the claim used a DETERMINISTIC injected clock, so the winner's expiry must be EXACTLY
+    # _R16_RACE_CLOCK + DEFAULT_LEASE_TTL - finite, exclusive (> claim time), and NOT one tick past the
+    # configured TTL. lease_overshoot_ttl (expiry = now+TTL+0.5) fails this exact bound.
+    want_expiry = _R16_RACE_CLOCK + DEFAULT_LEASE_TTL
+    if exp is None or not math.isfinite(float(exp)) or abs(float(exp) - want_expiry) > 1e-6:
         raise DefectStillPresent(
-            f"R16 the winner's lease expiry must be FINITE and inside the TTL window "
-            f"(now {parent_now} < expiry <= now+{DEFAULT_LEASE_TTL}); got {exp}"
+            f"R16 the winner's lease expiry must be EXACTLY now+TTL ({want_expiry}), finite, not one tick "
+            f"longer than the configured TTL; got {exp}"
         )
 
 
@@ -4198,7 +4204,7 @@ _CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r7": (_check_r7, ["reconcile_always_apply"]),
     "r11": (_check_r11, ["no_unique_index"]),
     "r14race": (_check_r14_race, ["check_then_insert_race"]),
-    "r16race": (_check_r16_race, ["select_then_update"]),
+    "r16race": (_check_r16_race, ["select_then_update", "lease_overshoot_ttl"]),
     "r22": (_check_r22, ["non_atomic_cas"]),
 }
 
