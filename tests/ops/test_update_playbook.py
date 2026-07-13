@@ -24,12 +24,17 @@ import re
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
 RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade.md"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
+
+
+class DefectStillPresent(Exception):
+    """Raised when a production deployment guard was lost during reconciliation."""
 
 
 def _load(path: Path) -> list[dict[str, Any]]:
@@ -152,6 +157,25 @@ def test_update_probes_core_health_post_apply() -> None:
         if module and "{{ musubi_health_urls.core }}" in str(module.get("url", "")):
             return
     raise AssertionError("update.yml has no /v1/ops/health probe task")
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="the source candidate removes the post-recreate Config.Image assertion that prevents a silent stale or downgraded core/lifecycle worker",
+)
+def test_update_asserts_recreated_core_services_match_the_pinned_digest() -> None:
+    text = UPDATE_PLAYBOOK.read_text()
+    required = (
+        "Inspect recreated containers",
+        "community.docker.docker_container_info",
+        "item.container.Config.Image == musubi_core_image",
+        "item.item in ['core', 'lifecycle-worker']",
+        "no_log: true",
+    )
+    missing = [fragment for fragment in required if fragment not in text]
+    if missing:
+        raise DefectStillPresent(f"post-recreate digest guard missing: {missing!r}")
 
 
 def test_update_writes_upgrade_history() -> None:

@@ -63,6 +63,7 @@ listed in `blocks`.
 7. `test_ansible_templates_remain_parseable_controls`
 8. `test_update_preserves_prometheus_bind_inode_and_verifies_lifecycle_target`
 9. `test_lifecycle_worker_metrics_survive_source_reconciliation`
+10. `test_update_asserts_recreated_core_services_match_the_pinned_digest`
 
 ## Work log
 
@@ -91,3 +92,7 @@ listed in `blocks`.
   Prometheus scrape job. Added a separate strict red before restoring those
   operationally proven blocks; an internally green candidate is not sufficient
   if it regresses the actual operator source.
+- 2026-07-13, codex-gpt5: The operational diff also found that the candidate
+  removed the post-recreate container-image assertion used to prevent a silent
+  stale or downgraded Core/lifecycle worker. Added a third preservation red;
+  credential-source cleanup may not delete the signed-image convergence gate.
