@@ -1035,7 +1035,14 @@ class _RefCoordinator:
         must: list[models.Condition] = [
             models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))
         ]
-        non_atomic = self._mode in ("warn_only_fence", "non_atomic_cas")
+        # stale_owner_effective_apply (R17 WRONG): a reclaimed/stale owner applies WITHOUT the version
+        # fence, so its late attempt is EFFECTIVE (a second mutation) instead of a zero-match no-op. The
+        # correct composition relies on R13/R22's version-fenced apply to neutralise a stale attempt.
+        non_atomic = self._mode in (
+            "warn_only_fence",
+            "non_atomic_cas",
+            "stale_owner_effective_apply",
+        )
         if not non_atomic:
             must.append(
                 models.FieldCondition(
@@ -1397,7 +1404,13 @@ class _RefCoordinator:
             # Qdrant apply but before the APPLIED commit), recognize it and finalize WITHOUT re-applying
             # (readback-only finalization -> NO attempts increment).
             cur_ver, cur_st = self._cur(coll, oid)
-            if self._mode != "reconcile_no_readback" and (cur_ver, cur_st) == (ver + 1, tstate):
+            # reclaim_reapplies_after_readback (R17 WRONG): after a reclaim, RE-APPLY instead of recognising
+            # the already-applied mutation via readback -> a SECOND effective apply (caught by R17's crash-
+            # after-Qdrant reclaim, which requires exactly one effective mutation).
+            if self._mode not in ("reconcile_no_readback", "reclaim_reapplies_after_readback") and (
+                cur_ver,
+                cur_st,
+            ) == (ver + 1, tstate):
                 self._mark(opk, "APPLIED", owner=token)
                 self._finalize(opk, event_id, oid, _NS, tstate, owner=token)
                 fin += 1
@@ -1453,6 +1466,9 @@ class _RefCoordinator:
                 pend += 1
                 continue
             # confirmed: the attempt happened (increment) + hold the lease through APPLIED, release at FINAL.
+            self._checkpoint(
+                "after_qdrant_before_applied"
+            )  # R17 crash point: Qdrant mutated, row still PENDING+leased
             self._persist_attempt(opk, reschedule=False, owner=token)
             self._mark(opk, "APPLIED", owner=token)
             self._finalize(opk, event_id, oid, _NS, tstate, owner=token)
@@ -2748,6 +2764,126 @@ def _r16_pending(coord: Any, c: QdrantClient, s: _Seed, opk: str) -> None:
     _restore_set_payload(c)
 
 
+def _r17_probe_claimable(coord: Any, d: Path, opk: str, now: float) -> bool:
+    """Probe whether a row is claimable at `now` WITHOUT persisting (roll the claim back)."""
+    coord._now = lambda: now
+    con = sqlite3.connect(str(d))
+    try:
+        got = coord._claim(con, opk, now, coord._new_token())
+        con.rollback()
+        return bool(got)
+    finally:
+        con.close()
+
+
+def _check_r17(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """Expired-owner reclaim safety (Yua R17): the expiry boundary is exact (expires>now valid,
+    <=now reclaimable); a reclaim mints a FRESH owner token so a stale owner's OLD token can never
+    ABA-match; and a stale/expired owner can neither finalize a row the current owner holds nor apply
+    effectively (the R13/R22 version fence makes its late attempt a zero-match no-op). Each scenario is a
+    fresh env with an injected clock. The reclaim CRASH matrix (real process death) is _check_r17_reclaim."""
+    base = Path(db_path).parent
+    E = 5_000.0  # a lease's expiry epoch
+
+    # (1) EXACT expiry boundary: unexpired (expires>now) NOT reclaimable; == and > now (expired) ARE.
+    c, s, d = _make_env(base / "r17-boundary")
+    try:
+        coord = _coordinator(c, d)
+        _r16_pending(coord, c, s, "op-b")
+        _set_outbox(d, "op-b", lease_owner="old-owner", lease_expires_epoch=E)
+        if _r17_probe_claimable(coord, d, "op-b", E - 1.0):
+            raise DefectStillPresent("R17 an UNEXPIRED lease (expires>now) must NOT be reclaimable")
+        if _r17_probe_claimable(coord, d, "op-b", E - 0.001):  # clock-skew bound: still unexpired
+            raise DefectStillPresent(
+                "R17 a lease 1ms before expiry must NOT be reclaimable (skew bound)"
+            )
+        if not _r17_probe_claimable(coord, d, "op-b", E):  # equality: reclaimable AT expiry
+            raise DefectStillPresent("R17 at expiry (expires==now) the lease MUST be reclaimable")
+        if not _r17_probe_claimable(coord, d, "op-b", E + 1.0):  # expired: reclaimable
+            raise DefectStillPresent("R17 an EXPIRED lease (expires<now) MUST be reclaimable")
+    finally:
+        c.close()
+
+    # (2) ABA: after the lease expires, a reclaim mints a FRESH token; a stale owner's OLD token must NOT
+    #     match the reclaimed row (owner guard). reuse_owner_ABA replays the old token -> it matches.
+    c, s, d = _make_env(base / "r17-aba")
+    try:
+        coord = _coordinator(c, d)
+        _r16_pending(coord, c, s, "op-aba")
+        token_a = coord._new_token()  # A's original claim token
+        _set_outbox(d, "op-aba", lease_owner=token_a, lease_expires_epoch=E)
+        now_b = E + 1.0
+        coord._now = lambda: now_b
+        token_b = (
+            coord._new_token()
+        )  # B's reclaim token (correct: fresh; reuse_owner_ABA: == token_a)
+        cc = sqlite3.connect(str(d))
+        if not coord._claim(cc, "op-aba", now_b, token_b):
+            raise DefectStillPresent("R17 B must be able to reclaim an EXPIRED lease")
+        cc.commit()
+        cc.close()
+        coord._mark(
+            "op-aba", "PENDING", owner=token_a, release=True
+        )  # stale A's OLD-token disposition
+        if _outbox_field(d, "op-aba", "lease_owner") != token_b:
+            raise DefectStillPresent(
+                "R17 ABA: a stale owner's OLD token must NOT match the reclaimer's fresh lease (owner guard)"
+            )
+    finally:
+        c.close()
+
+    # (3) a STALE/expired owner must NOT finalize a row the CURRENT owner (B) holds - only the current owner
+    #     commits SQLite disposition. Correct: A's finalize is owner-guarded -> no-op -> row stays APPLIED.
+    c, s, d = _make_env(base / "r17-stale-finalize")
+    try:
+        coord = _coordinator(c, d)
+        _r16_pending(coord, c, s, "op-sf")
+        token_b = coord._new_token()  # B currently owns an APPLIED row (mid-processing)
+        _set_outbox(d, "op-sf", state="APPLIED", lease_owner=token_b, lease_expires_epoch=E + 100.0)
+        ev = _outbox_field(d, "op-sf", "event_id")
+        coord._finalize("op-sf", ev, s.object_id, s.namespace, "matured", owner=coord._new_token())
+        if _outbox_field(d, "op-sf", "state") == "FINAL":
+            raise DefectStillPresent(
+                "R17 a stale/non-current owner must NOT finalize a row the current owner holds"
+            )
+    finally:
+        c.close()
+
+    # (4) a STALE owner's late apply must be a ZERO-MATCH no-op (the R13/R22 version fence), never an
+    #     effective overwrite of a newer state. B reclaims+applies (v->v+1 matured); a THIRD op moves the
+    #     object v+1->v+2 demoted; then stale A (expected_version=v) resumes - its fenced apply must not
+    #     overwrite. stale_owner_effective_apply drops the fence and clobbers the newer state.
+    c, s, d = _make_env(base / "r17-stale-apply")
+    try:
+        coord = _coordinator(c, d)
+        v = s.version
+        _r16_pending(coord, c, s, "op-A")  # A's intent: expected_version=v, target matured
+        _set_outbox(d, "op-A", lease_owner=coord._new_token(), lease_expires_epoch=E)
+        coord._now = lambda: E + 1.0
+        coord.reconcile_once()  # B reclaims op-A, applies (v->v+1 matured), FINAL
+        if _qdrant_state(c, s.collection, s.object_id) != (v + 1, "matured"):
+            raise DefectStillPresent("R17 setup: B's reclaim must land the object at matured/v+1")
+        third = coord.transition(
+            _intent(s, to_state="demoted", operation_key="op-C", expected_version=v + 1)
+        )
+        if not (isinstance(third, Ok) and isinstance(third.value, _api().TransitionFinal)):
+            raise DefectStillPresent("R17 setup: the third op must move the object to demoted/v+2")
+        if _qdrant_state(c, s.collection, s.object_id) != (v + 2, "demoted"):
+            raise DefectStillPresent("R17 setup: object must be at demoted/v+2 before A resumes")
+        # stale A resumes its IN-FLIGHT apply (expected_version=v, target matured/v+1).
+        a_patch = _intended_patch(
+            _intent(s, to_state="matured", operation_key="op-A", expected_version=v)
+        )
+        coord._apply_conditional("op-A", s.collection, s.object_id, a_patch)
+        if _qdrant_state(c, s.collection, s.object_id) != (v + 2, "demoted"):
+            raise DefectStillPresent(
+                "R17 a stale owner's late apply must be a ZERO-MATCH no-op (fenced), never overwrite the "
+                "newer state - exactly one effective mutation survives"
+            )
+    finally:
+        c.close()
+
+
 def _check_r16(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Valid-lease exclusivity (Yua R16): a worker atomically CLAIMS a due, unleased-or-expired row (one
     guarded UPDATE, rowcount==1 IS ownership); an unexpired owner is exclusive; every post-claim
@@ -3537,6 +3673,12 @@ _R16_REASON = (
     "unleased-or-expired row, an exclusive unexpired owner, and owner-guarded dispositions that clear the "
     "lease atomically - `claimed` counts successful claims, and lease_ttl is positive-finite."
 )
+_R17_REASON = (
+    "today nothing reclaims a dead worker's lease, and nothing stops a stale/expired owner from clobbering "
+    "a reclaimer; R17 needs the exact expiry boundary (expires>now valid, <=now reclaimable), a FRESH "
+    "reclaim token so an old token can never ABA-match, and the composition where the owner guard blocks a "
+    "stale disposition while the R13/R22 version fence makes a stale apply a zero-match no-op."
+)
 _R10_REASON = (
     "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
     "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
@@ -3584,6 +3726,13 @@ def test_r16_valid_lease_exclusive_processing(
     _check_r16(*env)
 
 
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R17_REASON)
+def test_r17_expired_owner_reclaim_safe(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r17(*env)
+
+
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
 def test_r10_operation_key_idempotent_across_caller_retries(
     env: tuple[QdrantClient, _Seed, Path],
@@ -3618,6 +3767,19 @@ _R16_RACE_REASON = (
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R16_RACE_REASON)
 def test_r16_two_process_claim_race_one_owner(tmp_path: Path) -> None:
     _check_r16_race(tmp_path)
+
+
+_R17_RECLAIM_REASON = (
+    "today a dead worker's lease is never reclaimed and a crash-applied mutation has no owner to finalize "
+    "it; R17 needs a new owner to reclaim the expired lease, READBACK-CONFIRM the already-applied mutation, "
+    "and finalize it exactly once WITHOUT a second effective apply - proven with a real process that dies "
+    "over an on-disk Qdrant."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R17_RECLAIM_REASON)
+def test_r17_crash_reclaim_readback_confirms_no_reapply(tmp_path: Path) -> None:
+    _check_r17_reclaim(tmp_path)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R12_REASON)
@@ -3858,6 +4020,122 @@ def _check_r7(base: Path) -> None:  # C3: crash after APPLIED commit, before fin
         coord.reconcile_once(limit=10)
         if calls["n"] - n1 != 0:
             raise DefectStillPresent("a second reconcile must be a no-op")
+    finally:
+        client.close()
+
+
+_R17_CRASH_CODE = (
+    71  # worker A crashed at after_qdrant_before_applied (Qdrant mutated, row PENDING+leased)
+)
+
+
+def _r17_crash_child_source(
+    *,
+    use_reference: bool,
+    mode: str,
+    qdrant_path: Path,
+    db_path: Path,
+    crash_at: str,
+    exit_code: int,
+) -> str:
+    """Worker A: reconcile the pre-existing PENDING row (claim -> apply Qdrant), then die at `crash_at`
+    (over an ON-DISK Qdrant) so the mutation is a REAL surviving cross-process side effect and the row is
+    left PENDING + still leased by the dead A."""
+    if use_reference:
+        imp = "from tests.lifecycle.test_c6b_atomicity import _RefCoordinator as _Coord"
+        ctor = f"_Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})"
+    else:  # future: the REAL src coordinator (absent today -> the parent xfails at _api())
+        imp = "from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator as _Coord"
+        ctor = f"_Coord(client=_client, db_path={str(db_path)!r})"
+    return (
+        "import os, warnings\n"
+        "from qdrant_client import QdrantClient\n"
+        f"{imp}\n"
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        f"    _client = QdrantClient(path={str(qdrant_path)!r})\n"
+        f"_c = {ctor}\n"
+        f"_c._checkpoint = lambda name: os._exit({exit_code}) if name == {crash_at!r} else None\n"
+        "_c.reconcile_once()\n"
+        "os._exit(99)\n"  # reached only if the crash checkpoint did NOT fire
+    )
+
+
+def _check_r17_reclaim(base: Path) -> None:
+    """Expired-owner reclaim across a REAL crash (Yua R17): worker A claims + applies Qdrant then DIES
+    (os._exit over an ON-DISK Qdrant - a genuine surviving process, not an in-memory fake) before marking
+    APPLIED. The mutation is durable; the row is PENDING + still leased by the dead A. After the lease
+    expires, worker B reclaims, READBACK-CONFIRMS the already-applied mutation, and finalizes WITHOUT a
+    second effective apply. reclaim_reapplies_after_readback re-applies -> a false version fence -> the
+    audit is lost (ABANDONED, not FINAL) and a wasted Qdrant attempt is made."""
+    _api()  # xfail today (coordinator absent); a candidate is active under red-proof
+    use_ref = _ACTIVE_CANDIDATE is not None
+    mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
+    seed, db_path, qdrant_path = _make_ondisk_env(base)
+    # the parent creates A's durable PENDING intent, then releases the Qdrant lock for the child.
+    client = _open_ondisk_qdrant(qdrant_path)
+    coord = _coordinator(client, db_path)
+    _fail_set_payload(client, _TransientQdrantError("hold PENDING"))
+    coord.transition(_intent(seed, to_state="matured", operation_key="op-r17"))
+    _restore_set_payload(client)
+    client.close()
+    src = _r17_crash_child_source(
+        use_reference=use_ref,
+        mode=mode,
+        qdrant_path=qdrant_path,
+        db_path=db_path,
+        crash_at="after_qdrant_before_applied",
+        exit_code=_R17_CRASH_CODE,
+    )
+    proc = subprocess.run([sys.executable, "-c", src], capture_output=True, timeout=90, check=False)
+    if proc.returncode != _R17_CRASH_CODE:
+        raise DefectStillPresent(
+            f"worker A must crash at after_qdrant_before_applied with code {_R17_CRASH_CODE} (never "
+            f"timeout/kill), got {proc.returncode}: {proc.stderr.decode()[-300:]}"
+        )
+    rows = _outbox_rows(db_path, "op-r17")
+    if len(rows) != 1 or rows[0]["state"] != "PENDING":
+        raise DefectStillPresent(
+            f"a crash post-Qdrant/pre-APPLIED must leave ONE PENDING row, got {[r['state'] for r in rows]}"
+        )
+    if _outbox_field(db_path, "op-r17", "lease_owner") is None:
+        raise DefectStillPresent(
+            "the dead worker A's lease must still be HELD (reclaimable after expiry)"
+        )
+    client = _open_ondisk_qdrant(qdrant_path)
+    try:
+        if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+            raise DefectStillPresent(
+                "A's Qdrant mutation must be durable BEFORE reclaim (the ACTUAL cross-process side effect)"
+            )
+        _set_outbox(
+            db_path, "op-r17", lease_expires_epoch=0.0
+        )  # A's lease expires -> B may reclaim
+        coord = _coordinator(client, db_path)
+        calls = _count_set_payload(client)
+        n0 = calls["n"]
+        report = coord.reconcile_once(limit=10)  # B: reclaim -> readback-confirm -> finalize
+        if calls["n"] - n0 != 0:
+            raise DefectStillPresent(
+                f"B must READBACK-CONFIRM the already-applied mutation, NOT re-apply; got "
+                f"{calls['n'] - n0} Qdrant attempt(s)"
+            )
+        rows2 = _outbox_rows(db_path, "op-r17")
+        if len(rows2) != 1 or rows2[0]["state"] != "FINAL":
+            raise DefectStillPresent(
+                f"B's reclaim must FINALIZE the recovered mutation (not lose it), got "
+                f"{[r['state'] for r in rows2]}"
+            )
+        if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
+            raise DefectStillPresent("the reclaim must produce EXACTLY ONE FINAL event")
+        if getattr(report, "finalized", None) != 1:
+            raise DefectStillPresent(f"report must show one finalized, got {report!r}")
+        if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+            raise DefectStillPresent(
+                "B must NOT mutate Qdrant again (exactly one effective mutation)"
+            )
+        if _outbox_field(db_path, "op-r17", "lease_owner") is not None:
+            raise DefectStillPresent("a finalized row must have its lease cleared")
     finally:
         client.close()
 
@@ -4136,6 +4414,17 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
             "report_claimed_as_selected",
         ],
     ),
+    "r17": (
+        _check_r17,
+        [
+            "reclaim_before_expiry",
+            "strict_lt_equality_bug",
+            "never_reclaim",
+            "reuse_owner_ABA",
+            "stale_owner_finalizes",
+            "stale_owner_effective_apply",
+        ],
+    ),
     "r15": (
         _check_r15,
         [
@@ -4205,6 +4494,7 @@ _CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r11": (_check_r11, ["no_unique_index"]),
     "r14race": (_check_r14_race, ["check_then_insert_race"]),
     "r16race": (_check_r16_race, ["select_then_update", "lease_overshoot_ttl"]),
+    "r17reclaim": (_check_r17_reclaim, ["reclaim_reapplies_after_readback"]),
     "r22": (_check_r22, ["non_atomic_cas"]),
 }
 
