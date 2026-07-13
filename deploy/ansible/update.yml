@@ -76,6 +76,10 @@
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0644"
+        # Prometheus bind-mounts this file. Atomic replacement leaves the
+        # running container attached to the old inode, so SIGHUP would reload
+        # stale configuration.
+        unsafe_writes: true
       notify: reload prometheus
 
     - name: Refresh op-run reference template
@@ -160,6 +164,22 @@
         - "'no such service' not in (prometheus_reload.stderr | default(''))"
         - "'not running' not in (prometheus_reload.stderr | default(''))"
       changed_when: prometheus_reload.rc == 0
+
+    - name: Verify lifecycle-worker is scraped after reload
+      listen: reload prometheus
+      ansible.builtin.uri:
+        url: >-
+          http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22lifecycle-worker%22%7D
+        status_code: 200
+        return_content: true
+      register: prometheus_lifecycle_query
+      retries: 15
+      delay: 2
+      until:
+        - prometheus_lifecycle_query.json.status == 'success'
+        - prometheus_lifecycle_query.json.data.result | length == 1
+        - prometheus_lifecycle_query.json.data.result[0].value[1] == '1'
+      changed_when: false
 
     - name: Reload systemd
       ansible.builtin.systemd_service:

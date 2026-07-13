@@ -56,6 +56,7 @@ def _task_module(task: dict[str, Any]) -> str | None:
         "changed_when",
         "failed_when",
         "notify",
+        "listen",
         "become",
         "vars",
         "tags",
