@@ -975,6 +975,22 @@ def _final_event_count(db_path: Path, event_id: object) -> int:
         con.close()
 
 
+def _events_for_object(db_path: Path, object_id: str) -> int:
+    if not Path(db_path).exists():
+        return 0
+    con = sqlite3.connect(str(db_path))
+    try:
+        try:
+            cur = con.execute(
+                "SELECT COUNT(*) FROM lifecycle_events WHERE object_id=?", (object_id,)
+            )
+        except sqlite3.OperationalError:
+            return 0
+        return int(cur.fetchone()[0])
+    finally:
+        con.close()
+
+
 def _set_checkpoint(coord: Any, hook: Any) -> None:
     coord._checkpoint = hook
 
@@ -1246,7 +1262,12 @@ def _check_r10(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     )
     if not isinstance(ra, Ok):
         raise DefectStillPresent("the delimiter-adversarial first op must succeed")
+    # snapshot BEFORE the colliding intent_B, then assert it changed NOTHING (Yua completeness: not just
+    # Err + zero apply, but zero new outbox row, zero new audit event, unchanged object).
     before_calls = calls["n"]
+    rows_before = len(_outbox_for_object(db_path, seed.object_id))
+    events_before = _events_for_object(db_path, seed.object_id)
+    state_before = _qdrant_state(client, seed.collection, seed.object_id)
     rb = coord.transition(
         _intent(
             seed,
@@ -1264,6 +1285,16 @@ def _check_r10(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         )
     if calls["n"] - before_calls != 0:
         raise DefectStillPresent("the delimiter-collision conflict must NOT apply anything")
+    if len(_outbox_for_object(db_path, seed.object_id)) != rows_before:
+        raise DefectStillPresent(
+            "the delimiter-collision conflict must NOT create a new outbox row"
+        )
+    if _events_for_object(db_path, seed.object_id) != events_before:
+        raise DefectStillPresent(
+            "the delimiter-collision conflict must NOT create a new audit event"
+        )
+    if _qdrant_state(client, seed.collection, seed.object_id) != state_before:
+        raise DefectStillPresent("the delimiter-collision conflict must NOT change the object")
 
 
 # ---- R11: single active intent proven under a TWO-PROCESS begin race (Yua correction D) ------------ #
