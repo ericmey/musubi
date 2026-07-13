@@ -1105,18 +1105,142 @@ def test_discrimination_abstention_fpr() -> None:
         _assert_abstention_fpr(wrong_check_bad_fn_only)
 
 
-# The remaining 2 tests are preserved as documentation of the pending inventory,
-# explicitly raising a skipped exception so they do not artificially pad the test count.
+def _assert_contradiction_blending(
+    eval_func: Callable[[list[dict[str, Any]], str], dict[str, Any]],
+) -> None:
+    # Fixture: Query with two contradictory facts
+    corpus = [
+        {"id": "doc_pro", "text": "X is safe.", "plane": "curated"},
+        {"id": "doc_con", "text": "X is dangerous.", "plane": "curated"},
+        {"id": "doc_summary", "text": "X is debated.", "plane": "curated"},
+    ]
+    query = "Is X safe?"
+    res = eval_func(corpus, query)
+    hits = res.get("top_ids", [])
+
+    if "doc_pro" not in hits[:5] or "doc_con" not in hits[:5]:
+        raise ValueError("Contradictory facts not in top-K context")
+
+    if hits and hits[0] in ("doc_pro", "doc_con"):
+        raise ValueError("Contradictory top hit not penalized")
 
 
-@pytest.mark.skip(reason="Pending RET-004 implementation")
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: Contradiction blending unproven"
+)
 def test_eval_contradiction_blending() -> None:
-    pass
+    try:
+        from musubi.evals.gates import check_contradiction_blending
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.gates missing contradiction")
+    _assert_contradiction_blending(check_contradiction_blending)
 
 
-@pytest.mark.skip(reason="Pending RET-004 implementation")
+def test_discrimination_contradiction_blending() -> None:
+    def correct_check(corpus: list[dict[str, Any]], query: str) -> dict[str, Any]:
+        return {"top_ids": ["doc_summary", "doc_pro", "doc_con"]}
+
+    def wrong_picks_pro(corpus: list[dict[str, Any]], query: str) -> dict[str, Any]:
+        return {"top_ids": ["doc_pro", "doc_summary", "doc_con"]}
+
+    def wrong_drops_con(corpus: list[dict[str, Any]], query: str) -> dict[str, Any]:
+        return {"top_ids": ["doc_summary", "doc_pro"]}
+
+    _assert_contradiction_blending(correct_check)
+
+    with pytest.raises(ValueError, match="Contradictory top hit not penalized"):
+        _assert_contradiction_blending(wrong_picks_pro)
+
+    with pytest.raises(ValueError, match="Contradictory facts not in top-K context"):
+        _assert_contradiction_blending(wrong_drops_con)
+
+
+def _assert_cross_plane_blending(
+    eval_func: Callable[[list[dict[str, Any]], list[dict[str, Any]], str], list[dict[str, Any]]],
+) -> None:
+    # Fixtures for two planes
+    curated = [
+        {"id": "c1", "text": "canon info"},
+        {"id": "dup1", "text": "shared info"},
+    ]
+    episodic = [
+        {"id": "e1", "text": "recent event"},
+        {"id": "dup1", "text": "shared info"},
+    ]
+    query = "canon and recent info"
+
+    res = eval_func(curated, episodic, query)
+
+    ids = [r["id"] for r in res]
+    if "c1" not in ids or "e1" not in ids:
+        raise ValueError("Missing multi-plane hits")
+
+    if ids.count("dup1") > 1:
+        raise ValueError("Naive concat: double-count detected")
+
+    if "dup1" not in ids:
+        raise ValueError("Missing duplicated hit")
+
+    # Check provenance
+    provs = {r["id"]: r.get("provenance", []) for r in res}
+    if "curated" not in provs.get("c1", []):
+        raise ValueError("Missing provenance for c1")
+    if "episodic" not in provs.get("e1", []):
+        raise ValueError("Missing provenance for e1")
+    if not {"curated", "episodic"}.issubset(set(provs.get("dup1", []))):
+        raise ValueError("Missing blended provenance for dup1")
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: Cross plane blending unproven"
+)
 def test_eval_cross_plane_blending() -> None:
-    pass
+    try:
+        from musubi.evals.gates import check_cross_plane_blending
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.gates missing cross plane")
+    _assert_cross_plane_blending(check_cross_plane_blending)
+
+
+def test_discrimination_cross_plane_blending() -> None:
+    def correct_check(cur: list[Any], epi: list[Any], q: str) -> list[dict[str, Any]]:
+        return [
+            {"id": "c1", "provenance": ["curated"]},
+            {"id": "e1", "provenance": ["episodic"]},
+            {"id": "dup1", "provenance": ["curated", "episodic"]},
+        ]
+
+    def wrong_single_plane(cur: list[Any], epi: list[Any], q: str) -> list[dict[str, Any]]:
+        return [
+            {"id": "c1", "provenance": ["curated"]},
+            {"id": "dup1", "provenance": ["curated"]},
+        ]
+
+    def wrong_naive_concat(cur: list[Any], epi: list[Any], q: str) -> list[dict[str, Any]]:
+        return [
+            {"id": "c1", "provenance": ["curated"]},
+            {"id": "dup1", "provenance": ["curated"]},
+            {"id": "e1", "provenance": ["episodic"]},
+            {"id": "dup1", "provenance": ["episodic"]},
+        ]
+
+    def wrong_no_provenance(cur: list[Any], epi: list[Any], q: str) -> list[dict[str, Any]]:
+        return [
+            {"id": "c1"},
+            {"id": "e1"},
+            {"id": "dup1"},
+        ]
+
+    _assert_cross_plane_blending(correct_check)
+
+    with pytest.raises(ValueError, match="Missing multi-plane hits"):
+        _assert_cross_plane_blending(wrong_single_plane)
+
+    with pytest.raises(ValueError, match="Naive concat: double-count detected"):
+        _assert_cross_plane_blending(wrong_naive_concat)
+
+    with pytest.raises(ValueError, match="Missing provenance"):
+        _assert_cross_plane_blending(wrong_no_provenance)
 
 
 def _assert_provisional_immediate_recall(
