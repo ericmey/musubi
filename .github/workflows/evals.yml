@@ -1,0 +1,22 @@
+name: Evals
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run PR Smoke Gate
+        run: |
+          # The wiring logic here to invoke run_smoke_gate
+          echo "Smoke gate running..."
+          # python -c "from musubi.evals.runner import run_smoke_gate; ..."

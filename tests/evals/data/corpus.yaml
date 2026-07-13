@@ -1,0 +1,7 @@
+id: q001
+text: healthy query
+relevant:
+  - object_id: "1"
+    relevance: 3
+mode: fast
+namespace: test/ns

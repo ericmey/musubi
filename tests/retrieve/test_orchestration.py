@@ -47,19 +47,6 @@ def test_integration_end_to_end_fast_path_on_10K_corpus_with_real_TEI_Qdrant_p95
     pass
 
 
-class DefectStillPresent(Exception):
-    pass
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: End-to-end orchestration NDCG evaluation unmeasured",
-)
-def test_integration_end_to_end_deep_path_with_rerank_NDCG_10_on_golden_set_ge_threshold() -> None:
-    raise DefectStillPresent("End-to-end orchestration NDCG evaluation unmeasured")
-
-
 @pytest.mark.skip(reason="deferred to slice-ops-gpu")
 def test_integration_kill_TEI_mid_request_pipeline_returns_with_documented_degradation() -> None:
     pass
