@@ -71,19 +71,54 @@ Phase A REQ-10 changes are NOT touched.
 Multipart ingress cap / D5, artifact digest changes, Phase A files except the named app.py
 wiring, retrieval/lifecycle/adapters, durable cross-process cache.
 
-## OPEN DESIGN DRIFT — reported to Yua before coding (2026-07-13)
+## APPROVED SPEC DRIFT — Option A (Yua REQ 2026-07-13T00:27)
 
-The D3 spike modeled auth as a clean route dependency (`authenticate` → `idem` edge). The real
-**capture routes** (`POST /v1/episodic`, `/v1/curated`, batch) authorize the **body-derived**
-namespace INSIDE the handler via `_check_body_scope`, NOT as a route dependency
-(`writes_episodic.py:66-68` states scope is body-derived so it cannot use the query-reading
-`require_auth` dependency). A route-level idempotency dependency would therefore run BEFORE that
-in-handler authz → the SEC-002 pre-auth replay bug. Options (awaiting Yua's direction):
-- (A) refactor the capture-route body-namespace authz into a body-reading dependency edge, then
-  the idempotency dependency `Depends` on it;
-- (B) the idempotency dependency itself performs the body-namespace authz (read body, authorize,
-  then lookup) — self-contained; the handler's `_check_body_scope` becomes defense-in-depth.
-Routes that already use route-level `require_auth` (PATCH/DELETE, concept POST) are unaffected.
+Spec-update: idempotent JSON captures use an **explicit body-derived authorization dependency
+edge**, not in-handler `_check_body_scope`. Yua chose (A) and rejected (B) — (B) double-
+authenticates and lets idempotency interpret body security independently, a second path that can
+drift.
+
+Design (proven expressible in FastAPI with a SINGLE body parse — `parse_count == 1`):
+1. A shared `AuthorizedWrite` context: `auth: AuthContext` + authorized `namespace` + the parsed
+   `body` instance.
+2. A per-capture body-auth dependency declares `body: <Model> = Body(...)` (the ONE parse), calls
+   `authorize_namespace(request, body.namespace, settings, access="w")`, and returns
+   `AuthorizedWrite`.
+3. The idempotency dependency **explicitly `Depends`** on `AuthorizedWrite` (edge, no sibling
+   order).
+4. Handlers `Depends` the idempotency result, consume the SAME `ctx.body` (no re-declared body
+   param), **remove `_check_body_scope`** (no duplicate defense-in-depth auth), and mutate the
+   plane ONLY after the dependency chain.
+5. `created_at` operator guard still reads `request.state.auth` (set by `authenticate_request` in
+   the authz dependency) — red-locked.
+
+Inventory (proven, not assumed): body-derived eligible captures are exactly `POST /v1/episodic`,
+`POST /v1/episodic/batch`, `POST /v1/curated`. Concept routes are **query-derived** (`namespace:
+str = Query(...)` + route-level `require_auth`) and are OUT of the body-drift scope (mutations on
+existing objects, not captures).
+
+`owns_paths` expanded (narrow): + `src/musubi/api/routers/writes_episodic.py`,
+`writes_curated.py`, and a shared dependency-types module (`src/musubi/api/write_auth.py`).
+
+spec-update: slice-idempotency-phase-b — Option A body-auth dependency edge (Yua 2026-07-13T00:27).
+
+## Named follow-up: query-derived / concept mutations (Yua 2026-07-13T00:30)
+
+Concept `reinforce`/`promote`/`reject` and other query-derived write mutations are **explicitly
+out of Phase B scope** — recorded here as a NAMED follow-up decision, not a silent omission. They
+are mutations on existing objects (not JSON captures), authorize a query-derived namespace via
+route-level `require_auth`, and would integrate through a simpler `Depends(require_auth)` edge (no
+body-derived parse). Whether they become idempotent-eligible is a **Phase B-follow-up inventory
+decision** to be made explicitly, tracked against this slice.
+
+## Additional required reds (Yua 2026-07-13T00:30)
+
+- OpenAPI `requestBody` schema + requiredness for all 3 routes stays byte/structure-equivalent in
+  the material fields after the body moves into the dependency (proven feasible: FastAPI flattens
+  a dependency `Body(...)` into the route's requestBody identically). Malformed-body 422 envelope
+  stays compatible with the current contract.
+- The handler cannot be invoked without the `AuthorizedWrite` / idempotency context through the
+  normal route graph (route `dependant` structurally enforces the edge; no bypass path).
 
 ## Verification gate
 
