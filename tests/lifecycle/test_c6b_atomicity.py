@@ -43,12 +43,27 @@ strict-xfail today because the coordinator is unbuilt, but its decorator names t
 targets and its assertion discriminates that behavior — so a WRONG coordinator leaves its own red
 unflipped (proven at red-proof), not a single shared "coordinator absent" reason.
 
-**Assumed Phase-1 coordinator surface** (documented here for Yua to confirm at source authorization):
+**LOCKED Phase-1 coordinator API** (Yua 2026-07-13):
 `LifecycleTransitionCoordinator(client=<qdrant>, db_path=<shared events+outbox sqlite>)` with
-`.transition(collection, object_id, namespace, expected_version, to_state, actor, reason, operation_key)
--> Result[TransitionOutcome, TransitionError]` and `.reconcile()`. A durable `lifecycle_outbox` row
-(operation_key PRIMARY KEY, object_id, collection, target_state, expected_version, state, event_id, ...)
-is committed BEFORE the Qdrant mutation. Tests inspect that table + Qdrant state directly.
+`.transition(intent: TransitionIntent) -> Result[TransitionOutcome, TransitionError]`.
+- `TransitionIntent` (frozen value object): `collection, object_id, namespace, expected_version`
+  (required, no None at the canonical boundary), `target_state, actor, reason`; `operation_key` optional
+  (coordinator derives a stable canonical key when absent); minimal deterministic patch fields + patch_sha
+  as reds require.
+- `TransitionOutcome = TransitionFinal | TransitionPending` (literal discriminator). `TransitionFinal`:
+  `operation_key, event_id, TransitionResult`. `TransitionPending`: `operation_key, event_id`, bounded
+  non-secret retry metadata. **APPLIED is an INTERNAL outbox state, never a public success outcome.** Err
+  means no future mutation will occur.
+- Shared DB: ONE `lifecycle_sqlite_path` file holds `lifecycle_events` (C6) + `lifecycle_outbox` (C6b),
+  so the FINAL event insert + outbox->FINAL happen in one SQLite transaction. Distinct sink/outbox/
+  coordinator types.
+- Reconciler: `reconcile_once(*, limit: int = 100) -> ReconcileReport` (constructor owns
+  clock/lease/backoff for deterministic tests); report carries bounded counts
+  (claimed/finalized/pending/abandoned/failed), no content. The lifecycle-runner calls `reconcile_once`
+  at startup + periodically; it embeds no second transition algorithm.
+A durable `lifecycle_outbox` row (operation_key PRIMARY KEY, object_id, collection, target_state,
+expected_version, state, event_id, ...) is committed BEFORE the Qdrant mutation. Tests inspect that table
++ `lifecycle_events` + Qdrant state directly.
 
     uv run pytest tests/lifecycle/test_c6b_atomicity.py -v
 """
@@ -382,18 +397,58 @@ def _fail_set_payload(client: QdrantClient, exc: Exception) -> None:
     client.set_payload = _boom  # type: ignore[assignment]
 
 
-def _coordinator(client: QdrantClient, db_path: Path) -> Any:
-    """Import-guard: the reds drive the future coordinator. Absent today -> DefectStillPresent, so the
-    xfail fires for each red's OWN named reason (the specific behavior it asserts is unreachable)."""
+def _api() -> Any:
+    """Import-guard for the whole locked Phase-1 API (coordinator + TransitionIntent + outcome types).
+    Absent today -> DefectStillPresent, so each red xfails for its OWN named reason (the specific behavior
+    it asserts is unreachable), never a single shared 'coordinator absent'."""
     try:
-        from musubi.lifecycle.coordinator import (  # type: ignore[import-untyped]
-            LifecycleTransitionCoordinator,
-        )
+        from musubi.lifecycle import coordinator as _c  # type: ignore[attr-defined]
     except ImportError as e:
         raise DefectStillPresent(
-            "LifecycleTransitionCoordinator is not implemented (Phase-1 coordinator/outbox source)"
+            "the Phase-1 coordinator module is not implemented (LifecycleTransitionCoordinator + "
+            "TransitionIntent + TransitionFinal/TransitionPending)"
         ) from e
-    return LifecycleTransitionCoordinator(client=client, db_path=Path(db_path))
+    return _c
+
+
+def _coordinator(client: QdrantClient, db_path: Path) -> Any:
+    return _api().LifecycleTransitionCoordinator(client=client, db_path=Path(db_path))
+
+
+def _intent(
+    seeded: _Seed,
+    *,
+    to_state: str,
+    operation_key: str | None = None,
+    expected_version: int | None = None,
+) -> Any:
+    """Build a frozen TransitionIntent (Yua-locked value object, not loose kwargs)."""
+    return _api().TransitionIntent(
+        collection=seeded.collection,
+        object_id=seeded.object_id,
+        namespace=seeded.namespace,
+        expected_version=seeded.version if expected_version is None else expected_version,
+        target_state=to_state,
+        actor="t",
+        reason="r",
+        operation_key=operation_key,
+    )
+
+
+def _final_event_exists(db_path: Path, event_id: object) -> bool:
+    """Whether a FINAL lifecycle_events row exists for this event_id (shared DB). False if the table is
+    absent (C6 source not merged) or no row."""
+    if event_id is None or not Path(db_path).exists():
+        return False
+    con = sqlite3.connect(str(db_path))
+    try:
+        try:
+            cur = con.execute("SELECT 1 FROM lifecycle_events WHERE event_id = ?", (event_id,))
+        except sqlite3.OperationalError:
+            return False
+        return cur.fetchone() is not None
+    finally:
+        con.close()
 
 
 def _outbox_rows(db_path: Path) -> list[dict[str, object]]:
@@ -433,23 +488,20 @@ def test_r1_durable_intent_persisted_before_qdrant_mutation(
 ) -> None:
     coord = _coordinator(qdrant, db_path)  # DefectStillPresent (xfail) until the coordinator exists
     _fail_set_payload(qdrant, _TransientQdrantError("injected transient during apply"))
-    # Drive a transition whose Qdrant mutation will fault. Regardless of the returned outcome, a durable
-    # intent for this operation MUST already be committed (it was written before the mutation).
-    coord.transition(
-        collection=seeded.collection,
-        object_id=seeded.object_id,
-        namespace=seeded.namespace,
-        expected_version=seeded.version,
-        to_state="matured",
-        actor="t",
-        reason="r1",
-        operation_key="op-r1",
-    )
+    # Drive a transition whose Qdrant mutation will fault. A durable intent MUST already be committed
+    # (written before the mutation) and, because the mutation did not succeed, it must be EXACTLY PENDING
+    # with NO FINAL audit — APPLIED/FINAL here would be a false pre-mutation completion (Yua 2026-07-13).
+    coord.transition(_intent(seeded, to_state="matured", operation_key="op-r1"))
     rows = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r1"]
     if not rows:
         raise DefectStillPresent(
-            "no durable PENDING intent was persisted before the Qdrant mutation "
+            "no durable intent was persisted before the Qdrant mutation "
             "(a mutate-first coordinator leaves no record when the mutation faults)"
         )
-    if rows[0]["state"] not in ("PENDING", "APPLIED", "FINAL"):
-        raise DefectStillPresent(f"intent row in unexpected state {rows[0]['state']!r}")
+    if rows[0]["state"] != "PENDING":
+        raise DefectStillPresent(
+            f"a transient-faulted mutation must leave the intent EXACTLY PENDING, got "
+            f"{rows[0]['state']!r} (APPLIED/FINAL would be a false pre-mutation completion)"
+        )
+    if _final_event_exists(db_path, rows[0]["event_id"]):
+        raise DefectStillPresent("no FINAL lifecycle event may exist for a still-PENDING operation")
