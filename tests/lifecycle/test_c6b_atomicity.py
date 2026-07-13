@@ -74,6 +74,7 @@ import ast
 import asyncio
 import hashlib
 import json
+import logging
 import math
 import secrets
 import sqlite3
@@ -483,6 +484,29 @@ _R15_WRONG_ABANDON_AT = 5  # attempt count at which the count-based-abandon WRON
 # from Settings (a SEPARATE source decision; Settings is NOT implied/authorized now).
 DEFAULT_LEASE_TTL = 30.0
 
+# R19 observability discipline. The coordinator logs failures through this logger (so pytest caplog / a
+# capturing handler sees the SAME records production would) with a stable event code + the bounded
+# failure_class ONLY - never operation/object/namespace/content/patch/reason/token. Metrics are a no-label
+# pending gauge + a mutation-failures counter whose ONLY label is class in {terminal, transient}.
+_LIFECYCLE_LOGGER = logging.getLogger("musubi.lifecycle.coordinator")
+# the ONLY keys a persisted outbox patch may contain (Yua R19 minimal canonical target patch).
+_CANONICAL_PATCH_KEYS = frozenset(
+    {"state", "version", "updated_at", "updated_epoch", "superseded_by"}
+)
+# the sentinel a test injects into every PII-carrying field; it must NEVER surface in row/log/metrics.
+_PII_SENTINEL = "PIISENTINEL"
+
+
+class _LogCapture(logging.Handler):
+    """Capture LogRecords emitted by the coordinator's logger (the caplog-equivalent for R19)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.records: list[logging.LogRecord] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.records.append(record)
+
 
 def _validate_lease_ttl(ttl: object) -> float:
     """Config-boundary validation (Yua R16): a positive, FINITE lease TTL. bool is an int subclass, so
@@ -535,6 +559,7 @@ class _RefCoordinator:
         self._reused_token: str | None = (
             None  # only the reuse_owner_ABA wrong replays a prior token
         )
+        self._metrics: list[tuple[str, dict[str, str], float]] = []  # R19: (name, labels, value)
         self._client = client
         # LAZY on-disk Qdrant (R22): a two-process race passes a qdrant_path; Qdrant is opened only when a
         # process actually reads/applies. An active_intent loser (rejected at begin) never opens it; a
@@ -846,14 +871,26 @@ class _RefCoordinator:
         second active intent for the object, R11) RAISES IntegrityError so the loser is rejected."""
         self._checkpoint("before_pending_commit")
         patch = _intended_patch(i)
+        if self._mode == "full_payload_storage":
+            # WRONG (R19): persist arbitrary payload beyond the minimal canonical patch (leaks
+            # namespace/reason/actor - PII - into the stored row).
+            patch = {**patch, "namespace": i.namespace, "reason": i.reason, "actor": i.actor}
+        if self._mode == "noncanonical_serialization":
+            # WRONG (R19): store a NON-canonical serialization + a SHA over that noncanonical form, so the
+            # stored patch is neither the canonical string nor matches the canonical SHA (breaks R13).
+            patch_json = json.dumps(patch, sort_keys=False, indent=2)
+            patch_sha = hashlib.sha256(patch_json.encode()).hexdigest()
+        else:
+            patch_sha = _canonical_patch_sha(patch)
+            patch_json = json.dumps(patch, sort_keys=True, separators=(",", ":"))
         params = (
             opk,
             i.object_id,
             i.collection,
             i.target_state,
             i.expected_version,
-            _canonical_patch_sha(patch),
-            json.dumps(patch, sort_keys=True, separators=(",", ":")),
+            patch_sha,
+            patch_json,
             self._intent_digest(i),
             state,
             event_id,
@@ -1189,6 +1226,55 @@ class _RefCoordinator:
     def _classify_terminal(self, exc: Exception) -> bool:
         return self._classify(exc) == "terminal"
 
+    def _observe_failure(self, *, opk: str, oid: str, ns: str, exc: Exception, cls: str) -> None:
+        """R19: a PII-FREE failure log + a bounded-cardinality metric. CORRECT logs ONLY a static event
+        code + failure_class (terminal|transient|unknown - low-cardinality, NOT PII), and emits a counter
+        whose only label is class in {terminal, transient} (unknown maps to transient). The wrongs leak
+        identifiers / the raw exception reason into the log, or high-cardinality labels into the metric."""
+        extra: dict[str, object] = {"failure_class": cls}
+        if (
+            self._mode == "log_interpolation"
+        ):  # WRONG: interpolate operation/object/namespace identifiers
+            extra["message"] = f"mutation failed op={opk} object={oid} namespace={ns}"
+        if (
+            self._mode == "raw_exception_reason"
+        ):  # WRONG: the raw exception message may carry PII/content
+            extra["reason"] = str(exc)
+        _LIFECYCLE_LOGGER.warning("lifecycle_mutation_failed", extra={"c6b": extra})
+        metric_class = (
+            "terminal" if cls == "terminal" else "transient"
+        )  # unknown -> transient (bounded)
+        labels: dict[str, str] = {"class": metric_class}
+        if (
+            self._mode == "high_cardinality_unknown_class"
+        ):  # WRONG: leaks 'unknown' as a 3rd class label
+            labels["class"] = cls
+        if (
+            self._mode == "object_namespace_labels"
+        ):  # WRONG: high-cardinality object/namespace labels
+            labels["object_id"] = oid
+            labels["namespace"] = ns
+        self._metrics.append(("musubi_lifecycle_outbox_mutation_failures_total", labels, 1.0))
+
+    def _observe_pending(self) -> None:
+        """R19: the pending-depth gauge - NO labels (a bounded cap-backstop signal)."""
+        con = sqlite3.connect(self._db)
+        try:
+            n = con.execute(
+                "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED')"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        self._metrics.append(("musubi_lifecycle_outbox_pending", {}, float(n)))
+
+    def _prometheus_exposition(self) -> str:
+        """Render the captured metrics as a Prometheus text exposition (name{k=\"v\",...} value)."""
+        lines = []
+        for name, labels, value in self._metrics:
+            lbl = ",".join(f'{k}="{v}"' for k, v in labels.items())
+            lines.append(f"{name}{{{lbl}}} {value}" if lbl else f"{name} {value}")
+        return "\n".join(lines)
+
     # -- public API -------------------------------------------------------------------------------- #
     def transition(self, intent: _RefIntent) -> Any:
         # ignore_operation_key (WRONG): mint a fresh key each call -> a caller retry becomes a second
@@ -1430,6 +1516,7 @@ class _RefCoordinator:
                 status = self._apply_conditional(opk, coll, oid, patch)
             except Exception as exc:
                 cls = self._classify(exc)
+                self._observe_failure(opk=opk, oid=oid, ns=_NS, exc=exc, cls=cls)  # R19: PII-free
                 if cls == "terminal":
                     self._persist_attempt(
                         opk,
@@ -1490,6 +1577,7 @@ class _RefCoordinator:
             self._mark(opk, "APPLIED", owner=token)
             self._finalize(opk, event_id, oid, _NS, tstate, owner=token)
             fin += 1
+        self._observe_pending()  # R19: emit the no-label pending-depth gauge
         reported = len(rows) if self._mode == "report_claimed_as_selected" else claimed
         return _RefReport(claimed=reported, finalized=fin, pending=pend, abandoned=ab)
 
@@ -3365,6 +3453,89 @@ def _check_r18(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         c.close()
 
 
+def _check_r19(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """PII-free content + bounded observability (Yua R19): the outbox persists ONLY the canonical minimal
+    target patch (state/version/lineage) + matching SHA - no arbitrary payload/unknown keys; and the
+    coordinator NEVER emits operation/object/namespace/content/patch/reason/token into logs or metric
+    labels. Metrics are a no-label pending gauge + a failures counter whose only label is class in
+    {terminal, transient}. Adversarial PII sentinels are injected into the operation_key, the intent
+    namespace/reason, and the exception message, then checked across the row, the captured log, and the
+    Prometheus exposition. R13 full-readback SHA and R15 unknown classification (without leaking reason)
+    are preserved."""
+    base = Path(db_path).parent
+    c, s, d = _make_env(base / "r19")
+    op = f"{_PII_SENTINEL}-op"
+    reason = f"{_PII_SENTINEL}-reason"
+    # a seed carrying a PII namespace (points at the real object; apply keys on object_id+version).
+    poison = _Seed(
+        collection=s.collection,
+        object_id=s.object_id,
+        namespace=f"{_PII_SENTINEL}-ns",
+        version=s.version,
+    )
+    cap = _LogCapture()
+    _LIFECYCLE_LOGGER.addHandler(cap)
+    old_level = _LIFECYCLE_LOGGER.level
+    _LIFECYCLE_LOGGER.setLevel(logging.DEBUG)
+    try:
+        coord = _coordinator(c, d)
+        _fail_set_payload(c, _TransientQdrantError("hold"))
+        coord.transition(_intent(poison, to_state="matured", operation_key=op, reason=reason))
+        _restore_set_payload(c)
+        _fail_set_payload(
+            c, _UnknownQdrantError(f"{_PII_SENTINEL}-exc")
+        )  # an UNKNOWN failure w/ PII msg
+        coord.reconcile_once(limit=10)  # -> _observe_failure + _observe_pending
+    finally:
+        _LIFECYCLE_LOGGER.removeHandler(cap)
+        _LIFECYCLE_LOGGER.setLevel(old_level)
+
+    # ROW: only canonical minimal keys, canonical serialization, canonical SHA, no PII.
+    row = _outbox_rows(d, op)[0]
+    patch = json.loads(str(row["patch_json"]))
+    extra_keys = set(patch.keys()) - _CANONICAL_PATCH_KEYS
+    if extra_keys:
+        raise DefectStillPresent(
+            f"R19 the persisted patch must contain ONLY canonical minimal keys; got extra {extra_keys}"
+        )
+    if str(row["patch_json"]) != json.dumps(patch, sort_keys=True, separators=(",", ":")):
+        raise DefectStillPresent("R19 the stored patch_json must be the CANONICAL serialization")
+    if str(row["patch_sha"]) != _canonical_patch_sha(patch):
+        raise DefectStillPresent(
+            "R19 the stored patch_sha must be the canonical SHA (R13 preserved)"
+        )
+    if _PII_SENTINEL in str(row["patch_json"]):
+        raise DefectStillPresent("R19 no PII may appear in the persisted patch")
+
+    # LOG: no captured record may carry any PII (message OR structured fields).
+    for r in cap.records:
+        blob = f"{r.getMessage()} {r.__dict__}"
+        if _PII_SENTINEL in blob:
+            raise DefectStillPresent(f"R19 no PII may appear in a log record: {blob[:120]}")
+
+    # METRICS: pending gauge is UNLABELED; the failures counter has EXACTLY class in {terminal, transient};
+    # no PII in any label; and the same holds in the rendered Prometheus exposition.
+    for name, labels, _value in coord._metrics:
+        if name == "musubi_lifecycle_outbox_pending":
+            if labels:
+                raise DefectStillPresent(f"R19 the pending gauge must be UNLABELED, got {labels}")
+        elif name == "musubi_lifecycle_outbox_mutation_failures_total":
+            if set(labels.keys()) != {"class"}:
+                raise DefectStillPresent(
+                    f"R19 the failures metric must have EXACTLY a 'class' label (no object/namespace); "
+                    f"got {set(labels.keys())}"
+                )
+            if labels["class"] not in ("terminal", "transient"):
+                raise DefectStillPresent(
+                    f"R19 the metric class label must be bounded to terminal|transient; got {labels['class']!r}"
+                )
+        if any(_PII_SENTINEL in str(v) for v in labels.values()):
+            raise DefectStillPresent("R19 no PII may appear in a metric label")
+    if _PII_SENTINEL in coord._prometheus_exposition():
+        raise DefectStillPresent("R19 no PII may appear in the Prometheus exposition")
+    c.close()
+
+
 def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Idempotent replay: a PENDING op processed, then REPLAYED (duplicate delivery), yields EXACTLY ONE
     FINAL, ONE audit event, and ONE EFFECTIVE apply (measured by set_payload calls, not readback), leaving
@@ -3821,6 +3992,11 @@ _R18_REASON = (
     "not-due so the due filter lets others through) under both limit=1 and a limit>1 batch, exact report "
     "accounting, and no head-of-line break or false-success drop - the poison stays PENDING forever."
 )
+_R19_REASON = (
+    "today the outbox could persist arbitrary payload and the coordinator could log/label PII; R19 needs "
+    "the row to store ONLY the canonical minimal patch + matching SHA, and every log/metric to carry only "
+    "stable codes + a bounded class label - never operation/object/namespace/content/patch/reason/token."
+)
 _R10_REASON = (
     "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
     "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
@@ -3880,6 +4056,13 @@ def test_r18_no_poison_row_starvation(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r18(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R19_REASON)
+def test_r19_pii_free_content_and_bounded_observability(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r19(*env)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
@@ -4580,6 +4763,17 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
             "head_of_line_break",
             "fixed_first_row_reselection",
             "false_success_dropping",
+        ],
+    ),
+    "r19": (
+        _check_r19,
+        [
+            "full_payload_storage",
+            "noncanonical_serialization",
+            "log_interpolation",
+            "raw_exception_reason",
+            "object_namespace_labels",
+            "high_cardinality_unknown_class",
         ],
     ),
     "r15": (
