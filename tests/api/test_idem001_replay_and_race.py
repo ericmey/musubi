@@ -65,7 +65,8 @@ def _prime(client: TestClient, token: str, key: str, body: dict[str, Any]) -> No
 
 
 @pytest.mark.xfail(
-    strict=True, reason="IDEM-001(A): key+body replays across DIFFERENT endpoints — deferred; closed by slice-idempotency-phase-b (PR #404, Issue #407)"
+    strict=True,
+    reason="IDEM-001(A): key+body replays across DIFFERENT endpoints — deferred; closed by slice-idempotency-phase-b (PR #404, Issue #407)",
 )
 def test_same_key_body_must_not_replay_across_endpoints(
     client: TestClient, valid_token: str

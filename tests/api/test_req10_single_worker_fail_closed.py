@@ -128,7 +128,8 @@ def test_create_app_must_fail_closed_on_web_concurrency(
 
 
 @pytest.mark.xfail(
-    strict=True, reason="REQ-10: Settings has no api_workers field rejecting >1 yet — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #410)"
+    strict=True,
+    reason="REQ-10: Settings has no api_workers field rejecting >1 yet — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #410)",
 )
 def test_settings_must_reject_api_workers_gt_1(api_settings: Settings) -> None:
     """Settings must carry an api_workers field that REJECTS >1 (not merely store it). The
