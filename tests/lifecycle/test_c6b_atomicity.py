@@ -1322,18 +1322,28 @@ class _RefCoordinator:
             "lease_claim_not_due",
             "claim_without_due_filter",
             "report_claimed_as_selected",
+            "fixed_first_row_reselection",
         )
         con = sqlite3.connect(self._db)
         select = (
             "SELECT operation_key,object_id,collection,target_state,expected_version,event_id,state,"
             "patch_json,attempts,next_attempt_epoch FROM lifecycle_outbox WHERE state IN "
         )
+        # DETERMINISTIC FAIR ordering (Yua R18): oldest-first - never-scheduled (NULL next) first, then
+        # earliest next_attempt, then insertion order. A failed poison is rescheduled to the FUTURE, so it
+        # sinks to the back and other due rows come first. fixed_first_row_reselection (WRONG) orders by
+        # rowid ALONE, ignoring the schedule, so it re-selects the same head-of-line row every pass.
+        order_by = (
+            " ORDER BY rowid"
+            if self._mode == "fixed_first_row_reselection"
+            else " ORDER BY (next_attempt_epoch IS NOT NULL), next_attempt_epoch, rowid"
+        )
         if ignore_due:
-            rows = con.execute(f"{select}{claim_states} LIMIT ?", (limit,)).fetchall()
+            rows = con.execute(f"{select}{claim_states}{order_by} LIMIT ?", (limit,)).fetchall()
         else:
             rows = con.execute(
-                f"{select}{claim_states} AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
-                "LIMIT ?",
+                f"{select}{claim_states} AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?)"
+                f"{order_by} LIMIT ?",
                 (now, limit),
             ).fetchall()
         con.close()
@@ -1440,11 +1450,18 @@ class _RefCoordinator:
                         release=True,
                     )
                     ab += 1
+                elif self._mode == "false_success_dropping":
+                    # WRONG (R18): drop a poison transient row via a FALSE success (mark it FINAL) so it
+                    # stops re-appearing - silently losing the intent instead of retrying it forever.
+                    self._mark(opk, "FINAL", owner=token, release=True)
+                    fin += 1
                 else:  # transient OR unknown -> keep PENDING, increment + reschedule (durable, forever)
                     self._persist_attempt(
                         opk, reschedule=True, failure_class=cls, owner=token, release=True
                     )
                     pend += 1
+                    if self._mode == "head_of_line_break":
+                        break  # WRONG (R18): stop the whole batch at the first transient -> later rows starve
                 continue
             if status == "fence":
                 self._persist_attempt(
@@ -2764,6 +2781,36 @@ def _r16_pending(coord: Any, c: QdrantClient, s: _Seed, opk: str) -> None:
     _restore_set_payload(c)
 
 
+def _seed_extra(client: QdrantClient, content: str) -> _Seed:
+    """Create an additional real episodic object (R18 needs several distinct due rows)."""
+    plane = EpisodicPlane(client=client, embedder=FakeEmbedder())
+    obj = asyncio.run(plane.create(EpisodicMemory(namespace=_NS, content=content)))
+    return _Seed(
+        collection=str(collection_for_plane("episodic")),
+        object_id=str(obj.object_id),
+        namespace=_NS,
+        version=int(obj.version),
+    )
+
+
+def _fail_set_payload_for(client: QdrantClient, object_id: str, exc: Exception) -> None:
+    """Wrap set_payload to raise `exc` ONLY for the given object_id (a selective 'poison' row - every
+    other object applies normally). The object_id is read from the points Filter's object_id condition."""
+    orig: Any = client.set_payload
+
+    def _f(*a: Any, **k: Any) -> Any:
+        pts = k.get("points")
+        oid = None
+        for cond in getattr(pts, "must", None) or []:
+            if getattr(cond, "key", None) == "object_id":
+                oid = getattr(getattr(cond, "match", None), "value", None)
+        if oid == object_id:
+            raise exc
+        return orig(*a, **k)
+
+    client.set_payload = _f  # type: ignore[method-assign]
+
+
 def _r17_probe_claimable(coord: Any, d: Path, opk: str, now: float) -> bool:
     """Probe whether a row is claimable at `now` WITHOUT persisting (roll the claim back)."""
     coord._now = lambda: now
@@ -3229,6 +3276,95 @@ def _check_r16_race(base: Path) -> None:
         )
 
 
+def _r18_setup(coord: Any, c: QdrantClient, poison: _Seed, others: list[tuple[_Seed, str]]) -> None:
+    """Create durable PENDING rows for the poison + other objects (poison's op is 'op-P', inserted FIRST
+    so it is the head-of-line row), then arm the poison so ONLY its object keeps failing transient."""
+    _fail_set_payload(c, _TransientQdrantError("hold"))
+    coord.transition(_intent(poison, to_state="matured", operation_key="op-P"))
+    for obj, op in others:
+        coord.transition(_intent(obj, to_state="matured", operation_key=op))
+    _restore_set_payload(c)
+    _fail_set_payload_for(c, poison.object_id, _TransientQdrantError("poison"))
+
+
+def _check_r18(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """No poison-row starvation (Yua R18): one repeatedly-transient PENDING row must NOT block other due
+    rows. Fairness is DUE-TIME ADVANCEMENT - a failed poison is rescheduled (not-due), so the due filter
+    lets other rows through under both limit=1 (repeated calls) and limit>1 (one batch). The poison stays
+    PENDING forever (R15 no-abandon), never dropped, and is processed through the normal claim/apply/fence
+    (no lease/cap/version bypass). Each scenario is a fresh env with an injected clock."""
+    base = Path(db_path).parent
+    T = 5_000.0
+
+    # (1) limit=1 across repeated reconciles: A and B must both finalize despite the head-of-line poison,
+    #     and the poison stays PENDING (never abandoned/dropped).
+    c, s, d = _make_env(base / "r18-limit1")
+    try:
+        coord = _coordinator(c, d)
+        coord._now = lambda: T
+        a, b = _seed_extra(c, "a"), _seed_extra(c, "b")
+        _r18_setup(coord, c, s, [(a, "op-A"), (b, "op-B")])
+        for _ in range(12):
+            coord.reconcile_once(limit=1)
+            if (
+                _outbox_field(d, "op-A", "state") == "FINAL"
+                and _outbox_field(d, "op-B", "state") == "FINAL"
+            ):
+                break
+        if (
+            _outbox_field(d, "op-A", "state") != "FINAL"
+            or _outbox_field(d, "op-B", "state") != "FINAL"
+        ):
+            raise DefectStillPresent(
+                "R18 a head-of-line poison row must NOT starve other due rows under limit=1 (A and B "
+                "must both finalize)"
+            )
+        if _outbox_field(d, "op-P", "state") != "PENDING":
+            raise DefectStillPresent(
+                "R18 the poison row must stay PENDING (never falsely finalized / abandoned / dropped)"
+            )
+    finally:
+        c.close()
+
+    # (2) limit>1 single batch: a head-of-line poison must not block later rows in the SAME batch; the
+    #     report accounts EXACTLY; the poison went through the normal R15 reschedule (no bypass).
+    c, s, d = _make_env(base / "r18-batch")
+    try:
+        coord = _coordinator(c, d)
+        coord._now = lambda: T
+        a, b = _seed_extra(c, "a"), _seed_extra(c, "b")
+        _r18_setup(coord, c, s, [(a, "op-A"), (b, "op-B")])
+        rep = coord.reconcile_once(limit=10)
+        if (
+            _outbox_field(d, "op-A", "state") != "FINAL"
+            or _outbox_field(d, "op-B", "state") != "FINAL"
+        ):
+            raise DefectStillPresent(
+                "R18 a head-of-line poison row must NOT block later due rows in the same batch"
+            )
+        if _outbox_field(d, "op-P", "state") != "PENDING":
+            raise DefectStillPresent("R18 the poison row must stay PENDING after the batch")
+        if (rep.claimed, rep.finalized, rep.pending, rep.abandoned) != (3, 2, 1, 0):
+            raise DefectStillPresent(
+                f"R18 batch report must be claimed=3/finalized=2/pending=1/abandoned=0; got "
+                f"{(rep.claimed, rep.finalized, rep.pending, rep.abandoned)}"
+            )
+        # no-bypass: the poison went through the normal R15 path (attempts incremented, rescheduled, lease
+        # released) rather than being dropped or spun without backoff.
+        p_next = _outbox_field(d, "op-P", "next_attempt_epoch")
+        if _outbox_field(d, "op-P", "attempts") != 1 or p_next is None or float(p_next) <= T:
+            raise DefectStillPresent(
+                "R18 the poison must be retried via the normal R15 reschedule (attempts+1, backoff in the "
+                "future, no bypass)"
+            )
+        if _outbox_field(d, "op-P", "lease_owner") is not None:
+            raise DefectStillPresent(
+                "R18 the poison's lease must be released after its transient failure"
+            )
+    finally:
+        c.close()
+
+
 def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Idempotent replay: a PENDING op processed, then REPLAYED (duplicate delivery), yields EXACTLY ONE
     FINAL, ONE audit event, and ONE EFFECTIVE apply (measured by set_payload calls, not readback), leaving
@@ -3679,6 +3815,12 @@ _R17_REASON = (
     "reclaim token so an old token can never ABA-match, and the composition where the owner guard blocks a "
     "stale disposition while the R13/R22 version fence makes a stale apply a zero-match no-op."
 )
+_R18_REASON = (
+    "today a repeatedly-transient 'poison' row at the head of the reconcile queue can be reselected every "
+    "pass and starve other due rows; R18 needs due-time advancement (a failed poison is rescheduled "
+    "not-due so the due filter lets others through) under both limit=1 and a limit>1 batch, exact report "
+    "accounting, and no head-of-line break or false-success drop - the poison stays PENDING forever."
+)
 _R10_REASON = (
     "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
     "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
@@ -3731,6 +3873,13 @@ def test_r17_expired_owner_reclaim_safe(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r17(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R18_REASON)
+def test_r18_no_poison_row_starvation(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r18(*env)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
@@ -4423,6 +4572,14 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
             "reuse_owner_ABA",
             "stale_owner_finalizes",
             "stale_owner_effective_apply",
+        ],
+    ),
+    "r18": (
+        _check_r18,
+        [
+            "head_of_line_break",
+            "fixed_first_row_reselection",
+            "false_success_dropping",
         ],
     ),
     "r15": (
