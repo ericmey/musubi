@@ -1,6 +1,6 @@
-"""RET-003 wire contract: 18 acceptance tests (15 strict reds + 3 guards).
+"""RET-003 wire contract: 19 acceptance tests (16 strict reds + 3 guards).
 
-Tests-first slice (zero src in this commit). All 15 strict reds are
+Tests-first slice (zero src in this commit). All 16 strict reds are
 strict xfail (the implementation will satisfy them; the tests are the
 contract). The 3 guards are real tests that pass before AND after the
 implementation.
@@ -10,12 +10,23 @@ The tests are organized per the locked spec at:
 
 See docs/Musubi/_slices/slice-api-v1-ret003-wire.md for the slice contract.
 
-Accountancy: 15 strict xfail + 3 pass (not 18 fail). The 3 guards are
-the reclassified #8 (reinforcement-full-word) plus #17 and #18 (regression
-guards). Each red must fail for its named missing behavior only, and
-will turn green when the implementation lands.
+Accountancy: 16 strict xfail + 3 pass = 19 acceptance tests (not 18).
+The 3 guards are the reclassified #8 (reinforcement-full-word) plus
+#18 and #19 (regression guards). The count is 19 because test #13
+(provenance_score) is split per Yua 2026-07-13 11:57:59 #2 into:
 
-Source-row discipline (Yua 2026-07-13 11:03:25 corrections):
+  #13a HTTP exact cases (episodic,matured)=0.5 and (curated,provisional)=None
+  #13b Orchestration->wire projection seam case (state=None → provenance_score=None)
+
+Each red must fail for its named missing behavior only, and will turn
+green when the implementation lands. ``pytest --runxfail`` is the
+honest evidence boundary: it runs every xfail and verifies the test
+fails at its named assertion (not at setup or row-selection). This is
+not the same as bounded discrimination helpers (which would require
+mutating the production source); it is the floor the tests-first slice
+commits to.
+
+Source-row discipline (Yua 2026-07-13 11:03:25 + 11:57:59 corrections):
 
 - B1: tests that exercise "corrupt source" behavior (HTTP 500 on bad
   enum / out-of-range value) seed via RAW qdrant.upsert, NOT through
@@ -30,17 +41,24 @@ Source-row discipline (Yua 2026-07-13 11:03:25 corrections):
   RAW qdrant.upsert with the importance key ABSENT, NOT through the
   typed EpisodicMemory (which writes the model default of 5).
 
-- B3: test #13 (provenance_score) seeds THREE distinct raw rows
-  (episodic+matured, missing-state, curated+provisional) with unique
-  marker content. The test locates each row in the response by the
-  unique marker and asserts the EXACT provenance_score value for
-  that specific (plane, state) pair — never inspects results[0] and
-  never wraps assertions in a conditional.
+- B3: tests that exercise recent-mode state-bearing behavior MUST
+  seed a state value IN the recent mode's mandatory state filter
+  (``provisional``, ``matured``, ``promoted``). Otherwise the
+  orchestrator's `run_recent_retrieve` filter excludes the row and
+  the red fails at "row is None" instead of its named assertion.
 
 - B4: across all behavioral tests, stop trusting results[0]. Each
   test captures the seeded object_id and locates that exact returned
   row; otherwise an older candidate can satisfy or fail the wrong
   claim.
+
+- B5: test #13's missing-state case can never traverse canonical
+  recent HTTP because recent's state filter excludes rows with
+  state=None. That case is tested at the orchestration->wire
+  projection seam: a row-factory seam constructs a ``RetrievalResult``
+  with state=None directly and asserts the wire projection emits
+  ``provenance_score=None``. The HTTP-exact cases (a) and (c) still
+  traverse canonical recent HTTP.
 """
 
 from __future__ import annotations
@@ -653,7 +671,14 @@ def test_retrieve_recent_top_level_state_present(
 def test_retrieve_recent_top_level_importance_present(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
-    """`importance` key is present on every recent row (may be null for legacy)."""
+    """`importance` key is present on every recent row (may be null for legacy).
+
+    Yua 2026-07-13 11:57:59 #1: seed state=provisional explicitly so the
+    row is NOT dropped by recent's mandatory state filter
+    (provisional, matured, promoted). The red must fail at the named
+    "importance key present" assertion, not at the row-selection
+    boundary.
+    """
     ns = "eric/claude-code/episodic"
     marker = _marker()
     object_id = str(generate_ksuid())
@@ -662,7 +687,12 @@ def test_retrieve_recent_top_level_importance_present(
         qdrant,
         collection=collection_for_plane("episodic"),
         object_id=object_id,
-        payload={"namespace": ns, "object_id": object_id, "importance": 4},
+        payload={
+            "namespace": ns,
+            "object_id": object_id,
+            "state": "provisional",
+            "importance": 4,
+        },
         marker_in_content=marker,
     )
 
@@ -687,20 +717,22 @@ def test_retrieve_recent_top_level_importance_present(
 
 @pytest.mark.xfail(
     strict=True,
-    reason="RED: recent `provenance_score` is currently absent from the row. Will fail until the row has `provenance_score: float | None` (exact-table-only; null when state is missing OR (plane, state) is absent from `_PROVENANCE`).",
+    reason="RED: recent `provenance_score` is currently absent from HTTP rows (a) and (c). Will fail until the row has `provenance_score: float | None` (exact-table-only; null when (plane, state) is absent from `_PROVENANCE`). Per Yua 2026-07-13 11:57:59 #2, this test covers the HTTP-exact cases only; the state=None case is covered by the projection-seam test below.",
 )
-def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
+def test_retrieve_recent_provenance_score_http_exact(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
-    """`provenance_score` is None for missing state or absent (plane, state); otherwise exact value.
+    """HTTP exact: `provenance_score` is the table value for known (plane, state) pairs; None for absent pairs.
 
-    THREE distinct raw rows are seeded (per Yua 10:00:42 #2 + 11:03:25 #3).
-    Each row has a unique marker; the test locates each row in the response
-    and asserts the EXACT provenance_score for that (plane, state) pair.
+    TWO distinct raw rows are seeded (per Yua 11:57:59 #2 — the missing-state
+    case (b) moved to the projection-seam test because canonical recent
+    Qdrant never returns state=None). Each row has a unique marker; the
+    test locates each row in the response and asserts the EXACT
+    provenance_score for that (plane, state) pair.
 
-    Cases:
+    Cases (HTTP exact only — both rows are in the recent default state
+    filter so they traverse canonical recent HTTP):
     (a) episodic + matured → provenance_score == 0.5 (in `_PROVENANCE`)
-    (b) state key ABSENT in source → provenance_score is None (no fabrication)
     (c) curated + provisional → provenance_score is None (NOT 0.1 from a
         fabricated state; (curated, provisional) is NOT in `_PROVENANCE`)
     """
@@ -708,10 +740,8 @@ def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
     ns_curated = "eric/claude-code/curated"
 
     marker_a = _marker()
-    marker_b = _marker()
     marker_c = _marker()
     oid_a = str(generate_ksuid())
-    oid_b = str(generate_ksuid())
     oid_c = str(generate_ksuid())
 
     # (a) episodic + matured (in `_PROVENANCE`; expected 0.5)
@@ -725,18 +755,6 @@ def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
             "state": "matured",
         },
         marker_in_content=marker_a,
-    )
-    # (b) episodic, state ABSENT (legacy)
-    _raw_upsert(
-        qdrant,
-        collection=collection_for_plane("episodic"),
-        object_id=oid_b,
-        payload={
-            "namespace": ns_episodic,
-            "object_id": oid_b,
-            # No `state` key at all.
-        },
-        marker_in_content=marker_b,
     )
     # (c) curated + provisional (NOT in `_PROVENANCE`; expected None)
     _raw_upsert(
@@ -752,7 +770,6 @@ def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
     )
 
     # Query recent for each namespace separately, then locate the exact row by id.
-    # (a) and (b) live in episodic; (c) lives in curated.
     r_epi = client.post(
         "/v1/retrieve",
         headers=auth,
@@ -761,9 +778,7 @@ def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
     assert r_epi.status_code == 200
     epi_results = r_epi.json()["results"]
     row_a = _find_row_by_object_id(epi_results, oid_a)
-    row_b = _find_row_by_object_id(epi_results, oid_b)
     assert row_a is not None, f"(a) row {oid_a} not in episodic recent results"
-    assert row_b is not None, f"(b) row {oid_b} not in episodic recent results"
 
     r_cur = client.post(
         "/v1/retrieve",
@@ -782,13 +797,6 @@ def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
     assert row_a["provenance_score"] == 0.5, (
         f"(a) provenance_score should be 0.5 for (episodic, matured); got {row_a['provenance_score']!r}"
     )
-    # (b) state missing → provenance_score is None
-    assert "provenance_score" in row_b, (
-        f"(b) provenance_score key missing on row; current shape: {sorted(row_b.keys())}"
-    )
-    assert row_b["provenance_score"] is None, (
-        f"(b) provenance_score must be None when state is missing; got {row_b['provenance_score']!r}"
-    )
     # (c) curated + provisional → provenance_score is None (not 0.1 from fabrication)
     assert "provenance_score" in row_c, (
         f"(c) provenance_score key missing on row; current shape: {sorted(row_c.keys())}"
@@ -796,6 +804,55 @@ def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
     assert row_c["provenance_score"] is None, (
         f"(c) provenance_score must be None for (curated, provisional) NOT in _PROVENANCE; "
         f"got {row_c['provenance_score']!r}"
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="RED: orchestration->wire projection seam must emit `provenance_score=None` for state=None. The current wire does not expose the seam at all. Per Yua 2026-07-13 11:57:59 #2, this test uses a row-factory seam (not canonical recent HTTP) because recent's state filter excludes state=None rows.",
+)
+def test_retrieve_recent_provenance_score_seam_state_none() -> None:
+    """Orchestration->wire projection seam: state=None → provenance_score=None.
+
+    Per Yua 2026-07-13 11:57:59 #2, the missing-state case (b) cannot be
+    exercised through canonical recent HTTP because
+    ``run_recent_retrieve`` always filters state to
+    (provisional, matured, promoted). A row with state=None would be
+    silently dropped before reaching the wire.
+
+    The seam is the row-factory function that the orchestrator's
+    recent branch uses to project a `RecentHit` (or the equivalent
+    internal row representation) into a wire row. This test
+    constructs a row object with state=None directly and asserts the
+    projection emits `provenance_score=None` (exact-table-only — no
+    fabricated 0.1 default).
+
+    The seam function is a stable named test-local handle to the
+    production projection; the test is RED today because the
+    projection does not yet expose the row-factory seam.
+    """
+    # The seam signature is: project(plane: str, state: str | None) -> float | None
+    # (no fabrication; exact-table-only; None for state=None or
+    # absent (plane, state) pair). The implementation MUST expose a
+    # named row-factory seam so callers can construct internal rows
+    # with state=None and verify the wire emits provenance_score=None.
+    #
+    # Today no such seam exists; this test is xfail for the named
+    # missing behavior. Implementation acceptance: production exposes
+    # a stable seam (e.g. ``musubi.retrieve.recent._provenance_score_for``)
+    # that returns None for state=None.
+    from musubi.retrieve.recent import _provenance_score_for  # type: ignore[attr-defined]
+
+    assert _provenance_score_for(plane="episodic", state=None) is None, (
+        "row-factory seam: provenance_score must be None when state is None (no fabrication)"
+    )
+    # And the table value for a known pair is preserved exactly (not 0.1).
+    assert _provenance_score_for(plane="episodic", state="matured") == 0.5, (
+        "row-factory seam: provenance_score must equal _PROVENANCE[(episodic, matured)] = 0.5"
+    )
+    # And an absent pair returns None (not a fabrication default).
+    assert _provenance_score_for(plane="curated", state="provisional") is None, (
+        "row-factory seam: provenance_score must be None for (curated, provisional) not in _PROVENANCE"
     )
 
 
@@ -901,18 +958,34 @@ def test_runtime_openapi_ranked_response_schema_required_with_five_components(
         f"RankedRetrieveResponse required must be [mode, results, limit]; got {ranked_response.get('required')}"
     )
     assert ranked_row is not None, "RankedResultRow schema missing from runtime openapi.json"
+    # Yua #3: required set is 9 fields (object_id, namespace, plane, score,
+    # content, state, importance, score_kind, extra). title is optional.
+    # state and importance are required-nullable (present, value may be null)
+    # without a Pydantic/OpenAPI default.
     expected_row_required = {
-        "plane",
         "object_id",
+        "namespace",
+        "plane",
         "score",
-        "score_kind",
+        "content",
         "state",
         "importance",
+        "score_kind",
         "extra",
     }
     assert set(ranked_row.get("required", [])) == expected_row_required, (
         f"RankedResultRow required must be {expected_row_required}; got {set(ranked_row.get('required', []))}"
     )
+    # Yua #3: required-nullable without defaults. state, importance are
+    # required keys in the schema (present on every row), but the value
+    # may be null. A field with `default=None` is OPTIONAL, not
+    # required-nullable. Verify those fields do not declare a default.
+    for prop_name in ("state", "importance"):
+        prop = ranked_row.get("properties", {}).get(prop_name, {})
+        assert "default" not in prop, (
+            f"RankedResultRow.{prop_name} must be required-nullable WITHOUT default "
+            f"(present on every row, value may be null); got default={prop.get('default')!r}"
+        )
     assert ranked_components is not None, (
         "RankedScoreComponents schema missing from runtime openapi.json"
     )
@@ -926,6 +999,15 @@ def test_runtime_openapi_ranked_response_schema_required_with_five_components(
         f"RankedScoreComponents must have exactly 5 properties; "
         f"got {set(ranked_components.get('properties', {}).keys())}"
     )
+    # Yua #3: required-nullable without defaults. state and importance are
+    # required keys in the schema (present on every row), but the value
+    # may be null. A field with `default=None` is OPTIONAL, not
+    # required-nullable. Verify no property declares a default.
+    for prop_name, prop in ranked_components.get("properties", {}).items():
+        assert "default" not in prop, (
+            f"RankedScoreComponents property {prop_name!r} must not declare a default "
+            f"(required-nullable without default); got {prop.get('default')!r}"
+        )
 
 
 @pytest.mark.xfail(
@@ -959,19 +1041,31 @@ def test_runtime_openapi_recent_response_schema_required_with_empty_components(
         f"RecentRetrieveResponse required must be [mode, results, limit]; got {recent_response.get('required')}"
     )
     assert recent_row is not None, "RecentResultRow schema missing from runtime openapi.json"
+    # Yua #3: required set is 10 fields (ranked 9 + provenance_score). title
+    # is optional. state, importance, provenance_score are required-nullable
+    # (present, value may be null) without a Pydantic/OpenAPI default.
     expected_row_required = {
-        "plane",
         "object_id",
+        "namespace",
+        "plane",
         "score",
-        "score_kind",
+        "content",
         "state",
         "importance",
+        "score_kind",
         "provenance_score",
         "extra",
     }
     assert set(recent_row.get("required", [])) == expected_row_required, (
         f"RecentResultRow required must be {expected_row_required}; got {set(recent_row.get('required', []))}"
     )
+    # Yua #3: required-nullable without defaults.
+    for prop_name in ("state", "importance", "provenance_score"):
+        prop = recent_row.get("properties", {}).get(prop_name, {})
+        assert "default" not in prop, (
+            f"RecentResultRow.{prop_name} must be required-nullable WITHOUT default "
+            f"(present on every row, value may be null); got default={prop.get('default')!r}"
+        )
     assert recent_components is not None, (
         "RecentScoreComponents schema missing from runtime openapi.json"
     )
@@ -983,6 +1077,149 @@ def test_runtime_openapi_recent_response_schema_required_with_empty_components(
     assert not recent_components.get("properties"), (
         f"RecentScoreComponents must have NO declared properties (exact {{}}); "
         f"got {recent_components.get('properties')!r}"
+    )
+
+
+# =====================================================================
+# SECTION 6.4b — Discriminator + score-component exactness + recent typed-empty guard
+#                 (Yua 2026-07-13 11:57:59 #4, #5, #6)
+# =====================================================================
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="RED: the runtime openapi.json does not yet model the 200 response of POST /v1/retrieve as a `oneOf` of RankedRetrieveResponse and RecentRetrieveResponse with a top-level `mode` discriminator. Will turn green when the discriminator lands. Per Yua 2026-07-13 11:57:59 #4, this was a locked contract item.",
+)
+def test_runtime_openapi_retrieve_response_is_oneof_mode_discriminated(
+    client: TestClient,
+) -> None:
+    """POST /v1/retrieve 200 response is a `oneOf` of RankedRetrieveResponse and
+    RecentRetrieveResponse with a top-level `mode` discriminator and correct
+    mapping/const enums.
+
+    Per Yua 2026-07-13 11:57:59 #4, component-name existence is not enough;
+    the discriminator must be present in the openapi schema.
+    """
+    r = requests_get("/v1/openapi.json", client)
+    doc = r.json()
+
+    paths = doc.get("paths", {})
+    retrieve_path = paths.get("/v1/retrieve")
+    assert retrieve_path is not None, "/v1/retrieve path missing from openapi.json"
+    post_op = retrieve_path.get("post")
+    assert post_op is not None, "POST /v1/retrieve operation missing"
+    response_200 = post_op.get("responses", {}).get("200")
+    assert response_200 is not None, "POST /v1/retrieve 200 response missing"
+    content = response_200.get("content", {})
+    json_content = content.get("application/json")
+    assert json_content is not None, "POST /v1/retrieve 200 application/json content missing"
+    schema_ref = json_content.get("schema", {})
+    one_of = schema_ref.get("oneOf")
+    assert one_of is not None, (
+        f"POST /v1/retrieve 200 schema must be a oneOf with a mode discriminator; got {schema_ref!r}"
+    )
+    assert len(one_of) == 2, (
+        f"POST /v1/retrieve 200 oneOf must have exactly 2 variants (ranked + recent); got {len(one_of)}"
+    )
+    discriminator = schema_ref.get("discriminator")
+    assert discriminator is not None, "POST /v1/retrieve 200 schema must declare a discriminator"
+    assert discriminator.get("propertyName") == "mode", (
+        f"discriminator must be on top-level `mode`; got {discriminator.get('propertyName')!r}"
+    )
+    mapping = discriminator.get("mapping") or {}
+    assert mapping.get("fast") == "#/components/schemas/RankedRetrieveResponse", (
+        f"discriminator mapping[fast] must point to RankedRetrieveResponse; got {mapping.get('fast')!r}"
+    )
+    assert mapping.get("deep") == "#/components/schemas/RankedRetrieveResponse", (
+        f"discriminator mapping[deep] must point to RankedRetrieveResponse; got {mapping.get('deep')!r}"
+    )
+    assert mapping.get("blended") == "#/components/schemas/RankedRetrieveResponse", (
+        f"discriminator mapping[blended] must point to RankedRetrieveResponse; got {mapping.get('blended')!r}"
+    )
+    assert mapping.get("recent") == "#/components/schemas/RecentRetrieveResponse", (
+        f"discriminator mapping[recent] must point to RecentRetrieveResponse; got {mapping.get('recent')!r}"
+    )
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="RED: ranked `extra.score_components` keys are currently 3 (relevance, recency, reinforcement); the test must assert EXACTLY the 5 public contributors AND every value in [0,1]. Per Yua 2026-07-13 11:57:59 #5, component-name existence is not enough; the implementation must reject extra/fabricated keys at runtime and clamp values to [0,1].",
+)
+def test_retrieve_ranked_extra_score_components_exactly_five_and_values_in_unit_interval(
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
+) -> None:
+    """`extra.score_components` has EXACTLY the 5 public contributors and every value is numeric in [0,1].
+
+    Per Yua 2026-07-13 11:57:59 #5, the previous test checked only
+    `expected - keys` empty; a fabricated key would pass. The
+    implementation must expose exactly the 5 public contributors and
+    clamp every value to [0,1].
+    """
+    ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
+
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={
+            "namespace": ns,
+            "object_id": object_id,
+            "state": "matured",
+            "importance": 7,
+        },
+        marker_in_content=marker,
+    )
+
+    r = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={"namespace": ns, "query_text": marker, "mode": "fast", "limit": 10},
+    )
+    assert r.status_code == 200
+    results = r.json()["results"]
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    components = row.get("extra", {}).get("score_components", {})
+    expected = {"relevance", "recency", "importance", "provenance", "reinforcement"}
+    assert set(components.keys()) == expected, (
+        f"`extra.score_components` keys must be EXACTLY {expected}; got {sorted(components.keys())}"
+    )
+    for k, v in components.items():
+        assert isinstance(v, (int, float)) and not isinstance(v, bool), (
+            f"score_components[{k!r}] must be numeric; got {v!r}"
+        )
+        assert 0.0 <= float(v) <= 1.0, f"score_components[{k!r}] must be in [0,1]; got {v!r}"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="RED: the runtime `RecentScoreComponents` model must reject a non-empty dict at Pydantic validation time. OpenAPI `additionalProperties:false` alone is not execution proof (Yua 2026-07-13 11:57:59 #6).",
+)
+def test_recent_score_components_typed_empty_runtime_rejects_nonempty() -> None:
+    """The runtime `RecentScoreComponents` Pydantic model rejects a non-empty dict at validation.
+
+    Per Yua 2026-07-13 11:57:59 #6, OpenAPI `additionalProperties:false`
+    alone is not execution proof. The runtime Pydantic model must
+    reject a non-empty input at validation time.
+    """
+    from pydantic import ValidationError
+
+    # The implementation will land `musubi.api.responses.RecentScoreComponents`.
+    from musubi.api.responses import RecentScoreComponents  # type: ignore[attr-defined]
+
+    obj = RecentScoreComponents()
+    assert obj.model_dump() == {}, (
+        f"RecentScoreComponents() must be the exact empty {{}}; got {obj.model_dump()!r}"
+    )
+    with pytest.raises(ValidationError) as excinfo:
+        RecentScoreComponents.model_validate({"relevance": 0.0})
+    err_str = str(excinfo.value).lower()
+    assert "extra" in err_str or "additional" in err_str or "forbid" in err_str, (
+        f"RecentScoreComponents must reject non-empty input as a forbid-extra violation; got {excinfo.value!r}"
     )
 
 

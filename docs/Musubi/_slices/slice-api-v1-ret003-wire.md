@@ -133,7 +133,15 @@ are organized as:
   `brief=true` preserves top-level `state` / `importance` on a deep-mode row (per Yua 09:55:38 #6)
 - **Total: 18 acceptance tests = 15 red + 3 guards**
 
-## 18 acceptance tests (the contract; first-commit tests must match these names)
+## 19 acceptance tests (the contract; first-commit tests must match these names)
+
+The count is 19 (not 18) because per Yua 2026-07-13 11:57:59 #2,
+test #13 is split into two:
+
+- `test_retrieve_recent_provenance_score_http_exact` (cases a, c via canonical recent HTTP)
+- `test_retrieve_recent_provenance_score_seam_state_none` (case b via the
+  orchestration->wire projection seam; canonical recent Qdrant never
+  returns state=None because recent's state filter excludes it)
 
 ### Ranked-mode (7 strict reds + 1 guard)
 
@@ -151,9 +159,12 @@ are organized as:
 9. `test_retrieve_recent_score_kind_is_created_epoch`
 10. `test_retrieve_recent_extra_score_components_is_empty_dict_typed` — exact `{}`, never null
 11. `test_retrieve_recent_top_level_state_present`
-12. `test_retrieve_recent_top_level_importance_present`
-13. `test_retrieve_recent_provenance_score_is_nullable_not_fabricated` (3 cases) — exact
-    known-table value, missing-state null, absent-pair null
+12. `test_retrieve_recent_top_level_importance_present` — seed state=provisional
+    explicitly so the row traverses recent's state filter (Yua #1)
+13a. `test_retrieve_recent_provenance_score_http_exact` (cases a, c) —
+    episodic+matured=0.5; curated+provisional=None
+13b. `test_retrieve_recent_provenance_score_seam_state_none` (case b) —
+    orchestration->wire projection seam; state=None -> provenance_score=None
 
 ### Source-truth vs internal-default (1 strict red)
 
@@ -162,18 +173,75 @@ are organized as:
 
 ### Runtime OpenAPI schema (2 strict reds)
 
-15. `test_runtime_openapi_ranked_response_schema_required_with_five_components`
-16. `test_runtime_openapi_recent_response_schema_required_with_empty_components`
+15. `test_runtime_openapi_ranked_response_schema_required_with_five_components` —
+    9 required row fields; required-nullable without defaults (Yua #3)
+16. `test_runtime_openapi_recent_response_schema_required_with_empty_components` —
+    10 required row fields; required-nullable without defaults (Yua #3)
 
-### Regression guards (3 — but only 2 new tests; #8 is reclassified)
+### Schema discriminator + score-component exactness + typed-empty guard (3 strict reds)
 
-17. `test_streaming_endpoint_excluded_from_this_contract_unchanged` (guard)
-18. `test_extra_score_components_path_preserved_for_all_modes` (guard)
+17. `test_runtime_openapi_retrieve_response_is_oneof_mode_discriminated` (Yua #4) —
+    POST /v1/retrieve 200 response is `oneOf` with a top-level `mode` discriminator
+18. `test_retrieve_ranked_extra_score_components_exactly_five_and_values_in_unit_interval` (Yua #5) —
+    exactly 5 keys, every value numeric in [0,1]
+19. `test_recent_score_components_typed_empty_runtime_rejects_nonempty` (Yua #6) —
+    runtime Pydantic rejects non-empty input at validation time
+
+### Regression guards (2 — but they remain 2 green tests, not reds)
+
+20. `test_streaming_endpoint_excluded_from_this_contract_unchanged` (guard)
+21. `test_extra_score_components_path_preserved_for_all_modes` (guard)
+
+(Numbers 20-21 are the re-anchored test positions; the file
+currently collects 19 tests because the 2 guards are #18 and #19 in
+the file and the 3 new strict reds are #17-#19 in the file. The
+strict-reds + guards in the test file are 16 strict xfail + 3 pass
+= 19 total; the spec table above lists 19 to keep the names
+intact. The implementation slice changes the production source to
+turn the 16 strict reds green; the 3 guards stay green before and
+after.)
+
+## Evidence (Yua #9)
+
+The "every red is red-proofed against its named missing behavior"
+claim is replaced with the honest evidence: `pytest
+tests/api/test_retrieve_ret003_wire.py --runxfail` is the rerunnable
+floor the tests-first slice commits to. It runs every xfail and
+verifies each test fails at its NAMED assertion (not at setup or
+row-selection). Implementation acceptance will require correct +
+plausible-wrong mutation proof (i.e., the implementation slice
+must also include bounded discrimination helpers — not in this
+slice).
+
+Per-test failure points from `--runxfail`:
+
+- `test_retrieve_recent_top_level_importance_present`: fails at
+  line 710, assertion `importance key missing` (the named red;
+  row is present after the state=provisional fix).
+- `test_retrieve_recent_provenance_score_http_exact`: fails at
+  line 794, assertion `(a) provenance_score key missing` (the
+  named red; row is present).
+- `test_retrieve_recent_provenance_score_seam_state_none`: fails
+  at line 844, ImportError on `_provenance_score_for` (the named
+  missing seam).
+- `test_runtime_openapi_retrieve_response_is_oneof_mode_discriminated`:
+  fails at line 1118, assertion `oneOf with mode discriminator`
+  missing (the named red).
+- `test_retrieve_ranked_extra_score_components_exactly_five_and_values_in_unit_interval`:
+  fails at line 1188, assertion `keys must be EXACTLY ...` (the
+  named red).
+- `test_recent_score_components_typed_empty_runtime_rejects_nonempty`:
+  fails at line 1214, ImportError on `RecentScoreComponents` (the
+  named missing model).
+
+The remaining 10 strict reds (ranked 7, recent 4, source-truth 1,
+openapi 2) similarly fail at their named assertions, not at setup
+or row selection. This is the floor; the implementation acceptance
+criterion is mutation proof, not just --runxfail.
 
 ## Status
 
-slice — `ready`; tests-first; zero `src/` in the first commit. Awaits Aoi's
-implementation PR after the test contract lands.
+slice — `ready`; tests-first; zero `src/` in the first commit. Implementation lands in a follow-up slice after the test contract lands. This slice is owned by Tama, not "awaits Aoi" (per Yua 2026-07-13 10:08:41 + 10:00:42).
 
 ## Depends on
 
@@ -189,18 +257,18 @@ none (deferred to implementation slices)
 tama (Per Yua 2026-07-13 10:08:41, RET-003 tests-first lane is assigned to Tama. Aoi
 remains exclusively on C6. Shiori's RET-004 lane is in flight and is NOT to be touched.)
 
-## Hermes adapter follow-up (Yua 2026-07-13 10:56:23 closeout gate; corrected 11:19:50)
+## Hermes adapter follow-up (Yua 2026-07-13 10:56:23 closeout gate; corrected 11:19:50 + 11:57:59 #7)
 
-Per Yua 2026-07-13 10:56:23, this slice is the natural seam for a SEPARATE follow-up: once the Musubi contract is stable, the Hermes adapter (`/Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py`, lines ~1200-1305) must preserve the following through without fabricating fields. Per Yua 2026-07-13 11:19:50 correction, the current user plugin is a standalone Hermes user plugin (NOT core/MCP), and the current emitted shape is:
+Per Yua 2026-07-13 10:56:23, this slice is the natural seam for a SEPARATE follow-up: once the Musubi contract is stable, the Hermes adapter (`/Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py`, lines ~1200-1305) must preserve the following through without fabricating fields. Per Yua 2026-07-13 11:19:50 + 11:57:59 #7 correction, the current user plugin is a standalone Hermes user plugin (NOT core/MCP), and the current emitted shape is:
 
-- The plugin emits `object_id` (the Qdrant point id), NOT `result_id`.
+- The plugin emits Musubi's **logical API `object_id` (the stored KSUID)**, NOT the physical Qdrant point id. `episodic_point_id(object_id)` is a distinct UUID translation used internally to address the Qdrant point. The plugin's emitted `object_id` is the KSUID, e.g. `3GSGzQauqzXNPstBMJw3hcIV0yd`.
 - The plugin discards `extra` entirely today; it does NOT already pass `score_components` through.
 - `musubi_recall` is pinned to BLENDED ranked mode today; recent mode is NOT a current surface in the plugin.
 - Recent passthrough is therefore only relevant if a future Hermes surface requests recent.
 
 For the follow-up:
 
-- **Ranked mode (the only current surface)**: the Hermes adapter must surface `state` (LifecycleState enum, 7 values, nullable for missing legacy) and `importance` (int 1..10, nullable for missing legacy) on the JSON row alongside the existing `object_id`; and must pass the 5-key `extra.score_components` dict (relevance, recency, importance, provenance, reinforcement) through without fabrication. The adapter must NOT fabricate values; it must null through for missing-legacy fields.
+- **Ranked mode (the only current surface)**: the Hermes adapter must surface `state` (LifecycleState enum, 7 values, nullable for missing legacy) and `importance` (int 1..10, nullable for missing legacy) on the JSON row alongside the existing `object_id` (the KSUID, not the physical Qdrant point id); and must pass the 5-key `extra.score_components` dict (relevance, recency, importance, provenance, reinforcement) through without fabrication. The adapter must NOT fabricate values; it must null through for missing-legacy fields.
 - **Recent mode**: only relevant if a future Hermes surface requests recent. When that lands, the adapter must surface `score_kind="created_epoch"` and `provenance_score` (nullable, exact-table-only).
 
 This follow-up is a separate slice/branch (NOT this one). It is a "closeout gate" for the broader wire contract, secondary to Musubi correctness. This slice does not implement the Hermes adapter; the adapter lands in a follow-up that depends on this slice's wire contract.

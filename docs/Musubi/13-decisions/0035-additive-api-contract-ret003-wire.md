@@ -40,10 +40,39 @@ the authoritative locked contract for the public shape. The 5 correction cycles
 ## Decision
 
 Adopt the RET-003 public wire shape from the harem-ops spec as the additive-API contract for
-`POST /v1/retrieve`. The changes are purely additive: the public top-level shape gains
-`state`, `importance`, `score_kind`; the existing `extra.score_components` path gains 2 keys
-(importance, provenance) and renames `reinforce` to `reinforcement`; the new `provenance_score`
-top-level is added for recent mode; the recent `extra.score_components` becomes exact `{}`.
+`POST /v1/retrieve`. The changes are **additive fields + a deliberate
+corrective semantic change**, not "purely additive" (Yua 2026-07-13
+11:57:59 #8):
+
+- **Additive**: the public top-level shape gains `state`,
+  `importance`, `score_kind`; the existing `extra.score_components`
+  path gains 2 keys (importance, provenance) and uses the public name
+  `reinforcement`; the new `provenance_score` top-level is added for
+  recent mode.
+- **Deliberate corrective change (NOT purely additive)**: the
+  recent-mode `extra.score_components` changes from a fabricated
+  3-key object `{relevance: 0, recency: 1, reinforcement: 0}` to
+  the exact empty `{}` (typed `RecentScoreComponents(extra='forbid')`).
+  Any consumer reading the prior fabricated keys will see them
+  disappear. This is a **breaking semantic change** for those
+  consumers, named explicitly here so the change is not mis-described
+  as purely additive.
+
+**Compat risk (must be addressed by adapter tests before deploy):**
+
+- The Hermes adapter (`/Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py`)
+  currently discards `extra` entirely; the Hermes closeout gate covers ranked passthrough.
+  A future recent-mode Hermes surface MUST be tested against the
+  exact-`{}` shape so it does not depend on the prior fabricated keys.
+- Any internal Musubi consumer that reads `recent_results[i].extra.score_components.relevance`
+  (or recency / reinforcement) will silently see `None` after the change; this ADR
+  requires those consumers to be updated in lockstep with the
+  implementation slice.
+- The repo-root `openapi.yaml` is a committed deploy-time snapshot
+  and MUST be regenerated as a **blocking tracked dependency** of
+  the implementation slice (not an unnamed later task). The
+  implementation slice MUST keep runtime vs snapshot parity; if the
+  regen lands later, the slice is not ACCEPTED.
 
 The discriminator is at the **top-level response** (`mode` field on the new top-level variants
 `RankedRetrieveResponse` and `RecentRetrieveResponse`), not on individual rows.
@@ -167,17 +196,20 @@ The implementation slice lands in a follow-up branch after the test contract is 
 - Nyla / Sumi consumer proof (separate lane)
 
 
-## Closeout gate: Hermes adapter follow-up (per Yua 2026-07-13 10:56:23; corrected 11:19:50)
+## Closeout gate: Hermes adapter follow-up (per Yua 2026-07-13 10:56:23; corrected 11:19:50 + 11:57:59 #7)
 
 This ADR is a closeout gate for the broader wire contract. Once the
 Musubi contract is stable, the Hermes adapter
 (`/Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py`,
 lines ~1200-1305 — a standalone Hermes user plugin loaded as such,
 NOT core/MCP) must preserve the following through without fabricating
-fields. Per Yua 2026-07-13 11:19:50 correction, the current emitted
-shape is:
+fields. Per Yua 2026-07-13 11:19:50 + 11:57:59 #7 correction, the
+current emitted shape is:
 
-- The plugin emits `object_id` (the Qdrant point id), NOT `result_id`.
+- The plugin emits Musubi's **logical API `object_id` (the stored KSUID)**,
+  NOT the physical Qdrant point id. `episodic_point_id(object_id)` is a
+  distinct UUID translation used internally to address the Qdrant
+  point; the plugin emits the KSUID on the wire.
 - The plugin discards `extra` entirely today; it does NOT already
   pass `score_components` through.
 - `musubi_recall` is pinned to BLENDED ranked mode today; recent mode
@@ -190,11 +222,12 @@ For the follow-up:
 - **Ranked mode (the only current surface)**: the Hermes adapter
   must surface `state` (LifecycleState enum, 7 values, nullable for
   missing legacy) and `importance` (int 1..10, nullable for missing
-  legacy) on the JSON row alongside the existing `object_id`; and
-  must pass the 5-key `extra.score_components` dict (relevance,
-  recency, importance, provenance, reinforcement) through without
-  fabrication. The adapter must NOT fabricate values; it must null
-  through for missing-legacy fields.
+  legacy) on the JSON row alongside the existing `object_id` (the
+  KSUID, not the physical Qdrant point id); and must pass the 5-key
+  `extra.score_components` dict (relevance, recency, importance,
+  provenance, reinforcement) through without fabrication. The adapter
+  must NOT fabricate values; it must null through for missing-legacy
+  fields.
 - **Recent mode**: only relevant if a future Hermes surface requests
   recent. When that lands, the adapter must surface
   `score_kind="created_epoch"` and `provenance_score` (nullable,
