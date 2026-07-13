@@ -1400,7 +1400,6 @@ def test_runtime_vs_snapshot_parity_normalizer_preserves_other_info_fields() -> 
     preserves ``info.description``, ``info.contact``, ``info.license``,
     and any other non-permitted info field it encounters.
     """
-    import copy as _copy
 
     doc: Any = {
         "info": {
