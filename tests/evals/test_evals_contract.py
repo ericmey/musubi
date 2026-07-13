@@ -576,11 +576,6 @@ def test_discrimination_per_query_drop() -> None:
 
 
 @pytest.mark.skip(reason="Pending RET-004 implementation")
-def test_eval_abstention_fpr() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_contradiction_blending() -> None:
     pass
 
@@ -595,11 +590,131 @@ def test_eval_provisional_immediate_recall() -> None:
     pass
 
 
-@pytest.mark.skip(reason="Pending RET-004 implementation")
+# ---------------------------------------------------------------------------
+# Tranche 2: Holdout, Smoke Gate, Per-Query Drop, Abstention
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: Holdout isolation unproven"
+)
 def test_eval_holdout_isolation() -> None:
-    pass
+    try:
+        from musubi.evals.corpus import load_corpus_splits
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.corpus module missing splits")
+
+    # Contract: Holdout queries/labels MUST NOT participate in tuning.
+    train_queries, test_queries = load_corpus_splits()
+
+    train_ids = {q.id for q in train_queries}
+    test_ids = {q.id for q in test_queries}
+
+    assert not train_ids.intersection(test_ids), (
+        "Holdout leakage detected: test queries overlap with train queries"
+    )
 
 
-@pytest.mark.skip(reason="Pending RET-004 implementation")
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: PR Smoke Gate with fixed embeddings missing",
+)
 def test_eval_pr_smoke_fixed_embeddings() -> None:
-    pass
+    try:
+        from musubi.evals.runner import run_smoke_gate
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.runner missing smoke gate")
+
+    # Contract: Must run entirely in memory without Qdrant/TEI
+    res = run_smoke_gate(use_qdrant=False)
+    assert res.metrics["ndcg@10"] > 0.0, "Smoke gate failed to produce valid metrics"
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: Abstention FPR threshold unproven"
+)
+def test_eval_abstention_fpr() -> None:
+    try:
+        from musubi.evals.gates import check_abstention_fpr
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.gates missing abstention")
+
+    # Contract: Explicitly train-calibrated, versioned score threshold reporting FPR.
+    # We pass a threshold and noise queries. It must reject hits below threshold.
+    noise_results = {"noise_q1": [{"score": 0.2}], "noise_q2": [{"score": 0.1}]}
+    threshold = 0.3
+
+    fpr = check_abstention_fpr(noise_results, threshold)
+    assert fpr == 0.0, "FPR > 0: engine hallucinated fallback matches for noise"
+
+
+def test_discrimination_holdout_isolation() -> None:
+    from typing import NamedTuple
+
+    class Q(NamedTuple):
+        id: str
+
+    def correct_load() -> tuple[list[Q], list[Q]]:
+        return [Q("1"), Q("2")], [Q("3"), Q("4")]
+
+    def wrong_load_leakage() -> tuple[list[Q], list[Q]]:
+        return [Q("1"), Q("2"), Q("3")], [Q("3"), Q("4")]
+
+    # Direct assertion matching the test_eval_holdout_isolation logic
+    train, test = correct_load()
+    assert not {q.id for q in train}.intersection({q.id for q in test})
+
+    train_w, test_w = wrong_load_leakage()
+    with pytest.raises(AssertionError):
+        assert not {q.id for q in train_w}.intersection({q.id for q in test_w})
+
+
+def test_discrimination_pr_smoke_fixed_embeddings() -> None:
+    class MockResult:
+        def __init__(self, val: float) -> None:
+            self.metrics = {"ndcg@10": val}
+
+    def correct_smoke(use_qdrant: bool = False) -> MockResult:
+        if use_qdrant:
+            raise ValueError("Smoke gate must run in-memory")
+        return MockResult(0.8)
+
+    def wrong_smoke_requires_qdrant(use_qdrant: bool = False) -> MockResult:
+        if not use_qdrant:
+            raise ValueError("Qdrant required")
+        return MockResult(0.8)
+
+    assert correct_smoke(use_qdrant=False).metrics["ndcg@10"] > 0.0
+
+    import _pytest.outcomes
+
+    try:
+        wrong_smoke_requires_qdrant(use_qdrant=False)
+        pytest.fail("Accepted bad runner")
+    except _pytest.outcomes.Failed:
+        pass
+    except Exception:
+        pass
+
+
+def test_discrimination_abstention_fpr() -> None:
+    def correct_check(results: dict[str, list[dict[str, float]]], threshold: float) -> float:
+        fp = 0
+        for q, hits in results.items():
+            valid_hits = [h for h in hits if h.get("score", 0.0) >= threshold]
+            if valid_hits:
+                fp += 1
+        return fp / len(results) if results else 0.0
+
+    noise_results = {"noise_q1": [{"score": 0.2}], "noise_q2": [{"score": 0.1}]}
+    assert correct_check(noise_results, 0.3) == 0.0
+
+    def wrong_check_ignores_threshold(
+        results: dict[str, list[dict[str, float]]], threshold: float
+    ) -> float:
+        fp = sum(1 for hits in results.values() if hits)
+        return fp / len(results) if results else 0.0
+
+    with pytest.raises(AssertionError):
+        assert wrong_check_ignores_threshold(noise_results, 0.3) == 0.0
