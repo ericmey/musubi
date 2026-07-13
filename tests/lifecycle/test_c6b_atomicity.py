@@ -79,7 +79,7 @@ import subprocess
 import sys
 import time
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -1068,19 +1068,59 @@ def _restore_set_payload(client: QdrantClient) -> None:
         client.set_payload = orig  # type: ignore[method-assign]
 
 
-def _corrupt_apply_drop_lineage(client: QdrantClient) -> None:
-    """PARTIAL/corrupt apply (Yua R13): the set_payload lands the correct state + version but DROPS the
-    intended lineage key (superseded_by), so version+state alone would falsely confirm while a full
-    readback-SHA over the intended key set catches the missing field."""
+def _corrupt_apply(
+    client: QdrantClient, mutate: Callable[[dict[str, Any], str], None], sup: str
+) -> None:
+    """PARTIAL/corrupt apply (Yua R13): wrap set_payload so the mutation lands with ONE patch field
+    corrupted per `mutate` (state + version otherwise correct), exercising a distinct readback-SHA
+    failure mode. `sup` is the intended lineage ksuid, available to faults that need the true value."""
     orig: Any = client.set_payload
 
     def _partial(*a: Any, **k: Any) -> Any:
         payload = dict(k.get("payload") or {})
-        payload.pop("superseded_by", None)  # the field that did not land
+        mutate(payload, sup)
         k["payload"] = payload
         return orig(*a, **k)
 
     client.set_payload = _partial  # type: ignore[method-assign]
+
+
+def _r13_drop_lineage(p: dict[str, Any], sup: str) -> None:
+    p.pop("superseded_by", None)  # (a) key ABSENT from the applied payload
+
+
+def _r13_null_lineage(p: dict[str, Any], sup: str) -> None:
+    p["superseded_by"] = None  # (b) present-NULL where intended non-null (absence != null)
+
+
+def _r13_type_blur_version(p: dict[str, Any], sup: str) -> None:
+    p["version"] = float(
+        p["version"]
+    )  # (c) int->float: Python == blurs it, canonical JSON does not
+
+
+def _r13_wrong_updated_at(p: dict[str, Any], sup: str) -> None:
+    p["updated_at"] = "1999-01-01T00:00:00+00:00"  # (d) wrong timestamp value
+
+
+def _r13_mismatched_epoch(p: dict[str, Any], sup: str) -> None:
+    p["updated_epoch"] = float(p["updated_epoch"]) + 1.0  # (e) updated_at right, epoch mismatched
+
+
+def _r13_wrong_lineage(p: dict[str, Any], sup: str) -> None:
+    p["superseded_by"] = sup[:-1] + ("A" if sup[-1] != "A" else "B")  # (f) present but WRONG value
+
+
+# Each mode lands the correct state+version but corrupts exactly ONE patch field, so version/state
+# (and, for c/d/e, everything the fence checks) still match while the intended-key readback SHA differs.
+_R13_CORRUPT_FAULTS: dict[str, Callable[[dict[str, Any], str], None]] = {
+    "missing_lineage_key": _r13_drop_lineage,
+    "present_null_lineage": _r13_null_lineage,
+    "type_blur_version_int_float": _r13_type_blur_version,
+    "wrong_updated_at": _r13_wrong_updated_at,
+    "updated_at_ok_epoch_mismatch": _r13_mismatched_epoch,
+    "wrong_superseded_by_value": _r13_wrong_lineage,
+}
 
 
 def _count_set_payload(client: QdrantClient) -> dict[str, int]:
@@ -1142,7 +1182,9 @@ def _outbox_rows(db_path: Path, operation_key: str) -> list[dict[str, object]]:
 def _actual_projected_sha(
     client: QdrantClient, collection: str, object_id: str, patch_json: object
 ) -> str:
-    """Recompute the patch SHA from the ACTUAL Qdrant payload projected onto the stored patch's key set."""
+    """Recompute the patch SHA from the ACTUAL Qdrant payload projected onto the stored patch's key set.
+    An ABSENT key is OMITTED from the projection (not mapped to None), so a missing key produces a
+    DIFFERENT SHA than a present-null value (Yua: distinguish absence explicitly, missing != null)."""
     patch = json.loads(str(patch_json))
     points, _ = client.scroll(
         collection_name=collection,
@@ -1153,7 +1195,7 @@ def _actual_projected_sha(
         with_payload=True,
     )
     actual = dict(points[0].payload or {}) if points else {}
-    return _canonical_patch_sha({k: actual.get(k) for k in patch})
+    return _canonical_patch_sha({k: actual[k] for k in patch if k in actual})
 
 
 def _outbox_for_object(db_path: Path, object_id: str) -> list[dict[str, object]]:
@@ -1469,45 +1511,98 @@ def test_r4_terminal_failure_is_err_abandoned_no_final(
 
 
 def _check_r13(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
-    """Conditional apply + FULL readback patch SHA (Yua R13): a PARTIAL/corrupt apply that lands the
-    correct state+version but DROPS the intended lineage key must be REFUSED - version/state alone is
-    insufficient. Correct outcome on mismatch: Ok(Pending), NO apply-success marker, NO event, NO FINAL,
-    and the op stays recoverable/nonterminal (R13 invents no repair policy). The stored intended patch SHA
-    must equal the SHA over the intended patch, and the ACTUAL readback SHA must DIFFER from it."""
-    coord = _coordinator(client, db_path)
-    _corrupt_apply_drop_lineage(client)  # the apply lands state+version but drops superseded_by
+    """Conditional apply + FULL readback patch SHA (Yua R13), table-driven proof completeness. For EACH
+    corruption mode the apply lands the correct state+version but corrupts exactly ONE patch field; each
+    must be INDEPENDENTLY refused - Ok(Pending), exactly one recoverable PENDING outbox row, NO apply
+    marker, NO event, NO FINAL - with the stored intended patch_sha unchanged and the ACTUAL projected
+    readback SHA DIFFERING from it (R13 invents no repair policy). A healthy CONTROL then proves an
+    unrelated pre-existing payload field OUTSIDE the patch key set does NOT change confirmation. The
+    harness (client, seed, db_path) are unused - each case gets a FRESH env so cases cannot cross-
+    contaminate; only db_path's parent (the tmp dir) is borrowed as the base."""
+    base = Path(db_path).parent
     sup = "supersededby0000000000000000"[:27]  # a real lineage ksuid
-    intent = _intent(seed, to_state="matured", operation_key="op-r13", superseded_by=sup)
-    res = coord.transition(intent)
-    if not isinstance(res, Ok) or not isinstance(res.value, _api().TransitionPending):
-        raise DefectStillPresent(
-            "a partial/corrupt apply (state+version right, lineage MISSING) must NOT be confirmed on "
-            "version/state alone - the full readback SHA must catch it and return Ok(Pending)"
+    for name, mutate in _R13_CORRUPT_FAULTS.items():
+        c, s, d = _make_env(base / f"r13-{name}")
+        try:
+            coord = _coordinator(c, d)
+            _corrupt_apply(c, mutate, sup)  # land state+version, corrupt this one field
+            intent = _intent(s, to_state="matured", operation_key="op-r13", superseded_by=sup)
+            res = coord.transition(intent)
+            if not isinstance(res, Ok) or not isinstance(res.value, _api().TransitionPending):
+                raise DefectStillPresent(
+                    f"corrupt apply [{name}] (state+version right, one patch field wrong) must NOT be "
+                    f"confirmed on version/state alone - the full readback SHA must catch it -> Ok(Pending)"
+                )
+            rows = _outbox_for_object(d, s.object_id)
+            if len(rows) != 1 or rows[0]["state"] != "PENDING":
+                raise DefectStillPresent(
+                    f"corrupt apply [{name}] must leave exactly one recoverable PENDING row, got "
+                    f"{[r['state'] for r in rows]}"
+                )
+            if _apply_markers(d, s.object_id):
+                raise DefectStillPresent(
+                    f"corrupt apply [{name}] must write NO effective-apply marker"
+                )
+            if _events_for_object(d, s.object_id):
+                raise DefectStillPresent(
+                    f"corrupt apply [{name}] must emit NO audit event / NO FINAL"
+                )
+            intended_sha = _canonical_patch_sha(_intended_patch(intent))
+            if rows[0]["patch_sha"] != intended_sha:
+                raise DefectStillPresent(
+                    f"corrupt apply [{name}] stored patch_sha must equal the SHA over the intended patch"
+                )
+            if (
+                _actual_projected_sha(c, s.collection, s.object_id, rows[0]["patch_json"])
+                == intended_sha
+            ):
+                raise DefectStillPresent(
+                    f"corrupt apply [{name}] ACTUAL readback SHA must DIFFER from the intended patch SHA"
+                )
+        finally:
+            c.close()
+    # healthy CONTROL: an unrelated pre-existing payload field OUTSIDE the patch key set must NOT change
+    # confirmation - the readback SHA covers the intended patch key set ONLY, so extra fields are ignored.
+    c, s, d = _make_env(base / "r13-control")
+    try:
+        c.set_payload(
+            collection_name=s.collection,
+            payload={"unrelated_marker": "outside-the-patch-keyset"},
+            points=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=s.object_id)
+                    )
+                ]
+            ),
         )
-    rows = _outbox_for_object(db_path, seed.object_id)
-    if len(rows) != 1 or rows[0]["state"] != "PENDING":
-        raise DefectStillPresent(
-            f"a corrupt apply must leave the op recoverable/nonterminal (PENDING), got "
-            f"{[r['state'] for r in rows]}"
-        )
-    if _apply_markers(db_path, seed.object_id):
-        raise DefectStillPresent("a corrupt apply must write NO effective-apply marker")
-    if _events_for_object(db_path, seed.object_id):
-        raise DefectStillPresent("a corrupt apply must emit NO audit event / NO FINAL")
-    # the stored intended patch SHA is exactly the SHA over the intended patch, and the ACTUAL readback
-    # (which is missing the lineage key) must DIFFER from it - proving version+state alone insufficient.
-    intended_sha = _canonical_patch_sha(_intended_patch(intent))
-    if rows[0]["patch_sha"] != intended_sha:
-        raise DefectStillPresent(
-            "the stored patch_sha must equal the SHA over the intended mutation patch"
-        )
-    actual_sha = _actual_projected_sha(
-        client, seed.collection, seed.object_id, rows[0]["patch_json"]
-    )
-    if actual_sha == intended_sha:
-        raise DefectStillPresent(
-            "the ACTUAL readback SHA must DIFFER from the intended (the lineage key did not land)"
-        )
+        coord = _coordinator(c, d)
+        ctrl = _intent(s, to_state="matured", operation_key="op-r13c", superseded_by=sup)
+        res = coord.transition(ctrl)
+        if not isinstance(res, Ok) or not isinstance(res.value, _api().TransitionFinal):
+            raise DefectStillPresent(
+                "healthy CONTROL: an unrelated pre-existing payload field must NOT block confirmation "
+                "(the readback SHA covers the intended patch key set only) - expected Ok(Final)"
+            )
+        rows = _outbox_for_object(d, s.object_id)
+        if len(rows) != 1 or rows[0]["state"] != "FINAL":
+            raise DefectStillPresent(
+                f"healthy CONTROL must reach exactly one FINAL row, got {[r['state'] for r in rows]}"
+            )
+        if _events_for_object(d, s.object_id) != 1 or not _apply_markers(d, s.object_id):
+            raise DefectStillPresent(
+                "healthy CONTROL must emit exactly one event and one apply marker"
+            )
+        if _qdrant_state(c, s.collection, s.object_id) != (s.version + 1, "matured"):
+            raise DefectStillPresent("healthy CONTROL must leave Qdrant at target/v+1")
+        if _actual_projected_sha(
+            c, s.collection, s.object_id, rows[0]["patch_json"]
+        ) != _canonical_patch_sha(_intended_patch(ctrl)):
+            raise DefectStillPresent(
+                "healthy CONTROL: the ACTUAL projected readback SHA must EQUAL the intended patch SHA"
+            )
+    finally:
+        c.close()
 
 
 def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
