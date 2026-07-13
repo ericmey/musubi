@@ -67,7 +67,7 @@ def test_discrimination_ndcg_at_k() -> None:
         idcg = dcg(sorted(ideal_scores, reverse=True))
         return dcg(scores) / idcg if idcg > 0 else 0.0
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="assert "):
         _assert_ndcg_at_k(wrong_ndcg_ignores_k)
 
     # Fault: Zero IDCG raises ZeroDivisionError
@@ -78,7 +78,7 @@ def test_discrimination_ndcg_at_k() -> None:
         idcg = dcg(sorted(ideal_scores, reverse=True), k)
         return dcg(scores, k) / idcg
 
-    with pytest.raises(ZeroDivisionError):
+    with pytest.raises(ZeroDivisionError, match="division by zero"):
         _assert_ndcg_at_k(wrong_ndcg_zero_div)
 
 
@@ -132,7 +132,7 @@ def test_discrimination_corpus_schema() -> None:
         def model_validate(cls, data: dict[str, Any]) -> Any:
             return type("Obj", (), data)()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Schema validation failed to enforce required fields"):
         _assert_schema_validation(AcceptAllSchema)
 
 
@@ -189,7 +189,7 @@ def test_discrimination_manifest_checksum(tmp_path: Path) -> None:
     def wrong_verify(manifest: dict[str, Any], base_dir: Path) -> bool:
         return True
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Failed to raise checksum error"):
         _assert_manifest_checksum(wrong_verify, tmp_path)
 
 
@@ -249,7 +249,7 @@ def test_discrimination_deterministic_rerun() -> None:
     def wrong_constant_runner(corpus: list[dict[str, Any]], embedder: str, seed: int) -> EvalResult:
         return EvalResult({"ndcg@10": float(seed)}, [str(seed)])
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="assert "):
         _assert_deterministic_rerun(wrong_constant_runner)
 
 
@@ -377,7 +377,7 @@ def test_discrimination_nightly_thresholds() -> None:
                 raise ValueError(f"Metric {k} below threshold {v}")
         return True
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Failed to catch ndcg@10"):
         _assert_nightly_thresholds(wrong_check_ignores_mode)
 
     def wrong_check_accepts_nan(metrics: dict[str, float], mode: str) -> bool:
@@ -396,7 +396,7 @@ def test_discrimination_nightly_thresholds() -> None:
                 raise ValueError()
         return True
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Failed to catch nan ndcg@10"):
         _assert_nightly_thresholds(wrong_check_accepts_nan)
 
 
@@ -492,7 +492,7 @@ def test_discrimination_baseline_delta_gate() -> None:
     def wrong_delta_allows_any(base: dict[str, float], cand: dict[str, float]) -> bool:
         return True
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Failed to catch ndcg@10 delta"):
         _assert_baseline_delta_gate(wrong_delta_allows_any)
 
     def wrong_delta_ignores_mrr(base: dict[str, float], cand: dict[str, float]) -> bool:
@@ -505,7 +505,7 @@ def test_discrimination_baseline_delta_gate() -> None:
             raise ValueError("regression on latency_p95_ms")
         return True
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Failed to catch mrr delta"):
         _assert_baseline_delta_gate(wrong_delta_ignores_mrr)
 
     def wrong_delta_latency_direction(base: dict[str, float], cand: dict[str, float]) -> bool:
@@ -568,7 +568,7 @@ def test_discrimination_scheduled_baseline() -> None:
         runner.run()
         return True
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Failed to raise ValueError"):
         _assert_scheduled_baseline_report(wrong_report_logs_only)
 
 
@@ -615,7 +615,7 @@ def test_discrimination_per_query_drop() -> None:
     def wrong_drop_check_warns_only(base: dict[str, list[str]], cand: dict[str, list[str]]) -> bool:
         return True
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Failed to catch top hit drop"):
         _assert_per_query_top_hit_drop(wrong_drop_check_warns_only)
 
 
@@ -630,20 +630,32 @@ def _assert_holdout_isolation(
         Any,
     ],
 ) -> None:
+    loader_calls = 0
+
     def loader() -> tuple[list[MockQuery], list[MockQuery]]:
+        nonlocal loader_calls
+        loader_calls += 1
         return [MockQuery("1", "a", ["train_l1"])], [MockQuery("2", "b", ["test_l2"])]
 
     actual_trained_queries: list[MockQuery] = []
+    trainer_calls = 0
 
     def spy_trainer(q_list: list[MockQuery]) -> Any:
+        nonlocal trainer_calls
+        trainer_calls += 1
         actual_trained_queries.extend(q_list)
         return "mock_model"
 
     run_eval_func(loader, spy_trainer)
 
+    assert loader_calls == 1, "Holdout leakage: Loader not called exactly once"
+    assert trainer_calls == 1, "Holdout leakage: Trainer not called exactly once"
+
     trained_ids = {q.id for q in actual_trained_queries}
     trained_labels = {lbl for q in actual_trained_queries for lbl in q.labels}
 
+    assert "1" in trained_ids, "Holdout leakage: Trainer never saw train IDs"
+    assert "train_l1" in trained_labels, "Holdout leakage: Trainer never saw train labels"
     assert "2" not in trained_ids, "Holdout leakage: Trainer saw test IDs"
     assert "test_l2" not in trained_labels, "Holdout leakage: Trainer saw test labels"
 
@@ -666,27 +678,50 @@ def test_discrimination_holdout_isolation() -> None:
 
     _assert_holdout_isolation(correct_runner)
 
-    def wrong_runner_leaks_labels(ld: Any, tr: Any) -> Any:
-        train_q, _test_q = ld()
-        tr(train_q + _test_q)
+    def wrong_runner_does_nothing(ld: Any, tr: Any) -> Any:
+        pass
 
-    with pytest.raises(AssertionError, match=r"Trainer saw test IDs|Trainer saw test labels"):
-        _assert_holdout_isolation(wrong_runner_leaks_labels)
+    with pytest.raises(AssertionError, match="Holdout leakage: Loader not called exactly once"):
+        _assert_holdout_isolation(wrong_runner_does_nothing)
+
+    def wrong_runner_trains_empty(ld: Any, tr: Any) -> Any:
+        ld()
+        tr([])
+
+    with pytest.raises(AssertionError, match="Holdout leakage: Trainer never saw train IDs"):
+        _assert_holdout_isolation(wrong_runner_trains_empty)
+
+    def wrong_runner_trains_test_ids(ld: Any, tr: Any) -> Any:
+        train_q, _test_q = ld()
+        tr([*train_q, MockQuery("2", "b", ["train_fake"])])
+
+    with pytest.raises(AssertionError, match="Holdout leakage: Trainer saw test IDs"):
+        _assert_holdout_isolation(wrong_runner_trains_test_ids)
+
+    def wrong_runner_trains_test_labels(ld: Any, tr: Any) -> Any:
+        train_q, _test_q = ld()
+        tr([*train_q, MockQuery("3", "c", ["test_l2"])])
+
+    with pytest.raises(AssertionError, match="Holdout leakage: Trainer saw test labels"):
+        _assert_holdout_isolation(wrong_runner_trains_test_labels)
 
 
 def _assert_pr_smoke_fixed_embeddings(
     run_func: Callable[[list[dict[str, Any]]], Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fixed_corpus = [
+    fixed_corpus_1 = [
         {"id": "doc1", "text": "alpha", "embedding": [0.1, 0.2], "relevance": 1},
         {"id": "doc2", "text": "beta", "embedding": [0.3, 0.4], "relevance": 0},
+    ]
+    fixed_corpus_2 = [
+        {"id": "doc3", "text": "gamma", "embedding": [0.5, 0.6], "relevance": 1},
+        {"id": "doc4", "text": "delta", "embedding": [0.7, 0.8], "relevance": 0},
     ]
     import hashlib
     import json
 
-    canonical_hash = hashlib.sha256(
-        json.dumps(fixed_corpus, sort_keys=True).encode("utf-8")
-    ).hexdigest()
+    hash_1 = hashlib.sha256(json.dumps(fixed_corpus_1, sort_keys=True).encode("utf-8")).hexdigest()
+    hash_2 = hashlib.sha256(json.dumps(fixed_corpus_2, sort_keys=True).encode("utf-8")).hexdigest()
 
     network_called = False
 
@@ -702,15 +737,29 @@ def _assert_pr_smoke_fixed_embeddings(
     monkeypatch.setattr(urllib.request, "urlopen", mock_network)
     monkeypatch.setattr(qdrant_client, "QdrantClient", mock_network)
 
-    res1 = run_func(fixed_corpus)
-    res2 = run_func(fixed_corpus)
-
+    # Fixture 1
+    res1_a = run_func(fixed_corpus_1)
+    res1_b = run_func(fixed_corpus_1)
     if network_called:
         raise ValueError("Qdrant/TEI network hit detected")
 
-    assert getattr(res1, "corpus_checksum", "") == canonical_hash, "Checksum mismatch"
-    assert getattr(res1, "metrics", {}).get("ndcg@10", 0.0) == 1.0, "Metrics mismatch"
-    assert getattr(res1, "metrics", {}) == getattr(res2, "metrics", {}), "Metrics non-deterministic"
+    assert getattr(res1_a, "corpus_checksum", "") == hash_1, "Checksum mismatch fix 1"
+    assert getattr(res1_a, "metrics", {}).get("ndcg@10", 0.0) == 1.0, "Metrics mismatch fix 1"
+    assert getattr(res1_a, "metrics", {}) == getattr(res1_b, "metrics", {}), (
+        "Metrics non-deterministic"
+    )
+
+    # Fixture 2
+    res2_a = run_func(fixed_corpus_2)
+    res2_b = run_func(fixed_corpus_2)
+    if network_called:
+        raise ValueError("Qdrant/TEI network hit detected")
+
+    assert getattr(res2_a, "corpus_checksum", "") == hash_2, "Checksum mismatch fix 2"
+    assert getattr(res2_a, "metrics", {}).get("ndcg@10", 0.0) == 0.8, "Metrics mismatch fix 2"
+    assert getattr(res2_a, "metrics", {}) == getattr(res2_b, "metrics", {}), (
+        "Metrics non-deterministic"
+    )
 
 
 @pytest.mark.xfail(
@@ -732,7 +781,8 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
         import json
 
         h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
-        return type("MockResult", (), {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": h})()
+        m = 1.0 if any(d["id"] == "doc1" for d in corpus) else 0.8
+        return type("MockResult", (), {"metrics": {"ndcg@10": m}, "corpus_checksum": h})()
 
     def wrong_smoke_requires_qdrant(corpus: list[dict[str, Any]]) -> Any:
         import contextlib
@@ -743,17 +793,16 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
             qdrant_client.QdrantClient("http://localhost:6333")
         return correct_smoke(corpus)
 
-    def wrong_smoke_wrong_hash(corpus: list[dict[str, Any]]) -> Any:
-        return type(
-            "MockResult", (), {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": "bad_hash"}
-        )()
-
-    def wrong_smoke_wrong_metrics(corpus: list[dict[str, Any]]) -> Any:
+    def wrong_smoke_hardcodes_first_fixture_metric(corpus: list[dict[str, Any]]) -> Any:
         import hashlib
         import json
 
         h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
-        return type("MockResult", (), {"metrics": {"ndcg@10": 0.5}, "corpus_checksum": h})()
+        return type("MockResult", (), {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": h})()
+
+    def wrong_smoke_wrong_hash(corpus: list[dict[str, Any]]) -> Any:
+        m = 1.0 if any(d["id"] == "doc1" for d in corpus) else 0.8
+        return type("MockResult", (), {"metrics": {"ndcg@10": m}, "corpus_checksum": "bad_hash"})()
 
     def wrong_smoke_nondeterministic(corpus: list[dict[str, Any]]) -> Any:
         import hashlib
@@ -770,13 +819,13 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(ValueError, match="Qdrant/TEI network hit detected"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_requires_qdrant, monkeypatch)
 
-    with pytest.raises(AssertionError, match="Checksum mismatch"):
+    with pytest.raises(AssertionError, match="Metrics mismatch fix 2"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_hardcodes_first_fixture_metric, monkeypatch)
+
+    with pytest.raises(AssertionError, match="Checksum mismatch fix 1"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_hash, monkeypatch)
 
-    with pytest.raises(AssertionError, match="Metrics mismatch"):
-        _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_metrics, monkeypatch)
-
-    with pytest.raises(AssertionError, match=r"Metrics non-deterministic|Metrics mismatch"):
+    with pytest.raises(AssertionError, match="Metrics non-deterministic|Metrics mismatch fix 1"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_nondeterministic, monkeypatch)
 
 
@@ -808,40 +857,61 @@ class MockEvalReport:
 def _assert_abstention_fpr(
     eval_func: Callable[[FrozenModelConfig, dict[str, list[dict[str, Any]]]], MockEvalReport],
 ) -> None:
-    config = FrozenModelConfig(
+    # 1. First scenario
+    config1 = FrozenModelConfig(
         thresholds=(("fast", 0.5), ("deep", 0.8)), version="v1.0", calibrated_on="train_split_A"
     )
 
-    test_data = {
-        "fast_noise": [{"score": 0.4}, {"score": 0.6}],
-        "fast_answerable": [{"score": 0.6}, {"score": 0.4}],
-        "deep_noise": [{"score": 0.7}],
-        "deep_answerable": [{"score": 0.9}],
+    test_data1 = {
+        "fast_noise": [{"score": 0.4}, {"score": 0.6}],  # fpr 0.5
+        "fast_answerable": [{"score": 0.6}, {"score": 0.4}],  # fnr 0.5
+        "deep_noise": [{"score": 0.7}],  # fpr 0.0
+        "deep_answerable": [{"score": 0.9}],  # fnr 0.0
     }
 
-    report = eval_func(config, test_data)
+    r1 = eval_func(config1, test_data1)
 
-    if report.version != "v1.0":
+    if r1.version != "v1.0":
         raise ValueError("Version mismatch")
-    if report.calibrated_on != "train_split_A":
+    if r1.calibrated_on != "train_split_A":
         raise ValueError("Calibration mismatch")
 
-    if getattr(report, "fast_fpr") != 0.5:
-        raise ValueError("Fast FPR exact mismatch")
-    if getattr(report, "fast_fnr") != 0.5:
-        raise ValueError("Fast FNR exact mismatch")
-    if getattr(report, "deep_fpr") != 0.0:
-        raise ValueError("Deep FPR exact mismatch")
-    if getattr(report, "deep_fnr") != 0.0:
-        raise ValueError("Deep FNR exact mismatch")
+    if getattr(r1, "fast_fpr") != 0.5:
+        raise ValueError("Fast FPR exact mismatch 1")
+    if getattr(r1, "fast_fnr") != 0.5:
+        raise ValueError("Fast FNR exact mismatch 1")
+    if getattr(r1, "deep_fpr") != 0.0:
+        raise ValueError("Deep FPR exact mismatch 1")
+    if getattr(r1, "deep_fnr") != 0.0:
+        raise ValueError("Deep FNR exact mismatch 1")
 
-    if (
-        getattr(report, "fast_fpr") > 0.5
-        or getattr(report, "fast_fnr") > 0.5
-        or getattr(report, "deep_fpr") > 0.0
-        or getattr(report, "deep_fnr") > 0.0
-    ):
-        raise ValueError("Ceiling exceeded")
+    # 2. Second scenario
+    config2 = FrozenModelConfig(
+        thresholds=(("fast", 0.2), ("deep", 0.5)), version="v1.1", calibrated_on="train_split_B"
+    )
+
+    test_data2 = {
+        "fast_noise": [{"score": 0.1}],  # fpr 0.0
+        "fast_answerable": [{"score": 0.3}, {"score": 0.1}],  # fnr 0.5
+        "deep_noise": [{"score": 0.6}, {"score": 0.4}],  # fpr 0.5
+        "deep_answerable": [{"score": 0.7}],  # fnr 0.0
+    }
+
+    r2 = eval_func(config2, test_data2)
+
+    if r2.version != "v1.1":
+        raise ValueError("Version mismatch")
+    if r2.calibrated_on != "train_split_B":
+        raise ValueError("Calibration mismatch")
+
+    if getattr(r2, "fast_fpr") != 0.0:
+        raise ValueError("Fast FPR exact mismatch 2")
+    if getattr(r2, "fast_fnr") != 0.5:
+        raise ValueError("Fast FNR exact mismatch 2")
+    if getattr(r2, "deep_fpr") != 0.5:
+        raise ValueError("Deep FPR exact mismatch 2")
+    if getattr(r2, "deep_fnr") != 0.0:
+        raise ValueError("Deep FNR exact mismatch 2")
 
 
 @pytest.mark.xfail(
@@ -880,33 +950,42 @@ def test_discrimination_abstention_fpr() -> None:
 
     _assert_abstention_fpr(correct_check)
 
-    def wrong_check_ignores_version(
+    def wrong_check_hardcodes_first_report(
         config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
     ) -> MockEvalReport:
-        rep = correct_check(config, results)
-        rep.version = "v0.0"
-        return rep
+        return MockEvalReport("v1.0", "train_split_A", 0.5, 0.5, 0.0, 0.0)
 
     with pytest.raises(ValueError, match="Version mismatch"):
-        _assert_abstention_fpr(wrong_check_ignores_version)
+        _assert_abstention_fpr(wrong_check_hardcodes_first_report)
 
-    def wrong_check_bad_fn(
-        config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
-    ) -> MockEvalReport:
-        rep = correct_check(config, results)
-        rep.fast_fnr = 1.0
-        return rep
-
-    with pytest.raises(ValueError, match=r"Fast FNR exact mismatch"):
-        _assert_abstention_fpr(wrong_check_bad_fn)
-
-    def wrong_check_hardcoded(
+    def wrong_check_ignores_threshold(
         config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
     ) -> MockEvalReport:
         return MockEvalReport(config.version, config.calibrated_on, 0.0, 0.0, 0.0, 0.0)
 
-    with pytest.raises(ValueError, match=r"Fast FPR exact mismatch"):
-        _assert_abstention_fpr(wrong_check_hardcoded)
+    with pytest.raises(ValueError, match="Fast FPR exact mismatch 1"):
+        _assert_abstention_fpr(wrong_check_ignores_threshold)
+
+    def wrong_check_swaps_fpr_fnr(
+        config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
+    ) -> MockEvalReport:
+        rep = correct_check(config, results)
+        rep.fast_fpr, rep.fast_fnr = rep.fast_fnr, rep.fast_fpr
+        rep.deep_fpr, rep.deep_fnr = rep.deep_fnr, rep.deep_fpr
+        return rep
+
+    with pytest.raises(ValueError, match="Fast FPR exact mismatch 2"):
+        _assert_abstention_fpr(wrong_check_swaps_fpr_fnr)
+
+    def wrong_check_calibration_mismatch(
+        config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
+    ) -> MockEvalReport:
+        rep = correct_check(config, results)
+        rep.calibrated_on = "wrong_cal"
+        return rep
+
+    with pytest.raises(ValueError, match="Calibration mismatch"):
+        _assert_abstention_fpr(wrong_check_calibration_mismatch)
 
 
 # The remaining 2 tests are preserved as documentation of the pending inventory,
@@ -959,5 +1038,5 @@ def test_discrimination_provisional_immediate_recall() -> None:
     def wrong_check_ignores_missing(results: dict[str, list[str]], prov_id: str) -> bool:
         return True
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError, match="Failed to catch missing provisional document"):
         _assert_provisional_immediate_recall(wrong_check_ignores_missing)
