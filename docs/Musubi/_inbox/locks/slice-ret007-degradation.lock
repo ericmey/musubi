@@ -1,0 +1,11 @@
+owner: aoi
+branch: slice/ret007-degradation-contract
+worktree: /Users/ericmey/Projects/musubi-worktrees/aoi-ret007-degradation
+claimed: 2026-07-13
+scope: RET-007 / C5+H11+M15 degradation-propagation RED CONTRACT (docs + tests only, no src). Owns
+  the 4 test files + the slice doc. Transcribes Shiori's accepted contract (harem-ops e9ef562).
+authorization: Yua (RET-007 lane 2026-07-13); topology accepted (2 slices; 6 PASS + 11 XFAIL = 17).
+  No src until Yua independently accepts the red contract + slice topology.
+second-reader: yua; acceptance: yua; merger: different party.
+forbidden: src/musubi/** (the fix is a separate implementation slice); the hermes-agent repo (the
+  Hermes provider is a separate dependent slice, Issue #417, tracked via harem-ops).
