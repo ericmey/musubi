@@ -25,30 +25,6 @@ def mock_write_log() -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_boot_scan_archives_removed_files(
-    tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
-) -> None:
-    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log)
-    watcher._loop = asyncio.get_running_loop()
-
-    # Create a slow mock for the plane scroll
-    async def slow_scroll(
-        *args: dict[str, Any], **kwargs: dict[str, Any]
-    ) -> tuple[list[Any], None]:
-        await asyncio.sleep(0.1)
-        return ([], None)
-
-    mock_curated_plane._client.scroll.side_effect = slow_scroll
-
-    # This should return immediately
-    watcher.boot_scan()
-    assert True
-
-    # wait for the background task to finish
-    await asyncio.sleep(0.2)
-
-
-@pytest.mark.asyncio
 async def test_boot_scan_detects_body_hash_change(
     tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
 ) -> None:

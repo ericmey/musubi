@@ -5,9 +5,10 @@
   "reason": "VAULT-002 red contract: 1 strict-xfail + 4 controls + 3 red-proofs + 1 repair marker (9 tests, source forbidden). Fix lives in a separate follow-up PR.",
   "owns_paths": [
     "tests/vault/test_watcher_boot_scan_vault_002.py",
+    "tests/vault/test_watcher_boot_scan.py",
     "docs/Musubi/_slices/slice-vault-002-boot-scan-fix.md",
     "docs/Musubi/_inbox/locks/slice-vault-002-boot-scan-fix.lock"
   ],
   "sid": "slice-vault-002-boot-scan-fix",
-  "scope": "VAULT-002 red contract test (tests-first; source forbidden; no src/merge/host)"
+  "scope": "VAULT-002 red contract test (tests-first; source forbidden; no src/merge/host). tests/vault/test_watcher_boot_scan.py is owned exclusively by this slice for the duration of the VAULT-002 fix (transfer from slice-ops-hardening-suite per Yua 2026-07-13 18:01:24)."
 }

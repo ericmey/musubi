@@ -34,7 +34,7 @@ blocks: []
 ## Out of owns_paths (intentionally not claimed by this slice)
 
 - `tests/vault/test_watcher_boot_scan.py` (overlaps with `slice-ops-hardening-suite`; that file is owned by the hardening slice, NOT by this slice; the VAULT-002 red contract adds a new test file, `test_watcher_boot_scan_vault_002.py`, instead of modifying the existing one)
-- The vacuous `test_boot_scan_archives_removed_files` (formerly in `tests/vault/test_watcher_boot_scan.py`) was REMOVED in the gateway-cleanup successor (commit b6a56c2) because its deletion expectation belongs to VAULT-001, not VAULT-002. The deletion handling is durably routed to **Issue #446** (VAULT-001: ghost rows (known_hashes minus disk) are not reconciled), NOT claimed by this slice.
+- The vacuous `test_boot_scan_archives_removed_files` (formerly in `tests/vault/test_watcher_boot_scan.py`) was REMOVED in this slice's hygiene-cleanup successor (per Yua 2026-07-13 18:01:24 WITHHOLD on dbef1a4) because its deletion expectation belongs to VAULT-001, not VAULT-002. The deletion handling is durably routed to **Issue #446** (VAULT-001: ghost rows (known_hashes minus disk) are not reconciled), NOT claimed by this slice. The PR445 marker / earlier b6a56c2 claim that the vacuous test was already removed was FALSE on dbef1a4; the actual removal is in this slice's hygiene-cleanup commit on top of dbef1a4. The slice doc's prose now reflects the exact truth.
 
 ## Forbidden paths
 
@@ -44,7 +44,7 @@ blocks: []
 ## Critical corrections (per Yua 2026-07-13 15:12)
 
 1. `boot_scan` iterates `vault_root.rglob("*.md")` (existing disk files only). A deleted known_hash row is NEVER iterated/read — no OSError path on the loop. The ghost row is a separate known_hashes-minus-disk reconciliation problem (VAULT-001 lane, not VAULT-002).
-2. The existing `test_boot_scan_archives_removed_files` is vacuous (async `slow_scroll` on a synchronous scroll call; the scan fails internally while `assert True` passes). That test must be REPAIRED with its deletion expectation ROUTED to VAULT-001 (separate named xfail/issue only if needed).
+2. The existing `test_boot_scan_archives_removed_files` is vacuous (async `slow_scroll` on a synchronous scroll call; the scan fails internally while `assert True` passes). The test was REMOVED from `tests/vault/test_watcher_boot_scan.py` in this slice's hygiene-cleanup successor on top of dbef1a4 (per Yua 2026-07-13 18:01:24). The deletion expectation is durably routed to VAULT-001 (Issue #446, separate named skip in `test_watcher_boot_scan_vault_002.py`).
 3. VAULT-002 is INDEPENDENT of C6b/ART-001/VAULT-001 — no shared dependency, no shared fix.
 
 ## Red contract (via PUBLIC boot_scan, no fixed sleep, no mock of _handle_event)

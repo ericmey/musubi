@@ -643,10 +643,13 @@ def test_boot_scan_vault_002_redproof_mock_handler() -> None:
     reason="deferred to VAULT-001 (Issue ericmey/musubi#446): ghost-row "
     "reconciliation (known_hashes minus rglob) is a separate slice. The "
     "vacuous test_boot_scan_archives_removed_files was REMOVED from "
-    "tests/vault/test_watcher_boot_scan.py in the VAULT-002 gateway-cleanup "
-    "successor (commit b6a56c2). The deletion expectation is not in scope "
-    "for this slice. This marker is a documentary record only; it is NOT "
-    "behavioral proof and NOT strict-xfail discrimination (per Yua 17:10:38).",
+    "tests/vault/test_watcher_boot_scan.py in the VAULT-002 hygiene-cleanup "
+    "successor on top of dbef1a4 (per Yua 2026-07-13 18:01:24). The earlier "
+    "b6a56c2 claim that the vacuous test was already removed was FALSE on "
+    "dbef1a4; the actual removal is in this slice's hygiene-cleanup commit. "
+    "The deletion expectation is not in scope for this slice. This marker "
+    "is a documentary record only; it is NOT behavioral proof and NOT "
+    "strict-xfail discrimination (per Yua 17:10:38).",
 )
 def test_boot_scan_vault_002_deletion_routed_to_vault_001_marker() -> None:
     """Documentary marker only. Skipped with durable routing to Issue #446.

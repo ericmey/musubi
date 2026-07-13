@@ -48,8 +48,9 @@ None of these is big enough to justify its own slice, but together they're "all 
 - `tests/ops/test_retention.py`                   (new)
 - `tests/ops/test_cleanup.py`                     (new)
 - `tests/api/test_rate_limits.py`                 (new)
-- `tests/vault/test_watcher_boot_scan.py`         (new)
 - `deploy/systemd/maintenance/`                   (new — scheduled retention + cleanup timer + service units; sibling-scoped under systemd/ to avoid conflict with slice-ops-first-deploy's top-level service units)
+
+**Transfer note (Yua 2026-07-13 18:01:24):** `tests/vault/test_watcher_boot_scan.py` was created under this slice but its dispatch-shape expectation must match the accepted VAULT-002 source fix (c0c91ba: `boot_scan` passes `str(path)` absolute). The file is now owned exclusively by `slice-vault-002-boot-scan-fix` for the duration of that slice. The vacuous `test_boot_scan_archives_removed_files` (async `slow_scroll` on sync `scroll`, `assert True`, fixed `asyncio.sleep`) was removed in VAULT-002's hygiene-cleanup successor on top of dbef1a4. The deletion expectation is durably routed to VAULT-001 (Issue #446).
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
