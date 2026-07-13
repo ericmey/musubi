@@ -638,10 +638,44 @@ class _RefCoordinator:
         """Atomic FINAL: insert the FINAL lifecycle event AND mark the outbox FINAL in ONE txn. The
         outbox update is GUARDED on the exact APPLIED state (`WHERE state='APPLIED'`, exactly one row) so
         a PENDING row can never jump straight to FINAL (Yua R8 forward guard)."""
-        if self._mode == "finalize_fresh_event":
-            # WRONG: mint a NEW event_id per finalize instead of the operation's stable event_id -> a
-            # replayed finalize emits a SECOND audit event (caught by R9's one-event assertion).
-            event_id = generate_ksuid()
+        if self._mode in ("finalize_dup_event_on_replay", "finalize_rekey_on_replay"):
+            # These candidates keep the STABLE event on the FIRST finalize (so R9's first phase passes) and
+            # only misbehave on a REPLAYED finalize (an event for this op already exists).
+            con = sqlite3.connect(self._db)
+            already = con.execute(
+                "SELECT 1 FROM lifecycle_events WHERE event_id=?", (event_id,)
+            ).fetchone()
+            con.close()
+            if already:
+                con = sqlite3.connect(self._db)
+                if self._mode == "finalize_dup_event_on_replay":
+                    # WRONG: emit a SECOND event (fresh id), leaving the row's event_id -> two events for
+                    # the object (caught by R9's total-event assertion).
+                    con.execute(
+                        "INSERT INTO lifecycle_events (event_id,object_id,namespace,to_state) "
+                        "VALUES (?,?,?,?)",
+                        (generate_ksuid(), object_id, namespace, target_state),
+                    )
+                else:  # finalize_rekey_on_replay
+                    # WRONG: re-key the operation's audit - delete the original event, insert a fresh one,
+                    # and repoint the outbox row's event_id (caught by R9's stable-event assertions).
+                    fresh = generate_ksuid()
+                    con.execute("DELETE FROM lifecycle_events WHERE event_id=?", (event_id,))
+                    con.execute(
+                        "INSERT INTO lifecycle_events (event_id,object_id,namespace,to_state) "
+                        "VALUES (?,?,?,?)",
+                        (fresh, object_id, namespace, target_state),
+                    )
+                    con.execute(
+                        "UPDATE lifecycle_outbox SET event_id=? WHERE operation_key=?", (fresh, opk)
+                    )
+                con.execute(
+                    "UPDATE lifecycle_outbox SET state='FINAL' WHERE operation_key=? AND state='APPLIED'",
+                    (opk,),
+                )
+                con.commit()
+                con.close()
+                return
         if self._mode == "finalize_not_atomic":
             # WRONG: the event insert is its OWN committed txn, so a fault before the FINAL mark leaves the
             # event orphaned (not rolled back) - caught by R8's "rollback leaves NO event".
@@ -1032,8 +1066,11 @@ def _event_to_state(db_path: Path, event_id: object) -> object:
 
 
 def _reset_to_pending(db_path: Path, operation_key: str) -> None:
-    """Simulate a duplicate/replayed delivery: put a resolved op's outbox row back to PENDING so a fresh
-    reconcile re-processes it (R9). The op's stable event_id + expected_version are preserved."""
+    """TEST-ONLY duplicate/stale-delivery FAULT INJECTION: put a resolved op's outbox row back to PENDING
+    so a fresh reconcile re-processes it (R9), preserving the op's stable event_id + expected_version.
+    This models a duplicate/replayed delivery of the SAME operation. It is NOT a legal production state
+    transition: production code must NEVER move an outbox row FINAL/ABANDONED -> PENDING; terminal states
+    are terminal (that is exactly what the idempotency this red asserts relies on)."""
     con = sqlite3.connect(str(db_path))
     con.execute(
         "UPDATE lifecycle_outbox SET state='PENDING' WHERE operation_key=?", (operation_key,)
@@ -1332,6 +1369,14 @@ def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     rows2 = _outbox_for_object(db_path, seed.object_id)
     if len(rows2) != 1 or rows2[0]["state"] != "FINAL":
         raise DefectStillPresent("a replayed op must resolve to exactly one FINAL row")
+    # the replay must not re-key: the FINAL row still references the ORIGINAL event, and that event is
+    # still exactly one (Yua/Tama: prove the stable-event property, not just a total count).
+    if rows2[0]["event_id"] != ev:
+        raise DefectStillPresent(
+            "a replay must leave the FINAL row referencing the ORIGINAL event_id"
+        )
+    if _final_event_count(db_path, ev) != 1:
+        raise DefectStillPresent("the ORIGINAL event_id must remain exactly one event after replay")
     if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
         raise DefectStillPresent("a replayed op must NOT mutate the object a second time")
 
@@ -2092,7 +2137,10 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r3": (_check_r3, ["classify_all_terminal", "reconcile_no_apply", "reconcile_greedy"]),
     "r4": (_check_r4, ["classify_all_transient"]),
     "r8": (_check_r8, ["finalize_not_atomic"]),
-    "r9": (_check_r9, ["reconcile_no_readback", "finalize_fresh_event"]),
+    "r9": (
+        _check_r9,
+        ["reconcile_no_readback", "finalize_dup_event_on_replay", "finalize_rekey_on_replay"],
+    ),
     "r10": (
         _check_r10,
         [
