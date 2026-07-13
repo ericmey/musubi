@@ -3,10 +3,10 @@ title: "Slice: Phase B — routed post-authz idempotency pipeline (SEC-002 + IDE
 slice_id: slice-idempotency-phase-b
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: aoi
 phase: "Security audit 2026-07-12/13 — narrow source, Phase B (Yua-authorized 2026-07-13T00:17)"
-tags: [section/slices, status/in-progress, type/slice, security, p0, auth, idempotency]
+tags: [section/slices, status/in-review, type/slice, security, p0, auth, idempotency]
 updated: 2026-07-13
 reviewed: false
 depends-on: [slice-auth-boundary-red-contract, slice-sec-002-idempotency-auth-bypass]
@@ -232,7 +232,19 @@ temporarily retarget → main for exact-SHA evidence, then restore base to
 acceptance + green. Merge order: #402 → main, retarget/recheck #403 → main, then Phase B → main.
 
 ## Status
-Design drift resolved (Option A approved, Yua 2026-07-13T00:27); feasibility gates + inventory
-proven; required reds landed (106f19c). Proceeding with the authorized Phase B src implementation
-in reviewable commits (AuthorizedWrite edge → idempotency dependency → lease/digest cache →
-store-only observer → named app.py wiring), flipping the SEC-002 / IDEM-001 / lease reds.
+
+**`in-review`** (2026-07-13) — Phase B src shipped and handed off. Tracking: GitHub Issue #405;
+PR #404 (`slice/idempotency-phase-b`, stacked on `slice/auth-boundary-phase-a`).
+
+Work log:
+- Design drift resolved (Option A approved, Yua 2026-07-13T00:27); feasibility gates + inventory
+  proven; required reds landed (106f19c).
+- Phase B src landed in reviewable, per-commit Yua-reviewed commits: AuthorizedWrite body-auth edge
+  → lease/digest cache (+ review fixes) → routed idempotency dependency → typed values → store-only
+  observer + named app.py wiring (legacy pre-auth path removed).
+- Review blockers B1/B2/B3 fixed (observer buffers by eligibility not candidacy; no time-based
+  live-lease reclaim; concurrency test counts the real mutation) — see the section above.
+- Handoff gates closed: `ruff format --check` + `ruff check` + `mypy` clean (284 files);
+  `tc-coverage` 26/26 exit 0; `agent-check` zero warnings for this slice; full suite 1604 pass / 0
+  fail; all three remote checks SUCCESS on the exact SHA.
+- SEC-002 + IDEM-001 closed. Awaiting Yua acceptance + merge (stacked after #403).
