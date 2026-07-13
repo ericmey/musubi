@@ -3,10 +3,10 @@ title: "Slice: C6b lifecycle audit — Qdrant↔SQLite atomicity (precondition o
 slice_id: slice-c6b-lifecycle-qdrant-sqlite-atomicity
 section: _slices
 type: slice
-status: ready
+status: in-progress
 owner: aoi
-phase: "Lifecycle-audit 2026-07-13 — C6b atomicity dependency"
-tags: [section/slices, status/ready, type/slice, lifecycle, audit, atomicity]
+phase: "Lifecycle-audit 2026-07-13 — C6b atomicity design + red contract"
+tags: [section/slices, status/in-progress, type/slice, lifecycle, audit, atomicity]
 updated: 2026-07-13
 reviewed: false
 depends-on: []
@@ -17,10 +17,18 @@ issue: 437
 # Slice: C6b lifecycle audit — Qdrant↔SQLite atomicity (precondition of C6 source merge)
 
 The concrete follow-on that C6's durability work explicitly does **not** close. Tracked as Issue #437
-(distinct from #433, which is C6 only). Status `ready`: unclaimed, no upstream dependency — any agent may
-pick up the design. It **blocks** the C6 source slice ([[_slices/slice-c6-lifecycle-event-loss]] lists it
-in `depends-on`), which must not be authorized/merged before C6b has a design + red contract, because the
-transition `Err` semantics after a committed Qdrant mutation are otherwise undefined.
+(distinct from #433, which is C6 only). Status `in-progress` (claimed by aoi, lock
+`_inbox/locks/slice-c6b-lifecycle-qdrant-sqlite-atomicity.lock`). It **blocks** the C6 source slice
+([[_slices/slice-c6-lifecycle-event-loss]] lists it in `depends-on`), which must not be
+authorized/merged before C6b has a design + red contract, because the transition `Err` semantics after a
+committed Qdrant mutation are otherwise undefined.
+
+**Design + exact red inventory:** [[13-decisions/c6b-lifecycle-atomicity-design]] — a durable-intent
+outbox (PENDING→APPLIED→FINAL / ABANDONED), begin/finalize API (record() stays for the no-mutation
+path), full crash matrix, hard version fence, lease-based reconciliation. Returned to Yua for an
+architecture ruling BEFORE the red contract is encoded (the C6 rhythm: memo → ruling → contract), because
+three forks — begin/finalize vs final-append, hard-fence vs warn-only, separate outbox table vs columns —
+change what every red asserts.
 
 ## The gap (verified against `src/musubi/lifecycle/transitions.py`)
 
@@ -38,18 +46,21 @@ Symmetrically, once C6's `record()` returns `Result[None, LifecycleEventWriteErr
 finally *learn* that an audit was refused after a committed mutation — but deciding what to do about it
 (compensate, replay, fail the transition) is this slice's design, not C6's.
 
-## What closing this requires (design space — not yet decided)
+## What closing this requires (design — see the ADR for the full treatment)
 
-A transactional-outbox / two-phase / idempotent-replay pattern spanning Qdrant + SQLite:
+A durable-intent transactional outbox spanning Qdrant + SQLite — [[13-decisions/c6b-lifecycle-atomicity-design]]:
 
-- **Outbox:** write the audit intent to SQLite in the same logical unit as (or before) the Qdrant
-  mutation, then reconcile/replay to Qdrant asynchronously with idempotency on `event_id`.
-- **Order + compensate:** audit-first-then-mutate with a durable pending marker, or mutate-then-audit
-  with a replay sweep that detects mutation-without-audit and repairs it.
-- **Idempotent replay:** `event_id TEXT PRIMARY KEY` + `INSERT OR REPLACE` already make audit replay
-  exactly-once; the missing half is a Qdrant-side idempotent reconcile.
-
-Scope + tradeoffs are a full design memo (an H5/H7-class dependency), larger than sink durability.
+- **Durable intent BEFORE the mutation:** `begin_transition` writes + commits a PENDING outbox row
+  before `set_payload`; `finalize_transition` marks APPLIED→FINAL after. So `record()` cannot stay a
+  pure final-append primitive — a two-call boundary is required (record() is retained for no-mutation
+  audits). The invariant: **a FINAL audit ⟺ a confirmed Qdrant mutation.**
+- **Crash matrix (C1–C4):** intent-before-mutate + version+payload readback on recovery lets
+  reconciliation replay (crash before mutate), finalize (crash after mutate, before finalize), or abandon
+  — never a false FINAL, never a lost audit.
+- **Hard version fence + idempotent replay:** `expected_version` becomes a hard fence for the audited
+  path (today warn-only), `event_id` is the idempotency key, guarded SQL edges make replay exactly-once.
+- **Lease-based reconciliation:** PENDING rows are claimed via an atomic guarded UPDATE; expired leases
+  (dead workers) are reclaimable; bounded attempts → ABANDONED.
 
 ## Relationship to C6
 
@@ -61,8 +72,20 @@ Scope + tradeoffs are a full design memo (an H5/H7-class dependency), larger tha
 
 Decision context: [[13-decisions/c6-lifecycle-durability-options]] (§ "Boundary — what C6 closes vs C6b").
 
+## Test Contract (behavior-shaped red inventory — to be encoded on ruling)
+
+Full inventory + fixtures + red-proof plan: [[13-decisions/c6b-lifecycle-atomicity-design]] § "Behavior-shaped
+RED INVENTORY". ≈13 strict-xfail reds against the current no-outbox `transition()` — durable-intent-before-
+mutation (R1), sqlite-blocks-qdrant (R2), qdrant-failure-retryable-not-final (R3), crash matrix C1/C2
+(R4/R5), idempotent replay (R6), hard version fence (R7), reconciliation lease + expired-lease reclaim
+(R8/R9), caller Result durable-intent flag (R10), bounded PII-free pending metric (R11), the FINAL⟺mutation
+invariant (R12), migration/rollback (R13) — plus green callsite + AST "Result consumed" guards. Fixtures:
+in-memory Qdrant (`QdrantClient(":memory:")`), real SQLite outbox+sink, `set_payload`/PENDING-write fault
+injectors, an env-selected crash subprocess, a reconciliation entrypoint. Not yet written: the three design
+forks change what each red asserts, so the contract follows Yua's ruling.
+
 ## Status
 
-**`ready`** (2026-07-13) — boundary artifact + tracked dependency; no contract or source yet, but
-unclaimed and pickup-ready (it blocks C6 source, so it must land first). Owner: aoi. A design memo + red
-contract are the next work. Tracking **Issue #437** (dedicated; #433 stays C6 only).
+**`in-progress`** (2026-07-13) — claimed by aoi (Issue #437, lock in `_inbox/locks/`). Design + exact red
+inventory delivered ([[13-decisions/c6b-lifecycle-atomicity-design]]); returned to Yua for an architecture
+ruling before the red contract is encoded and before any source. #433 stays C6 only.
