@@ -237,9 +237,9 @@ JSON write:
   authn-mw(401?) → route: Depends(authorize(from_body_field "namespace"), "w")(403?)
                         → Depends(idempotent_replay)(hit→replay | miss→) → handler → store
 
-Multipart upload:
+Multipart upload:  (the bounded-hash step is UNPROVEN — see D5; topology only, not a proven digest)
   authn-mw(401?) → route: parse Form("namespace") → Depends(authorize(from_form_field,"w"))(403?)
-                        → Depends(idempotent_replay)(bounded-hash, D5) → handler → store
+                        → Depends(idempotent_replay)(bounded-hash, D5 — UNPROVEN) → handler → store
 
 Path stats (GET, no idem):
   authn-mw(401?) → route: Depends(authorize(from_path "namespace_path", "r"))(403?) → handler
