@@ -12,7 +12,22 @@ reviewed: false
 
 How we measure retrieval quality. Without evals, tuning is vibes; with them, every weight change and model swap is defensible.
 
-## Layers
+## Current Implementation Status (v1.11.8)
+**The content of this document is a TARGET CONTRACT, not current executable reality.**
+As of `v1.11.8`, there is zero evaluation implementation in the source tree:
+- There is no `src/musubi/evals` module.
+- There are no golden query sets (query/answer pairs) or `evals/corpus/` directories. (`tests/integration/_corpus` contains a structured integration/performance fixture, but it completely lacks relevance labels or evaluation data).
+- There is no `musubi.evals` CLI tooling.
+- There is no GitHub Action workflow wired for quality metric testing.
+- Four distinct mathematical quality gate tests are currently skipped via `@pytest.mark.skip`:
+  - `test_eval_golden_query_set_mrr_ge_0_7_with_default_weights` (scoring.py:380)
+  - `test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points` (hybrid.py:403)
+  - `test_integration_deep_path_ndcg_10_on_golden_set_improves_vs_fast_path_by_ge_5_points` (rerank.py:210)
+  - `test_integration_end_to_end_deep_path_with_rerank_NDCG_10_on_golden_set_ge_threshold` (orchestration.py:50)
+
+The structures, commands, and workflows detailed below define the contract for the future `slice-ret004-evals` implementation.
+
+## Layers (Proposed Target)
 
 Three layers of evaluation, increasing in cost:
 

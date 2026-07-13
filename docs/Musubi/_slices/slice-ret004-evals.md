@@ -1,6 +1,7 @@
 ---
 title: "Slice: RET-004 Quality-Gate Evals"
 slice_id: slice-ret004-evals
+issue: 430
 section: _slices
 type: slice
 status: ready
@@ -45,10 +46,11 @@ This slice must implement a tests-first evaluation harness. The existing skipped
 | `test_eval_corpus_schema_validation` | Load malformed/missing fields in corpus YAML/JSONL. | Assert strict Pydantic validation failures. |
 | `test_eval_corpus_manifest_checksum` | Modify corpus file without bumping manifest hash. | Assert pipeline halt on checksum mismatch. |
 | `test_eval_deterministic_rerun` | Run identical queries 3 times with fixed seed. | Assert identical score ordering and values. |
-| `test_eval_holdout_isolation` | Run queries against partitioned test vs train sets. | Assert holdout queries/labels never participate in tuning/calibration, while searching the same corpus. |
+| `test_eval_holdout_isolation` | Queries against partitioned query/label sets over the same corpus. | Assert holdout queries/labels never participate in tuning/calibration. |
 | `test_eval_pr_smoke_fixed_embeddings` | PR pipeline: deterministic fake/precomputed embeddings and in-memory store. | Assert logic/weight schema runs without real models (no Qdrant). |
 | `test_eval_nightly_qdrant_tei_thresholds` | Scheduled pipeline: Real Qdrant/TEI against 1000-doc BEIR. | Assert mode-specific targets: Fast vs Deep separately for MRR, NDCG@10, Recall@20, P@1. |
-| `test_eval_baseline_delta_enforcement` | Compare `main` metrics to `pr` metrics; inject -0.05 regression. | Assert logic unit-tests on PR, full metric comparison scheduled/pre-release. |
+| `test_eval_baseline_delta_gate_unit` | Unit test feeding fixed baseline/candidate metrics to the delta logic. | Assert exact pass/fail boundaries. |
+| `test_eval_scheduled_baseline_report` | Scheduled integration: runs real `main` vs `candidate` metrics. | Assert pipeline FAILS at explicitly documented degradation deltas. |
 | `test_eval_per_query_top_hit_drop` | Inject scenario where previously top-ranked hit falls to rank 11. | Assert per-query top-relevant dropping out of top-10 is a FAIL. |
 | `test_eval_abstention_fpr` | Explicitly enforce score threshold against pure noise query. | Assert explicitly train-calibrated, versioned score threshold (frozen before holdout). Report FPR and FN/recall tradeoff per mode. |
 | `test_eval_contradiction_blending` | Query targeting two matured but contradictory facts. | Assert both facts appear in top-K context. |
