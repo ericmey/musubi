@@ -18,7 +18,9 @@ durable-on-accept does NOT make the two stores atomic. See slice-c6b-lifecycle-q
 Discriminators hardened per Yua's proof review (2026-07-13):
 - the PII red injects an exception whose MESSAGE carries the reason/namespace/object_id canaries and
   scans the FULLY RENDERED log (incl. the exc_info traceback), so `logger.exception` leaking would FAIL;
-- the failure red pins the concrete error TYPE + PII-free public fields, not just `Err[object]`;
+- the failure red pins the concrete error TYPE and an EXACT bounded public shape
+  ({"code": "lifecycle_event_write_failed"} only), so a same-type error that grows an extra PII-capable
+  field fails — not just `Err[object]`;
 - the sustained-failure red runs behind a bounded subprocess so a blocking `record()` fails, not hangs;
 - the callsite item is split: a green guard asserts EXACTLY one reviewed callsite, and a strict red
   AST-rejects the bare `sink.record(event)` expression (the Result must be consumed, not dropped).
@@ -150,6 +152,19 @@ def _error_public_text(err: object) -> str:
     return " ".join(parts)
 
 
+#: The LOCKED, immutable public shape of LifecycleEventWriteError — a single machine code, nothing else.
+#: No message / cause / path / event fields (any of which could carry PII). A same-type error with an
+#: EXTRA field must fail red #2 (proven), so the schema cannot silently grow a PII channel.
+_ACCEPTED_ERROR_SHAPE: dict[str, object] = {"code": "lifecycle_event_write_failed"}
+
+
+def _error_public_shape(err: object) -> dict[str, object]:
+    dump = getattr(err, "model_dump", None)
+    if callable(dump):
+        return dict(dump())
+    return dict(getattr(err, "__dict__", {}))
+
+
 def _as_result(value: object) -> "Ok[None] | Err[object]":
     if not isinstance(value, (Ok, Err)):
         raise DefectStillPresent(
@@ -205,13 +220,21 @@ def test_write_failure_is_typed_err_zero_row_metric_and_pii_free_log(
             res = _record(sink, ev)
         if not isinstance(res, Err):
             raise DefectStillPresent(f"a failed write must return Err, got {type(res).__name__}")
-        # (blocker 2) concrete error TYPE + bounded PII-free public fields — not a bare Err[object]
+        # (blocker 2) concrete error TYPE + an EXACT bounded public shape — not a bare Err[object],
+        # and not a same-type error that grew an extra (PII-capable) field.
         if type(res.error).__name__ != "LifecycleEventWriteError":
             raise DefectStillPresent(
                 f"error must be a concrete LifecycleEventWriteError, got {type(res.error).__name__}"
             )
-        pub = _error_public_text(res.error)
-        if any(c in pub for c in (_REASON_CANARY, _NS_CANARY, _OID_CANARY)):
+        shape = _error_public_shape(res.error)
+        if shape != _ACCEPTED_ERROR_SHAPE:
+            raise DefectStillPresent(
+                f"error public shape must be EXACTLY {_ACCEPTED_ERROR_SHAPE}, got {shape}"
+            )
+        # defense in depth: the fully-rendered public text still carries no PII canary
+        if any(
+            c in _error_public_text(res.error) for c in (_REASON_CANARY, _NS_CANARY, _OID_CANARY)
+        ):
             raise DefectStillPresent(
                 "error object leaked reason/namespace/object_id in public fields"
             )

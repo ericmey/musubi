@@ -9,7 +9,7 @@ phase: "Lifecycle-audit 2026-07-13 — C6 event-loss red contract (Yua-authorize
 tags: [section/slices, status/in-progress, type/slice, lifecycle, audit, durability]
 updated: 2026-07-13
 reviewed: false
-depends-on: []
+depends-on: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
 blocks: []
 issue: 433
 ---

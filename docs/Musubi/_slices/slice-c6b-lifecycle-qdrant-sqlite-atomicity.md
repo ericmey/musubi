@@ -3,23 +3,24 @@ title: "Slice: C6b lifecycle audit — Qdrant↔SQLite atomicity (precondition o
 slice_id: slice-c6b-lifecycle-qdrant-sqlite-atomicity
 section: _slices
 type: slice
-status: blocked
+status: ready
 owner: aoi
 phase: "Lifecycle-audit 2026-07-13 — C6b atomicity dependency"
-tags: [section/slices, status/blocked, type/slice, lifecycle, audit, atomicity]
+tags: [section/slices, status/ready, type/slice, lifecycle, audit, atomicity]
 updated: 2026-07-13
 reviewed: false
 depends-on: []
-blocks: []
-issue: 433
+blocks: ["[[_slices/slice-c6-lifecycle-event-loss]]"]
+issue: 437
 ---
 
 # Slice: C6b lifecycle audit — Qdrant↔SQLite atomicity (precondition of C6 source merge)
 
-The concrete follow-on that C6's durability work explicitly does **not** close. Named + linked here so
-the dependency is reviewable **before any C6 source merge** — durable-on-accept must not be mistaken for
-cross-store atomicity. Status `blocked`: no contract yet, and it cannot proceed until C6 source is
-scheduled. It exists so the boundary is a tracked artifact, not prose.
+The concrete follow-on that C6's durability work explicitly does **not** close. Tracked as Issue #437
+(distinct from #433, which is C6 only). Status `ready`: unclaimed, no upstream dependency — any agent may
+pick up the design. It **blocks** the C6 source slice ([[_slices/slice-c6-lifecycle-event-loss]] lists it
+in `depends-on`), which must not be authorized/merged before C6b has a design + red contract, because the
+transition `Err` semantics after a committed Qdrant mutation are otherwise undefined.
 
 ## The gap (verified against `src/musubi/lifecycle/transitions.py`)
 
@@ -62,6 +63,6 @@ Decision context: [[13-decisions/c6-lifecycle-durability-options]] (§ "Boundary
 
 ## Status
 
-**`blocked`** (2026-07-13) — boundary artifact only; no contract, no source; cannot proceed until C6
-source is scheduled. Owner: aoi. A design memo + red contract follow then. Tracking Issue #433 (shared
-lifecycle-audit epic; a dedicated C6b issue to be bootstrapped when this leaves `blocked`).
+**`ready`** (2026-07-13) — boundary artifact + tracked dependency; no contract or source yet, but
+unclaimed and pickup-ready (it blocks C6 source, so it must land first). Owner: aoi. A design memo + red
+contract are the next work. Tracking **Issue #437** (dedicated; #433 stays C6 only).
