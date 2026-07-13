@@ -453,6 +453,27 @@ def _canonical_patch_sha(patch: dict[str, object]) -> str:
     ).hexdigest()
 
 
+# The frozen, explicit safety default for the in-flight-outbox cap (Yua R14): NO silent unbounded
+# production. The future source phase must surface the SAME positive value from Settings; there is no
+# None/unbounded option. A test overrides it with a small positive N via the pending_cap kwarg.
+DEFAULT_PENDING_CAP = 10_000
+
+
+class _CapExceeded(Exception):
+    """Internal sentinel: the atomic admission found the non-terminal backlog at/over the cap (Yua R14).
+    transition() maps it to Err(code='cap_exceeded'); no outbox row is written and Qdrant is untouched."""
+
+
+def _validate_pending_cap(cap: object) -> int:
+    """Config-boundary validation (Yua R14 D2/(f)): the cap must be a positive int. bool is a subclass of
+    int, so reject it EXPLICITLY; reject any non-int type and any value <= 0. No None/unbounded."""
+    if isinstance(cap, bool) or not isinstance(cap, int):
+        raise TypeError(f"pending_cap must be an int (not bool), got {type(cap).__name__}")
+    if cap <= 0:
+        raise ValueError(f"pending_cap must be a positive int, got {cap}")
+    return cap
+
+
 # ---- committed reference/candidate coordinator (test-local, NEVER written to src) ------------------ #
 
 
@@ -469,7 +490,11 @@ class _RefCoordinator:
         db_path: Path,
         qdrant_path: Path | None = None,
         mode: str = "correct",
+        pending_cap: int = DEFAULT_PENDING_CAP,
     ) -> None:
+        self._pending_cap = _validate_pending_cap(
+            pending_cap
+        )  # Yua R14: positive-int, no unbounded
         self._client = client
         # LAZY on-disk Qdrant (R22): a two-process race passes a qdrant_path; Qdrant is opened only when a
         # process actually reads/applies. An active_intent loser (rejected at begin) never opens it; a
@@ -562,33 +587,80 @@ class _RefCoordinator:
         canon = json.dumps(fields, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canon.encode()).hexdigest()
 
+    def _nonterminal_count_sql(self) -> str:
+        """The global backlog SELECT for the cap gate (Yua R14). CORRECT counts NON-TERMINAL rows
+        (PENDING+APPLIED); terminal FINAL/ABANDONED never count. Two wrong variants mis-scope it."""
+        if (
+            self._mode == "terminal_counts"
+        ):  # WRONG: terminal rows inflate the count -> false early cap
+            states = "('PENDING','APPLIED','FINAL','ABANDONED')"
+        elif (
+            self._mode == "pending_only"
+        ):  # WRONG: ignores APPLIED -> undercounts the in-flight backlog
+            states = "('PENDING')"
+        else:
+            states = "('PENDING','APPLIED')"
+        return f"SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN {states}"
+
+    def _over_cap(self, con: Any) -> bool:
+        count = con.execute(self._nonterminal_count_sql()).fetchone()[0]
+        if (
+            self._mode == "off_by_one"
+        ):  # WRONG: '>' admits one PAST the cap (should reject AT the cap)
+            return bool(count > self._pending_cap)
+        return bool(count >= self._pending_cap)
+
     def _write_pending(
         self, i: _RefIntent, opk: str, event_id: str, state: str = "PENDING"
     ) -> None:
+        """Atomic admission (Yua R14 D3): BEGIN IMMEDIATE -> count NON-TERMINAL globally -> cap gate ->
+        INSERT -> COMMIT, all in ONE write transaction so concurrent admissions serialize on the write
+        lock. At/over the cap: raise _CapExceeded, write NO row (the caller maps it to Err(cap_exceeded)
+        before any Qdrant access). The INSERT is NOT 'OR IGNORE': a partial-unique-index violation (a
+        second active intent for the object, R11) RAISES IntegrityError so the loser is rejected."""
         self._checkpoint("before_pending_commit")
-        con = sqlite3.connect(self._db)
+        patch = _intended_patch(i)
+        params = (
+            opk,
+            i.object_id,
+            i.collection,
+            i.target_state,
+            i.expected_version,
+            _canonical_patch_sha(patch),
+            json.dumps(patch, sort_keys=True, separators=(",", ":")),
+            self._intent_digest(i),
+            state,
+            event_id,
+        )
+        insert = (
+            "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
+            "expected_version,patch_sha,patch_json,intent_digest,state,event_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)"
+        )
+        # cap_after_qdrant/no_cap deliberately DO NOT gate at admission (their defect is exposed later).
+        gate = self._mode not in ("no_cap", "cap_after_qdrant")
+        con = sqlite3.connect(self._db, isolation_level=None)  # manual transaction control
         try:
-            # NOT "OR IGNORE": a partial-unique-index violation (a second active intent for the object)
-            # must RAISE (IntegrityError) so the loser is rejected atomically, not silently ignored.
-            patch = _intended_patch(i)
-            con.execute(
-                "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
-                "expected_version,patch_sha,patch_json,intent_digest,state,event_id) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (
-                    opk,
-                    i.object_id,
-                    i.collection,
-                    i.target_state,
-                    i.expected_version,
-                    _canonical_patch_sha(patch),
-                    json.dumps(patch, sort_keys=True, separators=(",", ":")),
-                    self._intent_digest(i),
-                    state,
-                    event_id,
-                ),
-            )
-            con.commit()
+            if self._mode == "check_then_insert_race":
+                # WRONG (Yua R14 D3): count with NO held write lock, then (after a rendezvous) insert in a
+                # SEPARATE step -> two processes both read count<cap and both insert (caught by the race).
+                if gate and self._over_cap(con):
+                    raise _CapExceeded()
+                self._checkpoint("after_cap_count_before_insert")
+                con.execute("BEGIN IMMEDIATE")
+                con.execute(insert, params)
+                con.execute("COMMIT")
+            else:
+                con.execute("BEGIN IMMEDIATE")
+                try:
+                    if gate and self._over_cap(con):
+                        con.execute("ROLLBACK")
+                        raise _CapExceeded()
+                    con.execute(insert, params)
+                    con.execute("COMMIT")
+                except sqlite3.IntegrityError:
+                    con.execute("ROLLBACK")
+                    raise
         finally:
             con.close()
         self._checkpoint("after_pending_commit")
@@ -829,6 +901,17 @@ class _RefCoordinator:
         # operation instead of the same one (caught by R10).
         opk = generate_ksuid() if self._mode == "ignore_operation_key" else self._key(intent)
         digest = self._intent_digest(intent)
+        # cap_before_retry (WRONG, Yua R14 (d)): gate the cap BEFORE resolving operation_key idempotency,
+        # so a retry of an EXISTING op at cap is falsely rejected cap_exceeded instead of resolving its row.
+        # CORRECT gates the cap only at a NEW admission (inside _write_pending), AFTER idempotency below.
+        if self._mode == "cap_before_retry":
+            con = sqlite3.connect(self._db, isolation_level=None)
+            try:
+                over = self._over_cap(con)
+            finally:
+                con.close()
+            if over:
+                return Err(error=_RefError(code="cap_exceeded"))
         # operation_key idempotency + CONFLICT (R10): an existing row for this key short-circuits. If the
         # stored intent digest differs, the same key was reused for a DIFFERENT intent -> conflict, no
         # apply/new row/event. Only identical key+intent replays.
@@ -858,6 +941,10 @@ class _RefCoordinator:
                     event_id,
                     state=("FINAL" if self._mode == "premature_final" else "PENDING"),
                 )
+            except _CapExceeded:
+                # R14: the non-terminal backlog is at/over the cap. No row was written and we have NOT
+                # touched Qdrant yet (admission precedes apply) -> bounded Err, Qdrant untouched.
+                return Err(error=_RefError(code="cap_exceeded"))
             except sqlite3.IntegrityError:
                 # the ATOMIC partial-unique index rejected a second active intent for this object (R11).
                 return Err(error=_RefError(code="active_intent_exists"))
@@ -871,6 +958,23 @@ class _RefCoordinator:
             status = self._apply_conditional(
                 opk, intent.collection, intent.object_id, _intended_patch(intent)
             )
+            if self._mode == "cap_after_qdrant":
+                # WRONG (Yua R14): the cap is checked only AFTER mutating Qdrant, so an over-cap intent has
+                # ALREADY touched Qdrant by the time it is rejected (caught by the "Qdrant untouched /
+                # 0 set_payload" assertion). Count the OTHER non-terminal rows (excluding this just-inserted
+                # one) so the admission decision matches begin-time - it merely fires too late.
+                con = sqlite3.connect(self._db, isolation_level=None)
+                try:
+                    others = con.execute(
+                        "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED') "
+                        "AND operation_key != ?",
+                        (opk,),
+                    ).fetchone()[0]
+                finally:
+                    con.close()
+                if others >= self._pending_cap:
+                    self._mark(opk, "ABANDONED")
+                    return Err(error=_RefError(code="cap_exceeded"))
             if status == "fence":
                 if self._mode != "mutate_first":
                     self._mark(opk, "ABANDONED")
@@ -974,8 +1078,12 @@ class _CandidateApi:
         self.TransitionFinal = _RefFinal
         self.TransitionPending = _RefPending
 
-    def LifecycleTransitionCoordinator(self, *, client: Any, db_path: Path) -> _RefCoordinator:
-        return _RefCoordinator(client=client, db_path=db_path, mode=self._mode)
+    def LifecycleTransitionCoordinator(
+        self, *, client: Any, db_path: Path, pending_cap: int = DEFAULT_PENDING_CAP
+    ) -> _RefCoordinator:
+        return _RefCoordinator(
+            client=client, db_path=db_path, mode=self._mode, pending_cap=pending_cap
+        )
 
 
 _ACTIVE_CANDIDATE: _CandidateApi | None = None
@@ -1035,8 +1143,12 @@ def env(tmp_path: Path) -> Iterator[tuple[QdrantClient, _Seed, Path]]:
         client.close()
 
 
-def _coordinator(client: QdrantClient, db_path: Path) -> Any:
-    return _api().LifecycleTransitionCoordinator(client=client, db_path=Path(db_path))
+def _coordinator(
+    client: QdrantClient, db_path: Path, pending_cap: int = DEFAULT_PENDING_CAP
+) -> Any:
+    return _api().LifecycleTransitionCoordinator(
+        client=client, db_path=Path(db_path), pending_cap=pending_cap
+    )
 
 
 def _intent(
@@ -1336,6 +1448,83 @@ def _events_for_object(db_path: Path, object_id: str) -> int:
         return int(cur.fetchone()[0])
     finally:
         con.close()
+
+
+_R14_CAP = 3  # a small test cap; the production default is DEFAULT_PENDING_CAP (10_000)
+
+
+def _nonterminal_total(db_path: Path) -> int:
+    """The GLOBAL non-terminal outbox backlog (PENDING+APPLIED) - exactly what R14's cap gates on."""
+    if not Path(db_path).exists():
+        return 0
+    con = sqlite3.connect(str(db_path))
+    try:
+        cur = con.execute(
+            "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED')"
+        )
+        return int(cur.fetchone()[0])
+    finally:
+        con.close()
+
+
+def _fill_outbox(
+    db_path: Path,
+    collection: str,
+    *,
+    pending: int = 0,
+    applied: int = 0,
+    final: int = 0,
+    abandoned: int = 0,
+    tag: str = "fill",
+) -> list[str]:
+    """Seed dummy outbox rows in the given states (distinct object_id + operation_key each) to set the
+    global backlog for R14 cap tests. Terminal FINAL/ABANDONED rows exist to prove they DON'T count.
+    Returns the created operation_keys in insertion order."""
+    con = sqlite3.connect(str(db_path))
+    opks: list[str] = []
+    n = 0
+    try:
+        for state, count in (
+            ("PENDING", pending),
+            ("APPLIED", applied),
+            ("FINAL", final),
+            ("ABANDONED", abandoned),
+        ):
+            for _ in range(count):
+                opk = f"{tag}-op-{n}"
+                # pad n into the width remaining after the tag so ids stay DISTINCT for any tag length
+                # (a fixed [:27] on a longer tag would truncate the distinguishing digits -> collision).
+                oid = f"{tag}{n:0{max(1, 27 - len(tag))}d}"[:27]
+                con.execute(
+                    "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
+                    "expected_version,patch_sha,patch_json,intent_digest,state,event_id) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        opk,
+                        oid,
+                        collection,
+                        "matured",
+                        1,
+                        "sha",
+                        "{}",
+                        f"dig-{n}",
+                        state,
+                        f"ev-{n}",
+                    ),
+                )
+                opks.append(opk)
+                n += 1
+        con.commit()
+    finally:
+        con.close()
+    return opks
+
+
+def _mark_row(db_path: Path, operation_key: str, state: str) -> None:
+    con = sqlite3.connect(str(db_path))
+    con.execute("UPDATE lifecycle_outbox SET state=? WHERE operation_key=?", (state, operation_key))
+    con.commit()
+    con.close()
 
 
 def _set_checkpoint(coord: Any, hook: Any) -> None:
@@ -1684,6 +1873,177 @@ def _check_r13(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         c.close()
 
 
+def _check_r14(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """Hard in-flight-outbox cap (Yua R14): at the cap on GLOBAL non-terminal (PENDING+APPLIED) rows a
+    fresh begin returns Err(cap_exceeded) with NO new row / NO Qdrant / NO event / NO marker; below the
+    cap it admits; APPLIED counts and terminal (FINAL/ABANDONED) does not; completing one row frees
+    EXACTLY one slot; a same-key retry at cap resolves its row (never falsely cap_exceeded) while a
+    changed intent on the same key is a conflict; config is validated. Each scenario uses a FRESH env;
+    the harness (client, seed, db_path) supply only the base tmp dir."""
+    cap = _R14_CAP
+    base = Path(db_path).parent
+
+    def _cap_err(res: Any) -> bool:
+        return isinstance(res, Err) and getattr(res.error, "code", None) == "cap_exceeded"
+
+    def _is_final(res: Any) -> bool:
+        return isinstance(res, Ok) and isinstance(res.value, _api().TransitionFinal)
+
+    # (b) BELOW the cap (cap-1 non-terminal) a fresh transition is ADMITTED and completes. Build the
+    # coordinator FIRST - it owns the schema (and, for the strict-xfail red, _api() raises here).
+    c, s, d = _make_env(base / "r14-below")
+    try:
+        coord = _coordinator(c, d, pending_cap=cap)
+        _fill_outbox(d, s.collection, pending=cap - 1)
+        res = coord.transition(_intent(s, to_state="matured", operation_key="op-r14-below"))
+        if not _is_final(res):
+            raise DefectStillPresent(
+                "R14 below the cap (cap-1) must ADMIT a fresh transition -> Ok(Final)"
+            )
+    finally:
+        c.close()
+
+    # (b core) AT the cap a fresh transition is REJECTED cap_exceeded: no new row, Qdrant untouched
+    # (0 set_payload calls + unchanged version/state), no event, no marker.
+    c, s, d = _make_env(base / "r14-atcap")
+    try:
+        coord = _coordinator(c, d, pending_cap=cap)
+        _fill_outbox(d, s.collection, pending=cap)
+        before = _qdrant_state(c, s.collection, s.object_id)
+        calls = _count_set_payload(c)
+        res = coord.transition(_intent(s, to_state="matured", operation_key="op-r14-atcap"))
+        if not _cap_err(res):
+            raise DefectStillPresent(f"R14 AT the cap must return Err(cap_exceeded), got {res!r}")
+        if calls["n"] != 0:
+            raise DefectStillPresent(
+                "R14 cap rejection must NOT touch Qdrant (0 set_payload calls)"
+            )
+        if _qdrant_state(c, s.collection, s.object_id) != before:
+            raise DefectStillPresent(
+                "R14 cap rejection must leave the object's Qdrant state UNCHANGED"
+            )
+        if _nonterminal_total(d) != cap:
+            raise DefectStillPresent(
+                f"R14 cap rejection must write NO new row (backlog stays {cap}), got {_nonterminal_total(d)}"
+            )
+        if _outbox_rows(d, "op-r14-atcap"):
+            raise DefectStillPresent(
+                "R14 cap rejection must create no outbox row for the rejected op"
+            )
+        if _events_for_object(d, s.object_id) or _apply_markers(d, s.object_id):
+            raise DefectStillPresent("R14 cap rejection must emit no event and no apply marker")
+    finally:
+        c.close()
+
+    # (a) mixed PENDING+APPLIED reach the cap: an APPLIED row DOES count toward the backlog.
+    c, s, d = _make_env(base / "r14-mixed")
+    try:
+        coord = _coordinator(c, d, pending_cap=cap)
+        _fill_outbox(d, s.collection, pending=cap - 1, applied=1)  # cap non-terminal, mixed
+        res = coord.transition(_intent(s, to_state="matured", operation_key="op-r14-mixed"))
+        if not _cap_err(res):
+            raise DefectStillPresent(
+                "R14 mixed PENDING+APPLIED must reach the cap (APPLIED must count)"
+            )
+    finally:
+        c.close()
+
+    # (a) terminal rows are EXCLUDED: cap-1 non-terminal + many terminal still ADMITS.
+    c, s, d = _make_env(base / "r14-terminal-excluded")
+    try:
+        coord = _coordinator(c, d, pending_cap=cap)
+        _fill_outbox(d, s.collection, pending=cap - 1, final=cap, abandoned=cap)
+        res = coord.transition(_intent(s, to_state="matured", operation_key="op-r14-term"))
+        if not _is_final(res):
+            raise DefectStillPresent(
+                "R14 terminal rows must NOT count; cap-1 non-terminal must ADMIT"
+            )
+    finally:
+        c.close()
+
+    # (c) completing/abandoning ONE row frees EXACTLY one slot: at cap -> free one -> exactly one more
+    # admission fills it (held PENDING) -> the next fresh object is rejected again.
+    c, s, d = _make_env(base / "r14-frees-slot")
+    try:
+        coord = _coordinator(c, d, pending_cap=cap)
+        fillers = _fill_outbox(d, s.collection, pending=cap)
+        _mark_row(d, fillers[0], "FINAL")  # free exactly one slot (backlog -> cap-1)
+        _fail_set_payload(c, _TransientQdrantError("hold op-r14-slot PENDING"))
+        r1 = coord.transition(_intent(s, to_state="matured", operation_key="op-r14-slot"))
+        if not (isinstance(r1, Ok) and isinstance(r1.value, _api().TransitionPending)):
+            raise DefectStillPresent(
+                "R14 freeing one slot must admit exactly one more (held PENDING)"
+            )
+        _restore_set_payload(c)
+        if _nonterminal_total(d) != cap:
+            raise DefectStillPresent("R14 the freed slot must be consumed by exactly one admission")
+        c2, s2, _ = _make_env(base / "r14-frees-slot-2")  # a different object, same shared db
+        try:
+            res2 = _coordinator(c2, d, pending_cap=cap).transition(
+                _intent(s2, to_state="matured", operation_key="op-r14-slot2")
+            )
+            if not _cap_err(res2):
+                raise DefectStillPresent(
+                    "R14 only ONE slot was freed; the next fresh object must reject"
+                )
+        finally:
+            c2.close()
+    finally:
+        c.close()
+
+    # (d) a same-key RETRY at the cap resolves the existing row (idempotent replay), NOT cap_exceeded;
+    # a CHANGED intent on the same key stays a conflict.
+    c, s, d = _make_env(base / "r14-retry")
+    try:
+        coord = _coordinator(c, d, pending_cap=cap)
+        _fill_outbox(d, s.collection, pending=cap - 1)
+        _fail_set_payload(c, _TransientQdrantError("hold op-r14-retry PENDING"))
+        r1 = coord.transition(_intent(s, to_state="matured", operation_key="op-r14-retry"))
+        if not (isinstance(r1, Ok) and isinstance(r1.value, _api().TransitionPending)):
+            raise DefectStillPresent(
+                "R14 (d) setup: op-r14-retry must be admitted+held PENDING at cap-1"
+            )
+        if _nonterminal_total(d) != cap:  # now AT the cap
+            raise DefectStillPresent("R14 (d) setup: backlog must be at the cap before the retry")
+        retry = coord.transition(_intent(s, to_state="matured", operation_key="op-r14-retry"))
+        if _cap_err(retry):
+            raise DefectStillPresent(
+                "R14 a same-key retry AT the cap must resolve its existing row, NOT be falsely cap_exceeded"
+            )
+        if not (isinstance(retry, Ok) and isinstance(retry.value, _api().TransitionPending)):
+            raise DefectStillPresent(
+                "R14 a same-key retry must replay the in-flight row -> Ok(Pending)"
+            )
+        changed = coord.transition(
+            _intent(
+                s, to_state="demoted", operation_key="op-r14-retry"
+            )  # same key, different intent
+        )
+        if _cap_err(changed) or not isinstance(changed, Err):
+            raise DefectStillPresent(
+                "R14 a changed intent on the same key must be operation_key_conflict, not cap_exceeded"
+            )
+        if getattr(changed.error, "code", None) != "operation_key_conflict":
+            raise DefectStillPresent(
+                "R14 changed-intent same-key must return operation_key_conflict"
+            )
+    finally:
+        _restore_set_payload(c)
+        c.close()
+
+    # (f) config boundary validation: bool / non-int / <= 0 are rejected by the constructor.
+    c, s, d = _make_env(base / "r14-config")
+    try:
+        for bad_cap in (True, 0, -1, 3.5, "3", None):
+            try:
+                _coordinator(c, d, pending_cap=bad_cap)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            raise DefectStillPresent(f"R14 config validation must reject pending_cap={bad_cap!r}")
+    finally:
+        c.close()
+
+
 def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Idempotent replay: a PENDING op processed, then REPLAYED (duplicate delivery), yields EXACTLY ONE
     FINAL, ONE audit event, and ONE EFFECTIVE apply (measured by set_payload calls, not readback), leaving
@@ -1957,6 +2317,129 @@ def _check_r11(base: Path) -> None:
         )
 
 
+_R14_RACE_WIN = (
+    51  # won admission (its row committed; it exits at after_pending_commit, before apply)
+)
+_R14_RACE_CAP = 52  # was cap_exceeded AND touched no Qdrant (the correct loser)
+_R14_RACE_TOUCHED = 58  # cap_exceeded BUT it had already touched Qdrant - a defect
+
+
+def _r14_two_barrier_source(barrier_dir: Path) -> str:
+    """Two file barriers for the R14 admission race: _await_begin (both processes REACH admission) and
+    _await_cap2 (both have COUNTED before either inserts - this forces the non-atomic check_then_insert
+    candidate to deterministically admit both, while the correct BEGIN IMMEDIATE serializes regardless)."""
+
+    def one(fn: str, tag: str) -> str:
+        return (
+            f"def {fn}():\n"
+            f"    open(_os.path.join(_bd, {tag!r} + '.' + str(_os.getpid())), 'w').close()\n"
+            f"    for _ in range(int({_RACE_BARRIER_TIMEOUT!r} / 0.02)):\n"
+            f"        if len([f for f in _os.listdir(_bd) if f.startswith({tag!r})]) >= 2: return\n"
+            "        _time.sleep(0.02)\n"
+            "    raise SystemExit('barrier timeout')\n"
+        )
+
+    return (
+        "import os as _os, time as _time\n"
+        f"_bd = {str(barrier_dir)!r}\n" + one("_await_begin", "begin") + one("_await_cap2", "cap2")
+    )
+
+
+def _r14_race_child_source(
+    *, mode: str, cap: int, db_path: Path, seed: _Seed, target: str, op_key: str, barrier_dir: Path
+) -> str:
+    """A child that races admission at cap-1 with a DISTINCT object. It exits WIN at after_pending_commit
+    (row committed, before any apply), or - if the atomic cap gate rejects it - CAP (verifying via a
+    wrapped set_payload that it touched NO Qdrant). Two WINs means the cap was lost."""
+    return (
+        "import os, warnings\n"
+        "from qdrant_client import QdrantClient\n"
+        "from tests.lifecycle.test_c6b_atomicity import _RefCoordinator as _Coord, _RefIntent as _Intent\n"
+        + _r14_two_barrier_source(barrier_dir)
+        + "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        "    _client = QdrantClient(':memory:')\n"
+        "_touched = {'n': 0}\n"
+        "_orig_sp = _client.set_payload\n"
+        "def _sp(*a, **k):\n"
+        "    _touched['n'] += 1\n"
+        "    return _orig_sp(*a, **k)\n"
+        "_client.set_payload = _sp\n"
+        f"_c = _Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r}, pending_cap={cap})\n"
+        "def _cp(name):\n"
+        "    if name == 'before_pending_commit': _await_begin()\n"
+        "    if name == 'after_cap_count_before_insert': _await_cap2()\n"
+        f"    if name == 'after_pending_commit': os._exit({_R14_RACE_WIN})\n"
+        "_c._checkpoint = _cp\n"
+        f"_res = _c.transition(_Intent(collection={seed.collection!r}, object_id={seed.object_id!r}, "
+        f"namespace={seed.namespace!r}, expected_version={seed.version}, target_state={target!r}, "
+        f"actor='t', reason='r', operation_key={op_key!r}))\n"
+        "code = getattr(getattr(_res, 'error', None), 'code', None)\n"
+        "if code == 'cap_exceeded':\n"
+        f"    os._exit({_R14_RACE_CAP} if _touched['n'] == 0 else {_R14_RACE_TOUCHED})\n"
+        "os._exit(99)\n"
+    )
+
+
+def _check_r14_race(base: Path) -> None:
+    """Deterministic TWO-PROCESS admission race from cap-1 with DISTINCT objects (Yua R14 (e)): exactly
+    ONE admission + ONE cap_exceeded, the shared backlog settles at EXACTLY the cap, and the rejected
+    process touched no Qdrant. The non-atomic check_then_insert candidate admits both -> cap+1."""
+    _api()  # xfail today (coordinator absent)
+    mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
+    base.mkdir(parents=True, exist_ok=True)
+    db_path = base / "lifecycle.db"
+    barrier_dir = base / "barrier"
+    barrier_dir.mkdir(parents=True, exist_ok=True)
+    collection = str(collection_for_plane("episodic"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _RefCoordinator(
+            client=QdrantClient(":memory:"), db_path=db_path, mode=mode, pending_cap=_R14_CAP
+        )  # create schema
+    _fill_outbox(db_path, collection, pending=_R14_CAP - 1, tag="racefill")  # backlog at cap-1
+    seeds = (
+        _Seed(
+            collection=collection, object_id="raceobjA000000000000000000", namespace=_NS, version=1
+        ),
+        _Seed(
+            collection=collection, object_id="raceobjB000000000000000000", namespace=_NS, version=1
+        ),
+    )
+    op_keys = ("op-a14", "op-b14")
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _r14_race_child_source(
+                    mode=mode,
+                    cap=_R14_CAP,
+                    db_path=db_path,
+                    seed=seeds[i],
+                    target="matured",
+                    op_key=op_keys[i],
+                    barrier_dir=barrier_dir,
+                ),
+            ]
+        )
+        for i in range(2)
+    ]
+    codes = [p.wait(timeout=90) for p in procs]
+    if _R14_RACE_TOUCHED in codes:
+        raise DefectStillPresent("a cap_exceeded loser must have touched NO Qdrant (0 set_payload)")
+    if sorted(codes) != [_R14_RACE_WIN, _R14_RACE_CAP]:
+        raise DefectStillPresent(
+            f"from cap-1, exactly ONE admission + ONE cap_exceeded expected; got exit codes {codes} "
+            f"(two {_R14_RACE_WIN} = both admitted over the cap = the check-then-insert race)"
+        )
+    total = _nonterminal_total(db_path)
+    if total != _R14_CAP:
+        raise DefectStillPresent(
+            f"the shared backlog must settle at EXACTLY the cap ({_R14_CAP}); got {total} (cap+1 = lost cap)"
+        )
+
+
 def _check_r12(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Hard version fence: a stale expected_version is refused (Err), the mutation is NOT applied, and the
     intent is ABANDONED - never a warn-only last-writer-wins clobber (Yua fork 2 / correction E)."""
@@ -1989,6 +2472,11 @@ _R13_REASON = (
     "drops a lineage field is falsely accepted; R13 needs a FULL readback patch SHA over the intended key "
     "set projected from ACTUAL data - a missing/wrong field must refuse (Ok(Pending), no marker/event/FINAL)."
 )
+_R14_REASON = (
+    "today the outbox backlog is unbounded, so a stalled reconciler lets in-flight intents grow without "
+    "limit; R14 needs a hard cap on GLOBAL non-terminal rows enforced atomically at admission - at the "
+    "cap a fresh begin returns Err(cap_exceeded), Qdrant untouched, no row/event/marker."
+)
 _R10_REASON = (
     "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
     "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
@@ -2015,6 +2503,13 @@ def test_r13_conditional_apply_full_readback_patch_sha(
     _check_r13(*env)
 
 
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R14_REASON)
+def test_r14_hard_pending_cap_admission_backpressure(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r14(*env)
+
+
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
 def test_r10_operation_key_idempotent_across_caller_retries(
     env: tuple[QdrantClient, _Seed, Path],
@@ -2025,6 +2520,18 @@ def test_r10_operation_key_idempotent_across_caller_retries(
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R11_REASON)
 def test_r11_single_active_intent_per_object(tmp_path: Path) -> None:
     _check_r11(tmp_path)
+
+
+_R14_RACE_REASON = (
+    "today admission is not atomic across processes, so two concurrent begins at cap-1 both count under "
+    "the cap and both insert (a check-then-insert race) -> the backlog exceeds the cap; R14 needs BEGIN "
+    "IMMEDIATE -> count -> insert -> commit in one transaction so exactly one admits and one is cap_exceeded."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R14_RACE_REASON)
+def test_r14_two_process_admission_race_holds_cap(tmp_path: Path) -> None:
+    _check_r14_race(tmp_path)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R12_REASON)
@@ -2529,6 +3036,17 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
         ],
     ),
     "r12": (_check_r12, ["warn_only_fence"]),
+    "r14": (
+        _check_r14,
+        [
+            "no_cap",  # never gates -> admits over the cap
+            "off_by_one",  # '>' admits AT the cap
+            "cap_after_qdrant",  # gates only after mutating Qdrant -> Qdrant touched
+            "pending_only",  # ignores APPLIED -> undercounts the backlog
+            "terminal_counts",  # counts terminal rows -> falsely rejects under the cap
+            "cap_before_retry",  # gates before idempotency -> falsely rejects a same-key retry
+        ],
+    ),
 }
 
 
@@ -2565,6 +3083,7 @@ _CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r6": (_check_r6, ["reconcile_no_readback"]),
     "r7": (_check_r7, ["reconcile_always_apply"]),
     "r11": (_check_r11, ["no_unique_index"]),
+    "r14race": (_check_r14_race, ["check_then_insert_race"]),
     "r22": (_check_r22, ["non_atomic_cas"]),
 }
 
