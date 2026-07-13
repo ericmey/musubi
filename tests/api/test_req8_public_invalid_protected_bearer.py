@@ -42,7 +42,7 @@ def test_public_absent_bearer_stays_public(client: TestClient) -> None:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="REQ-8: a presented-invalid bearer is ignored on public routes — fix pending",
+    reason="REQ-8: a presented-invalid bearer is ignored on public routes — deferred; future REQ-8 slice (Issue #413)",
 )
 def test_public_presented_invalid_bearer_must_fail(client: TestClient) -> None:
     """The hole: presenting an INVALID bearer to a public route is silently ignored (200 today).
