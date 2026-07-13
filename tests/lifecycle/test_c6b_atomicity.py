@@ -411,10 +411,6 @@ class _TerminalQdrantError(RuntimeError):
     terminal = True
 
 
-class _BeginStoreError(RuntimeError):
-    """Injected at the durable-intent persistence/commit failpoint (R2, deterministic - not chmod)."""
-
-
 def _patch_sha(target_state: str, next_version: int) -> str:
     return hashlib.sha256(f"{target_state}:{next_version}".encode()).hexdigest()
 
@@ -488,23 +484,32 @@ class _RefCoordinator:
     def _apply_conditional(
         self, collection: str, object_id: str, target_state: str, expected_version: int
     ) -> bool:
-        """Server-side-conditional stand-in: only apply if the current version == expected (fence)."""
-        ver, _ = self._cur(collection, object_id)
-        if ver != expected_version:
-            return False
+        """Server-side conditional: the expected version is IN the set_payload filter (object_id AND
+        version == expected), so a stale version matches zero points and does not apply. Then readback the
+        actual payload to confirm the fence held and the exact patch landed (Yua repair 5)."""
         self._client.set_payload(
             collection_name=collection,
             payload={"state": target_state, "version": expected_version + 1},
             points=models.Filter(
-                must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=object_id)
+                    ),
+                    models.FieldCondition(
+                        key="version", match=models.MatchValue(value=expected_version)
+                    ),
+                ]
             ),
         )
-        return True
+        ver, st = self._cur(collection, object_id)
+        return ver == expected_version + 1 and st == target_state
 
     def _finalize(
         self, opk: str, event_id: str, object_id: str, namespace: str, target_state: str
     ) -> None:
-        """Atomic FINAL: insert the FINAL lifecycle event AND mark the outbox FINAL in ONE txn."""
+        """Atomic FINAL: insert the FINAL lifecycle event AND mark the outbox FINAL in ONE txn. The
+        outbox update is GUARDED on the exact APPLIED state (`WHERE state='APPLIED'`, exactly one row) so
+        a PENDING row can never jump straight to FINAL (Yua R8 forward guard)."""
         con = sqlite3.connect(self._db)
         try:
             con.execute("BEGIN")
@@ -514,7 +519,15 @@ class _RefCoordinator:
                 (event_id, object_id, namespace, target_state),
             )
             self._checkpoint("inside_finalize_after_event_insert")  # R8 fault point
-            con.execute("UPDATE lifecycle_outbox SET state='FINAL' WHERE operation_key=?", (opk,))
+            cur = con.execute(
+                "UPDATE lifecycle_outbox SET state='FINAL' WHERE operation_key=? AND state='APPLIED'",
+                (opk,),
+            )
+            if cur.rowcount != 1:
+                con.execute("ROLLBACK")
+                raise RuntimeError(
+                    f"finalize guard: expected exactly one APPLIED row for {opk}, updated {cur.rowcount}"
+                )
             con.execute("COMMIT")
         except Exception:
             con.execute("ROLLBACK")
@@ -541,7 +554,11 @@ class _RefCoordinator:
                     event_id,
                     state=("FINAL" if self._mode == "premature_final" else "PENDING"),
                 )
-            except _BeginStoreError:
+            except sqlite3.Error:
+                # A REAL SQLite failure at durable-begin (the checkpoint delivers sqlite3.OperationalError,
+                # the same class a genuine disk error raises) maps to a bounded Err; no row, no mutation.
+                if self._mode == "no_begin_catch":
+                    raise  # WRONG: lets the store error escape past the mutation boundary
                 return Err(error=_RefError(code="durable_begin_failed"))
         try:
             applied = self._apply_conditional(
@@ -566,21 +583,34 @@ class _RefCoordinator:
         return Ok(value=_RefFinal(operation_key=opk, event_id=event_id))
 
     def reconcile_once(self, *, limit: int = 100) -> _RefReport:
+        # reconcile_greedy (WRONG): also claims already-FINAL rows and re-affirms the payload -> a second
+        # reconcile makes extra set_payload calls (caught by R3's exactly-one/zero-apply instrumentation).
+        claim_states = (
+            "('PENDING','APPLIED','FINAL')"
+            if self._mode == "reconcile_greedy"
+            else "('PENDING','APPLIED')"
+        )
         con = sqlite3.connect(self._db)
         rows = con.execute(
             "SELECT operation_key,object_id,collection,target_state,expected_version,event_id,state "
-            "FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED') LIMIT ?",
+            f"FROM lifecycle_outbox WHERE state IN {claim_states} LIMIT ?",
             (limit,),
         ).fetchall()
         con.close()
         fin = ab = pend = 0
         for opk, oid, coll, tstate, ver, event_id, state in rows:
+            if state == "FINAL":  # only reachable under reconcile_greedy
+                self._apply_conditional(
+                    coll, oid, tstate, ver
+                )  # WRONG: re-affirm -> extra apply call
+                continue
             if state == "APPLIED":
                 self._finalize(opk, event_id, oid, _NS, tstate)
                 fin += 1
                 continue
             if self._mode == "reconcile_no_apply":
-                self._mark(opk, "FINAL")  # WRONG: finalize without applying the mutation
+                self._mark(opk, "APPLIED")
+                self._finalize(opk, event_id, oid, _NS, tstate)  # WRONG: finalize without applying
                 fin += 1
                 continue
             try:
@@ -596,6 +626,7 @@ class _RefCoordinator:
                 self._mark(opk, "ABANDONED")
                 ab += 1
                 continue
+            self._mark(opk, "APPLIED")  # PENDING -> APPLIED before the guarded FINAL txn
             self._finalize(opk, event_id, oid, _NS, tstate)
             fin += 1
         return _RefReport(claimed=len(rows), finalized=fin, pending=pend, abandoned=ab)
@@ -710,6 +741,20 @@ def _restore_set_payload(client: QdrantClient) -> None:
         client.set_payload = orig  # type: ignore[method-assign]
 
 
+def _count_set_payload(client: QdrantClient) -> dict[str, int]:
+    """Wrap the CURRENT set_payload to count effective apply calls (R3: first reconcile makes exactly one,
+    a second makes zero - a duplicate idempotent write leaves the version unchanged but IS a call)."""
+    orig: Any = client.set_payload
+    calls = {"n": 0}
+
+    def _wrapped(*a: Any, **k: Any) -> Any:
+        calls["n"] += 1
+        return orig(*a, **k)
+
+    client.set_payload = _wrapped  # type: ignore[method-assign]
+    return calls
+
+
 def _qdrant_state(client: QdrantClient, collection: str, object_id: str) -> tuple[object, object]:
     points, _ = client.scroll(
         collection_name=collection,
@@ -732,12 +777,16 @@ def _outbox_rows(db_path: Path, operation_key: str) -> list[dict[str, object]]:
     try:
         try:
             cur = con.execute(
-                "SELECT operation_key,state,event_id FROM lifecycle_outbox WHERE operation_key=?",
+                "SELECT operation_key,state,event_id,patch_sha FROM lifecycle_outbox "
+                "WHERE operation_key=?",
                 (operation_key,),
             )
         except sqlite3.OperationalError:
             return []
-        return [{"operation_key": r[0], "state": r[1], "event_id": r[2]} for r in cur.fetchall()]
+        return [
+            {"operation_key": r[0], "state": r[1], "event_id": r[2], "patch_sha": r[3]}
+            for r in cur.fetchall()
+        ]
     finally:
         con.close()
 
@@ -784,7 +833,9 @@ def _check_r2(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
 
     def _fail_begin(name: str) -> None:
         if name == "before_pending_commit":
-            raise _BeginStoreError("injected durable-begin failpoint")
+            # A REAL sqlite failure class (Yua repair 1) - not a test-only exception a candidate could
+            # special-case while genuine SQLite disk errors still escape.
+            raise sqlite3.OperationalError("disk I/O error")
 
     _set_checkpoint(coord, _fail_begin)
     try:
@@ -819,34 +870,49 @@ def _check_r3(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
             f"transient outcome must be TransitionPending, got {type(res.value).__name__}"
         )
     rows = _outbox_rows(db_path, "op-r3")
-    if not rows or rows[0]["state"] != "PENDING":
-        raise DefectStillPresent("the intent must remain PENDING after a transient failure")
+    if len(rows) != 1 or rows[0]["state"] != "PENDING":
+        raise DefectStillPresent("there must be EXACTLY ONE outbox row and it must be PENDING")
     if _final_event_count(db_path, rows[0]["event_id"]):
         raise DefectStillPresent("no FINAL event may exist while the op is transient-PENDING")
-    # Qdrant recovers; reconcile must ACTUALLY apply + finalize (not just flip a FINAL flag).
+    # Qdrant recovers; reconcile must ACTUALLY apply + finalize (not just flip a FINAL flag). Instrument
+    # the real set_payload so a duplicate idempotent write (which leaves the version unchanged) is caught.
     _restore_set_payload(client)
+    calls = _count_set_payload(client)
+    before_first = calls["n"]
     report = coord.reconcile_once(limit=10)
+    if calls["n"] - before_first != 1:
+        raise DefectStillPresent(
+            f"the first reconcile must make EXACTLY ONE effective apply, got {calls['n'] - before_first}"
+        )
     ver, st = _qdrant_state(client, seed.collection, seed.object_id)
     if (ver, st) != (seed.version + 1, "matured"):
         raise DefectStillPresent(
-            f"reconcile must actually apply the mutation (object -> matured/v{seed.version + 1}), got {st}/{ver}"
+            f"reconcile must actually apply the mutation (object -> matured/v{seed.version + 1}), "
+            f"got {st}/{ver}"
         )
     rows2 = _outbox_rows(db_path, "op-r3")
-    if not rows2 or rows2[0]["state"] != "FINAL":
-        raise DefectStillPresent("reconcile must mark the recovered op FINAL")
+    if len(rows2) != 1 or rows2[0]["state"] != "FINAL":
+        raise DefectStillPresent("there must be EXACTLY ONE outbox row and it must be FINAL")
+    # patch-SHA readback: the stored intended patch SHA must equal the SHA of the ACTUAL Qdrant payload.
+    if rows2[0]["patch_sha"] != _patch_sha(str(st), int(str(ver))):
+        raise DefectStillPresent(
+            "the stored intended patch SHA must match the readback of the actual Qdrant payload"
+        )
     if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
         raise DefectStillPresent("recovery must produce EXACTLY ONE FINAL event for the event_id")
     if getattr(report, "finalized", None) != 1:
         raise DefectStillPresent(
             f"ReconcileReport must report exactly one finalized, got {report!r}"
         )
-    # Second reconcile is a no-op: no second apply, no second event.
+    # Second reconcile is a no-op: ZERO set_payload calls, no second event.
+    before_second = calls["n"]
     report2 = coord.reconcile_once(limit=10)
-    ver2, _ = _qdrant_state(client, seed.collection, seed.object_id)
-    if ver2 != seed.version + 1 or getattr(report2, "finalized", 0) != 0:
+    if calls["n"] - before_second != 0:
         raise DefectStillPresent(
-            "a second reconcile must be a no-op (no re-apply, nothing finalized)"
+            f"a second reconcile must make ZERO apply calls, got {calls['n'] - before_second}"
         )
+    if getattr(report2, "finalized", 0) != 0:
+        raise DefectStillPresent("a second reconcile must finalize nothing")
     if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
         raise DefectStillPresent("a second reconcile must not emit a second FINAL event")
 
@@ -858,17 +924,21 @@ def _check_r4(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     res = coord.transition(_intent(seed, to_state="matured", operation_key="op-r4"))
     if not isinstance(res, Err):
         raise DefectStillPresent("a proven-terminal failure must return Err (no future mutation)")
-    if not getattr(res.error, "code", None):
-        raise DefectStillPresent("Err must carry a bounded terminal error code")
+    if getattr(res.error, "code", None) != "terminal_apply_failure":
+        raise DefectStillPresent(
+            f"Err must carry the exact bounded terminal code 'terminal_apply_failure', got "
+            f"{getattr(res.error, 'code', None)!r}"
+        )
     after = _qdrant_state(client, seed.collection, seed.object_id)
     if before != after:
         raise DefectStillPresent(
             f"a terminal failure must leave Qdrant exactly unchanged: {before} -> {after}"
         )
     rows = _outbox_rows(db_path, "op-r4")
-    if not rows or rows[0]["state"] != "ABANDONED":
+    if len(rows) != 1 or rows[0]["state"] != "ABANDONED":
         raise DefectStillPresent(
-            f"a proven-terminal failure must mark the intent ABANDONED, got {rows[0]['state'] if rows else 'no row'!r}"
+            f"a proven-terminal failure must leave EXACTLY ONE ABANDONED row, got "
+            f"{[r['state'] for r in rows] if rows else 'no row'}"
         )
     if _final_event_count(db_path, rows[0]["event_id"]):
         raise DefectStillPresent("ABANDONED must never create a FINAL lifecycle event")
@@ -940,8 +1010,8 @@ def test_r4_terminal_failure_is_err_abandoned_no_final(
 _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
     # red -> (check, plausible-wrong modes that MUST fail this check)
     "r1": (_check_r1, ["mutate_first", "premature_final"]),
-    "r2": (_check_r2, ["mutate_first"]),
-    "r3": (_check_r3, ["classify_all_terminal", "reconcile_no_apply"]),
+    "r2": (_check_r2, ["mutate_first", "no_begin_catch"]),
+    "r3": (_check_r3, ["classify_all_terminal", "reconcile_no_apply", "reconcile_greedy"]),
     "r4": (_check_r4, ["classify_all_transient"]),
 }
 
