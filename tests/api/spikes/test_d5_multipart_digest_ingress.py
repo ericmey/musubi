@@ -27,11 +27,14 @@ import asyncio
 import hashlib
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from tempfile import SpooledTemporaryFile
-from typing import Any
 
 import pytest
+from fastapi import FastAPI, File, Form
+from fastapi import UploadFile as FastAPIUploadFile
 from starlette.datastructures import Headers, UploadFile
 from starlette.formparsers import MultiPartParser
+from starlette.testclient import TestClient
+from starlette.types import Message, Receive, Scope, Send
 
 BOUNDARY = "----d5boundary"
 
@@ -136,11 +139,6 @@ def test_spool_rollover_and_rewind_both_modes() -> None:
 # --------------------------------------------------------------------------- #
 # 3. proposed pure-ASGI ingress byte cap — independent of Content-Length/chunking
 # --------------------------------------------------------------------------- #
-
-Message = dict[str, Any]
-Scope = dict[str, Any]
-Receive = Callable[[], Awaitable[Message]]
-Send = Callable[[Message], Awaitable[None]]
 
 
 class _PayloadTooLarge(Exception):
@@ -258,3 +256,131 @@ def test_identity_length_prefix_prevents_boundary_ambiguity() -> None:
     id1 = _canonical_identity({"a": "bc", "d": "e"}, sha)
     id2 = _canonical_identity({"a": "b", "cd": "e"}, sha)
     assert id1 != id2, "length-prefixed canonicalisation must disambiguate field boundaries"
+
+
+def test_d5_8_ingress_cap_rejects_missing_cl_oversized_chunked() -> None:
+    """Missing Content-Length AND an oversized body sent in chunks → rejects on ACTUAL bytes."""
+    scope: Scope = {"type": "http", "headers": []}  # NO content-length at all
+    chunks = [b"x" * 300, b"y" * 300]  # 600 actual, cap 500
+    app = IngressByteCap(_body_consumer(), max_bytes=500)
+    with pytest.raises(_PayloadTooLarge) as ei:
+        asyncio.run(_run_asgi(app, scope, _receive_from(chunks)))
+    assert ei.value.seen > 500, "cap fires on actual streamed bytes with no Content-Length present"
+
+
+def test_d5_9_ingress_cap_boundary_exact_passes_over_by_one_rejects() -> None:
+    """Exact max bytes passes; max+1 rejects."""
+    app = IngressByteCap(_body_consumer(), max_bytes=500)
+    asyncio.run(
+        _run_asgi(app, {"type": "http", "headers": []}, _receive_from([b"a" * 500]))
+    )  # exact → ok
+    with pytest.raises(_PayloadTooLarge):
+        asyncio.run(
+            _run_asgi(app, {"type": "http", "headers": []}, _receive_from([b"a" * 501]))
+        )  # +1 → reject
+
+
+# --------------------------------------------------------------------------- #
+# D5-10 — real FastAPI multipart route behind a buffer-and-gate ingress cap
+# --------------------------------------------------------------------------- #
+
+
+class BufferAndGateCap:
+    """Ingress cap that BUFFERS the request body up to max_bytes+1 and GATES: if the total encoded
+    request bytes (multipart framing INCLUDED) exceed the cap, it returns 413 and NEVER calls the
+    app — so the route/parser never runs and no UploadFile temp file is ever created. Within the
+    limit, it replays the buffered body to the app. Counts ACTUAL bytes, ignores Content-Length."""
+
+    def __init__(
+        self, app: Callable[[Scope, Receive, Send], Awaitable[None]], *, max_bytes: int
+    ) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        buffered = bytearray()
+        over = False
+        more = True
+        while more:
+            m = await receive()
+            buffered += m.get("body", b"")
+            more = m.get("more_body", False)
+            if len(buffered) > self.max_bytes:
+                over = True
+                break
+        if over:
+            await send(
+                {
+                    "type": "http.response.start",
+                    "status": 413,
+                    "headers": [(b"content-type", b"application/json")],
+                }
+            )
+            await send({"type": "http.response.body", "body": b'{"detail":"payload too large"}'})
+            return  # app NEVER called → route/parser never runs → no temp file
+
+        sent = {"done": False}
+
+        async def replay_receive() -> Message:
+            if not sent["done"]:
+                sent["done"] = True
+                return {"type": "http.request", "body": bytes(buffered), "more_body": False}
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await self.app(scope, replay_receive, send)
+
+
+def _upload_app(entered: dict[str, int]) -> FastAPI:
+    app = FastAPI()
+
+    @app.post("/upload")
+    async def upload(
+        namespace: str = Form(...), file: FastAPIUploadFile = File(...)
+    ) -> dict[str, int]:
+        entered["n"] += 1
+        data = await file.read()
+        return {"size": len(data)}
+
+    return app
+
+
+def test_d5_10_real_multipart_413_before_handler_counts_total_encoded_bytes() -> None:
+    entered = {"n": 0}
+    file_content = b"F" * 150
+    body = _multipart_body(
+        field=("namespace", b"eric/claude-code/artifact"), file=("file", file_content)
+    )
+    # cap is ABOVE the file content (150) but BELOW the total encoded body (framing included):
+    cap = (len(file_content) + len(body)) // 2
+    assert len(file_content) < cap < len(body), (
+        "cap sits between file-content size and total encoded size"
+    )
+
+    app = BufferAndGateCap(_upload_app(entered), max_bytes=cap)
+    client = TestClient(app, raise_server_exceptions=False)
+    r = client.post(
+        "/upload",
+        content=body,
+        headers={"content-type": f"multipart/form-data; boundary={BOUNDARY}"},
+    )
+    assert r.status_code == 413, "over-cap multipart request must 413 at the ingress"
+    assert entered["n"] == 0, (
+        "handler not entered → route/parser never ran → no UploadFile temp handle"
+    )
+
+    # CONTRACT LOCKED: the cap bounds TOTAL ENCODED request bytes (multipart framing included).
+    # The file content alone (150) is under the cap, yet the request is rejected because the full
+    # encoded body (headers + boundaries + framing) exceeds it. A within-cap upload still works:
+    entered2 = {"n": 0}
+    small_body = _multipart_body(field=("namespace", b"ns"), file=("file", b"F" * 10))
+    ok = TestClient(BufferAndGateCap(_upload_app(entered2), max_bytes=len(small_body) + 10)).post(
+        "/upload",
+        content=small_body,
+        headers={"content-type": f"multipart/form-data; boundary={BOUNDARY}"},
+    )
+    assert ok.status_code == 200 and entered2["n"] == 1, (
+        "within-cap upload passes and enters the handler"
+    )

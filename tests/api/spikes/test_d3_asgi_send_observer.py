@@ -27,18 +27,14 @@ terminal event) — `more_body` ever being true must NOT exclude it.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-
-Message = dict[str, Any]
-Scope = dict[str, Any]
-Send = Callable[[Message], Awaitable[None]]
-Receive = Callable[[], Awaitable[Message]]
-ASGIApp = Callable[[Scope, Receive, Send], Awaitable[None]]
-
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import PlainTextResponse
+from starlette.testclient import TestClient
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # --------------------------------------------------------------------------- #
 # The pure-ASGI send observer (the thing being designed). Not src — a spike.
@@ -395,3 +391,81 @@ def test_middleware_placement_determines_captured_bytes() -> None:
     assert inner.cache["p2"][2] == body, "observer below transform captures original bytes"
 
     assert outside.cache["p1"][2] != inner.cache["p2"][2], "placement changes what is stored"
+
+
+# --------------------------------------------------------------------------- #
+# D3-12 / D3-13 — the SAME observer wrapping a REAL pinned FastAPI app
+# --------------------------------------------------------------------------- #
+
+
+def _fastapi_app(counters: dict[str, int]) -> FastAPI:
+    """Real FastAPI app: a routed dependency sets request.state (scope['state']) and is counted;
+    one handler returns a dict, one returns a raw Response; one raises → real exception handler."""
+    app = FastAPI()
+
+    async def idem_dependency(request: Request) -> None:
+        counters["dep"] += 1
+        request.state.idem_identity = "declared"  # dependency sets state (scope['state'])
+
+    @app.post("/eligible-dict", dependencies=[Depends(idem_dependency)])
+    async def eligible_dict() -> dict[str, int]:
+        counters["dict_handler"] += 1
+        return {"z": 1, "a": 2}
+
+    @app.post("/eligible-response", dependencies=[Depends(idem_dependency)])
+    async def eligible_response() -> Response:
+        counters["resp_handler"] += 1
+        r = PlainTextResponse("col1,col2\n1,2\n", media_type="text/csv")
+        r.set_cookie("s", "1")
+        return r
+
+    @app.post("/boom", dependencies=[Depends(idem_dependency)])
+    async def boom() -> Response:
+        counters["boom_handler"] += 1
+        raise HTTPException(status_code=503, detail="backend down")
+
+    return app
+
+
+def test_d3_12_real_fastapi_dict_and_response_capture_and_replay_byte_exact() -> None:
+    counters = {"dep": 0, "dict_handler": 0, "resp_handler": 0, "boom_handler": 0}
+    obs = SendObserver(
+        _fastapi_app(counters), eligible_paths={"/eligible-dict", "/eligible-response"}
+    )
+    client = TestClient(obs)
+
+    for path, key, expect_ct in [
+        ("/eligible-dict", "d1", "application/json"),
+        ("/eligible-response", "r1", "text/csv"),
+    ]:
+        first = client.post(path, headers={"Idempotency-Key": key})
+        assert first.status_code == 200
+        assert first.headers.get("x-idempotent-replay") is None, "first call is not a replay"
+        replay = client.post(path, headers={"Idempotency-Key": key})
+        assert replay.headers.get("x-idempotent-replay") == "true", "second call is a replay"
+        assert replay.content == first.content, f"{path}: replay bytes must be identical"
+        assert replay.headers.get("content-type", "").startswith(expect_ct), (
+            "media type preserved on replay"
+        )
+
+    # dependency + handlers each ran exactly ONCE (miss); replay never re-executed either.
+    assert counters["dep"] == 2, f"dependency ran once per distinct key, not on replay: {counters}"
+    assert counters["dict_handler"] == 1 and counters["resp_handler"] == 1, counters
+    # replay preserves the raw Set-Cookie from the Response handler
+    replay2 = client.post("/eligible-response", headers={"Idempotency-Key": "r1"})
+    assert any("s=1" in c for c in replay2.headers.get_list("set-cookie")), (
+        "Set-Cookie preserved on replay"
+    )
+
+
+def test_d3_13_real_exception_handler_5xx_not_cached_lease_released() -> None:
+    counters = {"dep": 0, "dict_handler": 0, "resp_handler": 0, "boom_handler": 0}
+    obs = SendObserver(_fastapi_app(counters), eligible_paths={"/boom"})
+    client = TestClient(obs)
+    r = client.post("/boom", headers={"Idempotency-Key": "b1"})
+    assert r.status_code == 503, "real exception handler produced the 5xx"
+    assert obs.stored == [], "a 5xx from a real exception handler must not be cached"
+    assert obs.leases_released == ["lease:b1"], "lease released on the exception-handler path"
+    # a second identical request re-executes (nothing was cached) — proves no false replay
+    client.post("/boom", headers={"Idempotency-Key": "b1"})
+    assert counters["boom_handler"] == 2, "no cache → handler runs again, not served a stale replay"
