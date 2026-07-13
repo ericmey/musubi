@@ -141,14 +141,25 @@ Every SQL edge is a guarded `UPDATE ... WHERE state = <expected>` → idempotent
 
 ## Structural blind spot — every mutation path (correction G)
 
-**Verified: `transitions.py` is NOT the only state-mutation path.** Direct `state` mutation via
-`set_payload` (or a plane's own `transition`) exists in:
+**Verified: `transitions.py` is NOT the only state-mutation path.** The precise inventory is by an AST
+rule (a `set_payload` in a function that writes a `state` field), NOT the raw line refs — several
+`set_payload` sites named in the ruling write **non-state** fields and are correctly excluded (verified
+2026-07-13): `maturation.py:893` writes `tags/importance/topics` ("non-state enrichment", per its own
+docstring), `synthesis.py:718` writes `contradicts`, `demotion.py:380` writes the reinforcement clock.
+The actual **state-writing** `set_payload` sites are:
 
-- **5 plane `transition()` methods** — `planes/{episodic,concept,thoughts,artifact,curated}/plane.py`
-  (each `set_payload`s `state`+`version` and emits its own event), called by `promotion.py`,
-  `demotion.py` (×5), `api/routers/writes_concept.py` (×2).
-- **Direct lifecycle `set_payload` of `state`** — `lifecycle/maturation.py:893`,
-  `lifecycle/synthesis.py:718`, `lifecycle/demotion.py:380`, plus the canonical `transitions.py:252`.
+- **5 plane `transition()` methods** — `planes/episodic/plane.py:812`, `planes/concept/plane.py:436`,
+  `planes/thoughts/plane.py:488`, `planes/artifact/plane.py:295`, `planes/curated/plane.py:449` (each
+  `set_payload`s `state`+`version` and emits its own event), called by `lifecycle/promotion.py`,
+  `lifecycle/demotion.py` (×5), `api/routers/writes_concept.py` (×2).
+- **`lifecycle/transitions.py:252`** — the canonical path.
+- **`planes/curated/plane.py:224` (`create`)** — writes an initial `state` on object creation (a
+  create-without-atomic-audit boundary case; whether H5 routes creates through the coordinator is an H5
+  scope call).
+
+So **7 state-writing sites across 6 files** — the G1 guard enumerates exactly these. (demotion's state
+changes go through the plane `transition()` methods, already covered; its direct `set_payload` is
+non-state.)
 
 **Decision:** C6b does NOT migrate all of these in-scope (too large). C6b **depends on a concrete H5
 unification slice** ([[_slices/slice-h5-unify-state-mutation]], Issue TBD) that routes ALL state mutation

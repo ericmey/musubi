@@ -23,14 +23,19 @@ directly by many bypassing paths today.
 
 ## The bypass inventory (verified 2026-07-13)
 
-Direct `state` mutation via `set_payload` or a plane's own `transition()` — every one bypasses any
-coordinator and can produce mutation-without-audit:
+**State-writing** `set_payload` sites (verified 2026-07-13 by an AST rule — a `set_payload` in a function
+that writes a `state` field; non-state sites like `maturation.py:893` tags/importance,
+`synthesis.py:718` contradicts, `demotion.py:380` reinforcement-clock are correctly EXCLUDED). Every one
+bypasses any coordinator and can produce mutation-without-audit:
 
-- **5 plane `transition()` methods** — `planes/{episodic,concept,thoughts,artifact,curated}/plane.py`
-  (each `set_payload`s `state`+`version` and emits its own `LifecycleEvent`), called by
+- **5 plane `transition()` methods** — `planes/episodic/plane.py:812`, `planes/concept/plane.py:436`,
+  `planes/thoughts/plane.py:488`, `planes/artifact/plane.py:295`, `planes/curated/plane.py:449` (each
+  `set_payload`s `state`+`version` and emits its own `LifecycleEvent`), called by
   `lifecycle/promotion.py`, `lifecycle/demotion.py` (×5), `api/routers/writes_concept.py` (×2).
-- **Direct lifecycle `set_payload` of `state`** — `lifecycle/maturation.py:893`,
-  `lifecycle/synthesis.py:718`, `lifecycle/demotion.py:380`, and canonical `lifecycle/transitions.py:252`.
+- **`lifecycle/transitions.py:252`** — the canonical path.
+- **`planes/curated/plane.py:224` (`create`)** — initial-state write on creation (boundary case).
+
+7 state-writing sites across 6 files — the C6b G1 guard enumerates exactly these.
 
 ## Scope
 
