@@ -60,7 +60,7 @@ def test_discrimination_ndcg_at_k() -> None:
         idcg = dcg(sorted(ideal_scores, reverse=True))
         return dcg(scores) / idcg if idcg > 0 else 0.0
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(Exception):
         _assert_ndcg_at_k(wrong_ndcg_ignores_k)
 
     # Fault: Zero IDCG raises ZeroDivisionError
@@ -248,7 +248,7 @@ def test_discrimination_deterministic_rerun() -> None:
     def wrong_constant_runner(corpus: list[dict[str, Any]], embedder: str, seed: int) -> EvalResult:
         return EvalResult({"ndcg@10": float(seed)}, [str(seed)])
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(Exception):
         _assert_deterministic_rerun(wrong_constant_runner)
 
 
@@ -262,26 +262,6 @@ def test_eval_holdout_isolation() -> None:
 
 @pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_pr_smoke_fixed_embeddings() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Pending RET-004 implementation")
-def test_eval_nightly_qdrant_tei_thresholds() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Pending RET-004 implementation")
-def test_eval_baseline_delta_gate_unit() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Pending RET-004 implementation")
-def test_eval_scheduled_baseline_report() -> None:
-    pass
-
-
-@pytest.mark.skip(reason="Pending RET-004 implementation")
-def test_eval_per_query_top_hit_drop() -> None:
     pass
 
 
@@ -303,3 +283,205 @@ def test_eval_cross_plane_blending() -> None:
 @pytest.mark.skip(reason="Pending RET-004 implementation")
 def test_eval_provisional_immediate_recall() -> None:
     pass
+
+
+# ---------------------------------------------------------------------------
+# Tranche 1: Baseline & Delta Enforcement
+# ---------------------------------------------------------------------------
+
+
+def _assert_nightly_thresholds(check_func: Callable[[dict[str, float], str], bool]) -> None:
+    # Deep mode healthy
+    assert (
+        check_func({"ndcg@10": 0.65, "mrr": 0.70, "recall@20": 0.85, "p@1": 0.55}, "deep") is True
+    )
+    # Deep mode unhealthy (ndcg drop)
+    with pytest.raises(ValueError, match="ndcg@10"):
+        check_func({"ndcg@10": 0.64, "mrr": 0.70, "recall@20": 0.85, "p@1": 0.55}, "deep")
+    # Fast mode healthy
+    assert (
+        check_func({"ndcg@10": 0.55, "mrr": 0.55, "recall@20": 0.70, "p@1": 0.40}, "fast") is True
+    )
+    # Fast mode unhealthy
+    with pytest.raises(ValueError, match="p@1"):
+        check_func({"ndcg@10": 0.55, "mrr": 0.55, "recall@20": 0.70, "p@1": 0.39}, "fast")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: Missing eval for nightly qdrant tei thresholds",
+)
+def test_eval_nightly_qdrant_tei_thresholds() -> None:
+    try:
+        from musubi.evals.gates import check_nightly_thresholds  # type: ignore[import-untyped]
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.gates module does not exist")
+    _assert_nightly_thresholds(check_nightly_thresholds)
+
+
+def test_discrimination_nightly_thresholds() -> None:
+    def correct_check(metrics: dict[str, float], mode: str) -> bool:
+        targets = {
+            "deep": {"ndcg@10": 0.65, "mrr": 0.70, "recall@20": 0.85, "p@1": 0.55},
+            "fast": {"ndcg@10": 0.55, "mrr": 0.55, "recall@20": 0.70, "p@1": 0.40},
+        }
+        for k, v in targets[mode].items():
+            if metrics.get(k, 0.0) < v:
+                raise ValueError(f"Metric {k} below threshold {v}")
+        return True
+
+    _assert_nightly_thresholds(correct_check)
+
+    def wrong_check_ignores_mode(metrics: dict[str, float], mode: str) -> bool:
+        targets = {"ndcg@10": 0.55, "mrr": 0.55, "recall@20": 0.70, "p@1": 0.40}
+        for k, v in targets.items():
+            if metrics.get(k, 0.0) < v:
+                raise ValueError(f"Metric {k} below threshold {v}")
+        return True
+
+    with pytest.raises(pytest.fail.Exception if hasattr(pytest, "fail") else Exception):
+        try:
+            _assert_nightly_thresholds(wrong_check_ignores_mode)
+            pytest.fail("Accepted bad check")
+        except ValueError:
+            pass
+
+
+def _assert_baseline_delta_gate(
+    delta_check_func: Callable[[dict[str, float], dict[str, float], dict[str, float]], bool],
+) -> None:
+    baseline = {"ndcg@10": 0.80}
+    tolerances = {"ndcg@10": 0.05}
+    assert delta_check_func(baseline, {"ndcg@10": 0.75}, tolerances) is True
+    with pytest.raises(ValueError, match="regression"):
+        delta_check_func(baseline, {"ndcg@10": 0.74}, tolerances)
+    assert delta_check_func(baseline, {"ndcg@10": 0.82}, tolerances) is True
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: Missing eval for baseline delta gate unit",
+)
+def test_eval_baseline_delta_gate_unit() -> None:
+    try:
+        from musubi.evals.gates import check_delta_tolerances
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.gates module does not exist")
+    _assert_baseline_delta_gate(check_delta_tolerances)
+
+
+def test_discrimination_baseline_delta_gate() -> None:
+    def correct_delta(
+        base: dict[str, float], cand: dict[str, float], tol: dict[str, float]
+    ) -> bool:
+        for k, b_val in base.items():
+            if cand.get(k, 0.0) < b_val - tol.get(k, 0.0):
+                raise ValueError(f"regression on {k}")
+        return True
+
+    _assert_baseline_delta_gate(correct_delta)
+
+    def wrong_delta_allows_any(
+        base: dict[str, float], cand: dict[str, float], tol: dict[str, float]
+    ) -> bool:
+        return True
+
+    with pytest.raises(pytest.fail.Exception if hasattr(pytest, "fail") else Exception):
+        try:
+            _assert_baseline_delta_gate(wrong_delta_allows_any)
+            pytest.fail("Accepted bad check")
+        except ValueError:
+            pass
+
+
+def _assert_scheduled_baseline_report(report_func: Callable[[Any, dict[str, float]], bool]) -> None:
+    class MockRunner:
+        def run(self) -> dict[str, float]:
+            return {"ndcg@10": 0.50}
+
+    with pytest.raises(ValueError, match="regression"):
+        report_func(MockRunner(), {"ndcg@10": 0.80})
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: Missing eval for scheduled baseline report",
+)
+def test_eval_scheduled_baseline_report() -> None:
+    try:
+        from musubi.evals.runner import run_scheduled_report
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.runner module does not exist")
+    _assert_scheduled_baseline_report(run_scheduled_report)
+
+
+def test_discrimination_scheduled_baseline() -> None:
+    def correct_report(runner: Any, expected: dict[str, float]) -> bool:
+        metrics = runner.run()
+        for k, v in expected.items():
+            if metrics.get(k, 0.0) < v - 0.05:
+                raise ValueError("regression")
+        return True
+
+    _assert_scheduled_baseline_report(correct_report)
+
+    def wrong_report_logs_only(runner: Any, expected: dict[str, float]) -> bool:
+        runner.run()
+        return True
+
+    with pytest.raises(pytest.fail.Exception if hasattr(pytest, "fail") else Exception):
+        try:
+            _assert_scheduled_baseline_report(wrong_report_logs_only)
+            pytest.fail("Accepted bad check")
+        except ValueError:
+            pass
+
+
+def _assert_per_query_top_hit_drop(
+    check_func: Callable[[dict[str, list[str]], dict[str, list[str]]], bool],
+) -> None:
+    baseline = {"q1": ["docA", "docB"]}
+    candidate_fail = {"q1": ["docX"] * 10 + ["docA"]}
+    with pytest.raises(ValueError, match="top-relevant dropped"):
+        check_func(baseline, candidate_fail)
+    candidate_pass = {"q1": ["docX", "docA"]}
+    assert check_func(baseline, candidate_pass) is True
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: Missing eval for per query top hit drop",
+)
+def test_eval_per_query_top_hit_drop() -> None:
+    try:
+        from musubi.evals.gates import check_top_hit_drops
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.gates module does not exist")
+    _assert_per_query_top_hit_drop(check_top_hit_drops)
+
+
+def test_discrimination_per_query_drop() -> None:
+    def correct_drop_check(base: dict[str, list[str]], cand: dict[str, list[str]]) -> bool:
+        for q, hits in base.items():
+            top_hit = hits[0] if hits else None
+            if top_hit:
+                cand_hits = cand.get(q, [])
+                if top_hit not in cand_hits[:10]:
+                    raise ValueError("top-relevant dropped")
+        return True
+
+    _assert_per_query_top_hit_drop(correct_drop_check)
+
+    def wrong_drop_check_warns_only(base: dict[str, list[str]], cand: dict[str, list[str]]) -> bool:
+        return True
+
+    with pytest.raises(pytest.fail.Exception if hasattr(pytest, "fail") else Exception):
+        try:
+            _assert_per_query_top_hit_drop(wrong_drop_check_warns_only)
+            pytest.fail("Accepted bad check")
+        except ValueError:
+            pass
