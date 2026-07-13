@@ -16,6 +16,7 @@ def check_nightly_thresholds(metrics: dict[str, float], mode: str) -> bool:
             raise ValueError(f"Metric {k} below threshold {v}")
     return True
 
+
 def check_delta_tolerances(base: dict[str, float], cand: dict[str, float]) -> bool:
     if (
         cand.get("ndcg@10") is None
@@ -37,6 +38,7 @@ def check_delta_tolerances(base: dict[str, float], cand: dict[str, float]) -> bo
         raise ValueError("regression on latency_p95_ms")
     return True
 
+
 def check_top_hit_drops(base: dict[str, list[str]], cand: dict[str, list[str]]) -> bool:
     for q, hits in base.items():
         top_hit = hits[0] if hits else None
@@ -47,12 +49,12 @@ def check_top_hit_drops(base: dict[str, list[str]], cand: dict[str, list[str]]) 
     return True
 
 
-
 @dataclass(frozen=True)
 class FrozenModelConfig:
     thresholds: tuple[tuple[str, float], ...]
     version: str
     calibrated_on: str
+
 
 class MockEvalReport:
     def __init__(
@@ -71,7 +73,10 @@ class MockEvalReport:
         self.deep_fpr = deep_fpr
         self.deep_fnr = deep_fnr
 
-def check_abstention_fpr(config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]) -> MockEvalReport:
+
+def check_abstention_fpr(
+    config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
+) -> MockEvalReport:
     thresh_dict = dict(config.thresholds)
 
     def calc_fpr(hits: list[dict[str, Any]], thresh: float) -> float:
@@ -91,21 +96,29 @@ def check_abstention_fpr(config: FrozenModelConfig, results: dict[str, list[dict
         deep_fnr=calc_fnr(results["deep_answerable"], thresh_dict["deep"]),
     )
 
-def check_contradiction_blending(corpus: list[dict[str, Any]], query: str, config_pen: float) -> list[dict[str, Any]]:
+
+def check_contradiction_blending(
+    corpus: list[dict[str, Any]], query: str, config_pen: float
+) -> list[dict[str, Any]]:
     has_con = any(d["id"] == "doc_con" for d in corpus)
     res = []
     for d in corpus:
         pen = config_pen if has_con and d["id"] in ("doc_pro", "doc_con") else 0.0
-        res.append(
-            {"id": d["id"], "score": d["base_score"] - pen, "contradiction_penalty": pen}
-        )
+        res.append({"id": d["id"], "score": d["base_score"] - pen, "contradiction_penalty": pen})
     res.sort(key=lambda x: x["score"], reverse=True)
     return res
 
-def check_cross_plane_blending(cur: list[Any], epi: list[Any], w: dict[str, float]) -> list[dict[str, Any]]:
+
+def check_cross_plane_blending(
+    cur: list[Any], epi: list[Any], w: dict[str, float]
+) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     for d in cur:
-        merged[d["id"]] = {"id": d["id"], "score": d["score"] * w.get("curated", 1.0), "provenance": ["curated"]}
+        merged[d["id"]] = {
+            "id": d["id"],
+            "score": d["score"] * w.get("curated", 1.0),
+            "provenance": ["curated"],
+        }
     for d in epi:
         ns = d["score"] * w.get("episodic", 1.0)
         if d["id"] in merged:
@@ -116,6 +129,7 @@ def check_cross_plane_blending(cur: list[Any], epi: list[Any], w: dict[str, floa
     res = list(merged.values())
     res.sort(key=lambda x: x["score"], reverse=True)
     return res
+
 
 def check_provisional_recall(results: dict[str, list[str]], prov_id: str) -> bool:
     for _q, hits in results.items():

@@ -188,6 +188,7 @@ def test_discrimination_manifest_checksum(tmp_path: Path) -> None:
 # Test 4: Deterministic Rerun Stability
 # ---------------------------------------------------------------------------
 
+
 def _assert_deterministic_rerun(
     run_eval_func: Callable[[list[dict[str, Any]], str, int], EvalResult],
 ) -> None:
@@ -847,8 +848,6 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(AssertionError, match="Ranking non-deterministic fix 1"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_nondeterministic, monkeypatch)
-
-
 
 
 def _assert_abstention_fpr(

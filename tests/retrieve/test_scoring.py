@@ -375,5 +375,3 @@ def test_hypothesis_swapping_weights_reorders_results_consistently_with_the_math
 
     assert relevance_order == (relevance_a >= relevance_b)
     assert recency_order == (recency_a >= recency_b)
-
-
