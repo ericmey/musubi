@@ -41,11 +41,17 @@ same slice, flipping every red to green. No merge/deploy without Yua's independe
   plane timed out) is replaced by structured per-plane warnings preserved before the merge.
 
 ## Owned paths
-`owns_paths` (this expanded-red commit — tests + this doc):
+`owns_paths` (tests + this doc):
 - `tests/retrieve/test_ret007_envelope.py` (NEW: metadata survival, multi-target aggregation/dedup,
   structured-bounded warning, direct deep degradation).
 - `tests/api/test_ret007_status_and_telemetry.py` (NEW: kind→status controls incl. bad_query→400,
   per-request telemetry cardinality red).
+- `tests/retrieve/{test_hybrid,test_deep,test_blended,test_fast}.py` — **contract migration** (Yua
+  ruling 2026-07-13): repoint each old assertion that encodes pre-envelope behavior (hybrid Ok([])→Err
+  on timeout; deep/blended/fast free-text → bounded RetrievalWarning codes; deep list → envelope) onto
+  the accepted contract. NOT weakening — every non-RET007 behavior each test still guards is kept.
+- `tests/api/test_context.py` + `tests/cli/test_cli_context.py` — the /v1/context degradation red
+  (this commit) then its migration at src.
 - `docs/Musubi/_slices/slice-ret007-degradation-impl.md` (this file).
 
 `owns_paths` (the source-refactor — SAME slice, claimed NOW so ownership is explicit before source
@@ -57,7 +63,16 @@ per Yua 2026-07-13; these files are written in the src commit that follows this 
 - `src/musubi/observability/` — the two bounded metrics.
 - `src/musubi/adapters/{mcp,livekit}/` — surface warnings (MCP fixed-prefix note; LiveKit
   `last_warnings`).
+- `src/musubi/api/routers/context.py` + `src/musubi/retrieve/context_pack.py` + `src/musubi/cli/context.py`
+  — **/v1/context degradation surfacing** (Yua ruling 2026-07-13): the canonical context surface must
+  not return degraded context indistinguishable from healthy. `ContextPack.warnings` additive
+  (default-empty); router threads the bounded codes off the envelope; CLI `_render` visibly renders
+  them on the non-JSON path (JSON preserves them naturally).
 - flips the strict-xfail decorators across the RET-007 red files in the same commit.
+
+**Fast ruling (Yua 2026-07-13):** `run_fast_retrieve` MUST emit the same bounded `RetrievalWarning`
+codes as every other mode — ONE warning language, no translation seam. `test_fast.py` migrates with
+the rest.
 
 `forbidden_paths`: the `hermes-agent` repo — Hermes is a SEPARATE dependent slice (#417). Auth/idempotency
 files (unrelated).
@@ -105,6 +120,15 @@ Reds (strict-xfail; flip to PASS with the envelope):
 5. `test_partial_failure_warning_is_structured_and_bounded` structured `RetrievalWarning(code, fixed-plane)`.
 6. `test_direct_deep_degradation_surfaces_warning` direct deep path surfaces `sparse_embedding_failed`.
 7. `test_telemetry_per_request_cardinality` metric counts once per distinct `(warning,plane)`.
+
+/v1/context degradation reds (tests-only, landed BEFORE the context src per Yua; strict-xfail):
+8. `test_context_degraded_response_carries_warnings` (test_context.py) — a degraded retrieve makes the
+   /v1/context wire response carry the bounded warning codes (not indistinguishable from healthy).
+9. `test_context_nonjson_renders_warnings` (test_cli_context.py) — the non-JSON CLI visibly renders the
+   degradation codes.
+Controls (green now + post-impl): `test_context_healthy_response_default_empty_warnings` (healthy →
+warnings default-empty, additive); `test_context_json_preserves_warnings` (JSON path naturally
+preserves them).
 
 **Closure at this head:** full RET-007 set = 10 passed + 17 xfailed (inherited 6+11 plus this slice's
 4+6). tc-coverage/ruff/mypy/check.py clean; zero src in this red commit.

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from musubi.planes.episodic import EpisodicPlane
+from musubi.types.common import Ok
 from musubi.types.episodic import EpisodicMemory
 
 
@@ -128,3 +131,96 @@ def test_capture_allows_legacy_untyped_tags(client: TestClient, valid_token: str
     )
 
     assert response.status_code == 202
+
+
+# --------------------------------------------------------------------------- #
+# RET-007 — /v1/context degradation surfacing (slice-ret007-degradation-impl, #422).
+#
+# The canonical context surface iterates the orchestration envelope and drops its warnings
+# (routers/context.py), so a degraded context response is today INDISTINGUISHABLE from a healthy one.
+# These reds define the contract: a degraded retrieve makes the wire response carry the bounded codes,
+# and a healthy one keeps warnings additive/default-empty. Tests-only — no src in this commit.
+# --------------------------------------------------------------------------- #
+
+
+class DefectStillPresent(Exception):
+    """Raised when the current code still exhibits the contract-forbidden defect."""
+
+
+class _FakeWarning:
+    """Structured stand-in for the accepted internal RetrievalWarning(code, plane)."""
+
+    def __init__(self, code: str, plane: str) -> None:
+        self.code = code
+        self.plane = plane
+
+
+class _FakeEnvelope:
+    """Duck-typed retrieval envelope: iterable over ``results`` (so the current router's
+    ``for hit in result.value`` keeps working) plus a ``warnings`` channel the impl must thread."""
+
+    def __init__(self, results: list[Any], warnings: list[_FakeWarning]) -> None:
+        self.results = results
+        self.warnings = warnings
+
+    def __iter__(self) -> Any:
+        return iter(self.results)
+
+
+def _post_context(client: TestClient, valid_token: str) -> Any:
+    return client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code",
+            "query_text": "Vice LoRA promptsmith compiler route",
+            "planes": ["episodic"],
+            "max_items": 3,
+            "max_chars": 600,
+        },
+    )
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="/v1/context iterates the envelope and discards its warnings — a degraded context response is indistinguishable from a healthy one (no warnings on the wire)",
+)
+def test_context_degraded_response_carries_warnings(
+    client: TestClient, valid_token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A degraded retrieve (episodic timed out) must make the /v1/context response carry the bounded
+    `plane_timeout_episodic` code — otherwise the caller cannot tell degraded context from healthy."""
+
+    async def mock_orch(*args: Any, **kwargs: Any) -> Any:
+        return _fake_ok([], [_FakeWarning("plane_timeout_episodic", "episodic")])
+
+    monkeypatch.setattr("musubi.api.routers.context.run_orchestration_retrieve", mock_orch)
+    resp = _post_context(client, valid_token)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    warnings = body.get("warnings")
+    if not warnings or "plane_timeout_episodic" not in warnings:
+        raise DefectStillPresent(
+            f"/v1/context dropped the envelope warnings — degraded context is indistinguishable "
+            f"from healthy; response keys={sorted(body)}"
+        )
+
+
+def test_context_healthy_response_default_empty_warnings(
+    client: TestClient, valid_token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CONTROL (green now + post-impl): a healthy retrieve carries no spurious warnings — the field is
+    additive and defaults empty."""
+
+    async def mock_orch(*args: Any, **kwargs: Any) -> Any:
+        return _fake_ok([], [])
+
+    monkeypatch.setattr("musubi.api.routers.context.run_orchestration_retrieve", mock_orch)
+    resp = _post_context(client, valid_token)
+    assert resp.status_code == 200, resp.text
+    assert resp.json().get("warnings", []) == []
+
+
+def _fake_ok(results: list[Any], warnings: list[_FakeWarning]) -> Ok[Any]:
+    return Ok(value=_FakeEnvelope(results, warnings))
