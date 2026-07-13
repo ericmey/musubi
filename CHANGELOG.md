@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.11.7](https://github.com/ericmey/musubi/compare/v1.11.6...v1.11.7) (2026-07-13)
+
+
+### Bug Fixes
+
+* **api:** enforce form/path namespace scope, operator-only fleet contradiction reads, and single-worker safety ([#403](https://github.com/ericmey/musubi/pull/403)) ([0def0df](https://github.com/ericmey/musubi/commit/0def0dff52674fc006ae3bf0750a91dc390c87eb))
+* **api:** bind idempotent replay to the authorized principal, operation, namespace, and body while serializing concurrent writes ([#414](https://github.com/ericmey/musubi/pull/414)) ([8167202](https://github.com/ericmey/musubi/commit/81672020ce4478958ad766fd37433fcfbdf22d3d))
+* **deploy:** target main for image bump and rollback ([#415](https://github.com/ericmey/musubi/pull/415)) ([cb8f4a0](https://github.com/ericmey/musubi/commit/cb8f4a08dd694e3545f5c7048f6a8640475316c7))
+
 ## [1.11.6](https://github.com/ericmey/musubi/compare/v1.11.5...v1.11.6) (2026-07-11)
 
 
