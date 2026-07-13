@@ -71,3 +71,10 @@ listed in `blocks`.
   contract tests whose persistent-secret/module assumptions change with the
   accepted 1Password runtime model. Targeted update semantics and Prometheus
   authentication remain asserted through the `op run`/tmpfs boundary.
+- 2026-07-13, codex-gpt5: Source candidate `581ad9c` preserves phased deploy
+  ordering and per-service updates while moving runtime secret resolution to
+  the systemd/1Password boundary. Local gate: 52 passed, 1 pre-existing skip;
+  four Ansible syntax checks, ruff, strict mypy, and rendered Compose parsing
+  clean. Status remains `in-progress`: independent review, check-mode diff,
+  serial deployment, and runtime proof are still open; SEC-005 rotation remains
+  forbidden.
