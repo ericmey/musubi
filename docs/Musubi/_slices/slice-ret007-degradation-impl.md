@@ -52,6 +52,9 @@ same slice, flipping every red to green. No merge/deploy without Yua's independe
   the accepted contract. NOT weakening — every non-RET007 behavior each test still guards is kept.
 - `tests/api/test_context.py` + `tests/cli/test_cli_context.py` — the /v1/context degradation red
   (this commit) then its migration at src.
+- `tests/retrieve/test_ret007_kind_propagation.py` + `tests/api/test_ret007_telemetry_boundary.py` +
+  `tests/adapters/test_ret007_livekit_channel.py` (NEW — Yua's five blockers, second round).
+- `tests/retrieve/test_rerank.py` (DRIFT-4 — rerank shape migration).
 - `docs/Musubi/_slices/slice-ret007-degradation-impl.md` (this file).
 
 `owns_paths` (the source-refactor — SAME slice, claimed NOW so ownership is explicit before source
@@ -150,7 +153,21 @@ Reds (strict-xfail; flip to PASS with the envelope):
 4. `test_envelope_warnings_survive_slice` warning survives `[:limit]`.
 5. `test_partial_failure_warning_is_structured_and_bounded` structured `RetrievalWarning(code, fixed-plane)`.
 6. `test_direct_deep_degradation_surfaces_warning` direct deep path surfaces `sparse_embedding_failed`.
-7. `test_telemetry_per_request_cardinality` metric counts once per distinct `(warning,plane)`.
+7. Telemetry per-request cardinality → moved to the shared-boundary contract below (Blocker 5): the
+   counting lives at `orchestration.retrieve`, so the test exercises real orchestration (mocking
+   `_run_single`), not the router in isolation — see `test_ret007_telemetry_boundary.py`.
+
+Second-round contract (Yua's five blockers, 2026-07-13 — tests-first, red-proofed):
+- Blocker 1+2 (`test_ret007_kind_propagation.py`): a real hybrid `qdrant_timeout` through deep/fast and
+  a blended all-timeout reach `kind=timeout`; a non-timeout total failure stays `internal`; an
+  all-fast-timeout is `Err(503)`, not `Ok(empty)`. (Not just the router table — real pipeline faults.)
+- Blocker 3+5 (`test_ret007_telemetry_boundary.py`): telemetry counted once at the shared
+  orchestration boundary (so `/v1/context` + direct orchestration count too; `/v1/retrieve` doesn't
+  double-count); boundedness fails closed — a non-allowlisted code/plane or a code/plane mismatch is
+  dropped before the wire or a Prometheus label.
+- Blocker 4 (`test_ret007_livekit_channel.py`): the slow→cache→fast path preserves degradation status
+  (the cache carries warnings); a total failure is visible via `LiveKitAdapter.retrieval_status` (the
+  consumer); no stale warning survives a healthy/error transition.
 
 /v1/context degradation reds (tests-only, landed BEFORE the context src per Yua; strict-xfail):
 8. `test_context_degraded_response_carries_warnings` (test_context.py) — a degraded retrieve makes the

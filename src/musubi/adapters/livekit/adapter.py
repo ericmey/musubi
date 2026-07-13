@@ -66,6 +66,15 @@ class LiveKitAdapter:
         self.upload_history: list[dict[str, Any]] = []
         self.failed_upload_queue: list[dict[str, Any]] = []
 
+    @property
+    def retrieval_status(self) -> list[str]:
+        """RET-007 — the agent-facing degradation status for the CURRENT turn. The Fast Talker serves
+        the turn's context (a Slow Thinker pre-fetch reaches the agent by seeding the cache the Fast
+        Talker reads), so its ``last_warnings`` is authoritative: empty = healthy; bounded ``plane_*`` /
+        ``sparse_embedding_failed`` / ``reranker_failed`` = partial degradation; ``[RETRIEVAL_UNAVAILABLE]``
+        = no memory this turn. This is the consumer the LiveKit agent reads to render a status message."""
+        return list(self.fast_talker.last_warnings)
+
     # ------------------------------------------------------------------
     # LiveKit event hooks
     # ------------------------------------------------------------------

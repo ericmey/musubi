@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from musubi.adapters.livekit.cache import ContextCache
+from musubi.adapters.livekit.cache import RETRIEVAL_UNAVAILABLE, ContextCache
 
 log = logging.getLogger("musubi.adapters.livekit.fast_talker")
 
@@ -42,9 +42,12 @@ class FastTalker:
         """Return retrieval results for the live query — cache first,
         SDK fast path on miss. Returns ``[]`` on any error so the
         speech loop is never blocked."""
-        cached = self.cache.get_best_match(query_text, threshold=self._match_threshold)
+        cached = self.cache.match(query_text, threshold=self._match_threshold)
         if cached is not None:
-            return cached
+            # RET-007: a cache-hit must reflect the CACHED degradation status, not a stale one from a
+            # previous turn — the Slow Thinker stored the warnings alongside the results.
+            self.last_warnings = list(cached.warnings)
+            return cached.results
         try:
             response = await self.client.retrieve(
                 namespace=self.namespace,
@@ -54,8 +57,12 @@ class FastTalker:
             )
         except Exception:
             log.warning("fast-talker fallback failed", exc_info=True)
+            # RET-007: a total failure is VISIBLE on the agent-facing channel — never a silent [] that
+            # leaves a stale "healthy" (or stale-degraded) status from the previous turn.
+            self.last_warnings = [RETRIEVAL_UNAVAILABLE]
             return []
         if not isinstance(response, dict):
+            self.last_warnings = [RETRIEVAL_UNAVAILABLE]
             return []
         warnings = response.get("warnings", [])
         self.last_warnings = warnings if isinstance(warnings, list) else []

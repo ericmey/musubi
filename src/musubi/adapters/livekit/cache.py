@@ -11,8 +11,12 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+#: RET-007 — the agent-facing status code for a TOTAL retrieval failure (the SDK call raised / returned
+#: no usable body). Distinct from the bounded per-plane degradation codes; it means "no memory this turn".
+RETRIEVAL_UNAVAILABLE = "retrieval_unavailable"
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,9 @@ class _CacheEntry:
     key: str
     results: list[dict[str, Any]]
     expires_at: float
+    #: RET-007 — the retrieval degradation warnings that accompanied these cached results, so a Fast
+    #: Talker cache-hit surfaces the SAME degradation status the Slow Thinker recorded (not a stale one).
+    warnings: list[str] = field(default_factory=list)
 
 
 def _token_overlap(a: str, b: str) -> float:
@@ -47,21 +54,22 @@ class ContextCache:
         key: str,
         results: list[dict[str, Any]],
         ttl: float,
+        warnings: list[str] | None = None,
     ) -> None:
-        """Store results under ``key`` with a TTL. When full, the oldest
-        entry is evicted (FIFO via ``deque(maxlen=...)``)."""
+        """Store results (+ their RET-007 degradation ``warnings``) under ``key`` with a TTL. When
+        full, the oldest entry is evicted (FIFO via ``deque(maxlen=...)``)."""
         self._entries.append(
             _CacheEntry(
                 key=key,
                 results=results,
                 expires_at=time.monotonic() + ttl,
+                warnings=list(warnings or []),
             )
         )
 
-    def get_best_match(self, query: str, threshold: float) -> list[dict[str, Any]] | None:
-        """Return the highest-overlap unexpired entry's results, if any
-        beat ``threshold``. ``None`` otherwise — the Fast Talker reads
-        this and falls back to the SDK's fast path on miss."""
+    def match(self, query: str, threshold: float) -> _CacheEntry | None:
+        """Return the highest-overlap unexpired ENTRY (results + warnings), if any beat ``threshold``.
+        The Fast Talker uses this so a cache-hit carries the cached degradation status."""
         now = time.monotonic()
         best_score = 0.0
         best: _CacheEntry | None = None
@@ -72,6 +80,9 @@ class ContextCache:
             if score > best_score:
                 best_score = score
                 best = entry
-        if best is not None and best_score >= threshold:
-            return best.results
-        return None
+        return best if best is not None and best_score >= threshold else None
+
+    def get_best_match(self, query: str, threshold: float) -> list[dict[str, Any]] | None:
+        """Backward-compatible results-only view of :meth:`match` (``None`` on miss)."""
+        entry = self.match(query, threshold)
+        return entry.results if entry is not None else None

@@ -598,11 +598,11 @@ async def test_fast_path_all_planes_timeout_warns_all_planes(
         plane_timeout_s=0.001,
     )
 
-    assert isinstance(result, Ok)
-    assert result.value.results == []
-    assert result.value.warnings and all(
-        w.code.startswith("plane_timeout_") for w in result.value.warnings
-    )
+    # RET-007 Blocker 1: an all-plane timeout with no survivor is a total failure — Err(503), not the
+    # old Ok(empty) that a healthy no-match is indistinguishable from.
+    assert isinstance(result, Err)
+    assert result.error.status_code == 503
+    assert result.error.code == "all_planes_timeout"
 
 
 @pytest.mark.asyncio

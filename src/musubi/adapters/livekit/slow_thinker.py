@@ -17,7 +17,7 @@ import asyncio
 import logging
 from typing import Any
 
-from musubi.adapters.livekit.cache import ContextCache
+from musubi.adapters.livekit.cache import RETRIEVAL_UNAVAILABLE, ContextCache
 
 log = logging.getLogger("musubi.adapters.livekit.slow_thinker")
 
@@ -65,8 +65,12 @@ class SlowThinker:
             raise
         except Exception:
             log.warning("slow-thinker pre-fetch failed", exc_info=True)
+            # RET-007: a total pre-fetch failure is a visible impairment, not a silent no-op that leaves
+            # a stale status from the previous turn.
+            self.last_warnings = [RETRIEVAL_UNAVAILABLE]
             return
         warnings = response.get("warnings", []) if isinstance(response, dict) else []
         self.last_warnings = warnings if isinstance(warnings, list) else []
         results = response.get("results", []) if isinstance(response, dict) else []
-        self.cache.put(transcript, results, ttl=self._cache_ttl_s)
+        # Cache the warnings WITH the results so a later Fast Talker cache-hit preserves the status.
+        self.cache.put(transcript, results, ttl=self._cache_ttl_s, warnings=self.last_warnings)

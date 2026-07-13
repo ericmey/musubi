@@ -172,22 +172,37 @@ async def run_fast_retrieve(
     hits: list[HybridHit] = []
     warnings: list[RetrievalWarning] = []
     errors: list[RetrievalError] = []
+    timeouts = 0
+    contributors = 0
     for collection_name, plane_result in plane_results:
         # RET-007: one bounded warning language — a timed-out plane is plane_timeout_<plane>, any other
         # leg failure is plane_error_<plane>, and a surviving leg threads up its own sparse warnings.
         plane = collection_name.removeprefix("musubi_")
         if isinstance(plane_result, Ok):
+            contributors += 1
             hits.extend(plane_result.value.hits)
             warnings.extend(plane_result.value.warnings)
         elif "timeout" in plane_result.error.code:
             warnings.append(plane_timeout(plane))
+            timeouts += 1
         else:
             errors.append(plane_result.error)
             warnings.append(plane_error(plane))
 
     deduped = _dedupe(hits)
+    # RET-007 Blocker 1: an all-plane total failure is an Err, NOT Ok(empty). A non-timeout leg error
+    # maps through _map_error; an all-timeout-no-survivor case is a bounded timeout (→ 503).
     if not deduped and errors:
         return Err(error=_map_error(errors[0]))
+    if not deduped and contributors == 0 and timeouts == len(plane_results):
+        return Err(
+            error=FastRetrievalError(
+                code="all_planes_timeout",
+                detail="all planes timed out",
+                status_code=503,
+                retry_after_s=5,
+            )
+        )
 
     result = FastRetrieveResult(
         results=_pack(deduped, now=timestamp, limit=limit, weights=weights),

@@ -28,16 +28,6 @@ class DefectStillPresent(Exception):
     """Raised when the current code still exhibits the contract-forbidden defect."""
 
 
-class _FakeWarning:
-    """A structured stand-in for the accepted internal ``RetrievalWarning(code, plane)`` — NOT a bare
-    string. The router dedupes/counts by ``(code, plane)``; feeding structured warnings keeps the
-    telemetry red about CARDINALITY, not fixture shape (a correct router may ignore bare strings)."""
-
-    def __init__(self, code: str, plane: str) -> None:
-        self.code = code
-        self.plane = plane
-
-
 def _app(monkeypatch: pytest.MonkeyPatch, api_settings: Settings) -> TestClient:
     from musubi.api.app import create_app
     from musubi.api.dependencies import (
@@ -102,90 +92,4 @@ def test_total_failure_status_mapping_control(
     resp = _post(_app(monkeypatch, api_settings))
     assert resp.status_code == expected, (
         f"kind={kind} expected {expected}, got {resp.status_code}: {resp.text[:200]}"
-    )
-
-
-def test_telemetry_per_request_cardinality(
-    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
-) -> None:
-    """Snapshot each counter's ``collect()`` before/after a single request and assert the EXACT
-    delta — a degraded success carrying the SAME (code, plane) twice increments
-    ``warnings_total{warning,plane}`` by exactly +1 (deduped, zero unrelated labels moved), and a
-    total-failure request increments ``errors_total{kind}`` by exactly +1. Pre-impl the metrics do
-    not exist, so the snapshot is ``None`` and the red fires."""
-    from musubi.observability import registry as _reg
-
-    reg = _reg.default_registry()
-
-    def _find(name: str) -> Any:
-        return next((m for m in reg._instruments() if getattr(m, "name", None) == name), None)
-
-    def _snapshot(name: str) -> dict[tuple[str, ...], float] | None:
-        metric = _find(name)
-        return None if metric is None else dict(metric.collect())
-
-    def _labelnames(name: str) -> tuple[str, ...]:
-        return tuple(getattr(_find(name), "labelnames", ()))
-
-    warn_before = _snapshot("musubi_retrieval_warnings_total")
-    err_before = _snapshot("musubi_retrieval_errors_total")
-    if warn_before is None or err_before is None:
-        raise DefectStillPresent(
-            "musubi_retrieval_warnings_total / musubi_retrieval_errors_total do not exist — "
-            "per-request cardinality cannot be counted"
-        )
-
-    # --- degraded success: the SAME (code, plane) arrives twice; the request must count it ONCE ---
-    async def mock_degraded(*args: Any, **kwargs: Any) -> Any:
-        class Envelope:
-            def __init__(self) -> None:
-                # degraded-empty is enough to exercise the warning counter; a proper hit object isn't
-                # needed and a raw dict would break row packing.
-                self.results: list[Any] = []
-                # two STRUCTURED warnings with the SAME (code, plane) — the router must dedupe to +1
-                self.warnings = [
-                    _FakeWarning("plane_timeout_episodic", "episodic"),
-                    _FakeWarning("plane_timeout_episodic", "episodic"),
-                ]
-
-            def __iter__(self) -> Any:
-                return iter(self.results)
-
-        return Ok(value=Envelope())
-
-    monkeypatch.setattr("musubi.api.routers.retrieve.run_orchestration_retrieve", mock_degraded)
-    _post(_app(monkeypatch, api_settings))
-
-    warn_after = _snapshot("musubi_retrieval_warnings_total") or {}
-    wkey = tuple(
-        {"warning": "plane_timeout_episodic", "plane": "episodic"}[n]
-        for n in _labelnames("musubi_retrieval_warnings_total")
-    )
-    moved = {
-        k: warn_after.get(k, 0.0) - warn_before.get(k, 0.0)
-        for k in set(warn_after) | set(warn_before)
-        if warn_after.get(k, 0.0) - warn_before.get(k, 0.0) != 0.0
-    }
-    assert moved == {wkey: 1.0}, (
-        f"expected exactly +1 for {wkey} and zero unrelated labels; got moved={moved}"
-    )
-
-    # --- total failure: errors_total{kind} increments exactly once for the failed request ---
-    from musubi.retrieve.orchestration import RetrievalError
-
-    async def mock_fail(*args: Any, **kwargs: Any) -> Any:
-        return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
-
-    monkeypatch.setattr("musubi.api.routers.retrieve.run_orchestration_retrieve", mock_fail)
-    _post(_app(monkeypatch, api_settings))
-
-    err_after = _snapshot("musubi_retrieval_errors_total") or {}
-    ekey = tuple({"kind": "timeout"}[n] for n in _labelnames("musubi_retrieval_errors_total"))
-    err_moved = {
-        k: err_after.get(k, 0.0) - err_before.get(k, 0.0)
-        for k in set(err_after) | set(err_before)
-        if err_after.get(k, 0.0) - err_before.get(k, 0.0) != 0.0
-    }
-    assert err_moved == {ekey: 1.0}, (
-        f"expected exactly +1 for errors_total{ekey} and no other kind moving; got {err_moved}"
     )

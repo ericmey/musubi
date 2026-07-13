@@ -140,6 +140,7 @@ async def run_blended_retrieve(
     warnings: list[RetrievalWarning] = []
     all_hits: list[ScoredHit] = []
     plane_failures = 0
+    failure_codes: list[str] = []
 
     for (plane, ns), res in zip(expanded_namespaces, results, strict=True):
         # RET-007: a failed plane leg becomes a bounded structured warning (plane_timeout_<plane> for
@@ -148,9 +149,11 @@ async def run_blended_retrieve(
         if isinstance(res, Exception):
             warnings.append(plane_error(plane))
             plane_failures += 1
+            failure_codes.append("plane_exception")
             continue
         if isinstance(res, Err):
             code = getattr(res.error, "code", "")
+            failure_codes.append(code)
             warnings.append(plane_timeout(plane) if "timeout" in code else plane_error(plane))
             plane_failures += 1
             continue
@@ -161,11 +164,17 @@ async def run_blended_retrieve(
         planes_contributed.append(f"{plane}:{ns}")
         all_hits.extend(deep_result.hits)
 
-    # H11: if EVERY plane failed (none ran successfully), that is a total failure — Err, not Ok(empty).
+    # H11 + Blocker 2: if EVERY plane failed (none ran), that is a total failure — Err, not Ok(empty).
+    # Preserve WHY: an all-timeout total failure carries a timeout code so it maps to kind=timeout→503;
+    # anything else is internal→500.
     if plane_failures == len(expanded_namespaces) and not planes_contributed:
+        all_timeout = bool(failure_codes) and all("timeout" in c for c in failure_codes)
         return Err(
             error=BlendedRetrievalError(
-                code="all_planes_failed", detail="all planes failed in blended retrieval"
+                code="all_planes_timeout" if all_timeout else "all_planes_failed",
+                detail="all planes timed out"
+                if all_timeout
+                else "all planes failed in blended retrieval",
             )
         )
 
