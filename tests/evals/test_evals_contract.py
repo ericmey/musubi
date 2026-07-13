@@ -20,7 +20,6 @@ def _assert_rejects(
     except expected_exc:
         return
     except BaseException as e:
-
         if isinstance(e, ValueError):
             raise
         pytest.fail(f"Expected {expected_exc.__name__}, got {type(e).__name__}: {e}")
@@ -486,10 +485,7 @@ def test_discrimination_baseline_delta_gate() -> None:
             raise ValueError()
         return True
 
-
-    _assert_rejects(
-        _assert_baseline_delta_gate, ValueError, wrong_delta_latency_direction
-    )
+    _assert_rejects(_assert_baseline_delta_gate, ValueError, wrong_delta_latency_direction)
 
 
 def _assert_scheduled_baseline_report(report_func: Callable[[Any, dict[str, float]], bool]) -> None:
@@ -804,9 +800,7 @@ def test_discrimination_abstention_fpr() -> None:
     _assert_rejects(_assert_abstention_fpr, ValueError, wrong_check_ignores_threshold)
     _assert_rejects(_assert_abstention_fpr, AssertionError, wrong_check_holdout_tuned)
 
-    _assert_rejects(
-        _assert_abstention_fpr, ValueError, wrong_check_missing_fn_tradeoff
-    )
+    _assert_rejects(_assert_abstention_fpr, ValueError, wrong_check_missing_fn_tradeoff)
 
 
 # The remaining 6 tests are preserved as documentation of the pending inventory,
@@ -823,6 +817,40 @@ def test_eval_cross_plane_blending() -> None:
     pass
 
 
-@pytest.mark.skip(reason="Pending RET-004 implementation")
+def _assert_provisional_immediate_recall(
+    check_func: Callable[[dict[str, list[str]], str], bool],
+) -> None:
+    # Ensure provisional doc is in top hits
+    assert check_func({"q_prov": ["docA", "prov_doc"]}, "prov_doc") is True
+
+    try:
+        check_func({"q_prov": ["docA", "docB"]}, "prov_doc")
+        raise RuntimeError("Failed to catch missing provisional document")
+    except ValueError:
+        pass
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: Provisional immediate recall unproven"
+)
 def test_eval_provisional_immediate_recall() -> None:
-    pass
+    try:
+        from musubi.evals.gates import check_provisional_recall
+    except ImportError:
+        raise DefectStillPresent("musubi.evals.gates missing provisional recall")
+    _assert_provisional_immediate_recall(check_provisional_recall)
+
+
+def test_discrimination_provisional_immediate_recall() -> None:
+    def correct_check(results: dict[str, list[str]], prov_id: str) -> bool:
+        for q, hits in results.items():
+            if prov_id not in hits:
+                raise ValueError("Provisional doc not recalled")
+        return True
+
+    _assert_provisional_immediate_recall(correct_check)
+
+    def wrong_check_ignores_missing(results: dict[str, list[str]], prov_id: str) -> bool:
+        return True
+
+    _assert_rejects(_assert_provisional_immediate_recall, RuntimeError, wrong_check_ignores_missing)
