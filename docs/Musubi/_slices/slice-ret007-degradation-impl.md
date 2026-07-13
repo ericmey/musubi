@@ -3,10 +3,10 @@ title: "Slice: RET-007 degradation propagation — IMPLEMENTATION (explicit enve
 slice_id: slice-ret007-degradation-impl
 section: _slices
 type: slice
-status: in-review
+status: in-progress
 owner: aoi
 phase: "Retrieval-audit 2026-07-13 — RET-007 implementation (Yua-authorized, explicit-envelope design)"
-tags: [section/slices, status/in-review, type/slice, retrieval, degradation, observability]
+tags: [section/slices, status/in-progress, type/slice, retrieval, degradation, observability]
 updated: 2026-07-13
 reviewed: false
 depends-on: [slice-ret007-degradation]
@@ -48,20 +48,40 @@ same slice, flipping every red to green. No merge/deploy without Yua's independe
   per-request telemetry cardinality red).
 - `docs/Musubi/_slices/slice-ret007-degradation-impl.md` (this file).
 
+`owns_paths` (the source-refactor — SAME slice, claimed NOW so ownership is explicit before source
+per Yua 2026-07-13; these files are written in the src commit that follows this red commit):
+- `src/musubi/retrieve/{hybrid,deep,blended,orchestration,rerank,fast}.py` — the explicit envelope +
+  unified `kind` + bounded per-plane warnings.
+- `src/musubi/api/responses.py` — additive `RetrieveResponse.warnings: list[str] = []` (wire schema).
+- `src/musubi/api/routers/retrieve.py` — surface `warnings` on the Ok path; total failure → Err→status.
+- `src/musubi/observability/` — the two bounded metrics.
+- `src/musubi/adapters/{mcp,livekit}/` — surface warnings (MCP fixed-prefix note; LiveKit
+  `last_warnings`).
+- flips the strict-xfail decorators across the RET-007 red files in the same commit.
+
 `forbidden_paths`: the `hermes-agent` repo — Hermes is a SEPARATE dependent slice (#417). Auth/idempotency
 files (unrelated).
 
-## Source-refactor paths (NOT claimed by this red commit — to be claimed at the src commit)
+## Overlap resolution — both overlapping slices are DONE (not live contention)
 
-These are the paths the explicit-envelope source refactor will touch. They are listed here as
-prose, NOT in `owns_paths`, because this commit is tests-only; the claim happens at the src commit.
-**Two OVERLAP other slices' owns_paths — a coordination point flagged to Yua before source:**
-- `src/musubi/retrieve/{hybrid,deep,blended,orchestration,rerank,fast}.py` — envelope + unified `kind`.
-- `src/musubi/api/responses.py` — additive `RetrieveResponse.warnings: list[str] = []`.
-- `src/musubi/api/routers/retrieve.py` — **OVERLAPS `slice-api-retrieve-wildcards`** — surface warnings.
-- `src/musubi/observability/` — **OVERLAPS `slice-ops-observability`** — the two bounded metrics.
-- `src/musubi/adapters/{mcp,livekit}/` — surface warnings (MCP note; LiveKit `last_warnings`).
-- flips the strict-xfail decorators across the RET-007 red files in the same commit.
+The mechanical `owns_paths` check flags two files this slice claims as also claimed elsewhere. Both
+owning slices are **`status: done`** (merged) — verified in-repo, not assumed — so the overlap is
+*historical* ownership of already-shipped code, not two live branches racing the same file:
+
+- **`src/musubi/api/routers/retrieve.py` ↔ `slice-api-retrieve-wildcards` (`status: done`).** That
+  slice owns this file for the *wildcard namespace expansion* logic. RET-007's change is orthogonal
+  and purely additive: it surfaces the degradation `warnings` on the already-built Ok path and maps a
+  total-failure `Err(kind)` to the existing status table — it does not touch expansion. No live
+  contention: the wildcard slice shipped; this is a later additive extension of the same file.
+- **`src/musubi/observability/` ↔ `slice-ops-observability` (`status: done`).** That slice *created*
+  the observability module (registry, exposition, middleware). RET-007 *extends* it with two bounded
+  counters (`musubi_retrieval_warnings_total{warning,plane}`, `musubi_retrieval_errors_total{kind}`) —
+  the module's intended growth surface, not a rewrite. No live contention.
+
+Because both owners are done, ownership here is unambiguous: this slice is the live owner of these
+paths for the RET-007 additions. `check.py` still emits an advisory `⚠` for the path appearing in
+two slices (it does not special-case done slices) — surfaced here rather than suppressed; it is
+advisory (exit 0), not an error, and does not modify the shared checker.
 
 ## Specs to implement
 
@@ -91,9 +111,11 @@ Reds (strict-xfail; flip to PASS with the envelope):
 
 ## Status
 
-**`in-review`** (2026-07-13) — expanded red set landed (tests-first, zero src). The explicit-envelope
-source refactor is authorized to follow in this slice after the red commit (Yua 2026-07-13). Tracking
-Issue #422; depends-on the accepted red contract (#416); Hermes is a separate dependent slice (#417).
+**`in-progress`** (2026-07-13) — expanded red set landed (tests-first, zero src); implementation
+pending, so the slice stays `in-progress` (NOT `in-review`) until the source refactor lands and flips
+every red. The explicit-envelope source is authorized to follow in this slice after Yua accepts the
+reds (Yua 2026-07-13). Tracking Issue #422; depends-on the accepted red contract (#416); Hermes is a
+separate dependent slice (#417).
 
 spec-update: slice-ret007-degradation-impl — NEW implementation slice for RET-007; explicit typed
 success envelope (results + tuple[RetrievalWarning{code,plane}]); metadata survives fanout/dedup/

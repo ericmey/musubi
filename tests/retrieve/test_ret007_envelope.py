@@ -20,7 +20,7 @@ import pytest
 from musubi.embedding.fake import FakeEmbedder
 from musubi.retrieve.blended import BlendedRetrievalQuery, run_blended_retrieve
 from musubi.retrieve.deep import run_deep_retrieve
-from musubi.retrieve.orchestration import RetrievalQuery, RetrievalResult
+from musubi.retrieve.orchestration import NamespaceTarget, RetrievalQuery, RetrievalResult
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.types.common import Err, Ok
 
@@ -125,36 +125,67 @@ async def test_multi_target_aggregates_warnings_no_loss(monkeypatch: pytest.Monk
 @pytest.mark.xfail(
     raises=DefectStillPresent,
     strict=True,
-    reason="Per-request dedup: the same (code, plane) surfacing from multiple legs must be deduped to ONE warning at the request boundary",
+    reason="Per-request dedup: the SAME (code, plane) surfacing from multiple same-plane legs must be deduped to exactly ONE structured warning at the request boundary",
 )
 async def test_multi_target_dedupes_warnings_per_request(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Two namespaces on the SAME plane both time out. Contract: exactly ONE `plane_timeout_episodic`
-    at the request boundary (deduped by distinct (code, plane)), not two."""
+    """A wildcard namespace fanned out onto THREE `episodic` legs: two time out, the third returns a
+    hit. Contract: an Ok envelope with the surviving hit AND exactly ONE structured
+    `plane_timeout_episodic` — the two duplicate timeouts deduped to a single (code, plane) at the
+    request boundary, neither dropped (loss) nor doubled (leak)."""
     from musubi.retrieve import orchestration as orch
 
-    async def fake_run_single(*args: Any, plane: str, namespace: str, **kwargs: Any) -> Any:
+    async def fake_run_single(*args: Any, namespace: str, plane: str, **kwargs: Any) -> Any:
+        # two same-plane legs time out; the third survives with a hit
+        if namespace.endswith("/c"):
+            return Ok(value=[_mk_result("hit", "episodic", 1.0)])
         return Err(error=orch.RetrievalError(kind="timeout", detail=f"{namespace} timed out"))
 
     monkeypatch.setattr("musubi.retrieve.orchestration._run_single", fake_run_single)
-    # a multi-namespace fanout on one plane (wildcard-style) — both legs time out
-    query = RetrievalQuery(namespace="test", query_text="q", mode="deep", planes=["episodic"])
+    query = RetrievalQuery(
+        namespace="test",
+        query_text="q",
+        mode="deep",
+        planes=["episodic"],
+        namespace_targets=[
+            NamespaceTarget(namespace="test/a", plane="episodic"),
+            NamespaceTarget(namespace="test/b", plane="episodic"),
+            NamespaceTarget(namespace="test/c", plane="episodic"),
+        ],
+    )
     result = await run_orchestration_retrieve(
         client=cast(Any, _MockQdrant()),
         embedder=FakeEmbedder(),
         reranker=cast(Any, _OkReranker()),
         query=query,
     )
-    # all-timeout with no surviving hits => Err(timeout) is correct; but if the impl returns an Ok
-    # envelope of warnings it must not duplicate the (code, plane).
-    if isinstance(result, Ok):
-        codes = _warning_codes(result.value)
-        if codes.count("plane_timeout_episodic") > 1:
-            raise DefectStillPresent(
-                f"duplicate (code, plane) not deduped at the request boundary: {codes}"
-            )
-        raise DefectStillPresent("no warnings channel on the Ok envelope yet")
-    # today: Ok([]) or Err with no structured warning — the channel does not exist
-    raise DefectStillPresent("no structured per-plane warning channel exists yet")
+    if isinstance(result, Err):
+        raise DefectStillPresent(
+            f"partial timeout with a surviving hit must be Ok, not Err: {result.error}"
+        )
+    if not _result_rows(result.value):
+        raise DefectStillPresent("the surviving leg's hit was dropped")
+    codes = _warning_codes(result.value)
+    count = codes.count("plane_timeout_episodic")
+    if count == 0:
+        raise DefectStillPresent(
+            f"the two timed-out legs produced no plane_timeout_episodic warning; codes={codes}"
+        )
+    if count > 1:
+        raise DefectStillPresent(
+            f"duplicate (code, plane) not deduped at the request boundary: {codes}"
+        )
+    # exactly one — and it must be a STRUCTURED warning (bounded code + fixed plane), not a bare string
+    structured = [
+        w
+        for w in getattr(result.value, "warnings", [])
+        if getattr(w, "code", None) == "plane_timeout_episodic"
+        and getattr(w, "plane", None) in _FIXED_PLANES
+    ]
+    if not structured:
+        raise DefectStillPresent(
+            f"the deduped warning is not structured (bounded code + fixed plane); "
+            f"got {getattr(result.value, 'warnings', None)!r}"
+        )
 
 
 @pytest.mark.xfail(

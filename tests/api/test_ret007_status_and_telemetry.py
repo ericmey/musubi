@@ -98,19 +98,45 @@ def test_total_failure_status_mapping_control(
 @pytest.mark.xfail(
     raises=DefectStillPresent,
     strict=True,
-    reason="Telemetry cardinality: musubi_retrieval_warnings_total{warning,plane} must count ONCE per distinct (warning,plane) per request; the metric does not exist yet",
+    reason="Telemetry cardinality: musubi_retrieval_warnings_total{warning,plane} must count each distinct (warning,plane) exactly once per request (deduped) and musubi_retrieval_errors_total{kind} once per failed request; neither metric exists yet",
 )
 def test_telemetry_per_request_cardinality(
     monkeypatch: pytest.MonkeyPatch, api_settings: Settings
 ) -> None:
+    """Snapshot each counter's ``collect()`` before/after a single request and assert the EXACT
+    delta — a degraded success carrying the SAME (code, plane) twice increments
+    ``warnings_total{warning,plane}`` by exactly +1 (deduped, zero unrelated labels moved), and a
+    total-failure request increments ``errors_total{kind}`` by exactly +1. Pre-impl the metrics do
+    not exist, so the snapshot is ``None`` and the red fires."""
     from musubi.observability import registry as _reg
 
-    async def mock_run_orchestration(*args: Any, **kwargs: Any) -> Any:
+    reg = _reg.default_registry()
+
+    def _find(name: str) -> Any:
+        return next((m for m in reg._instruments() if getattr(m, "name", None) == name), None)
+
+    def _snapshot(name: str) -> dict[tuple[str, ...], float] | None:
+        metric = _find(name)
+        return None if metric is None else dict(metric.collect())
+
+    def _labelnames(name: str) -> tuple[str, ...]:
+        return tuple(getattr(_find(name), "labelnames", ()))
+
+    warn_before = _snapshot("musubi_retrieval_warnings_total")
+    err_before = _snapshot("musubi_retrieval_errors_total")
+    if warn_before is None or err_before is None:
+        raise DefectStillPresent(
+            "musubi_retrieval_warnings_total / musubi_retrieval_errors_total do not exist — "
+            "per-request cardinality cannot be counted"
+        )
+
+    # --- degraded success: the SAME (code, plane) arrives twice; the request must count it ONCE ---
+    async def mock_degraded(*args: Any, **kwargs: Any) -> Any:
         class Envelope:
-            # a degraded success where the SAME (code, plane) legitimately arises twice — the
-            # per-request metric must still count it exactly once.
             def __init__(self) -> None:
-                self.results: list[Any] = []
+                self.results: list[Any] = [
+                    {"plane": "episodic", "object_id": "1", "namespace": "test/ns", "score": 1.0}
+                ]
                 self.warnings = ["plane_timeout_episodic", "plane_timeout_episodic"]
 
             def __iter__(self) -> Any:
@@ -118,17 +144,33 @@ def test_telemetry_per_request_cardinality(
 
         return Ok(value=Envelope())
 
-    monkeypatch.setattr(
-        "musubi.api.routers.retrieve.run_orchestration_retrieve", mock_run_orchestration
-    )
-    reg = _reg.default_registry()
-    metric = {getattr(m, "name", None): m for m in getattr(reg, "_metrics", {}).values()}.get(
-        "musubi_retrieval_warnings_total"
-    )
-    if metric is None:
-        raise DefectStillPresent(
-            "musubi_retrieval_warnings_total does not exist — per-request cardinality cannot be counted"
-        )
-    # (post-impl) the request would increment {warning=plane_timeout_episodic, plane=episodic} by
-    # exactly 1 despite the duplicate; asserted once the metric exists.
+    monkeypatch.setattr("musubi.api.routers.retrieve.run_orchestration_retrieve", mock_degraded)
     _post(_app(monkeypatch, api_settings))
+
+    warn_after = _snapshot("musubi_retrieval_warnings_total") or {}
+    wkey = tuple(
+        {"warning": "plane_timeout_episodic", "plane": "episodic"}[n]
+        for n in _labelnames("musubi_retrieval_warnings_total")
+    )
+    moved = {
+        k: warn_after.get(k, 0.0) - warn_before.get(k, 0.0)
+        for k in set(warn_after) | set(warn_before)
+        if warn_after.get(k, 0.0) - warn_before.get(k, 0.0) != 0.0
+    }
+    assert moved == {wkey: 1.0}, (
+        f"expected exactly +1 for {wkey} and zero unrelated labels; got moved={moved}"
+    )
+
+    # --- total failure: errors_total{kind} increments exactly once for the failed request ---
+    from musubi.retrieve.orchestration import RetrievalError
+
+    async def mock_fail(*args: Any, **kwargs: Any) -> Any:
+        return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
+
+    monkeypatch.setattr("musubi.api.routers.retrieve.run_orchestration_retrieve", mock_fail)
+    _post(_app(monkeypatch, api_settings))
+
+    err_after = _snapshot("musubi_retrieval_errors_total") or {}
+    ekey = tuple({"kind": "timeout"}[n] for n in _labelnames("musubi_retrieval_errors_total"))
+    edelta = err_after.get(ekey, 0.0) - err_before.get(ekey, 0.0)
+    assert edelta == 1.0, f"expected exactly +1 for errors_total{ekey}, got {edelta}"
