@@ -64,6 +64,7 @@ listed in `blocks`.
 8. `test_update_preserves_prometheus_bind_inode_and_verifies_lifecycle_target`
 9. `test_lifecycle_worker_metrics_survive_source_reconciliation`
 10. `test_update_asserts_recreated_core_services_match_the_pinned_digest`
+11. `test_ansible_op_run_tasks_source_the_root_only_connect_environment`
 
 ## Work log
 
@@ -96,3 +97,8 @@ listed in `blocks`.
   removed the post-recreate container-image assertion used to prevent a silent
   stale or downgraded Core/lifecycle worker. Added a third preservation red;
   credential-source cleanup may not delete the signed-image convergence gate.
+- 2026-07-13, codex-gpt5: Pre-check-mode review found the candidate's Ansible
+  `op run` commands only prove `/etc/musubi/connect.env` exists; unlike systemd,
+  they never load it, so Connect authentication variables cannot reach `op`.
+  Added a strict red requiring value-safe export from the root-only file before
+  either repository is applied.
