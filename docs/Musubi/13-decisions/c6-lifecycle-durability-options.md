@@ -64,10 +64,11 @@ machinery than this event rate warrants).
 - **C6 (this slice) closes:** the LifecycleEventSink loses no *accepted* audit event — success is
   immediately durable; failure is a refused `Err` with zero rows + the observable metric/log; retry of
   the same `event_id` is idempotent (exactly one row); crash and close cannot lose an Ok event.
-- **C6 does NOT close — tracked as C6b (an H5/H7 dependency, named + linked before any C6 source
-  merge):** Qdrant-mutation ↔ SQLite-audit **atomicity**. `transitions.py:250-268` commits the Qdrant
-  `set_payload` FIRST, then records. Durable-on-accept does NOT make the two stores atomic — a crash
-  between the mutation commit and even a durable-on-accept audit still leaves mutation-without-audit.
-  Closing that needs a transactional-outbox / two-phase / idempotent-replay pattern spanning both stores,
-  a larger design than sink durability. C6 must not claim to have closed it. Contract + inventory:
+- **C6 does NOT close — tracked as [[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]** (a concrete
+  slice, an H5/H7-class dependency, reviewable **before any C6 source merge**): Qdrant-mutation ↔
+  SQLite-audit **atomicity**. `transitions.py:250-268` commits the Qdrant `set_payload` FIRST, then
+  records. Durable-on-accept does NOT make the two stores atomic — a crash between the mutation commit
+  and even a durable-on-accept audit still leaves mutation-without-audit. Closing that needs a
+  transactional-outbox / two-phase / idempotent-replay pattern spanning both stores, a larger design than
+  sink durability. C6 must not claim to have closed it. C6 contract + inventory:
   [[_slices/slice-c6-lifecycle-event-loss]].

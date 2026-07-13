@@ -73,25 +73,32 @@ retry queue and no backpressure cap** (nothing accumulates in memory). Full deci
    then `os._exit`, and only the committed markers survive on reopen (durable-on-accept);
 5. deterministic concurrent successes + one injected failure prove successful records persist **exactly
    once**, the failed record returns `Err`, and there is **no cross-loss**;
-6. **sustained 1000 failures** all return `Err` promptly, persist zero rows, and retain **no in-memory
+6. **sustained 1000 failures** all return `Err` **promptly** — proven in a bounded subprocess so a
+   blocking `record()` fails rather than hangs — persisting zero rows with **no in-memory
    queue/backpressure growth** (`_buffer` stays empty);
 7. `close()` is **idempotent** and cannot discard an already-`Ok` event;
-8. **control/guard** — a mechanical `record()` callsite inventory proves no caller may silently ignore
-   the new `Result` (the only current callsite is `transitions.py`, the C6b boundary).
+8. the returned `Result` **must be consumed** at every callsite — a strict AST red rejects the bare
+   `sink.record(event)` expression at `transitions.py:268` (the Result is silently dropped today), and a
+   green guard asserts the callsite set is **exactly** `{transitions.py}` so a new caller forces review.
 
 ## Specs to implement
 
 - [[_slices/slice-c6-lifecycle-event-loss]] — this slice's contract is its `## Test Contract` below.
-  At this head the reds are strict-xfail (each reason names the observed defect) and the control
+  At this head the 8 reds are strict-xfail (each reason names the observed defect) and the guard
   passes, so `make tc-coverage SLICE=slice-c6-lifecycle-event-loss` exits 0.
+- [[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] — the atomicity dependency (proposed);
+  reviewable before any C6 source merge.
 
-## What C6 does NOT close (C6b — atomicity)
+## What C6 does NOT close ([[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] — atomicity)
 
 Making the sink durable does NOT make Qdrant + SQLite atomic. `transitions.py:250-268` commits the
 Qdrant mutation FIRST, then records; a crash between the mutation commit and even a durable-on-accept
 audit still leaves **mutation-without-audit**. Closing that needs a transactional-outbox / two-phase /
-idempotent-replay pattern spanning both stores — tracked as **C6b (or an H5/H7 dependency)**, not this
-slice. Design-options + the durability recommendation: `docs/Musubi/13-decisions/c6-lifecycle-durability-options.md`.
+idempotent-replay pattern spanning both stores — tracked as the concrete slice
+[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] (an H5/H7 dependency), **reviewable before any C6
+source merge**, not this slice. The item-8 AST/callsite contract below proves the caller consumes the new
+`Result`, which is the seam C6b builds on. Accepted decision:
+[[13-decisions/c6-lifecycle-durability-options]].
 
 ## Test Contract
 
@@ -109,32 +116,42 @@ buffer/flush is not the durability boundary, so `failed-flush-retention`, the `A
 and `bounded-backpressure-queue` pass vacuously (they described a current defect, not an acceptance
 gate). The eight items below are the acceptance contract.
 
-Reds (strict-xfail; each red-proofed to flip to `XPASS(strict)` under the minimal Option-A fix):
+Reds (8, strict-xfail; each red-proofed to flip to `XPASS(strict)` under the minimal Option-A fix):
 1. `test_record_success_is_ok_and_immediately_durable` — healthy record is `Ok` + readable with no
    flush/close.
-2. `test_write_failure_is_err_zero_row_metric_and_pii_free_log` — failure is `Err`, zero rows, metric
-   exactly one unlabeled series +1, ERROR log excludes reason/namespace/object_id.
+2. `test_write_failure_is_typed_err_zero_row_metric_and_pii_free_log` — failure is a **concrete
+   `LifecycleEventWriteError`** (type + PII-free public fields, not a bare `Err[object]`), zero rows,
+   metric exactly one unlabeled series +1, and **exactly one** ERROR record whose **fully rendered form
+   (incl. the `exc_info` traceback)** excludes reason/namespace/object_id. The fault raises an exception
+   whose message carries those canaries, so a `logger.exception` leak fails — proven both ways: a leaky
+   log and an untyped error each leave this red *unflipped*.
 3. `test_retry_same_event_id_is_ok_exactly_one_row` — retry of the same `event_id` is `Ok`, exactly one
    row.
 4. `test_only_ok_accepted_events_survive_abrupt_crash` — subprocess asserts `returncode==0` then
    `os._exit`; only committed markers survive reopen.
 5. `test_concurrent_success_and_failure_no_cross_loss` — 20 concurrent records, one injected failure:
    successes persist exactly once, the failure is `Err`, no cross-loss.
-6. `test_sustained_failures_all_err_zero_rows_no_growth` — 1000 sustained failures all `Err`, zero rows,
-   `_buffer` stays empty (no retained queue/backpressure growth).
+6. `test_sustained_failures_all_err_zero_rows_no_growth` — 1000 sustained failures run in a **bounded
+   subprocess** (`_SUSTAINED_TIMEOUT`), so a `record()` that BLOCKS instead of refusing promptly fails
+   via `TimeoutExpired` rather than hanging CI; all `Err`, zero rows, `_buffer` empty.
 7. `test_close_idempotent_cannot_discard_ok_event` — double `close()` is idempotent and keeps the `Ok`
    event.
+8. `test_record_result_is_consumed_not_bare_expression` — AST-parses `transitions.py` and **rejects a
+   bare `sink.record(...)` expression**; the `Result` must be consumed/propagated (today it is a bare
+   statement at L.268 → red).
 
-Control/guard (green now + post-fix):
-8. `test_record_callsite_inventory_is_reviewed` — mechanical grep proves the only `sink.record(`
-   callsite is `transitions.py`, so a new caller forces review of the `Result` return (the C6b boundary).
+Guard (green now + post-fix):
+- `test_record_callsite_inventory_is_exactly_reviewed` — mechanical grep proves the `sink.record(`
+  callsite set is **exactly** `{transitions.py}` (equality, not subset), so a NEW caller fails the guard
+  and forces `Result`-handling review (the C6b boundary).
 
-**Closure at this head:** 1 passed + 7 xfailed; ruff/mypy clean; zero `src/musubi`.
+**Closure at this head:** 1 passed + 8 xfailed; ruff/mypy clean; zero `src/musubi`.
 Red-proofed: a temporary minimal Option-A fix (synchronous commit in `record()` returning
-`Ok(value=None)` / `Err(...)`, `default_registry` counter + PII-free ERROR on failure) flips ALL 7 reds
-to `XPASS(strict)` while the control stays green; source restored via `git checkout`, nothing committed
-to `src/`. (First red-proof attempt used `Ok(None)` positionally and produced 6 TypeErrors that *looked*
-like flips — corrected to `Ok(value=None)`; the instrument was verified before the claim.)
+`Ok(value=None)` / `Err(error=LifecycleEventWriteError(...))`, `default_registry` counter + PII-free
+static ERROR log; `transitions.py` consumes the `Result`) flips ALL 8 reds to `XPASS(strict)` while the
+guard stays green; source restored via `git checkout`, nothing committed to `src/`. The two subtle
+discriminators were proven to bite: a `logger.exception` leak (canaries in the traceback) and an untyped
+string error each leave red #2 *unflipped*, and the fully-correct typed+clean fix flips it.
 
 ## Status
 
@@ -144,7 +161,10 @@ this contract; C6b (Qdrant↔SQLite atomicity) is named + linked and must preced
 Tracking Issue #433. Second reader: Tama or Shiori, requested only after their current lanes clear.
 
 spec-update: slice-c6-lifecycle-event-loss — Option A durable-on-accept red contract for C6 lifecycle
-audit-event loss; proves immediate durability on Ok, Err+zero-row+metric+PII-free-log on failure,
-same-event_id retry exactly-once, crash survival of Ok-accepted events, concurrent no-cross-loss,
-sustained-failure no-growth, idempotent close, and a callsite-inventory guard; legacy batch-model reds
-removed as vacuous under Option A; source fix deferred (Yua 2026-07-13).
+audit-event loss (8 reds + 1 guard, hardened per Yua's proof review): immediate durability on Ok;
+typed `LifecycleEventWriteError` + zero-row + one-unlabeled-series-metric + PII-free rendered log (incl.
+exc_info traceback) on failure; same-event_id retry exactly-once; crash survival of Ok-accepted events;
+concurrent no-cross-loss; bounded-subprocess sustained-failure no-growth; idempotent close; strict AST
+red requiring the `Result` be consumed at `transitions.py`; exact-set callsite guard. C6b atomicity
+promoted to a concrete linked slice, reviewable before any C6 source merge. Source fix deferred (Yua
+2026-07-13).

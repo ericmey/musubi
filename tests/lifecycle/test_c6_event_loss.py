@@ -8,18 +8,28 @@ a durability mechanism — a failed write is refused immediately, so there is NO
 backpressure cap (nothing accumulates in memory).
 
 WHAT C6 CLOSES: no accepted (committed) audit event is ever lost — success is immediately durable;
-failure is a refused `Err` with zero rows + an observable metric/log; retry is idempotent; crash and
-close cannot lose an Ok event.
+failure is a refused `Err` (a concrete, PII-free `LifecycleEventWriteError`) with zero rows + an
+observable metric + a PII-free ERROR log; retry is idempotent; crash and close cannot lose an Ok event.
 
-WHAT C6 DOES NOT CLOSE (C6b, named + linked before C6 source merge): Qdrant↔SQLite ATOMICITY.
-`transitions.py:250-268` commits the Qdrant mutation FIRST, then records — durable-on-accept does NOT
-make the two stores atomic. Tracked as C6b / an H5-H7 dependency. See the accepted Option-A memo.
+WHAT C6 DOES NOT CLOSE (C6b — a concrete, linked slice, precondition of any C6 source merge):
+Qdrant↔SQLite ATOMICITY. `transitions.py:250-268` commits the Qdrant mutation FIRST, then records —
+durable-on-accept does NOT make the two stores atomic. See slice-c6b-lifecycle-qdrant-sqlite-atomicity.
 
-Current code returns `None` from `record()` and buffers in RAM, so every red is strict-xfail here.
+Discriminators hardened per Yua's proof review (2026-07-13):
+- the PII red injects an exception whose MESSAGE carries the reason/namespace/object_id canaries and
+  scans the FULLY RENDERED log (incl. the exc_info traceback), so `logger.exception` leaking would FAIL;
+- the failure red pins the concrete error TYPE + PII-free public fields, not just `Err[object]`;
+- the sustained-failure red runs behind a bounded subprocess so a blocking `record()` fails, not hangs;
+- the callsite item is split: a green guard asserts EXACTLY one reviewed callsite, and a strict red
+  AST-rejects the bare `sink.record(event)` expression (the Result must be consumed, not dropped).
+
+8 strict-xfail reds + 1 green guard. Current code returns `None` and buffers in RAM, so every red fails
+now for its named reason.
 
     uv run pytest tests/lifecycle/test_c6_event_loss.py -v
 """
 
+import ast
 import contextlib
 import logging
 import subprocess
@@ -37,12 +47,18 @@ from musubi.observability.registry import default_registry, render_text_format
 from musubi.types.common import Err, Ok
 from musubi.types.lifecycle_event import LifecycleEvent
 
-_Result = "Ok[None] | Err[object]"
-
 #: Named before source (Yua): a BOUNDED, NO-LABEL shared-registry counter; the fix increments it +1 per
 #: injected write failure. Asserted via the RENDERED exposition (exactly one unlabeled series).
 _METRIC = "musubi_lifecycle_event_write_failures_total"
 _JOIN_TIMEOUT = 5.0  # bounded joins/waits so a regression FAILS instead of hanging CI
+_SUSTAINED_TIMEOUT = (
+    30.0  # bounded subprocess wall-clock so a BLOCKING record() fails, never hangs CI
+)
+
+#: PII canaries — a leaky log or error object that echoes the event content will surface one of these.
+_REASON_CANARY = "reasonCANARYzz"
+_NS_CANARY = "nscanary/pcanary/episodic"  # valid tenant/presence/plane, distinctive
+_OID_CANARY = "oidcanary000000000000000000"  # 27-char base62 KSUID
 
 
 def _mk_sink(db_path: Path) -> LifecycleEventSink:
@@ -53,11 +69,15 @@ class DefectStillPresent(Exception):
     """Raised when the current code still exhibits the contract-forbidden defect."""
 
 
-def _ev(marker: str, object_id: str = "0" * 27) -> LifecycleEvent:
+def _ev(
+    marker: str,
+    object_id: str = "0" * 27,
+    namespace: str = "eric/claude-code/episodic",
+) -> LifecycleEvent:
     return LifecycleEvent(
         object_id=object_id,
         object_type="episodic",
-        namespace="eric/claude-code/episodic",
+        namespace=namespace,
         from_state="provisional",
         to_state="matured",
         actor="t",
@@ -77,6 +97,16 @@ class _FailN:
             self._remaining -= 1
             raise RuntimeError("injected write failure")
         self._real(batch)
+
+
+class _LeakyWrite:
+    """Raise an exception whose MESSAGE embeds the PII canaries — so a fix that logs the exception
+    (``logger.exception`` / ``exc_info=True``) or interpolates the event LEAKS and the red catches it."""
+
+    def __call__(self, batch: list[LifecycleEvent]) -> None:
+        raise RuntimeError(
+            f"disk write failed [{_REASON_CANARY}] ns={_NS_CANARY} oid={_OID_CANARY}"
+        )
 
 
 @contextlib.contextmanager
@@ -100,6 +130,24 @@ def _metric_value() -> float | None:
     reg = default_registry()
     m = next((x for x in reg._instruments() if getattr(x, "name", None) == _METRIC), None)
     return None if m is None else sum(cast(float, v) for _, v in m.collect())
+
+
+def _rendered_error_logs(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Fully render each ERROR record INCLUDING the exc_info traceback — so a leaked exception message
+    (via ``logger.exception``) is visible to the PII scan, not just the format string."""
+    fmt = (
+        logging.Formatter()
+    )  # default "%(message)s" + appended traceback when record.exc_info is set
+    return [fmt.format(r) for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def _error_public_text(err: object) -> str:
+    parts = [repr(err), str(err), repr(getattr(err, "__dict__", {}))]
+    dump = getattr(err, "model_dump", None)
+    if callable(dump):
+        with contextlib.suppress(Exception):
+            parts.append(repr(dump()))
+    return " ".join(parts)
 
 
 def _as_result(value: object) -> "Ok[None] | Err[object]":
@@ -136,41 +184,58 @@ def test_record_success_is_ok_and_immediately_durable(tmp_path: Path) -> None:
         sink.close()
 
 
-# 2 — write failure => Err + zero row + exact metric + PII-free log ---------- #
+# 2 — write failure => typed Err + zero row + exact metric + PII-free (rendered) log ---------- #
 
 
 @pytest.mark.xfail(
     raises=DefectStillPresent,
     strict=True,
-    reason="a write failure today buffers (no Err), persists nothing, and is suppressed with no metric/log — indistinguishable from success",
+    reason="a write failure today buffers (no Err), persists nothing, and is suppressed with no typed error/metric/log — indistinguishable from success",
 )
-def test_write_failure_is_err_zero_row_metric_and_pii_free_log(
+def test_write_failure_is_typed_err_zero_row_metric_and_pii_free_log(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     before = _metric_value() or 0.0
     sink = _mk_sink(tmp_path / "e.db")
+    real = sink._write_batch
     try:
-        canary = "PiiReasonCanary"
-        oid = "objidcanary0000000000000000"[:27]
-        with _write_fault(sink, n=10), caplog.at_level(logging.ERROR):
-            res = _as_result(_record(sink, _ev(canary, object_id=oid)))
-            if not res.is_err():
-                raise DefectStillPresent("a failed write must return Err, not Ok/None")
-            if sink.read_all():
-                raise DefectStillPresent("a failed write must persist ZERO rows")
-            lines = _rendered_metric_lines()
-            if len(lines) != 1 or "{" in lines[0]:
-                raise DefectStillPresent(
-                    f"metric must be exactly one UNLABELED series; got {lines}"
-                )
-            if (_metric_value() or 0.0) - before != 1.0:
-                raise DefectStillPresent("metric must increment by exactly +1 per failure")
-            errs = [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR]
-            if not errs:
-                raise DefectStillPresent("a write failure must log an ERROR")
-            if any(canary in m or oid in m or "eric/claude-code/episodic" in m for m in errs):
-                raise DefectStillPresent("log leaked namespace/reason/object_id (must be PII-free)")
+        ev = _ev(_REASON_CANARY, object_id=_OID_CANARY, namespace=_NS_CANARY)
+        sink._write_batch = _LeakyWrite()  # type: ignore[method-assign]
+        with caplog.at_level(logging.ERROR):
+            res = _record(sink, ev)
+        if not isinstance(res, Err):
+            raise DefectStillPresent(f"a failed write must return Err, got {type(res).__name__}")
+        # (blocker 2) concrete error TYPE + bounded PII-free public fields — not a bare Err[object]
+        if type(res.error).__name__ != "LifecycleEventWriteError":
+            raise DefectStillPresent(
+                f"error must be a concrete LifecycleEventWriteError, got {type(res.error).__name__}"
+            )
+        pub = _error_public_text(res.error)
+        if any(c in pub for c in (_REASON_CANARY, _NS_CANARY, _OID_CANARY)):
+            raise DefectStillPresent(
+                "error object leaked reason/namespace/object_id in public fields"
+            )
+        # zero rows
+        if sink.read_all():
+            raise DefectStillPresent("a failed write must persist ZERO rows")
+        # metric: exactly one unlabeled series, +1
+        lines = _rendered_metric_lines()
+        if len(lines) != 1 or "{" in lines[0]:
+            raise DefectStillPresent(f"metric must be exactly one UNLABELED series; got {lines}")
+        if (_metric_value() or 0.0) - before != 1.0:
+            raise DefectStillPresent("metric must increment by exactly +1 per failure")
+        # (blocker 1) exactly ONE ERROR record; FULLY rendered (incl exc_info traceback) is PII-free
+        rendered = _rendered_error_logs(caplog)
+        if len(rendered) != 1:
+            raise DefectStillPresent(
+                f"a write failure must log exactly one ERROR; got {len(rendered)}"
+            )
+        if any(c in rendered[0] for c in (_REASON_CANARY, _NS_CANARY, _OID_CANARY)):
+            raise DefectStillPresent(
+                "ERROR log leaked reason/namespace/object_id (checked incl. exc_info traceback)"
+            )
     finally:
+        sink._write_batch = real  # type: ignore[method-assign]
         sink.close()
 
 
@@ -296,7 +361,7 @@ def test_concurrent_success_and_failure_no_cross_loss(tmp_path: Path) -> None:
         sink.close()
 
 
-# 6 — sustained 1000 failures: all Err promptly, zero rows, no in-memory growth #
+# 6 — sustained 1000 failures: all Err PROMPTLY (bounded subprocess), zero rows, no in-memory growth #
 
 
 @pytest.mark.xfail(
@@ -305,26 +370,47 @@ def test_concurrent_success_and_failure_no_cross_loss(tmp_path: Path) -> None:
     reason="record() accepts into an unbounded RAM buffer and returns None; under sustained failure it neither refuses (Err) nor stays bounded",
 )
 def test_sustained_failures_all_err_zero_rows_no_growth(tmp_path: Path) -> None:
-    sink = _mk_sink(tmp_path / "e.db")
+    # The workload runs in a SUBPROCESS with a bounded wall-clock, so a `record()` that BLOCKS under
+    # sustained failure (instead of promptly returning Err) fails via TimeoutExpired rather than hanging.
+    db = tmp_path / "e.db"
+    prog = textwrap.dedent(
+        f"""
+        import os
+        from musubi.types.common import Err
+        from musubi.lifecycle.events import LifecycleEventSink
+        from musubi.types.lifecycle_event import LifecycleEvent
+        s = LifecycleEventSink(db_path={str(db)!r}, flush_every_n=1_000_000, flush_every_s=3600.0)
+        def boom(batch):
+            raise RuntimeError("injected sustained failure")
+        s._write_batch = boom
+        errs = 0
+        for i in range(1000):
+            r = s.record(LifecycleEvent(object_id="0"*27, object_type="episodic",
+                namespace="eric/claude-code/episodic", from_state="provisional",
+                to_state="matured", actor="t", reason=f"x{{i}}"))
+            if isinstance(r, Err):
+                errs += 1
+        buffered = len(getattr(s, "_buffer", []))
+        rows = len(s.read_all())
+        os._exit(0 if (errs == 1000 and buffered == 0 and rows == 0) else 4)
+        """
+    )
     try:
-        with _write_fault(sink, n=10_000):
-            errs = 0
-            for i in range(1000):
-                if _as_result(_record(sink, _ev(f"x{i}"))).is_err():
-                    errs += 1
-            if errs != 1000:
-                raise DefectStillPresent(
-                    f"every record under sustained failure must be Err; got {errs}/1000"
-                )
-            if sink.read_all():
-                raise DefectStillPresent("sustained failures must persist ZERO rows")
-            buffered = len(getattr(sink, "_buffer", []))
-            if buffered != 0:
-                raise DefectStillPresent(
-                    f"failed records must not accumulate in memory; buffered={buffered}"
-                )
-    finally:
-        sink.close()
+        proc = subprocess.run(
+            [sys.executable, "-c", prog],
+            capture_output=True,
+            timeout=_SUSTAINED_TIMEOUT,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise DefectStillPresent(
+            "record() under sustained failure did not refuse promptly (blocked past the bound)"
+        ) from exc
+    if proc.returncode != 0:
+        raise DefectStillPresent(
+            f"sustained failures must all be Err with zero rows and no buffer growth "
+            f"(subprocess rc={proc.returncode})"
+        )
 
 
 # 7 — close is idempotent and cannot discard an already-Ok event -------------- #
@@ -352,13 +438,10 @@ def test_close_idempotent_cannot_discard_ok_event(tmp_path: Path) -> None:
         reopened.close()
 
 
-# 8 — CONTROL/guard: mechanical record() callsite inventory (no caller may ignore the Result) #
+# 8 — the Result must be CONSUMED at the callsite (guard + strict red) ---------- #
 
 
-def test_record_callsite_inventory_is_reviewed() -> None:
-    """Item 8 (guard, green now): every LifecycleEventSink.record() callsite must handle the new
-    Result[None, LifecycleEventWriteError]. This inventories the callsites so a NEW one forces review;
-    the ONLY current callsite is transitions.py, whose mutation-first ordering is the C6b ticket."""
+def _record_callsites() -> set[str]:
     src = Path(__file__).resolve().parents[2] / "src" / "musubi"
     out = subprocess.run(
         ["grep", "-rn", "--include=*.py", r"\.record(", str(src)],
@@ -366,10 +449,38 @@ def test_record_callsite_inventory_is_reviewed() -> None:
         text=True,
         check=False,
     ).stdout
-    callsites = [ln for ln in out.splitlines() if "sink.record(" in ln]
-    seen = {Path(ln.split(":")[0]).name for ln in callsites}
-    reviewed = {"transitions.py"}  # the C6 src migration must make each handle the Err
-    assert seen <= reviewed, (
-        f"un-reviewed record() callsite(s) {seen - reviewed} — each must handle "
-        "Result[None, LifecycleEventWriteError] (see the C6 slice inventory)"
+    return {Path(ln.split(":")[0]).name for ln in out.splitlines() if "sink.record(" in ln}
+
+
+def test_record_callsite_inventory_is_exactly_reviewed() -> None:
+    """Guard (green now + post-fix): the set of `sink.record(` callsites must be EXACTLY the reviewed
+    set — equality, not subset — so a NEW callsite fails this guard and forces Result-handling review.
+    The one current callsite is transitions.py (the C6b mutation-first boundary)."""
+    reviewed = {"transitions.py"}
+    seen = _record_callsites()
+    assert seen == reviewed, (
+        f"record() callsite inventory changed: seen={seen} reviewed={reviewed} — "
+        "each callsite must handle Result[None, LifecycleEventWriteError] (see the C6 slice)"
     )
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="transitions.py:268 calls sink.record(event) as a bare expression statement — the Result is silently dropped, so a caller cannot learn a write was refused",
+)
+def test_record_result_is_consumed_not_bare_expression() -> None:
+    """Strict red: AST-parse transitions.py and reject a bare `sink.record(...)` expression. The Result
+    must be consumed (assigned / returned / propagated), never discarded as an expression statement."""
+    trans = Path(__file__).resolve().parents[2] / "src" / "musubi" / "lifecycle" / "transitions.py"
+    tree = ast.parse(trans.read_text())
+    bare: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            fn = node.value.func
+            if isinstance(fn, ast.Attribute) and fn.attr == "record":
+                bare.append(node.lineno)
+    if bare:
+        raise DefectStillPresent(
+            f"sink.record() Result ignored as a bare expression at transitions.py:{bare}"
+        )
