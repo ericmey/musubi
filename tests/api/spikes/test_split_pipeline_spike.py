@@ -19,7 +19,6 @@ Run:  uv run pytest tests/api/spikes/test_split_pipeline_spike.py -v
 
 from __future__ import annotations
 
-import pytest
 from fastapi import Depends, FastAPI, HTTPException, Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.testclient import TestClient

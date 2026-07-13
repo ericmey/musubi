@@ -18,8 +18,6 @@ Run:  pytest tests/api/test_sec002_idempotency_auth.py -v
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pytest
 from starlette.testclient import TestClient
 

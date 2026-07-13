@@ -152,7 +152,6 @@ def test_backend_failure_must_not_be_empty_200(
     client: TestClient, api_settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # force the qdrant scroll to raise; the handler currently swallows it -> items=[] 200
-    from musubi.api.routers import contradictions as mod
 
     def _boom(*a, **k):
         raise RuntimeError("qdrant is down")

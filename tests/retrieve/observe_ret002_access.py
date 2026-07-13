@@ -32,7 +32,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import FRESH_STATES, Fixture, Musubi, Store  # noqa: E402
+from harness import FRESH_STATES, Fixture, Musubi, Store
 
 ENV = Path.home() / ".musubi/musubi-mcp-aoi.env"
 NS = "aoi/command-chair/episodic"
@@ -81,7 +81,7 @@ for _ in range(3):
     musubi._req(
         "POST",
         "/retrieve",
-        {  # noqa: SLF001 - deliberate raw call
+        {
             "namespace": NS,
             "query_text": marker,
             "mode": "deep",
@@ -105,7 +105,7 @@ for _ in range(3):
     musubi._req(
         "POST",
         "/retrieve",
-        {  # noqa: SLF001
+        {
             "namespace": NS,
             "query_text": marker2,
             "mode": "deep",

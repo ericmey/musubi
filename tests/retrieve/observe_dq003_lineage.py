@@ -31,7 +31,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import ALL_STATES, FRESH_STATES, Fixture, Musubi, Store  # noqa: E402
+from harness import ALL_STATES, FRESH_STATES, Fixture, Musubi, Store
 
 ENV = Path.home() / ".musubi/musubi-mcp-aoi.env"
 OP_ENV = Path(

@@ -30,10 +30,11 @@ from __future__ import annotations
 
 import sys
 import time
+import uuid as _u6
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import FRESH_STATES, Fixture, Musubi, Store  # noqa: E402
+from harness import FRESH_STATES, Fixture, Musubi, Store
 
 ENV = Path.home() / ".musubi/musubi-mcp-aoi.env"
 NS = "aoi/command-chair/lifecycle"  # lifecycle plane: probes, not real memories
@@ -98,7 +99,7 @@ body = f"{marker2}. " + ("Filler that buries the lede. " * 14) + " FINAL CLAUSE:
 oid2 = musubi._req(
     "POST",
     "/episodic",
-    {  # noqa: SLF001 - raw, deliberate
+    {
         "namespace": NS_RECALL,
         "content": body,
         "summary": "SUPPLIED SUMMARY: the answer is 42.",
@@ -242,7 +243,6 @@ print()
 # 1500-char INPUT truncation (DQ-002) — a fact at zero_based_index 1500 is absent here
 # simply because it is past 300, which says nothing about the 1500 path.
 print("O6  First-lost character of the 300-char recall projection (zero-based index 300)")
-import uuid as _u6
 
 # zero_based_index 300 == the 301st ordinal character == first code point dropped by [:300]
 ZERO_BASED = 300

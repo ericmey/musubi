@@ -27,13 +27,12 @@ only; no src.
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
-from typing import Callable
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import pytest
 
 from musubi.api.idempotency import IdempotencyCache
-
 
 # --------------------------------------------------------------------------- #
 # Reference implementation of the PROPOSED primitive (the spec, not src).

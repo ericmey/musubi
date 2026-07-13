@@ -47,7 +47,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 VALID_MODES = ("fast", "blended", "deep", "recent")
 ALL_STATES = ["provisional", "matured", "promoted", "demoted", "archived", "superseded"]
@@ -100,7 +100,7 @@ class Musubi:
         self._tok = e["MUSUBI_TOKEN"]
 
     def _req(
-        self, method: str, path: str, body: Optional[dict] = None, query: Optional[dict] = None
+        self, method: str, path: str, body: dict | None = None, query: dict | None = None
     ) -> dict:
         url = f"{self._url}/{path.lstrip('/')}"
         if query:
@@ -114,7 +114,7 @@ class Musubi:
             return json.loads(r.read().decode() or "{}")
 
     def write(
-        self, namespace: str, content: str, *, importance: int = 5, tags: Optional[list[str]] = None
+        self, namespace: str, content: str, *, importance: int = 5, tags: list[str] | None = None
     ) -> str:
         payload = self._req(
             "POST",
@@ -135,7 +135,7 @@ class Musubi:
         *,
         mode: str = "blended",
         limit: int = 5,
-        state_filter: Optional[list[str]] = _SENTINEL,  # type: ignore[assignment]
+        state_filter: list[str] | None = _SENTINEL,  # type: ignore[assignment]
     ) -> list[dict]:
         """Raw ranked recall.
 
@@ -196,19 +196,25 @@ class Store:
             raise RuntimeError(f"store read failed: {out.stderr.strip()[:200]}")
         return out.stdout.strip()
 
-    def payload(self, object_id: str) -> Optional[dict]:
+    def payload(self, object_id: str) -> dict | None:
         """The raw stored payload, with NO side effects. Returns None if absent."""
+        # Built by concatenation (not %/format): the embedded script contains literal JSON
+        # braces, which str.format/f-strings would mis-parse.
         script = (
             "import os,json,urllib.request\n"
             'k=os.environ["QDRANT_API_KEY"]\n'
-            'r=urllib.request.Request("http://qdrant:6333/collections/%s/points/scroll",'
+            'r=urllib.request.Request("http://qdrant:6333/collections/'
+            + self.collection
+            + '/points/scroll",'
             'data=json.dumps({"limit":1,"with_payload":True,"filter":{"must":['
-            '{"key":"object_id","match":{"value":"%s"}}]}}).encode(),method="POST")\n'
+            '{"key":"object_id","match":{"value":"'
+            + object_id
+            + '"}}]}}).encode(),method="POST")\n'
             'r.add_header("api-key",k)\n'
             'r.add_header("Content-Type","application/json")\n'
             'p=json.load(urllib.request.urlopen(r,timeout=15))["result"]["points"]\n'
             'print(json.dumps(p[0]["payload"] if p else None))'
-        ) % (self.collection, object_id)
+        )
         return json.loads(self._exec(script))
 
     def observe(self, object_id: str, key: str) -> Observation:
@@ -220,16 +226,16 @@ class Store:
             key, pl.get(key), "qdrant", note="" if key in pl else "KEY ABSENT (not zero)"
         )
 
-    def count(self, collection: Optional[str] = None) -> Observation:
+    def count(self, collection: str | None = None) -> Observation:
         """The TRUE point count. Not a paged API's ``limit`` handed back to you."""
         col = collection or self.collection
         script = (
             "import os,json,urllib.request\n"
             'k=os.environ["QDRANT_API_KEY"]\n'
-            'r=urllib.request.Request("http://qdrant:6333/collections/%s")\n'
+            f'r=urllib.request.Request("http://qdrant:6333/collections/{col}")\n'
             'r.add_header("api-key",k)\n'
             'print(json.load(urllib.request.urlopen(r,timeout=15))["result"]["points_count"])'
-        ) % col
+        )
         return Observation(f"{col}.points_count", int(self._exec(script)), "qdrant")
 
 
@@ -309,7 +315,7 @@ class Fixture:
         oid = self.musubi.write(self.namespace, self._fresh_content(marker), importance=importance)
 
         deadline = time.time() + 25
-        pl: Optional[dict] = None
+        pl: dict | None = None
         while time.time() < deadline:
             pl = self.store.payload(oid)
             if pl is not None:
@@ -388,7 +394,7 @@ class Fixture:
         """
         oid = self.musubi.write(self.namespace, content, importance=importance)
         deadline = time.time() + 25
-        pl: Optional[dict] = None
+        pl: dict | None = None
         while time.time() < deadline:
             pl = self.store.payload(oid)
             if pl is not None:
