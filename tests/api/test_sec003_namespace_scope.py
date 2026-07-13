@@ -22,7 +22,6 @@ from __future__ import annotations
 import io
 from typing import Any
 
-import pytest
 from starlette.testclient import TestClient
 
 from musubi.settings import Settings
