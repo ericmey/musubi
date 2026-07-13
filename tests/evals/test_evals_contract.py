@@ -512,18 +512,18 @@ def test_discrimination_baseline_delta_gate() -> None:
 
     def wrong_delta_latency_direction(base: dict[str, float], cand: dict[str, float]) -> bool:
         if cand.get("ndcg@10") is None or cand["ndcg@10"] < base["ndcg@10"] - 0.02:
-            raise ValueError()
+            raise ValueError("regression on ndcg@10")
         if cand.get("mrr") is None or cand["mrr"] < base["mrr"] - 0.03:
-            raise ValueError()
+            raise ValueError("regression on mrr")
         # Fault: demands latency decreases (impossible threshold)
         if (
             cand.get("latency_p95_ms") is None
             or cand["latency_p95_ms"] > base["latency_p95_ms"] * 0.80
         ):
-            raise ValueError()
+            raise ValueError("regression on latency_p95_ms")
         return True
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="regression on latency_p95_ms"):
         _assert_baseline_delta_gate(wrong_delta_latency_direction)
 
 
@@ -723,6 +723,7 @@ def _assert_pr_smoke_fixed_embeddings(
     ]
     import hashlib
     import json
+    from math import log2
 
     hash_1 = hashlib.sha256(json.dumps(fixed_corpus_1, sort_keys=True).encode("utf-8")).hexdigest()
     hash_2 = hashlib.sha256(json.dumps(fixed_corpus_2, sort_keys=True).encode("utf-8")).hexdigest()
@@ -741,41 +742,58 @@ def _assert_pr_smoke_fixed_embeddings(
     monkeypatch.setattr(urllib.request, "urlopen", mock_network)
     monkeypatch.setattr(qdrant_client, "QdrantClient", mock_network)
 
+    def verify_result(
+        res: Any,
+        expected_hash: str,
+        expected_ranking: list[str],
+        corpus: list[dict[str, Any]],
+        fix_label: str,
+    ) -> None:
+        if network_called:
+            raise ValueError("Qdrant/TEI network hit detected")
+
+        assert getattr(res, "corpus_checksum", "") == expected_hash, (
+            f"Checksum mismatch {fix_label}"
+        )
+
+        ordered_hits = getattr(res, "ordered_hits", [])
+        assert ordered_hits == expected_ranking, f"Ranking mismatch {fix_label}"
+
+        # Independently map returned IDs to relevance
+        id_to_rel = {d["id"]: d["relevance"] for d in corpus}
+        rels = [id_to_rel.get(doc_id, 0) for doc_id in ordered_hits]
+
+        def dcg(r_list: list[int]) -> float:
+            return float(sum((2**r - 1) / log2(i + 2) for i, r in enumerate(r_list)))
+
+        idcg = dcg(sorted(id_to_rel.values(), reverse=True))
+        expected_ndcg = dcg(rels) / idcg if idcg > 0 else 0.0
+
+        reported_ndcg = getattr(res, "metrics", {}).get("ndcg@10", 0.0)
+        assert abs(reported_ndcg - expected_ndcg) < 0.001, f"Metrics mismatch {fix_label}"
+
     # Fixture 1
     res1_a = run_func(fixed_corpus_1)
     res1_b = run_func(fixed_corpus_1)
-    if network_called:
-        raise ValueError("Qdrant/TEI network hit detected")
 
-    assert getattr(res1_a, "corpus_checksum", "") == hash_1, "Checksum mismatch fix 1"
-    # Independent metric derivation: fixture 1 returns perfectly ordered (doc1 then doc2).
-    # IDCG for [1, 0] = 1/log2(2) = 1.0. DCG for perfectly ranked [1, 0] = 1.0. NDCG = 1.0.
-    assert getattr(res1_a, "metrics", {}).get("ndcg@10", 0.0) == 1.0, "Metrics mismatch fix 1"
+    verify_result(res1_a, hash_1, ["doc1", "doc2"], fixed_corpus_1, "fix 1")
     assert getattr(res1_a, "metrics", {}) == getattr(res1_b, "metrics", {}), (
-        "Metrics non-deterministic"
+        "Metrics non-deterministic fix 1"
     )
     assert getattr(res1_a, "ordered_hits", []) == getattr(res1_b, "ordered_hits", []), (
-        "Ranking non-deterministic"
+        "Ranking non-deterministic fix 1"
     )
 
     # Fixture 2
     res2_a = run_func(fixed_corpus_2)
     res2_b = run_func(fixed_corpus_2)
-    if network_called:
-        raise ValueError("Qdrant/TEI network hit detected")
 
-    assert getattr(res2_a, "corpus_checksum", "") == hash_2, "Checksum mismatch fix 2"
-    # Fixture 2 returns [doc4, doc3] where doc3 is relevant (score 1) and doc4 is not (score 0).
-    # Ideal ranking = [1, 0]. IDCG = 1.0
-    # Actual ranking = [0, 1]. DCG = 1/log2(3) = ~0.6309
-    assert abs(getattr(res2_a, "metrics", {}).get("ndcg@10", 0.0) - 0.6309) < 0.001, (
-        "Metrics mismatch fix 2"
-    )
+    verify_result(res2_a, hash_2, ["doc4", "doc3"], fixed_corpus_2, "fix 2")
     assert getattr(res2_a, "metrics", {}) == getattr(res2_b, "metrics", {}), (
-        "Metrics non-deterministic"
+        "Metrics non-deterministic fix 2"
     )
     assert getattr(res2_a, "ordered_hits", []) == getattr(res2_b, "ordered_hits", []), (
-        "Ranking non-deterministic"
+        "Ranking non-deterministic fix 2"
     )
 
 
@@ -799,7 +817,6 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
         from math import log2
 
         h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
-        # Mocking an engine that just returns the corpus IDs in the order they were provided
         ordered = [d["id"] for d in corpus]
         relevances = [d["relevance"] for d in corpus]
 
@@ -836,17 +853,25 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
             {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": h, "ordered_hits": ordered},
         )()
 
+    def wrong_smoke_wrong_ranking(corpus: list[dict[str, Any]]) -> Any:
+        res = correct_smoke(corpus)
+        res.ordered_hits = res.ordered_hits[::-1]
+        return res
+
     def wrong_smoke_wrong_hash(corpus: list[dict[str, Any]]) -> Any:
         res = correct_smoke(corpus)
         res.corpus_checksum = "bad_hash"
         return res
 
-    def wrong_smoke_nondeterministic(corpus: list[dict[str, Any]]) -> Any:
-        import random
+    # Nondeterministic ranking alternating
+    call_count = 0
 
+    def wrong_smoke_nondeterministic(corpus: list[dict[str, Any]]) -> Any:
+        nonlocal call_count
+        call_count += 1
         res = correct_smoke(corpus)
-        res.ordered_hits = res.ordered_hits.copy()
-        random.shuffle(res.ordered_hits)
+        if call_count % 2 == 0:
+            res.ordered_hits = res.ordered_hits[::-1]
         return res
 
     _assert_pr_smoke_fixed_embeddings(correct_smoke, monkeypatch)
@@ -857,10 +882,13 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(AssertionError, match="Metrics mismatch fix 2"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_hardcodes_first_fixture_metric, monkeypatch)
 
+    with pytest.raises(AssertionError, match="Ranking mismatch fix 1"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_ranking, monkeypatch)
+
     with pytest.raises(AssertionError, match="Checksum mismatch fix 1"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_hash, monkeypatch)
 
-    with pytest.raises(AssertionError, match="Ranking non-deterministic"):
+    with pytest.raises(AssertionError, match="Ranking non-deterministic fix 1"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_nondeterministic, monkeypatch)
 
 
@@ -904,9 +932,19 @@ def _assert_abstention_fpr(
         "deep_answerable": [{"score": 0.9}],  # fnr 0.0
     }
 
+    # B4 Snapshot before
+    snapshot_version = config1.version
+    snapshot_cal = config1.calibrated_on
+    snapshot_thresh = config1.thresholds
+
     r1 = eval_func(config1, test_data1)
 
-    if config1.thresholds != (("fast", 0.5), ("deep", 0.8)):
+    # B4 Verify snapshot
+    if config1.version != snapshot_version:
+        raise ValueError("Config version mutated")
+    if config1.calibrated_on != snapshot_cal:
+        raise ValueError("Config calibrated_on mutated")
+    if config1.thresholds != snapshot_thresh:
         raise ValueError("Config threshold mutated")
 
     if r1.version != "v1.0":
@@ -935,9 +973,19 @@ def _assert_abstention_fpr(
         "deep_answerable": [{"score": 0.7}],  # fnr 0.0
     }
 
+    # B4 Snapshot before
+    snapshot_version2 = config2.version
+    snapshot_cal2 = config2.calibrated_on
+    snapshot_thresh2 = config2.thresholds
+
     r2 = eval_func(config2, test_data2)
 
-    if config2.thresholds != (("fast", 0.2), ("deep", 0.5)):
+    # B4 Verify snapshot
+    if config2.version != snapshot_version2:
+        raise ValueError("Config version mutated")
+    if config2.calibrated_on != snapshot_cal2:
+        raise ValueError("Config calibrated_on mutated")
+    if config2.thresholds != snapshot_thresh2:
         raise ValueError("Config threshold mutated")
 
     if r2.version != "v1.1":
@@ -1036,6 +1084,15 @@ def test_discrimination_abstention_fpr() -> None:
 
     with pytest.raises(ValueError, match="Config threshold mutated"):
         _assert_abstention_fpr(wrong_check_mutates_threshold)
+
+    def wrong_check_mutates_version(
+        config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
+    ) -> MockEvalReport:
+        object.__setattr__(config, "version", "v0.0")
+        return correct_check(config, results)
+
+    with pytest.raises(ValueError, match="Config version mutated"):
+        _assert_abstention_fpr(wrong_check_mutates_version)
 
 
 # The remaining 2 tests are preserved as documentation of the pending inventory,
