@@ -495,6 +495,10 @@ _CANONICAL_PATCH_KEYS = frozenset(
 )
 # the sentinel a test injects into every PII-carrying field; it must NEVER surface in row/log/metrics.
 _PII_SENTINEL = "PIISENTINEL"
+# the ONLY metric names the coordinator may emit (Yua R19: names whitelisted, never dynamic/PII-bearing).
+_ALLOWED_METRIC_NAMES = frozenset(
+    {"musubi_lifecycle_outbox_pending", "musubi_lifecycle_outbox_mutation_failures_total"}
+)
 
 
 class _LogCapture(logging.Handler):
@@ -871,6 +875,12 @@ class _RefCoordinator:
         second active intent for the object, R11) RAISES IntegrityError so the loser is rejected."""
         self._checkpoint("before_pending_commit")
         patch = _intended_patch(i)
+        if self._mode == "empty_patch":
+            patch = {}  # WRONG (R19): persist an EMPTY patch - no required state/version/lineage
+        if self._mode == "missing_required_patch":
+            patch = {
+                k: v for k, v in patch.items() if k != "version"
+            }  # WRONG: drop a required field
         if self._mode == "full_payload_storage":
             # WRONG (R19): persist arbitrary payload beyond the minimal canonical patch (leaks
             # namespace/reason/actor - PII - into the stored row).
@@ -1241,6 +1251,8 @@ class _RefCoordinator:
         ):  # WRONG: the raw exception message may carry PII/content
             extra["reason"] = str(exc)
         _LIFECYCLE_LOGGER.warning("lifecycle_mutation_failed", extra={"c6b": extra})
+        if self._mode == "omit_metrics":  # WRONG: emit NO metric (no observability at all)
+            return
         metric_class = (
             "terminal" if cls == "terminal" else "transient"
         )  # unknown -> transient (bounded)
@@ -1254,10 +1266,17 @@ class _RefCoordinator:
         ):  # WRONG: high-cardinality object/namespace labels
             labels["object_id"] = oid
             labels["namespace"] = ns
-        self._metrics.append(("musubi_lifecycle_outbox_mutation_failures_total", labels, 1.0))
+        name = "musubi_lifecycle_outbox_mutation_failures_total"
+        if self._mode == "dynamic_metric_name":  # WRONG: a PII-bearing DYNAMIC metric name
+            name = f"musubi_lifecycle_{opk}_failures"
+        self._metrics.append((name, labels, 1.0))
+        if self._mode == "double_count_metrics":  # WRONG: emit the counter twice (double-count)
+            self._metrics.append((name, labels, 1.0))
 
     def _observe_pending(self) -> None:
         """R19: the pending-depth gauge - NO labels (a bounded cap-backstop signal)."""
+        if self._mode == "omit_metrics":  # WRONG: emit NO gauge sample
+            return
         con = sqlite3.connect(self._db)
         try:
             n = con.execute(
@@ -3490,19 +3509,24 @@ def _check_r19(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         _LIFECYCLE_LOGGER.removeHandler(cap)
         _LIFECYCLE_LOGGER.setLevel(old_level)
 
-    # ROW: only canonical minimal keys, canonical serialization, canonical SHA, no PII.
+    # ROW: the persisted patch must be EXACTLY the canonical _intended_patch for this intent (keys AND
+    # values, not merely a subset - so {} or a missing required field is rejected), with the canonical
+    # serialization and the canonical SHA (R13), and no PII.
+    expected_patch = _intended_patch(
+        _intent(poison, to_state="matured", operation_key=op, reason=reason)
+    )
     row = _outbox_rows(d, op)[0]
     patch = json.loads(str(row["patch_json"]))
-    extra_keys = set(patch.keys()) - _CANONICAL_PATCH_KEYS
-    if extra_keys:
+    if patch != expected_patch:
         raise DefectStillPresent(
-            f"R19 the persisted patch must contain ONLY canonical minimal keys; got extra {extra_keys}"
+            f"R19 the persisted patch must be EXACTLY the canonical intended patch {expected_patch}; "
+            f"got {patch}"
         )
-    if str(row["patch_json"]) != json.dumps(patch, sort_keys=True, separators=(",", ":")):
+    if str(row["patch_json"]) != json.dumps(expected_patch, sort_keys=True, separators=(",", ":")):
         raise DefectStillPresent("R19 the stored patch_json must be the CANONICAL serialization")
-    if str(row["patch_sha"]) != _canonical_patch_sha(patch):
+    if str(row["patch_sha"]) != _canonical_patch_sha(expected_patch):
         raise DefectStillPresent(
-            "R19 the stored patch_sha must be the canonical SHA (R13 preserved)"
+            "R19 the stored patch_sha must be the canonical SHA of the intended patch (R13 preserved)"
         )
     if _PII_SENTINEL in str(row["patch_json"]):
         raise DefectStillPresent("R19 no PII may appear in the persisted patch")
@@ -3513,24 +3537,46 @@ def _check_r19(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         if _PII_SENTINEL in blob:
             raise DefectStillPresent(f"R19 no PII may appear in a log record: {blob[:120]}")
 
-    # METRICS: pending gauge is UNLABELED; the failures counter has EXACTLY class in {terminal, transient};
-    # no PII in any label; and the same holds in the rendered Prometheus exposition.
+    # METRICS: emission is REQUIRED (exactly one pending gauge + one failure delta, correct values), every
+    # NAME is whitelisted and PII-free, the pending gauge is UNLABELED, and the failures counter has
+    # EXACTLY class in {terminal, transient}. Same for the rendered Prometheus exposition.
     for name, labels, _value in coord._metrics:
+        if name not in _ALLOWED_METRIC_NAMES or _PII_SENTINEL in name:
+            raise DefectStillPresent(
+                f"R19 metric name must be in the whitelist {sorted(_ALLOWED_METRIC_NAMES)}, PII-free; got {name!r}"
+            )
         if name == "musubi_lifecycle_outbox_pending":
             if labels:
                 raise DefectStillPresent(f"R19 the pending gauge must be UNLABELED, got {labels}")
-        elif name == "musubi_lifecycle_outbox_mutation_failures_total":
-            if set(labels.keys()) != {"class"}:
-                raise DefectStillPresent(
-                    f"R19 the failures metric must have EXACTLY a 'class' label (no object/namespace); "
-                    f"got {set(labels.keys())}"
-                )
-            if labels["class"] not in ("terminal", "transient"):
-                raise DefectStillPresent(
-                    f"R19 the metric class label must be bounded to terminal|transient; got {labels['class']!r}"
-                )
+        elif set(labels.keys()) != {"class"}:
+            raise DefectStillPresent(
+                f"R19 the failures metric must have EXACTLY a 'class' label (no object/namespace); "
+                f"got {set(labels.keys())}"
+            )
+        elif labels["class"] not in ("terminal", "transient"):
+            raise DefectStillPresent(
+                f"R19 the metric class label must be bounded to terminal|transient; got {labels['class']!r}"
+            )
         if any(_PII_SENTINEL in str(v) for v in labels.values()):
             raise DefectStillPresent("R19 no PII may appear in a metric label")
+    pending = [m for m in coord._metrics if m[0] == "musubi_lifecycle_outbox_pending"]
+    failures = [
+        m for m in coord._metrics if m[0] == "musubi_lifecycle_outbox_mutation_failures_total"
+    ]
+    if len(pending) != 1:
+        raise DefectStillPresent(
+            f"R19 exactly ONE pending gauge sample expected, got {len(pending)}"
+        )
+    if len(failures) != 1:
+        raise DefectStillPresent(
+            f"R19 exactly ONE failure counter delta expected, got {len(failures)}"
+        )
+    if pending[0][2] != 1.0:
+        raise DefectStillPresent(
+            f"R19 the pending gauge must be 1 (the poison row), got {pending[0][2]}"
+        )
+    if failures[0][2] != 1.0:
+        raise DefectStillPresent(f"R19 the failure counter delta must be 1, got {failures[0][2]}")
     if _PII_SENTINEL in coord._prometheus_exposition():
         raise DefectStillPresent("R19 no PII may appear in the Prometheus exposition")
     c.close()
@@ -4774,6 +4820,11 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
             "raw_exception_reason",
             "object_namespace_labels",
             "high_cardinality_unknown_class",
+            "empty_patch",
+            "missing_required_patch",
+            "omit_metrics",
+            "double_count_metrics",
+            "dynamic_metric_name",
         ],
     ),
     "r15": (
