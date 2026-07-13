@@ -50,11 +50,13 @@ closed. Deployment and live fault-injection proof remain tracked outside this co
   ruling 2026-07-13): repoint each old assertion that encodes pre-envelope behavior (hybrid Ok([])→Err
   on timeout; deep/blended/fast free-text → bounded RetrievalWarning codes; deep list → envelope) onto
   the accepted contract. NOT weakening — every non-RET007 behavior each test still guards is kept.
+  *(Note: `test_hybrid.py` ownership was subsequently transferred to [[_slices/slice-ret004-evals]] / Issue 430 on 2026-07-13).*
 - `tests/api/test_context.py` + `tests/cli/test_cli_context.py` — the /v1/context degradation red
   (this commit) then its migration at src.
 - `tests/retrieve/test_ret007_kind_propagation.py` + `tests/api/test_ret007_telemetry_boundary.py` +
   `tests/adapters/test_ret007_livekit_channel.py` (NEW — Yua's five blockers, second round).
 - `tests/retrieve/test_rerank.py` (DRIFT-4 — rerank shape migration).
+  *(Note: `tests/retrieve/test_rerank.py` ownership was subsequently transferred to [[_slices/slice-ret004-evals]] / Issue 430 on 2026-07-13).*
 - `docs/Musubi/_slices/slice-ret007-degradation-impl.md` (this file).
 
 `owns_paths` (the source-refactor — SAME slice, claimed NOW so ownership is explicit before source

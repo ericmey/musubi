@@ -403,10 +403,12 @@ def test_hypothesis_increasing_prefetch_limit_never_reduces_recall_on_fixed_quer
 @pytest.mark.skip(
     reason="deferred to slice-retrieval-evals: BEIR evaluation requires benchmark corpus"
 )
-def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points() -> (
-    None
-):
-    raise AssertionError("covered by retrieval eval suite")
+class DefectStillPresent(Exception):
+    pass
+
+@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: BEIR synthetic hybrid evaluation unmeasured")
+def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points() -> None:
+    raise DefectStillPresent("BEIR synthetic hybrid evaluation unmeasured")
 
 
 @pytest.mark.skip(reason="deferred to slice-ops-gpu: live TEI/Qdrant p95 requires reference host")

@@ -207,9 +207,13 @@ async def test_rerank_partial_batch_failure_rescored_for_rest() -> None:
     assert all(h.rerank_score is None for h in result.hits)
 
 
-@pytest.mark.skip(reason="deferred to slice-retrieval-evals: deep-path NDCG needs benchmark corpus")
-def test_integration_deep_path_ndcg_10_on_golden_set_improves_vs_fast_path_by_ge_5_points() -> None:
+
+class DefectStillPresent(Exception):
     pass
+
+@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: Deep-path NDCG evaluation unmeasured")
+def test_integration_deep_path_ndcg_10_on_golden_set_improves_vs_fast_path_by_ge_5_points() -> None:
+    raise DefectStillPresent("Deep-path NDCG evaluation unmeasured")
 
 
 @pytest.mark.skip(reason="deferred to slice-ops-gpu: live p95 requires reference host")

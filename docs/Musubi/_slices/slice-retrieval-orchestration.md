@@ -26,7 +26,7 @@ blocks: []
 ## Owned paths (you MAY write here)
 
 - `src/musubi/retrieve/orchestration.py`
-- `tests/retrieve/test_orchestration.py`
+*(Note: `tests/retrieve/test_orchestration.py` ownership was transferred to [[_slices/slice-ret004-evals]] / Issue 430 on 2026-07-13).*
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 
