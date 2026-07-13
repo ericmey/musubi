@@ -8,16 +8,16 @@ from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from qdrant_client import QdrantClient, models
 
-from musubi.api.auth import require_auth
+from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import get_episodic_plane, get_qdrant_client, get_settings_dep
-from musubi.api.errors import APIError, ErrorCode
+from musubi.api.errors import APIError
 from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
-from musubi.auth import AuthRequirement, authenticate_request
+from musubi.api.write_auth import AuthorizedWrite
 from musubi.lifecycle.transitions import transition
 from musubi.planes.episodic import EpisodicPlane
 from musubi.retrieve.context_pack import VALID_KINDS, VALID_STALENESS
 from musubi.settings import Settings
-from musubi.types.common import Err, Ok, utc_now
+from musubi.types.common import Ok, utc_now
 from musubi.types.episodic import EpisodicMemory
 
 
@@ -41,20 +41,6 @@ def _build_episodic(**kwargs: object) -> EpisodicMemory:
         ) from exc
 
 
-def _check_body_scope(request: Request, namespace: str, settings: Settings) -> None:
-    """Validate the bearer's scope grants ``w`` on a body-supplied namespace."""
-    requirement = AuthRequirement(namespace=namespace, access="w")
-    result = authenticate_request(
-        request,  # type: ignore[arg-type]
-        requirement,
-        settings=settings,
-    )
-    if isinstance(result, Err):
-        err = result.error
-        code: ErrorCode = err.code  # type: ignore[assignment]
-        raise APIError(status_code=err.status_code, code=code, detail=err.detail)
-
-
 def _require_operator_for_created_at(request: Request) -> None:
     """Guard the ``created_at`` override on capture endpoints.
 
@@ -63,11 +49,11 @@ def _require_operator_for_created_at(request: Request) -> None:
     ingesting historical data, but it must not be available to
     regular consumers because it would let a token rewrite when an
     event "happened". The bearer's ``AuthContext`` is attached to
-    ``request.state.auth`` by ``_check_body_scope`` (which calls
-    ``authenticate_request``) — the capture handlers don't use the
-    ``require_auth`` dependency because scope is body-derived, not
-    static. If the scope list doesn't include ``operator`` we 403
-    before touching the plane."""
+    ``request.state.auth`` by the ``authorized_capture`` / ``authorized_batch``
+    body-auth dependency (via ``authorize_namespace`` → ``authenticate_request``)
+    — the capture routes authorize a body-derived namespace through that
+    dependency edge, not the query-reading ``require_auth`` dependency. If the
+    scope list doesn't include ``operator`` we 403 before touching the plane."""
     ctx = getattr(request.state, "auth", None)
     if ctx is None or "operator" not in (ctx.scopes or ()):
         raise APIError(
@@ -241,6 +227,26 @@ _FORBIDDEN_PATCH_FIELDS = {"state", "version", "object_id", "namespace"}
 _PATCHABLE_FIELDS = set(PatchEpisodicRequest.model_fields)
 
 
+async def authorized_capture(
+    request: Request,
+    body: CaptureRequest = Body(...),
+    settings: Settings = Depends(get_settings_dep),
+) -> AuthorizedWrite[CaptureRequest]:
+    """Body-auth dependency edge: parse the body ONCE, authorize its namespace, return the
+    validated context. The idempotency dependency / handler ``Depends`` on this."""
+    authorize_namespace(request, body.namespace, settings=settings, access="w")
+    return AuthorizedWrite(auth=request.state.auth, namespace=body.namespace, body=body)
+
+
+async def authorized_batch(
+    request: Request,
+    body: BatchCaptureRequest = Body(...),
+    settings: Settings = Depends(get_settings_dep),
+) -> AuthorizedWrite[BatchCaptureRequest]:
+    authorize_namespace(request, body.namespace, settings=settings, access="w")
+    return AuthorizedWrite(auth=request.state.auth, namespace=body.namespace, body=body)
+
+
 @router.post(
     "",
     response_model=CaptureResponse,
@@ -249,11 +255,10 @@ _PATCHABLE_FIELDS = set(PatchEpisodicRequest.model_fields)
 )
 async def capture(
     request: Request,
-    body: CaptureRequest = Body(...),
+    authorized: AuthorizedWrite[CaptureRequest] = Depends(authorized_capture),
     plane: EpisodicPlane = Depends(get_episodic_plane),
-    settings: Settings = Depends(get_settings_dep),
 ) -> CaptureResponse:
-    _check_body_scope(request, body.namespace, settings)
+    body = authorized.body  # single parsed body; namespace already authorized by the dependency
     memory_kwargs: dict[str, object] = {
         "namespace": body.namespace,
         "content": body.content,
@@ -282,11 +287,10 @@ async def capture(
 )
 async def batch_capture(
     request: Request,
-    body: BatchCaptureRequest = Body(...),
+    authorized: AuthorizedWrite[BatchCaptureRequest] = Depends(authorized_batch),
     plane: EpisodicPlane = Depends(get_episodic_plane),
-    settings: Settings = Depends(get_settings_dep),
 ) -> BatchCaptureResponse:
-    _check_body_scope(request, body.namespace, settings)
+    body = authorized.body  # single parsed body; namespace already authorized by the dependency
     # Check operator scope once up front if ANY item overrides
     # created_at. A batch with mixed override / no-override is fine
     # under operator scope; a batch with any override under a

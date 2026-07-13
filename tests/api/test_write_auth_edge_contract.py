@@ -52,6 +52,15 @@ def _all_subdep_names(dependant: Any) -> list[str]:
     return names
 
 
+def _all_body_param_names(dependant: Any) -> list[str]:
+    """Body params across the WHOLE dependency tree — FastAPI keeps a dependency's Body(...) in the
+    sub-dependant, not the route's top-level body_params, so 'one parse' must count recursively."""
+    names = [b.name for b in dependant.body_params]
+    for d in dependant.dependencies:
+        names += _all_body_param_names(d)
+    return names
+
+
 def _valid_body(path: str) -> dict[str, Any]:
     if path == "/v1/episodic":
         return {"namespace": f"{NS}/episodic", "content": "x", "tags": ["kind:episode"], "importance": 3}
@@ -83,7 +92,7 @@ def test_each_capture_route_parses_body_exactly_once(app_factory: FastAPI) -> No
     routes = _post_capture_routes(app_factory)
     assert len(routes) == 3, f"expected exactly 3 body-derived captures, got {[r.path for r in routes]}"
     for r in routes:
-        names = [b.name for b in r.dependant.body_params]  # flattened across dependencies
+        names = _all_body_param_names(r.dependant)  # across the whole dependency tree
         assert len(names) == 1, f"{r.path}: must parse the body exactly once, got body_params={names}"
 
 
@@ -160,7 +169,6 @@ def test_every_eligible_capture_route_carries_idempotency_dependency(app_factory
         )
 
 
-@pytest.mark.xfail(strict=True, reason="Phase B: AuthorizedWrite edge not yet wired")
 def test_handler_unreachable_without_authorized_write(app_factory: FastAPI) -> None:
     for r in _post_capture_routes(app_factory):
         names = _all_subdep_names(r.dependant)
