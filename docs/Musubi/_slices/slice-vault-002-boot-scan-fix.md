@@ -4,10 +4,10 @@ slice_id: slice-vault-002-boot-scan-fix
 issue: 444
 section: _slices
 type: slice
-status: ready
+status: in-progress
 owner: unassigned
 phase: "Retrieval"
-tags: [section/slices, status/ready, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-07-13
 reviewed: false
 depends-on: []
@@ -18,7 +18,7 @@ blocks: []
 
 > Tests-first red contract for the boot_scan relative-path silent-swallow bug. Source is forbidden in this slice; the fix lands in a separate follow-up PR after the red contract is approved.
 
-**Phase:** Retrieval · **Status:** `ready` · **Owner:** `unassigned`
+**Phase:** Retrieval · **Status:** `in-progress` · **Owner:** `unassigned`
 
 ## Specs to implement
 
@@ -26,10 +26,14 @@ blocks: []
 
 ## Owned paths
 
-- `tests/vault/test_watcher_boot_scan.py` (test contract, tests only; no src/ changes)
+- `tests/vault/test_watcher_boot_scan_vault_002.py` (red contract test, tests only; no src/ changes)
 - `docs/Musubi/_slices/slice-vault-002-boot-scan-fix.md`
-- `docs/Musubi/_inbox/locks/slice-vault-002-boot-scan-relative-path-noop.lock`
-- `projects/active/hermes-musubi-provider/fixtures/test_VAULT_002.py` (locked evidence fixture)
+- `docs/Musubi/_inbox/locks/slice-vault-002-boot-scan-fix.lock`
+
+## Out of owns_paths (intentionally not claimed by this slice)
+
+- `tests/vault/test_watcher_boot_scan.py` (overlaps with `slice-ops-hardening-suite`; that file is owned by the hardening slice, NOT by this slice; the VAULT-002 red contract adds a new test file, `test_watcher_boot_scan_vault_002.py`, instead of modifying the existing one)
+- The vacuous `test_boot_scan_archives_removed_files` (formerly in `tests/vault/test_watcher_boot_scan.py`) was REMOVED in the prior commit because its deletion expectation belongs to VAULT-001, not VAULT-002. The deletion handling is routed to a separate VAULT-001 issue / slice.
 
 ## Forbidden paths
 
