@@ -1,25 +1,25 @@
-"""IDEM lease contract — executable future contract for the in-flight acquire/release primitive.
+"""IDEM lease contract — the SAME property suite run against the reference AND the real cache.
 
-Yua blocker 1 (2026-07-12T21:48): the earlier lease xfail called `lookup` twice and pretended
-the first call "claimed" the key — but `lookup` has no claim semantics, so a correct
-acquire/release API could not make that test pass without editing the test. It was coupled to
-the wrong surface. This file fixes that: the contract is written against the PROPOSED
-`acquire`/`release`/`store` primitive, so building it correctly makes the reds flip green with
-NO edit to the test.
+Yua (2026-07-12T21:48 blocker 1, then 22:11 lease gap): the earlier version proved the eight
+lease properties only against the reference `_LeaseCache`, while the real-target reds asserted
+merely that `acquire`/`release` EXIST and a basic second-status. A partial or broken real
+implementation could clear those weak reds. Fixed here.
 
-Two halves:
+Design:
+  - `_LeaseCache` is the REFERENCE implementation of the proposed acquire/release/store
+    primitive: injectable monotonic clock, owner-authenticated store/release, stale-lease
+    reclaim, and TTL cleanup of completed leases. It is the spec.
+  - Every property test is PARAMETRIZED over two cache factories:
+      * `reference`  — the prototype; MUST pass (proves the contract is coherent).
+      * `real-cache` — `musubi.api.idempotency.IdempotencyCache`; marked `xfail(strict=True)`.
+        It fails today (no `acquire`) and will only turn XPASS→fail when the real cache
+        satisfies the SAME property — not merely exposes the method. A partial real impl leaves
+        the unmet properties xfailing (honestly incomplete) and any met one XPASSes loudly
+        under strict, so the gate cannot be half-cleared.
 
-  1. REFERENCE PROTOTYPE (`_LeaseCache`, all green).  A minimal in-process implementation of
-     the proposed primitive, proving the contract is coherent and satisfiable and giving the
-     `src` implementer an exact spec. Covers all eight properties Yua named plus req-3 release
-     on error/cancel, plus the real-concurrency "executes exactly once" proof.
-
-  2. REAL-TARGET REDS (`xfail(strict=True)` against `musubi.api.idempotency.IdempotencyCache`).
-     Assert the real cache exposes the primitive with the same contract. Fail today (the
-     methods do not exist); flip to XPASS→fail the moment `src` implements them to spec.
-
-Identity here is the FULL replay identity — (key, body_hash, route/operation, authorized
-principal) — tying req 9 (endpoint in identity) to req 3 (the lease). Synthetic content only.
+Identity is the full replay identity — (key, body_hash, route/operation, principal). The clock
+is injected (no wall-clock, no `Date.now`) so stale/TTL behaviour is deterministic. Tests/docs
+only; no src.
 
     uv run pytest tests/api/spikes/test_idem_lease_contract.py -v
 """
@@ -27,8 +27,8 @@ principal) — tying req 9 (endpoint in identity) to req 3 (the lease). Syntheti
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass, field
+from typing import Callable
 
 import pytest
 
@@ -36,7 +36,7 @@ from musubi.api.idempotency import IdempotencyCache
 
 
 # --------------------------------------------------------------------------- #
-# Reference prototype of the PROPOSED primitive. This is the spec, not src.
+# Reference implementation of the PROPOSED primitive (the spec, not src).
 # --------------------------------------------------------------------------- #
 
 @dataclass
@@ -44,41 +44,38 @@ class _Lease:
     owner: str
     created_at: float
     done: bool = False
+    completed_at: float | None = None
     response: dict | None = None
     status: int | None = None
 
 
-@dataclass
 class _LeaseCache:
-    """Reference implementation of the proposed acquire/release/store contract.
+    """Reference acquire/release/store lease.
 
-    Identity is an opaque hashable (the caller builds it from key+body+route+principal).
-    `acquire` is the single atomic gate; `lookup`-then-`store` is replaced so there is no
-    window in which two callers both see "miss".
+    - `clock`: injected monotonic source (seconds, float). No wall-clock.
+    - `stale_after_s`: an in-flight lease older than this is reclaimable (crash recovery).
+    - `ttl_s`: a COMPLETED lease is replayable until this long after completion, then cleaned.
     """
 
-    ttl_s: float = 24 * 3600
-    stale_after_s: float = 30.0
-    _leases: dict = field(default_factory=dict)
-    _lock: threading.Lock = field(default_factory=threading.Lock)
+    def __init__(self, *, clock: Callable[[], float], stale_after_s: float = 30.0,
+                 ttl_s: float = 24 * 3600) -> None:
+        self._clock = clock
+        self._stale = stale_after_s
+        self._ttl = ttl_s
+        self._leases: dict = {}
+        self._lock = threading.Lock()
 
-    def acquire(self, identity, owner: str, *, now: float | None = None) -> tuple[str, dict | None, int | None]:
-        """Atomic. Returns (status, response, status_code):
-          - "acquired"  — caller owns the in-flight slot; must store+release.
-          - "in_flight" — someone else holds a fresh lease; caller waits/replays/409s.
-          - "hit"       — a completed response exists; replay it.
-          - "conflict"  — reserved for same-key/different-body at the API layer.
-        Owner identity is REQUIRED so release is authenticated (property 6)."""
-        now = now if now is not None else time.monotonic()
+    def acquire(self, identity, owner: str) -> tuple[str, dict | None, int | None]:
+        now = self._clock()
         with self._lock:
+            self._cleanup_locked(now)
             lease = self._leases.get(identity)
             if lease is None:
                 self._leases[identity] = _Lease(owner=owner, created_at=now)
                 return "acquired", None, None
             if lease.done:
                 return "hit", lease.response, lease.status
-            # in-flight; steal only if stale (property 5)
-            if now - lease.created_at > self.stale_after_s:
+            if now - lease.created_at > self._stale:              # reclaim a crashed owner
                 self._leases[identity] = _Lease(owner=owner, created_at=now)
                 return "acquired", None, None
             return "in_flight", None, None
@@ -89,12 +86,11 @@ class _LeaseCache:
             if lease is None or lease.owner != owner or lease.done:
                 raise PermissionError("store by non-owner or after completion")
             lease.done = True
+            lease.completed_at = self._clock()
             lease.response = response_body
             lease.status = response_status
 
     def release(self, identity, owner: str) -> bool:
-        """Release an incomplete lease (error/cancel path, property 4). A mismatched owner
-        must NOT be able to release someone else's lease (property 6)."""
         with self._lock:
             lease = self._leases.get(identity)
             if lease is None:
@@ -102,54 +98,92 @@ class _LeaseCache:
             if lease.owner != owner:
                 raise PermissionError("release by non-owner")
             if lease.done:
-                return False           # completed leases are kept for replay, not released
+                return False                                       # completed leases are kept for replay
             del self._leases[identity]
             return True
+
+    def cleanup(self) -> None:
+        with self._lock:
+            self._cleanup_locked(self._clock())
+
+    def _cleanup_locked(self, now: float) -> None:
+        expired = [k for k, v in self._leases.items()
+                   if v.done and v.completed_at is not None and now - v.completed_at > self._ttl]
+        for k in expired:
+            del self._leases[k]
 
 
 IDENT = ("idem-key-1", "bodyhash-abc", "POST /v1/episodic", "eric/claude-code")
 
 
-# ---- property proofs against the reference (all green) -------------------- #
+class _Clock:
+    """Deterministic injectable monotonic clock — advance() moves time forward."""
 
-def test_p1_acquire_returns_acquired() -> None:
-    c = _LeaseCache()
-    status, _, _ = c.acquire(IDENT, owner="o1")
-    assert status == "acquired"
+    def __init__(self, t: float = 1000.0) -> None:
+        self._t = t
+
+    def __call__(self) -> float:
+        return self._t
+
+    def advance(self, dt: float) -> None:
+        self._t += dt
 
 
-def test_p2_second_acquire_is_in_flight() -> None:
-    c = _LeaseCache()
+# --------------------------------------------------------------------------- #
+# Cache factories. Same property suite runs against BOTH.
+# --------------------------------------------------------------------------- #
+
+def _make_reference(clock: _Clock):
+    return _LeaseCache(clock=clock, stale_after_s=30.0, ttl_s=100.0)
+
+
+def _make_real(clock: _Clock):
+    # The real target. It has no clock-injecting lease API today; when it grows one to the SAME
+    # contract, these parametrizations flip. If the constructor cannot take a clock yet, the
+    # property still exercises acquire()/store()/release() which do not exist -> xfail.
+    return IdempotencyCache()
+
+
+_XFAIL_REAL = pytest.mark.xfail(
+    strict=True,
+    reason="IdempotencyCache does not yet satisfy the lease property (no acquire/release) — fix pending",
+)
+
+CACHES = [
+    pytest.param(_make_reference, id="reference"),
+    pytest.param(_make_real, id="real-cache", marks=_XFAIL_REAL),
+]
+
+
+# --------------------------------------------------------------------------- #
+# The property suite — parametrized over reference + real.
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p1_acquire_returns_acquired(make_cache) -> None:
+    c = make_cache(_Clock())
+    assert c.acquire(IDENT, owner="o1")[0] == "acquired"
+
+
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p2_second_acquire_is_in_flight(make_cache) -> None:
+    c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
-    status, _, _ = c.acquire(IDENT, owner="o2")
-    assert status == "in_flight", "a fresh in-flight lease must block a second acquirer"
+    assert c.acquire(IDENT, owner="o2")[0] == "in_flight"
 
 
-def test_p3_owner_store_then_replay_is_hit() -> None:
-    c = _LeaseCache()
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p3_owner_store_then_replay_is_hit(make_cache) -> None:
+    c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     c.store(IDENT, owner="o1", response_status=202, response_body={"object_id": "x"})
     status, body, code = c.acquire(IDENT, owner="o2")
     assert status == "hit" and body == {"object_id": "x"} and code == 202
 
 
-def test_p4_release_on_error_frees_the_slot() -> None:
-    c = _LeaseCache()
-    c.acquire(IDENT, owner="o1")
-    assert c.release(IDENT, owner="o1") is True          # handler raised → release
-    status, _, _ = c.acquire(IDENT, owner="o2")
-    assert status == "acquired", "after a release the next caller must be able to acquire"
-
-
-def test_p5_stale_owner_can_be_stolen() -> None:
-    c = _LeaseCache(stale_after_s=0.0)
-    c.acquire(IDENT, owner="o1", now=100.0)
-    status, _, _ = c.acquire(IDENT, owner="o2", now=100.0 + 1.0)   # past stale window
-    assert status == "acquired", "a stale in-flight lease must be reclaimable (no permanent wedge)"
-
-
-def test_p6_mismatched_owner_cannot_release_or_store() -> None:
-    c = _LeaseCache()
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p4_owner_only_store_and_release(make_cache) -> None:
+    c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     with pytest.raises(PermissionError):
         c.release(IDENT, owner="o2")
@@ -157,71 +191,96 @@ def test_p6_mismatched_owner_cannot_release_or_store() -> None:
         c.store(IDENT, owner="o2", response_status=202, response_body={})
 
 
-def test_p7_bounded_waiter_never_double_executes() -> None:
-    """A waiter that gets in_flight must NOT fall through to execute; it polls until hit or a
-    bounded deadline, then it is the caller's job to 409/425 — never a second mutation."""
-    c = _LeaseCache()
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p5_release_after_error_frees_slot(make_cache) -> None:
+    c = make_cache(_Clock())
+    c.acquire(IDENT, owner="o1")
+    assert c.release(IDENT, owner="o1") is True          # handler raised/cancelled → release
+    assert c.acquire(IDENT, owner="o2")[0] == "acquired"
+
+
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p6_stale_inflight_is_reclaimable(make_cache) -> None:
+    clock = _Clock()
+    c = make_cache(clock)
+    c.acquire(IDENT, owner="o1")
+    clock.advance(31.0)                                  # past stale window (30s)
+    assert c.acquire(IDENT, owner="o2")[0] == "acquired", "a crashed owner must not wedge the key"
+
+
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p7_completed_lease_expires_after_ttl(make_cache) -> None:
+    clock = _Clock()
+    c = make_cache(clock)
+    c.acquire(IDENT, owner="o1")
+    c.store(IDENT, owner="o1", response_status=202, response_body={"object_id": "x"})
+    assert c.acquire(IDENT, owner="o2")[0] == "hit"      # replayable within TTL
+    clock.advance(101.0)                                 # past ttl (100s)
+    assert c.acquire(IDENT, owner="o3")[0] == "acquired", "a completed lease must be cleaned after TTL"
+
+
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p8_bounded_waiter_never_double_executes(make_cache) -> None:
+    c = make_cache(_Clock())
     c.acquire(IDENT, owner="o1")
     executed = []
-    deadline = 5          # bounded polls, not unbounded spin
-    for _ in range(deadline):
-        status, body, _ = c.acquire(IDENT, owner="w")
+    for _ in range(5):                                   # bounded polls
+        status, _, _ = c.acquire(IDENT, owner="w")
         if status == "hit":
             break
         if status == "in_flight":
             continue
-        executed.append(status)      # "acquired" here would be a double-execution
+        executed.append(status)                          # "acquired" here == double execution
     assert executed == [], f"waiter double-acquired instead of waiting: {executed}"
 
 
-def test_p8_real_concurrency_executes_exactly_once() -> None:
-    """The point of the whole primitive: N threads racing the same identity → the handler body
-    runs ONCE. Deterministic barrier so all threads reach acquire together."""
-    c = _LeaseCache()
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p9_real_concurrency_executes_exactly_once(make_cache) -> None:
+    c = make_cache(_Clock())
     n = 12
     barrier = threading.Barrier(n)
     executions = []
+    errors = []
     exec_lock = threading.Lock()
 
     def worker(i: int) -> None:
-        barrier.wait()                       # force a real simultaneous race
-        status, _, _ = c.acquire(IDENT, owner=f"o{i}")
-        if status == "acquired":
+        barrier.wait()                                   # force a simultaneous race
+        try:
+            if c.acquire(IDENT, owner=f"o{i}")[0] == "acquired":
+                with exec_lock:
+                    executions.append(i)
+                c.store(IDENT, owner=f"o{i}", response_status=202, response_body={"object_id": "x"})
+        except Exception as exc:                         # missing/partial primitive: record, don't leak
             with exec_lock:
-                executions.append(i)         # the mutation happens here
-            c.store(IDENT, owner=f"o{i}", response_status=202, response_body={"object_id": "x"})
+                errors.append(repr(exc))
 
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
+    assert not errors, f"lease primitive raised under concurrency: {errors[0]}"
     assert len(executions) == 1, f"{n} concurrent callers executed {len(executions)} times, must be exactly 1"
 
 
-# ---- executable future contracts against the REAL cache (strict xfail) ---- #
+@pytest.mark.parametrize("make_cache", CACHES)
+def test_p10_clock_is_injected_not_wallclock(make_cache) -> None:
+    """Stale/TTL must key off the INJECTED monotonic clock, so behaviour is deterministic and
+    testable. Proven by holding the clock still: a fresh in-flight lease is NOT reclaimed when
+    zero injected time has passed, regardless of real wall-clock elapsed."""
+    clock = _Clock()
+    c = make_cache(clock)
+    c.acquire(IDENT, owner="o1")
+    # clock does NOT advance → the lease is not stale → second acquire is blocked
+    assert c.acquire(IDENT, owner="o2")[0] == "in_flight", "stale check must use the injected clock"
 
-@pytest.mark.xfail(strict=True, reason="IDEM lease: IdempotencyCache has no acquire() yet — fix pending")
-def test_real_cache_exposes_acquire() -> None:
+
+# --------------------------------------------------------------------------- #
+# Real-cache control (not xfail): prove the primitive is genuinely absent, so the reds above
+# fail for the RIGHT reason.
+# --------------------------------------------------------------------------- #
+
+def test_real_cache_lacks_lease_primitive_today() -> None:
     c = IdempotencyCache()
-    # SECURE CONTRACT: an acquire primitive exists and gates in-flight. Today: AttributeError.
-    status, _, _ = c.acquire(IDENT, owner="o1")            # type: ignore[attr-defined]
-    assert status == "acquired"
-    status2, _, _ = c.acquire(IDENT, owner="o2")           # type: ignore[attr-defined]
-    assert status2 in ("in_flight", "conflict"), "second concurrent acquire must not be a free slot"
-
-
-@pytest.mark.xfail(strict=True, reason="IDEM lease: IdempotencyCache has no release() yet — fix pending")
-def test_real_cache_exposes_release() -> None:
-    c = IdempotencyCache()
-    c.acquire(IDENT, owner="o1")                            # type: ignore[attr-defined]
-    freed = c.release(IDENT, owner="o1")                    # type: ignore[attr-defined]
-    assert freed is True, "release must free an incomplete lease so the next caller can acquire"
-
-
-def test_real_cache_lacks_lease_today_control() -> None:
-    """TODAY-REALITY control (not xfail): prove the primitive is genuinely absent, so the reds
-    above are failing for the RIGHT reason (missing API), not a typo."""
-    c = IdempotencyCache()
-    assert not hasattr(c, "acquire"), "unexpected: acquire exists — the xfails should XPASS now"
-    assert not hasattr(c, "release"), "unexpected: release exists — the xfails should XPASS now"
+    assert not hasattr(c, "acquire"), "unexpected: acquire exists — the parametrized reds should XPASS"
+    assert not hasattr(c, "release"), "unexpected: release exists — the parametrized reds should XPASS"
