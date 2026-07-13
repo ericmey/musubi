@@ -59,8 +59,8 @@ async def test_rerank_sorts_by_cross_encoder_score() -> None:
 
     result = await rerank(_client(client), "query", candidates, top_k=10)
 
-    assert [h.object_id for h in result[:3]] == ["high", "mid", "low"]
-    assert result[0].rerank_score == 0.9
+    assert [h.object_id for h in result.hits[:3]] == ["high", "mid", "low"]
+    assert result.hits[0].rerank_score == 0.9
 
 
 @pytest.mark.asyncio
@@ -72,7 +72,7 @@ async def test_rerank_replaces_relevance_component() -> None:
 
     result = await rerank(_client(client), "query", candidates, top_k=10)
 
-    h0 = result[0]
+    h0 = result.hits[0]
     assert h0.rerank_score == 0.8
     # scoring.score should use rerank_score
     _total, components = score(h0, now=1700000000.0)
@@ -87,7 +87,7 @@ async def test_rerank_skipped_when_candidates_le_5() -> None:
     result = await rerank(_client(client), "query", candidates, top_k=10)
 
     assert len(client.calls) == 0
-    assert len(result) == 5
+    assert len(result.hits) == 5
 
 
 @pytest.mark.asyncio
@@ -98,10 +98,10 @@ async def test_rerank_degrades_to_rrf_when_tei_down(caplog: pytest.LogCaptureFix
     with caplog.at_level(logging.WARNING):
         result = await rerank(_client(client), "query", candidates, top_k=5)
 
-    assert len(result) == 5
+    assert len(result.hits) == 5
     assert "Reranker failed" in caplog.text
     # Should maintain input order (or RRF order if already sorted)
-    assert [h.object_id for h in result] == ["h0", "h1", "h2", "h3", "h4"]
+    assert [h.object_id for h in result.hits] == ["h0", "h1", "h2", "h3", "h4"]
 
 
 @pytest.mark.asyncio
@@ -131,8 +131,8 @@ async def test_rerank_score_normalized_via_sigmoid() -> None:
 
     result = await rerank(_client(client), "query", candidates, top_k=10)
 
-    high = next(h for h in result if h.object_id == "h0")
-    low = next(h for h in result if h.object_id == "h1")
+    high = next(h for h in result.hits if h.object_id == "h0")
+    low = next(h for h in result.hits if h.object_id == "h1")
 
     _, comp_high = score(high, now=1700000000.0)
     _, comp_low = score(low, now=1700000000.0)
@@ -176,7 +176,7 @@ async def test_rerank_plane_agnostic_ordering() -> None:
     result = await rerank(_client(client), "query", candidates, top_k=10)
 
     # Order should purely be by rerank_score
-    assert [h.object_id for h in result[:3]] == ["artifact", "curated", "episodic"]
+    assert [h.object_id for h in result.hits[:3]] == ["artifact", "curated", "episodic"]
 
 
 @pytest.mark.asyncio
@@ -190,7 +190,7 @@ async def test_rerank_tei_error_returns_hybrid_results_with_warning(
     with caplog.at_level(logging.WARNING):
         result = await rerank(_client(client), "query", candidates, top_k=5)
 
-    assert len(result) == 5
+    assert len(result.hits) == 5
     assert "Reranker failed" in caplog.text
 
 
@@ -203,8 +203,8 @@ async def test_rerank_partial_batch_failure_rescored_for_rest() -> None:
     candidates = [_hit(f"h{i}") for i in range(10)]
 
     result = await rerank(_client(client), "query", candidates, top_k=5)
-    assert len(result) == 5
-    assert all(h.rerank_score is None for h in result)
+    assert len(result.hits) == 5
+    assert all(h.rerank_score is None for h in result.hits)
 
 
 @pytest.mark.skip(reason="deferred to slice-retrieval-evals: deep-path NDCG needs benchmark corpus")

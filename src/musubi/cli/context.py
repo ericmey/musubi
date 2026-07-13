@@ -83,10 +83,18 @@ def _parse_planes(value: str) -> list[str]:
 
 
 def _render(response: dict[str, object]) -> str:
+    lines: list[str] = []
+    # RET-007: surface degradation FIRST and visibly on the non-JSON path, so a degraded context pack
+    # is not rendered indistinguishably from a healthy one. (The --json path preserves them naturally.)
+    warnings = response.get("warnings")
+    if isinstance(warnings, list) and warnings:
+        codes = ", ".join(str(w) for w in warnings)
+        lines.append(f"⚠ Retrieval degraded: {codes}")
+        lines.append("")
     groups = response.get("groups", [])
     if not isinstance(groups, list) or not groups:
-        return "(no context surfaced)"
-    lines: list[str] = []
+        lines.append("(no context surfaced)")
+        return "\n".join(lines)
     for group in groups:
         if not isinstance(group, dict):
             continue

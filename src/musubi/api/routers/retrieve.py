@@ -419,11 +419,15 @@ async def retrieve(
 
     if isinstance(orchestration_result, Err):
         retrieval_err = orchestration_result.error
+        # Telemetry (errors_total) is counted at the shared orchestration boundary — not here.
         status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
         raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
 
+    # The envelope's warnings are already deduped, fail-closed (allowlisted only), and counted at the
+    # orchestration boundary — the router just flattens the bounded codes onto the wire.
+    envelope = orchestration_result.value
     rows: list[RetrieveResultRow] = []
-    for hit in orchestration_result.value:
+    for hit in envelope.results:
         rows.append(
             RetrieveResultRow(
                 object_id=hit.object_id,
@@ -447,6 +451,7 @@ async def retrieve(
         results=rows[: body.limit],
         mode=body.mode,
         limit=body.limit,
+        warnings=[warning.code for warning in envelope.warnings],
     )
 
 

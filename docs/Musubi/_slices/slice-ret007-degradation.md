@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice, retrieval, degradation, observab
 updated: 2026-07-13
 reviewed: true
 depends-on: []
-blocks: []
+blocks: [slice-ret007-degradation-impl]
 issue: 416
 ---
 

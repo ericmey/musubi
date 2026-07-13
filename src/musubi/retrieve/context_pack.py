@@ -143,6 +143,9 @@ class ContextPack(BaseModel):
     max_chars: int
     used_chars: int
     suppressed: dict[str, int] = Field(default_factory=dict)
+    #: RET-007 — additive, default-empty bounded degradation codes threaded from the retrieval
+    #: envelope. A healthy pack carries ``[]``.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class _RankedCandidate(BaseModel):
@@ -157,6 +160,7 @@ class _RankedCandidate(BaseModel):
 def build_context_pack(
     candidates: list[ContextCandidate],
     query: ContextPackQuery,
+    warnings: list[str] | None = None,
 ) -> ContextPack:
     """Return a grouped, char-capped essence context pack."""
 
@@ -194,6 +198,7 @@ def build_context_pack(
         max_chars=query.max_chars,
         used_chars=used_chars,
         suppressed=suppressed,
+        warnings=list(warnings) if warnings else [],
     )
 
 

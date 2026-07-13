@@ -98,7 +98,7 @@ async def test_deep_path_invokes_rerank(
     result = await run_deep_retrieve(qdrant, embedder, reranker, query)
 
     assert result.is_ok()
-    hits = result.unwrap()
+    hits = result.unwrap().hits
     assert len(hits) == 6
     # If reranked, rerank_score shouldn't be None. Wait, ScoredHit doesn't expose rerank_score directly,
     # but the scores should be computed.
@@ -169,7 +169,7 @@ async def test_deep_path_hydrates_lineage_by_default(
     result = await run_deep_retrieve(qdrant, embedder, reranker, query)
 
     assert result.is_ok()
-    hits = result.unwrap()
+    hits = result.unwrap().hits
     assert len(hits) > 0
     hit = hits[0]
     lineage = hit.payload["lineage"]
@@ -201,7 +201,7 @@ async def test_deep_path_snippet_longer_than_fast(
     )
     query = RetrievalQuery(namespace=f"{base_ns}/curated", query_text="Long", limit=1)
     result = await run_deep_retrieve(qdrant, embedder, reranker, query)
-    hits = result.unwrap()
+    hits = result.unwrap().hits
     assert hits[0].payload["content"] == long_content
 
 
@@ -247,7 +247,8 @@ async def test_deep_path_rerank_down_falls_back_with_warning(
     query = RetrievalQuery(namespace=f"{base_ns}/episodic", query_text="Hit", limit=10)
     result = await run_deep_retrieve(qdrant, embedder, DownReranker(), query)  # type: ignore
     assert result.is_ok()
-    assert len(result.unwrap()) == 6
+    assert len(result.unwrap().hits) == 6
+    assert "reranker_failed" in [w.code for w in result.unwrap().warnings]
 
 
 async def test_deep_path_hydrate_missing_artifact_partial_lineage(
@@ -272,7 +273,7 @@ async def test_deep_path_hydrate_missing_artifact_partial_lineage(
     query = RetrievalQuery(namespace=f"{base_ns}/curated", query_text="Missing", limit=1)
     result = await run_deep_retrieve(qdrant, embedder, reranker, query)
     assert result.is_ok()
-    hit = result.unwrap()[0]
+    hit = result.unwrap().hits[0]
     assert hit.payload["lineage"]["supported_by"] == []
 
 
@@ -341,7 +342,7 @@ async def test_deep_path_llm_expansion_fails_gracefully(
     result = await run_deep_retrieve(qdrant, embedder, reranker, query, llm=llm)
     assert result.is_ok()
     assert llm.calls == 1
-    assert len(result.unwrap()) > 0
+    assert len(result.unwrap().hits) > 0
 
 
 async def test_deep_path_hydrates_superseded_by(
@@ -396,7 +397,7 @@ async def test_deep_path_hydrates_superseded_by(
     )
     result = await run_deep_retrieve(qdrant, embedder, reranker, query)
     assert result.is_ok()
-    hits = result.unwrap()
+    hits = result.unwrap().hits
     assert hits[0].payload["lineage"]["superseded_by"]["object_id"] == new_cur.object_id
 
 
@@ -453,13 +454,13 @@ async def test_deep_path_hydrates_promoted_from_and_to(
     # Query for curated, check promoted_from
     query1 = RetrievalQuery(namespace=f"{base_ns}/curated", query_text="Curated content", limit=1)
     result1 = await run_deep_retrieve(qdrant, embedder, reranker, query1)
-    hits1 = result1.unwrap()
+    hits1 = result1.unwrap().hits
     assert hits1[0].payload["lineage"]["promoted_from"]["object_id"] == conc.object_id
 
     # Query for concept, check promoted_to
     query2 = RetrievalQuery(namespace=f"{base_ns}/concept", query_text="Concept content", limit=1)
     result2 = await run_deep_retrieve(qdrant, embedder, reranker, query2)
-    hits2 = result2.unwrap()
+    hits2 = result2.unwrap().hits
     assert hits2[0].payload["lineage"]["promoted_to"]["object_id"] == cur.object_id
 
 
@@ -472,7 +473,7 @@ async def test_deep_path_empty_results(
     query = RetrievalQuery(namespace=f"{base_ns}/episodic", query_text="Nothing", limit=10)
     result = await run_deep_retrieve(qdrant, embedder, reranker, query)
     assert result.is_ok()
-    assert result.unwrap() == []
+    assert result.unwrap().hits == []
 
 
 async def test_deep_path_no_llm_provided(
@@ -530,7 +531,7 @@ async def test_deep_path_no_lineage(
     )
     result = await run_deep_retrieve(qdrant, embedder, reranker, query, llm=None)
     assert result.is_ok()
-    assert len(result.unwrap()) == 1
+    assert len(result.unwrap().hits) == 1
 
 
 async def test_deep_path_hybrid_error(
