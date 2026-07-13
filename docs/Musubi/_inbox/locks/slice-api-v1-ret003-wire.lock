@@ -21,3 +21,9 @@ forbidden: any src/musubi/** change in this commit; any implementation of the
   the test contract is accepted. NO deployment, NO merge to main yet, NO host
   action. No touch of Aoi's C6 (Issue 433) or Shiori's RET-004 (Issue 430).
 # Hermes adapter follow-up: see ADR 0035 (closeout gate). Separate slice; depends on this slice's wire contract.
+# Per Yua 2026-07-13 11:19:50: the current user plugin is
+# /Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py (NOT core/MCP).
+# Today it emits object_id, discards extra, and musubi_recall is pinned to blended
+# ranked. The follow-up must surface state+importance and pass the 5-key
+# score_components through without fabrication. Recent passthrough is only relevant
+# if a future Hermes surface requests recent.

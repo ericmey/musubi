@@ -189,14 +189,19 @@ none (deferred to implementation slices)
 tama (Per Yua 2026-07-13 10:08:41, RET-003 tests-first lane is assigned to Tama. Aoi
 remains exclusively on C6. Shiori's RET-004 lane is in flight and is NOT to be touched.)
 
-## Hermes adapter follow-up (Yua 2026-07-13 10:56:23 closeout gate)
+## Hermes adapter follow-up (Yua 2026-07-13 10:56:23 closeout gate; corrected 11:19:50)
 
-Per Yua 2026-07-13 10:56:23, this slice is the natural seam for a SEPARATE follow-up: once the Musubi contract is stable, the Hermes adapter (`hermes-agent/agent/memory_provider.py`, the `musubi_recall` JSON) must preserve the following through without fabricating fields:
+Per Yua 2026-07-13 10:56:23, this slice is the natural seam for a SEPARATE follow-up: once the Musubi contract is stable, the Hermes adapter (`/Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py`, lines ~1200-1305) must preserve the following through without fabricating fields. Per Yua 2026-07-13 11:19:50 correction, the current user plugin is a standalone Hermes user plugin (NOT core/MCP), and the current emitted shape is:
 
-- **Ranked mode**: `result["results"][i]["state"]` (LifecycleState enum, 7 values, nullable for missing legacy), `result["results"][i]["importance"]` (int 1..10, nullable for missing legacy), and the full 5-key `result["results"][i]["extra"]["score_components"]` (relevance, recency, importance, provenance, reinforcement).
-- **Recent mode**: `result["results"][i]["score_kind"]` is `"created_epoch"`, and `result["results"][i]["provenance_score"]` (nullable, exact-table-only).
+- The plugin emits `object_id` (the Qdrant point id), NOT `result_id`.
+- The plugin discards `extra` entirely today; it does NOT already pass `score_components` through.
+- `musubi_recall` is pinned to BLENDED ranked mode today; recent mode is NOT a current surface in the plugin.
+- Recent passthrough is therefore only relevant if a future Hermes surface requests recent.
 
-The expected transformation is: the Hermes `musubi_recall` JSON may add a top-level `state` field (nullable) and an `importance` field (nullable) alongside the existing `result_id`; the `score_components` dict is already there in `extra` and should be passed through verbatim. The Hermes adapter must NOT fabricate values; it must null through for missing-legacy fields and pass the `score_components` dict through unchanged.
+For the follow-up:
+
+- **Ranked mode (the only current surface)**: the Hermes adapter must surface `state` (LifecycleState enum, 7 values, nullable for missing legacy) and `importance` (int 1..10, nullable for missing legacy) on the JSON row alongside the existing `object_id`; and must pass the 5-key `extra.score_components` dict (relevance, recency, importance, provenance, reinforcement) through without fabrication. The adapter must NOT fabricate values; it must null through for missing-legacy fields.
+- **Recent mode**: only relevant if a future Hermes surface requests recent. When that lands, the adapter must surface `score_kind="created_epoch"` and `provenance_score` (nullable, exact-table-only).
 
 This follow-up is a separate slice/branch (NOT this one). It is a "closeout gate" for the broader wire contract, secondary to Musubi correctness. This slice does not implement the Hermes adapter; the adapter lands in a follow-up that depends on this slice's wire contract.
 

@@ -10,20 +10,143 @@ The tests are organized per the locked spec at:
 
 See docs/Musubi/_slices/slice-api-v1-ret003-wire.md for the slice contract.
 
-Accountancy: 15 strict xfail + 3 pass (not 18 fail). The 3 guards are the
-reclassified #8 (reinforcement-full-word) plus #17 and #18 (regression
+Accountancy: 15 strict xfail + 3 pass (not 18 fail). The 3 guards are
+the reclassified #8 (reinforcement-full-word) plus #17 and #18 (regression
 guards). Each red must fail for its named missing behavior only, and
 will turn green when the implementation lands.
+
+Source-row discipline (Yua 2026-07-13 11:03:25 corrections):
+
+- B1: tests that exercise "corrupt source" behavior (HTTP 500 on bad
+  enum / out-of-range value) seed via RAW qdrant.upsert, NOT through
+  the typed EpisodicMemory model. The typed model would reject the
+  bad value client-side and the corrupt source would never reach the
+  store; then the route could not return 500. We bypass validation
+  and assert the corrupt point is present at the store before
+  exercising the route.
+
+- B2: tests that exercise "no importance in source" behavior (raw
+  wire `importance` should be null when source is missing) seed via
+  RAW qdrant.upsert with the importance key ABSENT, NOT through the
+  typed EpisodicMemory (which writes the model default of 5).
+
+- B3: test #13 (provenance_score) seeds THREE distinct raw rows
+  (episodic+matured, missing-state, curated+provisional) with unique
+  marker content. The test locates each row in the response by the
+  unique marker and asserts the EXACT provenance_score value for
+  that specific (plane, state) pair — never inspects results[0] and
+  never wraps assertions in a conditional.
+
+- B4: across all behavioral tests, stop trusting results[0]. Each
+  test captures the seeded object_id and locates that exact returned
+  row; otherwise an older candidate can satisfy or fail the wrong
+  claim.
 """
 
 from __future__ import annotations
 
-import pytest
-from fastapi.testclient import TestClient  # type: ignore[unused-ignore]
-from httpx import Response
+import time
+import uuid
+from typing import Any
 
-from musubi.planes.episodic import EpisodicPlane
-from musubi.types.episodic import EpisodicMemory
+import pytest
+from fastapi.testclient import TestClient
+from httpx import Response
+from qdrant_client import QdrantClient, models
+
+from musubi.planes.episodic.plane import episodic_point_id
+from musubi.store.names import collection_for_plane
+from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.types.common import generate_ksuid
+
+# =====================================================================
+# Helpers (test-local; not part of the public wire contract)
+# =====================================================================
+
+
+def _marker() -> str:
+    """Return a unique marker so a test can find its exact row in the response."""
+    return f"mark-{uuid.uuid4().hex[:12]}"
+
+
+def _raw_upsert(
+    qdrant: QdrantClient,
+    *,
+    collection: str,
+    object_id: str,
+    payload: dict[str, object],
+    marker_in_content: str | None = None,
+) -> str:
+    """Seed a point by RAW Qdrant upsert, bypassing typed model validation.
+
+    Returns the object_id (so the test can locate the exact row by id).
+    The marker_in_content is written into both `content` and `summary`
+    so the test can locate the row by content match if the response
+    doesn't expose object_id (it currently does not; ranked-mode rows
+    expose object_id, recent-mode rows do not).
+    """
+    if marker_in_content is not None:
+        # Spread the marker into the fields the orchestrator surfaces.
+        payload = dict(payload)
+        payload["content"] = f"{marker_in_content} :: {payload.get('content', '')}".strip()
+        if "summary" not in payload or not payload["summary"]:
+            payload["summary"] = marker_in_content
+    payload = dict(payload)
+    payload.setdefault("object_id", object_id)
+    payload.setdefault("namespace", "eric/claude-code/episodic")
+    # Recent-mode Qdrant scroll orders by `created_epoch` DESC; rows missing
+    # this field are filtered out by the order_by path. Seed it explicitly
+    # so recent-mode tests find the row.
+    if "created_epoch" not in payload or payload["created_epoch"] is None:
+        payload["created_epoch"] = time.time()
+    # In-memory Qdrant FakeEmbedder: dense = 1024 zeros, sparse = empty.
+    # The Qdrant point ID is the deterministic UUID derived from the KSUID
+    # via :func:`episodic_point_id` — the same translation the production
+    # plane uses, so the in-memory Qdrant accepts the upsert.
+    point = models.PointStruct(
+        id=episodic_point_id(object_id),
+        payload=payload,
+        vector={
+            DENSE_VECTOR_NAME: [0.0] * 1024,
+            SPARSE_VECTOR_NAME: models.SparseVector(indices=[0], values=[0.0]),
+        },
+    )
+    qdrant.upsert(collection_name=collection, points=[point])
+    return object_id
+
+
+def _find_row_by_object_id(
+    results: list[dict[str, Any]], object_id: str
+) -> dict[str, Any] | None:
+    """Locate the exact returned row whose object_id matches the seed."""
+    for row in results:
+        if row.get("object_id") == object_id:
+            return row
+    return None
+
+
+def _find_row_by_marker(
+    results: list[dict[str, Any]], marker: str
+) -> dict[str, Any] | None:
+    """Locate the exact returned row whose content contains the marker."""
+    for row in results:
+        content = row.get("content") or row.get("summary") or ""
+        if marker in str(content):
+            return row
+    return None
+
+
+def asyncio_run(coro: object) -> object:
+    """Run an async coroutine synchronously in tests."""
+    import asyncio
+
+    return asyncio.run(coro)  # type: ignore[arg-type]
+
+
+def requests_get(path: str, client: TestClient) -> Response:
+    """Synchronous HTTP GET helper that uses the test's `client` fixture."""
+    return client.get(path)
+
 
 # =====================================================================
 # SECTION 6.1 — Ranked-mode wire shape (7 strict reds + 1 guard)
@@ -35,53 +158,84 @@ from musubi.types.episodic import EpisodicMemory
     reason="RED: ranked row currently lacks top-level `state` key. Will fail until RetrieveResultRow adds `state: LifecycleState | None`; will turn green when field is present (including null for legacy).",
 )
 def test_retrieve_ranked_top_level_state_present_required_nullable(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`state` key is present on every ranked row (may be `null` for legacy)."""
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        saved = await episodic.create(EpisodicMemory(namespace=ns, content="about state"))
-        return str(saved.object_id)
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={
+            "namespace": ns,
+            "object_id": object_id,
+            "state": "matured",
+        },
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "query_text": "state", "mode": "fast", "limit": 5},
+        json={"namespace": ns, "query_text": marker, "mode": "fast", "limit": 10},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    first = results[0]
-    assert "state" in first, (
-        f"top-level `state` key missing; current wire shape: {sorted(first.keys())}"
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    assert "state" in row, (
+        f"top-level `state` key missing; current wire shape: {sorted(row.keys())}"
     )
     # The key is present; the value may be null (legacy row) or a valid LifecycleState.
-    assert first["state"] is None or first["state"] in {
+    assert row["state"] is None or row["state"] in {
         "provisional", "matured", "promoted", "synthesized",
         "demoted", "archived", "superseded",
-    }
+    }, f"state value not in LifecycleState; got {row['state']!r}"
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="RED: ranked `state` is currently source-backed but PRESENT-valid source still surfaces OK; the red is that a bad enum value (e.g. 'badvalue') must fail loud (500, NOT 422). Will fail until a corrupt `state` raises a 500 from the route.",
+    reason="RED: corrupt source (bad enum 'badvalue') must fail loud (500, NOT 422, NOT coerced). Will fail until a corrupt `state` raises a 500 from the route.",
 )
 def test_retrieve_ranked_state_is_source_backed_not_fabricated(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
-    """Valid source → exact value; invalid source → 500 (NOT 422, NOT coerced)."""
+    """Valid source → exact value; corrupt source (raw upsert with bad enum) → 500.
+
+    Seeded via RAW qdrant.upsert to bypass the typed model validation that
+    would otherwise reject the bad value at the plane layer. The corrupt
+    point is asserted to exist at the store before the route is exercised.
+    """
     ns = "eric/claude-code/episodic"
+    object_id = str(generate_ksuid())
 
-    async def _seed_bad_state() -> str:
-        # Source a row with an invalid lifecycle state (bypasses the type check at write
-        # because the source dict bypasses the typed plane.model_dump validation when
-        # we construct the row directly on the plane.)
-        saved = await episodic.create(EpisodicMemory(namespace=ns, content="x", state="badvalue"))  # type: ignore[arg-type]
-        return str(saved.object_id)
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={
+            "namespace": ns,
+            "object_id": object_id,
+            "state": "badvalue",  # NOT in LifecycleState; bypasses typed validation
+        },
+    )
 
-    asyncio_run(_seed_bad_state)
+    # Prove the corrupt source is present at the store (not filtered by Pydantic).
+    raw_point = qdrant.retrieve(
+        collection_name=collection_for_plane("episodic"),
+        ids=[episodic_point_id(object_id)],
+        with_payload=True,
+    )
+    assert raw_point and raw_point[0].payload is not None, "corrupt point not present in store"
+    assert raw_point[0].payload.get("state") == "badvalue", (
+        f"corrupt state not seeded; got {raw_point[0].payload.get('state')!r}"
+    )
+
     r = client.post(
         "/v1/retrieve",
         headers=auth,
@@ -98,49 +252,82 @@ def test_retrieve_ranked_state_is_source_backed_not_fabricated(
     reason="RED: ranked row currently lacks top-level `importance` key. Will fail until RetrieveResultRow adds `importance: int | None` (nullable, 1..10).",
 )
 def test_retrieve_ranked_top_level_importance_present_required_nullable(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`importance` key is present on every ranked row (may be `null` for legacy)."""
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        saved = await episodic.create(EpisodicMemory(namespace=ns, content="about importance", importance=7))
-        return str(saved.object_id)
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={
+            "namespace": ns,
+            "object_id": object_id,
+            "importance": 7,
+        },
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "query_text": "importance", "mode": "fast", "limit": 5},
+        json={"namespace": ns, "query_text": marker, "mode": "fast", "limit": 10},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    first = results[0]
-    assert "importance" in first, (
-        f"top-level `importance` key missing; current wire shape: {sorted(first.keys())}"
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    assert "importance" in row, (
+        f"top-level `importance` key missing; current wire shape: {sorted(row.keys())}"
     )
     # The key is present; the value may be null (legacy row) or an int 1..10.
-    assert first["importance"] is None or (isinstance(first["importance"], int) and 1 <= first["importance"] <= 10)
+    assert row["importance"] is None or (
+        isinstance(row["importance"], int) and 1 <= row["importance"] <= 10
+    ), f"importance not in 1..10 or null; got {row['importance']!r}"
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="RED: corrupt `importance` (out of range) must fail loud (500, NOT 422). Will fail until out-of-range `importance` raises a 500 from the route.",
+    reason="RED: corrupt source (importance=42, out of range) must fail loud (500, NOT 422, NOT coerced). Will fail until out-of-range `importance` raises a 500 from the route.",
 )
 def test_retrieve_ranked_importance_is_source_backed_not_fabricated(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
-    """Valid source → exact value; invalid source (out of range) → 500 (NOT 422, NOT coerced)."""
+    """Valid source → exact value; corrupt source (raw upsert with out-of-range importance) → 500.
+
+    Seeded via RAW qdrant.upsert to bypass the typed model validation that
+    would otherwise reject the out-of-range value at the plane layer.
+    """
     ns = "eric/claude-code/episodic"
+    object_id = str(generate_ksuid())
 
-    async def _seed_bad_importance() -> str:
-        saved = await episodic.create(
-            EpisodicMemory(namespace=ns, content="x", importance=42)
-        )
-        return str(saved.object_id)
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={
+            "namespace": ns,
+            "object_id": object_id,
+            "importance": 42,  # out of 1..10 range
+        },
+    )
 
-    asyncio_run(_seed_bad_importance)
+    # Prove the corrupt source is present at the store.
+    raw_point = qdrant.retrieve(
+        collection_name=collection_for_plane("episodic"),
+        ids=[episodic_point_id(object_id)],
+        with_payload=True,
+    )
+    assert raw_point and raw_point[0].payload is not None, "corrupt point not present in store"
+    assert raw_point[0].payload.get("importance") == 42, (
+        f"corrupt importance not seeded; got {raw_point[0].payload.get('importance')!r}"
+    )
+
     r = client.post(
         "/v1/retrieve",
         headers=auth,
@@ -157,28 +344,35 @@ def test_retrieve_ranked_importance_is_source_backed_not_fabricated(
     reason="RED: ranked row currently has no `score_kind` field. Will fail until the row has a `score_kind: Literal['ranked_combined']` field.",
 )
 def test_retrieve_ranked_score_kind_is_ranked_combined(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`score_kind` is the literal string 'ranked_combined' for every ranked row."""
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace=ns, content="score kind"))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "query_text": "kind", "mode": "fast", "limit": 5},
+        json={"namespace": ns, "query_text": marker, "mode": "fast", "limit": 10},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    for row in results:
-        assert row.get("score_kind") == "ranked_combined", (
-            f"score_kind must be 'ranked_combined' for ranked mode; got {row.get('score_kind')!r}"
-        )
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    assert row.get("score_kind") == "ranked_combined", (
+        f"score_kind must be 'ranked_combined' for ranked mode; got {row.get('score_kind')!r}"
+    )
 
 
 @pytest.mark.xfail(
@@ -186,32 +380,50 @@ def test_retrieve_ranked_score_kind_is_ranked_combined(
     reason="RED: `extra.score_components` has only 3 keys (relevance, recency, reinforcement); missing `importance` and `provenance`. Will fail until it has all 5 keys; also asserts `brief=true` preserves top-level `state` / `importance`.",
 )
 def test_retrieve_ranked_extra_score_components_has_five_keys(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """5 keys in extra.score_components; brief=true preserves state/importance."""
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace=ns, content="five keys"))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={
+            "namespace": ns,
+            "object_id": object_id,
+            "state": "matured",
+            "importance": 7,
+        },
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "query_text": "keys", "mode": "deep", "limit": 5, "brief": True},
+        json={"namespace": ns, "query_text": marker, "mode": "deep", "limit": 10, "brief": True},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    first = results[0]
-    components = first.get("extra", {}).get("score_components", {})
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    components = row.get("extra", {}).get("score_components", {})
     expected = {"relevance", "recency", "importance", "provenance", "reinforcement"}
     missing = expected - set(components.keys())
-    assert not missing, f"`extra.score_components` is missing keys: {missing}; got {sorted(components.keys())}"
+    assert not missing, (
+        f"`extra.score_components` is missing keys: {missing}; got {sorted(components.keys())}"
+    )
     # brief=true must still preserve top-level state and importance.
-    assert "state" in first, f"brief=true must preserve top-level `state`; missing; current shape: {sorted(first.keys())}"
-    assert "importance" in first, f"brief=true must preserve top-level `importance`; missing; current shape: {sorted(first.keys())}"
+    assert "state" in row, (
+        f"brief=true must preserve top-level `state`; missing; current shape: {sorted(row.keys())}"
+    )
+    assert "importance" in row, (
+        f"brief=true must preserve top-level `importance`; missing; current shape: {sorted(row.keys())}"
+    )
 
 
 @pytest.mark.xfail(
@@ -219,26 +431,35 @@ def test_retrieve_ranked_extra_score_components_has_five_keys(
     reason="RED: the public score is currently a single number. The test-local public-to-internal mapping helper maps `reinforcement` → `reinforce`. Will fail until the production `extra.score_components.reinforcement` is exposed and the score equals weights.combine(**mapping) within float tolerance.",
 )
 def test_retrieve_ranked_score_is_combined_from_components(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`score` equals weights.combine(**test-local public-to-internal mapping) (float tolerance)."""
     from musubi.retrieve.scoring import SCORE_WEIGHTS
 
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace=ns, content="combine score"))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "query_text": "combine", "mode": "fast", "limit": 5},
+        json={"namespace": ns, "query_text": marker, "mode": "fast", "limit": 10},
     )
     assert r.status_code == 200
-    first = r.json()["results"][0]
-    wire_components = first["extra"]["score_components"]
+    results = r.json()["results"]
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    wire_components = row["extra"]["score_components"]
     # Test-local public-to-internal mapping: wire key `reinforcement` → internal key `reinforce`.
     internal_components = {
         "relevance": wire_components["relevance"],
@@ -248,13 +469,13 @@ def test_retrieve_ranked_score_is_combined_from_components(
         "reinforce": wire_components["reinforcement"],
     }
     expected_score = SCORE_WEIGHTS.combine(**internal_components)
-    assert abs(first["score"] - expected_score) < 1e-9, (
-        f"score {first['score']!r} != expected combine {expected_score!r}"
+    assert abs(row["score"] - expected_score) < 1e-9, (
+        f"score {row['score']!r} != expected combine {expected_score!r}"
     )
 
 
 def test_retrieve_ranked_reinforcement_uses_full_word(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`extra.score_components.reinforcement` exists; no `reinforce` key (guard).
 
@@ -265,22 +486,33 @@ def test_retrieve_ranked_reinforcement_uses_full_word(
     If the production code reverts to the singular internal name on the
     wire, this test will fail and the implementation must fix it.
     """
-    # Seed a row so a real ranked-mode response is returned.
-    import asyncio as _aio
+    ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace="eric/claude-code/episodic", content="reinforce-guard"))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        marker_in_content=marker,
+    )
 
-    _aio.run(_seed())
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": "eric/claude-code/episodic", "query_text": "reinforce", "mode": "fast", "limit": 5},
+        json={"namespace": ns, "query_text": marker, "mode": "fast", "limit": 10},
     )
     assert r.status_code == 200
-    components = r.json()["results"][0]["extra"]["score_components"]
-    assert "reinforcement" in components, f"`reinforcement` missing from extra.score_components; got {sorted(components.keys())}"
+    results = r.json()["results"]
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    components = row["extra"]["score_components"]
+    assert "reinforcement" in components, (
+        f"`reinforcement` missing from extra.score_components; got {sorted(components.keys())}"
+    )
     assert "reinforce" not in components, (
         f"the public name must be `reinforcement` (full word), not `reinforce` (internal); found `reinforce` in {sorted(components.keys())}"
     )
@@ -296,28 +528,35 @@ def test_retrieve_ranked_reinforcement_uses_full_word(
     reason="RED: recent row currently has no `score_kind` field. Will fail until the row has `score_kind: Literal['created_epoch']` for recent mode.",
 )
 def test_retrieve_recent_score_kind_is_created_epoch(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`score_kind` is the literal string 'created_epoch' for every recent row."""
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace=ns, content="recent kind"))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "mode": "recent", "limit": 5},
+        json={"namespace": ns, "mode": "recent", "limit": 10},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    for row in results:
-        assert row.get("score_kind") == "created_epoch", (
-            f"score_kind must be 'created_epoch' for recent mode; got {row.get('score_kind')!r}"
-        )
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    assert row.get("score_kind") == "created_epoch", (
+        f"score_kind must be 'created_epoch' for recent mode; got {row.get('score_kind')!r}"
+    )
 
 
 @pytest.mark.xfail(
@@ -325,33 +564,40 @@ def test_retrieve_recent_score_kind_is_created_epoch(
     reason="RED: recent `extra.score_components` is currently a fabricated `{relevance: 0, recency: 1, reinforcement: 0}`. Will fail until it is the exact empty `{}` typed RecentScoreComponents (never `null`); non-empty input fails (500).",
 )
 def test_retrieve_recent_extra_score_components_is_empty_dict_typed(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`extra.score_components` is exactly `{}` typed RecentScoreComponents (never null)."""
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace=ns, content="empty recent"))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "mode": "recent", "limit": 5},
+        json={"namespace": ns, "mode": "recent", "limit": 10},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    for row in results:
-        components = row.get("extra", {}).get("score_components", None)
-        assert components == {}, (
-            f"`extra.score_components` must be exactly `{{}}` for recent mode; got {components!r}"
-        )
-        # The field is present (required) and is the empty object — not null.
-        assert components is not None, (
-            "`extra.score_components` must be present on every recent row; got null"
-        )
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
+    components = row.get("extra", {}).get("score_components", None)
+    assert components == {}, (
+        f"`extra.score_components` must be exactly `{{}}` for recent mode; got {components!r}"
+    )
+    # The field is present (required) and is the empty object — not null.
+    assert components is not None, (
+        "`extra.score_components` must be present on every recent row; got null"
+    )
 
 
 @pytest.mark.xfail(
@@ -359,32 +605,39 @@ def test_retrieve_recent_extra_score_components_is_empty_dict_typed(
     reason="RED: recent row currently lacks top-level `state` field. Will fail until RetrieveResultRow adds `state: LifecycleState | None` (nullable for legacy).",
 )
 def test_retrieve_recent_top_level_state_present(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`state` key is present on every recent row (may be null for legacy)."""
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace=ns, content="recent state"))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={"namespace": ns, "object_id": object_id, "state": "matured"},
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "mode": "recent", "limit": 5},
+        json={"namespace": ns, "mode": "recent", "limit": 10},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    first = results[0]
-    assert "state" in first, (
-        f"top-level `state` key missing on recent row; current shape: {sorted(first.keys())}"
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
     )
-    assert first["state"] is None or first["state"] in {
+    assert "state" in row, (
+        f"top-level `state` key missing on recent row; current shape: {sorted(row.keys())}"
+    )
+    assert row["state"] is None or row["state"] in {
         "provisional", "matured", "promoted", "synthesized",
         "demoted", "archived", "superseded",
-    }
+    }, f"state value not in LifecycleState; got {row['state']!r}"
 
 
 @pytest.mark.xfail(
@@ -392,29 +645,38 @@ def test_retrieve_recent_top_level_state_present(
     reason="RED: recent row currently lacks top-level `importance` field. Will fail until RetrieveResultRow adds `importance: int | None` (nullable for legacy).",
 )
 def test_retrieve_recent_top_level_importance_present(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`importance` key is present on every recent row (may be null for legacy)."""
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace=ns, content="recent importance", importance=4))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={"namespace": ns, "object_id": object_id, "importance": 4},
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed)
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "mode": "recent", "limit": 5},
+        json={"namespace": ns, "mode": "recent", "limit": 10},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    first = results[0]
-    assert "importance" in first, (
-        f"top-level `importance` key missing on recent row; current shape: {sorted(first.keys())}"
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
     )
-    assert first["importance"] is None or (isinstance(first["importance"], int) and 1 <= first["importance"] <= 10)
+    assert "importance" in row, (
+        f"top-level `importance` key missing on recent row; current shape: {sorted(row.keys())}"
+    )
+    assert row["importance"] is None or (
+        isinstance(row["importance"], int) and 1 <= row["importance"] <= 10
+    ), f"importance not in 1..10 or null; got {row['importance']!r}"
 
 
 @pytest.mark.xfail(
@@ -422,56 +684,113 @@ def test_retrieve_recent_top_level_importance_present(
     reason="RED: recent `provenance_score` is currently absent from the row. Will fail until the row has `provenance_score: float | None` (exact-table-only; null when state is missing OR (plane, state) is absent from `_PROVENANCE`).",
 )
 def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`provenance_score` is None for missing state or absent (plane, state); otherwise exact value.
 
-    3 cases (per Yua 10:00:42 #2):
-    (a) exact known-table value: row with (plane, state) = (episodic, matured) → provenance_score == 0.5
-    (b) missing-state null: row with state=None (legacy) → provenance_score is None
-    (c) absent-pair null: row with (plane, state) = (curated, provisional) → provenance_score is None
-        (NOT 0.1 from a fabricated state; (curated, provisional) is NOT in `_PROVENANCE`).
+    THREE distinct raw rows are seeded (per Yua 10:00:42 #2 + 11:03:25 #3).
+    Each row has a unique marker; the test locates each row in the response
+    and asserts the EXACT provenance_score for that (plane, state) pair.
+
+    Cases:
+    (a) episodic + matured → provenance_score == 0.5 (in `_PROVENANCE`)
+    (b) state key ABSENT in source → provenance_score is None (no fabrication)
+    (c) curated + provisional → provenance_score is None (NOT 0.1 from a
+        fabricated state; (curated, provisional) is NOT in `_PROVENANCE`)
     """
-    ns = "eric/claude-code/episodic"
+    ns_episodic = "eric/claude-code/episodic"
+    ns_curated = "eric/claude-code/curated"
 
-    async def _seed_one(plane: str, state: str | None) -> None:
-        # Write row directly to the qdrant collection with a specific (plane, state)
-        # combination. The source must match the contract.
-        # Use a simple create via the plane; for the legacy path, bypass state.
-        if state is None:
-            await episodic.create(EpisodicMemory(namespace=ns, content="legacy no-state row"))
-        else:
-            await episodic.create(EpisodicMemory(namespace=ns, content="row", state=state))  # type: ignore[arg-type]
-        # Also seed for "curated, provisional" via the curated plane.
+    marker_a = _marker()
+    marker_b = _marker()
+    marker_c = _marker()
+    oid_a = str(generate_ksuid())
+    oid_b = str(generate_ksuid())
+    oid_c = str(generate_ksuid())
 
-    asyncio_run(_seed_one)
-    # Case (a) + (b): query recent; row with state='matured' (episodic) → provenance_score == 0.5
-    # (provenance('episodic', 'matured') = 0.5 from `_PROVENANCE`).
-    r = client.post(
+    # (a) episodic + matured (in `_PROVENANCE`; expected 0.5)
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=oid_a,
+        payload={
+            "namespace": ns_episodic,
+            "object_id": oid_a,
+            "state": "matured",
+        },
+        marker_in_content=marker_a,
+    )
+    # (b) episodic, state ABSENT (legacy)
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=oid_b,
+        payload={
+            "namespace": ns_episodic,
+            "object_id": oid_b,
+            # No `state` key at all.
+        },
+        marker_in_content=marker_b,
+    )
+    # (c) curated + provisional (NOT in `_PROVENANCE`; expected None)
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("curated"),
+        object_id=oid_c,
+        payload={
+            "namespace": ns_curated,
+            "object_id": oid_c,
+            "state": "provisional",
+        },
+        marker_in_content=marker_c,
+    )
+
+    # Query recent for each namespace separately, then locate the exact row by id.
+    # (a) and (b) live in episodic; (c) lives in curated.
+    r_epi = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "mode": "recent", "limit": 5},
+        json={"namespace": ns_episodic, "mode": "recent", "limit": 20},
     )
-    assert r.status_code == 200
-    results = r.json()["results"]
-    assert results
-    first = results[0]
-    if "provenance_score" in first:
-        # The key is present (nullable).
-        ps = first["provenance_score"]
-        assert ps is None or (isinstance(ps, (int, float)) and 0.0 <= ps <= 1.0)
-        # Case (a) OR case (b) OR case (c) — exact value depends on the row's (plane, state).
-        # We don't assert exact numeric value here; we assert exact-table-only semantics:
-        # if state is missing, ps is None; if (plane, state) is in `_PROVENANCE`, ps equals the value.
-        if first.get("state") is not None:
-            # (a) or (c)
-            if (first["plane"], first["state"]) in {("episodic", "matured"), ("curated", "matured")}:
-                assert ps == 0.5, f"provenance_score should be 0.5; got {ps!r}"
-            elif (first["plane"], first["state"]) == ("curated", "provisional"):
-                assert ps is None, f"provenance_score should be None for absent pair (curated, provisional); got {ps!r}"
-        else:
-            # (b) missing-state null
-            assert ps is None, f"provenance_score must be None for missing state; got {ps!r}"
+    assert r_epi.status_code == 200
+    epi_results = r_epi.json()["results"]
+    row_a = _find_row_by_object_id(epi_results, oid_a)
+    row_b = _find_row_by_object_id(epi_results, oid_b)
+    assert row_a is not None, f"(a) row {oid_a} not in episodic recent results"
+    assert row_b is not None, f"(b) row {oid_b} not in episodic recent results"
+
+    r_cur = client.post(
+        "/v1/retrieve",
+        headers=auth,
+        json={"namespace": ns_curated, "mode": "recent", "limit": 20},
+    )
+    assert r_cur.status_code == 200
+    cur_results = r_cur.json()["results"]
+    row_c = _find_row_by_object_id(cur_results, oid_c)
+    assert row_c is not None, f"(c) row {oid_c} not in curated recent results"
+
+    # (a) episodic + matured → provenance_score == 0.5
+    assert "provenance_score" in row_a, (
+        f"(a) provenance_score key missing on row; current shape: {sorted(row_a.keys())}"
+    )
+    assert row_a["provenance_score"] == 0.5, (
+        f"(a) provenance_score should be 0.5 for (episodic, matured); got {row_a['provenance_score']!r}"
+    )
+    # (b) state missing → provenance_score is None
+    assert "provenance_score" in row_b, (
+        f"(b) provenance_score key missing on row; current shape: {sorted(row_b.keys())}"
+    )
+    assert row_b["provenance_score"] is None, (
+        f"(b) provenance_score must be None when state is missing; got {row_b['provenance_score']!r}"
+    )
+    # (c) curated + provisional → provenance_score is None (not 0.1 from fabrication)
+    assert "provenance_score" in row_c, (
+        f"(c) provenance_score key missing on row; current shape: {sorted(row_c.keys())}"
+    )
+    assert row_c["provenance_score"] is None, (
+        f"(c) provenance_score must be None for (curated, provisional) NOT in _PROVENANCE; "
+        f"got {row_c['provenance_score']!r}"
+    )
 
 
 # =====================================================================
@@ -484,31 +803,59 @@ def test_retrieve_recent_provenance_score_is_nullable_not_fabricated(
     reason="RED: the current wire does not expose the distinction between raw `importance` and `score_components.importance`. Will fail until the wire has both fields; for a row with no `importance` in source, raw `importance` is null and `score_components.importance` is 0.5 (the internal Hit default).",
 )
 def test_wire_importance_audits_internal_default(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
-    """Raw `importance` is null for missing source; `score_components.importance` is 0.5 from internal Hit default."""
+    """Raw `importance` is null for missing source; `score_components.importance` is 0.5 from internal Hit default.
+
+    Seeded via RAW qdrant.upsert with importance ABSENT (not the model default
+    of 5) so the wire's `importance: null` reflects the actual source absence.
+    """
     ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed_no_importance() -> None:
-        # Seed a row without an explicit importance — internal Hit default is 5 (0.5 normalized).
-        # The wire must expose BOTH fields with their distinct semantics.
-        await episodic.create(EpisodicMemory(namespace=ns, content="no importance"))
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={
+            "namespace": ns,
+            "object_id": object_id,
+            # importance is ABSENT here. Internal Hit default is 5 (0.5 normalized).
+        },
+        marker_in_content=marker,
+    )
 
-    asyncio_run(_seed_no_importance)
+    # Prove importance is absent at the store.
+    raw_point = qdrant.retrieve(
+        collection_name=collection_for_plane("episodic"),
+        ids=[episodic_point_id(object_id)],
+        with_payload=True,
+    )
+    assert raw_point and raw_point[0].payload is not None
+    assert "importance" not in raw_point[0].payload, (
+        f"importance should be absent in source; got {raw_point[0].payload.get('importance')!r}"
+    )
+
     r = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": ns, "query_text": "importance", "mode": "deep", "limit": 5},
+        json={"namespace": ns, "query_text": marker, "mode": "deep", "limit": 10},
     )
     assert r.status_code == 200
     results = r.json()["results"]
-    assert results
-    first = results[0]
+    row = _find_row_by_object_id(results, object_id)
+    assert row is not None, (
+        f"seeded row {object_id} not returned; results object_ids: {[r.get('object_id') for r in results]}"
+    )
     # Raw wire importance is null (source-backed, not the internal default).
-    assert first["importance"] is None, f"raw wire importance must be null when source missing; got {first['importance']!r}"
+    assert row["importance"] is None, (
+        f"raw wire importance must be null when source missing; got {row['importance']!r}"
+    )
     # Score_components.importance is 0.5 (the internal default normalized).
-    assert first["extra"]["score_components"]["importance"] == 0.5, (
-        f"score_components.importance must be 0.5 from internal Hit default; got {first['extra']['score_components']['importance']!r}"
+    assert row["extra"]["score_components"]["importance"] == 0.5, (
+        f"score_components.importance must be 0.5 from internal Hit default; "
+        f"got {row['extra']['score_components']['importance']!r}"
     )
 
 
@@ -519,22 +866,16 @@ def test_wire_importance_audits_internal_default(
 
 @pytest.mark.xfail(
     strict=True,
-    reason="RED: the runtime openapi.json does not yet have typed RankedResultRow/RecentResultRow schemas with the new fields. Will turn green when implementation lands the typed schemas.",
+    reason="RED: the runtime openapi.json does not yet have typed RankedRetrieveResponse/RankedResultRow/RankedScoreComponents schemas. Will turn green when implementation lands the typed schemas.",
 )
 def test_runtime_openapi_ranked_response_schema_required_with_five_components(
     client: TestClient,
 ) -> None:
     """GET /v1/openapi.json → RankedRetrieveResponse required has [mode, results, limit]; RankedResultRow required has 7 fields; RankedScoreComponents has 5 properties."""
-    r = client.get("/v1/openapi.json")
-    assert r.status_code == 200
+    r = requests_get("/v1/openapi.json", client)
     doc = r.json()
 
     schemas = doc.get("components", {}).get("schemas", {})
-
-    # Find the ranked row schema and its score_components.
-    # We expect: RankedRetrieveResponse with required [mode, results, limit];
-    #            RankedResultRow with required [...7 fields including state, importance...];
-    #            RankedScoreComponents with exactly 5 properties.
 
     ranked_response = None
     ranked_row = None
@@ -559,19 +900,21 @@ def test_runtime_openapi_ranked_response_schema_required_with_five_components(
     assert ranked_components is not None, "RankedScoreComponents schema missing from runtime openapi.json"
     assert set(ranked_components.get("properties", {}).keys()) == {
         "relevance", "recency", "importance", "provenance", "reinforcement",
-    }, f"RankedScoreComponents must have exactly 5 properties; got {set(ranked_components.get('properties', {}).keys())}"
+    }, (
+        f"RankedScoreComponents must have exactly 5 properties; "
+        f"got {set(ranked_components.get('properties', {}).keys())}"
+    )
 
 
 @pytest.mark.xfail(
     strict=True,
-    reason="RED: the runtime openapi.json does not yet have typed RecentResultRow with the new fields. Will turn green when implementation lands the typed schemas.",
+    reason="RED: the runtime openapi.json does not yet have typed RecentRetrieveResponse/RecentResultRow/RecentScoreComponents schemas. Will turn green when implementation lands the typed schemas.",
 )
 def test_runtime_openapi_recent_response_schema_required_with_empty_components(
     client: TestClient,
 ) -> None:
-    """GET /v1/openapi.json → RecentRetrieveResponse required has [mode, results, limit]; RecentResultRow required has 7 fields; RecentScoreComponents is exact {} (additionalProperties:false)."""
-    r = client.get("/v1/openapi.json")
-    assert r.status_code == 200
+    """GET /v1/openapi.json → RecentRetrieveResponse required has [mode, results, limit]; RecentResultRow required has 8 fields; RecentScoreComponents is exact {} (additionalProperties:false)."""
+    r = requests_get("/v1/openapi.json", client)
     doc = r.json()
 
     schemas = doc.get("components", {}).get("schemas", {})
@@ -592,22 +935,27 @@ def test_runtime_openapi_recent_response_schema_required_with_empty_components(
         f"RecentRetrieveResponse required must be [mode, results, limit]; got {recent_response.get('required')}"
     )
     assert recent_row is not None, "RecentResultRow schema missing from runtime openapi.json"
-    expected_row_required = {"plane", "object_id", "score", "score_kind", "state", "importance", "provenance_score", "extra"}
+    expected_row_required = {
+        "plane", "object_id", "score", "score_kind", "state", "importance",
+        "provenance_score", "extra",
+    }
     assert set(recent_row.get("required", [])) == expected_row_required, (
         f"RecentResultRow required must be {expected_row_required}; got {set(recent_row.get('required', []))}"
     )
     assert recent_components is not None, "RecentScoreComponents schema missing from runtime openapi.json"
     # RecentScoreComponents is exact {} (additionalProperties: false; no declared properties).
     assert recent_components.get("additionalProperties") is False, (
-        f"RecentScoreComponents must have additionalProperties:false; got {recent_components.get('additionalProperties')!r}"
+        f"RecentScoreComponents must have additionalProperties:false; "
+        f"got {recent_components.get('additionalProperties')!r}"
     )
     assert not recent_components.get("properties"), (
-        f"RecentScoreComponents must have NO declared properties (exact {{}}); got {recent_components.get('properties')!r}"
+        f"RecentScoreComponents must have NO declared properties (exact {{}}); "
+        f"got {recent_components.get('properties')!r}"
     )
 
 
 # =====================================================================
-# SECTION 6.5 — Regression guards (3; the 3rd was #8 reclassified from §6.1)
+# SECTION 6.5 — Regression guards (3; #8 reclassified from §6.1)
 # =====================================================================
 
 
@@ -621,8 +969,6 @@ def test_streaming_endpoint_excluded_from_this_contract_unchanged(client: TestCl
     `state`, no `importance`, no `score_components`, no `score_kind`,
     no `provenance_score`).
     """
-    # Just verify the streaming endpoint exists and is divergent — do NOT assert
-    # any of the new fields, because the streaming endpoint is RET-010 surface.
     r = requests_get("/v1/openapi.json", client)
     doc = r.json()
     paths = doc.get("paths", {})
@@ -632,7 +978,7 @@ def test_streaming_endpoint_excluded_from_this_contract_unchanged(client: TestCl
 
 
 def test_extra_score_components_path_preserved_for_all_modes(
-    client: TestClient, auth: dict[str, str], episodic: EpisodicPlane
+    client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
     """`extra.score_components` is present at the same path for both ranked and recent.
 
@@ -640,61 +986,48 @@ def test_extra_score_components_path_preserved_for_all_modes(
     3→5 keys; recent is a 3-key dict (currently fabricated but at the same
     path). Do NOT migrate `score_components` to top-level in v1.
     """
-    import asyncio as _aio
+    ns = "eric/claude-code/episodic"
+    marker = _marker()
+    object_id = str(generate_ksuid())
 
-    async def _seed() -> str:
-        await episodic.create(EpisodicMemory(namespace="eric/claude-code/episodic", content="path-guard"))
-        return ""
+    _raw_upsert(
+        qdrant,
+        collection=collection_for_plane("episodic"),
+        object_id=object_id,
+        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        marker_in_content=marker,
+    )
 
-    _aio.run(_seed())
-
-    # Both modes must have `result["results"][i]["extra"]["score_components"]` at the same path.
+    # Ranked mode: extra.score_components path must be present.
     r_ranked = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": "eric/claude-code/episodic", "query_text": "path", "mode": "fast", "limit": 5},
+        json={"namespace": ns, "query_text": marker, "mode": "fast", "limit": 10},
     )
     assert r_ranked.status_code == 200
     r_ranked_results = r_ranked.json()["results"]
-    assert r_ranked_results, "ranked mode returned no results"
-    for row in r_ranked_results:
-        assert "extra" in row, f"ranked row missing `extra`; current shape: {sorted(row.keys())}"
-        assert "score_components" in row["extra"], (
-            f"ranked row missing `extra.score_components`; extra: {list(row['extra'].keys())}"
-        )
+    row_ranked = _find_row_by_object_id(r_ranked_results, object_id)
+    assert row_ranked is not None, (
+        f"seeded row {object_id} not in ranked results; object_ids: {[r.get('object_id') for r in r_ranked_results]}"
+    )
+    assert "extra" in row_ranked, f"ranked row missing `extra`; current shape: {sorted(row_ranked.keys())}"
+    assert "score_components" in row_ranked["extra"], (
+        f"ranked row missing `extra.score_components`; extra: {list(row_ranked['extra'].keys())}"
+    )
 
+    # Recent mode: extra.score_components path must be present.
     r_recent = client.post(
         "/v1/retrieve",
         headers=auth,
-        json={"namespace": "eric/claude-code/episodic", "mode": "recent", "limit": 5},
+        json={"namespace": ns, "mode": "recent", "limit": 10},
     )
     assert r_recent.status_code == 200
     r_recent_results = r_recent.json()["results"]
-    assert r_recent_results, "recent mode returned no results"
-    for row in r_recent_results:
-        assert "extra" in row, f"recent row missing `extra`; current shape: {sorted(row.keys())}"
-        assert "score_components" in row["extra"], (
-            f"recent row missing `extra.score_components`; extra: {list(row['extra'].keys())}"
-        )
-
-
-# =====================================================================
-# Helpers (test-local; not part of the public wire contract)
-# =====================================================================
-
-
-def asyncio_run(coro: object) -> object:
-    """Run an async coroutine synchronously in tests."""
-    import asyncio
-
-    return asyncio.run(coro)  # type: ignore[arg-type]
-
-
-def requests_get(path: str, client: TestClient) -> Response:
-    """Synchronous HTTP GET helper that uses the test's `client` fixture.
-
-    The conftest's `client` fixture is the primary path; this helper
-    takes the fixture as a parameter so the openapi-mirror tests can
-    use the same in-memory Qdrant + planes + auth context.
-    """
-    return client.get(path)
+    row_recent = _find_row_by_object_id(r_recent_results, object_id)
+    assert row_recent is not None, (
+        f"seeded row {object_id} not in recent results; object_ids: {[r.get('object_id') for r in r_recent_results]}"
+    )
+    assert "extra" in row_recent, f"recent row missing `extra`; current shape: {sorted(row_recent.keys())}"
+    assert "score_components" in row_recent["extra"], (
+        f"recent row missing `extra.score_components`; extra: {list(row_recent['extra'].keys())}"
+    )
