@@ -35,7 +35,11 @@ four:
 2. a **typed `Replay` exception raised in the dependency reaches the middleware AS a
    response** (via the existing exception-handler infra), carrying
    `X-Idempotent-Replay: true`. ✓ proven
-3. the middleware can **distinguish hit/miss/status/streaming** to decide what to store. ✓
+3. the middleware can **distinguish hit/miss/status/streaming** to decide what to store — and
+   the spike CORRECTED the detector: under `BaseHTTPMiddleware` every response is wrapped as
+   `_StreamingResponse`, so `isinstance` misses real streams and `body_iterator` matches
+   everything; the proven discriminator is **absence of `Content-Length`**. ✓ (rev-3's
+   original `isinstance` guess was wrong; the committed spike caught it)
 4. **the store gate must be `2xx && non-streaming && non-replay`, NOT try/except** — because
    `HTTPException(500)` is converted to a **500 response**, not propagated as an exception,
    so an exception-keyed gate would cache a 500. Ownership is released in `finally` (always;
