@@ -164,23 +164,44 @@ if rowu:
     # é (e + U+0301), a ZWJ family emoji — leaving valid UTF-8 that means something else.
     line("    delivered is valid UTF-8 (code-point safe)", reencoded_ok)
     line("    cut is CHARACTER-based (len==300), not byte-based", len(du) == 300)
-    # the real test: place a grapheme cluster ACROSS the cut
-    for glabel, cluster in (("combining acute e+U+0301", "\u00e9"),
-                            ("ZWJ family emoji", "\U0001F468\u200d\U0001F469\u200d\U0001F467")):
-        gm = f"gz{int(time.time()*1000)%100000}"
-        pre = f"{gm}. "
-        gbody = pre + ("x" * (299 - len(pre))) + cluster + "TAIL"
-        goid = musubi.write(NS_RECALL, gbody, importance=6)
-        time.sleep(2.5)
-        gres = musubi.recall(NS_RECALL, gm, mode="blended", limit=5, state_filter=FRESH_STATES)
-        grow = next((r for r in gres if r.get("object_id") == goid), None)
-        if grow:
-            gd = grow.get("content") or ""
-            intact = cluster in gd
-            got = [cp for cp in cluster if cp in gd]
-            split = (not intact) and 0 < len(got) < len(cluster)
-            line(f"    {glabel}: split mid-grapheme?", split,
-                 "*** THE CUT DISMEMBERS THE GRAPHEME ***" if split else "cluster survived")
+    # The real test: a grapheme cluster ACROSS the cut, with the DECOMPOSED sequence and
+    # code-point ASSERTIONS (Yua). My first pass used precomposed '\u00e9' (one code
+    # point) while claiming e+U+0301 — so it reported a result for a fixture I never
+    # wrote. uuid markers, collision-proof.
+    import uuid as _uuid
+    combining = "e\u0301"          # U+0065 + U+0301 — two code points, one grapheme
+    assert [ord(c) for c in combining] == [0x65, 0x301], "fixture must be decomposed"
+    gm = f"gz{_uuid.uuid4().hex[:10]}"
+    gpre = f"{gm}. "
+    gbody = gpre + ("x" * (299 - len(gpre))) + combining + "TAIL"
+    assert gbody[299] == "e" and gbody[300] == "\u0301", "cut must straddle the cluster"
+    goid = musubi.write(NS_RECALL, gbody, importance=6)
+    time.sleep(2.5)
+    gres = musubi.recall(NS_RECALL, gm, mode="blended", limit=5, state_filter=FRESH_STATES)
+    grow = next((r for r in gres if r.get("object_id") == goid), None)
+    assert grow is not None, "combining-mark fixture was not returned"
+    gstored = (store.payload(goid) or {}).get("content") or ""
+    gd = grow.get("content") or ""
+    # HARD assertions, not printed inference:
+    assert "e\u0301" in gstored, "stored must contain the adjacent e + U+0301"
+    combining_split = gd.endswith("e") and not gd.endswith("e\u0301")
+    line("    combining mark e+U+0301: accent CUT across the boundary?", combining_split,
+         "*** 'é' DELIVERED AS 'e' ***" if combining_split else "accent survived")
+
+    # ZWJ family emoji across the cut
+    zwj = "\U0001F468\u200d\U0001F469\u200d\U0001F467"   # 👨‍👩‍👧, one grapheme
+    zm = f"gz{_uuid.uuid4().hex[:10]}"
+    zpre = f"{zm}. "
+    zbody = zpre + ("x" * (299 - len(zpre))) + zwj + "TAIL"
+    zoid = musubi.write(NS_RECALL, zbody, importance=6)
+    time.sleep(2.5)
+    zres = musubi.recall(NS_RECALL, zm, mode="blended", limit=5, state_filter=FRESH_STATES)
+    zrow = next((r for r in zres if r.get("object_id") == zoid), None)
+    if zrow:
+        zd = zrow.get("content") or ""
+        zwj_split = (zwj not in zd) and 0 < sum(cp in zd for cp in zwj) < len(zwj)
+        line("    ZWJ family emoji: severed across the boundary?", zwj_split,
+             "*** family emoji DELIVERED as a fragment ***" if zwj_split else "cluster survived")
 
 # ── O6: key fact at exactly 301 / 1501 / end ─────────────────────────────────
 print()
