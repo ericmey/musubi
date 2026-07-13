@@ -11,8 +11,11 @@ Owner slice: slice-ret007-degradation (Musubi router + schema + metrics). Tests/
     uv run pytest tests/api/test_ret007_http_warnings.py -v
 """
 
+from typing import Any
+
 import pytest
 
+from musubi.settings import Settings
 from musubi.types.common import Ok
 
 
@@ -20,42 +23,20 @@ class DefectStillPresent(Exception):
     """Raised when the current code still exhibits the contract-forbidden defect."""
 
 
-def _settings():
-    from musubi.settings import Settings
-
-    return Settings(
-        qdrant_host="localhost",
-        qdrant_api_key="a",
-        tei_dense_url="http://a",
-        tei_sparse_url="http://a",
-        tei_reranker_url="http://a",
-        ollama_url="http://a",
-        embedding_model="a",
-        sparse_model="a",
-        reranker_model="a",
-        llm_model="a",
-        vault_path="/tmp",
-        artifact_blob_path="/tmp",
-        lifecycle_sqlite_path="/tmp/db",
-        log_dir="/tmp",
-        jwt_signing_key="secret",
-        oauth_authority="http://a",
-        musubi_skip_bootstrap=True,
-    )
-
-
 @pytest.mark.xfail(
     raises=DefectStillPresent,
     strict=True,
     reason="Wire-shape: api/routers/retrieve.py drops the internal `warnings` array at the HTTP boundary",
 )
-def test_http_wire_shape_drops_warnings(monkeypatch):
+def test_http_wire_shape_drops_warnings(
+    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+) -> None:
     from fastapi.testclient import TestClient
 
     from musubi.api.app import create_app
     from musubi.auth.tokens import AuthContext
 
-    def mock_auth(*args, **kwargs):
+    def mock_auth(*args: Any, **kwargs: Any) -> Any:
         return Ok(
             value=AuthContext(
                 subject="test",
@@ -69,13 +50,13 @@ def test_http_wire_shape_drops_warnings(monkeypatch):
 
     monkeypatch.setattr("musubi.api.routers.retrieve.authenticate_request", mock_auth)
 
-    async def mock_run_orchestration(*args, **kwargs):
+    async def mock_run_orchestration(*args: Any, **kwargs: Any) -> Any:
         class MockOrchResult:
-            def __init__(self):
-                self.results = []
+            def __init__(self) -> None:
+                self.results: list[Any] = []
                 self.warnings = ["sparse_embedding_failed"]
 
-            def __iter__(self):
+            def __iter__(self) -> Any:
                 return iter(self.results)
 
         return Ok(value=MockOrchResult())
@@ -84,8 +65,7 @@ def test_http_wire_shape_drops_warnings(monkeypatch):
         "musubi.api.routers.retrieve.run_orchestration_retrieve", mock_run_orchestration
     )
 
-    settings = _settings()
-    app = create_app(settings=settings)
+    app = create_app(settings=api_settings)
     from musubi.api.dependencies import (
         get_embedder,
         get_qdrant_client,
@@ -93,7 +73,7 @@ def test_http_wire_shape_drops_warnings(monkeypatch):
         get_settings_dep,
     )
 
-    app.dependency_overrides[get_settings_dep] = lambda: settings
+    app.dependency_overrides[get_settings_dep] = lambda: api_settings
     app.dependency_overrides[get_qdrant_client] = lambda: None
     app.dependency_overrides[get_embedder] = lambda: None
     app.dependency_overrides[get_reranker] = lambda: None
@@ -125,7 +105,7 @@ def test_http_wire_shape_drops_warnings(monkeypatch):
     strict=True,
     reason="Telemetry: musubi_retrieval_warnings_total / musubi_retrieval_errors_total do not exist with bounded labels (contract §6)",
 )
-def test_telemetry_bounded_labels():
+def test_telemetry_bounded_labels() -> None:
     """The two required metrics must exist and their labels must be strictly bounded to the
     allowlisted codes / fixed planes — never raw exception text (contract §6)."""
     from musubi.observability import registry as _reg

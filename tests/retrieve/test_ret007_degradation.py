@@ -16,6 +16,8 @@ plane_timeout_<plane>, plane_error_<plane>. Healthy no-match => warnings == [] (
     uv run pytest tests/retrieve/test_ret007_degradation.py -v
 """
 
+from typing import Any, cast
+
 import pytest
 
 from musubi.embedding.fake import FakeEmbedder
@@ -31,12 +33,14 @@ class DefectStillPresent(Exception):
 
 
 class MockQdrantClient:
-    def __init__(self, should_timeout=False, empty=False, return_hits=False):
+    def __init__(
+        self, should_timeout: bool = False, empty: bool = False, return_hits: bool = False
+    ) -> None:
         self.should_timeout = should_timeout
         self.empty = empty
         self.return_hits = return_hits
 
-    def query_points(self, *args, **kwargs):
+    def query_points(self, *args: Any, **kwargs: Any) -> Any:
         if self.should_timeout:
             raise TimeoutError("Simulated Qdrant Timeout")
         if self.return_hits:
@@ -50,19 +54,21 @@ class MockQdrantClient:
 
 
 class MockFailReranker:
-    def __init__(self):
+    def __init__(self) -> None:
         self.call_count = 0
 
-    async def rerank(self, *args, **kwargs):
+    async def rerank(self, *args: Any, **kwargs: Any) -> Any:
         self.call_count += 1
         raise RuntimeError("Reranker failed")
 
 
 class MockSuccessReranker:
-    def __init__(self):
+    def __init__(self) -> None:
         self.call_count = 0
 
-    async def rerank(self, query_text, candidates, top_k=None):
+    async def rerank(
+        self, query_text: str, candidates: list[Any], top_k: int | None = None
+    ) -> list[Any]:
         self.call_count += 1
         return [1.0 for _ in candidates]
 
@@ -84,10 +90,10 @@ def _is_allowlisted(code: str) -> bool:
 # --------------------------------------------------------------------------- #
 
 
-async def test_control_healthy_zero_match():
+async def test_control_healthy_zero_match() -> None:
     """A legitimate zero-match query returns an empty Ok (not an error)."""
     result = await hybrid_search(
-        client=MockQdrantClient(empty=True),
+        client=cast(Any, MockQdrantClient(empty=True)),
         embedder=FakeEmbedder(),
         namespace="test/ns",
         query="test",
@@ -97,7 +103,7 @@ async def test_control_healthy_zero_match():
     assert result.value == []
 
 
-async def test_control_successful_rerank():
+async def test_control_successful_rerank() -> None:
     """A healthy reranker scores candidates."""
     hits = [
         Hit(
@@ -111,15 +117,15 @@ async def test_control_successful_rerank():
         for i in range(10)
     ]
     reranker = MockSuccessReranker()
-    result = await rerank(client=reranker, query_text="test", candidates=hits, top_k=5)
+    result = await rerank(client=cast(Any, reranker), query_text="test", candidates=hits, top_k=5)
     assert reranker.call_count == 1
     assert len(result) == 5 and result[0].rerank_score == 1.0
 
 
-async def test_control_successful_sparse():
+async def test_control_successful_sparse() -> None:
     """Healthy sparse embedding returns results."""
     result = await hybrid_search(
-        client=MockQdrantClient(return_hits=True),
+        client=cast(Any, MockQdrantClient(return_hits=True)),
         embedder=FakeEmbedder(),
         namespace="test/ns",
         query="test",
@@ -129,13 +135,13 @@ async def test_control_successful_sparse():
     assert isinstance(result, Ok) and len(result.value) == 1
 
 
-async def test_control_successful_blended(monkeypatch):
+async def test_control_successful_blended(monkeypatch: pytest.MonkeyPatch) -> None:
     """Healthy blended retrieval returns hits and NO warnings."""
     query = BlendedRetrievalQuery(
         namespace="test/blended", query_text="test", mode="blended", planes=["episodic"]
     )
 
-    async def mock_run_deep(*args, **kwargs):
+    async def mock_run_deep(*args: Any, **kwargs: Any) -> Any:
         from musubi.retrieve.orchestration import RetrievalResult
 
         hit = RetrievalResult(
@@ -152,9 +158,9 @@ async def test_control_successful_blended(monkeypatch):
 
     monkeypatch.setattr("musubi.retrieve.blended.run_deep_retrieve", mock_run_deep)
     result = await run_blended_retrieve(
-        client=MockQdrantClient(),
+        client=cast(Any, MockQdrantClient()),
         embedder=FakeEmbedder(),
-        reranker=MockSuccessReranker(),
+        reranker=cast(Any, MockSuccessReranker()),
         query=query,
     )
     assert isinstance(result, Ok)
@@ -172,9 +178,9 @@ async def test_control_successful_blended(monkeypatch):
     strict=True,
     reason="C5: hybrid_search swallows TimeoutError into Ok([]) instead of Err (BACKEND_UNAVAILABLE)",
 )
-async def test_c5_hybrid_timeout():
+async def test_c5_hybrid_timeout() -> None:
     result = await hybrid_search(
-        client=MockQdrantClient(should_timeout=True),
+        client=cast(Any, MockQdrantClient(should_timeout=True)),
         embedder=FakeEmbedder(),
         namespace="test/ns",
         query="test",
@@ -194,12 +200,12 @@ async def test_c5_hybrid_timeout():
     strict=True,
     reason="H11: blended all-plane failure maps to Ok(empty) instead of an Err envelope (500 INTERNAL)",
 )
-async def test_h11_blended_all_plane_failure(monkeypatch):
+async def test_h11_blended_all_plane_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     query = BlendedRetrievalQuery(
         namespace="test/blended", query_text="test", mode="blended", planes=["episodic", "curated"]
     )
 
-    async def mock_run_deep(*args, **kwargs):
+    async def mock_run_deep(*args: Any, **kwargs: Any) -> Any:
         class FakeError:
             code = "deep_failure"
             detail = "simulated plane failure"
@@ -208,7 +214,10 @@ async def test_h11_blended_all_plane_failure(monkeypatch):
 
     monkeypatch.setattr("musubi.retrieve.blended.run_deep_retrieve", mock_run_deep)
     result = await run_blended_retrieve(
-        client=MockQdrantClient(), embedder=FakeEmbedder(), reranker=MockFailReranker(), query=query
+        client=cast(Any, MockQdrantClient()),
+        embedder=FakeEmbedder(),
+        reranker=cast(Any, MockFailReranker()),
+        query=query,
     )
     if isinstance(result, Ok) and result.value.results == []:
         raise DefectStillPresent("H11: blended retrieve mapped all-plane failure to Ok(empty)")
@@ -220,13 +229,13 @@ async def test_h11_blended_all_plane_failure(monkeypatch):
     strict=True,
     reason="M15: sparse timeout drops the sparse channel with no `sparse_embedding_failed` warning to the caller",
 )
-async def test_m15_sparse_timeout_silent_fallback():
+async def test_m15_sparse_timeout_silent_fallback() -> None:
     class TimeoutSparseEmbedder(FakeEmbedder):
-        async def embed_sparse(self, texts):
+        async def embed_sparse(self, texts: Any) -> Any:
             raise TimeoutError("Simulated Sparse Timeout")
 
     result = await hybrid_search(
-        client=MockQdrantClient(return_hits=True),
+        client=cast(Any, MockQdrantClient(return_hits=True)),
         embedder=TimeoutSparseEmbedder(),
         namespace="test/ns",
         query="test",
@@ -246,7 +255,7 @@ async def test_m15_sparse_timeout_silent_fallback():
     strict=True,
     reason="M15: reranker failure falls back to RRF silently with no `reranker_failed` warning",
 )
-async def test_m15_rerank_failure_silent_fallback():
+async def test_m15_rerank_failure_silent_fallback() -> None:
     hits = [
         Hit(
             object_id=str(i),
@@ -259,7 +268,7 @@ async def test_m15_rerank_failure_silent_fallback():
         for i in range(6)
     ]
     reranker = MockFailReranker()
-    result = await rerank(client=reranker, query_text="test", candidates=hits, top_k=2)
+    result = await rerank(client=cast(Any, reranker), query_text="test", candidates=hits, top_k=2)
     assert reranker.call_count == 1, "reranker must be called"
     # Contract: on reranker failure the caller must receive a `reranker_failed` warning. rerank()
     # returns a bare list today, carrying NO warning channel — the degradation is invisible.
@@ -275,13 +284,13 @@ async def test_m15_rerank_failure_silent_fallback():
     strict=True,
     reason="Partial-plane: M<N plane failure must surface a bounded plane_timeout_/plane_error_ code, not free-text",
 )
-async def test_partial_plane_failure_surfaces_warning(monkeypatch):
+async def test_partial_plane_failure_surfaces_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     query = BlendedRetrievalQuery(
         namespace="test/blended", query_text="test", mode="blended", planes=["episodic", "curated"]
     )
     calls = {"n": 0}
 
-    async def mock_run_deep(*args, **kwargs):
+    async def mock_run_deep(*args: Any, **kwargs: Any) -> Any:
         from musubi.retrieve.orchestration import RetrievalResult
 
         calls["n"] += 1
@@ -306,9 +315,9 @@ async def test_partial_plane_failure_surfaces_warning(monkeypatch):
 
     monkeypatch.setattr("musubi.retrieve.blended.run_deep_retrieve", mock_run_deep)
     result = await run_blended_retrieve(
-        client=MockQdrantClient(),
+        client=cast(Any, MockQdrantClient()),
         embedder=FakeEmbedder(),
-        reranker=MockSuccessReranker(),
+        reranker=cast(Any, MockSuccessReranker()),
         query=query,
     )
     assert isinstance(result, Ok) and result.value.results, (
@@ -325,21 +334,21 @@ async def test_partial_plane_failure_surfaces_warning(monkeypatch):
     strict=True,
     reason="Healthy zero-match must carry NO warning; blended today emits free-text 'no hits in any plane'",
 )
-async def test_healthy_zero_match_has_no_warning(monkeypatch):
+async def test_healthy_zero_match_has_no_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     """Contract §2: a healthy no-match is `200 OK` with `warnings == []`. Today blended appends the
     free-text 'no hits in any plane' warning, marking a healthy empty result as degraded."""
     query = BlendedRetrievalQuery(
         namespace="test/blended", query_text="test", mode="blended", planes=["episodic"]
     )
 
-    async def mock_run_deep(*args, **kwargs):
+    async def mock_run_deep(*args: Any, **kwargs: Any) -> Any:
         return Ok(value=[])  # healthy plane, zero hits
 
     monkeypatch.setattr("musubi.retrieve.blended.run_deep_retrieve", mock_run_deep)
     result = await run_blended_retrieve(
-        client=MockQdrantClient(),
+        client=cast(Any, MockQdrantClient()),
         embedder=FakeEmbedder(),
-        reranker=MockSuccessReranker(),
+        reranker=cast(Any, MockSuccessReranker()),
         query=query,
     )
     assert isinstance(result, Ok) and result.value.results == []
