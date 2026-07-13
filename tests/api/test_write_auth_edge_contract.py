@@ -158,7 +158,6 @@ def test_openapi_requestbody_material_fields_stable(app_factory: FastAPI) -> Non
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(strict=True, reason="Phase B: idempotency dependency not yet wired onto captures")
 def test_every_eligible_capture_route_carries_idempotency_dependency(app_factory: FastAPI) -> None:
     routes = _post_capture_routes(app_factory)
     assert len(routes) == 3

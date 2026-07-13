@@ -11,6 +11,7 @@ from qdrant_client import QdrantClient, models
 from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import get_episodic_plane, get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError
+from musubi.api.idempotency_dependency import IdempotentContext, make_idempotency_dependency
 from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
 from musubi.api.write_auth import AuthorizedWrite
 from musubi.lifecycle.transitions import transition
@@ -247,6 +248,14 @@ async def authorized_batch(
     return AuthorizedWrite(auth=request.state.auth, namespace=body.namespace, body=body)
 
 
+# The routed post-authz idempotency edge: each Depends on its route's AuthorizedWrite dependency,
+# so authentication + namespace authz run BEFORE any cache lookup (SEC-002), and the identity is
+# bound to the validated principal + operation (IDEM-001). The store-only observer completes and
+# releases the lease.
+_idem_capture = make_idempotency_dependency(authorized_capture)
+_idem_batch = make_idempotency_dependency(authorized_batch)
+
+
 @router.post(
     "",
     response_model=CaptureResponse,
@@ -255,10 +264,10 @@ async def authorized_batch(
 )
 async def capture(
     request: Request,
-    authorized: AuthorizedWrite[CaptureRequest] = Depends(authorized_capture),
+    ctx: IdempotentContext = Depends(_idem_capture),
     plane: EpisodicPlane = Depends(get_episodic_plane),
 ) -> CaptureResponse:
-    body = authorized.body  # single parsed body; namespace already authorized by the dependency
+    body = ctx.body  # single parsed body; namespace already authorized by the dependency edge
     memory_kwargs: dict[str, object] = {
         "namespace": body.namespace,
         "content": body.content,
@@ -274,9 +283,7 @@ async def capture(
         preserve_created_at = True
     memory = _build_episodic(**memory_kwargs)
     saved = await plane.create(memory, preserve_created_at=preserve_created_at)
-    response = CaptureResponse(object_id=saved.object_id, state=saved.state)
-    request.state.idempotency_response = response.model_dump()
-    return response
+    return CaptureResponse(object_id=saved.object_id, state=saved.state)
 
 
 @router.post(
@@ -287,10 +294,10 @@ async def capture(
 )
 async def batch_capture(
     request: Request,
-    authorized: AuthorizedWrite[BatchCaptureRequest] = Depends(authorized_batch),
+    ctx: IdempotentContext = Depends(_idem_batch),
     plane: EpisodicPlane = Depends(get_episodic_plane),
 ) -> BatchCaptureResponse:
-    body = authorized.body  # single parsed body; namespace already authorized by the dependency
+    body = ctx.body  # single parsed body; namespace already authorized by the dependency edge
     # Check operator scope once up front if ANY item overrides
     # created_at. A batch with mixed override / no-override is fine
     # under operator scope; a batch with any override under a

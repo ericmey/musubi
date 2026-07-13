@@ -85,7 +85,7 @@ def make_idempotency_dependency(
 ) -> Callable[..., Awaitable[IdempotentContext]]:
     """Build the idempotency dependency for a capture route, depending on that route's authz edge."""
 
-    async def _dep(
+    async def _idempotency_dependency(
         request: Request,
         authorized: AuthorizedWrite[Any] = Depends(authz_dependency),
         cache: IdempotencyLeaseCache = Depends(get_idempotency_lease_cache),
@@ -130,18 +130,21 @@ def make_idempotency_dependency(
                 status_code=500, code="INTERNAL", detail="unexpected idempotency acquire status"
             )
 
-        # acquired: establish the observer-visible lease state. If that fails for any reason,
-        # release the lease so an acquired-but-unpublished slot can never leak.
+        # acquired: publish the observer-visible lease state AND the exact cache instance the
+        # observer must complete/release against (so a test-overridden provider and the observer
+        # never diverge). If publishing fails for any reason, release the lease so an
+        # acquired-but-unpublished slot can never leak.
         try:
             request.state.idem = IdempotencyRequestState(
                 identity=identity, owner=owner, digest=digest
             )
+            request.state.idem_cache = cache
         except BaseException:
             cache.release(identity, owner)
             raise
         return IdempotentContext(authorized=authorized, identity=identity, owner=owner)
 
-    return _dep
+    return _idempotency_dependency
 
 
 __all__ = [

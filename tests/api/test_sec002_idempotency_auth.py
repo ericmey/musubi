@@ -42,7 +42,6 @@ def _prime(client: TestClient, token: str, key: str, body: dict[str, Any]) -> No
     assert r.status_code in (200, 201, 202), f"priming write failed: {r.status_code} {r.text[:200]}"
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-002: replay served with NO bearer — fix pending")
 def test_no_bearer_must_not_replay(client: TestClient, valid_token: str) -> None:
     key, body = "sec002-nobearer", _capture_body()
     _prime(client, valid_token, key, body)
@@ -55,7 +54,6 @@ def test_no_bearer_must_not_replay(client: TestClient, valid_token: str) -> None
     )
 
 
-@pytest.mark.xfail(strict=True, reason="SEC-002: replay served to INVALID bearer — fix pending")
 def test_invalid_bearer_must_not_replay(client: TestClient, valid_token: str) -> None:
     key, body = "sec002-badbearer", _capture_body()
     _prime(client, valid_token, key, body)
@@ -67,9 +65,6 @@ def test_invalid_bearer_must_not_replay(client: TestClient, valid_token: str) ->
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="SEC-002: one tenant replays another tenant's write — fix pending"
-)
 def test_cross_tenant_must_not_replay(
     client: TestClient, api_settings: Settings, valid_token: str
 ) -> None:

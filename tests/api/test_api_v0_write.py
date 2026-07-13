@@ -1064,31 +1064,59 @@ def test_idempotency_key_roundtrip(
     assert r2.headers.get("X-Idempotent-Replay") == "true"
 
 
-def test_idempotency_key_expires_after_24h(
-    client: TestClient,
-    valid_token: str,
-) -> None:
-    """Bullet 11 — the idempotency cache TTL is 24h. A request with a
-    stale key behaves like a fresh request."""
-    from musubi.api.idempotency import _GLOBAL_CACHE
+def test_idempotency_key_expires_after_ttl(app_factory: object, valid_token: str) -> None:
+    """Bullet 11 — the idempotency lease cache TTL. A completed replay entry replays UP TO and
+    INCLUDING the TTL boundary, and past it the entry is CLEANED by ``acquire`` so the next
+    identical request executes fresh (no replay).
+
+    Phase B: this drives the REAL cleanup semantics — an ``IdempotencyLeaseCache`` with an INJECTED
+    clock (overriding the route provider, which the store-only observer also reads back via
+    ``request.state.idem_cache``), advancing the clock rather than reaching into private state. The
+    expiry comparison is strict (``now - completed_at > ttl``), so AT the TTL the entry still
+    replays and only strictly PAST it is cleaned — both boundaries are asserted."""
+    from fastapi.testclient import TestClient as _TC
+
+    from musubi.api.idempotency import IdempotencyLeaseCache, get_idempotency_lease_cache
+
+    class _Clock:
+        def __init__(self) -> None:
+            self.t = 1000.0
+
+        def __call__(self) -> float:
+            return self.t
+
+    clock = _Clock()
+    ttl = 100.0
+    cache = IdempotencyLeaseCache(clock=clock, ttl_s=ttl)
+    app_factory.dependency_overrides[get_idempotency_lease_cache] = lambda: cache  # type: ignore[attr-defined]
 
     headers = {
         "Authorization": f"Bearer {valid_token}",
         "Idempotency-Key": "idem-test-write-ttl",
     }
-    body = {
-        "namespace": "eric/claude-code/episodic",
-        "content": "idempotent-ttl-fixture-unique",
-    }
-    r1 = client.post("/v1/episodic", headers=headers, json=body)
-    assert r1.status_code == 202
-    # Force-expire the key.
-    _GLOBAL_CACHE.expire_for_test(headers["Idempotency-Key"])
-    r2 = client.post("/v1/episodic", headers=headers, json=body)
-    assert r2.status_code == 202
-    # Same object id (plane dedup), but the response should NOT be a
-    # replay — it ran fresh.
-    assert r2.headers.get("X-Idempotent-Replay") != "true"
+    body = {"namespace": "eric/claude-code/episodic", "content": "idempotent-ttl-fixture-unique"}
+
+    with _TC(app_factory) as client:  # type: ignore[arg-type]
+        first = client.post("/v1/episodic", headers=headers, json=body)
+        assert first.status_code == 202 and first.headers.get("X-Idempotent-Replay") != "true"
+
+        # AT the TTL boundary: strict `>` comparison → the completed entry is NOT yet expired, so
+        # an identical request still REPLAYS.
+        clock.t += ttl
+        at_boundary = client.post("/v1/episodic", headers=headers, json=body)
+        assert at_boundary.status_code == 202
+        assert at_boundary.headers.get("X-Idempotent-Replay") == "true", (
+            "at exactly the TTL the entry must still replay (expiry is strict `> ttl`)"
+        )
+
+        # PAST the TTL: acquire's cleanup removes the expired completed entry → fresh execution,
+        # NOT a replay.
+        clock.t += 0.5
+        past_ttl = client.post("/v1/episodic", headers=headers, json=body)
+        assert past_ttl.status_code == 202
+        assert past_ttl.headers.get("X-Idempotent-Replay") != "true", (
+            "past the TTL the completed entry must be cleaned so the request executes fresh"
+        )
 
 
 # ---------------------------------------------------------------------------

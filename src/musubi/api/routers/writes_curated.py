@@ -9,6 +9,7 @@ from qdrant_client import QdrantClient, models
 from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import get_curated_plane, get_qdrant_client, get_settings_dep
 from musubi.api.errors import APIError
+from musubi.api.idempotency_dependency import IdempotentContext, make_idempotency_dependency
 from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
 from musubi.api.write_auth import AuthorizedWrite
 from musubi.lifecycle.transitions import transition
@@ -72,6 +73,10 @@ async def authorized_curated_create(
     return AuthorizedWrite(auth=request.state.auth, namespace=body.namespace, body=body)
 
 
+# Routed post-authz idempotency edge (see writes_episodic for the full rationale).
+_idem_curated_create = make_idempotency_dependency(authorized_curated_create)
+
+
 @router.post(
     "",
     response_model=CuratedCreateResponse,
@@ -79,11 +84,10 @@ async def authorized_curated_create(
     operation_id="create_curated.bucket=capture",
 )
 async def create_curated(
-    request: Request,
-    authorized: AuthorizedWrite[CuratedCreateRequest] = Depends(authorized_curated_create),
+    ctx: IdempotentContext = Depends(_idem_curated_create),
     plane: CuratedPlane = Depends(get_curated_plane),
 ) -> CuratedCreateResponse:
-    body = authorized.body  # single parsed body; namespace already authorized by the dependency
+    body = ctx.body  # single parsed body; namespace already authorized by the dependency edge
     saved = await plane.create(
         CuratedKnowledge(
             namespace=body.namespace,

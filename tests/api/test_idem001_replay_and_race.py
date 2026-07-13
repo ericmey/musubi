@@ -32,10 +32,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from starlette.testclient import TestClient
 
-from musubi.api.idempotency import IdempotencyCache
+from musubi.api.idempotency import IdempotencyCache, IdempotencyLeaseCache
 
 CAPTURE = "/v1/episodic"
 BATCH = "/v1/episodic/batch"  # a DIFFERENT operation_id, same key space today
@@ -64,9 +63,6 @@ def _prime(client: TestClient, token: str, key: str, body: dict[str, Any]) -> No
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.xfail(
-    strict=True, reason="IDEM-001(A): key+body replays across DIFFERENT endpoints — fix pending"
-)
 def test_same_key_body_must_not_replay_across_endpoints(
     client: TestClient, valid_token: str
 ) -> None:
@@ -100,53 +96,54 @@ def test_replay_on_same_endpoint_still_works(client: TestClient, valid_token: st
 
 
 # --------------------------------------------------------------------------- #
-# (B) the race — no in-flight lease. Deterministic, cache-unit level.
+# (B) the race — closed by the in-flight lease. Deterministic, cache-unit level.
 # --------------------------------------------------------------------------- #
 
+_D = bytes(32)  # a valid SHA-256-length digest (mandatory on the lease acquire)
 
-def test_race_window_exists_two_concurrent_callers_both_miss() -> None:
-    """TODAY-REALITY PROOF (not xfail): two callers looking up the same key BEFORE either
-    stores BOTH receive "miss", so BOTH proceed to execute the mutation. This is the race
-    window, proven deterministically — no lease primitive exists to close it."""
+
+def test_retired_cache_had_the_race_window_both_callers_miss() -> None:
+    """MIGRATION RATIONALE (not xfail): the RETIRED ``IdempotencyCache`` (no longer in the write
+    path) exposes ``lookup`` then ``store`` with nothing between — two callers looking up the same
+    key before either stores BOTH receive "miss", so BOTH would execute the mutation. This is the
+    race that motivated the move to the lease cache; it is proven here on the retired class to
+    document why it was retired, and closed by the next test on the live primitive."""
     cache = IdempotencyCache()
     body = _capture_body()
     first, _, _ = cache.lookup("idem001-race", body)
     second, _, _ = cache.lookup("idem001-race", body)  # concurrent second caller, pre-store
     assert first == "miss" and second == "miss", (
-        f"expected the race window (miss, miss); got ({first}, {second}) — "
-        f"if this changed, a lease may now exist and the xfail below should XPASS"
+        f"the retired cache's race window (miss, miss); got ({first}, {second})"
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="IDEM-001(B): no in-flight lease — second concurrent caller gets a free miss — fix pending",
-)
-def test_second_concurrent_caller_must_not_get_free_miss() -> None:
-    """SECURE CONTRACT: once a caller has claimed a key, a concurrent second caller with the
-    same key must be told it is in-flight (so it waits/replays/409s), NOT handed a plain "miss"
-    that lets it execute the same mutation a second time. The ADR-D3 `acquire` lease is the
-    fix. Fails today (there is no acquire; the second caller gets "miss")."""
-    cache = IdempotencyCache()
-    body = _capture_body()
-    claimed, _, _ = cache.lookup("idem001-lease", body)  # first caller claims
-    assert claimed == "miss", "first caller should see a miss (the key is unused)"
-    second, _, _ = cache.lookup("idem001-lease", body)  # concurrent second caller
-    assert second != "miss", (
-        "no in-flight lease: a concurrent second caller for a claimed key also got 'miss' — "
-        "both callers execute the mutation (double write)"
+def test_in_flight_lease_closes_the_race_second_caller_is_not_a_free_miss() -> None:
+    """SECURE CONTRACT (the fix): the live write path uses ``IdempotencyLeaseCache``. Once a caller
+    has ACQUIRED a key's lease, a concurrent second caller with the same key is told ``in_flight``
+    (so the dependency 409s it — it waits/retries, never executes a second time), NOT handed a free
+    slot. The full exactly-once concurrency property is proven in
+    ``tests/api/spikes/test_idem_lease_contract.py``; this is the direct IDEM-001(B) closure."""
+    cache = IdempotencyLeaseCache()
+    identity = ("idem001-lease",)
+    assert cache.acquire(identity, "owner-1", digest=_D)[0] == "acquired", (
+        "first caller acquires the lease"
+    )
+    assert cache.acquire(identity, "owner-2", digest=_D)[0] == "in_flight", (
+        "a concurrent second caller for a held lease must be in_flight, never a free acquire "
+        "(that would be a double write)"
     )
 
 
 def test_conflict_still_detected_same_key_different_body() -> None:
-    """Control: same key + DIFFERENT body must be a conflict, not a silent miss or a wrong-body
-    replay. NOT xfail — must hold before and after the fix."""
-    cache = IdempotencyCache()
-    cache.store(
-        "idem001-conflict",
-        _capture_body(content="original"),
-        response_status=202,
-        response_body={"object_id": "x"},
-    )
-    status, _, _ = cache.lookup("idem001-conflict", _capture_body(content="DIFFERENT"))
+    """Control: on the live lease cache, a COMPLETED key replayed with a DIFFERENT body is a
+    conflict, not a silent miss or a wrong-body replay. NOT xfail — must always hold."""
+    cache = IdempotencyLeaseCache()
+    identity = ("idem001-conflict",)
+    digest_a = b"A" * 32
+    digest_b = b"B" * 32
+    cache.acquire(identity, "o1", digest=digest_a)
+    from musubi.api.idempotency import CompletedResponse
+
+    cache.store(identity, "o1", response=CompletedResponse(status=202, raw_headers=(), body=b"x"))
+    status, _ = cache.acquire(identity, "o2", digest=digest_b)
     assert status == "conflict", f"same key + different body must be 'conflict', got {status!r}"
