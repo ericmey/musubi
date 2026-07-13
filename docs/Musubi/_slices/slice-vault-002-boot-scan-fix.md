@@ -27,6 +27,7 @@ blocks: []
 ## Owned paths
 
 - `tests/vault/test_watcher_boot_scan_vault_002.py` (red contract test, tests only; no src/ changes)
+- `tests/vault/test_watcher_boot_scan.py` (transfer of ownership from `slice-ops-hardening-suite` per Yua 17:54:34: the dispatch-shape expectation in `test_boot_scan_detects_body_hash_change` must match the accepted source fix (c0c91ba) which passes `str(path)` (the ABSOLUTE in-root path) instead of the relative path string; also prefers deterministic task completion over fixed `asyncio.sleep(0.1)`)
 - `docs/Musubi/_slices/slice-vault-002-boot-scan-fix.md`
 - `docs/Musubi/_inbox/locks/slice-vault-002-boot-scan-fix.lock`
 
@@ -72,8 +73,8 @@ blocks: []
 ## Source-level invariant (lands in the implementation PR, not this red PR)
 
 The path representation crossing internal component boundaries must be normalized:
-- Option A: `boot_scan` passes an ABSOLUTE path (or a `Path` object) to `_handle_event` (the verifier checks `is_absolute()` first).
-- Option B: `_handle_event_inner` checks `is_absolute()` before calling `relative_to`.
+- Option A (ACCEPTED per Yua 17:43:21; landed at c0c91ba): `boot_scan` passes `str(path)` (the ABSOLUTE path from rglob) to `_handle_event`. The handler's `path.relative_to(self.vault_root)` succeeds; the file is processed; the typed `CuratedKnowledge` is constructed with the relative `vault_path` (the handler's `rel_path`).
+- Option B (REJECTED per Yua 17:54:34): enforce absolute-before-relative_to in `_handle_event_inner` by joining the relative path to `vault_root`. This was REJECTED because joining arbitrary relative input to `vault_root` can admit `../` traversal lexically and broadens handler semantics.
 - Option C: `os.path.relpath` + normalization (no exception swallow).
 
 ## Test accounting (post-Yua-17:20:42 repair)
