@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,11 +24,28 @@ def mock_write_log() -> MagicMock:
     return wl
 
 
-# test_boot_scan_archives_removed_files was REMOVED (vacuous:
-# async slow_scroll on sync scroll; assert True passed). The
-# deletion case is now a routing marker in
-# test_boot_scan_vault_002_deletion_routed_to_vault_001_marker
-# (in tests/vault/test_watcher_boot_scan_vault_002.py).
+@pytest.mark.asyncio
+async def test_boot_scan_archives_removed_files(
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
+) -> None:
+    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log)
+    watcher._loop = asyncio.get_running_loop()
+
+    # Create a slow mock for the plane scroll
+    async def slow_scroll(
+        *args: dict[str, Any], **kwargs: dict[str, Any]
+    ) -> tuple[list[Any], None]:
+        await asyncio.sleep(0.1)
+        return ([], None)
+
+    mock_curated_plane._client.scroll.side_effect = slow_scroll
+
+    # This should return immediately
+    watcher.boot_scan()
+    assert True
+
+    # wait for the background task to finish
+    await asyncio.sleep(0.2)
 
 
 @pytest.mark.asyncio
