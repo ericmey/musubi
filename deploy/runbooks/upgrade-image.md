@@ -83,7 +83,7 @@ sed -i '' \
 git add deploy/ansible/group_vars/all.yml
 git commit -m "ops: bump musubi_core_image to @sha256:<first 12 chars>"
 git push -u origin "$(git branch --show-current)"
-gh pr create --base v2 --title "ops: bump musubi_core_image to @sha256:<first 12 chars>"
+gh pr create --base main --title "ops: bump musubi_core_image to @sha256:<first 12 chars>"
 ```
 
 **Expected output:** a reviewable PR showing a single-line diff in
@@ -159,7 +159,7 @@ immediately — do not wait for alarms to fire.
 git -C ~/musubi log -p -- deploy/ansible/group_vars/all.yml | head -40
 # Revert the bump commit:
 git -C ~/musubi revert --no-edit <bump-commit-sha>
-git -C ~/musubi push origin v2
+git -C ~/musubi push origin main
 # Re-run deploy with the older digest:
 ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
  deploy/ansible/deploy.yml --ask-vault-pass
