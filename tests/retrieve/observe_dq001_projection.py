@@ -159,10 +159,28 @@ if rowu:
     line("    delivered BYTE length (utf-8)", len(du.encode("utf-8")))
     # a valid string re-encodes cleanly; a split grapheme shows as a replacement char
     reencoded_ok = "�" not in du and du == du.encode("utf-8", "ignore").decode("utf-8", "ignore")
-    line("    delivered text is valid UTF-8 (no split grapheme)", reencoded_ok,
-         "" if reencoded_ok else "*** the cut split a multi-byte character ***")
-    line("    cut is measured in CHARACTERS (300), not bytes", len(du) == 300,
-         "char-based cut" if len(du) == 300 else "check: byte-based cut splits graphemes")
+    # CORRECTION (Yua): "valid UTF-8" only proves CODE-POINT safety, NOT grapheme-cluster
+    # safety. A [:300] slice is code-point-safe but can still cut THROUGH a grapheme —
+    # é (e + U+0301), a ZWJ family emoji — leaving valid UTF-8 that means something else.
+    line("    delivered is valid UTF-8 (code-point safe)", reencoded_ok)
+    line("    cut is CHARACTER-based (len==300), not byte-based", len(du) == 300)
+    # the real test: place a grapheme cluster ACROSS the cut
+    for glabel, cluster in (("combining acute e+U+0301", "\u00e9"),
+                            ("ZWJ family emoji", "\U0001F468\u200d\U0001F469\u200d\U0001F467")):
+        gm = f"gz{int(time.time()*1000)%100000}"
+        pre = f"{gm}. "
+        gbody = pre + ("x" * (299 - len(pre))) + cluster + "TAIL"
+        goid = musubi.write(NS_RECALL, gbody, importance=6)
+        time.sleep(2.5)
+        gres = musubi.recall(NS_RECALL, gm, mode="blended", limit=5, state_filter=FRESH_STATES)
+        grow = next((r for r in gres if r.get("object_id") == goid), None)
+        if grow:
+            gd = grow.get("content") or ""
+            intact = cluster in gd
+            got = [cp for cp in cluster if cp in gd]
+            split = (not intact) and 0 < len(got) < len(cluster)
+            line(f"    {glabel}: split mid-grapheme?", split,
+                 "*** THE CUT DISMEMBERS THE GRAPHEME ***" if split else "cluster survived")
 
 # ── O6: key fact at exactly 301 / 1501 / end ─────────────────────────────────
 print()
