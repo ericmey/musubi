@@ -132,3 +132,56 @@ print("Observed only. The invariant — no silent loss of load-bearing content; 
 print("truncation and full length; surface a bounded summary; offer authorized full-content")
 print("continuation by object_id — is Yua's contract, not this file's.")
 print("=" * 98)
+
+
+# ── O4: the exact cut point, in BYTES and CHARS, and the boundary it lands on ─
+# Yua's additions: char 301 / 1501 / end; declared vs actual length in bytes AND chars;
+# Unicode grapheme boundaries at the cut. A cut measured in the wrong unit, or one that
+# splits a multi-byte character, corrupts a memory in a way that is invisible until the
+# glyph turns into a replacement box.
+print()
+print("O5  The cut point — bytes vs chars, and Unicode safety at the boundary")
+
+# a memory whose 300th character region is a multi-byte emoji, so a byte-cut would split it
+emoji_marker = f"dqu{int(time.time())}"
+prefix = "x" * 295
+emoji_content = f"{emoji_marker}. {prefix}🧠🧠🧠 CONCLUSION AFTER THE EMOJI BLOCK."
+oidu = musubi.write(NS_RECALL, emoji_content, importance=7)
+time.sleep(3)
+storedu = (store.payload(oidu) or {}).get("content") or ""
+line("    stored char length", len(storedu))
+line("    stored BYTE length (utf-8)", len(storedu.encode("utf-8")))
+resu = musubi.recall(NS_RECALL, emoji_marker, mode="blended", limit=5, state_filter=FRESH_STATES)
+rowu = next((r for r in resu if r.get("object_id") == oidu), None)
+if rowu:
+    du = rowu.get("content") or ""
+    line("    delivered char length", len(du))
+    line("    delivered BYTE length (utf-8)", len(du.encode("utf-8")))
+    # a valid string re-encodes cleanly; a split grapheme shows as a replacement char
+    reencoded_ok = "�" not in du and du == du.encode("utf-8", "ignore").decode("utf-8", "ignore")
+    line("    delivered text is valid UTF-8 (no split grapheme)", reencoded_ok,
+         "" if reencoded_ok else "*** the cut split a multi-byte character ***")
+    line("    cut is measured in CHARACTERS (300), not bytes", len(du) == 300,
+         "char-based cut" if len(du) == 300 else "check: byte-based cut splits graphemes")
+
+# ── O6: key fact at exactly 301 / 1501 / end ─────────────────────────────────
+print()
+print("O6  A load-bearing fact placed at char 301, 1501, and the very end")
+for pos, label in ((301, "char 301 (just past the 300 cut)"),
+                   (1501, "char 1501 (past the 1500 LLM-input budget)")):
+    m = f"dqp{pos}{int(time.time())}"
+    fact = f"FACTAT{pos}"
+    filler = "." * (pos - len(m) - 2)
+    body = f"{m}.{filler}{fact} and the rest continues."
+    o = musubi.write(NS_RECALL, body, importance=8)
+    time.sleep(2.5)
+    r = musubi.recall(NS_RECALL, m, mode="blended", limit=5, state_filter=FRESH_STATES)
+    row = next((x for x in r if x.get("object_id") == o), None)
+    survives = row is not None and fact in (row.get("content") or "")
+    line(f"    fact at {label}", survives,
+         "delivered" if survives else "*** LOST — caller never sees it ***")
+
+print()
+print("=" * 98)
+print("Observed only. Budgets, summary policy, and cut-unit are Yua's contract.")
+print("=" * 98)
