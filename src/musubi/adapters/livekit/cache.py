@@ -19,6 +19,22 @@ from typing import Any
 RETRIEVAL_UNAVAILABLE = "retrieval_unavailable"
 
 
+class RetrievalStatus:
+    """The ONE authoritative agent-facing retrieval status for the current turn (RET-007 Blocker 4).
+
+    Both the Slow Thinker (pre-fetch) and the Fast Talker (speech turn) publish to it on EVERY
+    retrieval — success, degraded, or total failure — so the most recent retrieval wins (current-turn
+    semantics). A Slow Thinker total failure is therefore visible immediately (not only in its own
+    ``last_warnings``), and a later healthy Fast Talker turn clears it with no stale carry-over.
+    """
+
+    def __init__(self) -> None:
+        self.warnings: list[str] = []
+
+    def publish(self, warnings: list[str]) -> None:
+        self.warnings = list(warnings)
+
+
 @dataclass(frozen=True)
 class _CacheEntry:
     key: str

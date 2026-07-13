@@ -18,7 +18,7 @@ import asyncio
 import logging
 from typing import Any
 
-from musubi.adapters.livekit.cache import ContextCache
+from musubi.adapters.livekit.cache import ContextCache, RetrievalStatus
 from musubi.adapters.livekit.config import LiveKitAdapterConfig
 from musubi.adapters.livekit.fast_talker import FastTalker
 from musubi.adapters.livekit.heuristics import detect_interesting_fact
@@ -47,12 +47,16 @@ class LiveKitAdapter:
         self.artifact_namespace = artifact_namespace
         self.config = config
         self.cache = ContextCache(max_entries=config.cache_max_entries)
+        # RET-007 — the ONE authoritative agent-facing channel; both talkers publish to it (last
+        # retrieval wins = current-turn semantics), so a Slow Thinker pre-fetch failure is visible.
+        self._retrieval_status = RetrievalStatus()
         self.slow_thinker = SlowThinker(
             client=client,
             namespace=namespace,
             cache=self.cache,
             deep_limit=config.deep_limit,
             cache_ttl_s=config.cache_default_ttl_s,
+            status=self._retrieval_status,
         )
         self.fast_talker = FastTalker(
             client=client,
@@ -60,6 +64,7 @@ class LiveKitAdapter:
             cache=self.cache,
             fast_limit=config.fast_limit,
             match_threshold=config.fast_match_threshold,
+            status=self._retrieval_status,
         )
         # Observability/state attached to the adapter for assertions in
         # tests and for an operator dashboard wiring later.
@@ -68,12 +73,13 @@ class LiveKitAdapter:
 
     @property
     def retrieval_status(self) -> list[str]:
-        """RET-007 — the agent-facing degradation status for the CURRENT turn. The Fast Talker serves
-        the turn's context (a Slow Thinker pre-fetch reaches the agent by seeding the cache the Fast
-        Talker reads), so its ``last_warnings`` is authoritative: empty = healthy; bounded ``plane_*`` /
-        ``sparse_embedding_failed`` / ``reranker_failed`` = partial degradation; ``[RETRIEVAL_UNAVAILABLE]``
-        = no memory this turn. This is the consumer the LiveKit agent reads to render a status message."""
-        return list(self.fast_talker.last_warnings)
+        """RET-007 — the agent-facing degradation status for the CURRENT turn: the ONE authoritative
+        channel both talkers publish to (most recent retrieval wins). Empty = healthy; bounded
+        ``plane_*`` / ``sparse_embedding_failed`` / ``reranker_failed`` = partial degradation;
+        ``[RETRIEVAL_UNAVAILABLE]`` = no memory this turn (a Slow Thinker pre-fetch failure surfaces
+        here immediately, not only in the talker's own ``last_warnings``). This is the consumer the
+        LiveKit agent reads to render a status message."""
+        return list(self._retrieval_status.warnings)
 
     # ------------------------------------------------------------------
     # LiveKit event hooks

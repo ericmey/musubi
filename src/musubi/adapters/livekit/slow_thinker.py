@@ -17,7 +17,11 @@ import asyncio
 import logging
 from typing import Any
 
-from musubi.adapters.livekit.cache import RETRIEVAL_UNAVAILABLE, ContextCache
+from musubi.adapters.livekit.cache import (
+    RETRIEVAL_UNAVAILABLE,
+    ContextCache,
+    RetrievalStatus,
+)
 
 log = logging.getLogger("musubi.adapters.livekit.slow_thinker")
 
@@ -33,6 +37,7 @@ class SlowThinker:
         cache: ContextCache,
         deep_limit: int = 15,
         cache_ttl_s: float = 120.0,
+        status: RetrievalStatus | None = None,
     ) -> None:
         self.client = client
         self.namespace = namespace
@@ -41,7 +46,15 @@ class SlowThinker:
         self._cache_ttl_s = cache_ttl_s
         #: RET-007 — allowlisted degradation codes from the most recent pre-fetch (empty when healthy).
         self.last_warnings: list[str] = []
+        #: The shared authoritative agent channel (set by the adapter) — a pre-fetch total failure must
+        #: be visible on it, not only on ``last_warnings``.
+        self._status = status
         self._task: asyncio.Task[None] | None = None
+
+    def _publish(self, warnings: list[str]) -> None:
+        self.last_warnings = list(warnings)
+        if self._status is not None:
+            self._status.publish(self.last_warnings)
 
     async def on_user_utterance_segment(self, transcript_so_far: str) -> None:
         """Cancel any in-flight pre-fetch, then start a new one with
@@ -65,12 +78,12 @@ class SlowThinker:
             raise
         except Exception:
             log.warning("slow-thinker pre-fetch failed", exc_info=True)
-            # RET-007: a total pre-fetch failure is a visible impairment, not a silent no-op that leaves
-            # a stale status from the previous turn.
-            self.last_warnings = [RETRIEVAL_UNAVAILABLE]
+            # RET-007: a total pre-fetch failure is a visible impairment on the agent channel, not a
+            # silent no-op that leaves a stale status from the previous turn.
+            self._publish([RETRIEVAL_UNAVAILABLE])
             return
         warnings = response.get("warnings", []) if isinstance(response, dict) else []
-        self.last_warnings = warnings if isinstance(warnings, list) else []
+        self._publish(warnings if isinstance(warnings, list) else [])
         results = response.get("results", []) if isinstance(response, dict) else []
         # Cache the warnings WITH the results so a later Fast Talker cache-hit preserves the status.
         self.cache.put(transcript, results, ttl=self._cache_ttl_s, warnings=self.last_warnings)

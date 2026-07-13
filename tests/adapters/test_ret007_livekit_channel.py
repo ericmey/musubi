@@ -25,13 +25,13 @@ class _Client:
     """Minimal SDK stand-in whose ``retrieve`` returns a fixed dict or raises."""
 
     def __init__(self, response: Any = None, raises: bool = False) -> None:
-        self._response = response
-        self._raises = raises
+        self.response = response
+        self.raises = raises
 
     async def retrieve(self, **kwargs: Any) -> Any:
-        if self._raises:
+        if self.raises:
             raise RuntimeError("backend down")
-        return self._response
+        return self.response
 
 
 def _degraded(warnings: list[str]) -> dict[str, Any]:
@@ -97,17 +97,55 @@ async def test_slow_thinker_total_failure_is_visible() -> None:
     assert slow.last_warnings == [RETRIEVAL_UNAVAILABLE]
 
 
-def test_adapter_retrieval_status_is_the_consumer() -> None:
-    """The agent-facing consumer: ``LiveKitAdapter.retrieval_status`` reads the live Fast Talker
-    channel — so the degradation status is actually reachable, not a dead attribute."""
+async def test_slow_thinker_failure_visible_on_agent_channel() -> None:
+    """The REAL seam (Yua): a Slow Thinker total failure must reach the AGENT channel
+    (``adapter.retrieval_status``), not merely ``slow_thinker.last_warnings`` in isolation."""
     adapter = LiveKitAdapter(
-        client=_Client(),
+        client=_Client(raises=True),
         namespace="ns",
         artifact_namespace="ns/_shared/artifact",
         config=LiveKitAdapterConfig(),
     )
-    assert adapter.retrieval_status == []  # healthy at construction
-    adapter.fast_talker.last_warnings = ["plane_timeout_episodic"]
-    assert adapter.retrieval_status == ["plane_timeout_episodic"]
-    adapter.fast_talker.last_warnings = [RETRIEVAL_UNAVAILABLE]
+    await adapter.slow_thinker._prefetch(_QUERY)
+    assert adapter.retrieval_status == [RETRIEVAL_UNAVAILABLE], (
+        "a slow-thinker total failure must be visible on the agent-facing channel"
+    )
+
+
+async def test_agent_channel_current_turn_transitions() -> None:
+    """Current-turn semantics on the one authoritative channel: a slow failure is visible, then a
+    later healthy Fast Talker turn CLEARS it (no stale failure), and a degraded turn shows the codes."""
+    client = _Client(raises=True)
+    adapter = LiveKitAdapter(
+        client=client,
+        namespace="ns",
+        artifact_namespace="ns/_shared/artifact",
+        config=LiveKitAdapterConfig(),
+    )
+    await adapter.slow_thinker._prefetch(_QUERY)
     assert adapter.retrieval_status == [RETRIEVAL_UNAVAILABLE]
+
+    # recovery — a healthy fast turn on the shared channel clears the stale failure
+    client.raises = False
+    client.response = {"results": [], "warnings": []}
+    await adapter.fast_talker.get_context("a fresh unrelated query")
+    assert adapter.retrieval_status == [], "a healthy current turn must clear the stale failure"
+
+    # a subsequent degraded fast turn shows the bounded codes
+    client.response = {"results": [], "warnings": ["sparse_embedding_failed"]}
+    await adapter.fast_talker.get_context("another fresh query")
+    assert adapter.retrieval_status == ["sparse_embedding_failed"]
+
+
+async def test_adapter_retrieval_status_is_the_consumer() -> None:
+    """The agent-facing consumer: a real Fast Talker turn publishes onto ``retrieval_status`` — the
+    status is reachable through the actual retrieval path, not a directly-mutated dead attribute."""
+    adapter = LiveKitAdapter(
+        client=_Client(response=_degraded(["plane_timeout_episodic"])),
+        namespace="ns",
+        artifact_namespace="ns/_shared/artifact",
+        config=LiveKitAdapterConfig(),
+    )
+    assert adapter.retrieval_status == []  # nothing retrieved yet
+    await adapter.fast_talker.get_context(_QUERY)
+    assert adapter.retrieval_status == ["plane_timeout_episodic"]

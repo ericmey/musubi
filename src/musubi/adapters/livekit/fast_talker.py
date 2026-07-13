@@ -12,7 +12,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from musubi.adapters.livekit.cache import RETRIEVAL_UNAVAILABLE, ContextCache
+from musubi.adapters.livekit.cache import (
+    RETRIEVAL_UNAVAILABLE,
+    ContextCache,
+    RetrievalStatus,
+)
 
 log = logging.getLogger("musubi.adapters.livekit.fast_talker")
 
@@ -28,6 +32,7 @@ class FastTalker:
         cache: ContextCache,
         fast_limit: int = 5,
         match_threshold: float = 0.5,
+        status: RetrievalStatus | None = None,
     ) -> None:
         self.client = client
         self.namespace = namespace
@@ -37,6 +42,13 @@ class FastTalker:
         #: RET-007 — the allowlisted degradation codes from the most recent retrieval, surfaced so the
         #: agent can render a non-memory status message. Empty when the last retrieval was healthy.
         self.last_warnings: list[str] = []
+        #: The shared authoritative agent channel (set by the adapter). The Fast Talker drives the turn.
+        self._status = status
+
+    def _publish(self, warnings: list[str]) -> None:
+        self.last_warnings = list(warnings)
+        if self._status is not None:
+            self._status.publish(self.last_warnings)
 
     async def get_context(self, query_text: str) -> list[dict[str, Any]]:
         """Return retrieval results for the live query — cache first,
@@ -46,7 +58,7 @@ class FastTalker:
         if cached is not None:
             # RET-007: a cache-hit must reflect the CACHED degradation status, not a stale one from a
             # previous turn — the Slow Thinker stored the warnings alongside the results.
-            self.last_warnings = list(cached.warnings)
+            self._publish(list(cached.warnings))
             return cached.results
         try:
             response = await self.client.retrieve(
@@ -59,12 +71,12 @@ class FastTalker:
             log.warning("fast-talker fallback failed", exc_info=True)
             # RET-007: a total failure is VISIBLE on the agent-facing channel — never a silent [] that
             # leaves a stale "healthy" (or stale-degraded) status from the previous turn.
-            self.last_warnings = [RETRIEVAL_UNAVAILABLE]
+            self._publish([RETRIEVAL_UNAVAILABLE])
             return []
         if not isinstance(response, dict):
-            self.last_warnings = [RETRIEVAL_UNAVAILABLE]
+            self._publish([RETRIEVAL_UNAVAILABLE])
             return []
         warnings = response.get("warnings", [])
-        self.last_warnings = warnings if isinstance(warnings, list) else []
+        self._publish(warnings if isinstance(warnings, list) else [])
         results = response.get("results", [])
         return results if isinstance(results, list) else []
