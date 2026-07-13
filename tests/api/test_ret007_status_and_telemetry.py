@@ -28,6 +28,16 @@ class DefectStillPresent(Exception):
     """Raised when the current code still exhibits the contract-forbidden defect."""
 
 
+class _FakeWarning:
+    """A structured stand-in for the accepted internal ``RetrievalWarning(code, plane)`` — NOT a bare
+    string. The router dedupes/counts by ``(code, plane)``; feeding structured warnings keeps the
+    telemetry red about CARDINALITY, not fixture shape (a correct router may ignore bare strings)."""
+
+    def __init__(self, code: str, plane: str) -> None:
+        self.code = code
+        self.plane = plane
+
+
 def _app(monkeypatch: pytest.MonkeyPatch, api_settings: Settings) -> TestClient:
     from musubi.api.app import create_app
     from musubi.api.dependencies import (
@@ -137,7 +147,11 @@ def test_telemetry_per_request_cardinality(
                 self.results: list[Any] = [
                     {"plane": "episodic", "object_id": "1", "namespace": "test/ns", "score": 1.0}
                 ]
-                self.warnings = ["plane_timeout_episodic", "plane_timeout_episodic"]
+                # two STRUCTURED warnings with the SAME (code, plane) — the router must dedupe to +1
+                self.warnings = [
+                    _FakeWarning("plane_timeout_episodic", "episodic"),
+                    _FakeWarning("plane_timeout_episodic", "episodic"),
+                ]
 
             def __iter__(self) -> Any:
                 return iter(self.results)
@@ -172,5 +186,11 @@ def test_telemetry_per_request_cardinality(
 
     err_after = _snapshot("musubi_retrieval_errors_total") or {}
     ekey = tuple({"kind": "timeout"}[n] for n in _labelnames("musubi_retrieval_errors_total"))
-    edelta = err_after.get(ekey, 0.0) - err_before.get(ekey, 0.0)
-    assert edelta == 1.0, f"expected exactly +1 for errors_total{ekey}, got {edelta}"
+    err_moved = {
+        k: err_after.get(k, 0.0) - err_before.get(k, 0.0)
+        for k in set(err_after) | set(err_before)
+        if err_after.get(k, 0.0) - err_before.get(k, 0.0) != 0.0
+    }
+    assert err_moved == {ekey: 1.0}, (
+        f"expected exactly +1 for errors_total{ekey} and no other kind moving; got {err_moved}"
+    )
