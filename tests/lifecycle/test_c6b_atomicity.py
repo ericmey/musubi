@@ -2767,14 +2767,14 @@ def _check_r16(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         )  # B valid lease
         _set_outbox(d, others[1], next_attempt_epoch=T + 1_000.0)  # C not-due
         rep = coord.reconcile_once()
-        if rep.claimed != 1:
+        if rep.claimed != 1:  # report_claimed_as_selected fails HERE (the claimed element only)
             raise DefectStillPresent(
                 f"R16 `claimed` must count SUCCESSFUL guarded claims (1), not scanned rows; got {rep.claimed}"
             )
-        if (rep.finalized, rep.pending, rep.abandoned) != (1, 0, 0):
+        if (rep.finalized, rep.pending, rep.abandoned, rep.failed) != (1, 0, 0, 0):
             raise DefectStillPresent(
-                f"R16 mixed batch: exactly finalized=1/pending=0/abandoned=0; got "
-                f"{(rep.finalized, rep.pending, rep.abandoned)}"
+                f"R16 mixed batch report must be exactly finalized=1/pending=0/abandoned=0/failed=0; got "
+                f"{(rep.finalized, rep.pending, rep.abandoned, rep.failed)}"
             )
         if _outbox_field(d, others[0], "lease_owner") != "other-worker":
             raise DefectStillPresent(
@@ -2885,6 +2885,76 @@ def _check_r16(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     finally:
         c.close()
 
+    # (7) termination / lease-clearing matrix: every HANDLED disposition clears BOTH lease columns in the
+    #     SAME owner-guarded state/attempt/schedule transaction; a CRASH preserves the reclaimable lease.
+    def _tup(dd: Path, k: str) -> tuple[Any, ...]:
+        return tuple(
+            _outbox_field(dd, k, f)
+            for f in (
+                "state",
+                "attempts",
+                "next_attempt_epoch",
+                "failure_class",
+                "lease_owner",
+                "lease_expires_epoch",
+            )
+        )
+
+    cases = (
+        # (name, inject-fail-exc-or-None, expected full tuple after reconcile)
+        ("success", None, ("FINAL", 1, None, None, None, None)),
+        ("transient", _TransientQdrantError("t"), ("PENDING", 1, T + 1.0, "transient", None, None)),
+        ("unknown", _UnknownQdrantError("?"), ("PENDING", 1, T + 1.0, "unknown", None, None)),
+        ("terminal", _TerminalQdrantError("x"), ("ABANDONED", 1, None, "terminal", None, None)),
+    )
+    for name, exc, want in cases:
+        c, s, d = _make_env(base / f"r16-term-{name}")
+        try:
+            coord = _coordinator(c, d)
+            coord._now = lambda: T
+            _r16_pending(coord, c, s, f"op-{name}")
+            if exc is not None:
+                _fail_set_payload(c, exc)
+            coord.reconcile_once()
+            got = _tup(d, f"op-{name}")
+            if got != want:
+                raise DefectStillPresent(f"R16 {name} disposition tuple must be {want}, got {got}")
+        finally:
+            _restore_set_payload(c)
+            c.close()
+
+    # crash after claim / pre-Qdrant: state/attempts/schedule unchanged, owner + FINITE expiry retained.
+    c, s, d = _make_env(base / "r16-term-crash")
+    try:
+        coord = _coordinator(c, d, lease_ttl=30.0)
+        coord._now = lambda: T
+        _r16_pending(coord, c, s, "op-crash")
+
+        def _crash(name: str) -> None:
+            if name == "after_claim_before_qdrant":
+                raise RuntimeError("simulated crash after claim, before Qdrant")
+
+        coord._checkpoint = _crash
+        with suppress(RuntimeError):
+            coord.reconcile_once()
+        st, att, nxt, fc, owner, exp = _tup(d, "op-crash")
+        if (st, att, nxt, fc) != ("PENDING", 0, None, None):
+            raise DefectStillPresent(
+                f"R16 crash-after-claim must leave state/attempts/schedule unchanged, got {(st, att, nxt, fc)}"
+            )
+        if (
+            owner is None
+            or exp is None
+            or not math.isfinite(float(exp))
+            or not (T < float(exp) <= T + 30.0 + 1e-6)
+        ):
+            raise DefectStillPresent(
+                f"R16 crash-after-claim must RETAIN the reclaimable lease (owner + finite expiry in the "
+                f"TTL window), got owner={owner} expiry={exp}"
+            )
+    finally:
+        c.close()
+
 
 _R16_RACE_WIN = (
     61  # this process won the guarded claim (exits at the post-claim/pre-Qdrant barrier)
@@ -2917,14 +2987,23 @@ def _r16_race_child_source(*, mode: str, db_path: Path, opk: str, barrier_dir: P
         + "with warnings.catch_warnings():\n"
         "    warnings.simplefilter('ignore')\n"
         "    _client = QdrantClient(':memory:')\n"
+        "_calls = {'n': 0}\n"
+        "_orig_sp = _client.set_payload\n"
+        "def _sp(*a, **k):\n"
+        "    _calls['n'] += 1\n"
+        "    return _orig_sp(*a, **k)\n"
+        "_client.set_payload = _sp\n"
+        "def _write_count():\n"
+        "    open(_os.path.join(_bd, 'count.' + str(_os.getpid())), 'w').write(str(_calls['n']))\n"
         f"_c = _Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})\n"
         "def _cp(name):\n"
         "    if name == 'before_claim': _await_before_claim()\n"
         "    if name == 'after_claim_check_before_write': _await_claim2()\n"
-        f"    if name == 'after_claim_before_qdrant': os._exit({_R16_RACE_WIN})\n"
+        "    if name == 'after_claim_before_qdrant':\n"
+        f"        _write_count(); os._exit({_R16_RACE_WIN})\n"
         "_c._checkpoint = _cp\n"
         "_c.reconcile_once()\n"
-        f"os._exit({_R16_RACE_LOSE})\n"
+        f"_write_count(); os._exit({_R16_RACE_LOSE})\n"
     )
 
 
@@ -2946,10 +3025,8 @@ def _check_r16_race(base: Path) -> None:
     opk = _fill_outbox(db_path, collection, pending=1, tag="race16")[
         0
     ]  # one due, unleased PENDING row
-    before = tuple(
-        _outbox_field(db_path, opk, f)
-        for f in ("state", "attempts", "next_attempt_epoch", "lease_owner")
-    )
+    fields = ("state", "attempts", "next_attempt_epoch", "lease_owner", "lease_expires_epoch")
+    before = tuple(_outbox_field(db_path, opk, f) for f in fields)
     procs = [
         subprocess.Popen(
             [
@@ -2963,22 +3040,21 @@ def _check_r16_race(base: Path) -> None:
         for _ in range(2)
     ]
     codes = [p.wait(timeout=90) for p in procs]
+    parent_now = time.time()
     if sorted(codes) != [_R16_RACE_WIN, _R16_RACE_LOSE]:
         raise DefectStillPresent(
             f"exactly ONE worker must claim (WIN) and one lose (LOSE); got exit codes {codes} "
             f"(two {_R16_RACE_WIN} = both claimed = a non-atomic check-then-update)"
         )
-    owner = _outbox_field(db_path, opk, "lease_owner")
-    if owner is None:
-        raise DefectStillPresent("R16 after the race the row must hold EXACTLY the winner's lease")
-    after = tuple(
-        _outbox_field(db_path, opk, f) for f in ("state", "attempts", "next_attempt_epoch")
-    )
-    if after != before[:3]:
+    # exact per-child Qdrant attempt counts (measured, not proxied): both must be 0 (winner exits
+    # pre-Qdrant; loser never claims). Plus exactly zero events.
+    counts = [
+        int(f.read_text().strip()) for f in barrier_dir.iterdir() if f.name.startswith("count.")
+    ]
+    if len(counts) != 2 or any(n != 0 for n in counts):
         raise DefectStillPresent(
-            f"R16 the loser must change NOTHING beyond the winner's claim: {before[:3]} -> {after}"
+            f"R16 race: each child must make EXACTLY zero Qdrant mutations; got counts {counts}"
         )
-    events = 0
     con = sqlite3.connect(str(db_path))
     try:
         events = con.execute("SELECT COUNT(*) FROM lifecycle_events").fetchone()[0]
@@ -2987,6 +3063,27 @@ def _check_r16_race(base: Path) -> None:
     if events != 0:
         raise DefectStillPresent(
             "R16 the winner exits pre-Qdrant; no FINAL event may exist after the race"
+        )
+    # exact before/after 5-field snapshot: only the winner's claim changes owner+expiry; state/attempts/
+    # next_attempt stay value-identical; owner is fresh/non-null; expiry is finite and inside the TTL window.
+    after = tuple(_outbox_field(db_path, opk, f) for f in fields)
+    if after[:3] != before[:3]:
+        raise DefectStillPresent(
+            f"R16 the loser must not change state/attempts/next_attempt: {before[:3]} -> {after[:3]}"
+        )
+    owner, exp = after[3], after[4]
+    if owner is None or before[3] is not None:
+        raise DefectStillPresent(
+            "R16 after the race exactly the winner's fresh, non-null owner must be set"
+        )
+    if (
+        exp is None
+        or not math.isfinite(float(exp))
+        or not (parent_now < float(exp) <= parent_now + DEFAULT_LEASE_TTL + 1.0)
+    ):
+        raise DefectStillPresent(
+            f"R16 the winner's lease expiry must be FINITE and inside the TTL window "
+            f"(now {parent_now} < expiry <= now+{DEFAULT_LEASE_TTL}); got {exp}"
         )
 
 
