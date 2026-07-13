@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
 
 from musubi.types.common import LifecycleState
 
@@ -92,11 +92,14 @@ class RankedScoreComponents(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    relevance: Annotated[float, Field(ge=0.0, le=1.0)]
-    recency: Annotated[float, Field(ge=0.0, le=1.0)]
-    importance: Annotated[float, Field(ge=0.0, le=1.0)]
-    provenance: Annotated[float, Field(ge=0.0, le=1.0)]
-    reinforcement: Annotated[float, Field(ge=0.0, le=1.0)]
+    # `StrictFloat` rejects str (e.g. "0.1") and bool (e.g. True)
+    # per Yua 2026-07-13 12:45:46 #2: "use strict numeric validation
+    # (accept real int/float as intended, reject str/bool/coercion)".
+    relevance: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
+    recency: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
+    importance: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
+    provenance: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
+    reinforcement: Annotated[StrictFloat, Field(ge=0.0, le=1.0)]
 
 
 class RecentScoreComponents(BaseModel):
@@ -123,11 +126,20 @@ class RankedExtra(BaseModel):
 
 
 class RecentExtra(BaseModel):
-    """Typed `extra` for recent rows: `score_components: RecentScoreComponents` (exact `{}`) plus `lineage`."""
+    """Typed `extra` for recent rows: `score_components: RecentScoreComponents` (exact `{}`) plus `lineage`.
+
+    `score_components` is REQUIRED (no default) so OpenAPI lists it
+    in the `required` set; a missing input fails the Pydantic model
+    validation (per Yua 2026-07-13 12:45:46 #3: "RecentExtra.score_components
+    has a default_factory, so missing input fabricates `{}` and
+    OpenAPI does not require it. Make it required; assert missing
+    and nonempty both reject, and required set includes
+    score_components.").
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    score_components: RecentScoreComponents = Field(default_factory=RecentScoreComponents)
+    score_components: RecentScoreComponents
     lineage: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -160,7 +172,10 @@ class RankedResultRow(BaseModel):
     # 422; per spec §4.6 invalid source semantics). The
     # `Annotated[..., Field(...)]` form (no default arg) keeps the
     # field REQUIRED in OpenAPI while still allowing `null`.
-    importance: Annotated[int | None, Field(ge=1, le=10)]
+    # `StrictInt` rejects str (e.g. "7") and bool (e.g. True) per
+    # Yua 2026-07-13 12:45:46 #2: "use strict numeric validation
+    # (accept real int/float as intended, reject str/bool/coercion)".
+    importance: Annotated[StrictInt | None, Field(ge=1, le=10)]
     score_kind: Literal["ranked_combined"]
     extra: RankedExtra
     title: str | None = None
@@ -189,17 +204,31 @@ class RecentResultRow(BaseModel):
     state: LifecycleState | None
     # importance: required-nullable (no default=) with int 1..10 when
     # present. See `RankedResultRow.importance` for the rationale.
-    importance: Annotated[int | None, Field(ge=1, le=10)]
+    # `StrictInt` rejects str/bool per Yua 12:45:46 #2.
+    importance: Annotated[StrictInt | None, Field(ge=1, le=10)]
     score_kind: Literal["created_epoch"]
-    provenance_score: float | None
+    # provenance_score: required-nullable float in [0.0, 1.0] when
+    # present. `StrictFloat` rejects str/bool per Yua 12:45:46 #2:
+    # "bound recent provenance_score 0..1 if non-null".
+    provenance_score: Annotated[StrictFloat | None, Field(ge=0.0, le=1.0)]
     extra: RecentExtra
     title: str | None = None
 
 
 class _RetrieveResponseBase(BaseModel):
-    """Shared base for the two top-level response variants."""
+    """Shared base for the two top-level response variants.
 
-    results: list[RankedResultRow | RecentResultRow]
+    NOTE: ``results`` is intentionally NOT declared here — each variant
+    declares its own concrete row type (RankedResultRow OR
+    RecentResultRow). Per Yua 2026-07-13 12:45:46 #1: the contract
+    requires ranked `results: list[RankedResultRow]` and recent
+    `results: list[RecentResultRow]`. A `Union[RankedResultRow,
+    RecentResultRow]` in a shared base would let OpenAPI show
+    `anyOf` both row types in BOTH variants (and let a recent
+    response smuggle a ranked row in, or vice versa). The
+    concrete-typed list is the discriminated contract.
+    """
+
     limit: int
     #: RET-007 — additive, default-empty. Bounded degradation codes
     #: surfaced from a degraded 200 so clients can tell degraded from
@@ -211,21 +240,31 @@ class RankedRetrieveResponse(_RetrieveResponseBase):
     """Top-level response for mode in {fast, deep, blended}.
 
     `mode` is the top-level discriminator (rows do NOT carry `mode`).
-    FastAPI emits this as one of the two variants in the response's
-    oneOf at `/v1/openapi.json`.
+    The results list is concrete `list[RankedResultRow]` — NOT a
+    Union — so a recent row cannot be smuggled into a ranked
+    response (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema
+    is a list of `RankedResultRow`, not an `anyOf` of both row types.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["fast", "deep", "blended"]
+    results: list[RankedResultRow]
 
 
 class RecentRetrieveResponse(_RetrieveResponseBase):
-    """Top-level response for mode='recent'."""
+    """Top-level response for mode='recent'.
+
+    The results list is concrete `list[RecentResultRow]` — NOT a
+    Union — so a ranked row cannot be smuggled into a recent
+    response (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema
+    is a list of `RecentResultRow`, not an `anyOf` of both row types.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     mode: Literal["recent"]
+    results: list[RecentResultRow]
 
 
 # Public alias for the discriminated union. We use Pydantic's

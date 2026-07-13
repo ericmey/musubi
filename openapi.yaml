@@ -2540,13 +2540,6 @@ components:
         \u2192 null)."
     RankedRetrieveResponse:
       properties:
-        results:
-          items:
-            anyOf:
-            - $ref: '#/components/schemas/RankedResultRow'
-            - $ref: '#/components/schemas/RecentResultRow'
-          type: array
-          title: Results
         limit:
           type: integer
           title: Limit
@@ -2562,21 +2555,22 @@ components:
           - deep
           - blended
           title: Mode
+        results:
+          items:
+            $ref: '#/components/schemas/RankedResultRow'
+          type: array
+          title: Results
       additionalProperties: false
       type: object
       required:
-      - results
       - limit
       - mode
+      - results
       title: RankedRetrieveResponse
-      description: 'Top-level response for mode in {fast, deep, blended}.
-
-
-        `mode` is the top-level discriminator (rows do NOT carry `mode`).
-
-        FastAPI emits this as one of the two variants in the response''s
-
-        oneOf at `/v1/openapi.json`.'
+      description: "Top-level response for mode in {fast, deep, blended}.\n\n`mode` is the top-level discriminator (rows do\
+        \ NOT carry `mode`).\nThe results list is concrete `list[RankedResultRow]` \u2014 NOT a\nUnion \u2014 so a recent\
+        \ row cannot be smuggled into a ranked\nresponse (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema\nis a list of\
+        \ `RankedResultRow`, not an `anyOf` of both row types."
     RankedScoreComponents:
       properties:
         relevance:
@@ -2627,8 +2621,25 @@ components:
           title: Lineage
       additionalProperties: false
       type: object
+      required:
+      - score_components
       title: RecentExtra
-      description: 'Typed `extra` for recent rows: `score_components: RecentScoreComponents` (exact `{}`) plus `lineage`.'
+      description: 'Typed `extra` for recent rows: `score_components: RecentScoreComponents` (exact `{}`) plus `lineage`.
+
+
+        `score_components` is REQUIRED (no default) so OpenAPI lists it
+
+        in the `required` set; a missing input fails the Pydantic model
+
+        validation (per Yua 2026-07-13 12:45:46 #3: "RecentExtra.score_components
+
+        has a default_factory, so missing input fabricates `{}` and
+
+        OpenAPI does not require it. Make it required; assert missing
+
+        and nonempty both reject, and required set includes
+
+        score_components.").'
     RecentResultRow:
       properties:
         object_id:
@@ -2673,6 +2684,8 @@ components:
         provenance_score:
           anyOf:
           - type: number
+            maximum: 1.0
+            minimum: 0.0
           - type: 'null'
           title: Provenance Score
         extra:
@@ -2702,13 +2715,6 @@ components:
         \ are present on every row but the value may\nbe `null` for missing-legacy rows."
     RecentRetrieveResponse:
       properties:
-        results:
-          items:
-            anyOf:
-            - $ref: '#/components/schemas/RankedResultRow'
-            - $ref: '#/components/schemas/RecentResultRow'
-          type: array
-          title: Results
         limit:
           type: integer
           title: Limit
@@ -2721,14 +2727,21 @@ components:
           type: string
           const: recent
           title: Mode
+        results:
+          items:
+            $ref: '#/components/schemas/RecentResultRow'
+          type: array
+          title: Results
       additionalProperties: false
       type: object
       required:
-      - results
       - limit
       - mode
+      - results
       title: RecentRetrieveResponse
-      description: Top-level response for mode='recent'.
+      description: "Top-level response for mode='recent'.\n\nThe results list is concrete `list[RecentResultRow]` \u2014 NOT\
+        \ a\nUnion \u2014 so a ranked row cannot be smuggled into a recent\nresponse (per Yua 2026-07-13 12:45:46 #1). The\
+        \ OpenAPI schema\nis a list of `RecentResultRow`, not an `anyOf` of both row types."
     RecentScoreComponents:
       properties: {}
       additionalProperties: false

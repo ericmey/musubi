@@ -71,7 +71,7 @@ def _reference_recent() -> RecentResultRow:
         importance=7,
         score_kind="created_epoch",
         provenance_score=0.5,
-        extra=RecentExtra(),
+        extra=RecentExtra(score_components=RecentScoreComponents()),
     )
 
 

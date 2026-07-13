@@ -447,7 +447,15 @@ async def retrieve(
     # The envelope's warnings are already deduped, fail-closed (allowlisted only), and counted at the
     # orchestration boundary — the router just flattens the bounded codes onto the wire.
     envelope = orchestration_result.value
-    rows: list[RankedResultRow | RecentResultRow] = []
+    # Per Yua 2026-07-13 12:45:46 #1: the response variants have
+    # CONCRETE row types (list[RankedResultRow] for ranked;
+    # list[RecentResultRow] for recent). The router builds the
+    # appropriate list per mode so the response construction type-
+    # checks each row against the right model.
+    if body.mode == "recent":
+        recent_rows: list[RecentResultRow] = []
+    else:
+        ranked_rows: list[RankedResultRow] = []
     for hit in envelope.results:
         if body.mode == "recent":
             # Recent row: exact empty `score_components: {}` (typed
@@ -460,7 +468,7 @@ async def retrieve(
                 score_components=RecentScoreComponents(),
                 lineage=hit.lineage,
             )
-            rows.append(
+            recent_rows.append(
                 RecentResultRow(
                     object_id=hit.object_id,
                     score=hit.score,
@@ -495,7 +503,7 @@ async def retrieve(
                 score_components=ranked_components,
                 lineage=hit.lineage,
             )
-            rows.append(
+            ranked_rows.append(
                 RankedResultRow(
                     object_id=hit.object_id,
                     score=hit.score,
@@ -512,13 +520,13 @@ async def retrieve(
 
     if body.mode == "recent":
         return RecentRetrieveResponse(
-            results=rows[: body.limit],
+            results=recent_rows[: body.limit],
             mode="recent",
             limit=body.limit,
             warnings=[warning.code for warning in envelope.warnings],
         )
     return RankedRetrieveResponse(
-        results=rows[: body.limit],
+        results=ranked_rows[: body.limit],
         mode=body.mode,
         limit=body.limit,
         warnings=[warning.code for warning in envelope.warnings],

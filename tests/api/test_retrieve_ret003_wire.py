@@ -73,6 +73,14 @@ from fastapi.testclient import TestClient
 from httpx import Response
 from qdrant_client import QdrantClient, models
 
+from musubi.api.responses import (
+    RankedExtra,
+    RankedResultRow,
+    RankedScoreComponents,
+    RecentExtra,
+    RecentResultRow,
+    RecentScoreComponents,
+)
 from musubi.planes.episodic.plane import episodic_point_id
 from musubi.store.names import collection_for_plane
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
@@ -1303,15 +1311,22 @@ def test_runtime_vs_snapshot_openapi_schema_parity(client: TestClient) -> None:
         )
 
 
-def test_hermes_wire_conformance_passthrough_shape() -> None:
-    """The wire shape preserves the fields the Hermes adapter must pass through.
+def test_musubi_wire_readiness_passthrough_shape() -> None:
+    """The Musubi wire shape preserves the fields the Hermes adapter must pass through.
+
+    Per Yua 2026-07-13 12:45:46 #5: the actual Hermes user plugin
+    (at /Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py)
+    has its OWN transform keep-list. This test is the **Musubi
+    wire-readiness** check — it loads the runtime response models
+    and asserts the shape is exactly what the Hermes plugin must
+    surface to its JSON callers. The actual plugin transform is
+    tested separately in /Users/ericmey/Vaults/fleet-tools (additive
+    branch on main; see commit history).
 
     Per Yua 2026-07-13 12:24:42 ("add the already-required Hermes
-    JSON pass-through conformance") and the spec's Hermes closeout
-    gate: the wire must surface, for every ranked row, the fields the
-    Hermes adapter (per the user plugin at
-    /Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py)
-    must pass through without fabrication:
+    JSON pass-through conformance"), the wire must surface, for every
+    ranked row, the fields the Hermes adapter must pass through
+    without fabrication:
 
       - top-level `state` (LifecycleState enum, 7 values, nullable for missing legacy)
       - top-level `importance` (int 1..10, nullable for missing legacy)
@@ -1385,7 +1400,7 @@ def test_hermes_wire_conformance_passthrough_shape() -> None:
         importance=7,
         score_kind="created_epoch",
         provenance_score=0.5,
-        extra=RecentExtra(),
+        extra=RecentExtra(score_components=RecentScoreComponents()),
     )
     dumped_recent = recent_row.model_dump()
     assert dumped_recent["score_kind"] == "created_epoch"
@@ -1406,3 +1421,304 @@ def test_hermes_wire_conformance_passthrough_shape() -> None:
     assert recent_resp.model_dump()["mode"] == "recent"
     # RecentScoreComponents is exactly {}.
     assert RecentScoreComponents().model_dump() == {}
+
+
+# =====================================================================
+# SECTION 8 — Yua 2026-07-13 12:45:46 WITHHOLD corrections
+#                #1 response variants; #2 strict numeric; #3 required score_components;
+#                #4 parity equality
+# =====================================================================
+
+
+def test_ranked_response_rejects_recent_row_mutation() -> None:
+    """RankedRetrieveResponse.results: list[RankedResultRow] REJECTS a RecentResultRow.
+
+    Per Yua 2026-07-13 12:45:46 #1: "Contract requires ranked
+    results:list[RankedResultRow], recent results:list[RecentResultRow].
+    Add exact ref tests + wrong-row rejection." A recent row
+    smuggled into a ranked response must FAIL the Pydantic validation.
+    """
+    from pydantic import ValidationError
+
+    from musubi.api.responses import RankedRetrieveResponse, RecentResultRow
+
+    recent_row = RecentResultRow(
+        object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+        namespace="eric/claude-code/episodic",
+        plane="episodic",
+        score=1783957804.0,
+        content="snippet",
+        state="matured",
+        importance=7,
+        score_kind="created_epoch",
+        provenance_score=0.5,
+        extra=RecentExtra(score_components=RecentScoreComponents()),
+    )
+    # The recent row's score_kind is "created_epoch", NOT
+    # "ranked_combined". A RankedRetrieveResponse that accepts this
+    # row would violate the contract.
+    with pytest.raises(ValidationError):
+        RankedRetrieveResponse(
+            mode="fast",
+            results=[recent_row],  # type: ignore[list-item]
+            limit=5,
+        )
+
+
+def test_recent_response_rejects_ranked_row_mutation() -> None:
+    """RecentRetrieveResponse.results: list[RecentResultRow] REJECTS a RankedResultRow.
+
+    Per Yua 2026-07-13 12:45:46 #1. A ranked row smuggled into a
+    recent response must FAIL the Pydantic validation.
+    """
+    from pydantic import ValidationError
+
+    from musubi.api.responses import RankedResultRow, RecentRetrieveResponse
+
+    ranked_row = RankedResultRow(
+        object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+        namespace="eric/claude-code/episodic",
+        plane="episodic",
+        score=0.875,
+        content="snippet",
+        state="matured",
+        importance=7,
+        score_kind="ranked_combined",
+        extra=RankedExtra(
+            score_components=RankedScoreComponents(
+                relevance=1.0,
+                recency=1.0,
+                importance=0.7,
+                provenance=0.5,
+                reinforcement=0.0,
+            ),
+        ),
+    )
+    # The ranked row's score_kind is "ranked_combined", NOT
+    # "created_epoch". A RecentRetrieveResponse that accepts this row
+    # would violate the contract.
+    with pytest.raises(ValidationError):
+        RecentRetrieveResponse(
+            mode="recent",
+            results=[ranked_row],  # type: ignore[list-item]
+            limit=5,
+        )
+
+
+def test_ranked_importance_rejects_str_coercion_mutation() -> None:
+    """RankedResultRow.importance REJECTS str "7" (coerced to 7) and bool True.
+
+    Per Yua 2026-07-13 12:45:46 #2: "importance="7" coerces to 7;
+    score component "0.1" coerces to float. Use strict numeric
+    validation (accept real int/float as intended, reject
+    str/bool/coercion) and mutation proofs." StrictInt rejects
+    str/bool; real int passes.
+    """
+    from pydantic import ValidationError
+
+    # str "7" is REJECTED (Pydantic would coerce by default; StrictInt
+    # rejects it per Yua #2).
+    with pytest.raises(ValidationError):
+        RankedResultRow(
+            object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            score=0.875,
+            content="snippet",
+            state="matured",
+            importance="7",  # type: ignore[arg-type]
+            score_kind="ranked_combined",
+            extra=RankedExtra(
+                score_components=RankedScoreComponents(
+                    relevance=1.0,
+                    recency=1.0,
+                    importance=0.7,
+                    provenance=0.5,
+                    reinforcement=0.0,
+                ),
+            ),
+        )
+    # bool True is REJECTED (True is technically an int in Python;
+    # StrictInt rejects it).
+    with pytest.raises(ValidationError):
+        RankedResultRow(
+            object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            score=0.875,
+            content="snippet",
+            state="matured",
+            importance=True,
+            score_kind="ranked_combined",
+            extra=RankedExtra(
+                score_components=RankedScoreComponents(
+                    relevance=1.0,
+                    recency=1.0,
+                    importance=0.7,
+                    provenance=0.5,
+                    reinforcement=0.0,
+                ),
+            ),
+        )
+    # Reference: real int 7 passes.
+    ref = RankedResultRow(
+        object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+        namespace="eric/claude-code/episodic",
+        plane="episodic",
+        score=0.875,
+        content="snippet",
+        state="matured",
+        importance=7,
+        score_kind="ranked_combined",
+        extra=RankedExtra(
+            score_components=RankedScoreComponents(
+                relevance=1.0,
+                recency=1.0,
+                importance=0.7,
+                provenance=0.5,
+                reinforcement=0.0,
+            ),
+        ),
+    )
+    assert ref.importance == 7
+
+
+def test_ranked_score_component_rejects_str_coercion_mutation() -> None:
+    """RankedScoreComponents values REJECT str "0.1" and bool True; accept real float.
+
+    Per Yua 2026-07-13 12:45:46 #2: "score component "0.1" coerces
+    to float. Use strict numeric validation (accept real int/float
+    as intended, reject str/bool/coercion)."
+    """
+    from pydantic import ValidationError
+
+    # str "0.1" is REJECTED.
+    with pytest.raises(ValidationError):
+        RankedScoreComponents(
+            relevance="0.1",  # type: ignore[arg-type]
+            recency=1.0,
+            importance=0.7,
+            provenance=0.5,
+            reinforcement=0.0,
+        )
+    # bool True is REJECTED.
+    with pytest.raises(ValidationError):
+        RankedScoreComponents(
+            relevance=True,
+            recency=1.0,
+            importance=0.7,
+            provenance=0.5,
+            reinforcement=0.0,
+        )
+    # Reference: real float 0.1 passes.
+    ref = RankedScoreComponents(
+        relevance=0.1,
+        recency=1.0,
+        importance=0.7,
+        provenance=0.5,
+        reinforcement=0.0,
+    )
+    assert ref.relevance == 0.1
+
+
+def test_recent_provenance_score_bounded_mutation() -> None:
+    """RecentResultRow.provenance_score REJECTS values outside [0.0, 1.0] and rejects str/bool.
+
+    Per Yua 2026-07-13 12:45:46 #2: "bound recent provenance_score
+    0..1 if non-null." Also rejects str (StrictFloat).
+    """
+    from pydantic import ValidationError
+
+    # Out of range (negative).
+    with pytest.raises(ValidationError):
+        RecentResultRow(
+            object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            score=1783957804.0,
+            content="snippet",
+            state="matured",
+            importance=7,
+            score_kind="created_epoch",
+            provenance_score=-0.1,  # out of [0, 1]
+            extra=RecentExtra(score_components=RecentScoreComponents()),
+        )
+    # Out of range (>1.0).
+    with pytest.raises(ValidationError):
+        RecentResultRow(
+            object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            score=1783957804.0,
+            content="snippet",
+            state="matured",
+            importance=7,
+            score_kind="created_epoch",
+            provenance_score=1.5,  # out of [0, 1]
+            extra=RecentExtra(score_components=RecentScoreComponents()),
+        )
+    # str is REJECTED (StrictFloat).
+    with pytest.raises(ValidationError):
+        RecentResultRow(
+            object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            score=1783957804.0,
+            content="snippet",
+            state="matured",
+            importance=7,
+            score_kind="created_epoch",
+            provenance_score="0.5",  # type: ignore[arg-type]
+            extra=RecentExtra(score_components=RecentScoreComponents()),
+        )
+    # Reference: real float 0.5 passes.
+    ref = RecentResultRow(
+        object_id="3GSGzQauqzXNPstBMJw3hcIV0yd",
+        namespace="eric/claude-code/episodic",
+        plane="episodic",
+        score=1783957804.0,
+        content="snippet",
+        state="matured",
+        importance=7,
+        score_kind="created_epoch",
+        provenance_score=0.5,
+        extra=RecentExtra(score_components=RecentScoreComponents()),
+    )
+    assert ref.provenance_score == 0.5
+
+
+def test_recent_extra_score_components_required_mutation() -> None:
+    """RecentExtra.score_components is REQUIRED; missing input REJECTS.
+
+    Per Yua 2026-07-13 12:45:46 #3: "RecentExtra.score_components
+    has a default_factory, so missing input fabricates `{}` and
+    OpenAPI does not require it. Make it required; assert missing
+    and nonempty both reject, and required set includes
+    score_components."
+
+    RecentExtra REQUIRES score_components (no default_factory).
+    Missing `score_components` REJECTS; non-empty input REJECTS (the
+    typed `RecentScoreComponents` is `extra=forbid`); `{}` is the
+    ONLY valid value.
+    """
+    from pydantic import ValidationError
+
+    # Missing: REJECTS.
+    with pytest.raises(ValidationError):
+        RecentExtra()  # type: ignore[call-arg]
+
+    # Empty `{}`: ACCEPTS.
+    extra_empty = RecentExtra(score_components=RecentScoreComponents())
+    assert extra_empty.model_dump() == {"score_components": {}, "lineage": {}}
+
+    # Non-empty input: REJECTS (RecentScoreComponents is extra=forbid).
+    with pytest.raises(ValidationError):
+        RecentExtra(score_components=RecentScoreComponents.model_validate({"relevance": 0.0}))
+
+    # OpenAPI required set: assert the generated schema lists
+    # score_components in `required`. Tested in the openapi tests
+    # but assert here too for directness.
+    schema = RecentExtra.model_json_schema()
+    assert "score_components" in schema.get("required", []), (
+        f"RecentExtra required must include score_components; got {schema.get('required')}"
+    )
