@@ -69,12 +69,19 @@ def test_cross_tenant_must_not_replay(client: TestClient, api_settings, valid_to
     # tenant B: a VALID token for a DIFFERENT presence with no access to A's namespace
     tenant_b = mint_token(api_settings, scopes=["mallory/evil/episodic:rw"],
                           presence="mallory/evil")
+    prime = client.post(CAPTURE, json=body,
+                        headers={"Authorization": f"Bearer {valid_token}", IDEM: key})
+    leaked_id = prime.json().get("object_id") if prime.headers.get("content-type","").startswith("application/json") else None
     r = client.post(CAPTURE, json=body,
                     headers={"Authorization": f"Bearer {tenant_b}", IDEM: key})
-    # SECURE: B must NOT receive A's cached result; at most it is authorized on its own
-    # namespace, and A's (key, body) is not B's to replay.
-    assert r.headers.get("X-Idempotent-Replay") != "true", (
-        "cross-tenant idempotent replay: tenant B received tenant A's cached response")
+    # SECURE (Yua): cross-tenant replay must be REFUSED (403), and must not DISCLOSE A's
+    # cached body — absence of the replay header alone is not enough; the object_id and
+    # body of A's write must not reach B.
+    assert r.status_code == 403, (
+        f"cross-tenant replay returned {r.status_code} — B was authorized on A's write")
+    assert r.headers.get("X-Idempotent-Replay") != "true"
+    if leaked_id is not None:
+        assert leaked_id not in r.text, "tenant A's object_id leaked to tenant B"
 
 
 @pytest.mark.skip(reason="SEC-002 collision probe NOT YET VALID — see note. Do not cite as evidence.")
