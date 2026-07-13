@@ -406,8 +406,15 @@ def test_hypothesis_increasing_prefetch_limit_never_reduces_recall_on_fixed_quer
 class DefectStillPresent(Exception):
     pass
 
-@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: BEIR synthetic hybrid evaluation unmeasured")
-def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points() -> None:
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: BEIR synthetic hybrid evaluation unmeasured",
+)
+def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points() -> (
+    None
+):
     raise DefectStillPresent("BEIR synthetic hybrid evaluation unmeasured")
 
 

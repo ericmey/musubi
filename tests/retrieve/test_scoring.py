@@ -377,10 +377,12 @@ def test_hypothesis_swapping_weights_reorders_results_consistently_with_the_math
     assert recency_order == (recency_a >= recency_b)
 
 
-
 class DefectStillPresent(Exception):
     pass
 
-@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: Golden query MRR evaluation unmeasured")
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: Golden query MRR evaluation unmeasured"
+)
 def test_eval_golden_query_set_mrr_ge_0_7_with_default_weights() -> None:
     raise DefectStillPresent("Golden query MRR evaluation unmeasured")
