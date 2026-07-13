@@ -82,6 +82,7 @@ import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -365,6 +366,12 @@ class _Seed:
 # ---- LOCKED value types (mirrored here as the reference/candidate surface) ------------------------- #
 
 
+#: Fixed, deterministic transition timestamps (the patch carries a real updated_at + matching epoch, not
+#: now()) so the intended mutation patch + its SHA are reproducible (Yua R13).
+_FIXED_UPDATED_AT = "2026-07-13T00:00:00+00:00"
+_FIXED_UPDATED_EPOCH = datetime.fromisoformat(_FIXED_UPDATED_AT).timestamp()
+
+
 @dataclass(frozen=True)
 class _RefIntent:
     collection: str
@@ -375,6 +382,11 @@ class _RefIntent:
     actor: str
     reason: str
     operation_key: str | None = None
+    # deterministic mutation-patch fields (Yua R13): a fixed updated_at + matching epoch, and an optional
+    # supplied lineage key. These are what the patch + patch_sha bind, beyond state+version.
+    updated_at: str = _FIXED_UPDATED_AT
+    updated_epoch: float = _FIXED_UPDATED_EPOCH
+    superseded_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -417,8 +429,28 @@ class _TerminalQdrantError(RuntimeError):
     terminal = True
 
 
-def _patch_sha(target_state: str, next_version: int) -> str:
-    return hashlib.sha256(f"{target_state}:{next_version}".encode()).hexdigest()
+def _intended_patch(intent: _RefIntent) -> dict[str, object]:
+    """The EXACT deterministic mutation patch a transition writes (Yua R13's real patch vocabulary):
+    target state, expected_version+1, the fixed updated_at + matching updated_epoch, and any supplied
+    lineage key (superseded_by). NOT the whole stored object - unrelated pre-existing payload is outside
+    the patch. `missing != null`, so an absent lineage key is simply not in the map."""
+    patch: dict[str, object] = {
+        "state": intent.target_state,
+        "version": intent.expected_version + 1,
+        "updated_at": intent.updated_at,
+        "updated_epoch": intent.updated_epoch,
+    }
+    if intent.superseded_by is not None:
+        patch["superseded_by"] = intent.superseded_by
+    return patch
+
+
+def _canonical_patch_sha(patch: dict[str, object]) -> str:
+    """SHA256 over a collision-safe canonical JSON of EXACTLY the patch map (sorted keys, compact,
+    type-preserving). A wrong value/type/timestamp or a missing key changes the digest."""
+    return hashlib.sha256(
+        json.dumps(patch, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 # ---- committed reference/candidate coordinator (test-local, NEVER written to src) ------------------ #
@@ -451,6 +483,7 @@ class _RefCoordinator:
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_outbox (operation_key TEXT PRIMARY KEY, object_id TEXT,"
             " collection TEXT, target_state TEXT, expected_version INTEGER, patch_sha TEXT,"
+            " patch_json TEXT,"
             " intent_digest TEXT, state TEXT, event_id TEXT)"
         )
         con.execute(
@@ -537,16 +570,19 @@ class _RefCoordinator:
         try:
             # NOT "OR IGNORE": a partial-unique-index violation (a second active intent for the object)
             # must RAISE (IntegrityError) so the loser is rejected atomically, not silently ignored.
+            patch = _intended_patch(i)
             con.execute(
                 "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
-                "expected_version,patch_sha,intent_digest,state,event_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                "expected_version,patch_sha,patch_json,intent_digest,state,event_id) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     opk,
                     i.object_id,
                     i.collection,
                     i.target_state,
                     i.expected_version,
-                    _patch_sha(i.target_state, i.expected_version + 1),
+                    _canonical_patch_sha(patch),
+                    json.dumps(patch, sort_keys=True, separators=(",", ":")),
                     self._intent_digest(i),
                     state,
                     event_id,
@@ -599,14 +635,69 @@ class _RefCoordinator:
         con.commit()
         con.close()
 
+    def _read_payload(self, collection: str, object_id: str) -> dict[str, object]:
+        points, _ = self._qc().scroll(
+            collection_name=collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))
+                ]
+            ),
+            limit=1,
+            with_payload=True,
+        )
+        return dict(points[0].payload or {}) if points else {}
+
+    def _confirm(
+        self,
+        patch: dict[str, object],
+        expected_version: int,
+        actual: dict[str, object],
+        non_atomic: bool,
+    ) -> str:
+        """Confirm an apply from the ACTUAL readback. 'fence' = stale/0-match (not applied); 'corrupt' =
+        the version landed but the readback patch mismatches (a partial/corrupt apply); 'confirmed' = full
+        readback identity/fence + SHA over the intended key set projected from ACTUAL data (Yua R13)."""
+        target_state = patch["state"]
+        intended_sha = _canonical_patch_sha(patch)
+        m = self._mode
+        if m == "readback_none":  # WRONG: trusts the attempt, no readback
+            return "confirmed"
+        if m == "readback_version_only":  # WRONG: version alone
+            return "confirmed" if actual.get("version") == expected_version + 1 else "fence"
+        if m == "readback_version_state_no_sha":  # WRONG: version+state, no SHA over the patch
+            if actual.get("version") != expected_version + 1:
+                return "fence"
+            return "confirmed" if actual.get("state") == target_state else "corrupt"
+        if (
+            m == "readback_hash_intended"
+        ):  # WRONG: hashes the INTENDED values, not the actual readback
+            if actual.get("version") != expected_version + 1:
+                return "fence"
+            return "confirmed" if _canonical_patch_sha(patch) == intended_sha else "corrupt"
+        if (
+            non_atomic
+        ):  # R12/R22 non-atomic candidates: confirm on state only (fence deliberately dropped)
+            return "confirmed" if actual.get("state") == target_state else "corrupt"
+        # CORRECT: full readback - fence, every intended key present, identity, and the actual-projected SHA.
+        # A wrong VERSION or a wrong STATE means my fenced set_payload matched zero points (I did not
+        # apply; the object is at someone else's version/state) -> fence, terminal-abandon-eligible. Only
+        # version AND state both correct with a missing/mismatched deeper patch key is a CORRUPT apply
+        # (I landed the state but a lineage/timestamp field is wrong) -> recoverable (Yua R13).
+        if actual.get("version") != expected_version + 1 or actual.get("state") != target_state:
+            return "fence"
+        for k in patch:
+            if k not in actual:
+                return "corrupt"  # an intended patch key did not land (missing != present)
+        projected = {k: actual[k] for k in patch}
+        return "confirmed" if _canonical_patch_sha(projected) == intended_sha else "corrupt"
+
     def _apply_conditional(
-        self, opk: str, collection: str, object_id: str, target_state: str, expected_version: int
-    ) -> bool:
-        """Server-side conditional: the expected version is IN the set_payload filter (object_id AND
-        version == expected), so a stale version matches zero points and does not apply. Then readback the
-        actual payload to confirm the fence held and the exact patch landed (Yua repair 5). The
-        warn_only_fence mode (WRONG) drops the version condition -> a stale writer clobbers (R12/R22). On a
-        POST-READBACK success it writes a durable effective-apply marker for opk/target (Yua R22)."""
+        self, opk: str, collection: str, object_id: str, patch: dict[str, object]
+    ) -> str:
+        """Send the EXACT mutation patch (fenced server-side on the expected version), then FULL-readback
+        (Yua R13). On a 'confirmed' apply it writes a durable effective-apply marker (Yua R22)."""
+        expected_version = int(str(patch["version"])) - 1
         must: list[models.Condition] = [
             models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))
         ]
@@ -618,19 +709,13 @@ class _RefCoordinator:
                 )
             )
         self._qc().set_payload(
-            collection_name=collection,
-            payload={"state": target_state, "version": expected_version + 1},
-            points=models.Filter(must=must),
+            collection_name=collection, payload=dict(patch), points=models.Filter(must=must)
         )
-        ver, st = self._cur(collection, object_id)
-        ok = (
-            st == target_state
-            if non_atomic
-            else (ver == expected_version + 1 and st == target_state)
-        )
-        if ok:
-            self._mark_apply_success(opk, object_id, target_state)  # post-readback-success boundary
-        return ok
+        actual = self._read_payload(collection, object_id)
+        status = self._confirm(patch, expected_version, actual, non_atomic)
+        if status == "confirmed":
+            self._mark_apply_success(opk, object_id, str(patch["state"]))
+        return status
 
     def _finalize(
         self, opk: str, event_id: str, object_id: str, namespace: str, target_state: str
@@ -773,17 +858,18 @@ class _RefCoordinator:
                     raise  # WRONG: lets the store error escape past the mutation boundary
                 return Err(error=_RefError(code="durable_begin_failed"))
         try:
-            applied = self._apply_conditional(
-                opk,
-                intent.collection,
-                intent.object_id,
-                intent.target_state,
-                intent.expected_version,
+            status = self._apply_conditional(
+                opk, intent.collection, intent.object_id, _intended_patch(intent)
             )
-            if not applied:
+            if status == "fence":
                 if self._mode != "mutate_first":
                     self._mark(opk, "ABANDONED")
                 return Err(error=_RefError(code="version_fence_violation"))
+            if status == "corrupt":
+                # R13: the version landed but the readback patch mismatches (partial/corrupt apply). Leave
+                # it PENDING/recoverable - NO marker/APPLIED/event/FINAL, no terminal abandon (that
+                # disposition is R15/R18/R20, not R13's to invent).
+                return Ok(value=_RefPending(operation_key=opk, event_id=event_id))
             self._checkpoint("after_qdrant_readback_before_applied_commit")
             self._mark(opk, "APPLIED")
             self._checkpoint("after_applied_commit_before_finalize")
@@ -813,23 +899,24 @@ class _RefCoordinator:
         )
         con = sqlite3.connect(self._db)
         rows = con.execute(
-            "SELECT operation_key,object_id,collection,target_state,expected_version,event_id,state "
-            f"FROM lifecycle_outbox WHERE state IN {claim_states} LIMIT ?",
+            "SELECT operation_key,object_id,collection,target_state,expected_version,event_id,state,"
+            f"patch_json FROM lifecycle_outbox WHERE state IN {claim_states} LIMIT ?",
             (limit,),
         ).fetchall()
         con.close()
         fin = ab = pend = 0
-        for opk, oid, coll, tstate, ver, event_id, state in rows:
+        for opk, oid, coll, tstate, ver, event_id, state, patch_json in rows:
+            patch: dict[str, object] = (
+                json.loads(patch_json) if patch_json else {"state": tstate, "version": ver + 1}
+            )
             if state == "FINAL":  # only reachable under reconcile_greedy
                 self._apply_conditional(
-                    opk, coll, oid, tstate, ver
+                    opk, coll, oid, patch
                 )  # WRONG: re-affirm -> extra apply call
                 continue
             if state == "APPLIED":
                 if self._mode == "reconcile_always_apply":
-                    self._apply_conditional(
-                        opk, coll, oid, tstate, ver
-                    )  # WRONG: re-apply an APPLIED row (C3)
+                    self._apply_conditional(opk, coll, oid, patch)  # WRONG: re-apply APPLIED (C3)
                 self._finalize(opk, event_id, oid, _NS, tstate)
                 fin += 1
                 continue
@@ -840,8 +927,6 @@ class _RefCoordinator:
                 continue
             # Readback FIRST (C2 recovery): if the mutation is already durably applied (a crash after the
             # Qdrant apply but before the APPLIED commit), recognize it and finalize WITHOUT re-applying.
-            # reconcile_no_readback (WRONG) skips this and re-applies (an extra set_payload call, caught by
-            # R6's zero-apply instrumentation).
             cur_ver, cur_st = self._cur(coll, oid)
             if self._mode != "reconcile_no_readback" and (cur_ver, cur_st) == (ver + 1, tstate):
                 self._mark(opk, "APPLIED")
@@ -849,7 +934,7 @@ class _RefCoordinator:
                 fin += 1
                 continue
             try:
-                applied = self._apply_conditional(opk, coll, oid, tstate, ver)
+                status = self._apply_conditional(opk, coll, oid, patch)
             except Exception as exc:
                 if self._classify_terminal(exc):
                     self._mark(opk, "ABANDONED")
@@ -857,9 +942,12 @@ class _RefCoordinator:
                 else:
                     pend += 1
                 continue
-            if not applied:
+            if status == "fence":
                 self._mark(opk, "ABANDONED")
                 ab += 1
+                continue
+            if status == "corrupt":  # R13: recoverable, stays PENDING
+                pend += 1
                 continue
             self._mark(opk, "APPLIED")  # PENDING -> APPLIED before the guarded FINAL txn
             self._finalize(opk, event_id, oid, _NS, tstate)
@@ -949,6 +1037,7 @@ def _intent(
     expected_version: int | None = None,
     actor: str = "t",
     reason: str = "r",
+    superseded_by: str | None = None,
 ) -> Any:
     return _api().TransitionIntent(
         collection=seed.collection,
@@ -959,6 +1048,7 @@ def _intent(
         actor=actor,
         reason=reason,
         operation_key=operation_key,
+        superseded_by=superseded_by,
     )
 
 
@@ -976,6 +1066,21 @@ def _restore_set_payload(client: QdrantClient) -> None:
     orig = getattr(client, "_orig_set_payload", None)
     if orig is not None:
         client.set_payload = orig  # type: ignore[method-assign]
+
+
+def _corrupt_apply_drop_lineage(client: QdrantClient) -> None:
+    """PARTIAL/corrupt apply (Yua R13): the set_payload lands the correct state + version but DROPS the
+    intended lineage key (superseded_by), so version+state alone would falsely confirm while a full
+    readback-SHA over the intended key set catches the missing field."""
+    orig: Any = client.set_payload
+
+    def _partial(*a: Any, **k: Any) -> Any:
+        payload = dict(k.get("payload") or {})
+        payload.pop("superseded_by", None)  # the field that did not land
+        k["payload"] = payload
+        return orig(*a, **k)
+
+    client.set_payload = _partial  # type: ignore[method-assign]
 
 
 def _count_set_payload(client: QdrantClient) -> dict[str, int]:
@@ -1014,18 +1119,41 @@ def _outbox_rows(db_path: Path, operation_key: str) -> list[dict[str, object]]:
     try:
         try:
             cur = con.execute(
-                "SELECT operation_key,state,event_id,patch_sha FROM lifecycle_outbox "
+                "SELECT operation_key,state,event_id,patch_sha,patch_json FROM lifecycle_outbox "
                 "WHERE operation_key=?",
                 (operation_key,),
             )
         except sqlite3.OperationalError:
             return []
         return [
-            {"operation_key": r[0], "state": r[1], "event_id": r[2], "patch_sha": r[3]}
+            {
+                "operation_key": r[0],
+                "state": r[1],
+                "event_id": r[2],
+                "patch_sha": r[3],
+                "patch_json": r[4],
+            }
             for r in cur.fetchall()
         ]
     finally:
         con.close()
+
+
+def _actual_projected_sha(
+    client: QdrantClient, collection: str, object_id: str, patch_json: object
+) -> str:
+    """Recompute the patch SHA from the ACTUAL Qdrant payload projected onto the stored patch's key set."""
+    patch = json.loads(str(patch_json))
+    points, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
+        ),
+        limit=1,
+        with_payload=True,
+    )
+    actual = dict(points[0].payload or {}) if points else {}
+    return _canonical_patch_sha({k: actual.get(k) for k in patch})
 
 
 def _outbox_for_object(db_path: Path, object_id: str) -> list[dict[str, object]]:
@@ -1036,14 +1164,21 @@ def _outbox_for_object(db_path: Path, object_id: str) -> list[dict[str, object]]
     try:
         try:
             cur = con.execute(
-                "SELECT operation_key,state,event_id,target_state FROM lifecycle_outbox "
-                "WHERE object_id=?",
+                "SELECT operation_key,state,event_id,target_state,patch_sha,patch_json "
+                "FROM lifecycle_outbox WHERE object_id=?",
                 (object_id,),
             )
         except sqlite3.OperationalError:
             return []
         return [
-            {"operation_key": r[0], "state": r[1], "event_id": r[2], "target_state": r[3]}
+            {
+                "operation_key": r[0],
+                "state": r[1],
+                "event_id": r[2],
+                "target_state": r[3],
+                "patch_sha": r[4],
+                "patch_json": r[5],
+            }
             for r in cur.fetchall()
         ]
     finally:
@@ -1215,8 +1350,11 @@ def _check_r3(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     rows2 = _outbox_rows(db_path, "op-r3")
     if len(rows2) != 1 or rows2[0]["state"] != "FINAL":
         raise DefectStillPresent("there must be EXACTLY ONE outbox row and it must be FINAL")
-    # patch-SHA readback: the stored intended patch SHA must equal the SHA of the ACTUAL Qdrant payload.
-    if rows2[0]["patch_sha"] != _patch_sha(str(st), int(str(ver))):
+    # patch-SHA readback: the stored intended patch SHA must equal the SHA of the ACTUAL Qdrant payload
+    # projected onto the patch key set.
+    if rows2[0]["patch_sha"] != _actual_projected_sha(
+        client, seed.collection, seed.object_id, rows2[0]["patch_json"]
+    ):
         raise DefectStillPresent(
             "the stored intended patch SHA must match the readback of the actual Qdrant payload"
         )
@@ -1328,6 +1466,48 @@ def test_r4_terminal_failure_is_err_abandoned_no_final(
 
 
 # ---- R10-R12 + R22: operation_key idempotency, single active intent, hard fence, two-tx race ------- #
+
+
+def _check_r13(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    """Conditional apply + FULL readback patch SHA (Yua R13): a PARTIAL/corrupt apply that lands the
+    correct state+version but DROPS the intended lineage key must be REFUSED - version/state alone is
+    insufficient. Correct outcome on mismatch: Ok(Pending), NO apply-success marker, NO event, NO FINAL,
+    and the op stays recoverable/nonterminal (R13 invents no repair policy). The stored intended patch SHA
+    must equal the SHA over the intended patch, and the ACTUAL readback SHA must DIFFER from it."""
+    coord = _coordinator(client, db_path)
+    _corrupt_apply_drop_lineage(client)  # the apply lands state+version but drops superseded_by
+    sup = "supersededby0000000000000000"[:27]  # a real lineage ksuid
+    intent = _intent(seed, to_state="matured", operation_key="op-r13", superseded_by=sup)
+    res = coord.transition(intent)
+    if not isinstance(res, Ok) or not isinstance(res.value, _api().TransitionPending):
+        raise DefectStillPresent(
+            "a partial/corrupt apply (state+version right, lineage MISSING) must NOT be confirmed on "
+            "version/state alone - the full readback SHA must catch it and return Ok(Pending)"
+        )
+    rows = _outbox_for_object(db_path, seed.object_id)
+    if len(rows) != 1 or rows[0]["state"] != "PENDING":
+        raise DefectStillPresent(
+            f"a corrupt apply must leave the op recoverable/nonterminal (PENDING), got "
+            f"{[r['state'] for r in rows]}"
+        )
+    if _apply_markers(db_path, seed.object_id):
+        raise DefectStillPresent("a corrupt apply must write NO effective-apply marker")
+    if _events_for_object(db_path, seed.object_id):
+        raise DefectStillPresent("a corrupt apply must emit NO audit event / NO FINAL")
+    # the stored intended patch SHA is exactly the SHA over the intended patch, and the ACTUAL readback
+    # (which is missing the lineage key) must DIFFER from it - proving version+state alone insufficient.
+    intended_sha = _canonical_patch_sha(_intended_patch(intent))
+    if rows[0]["patch_sha"] != intended_sha:
+        raise DefectStillPresent(
+            "the stored patch_sha must equal the SHA over the intended mutation patch"
+        )
+    actual_sha = _actual_projected_sha(
+        client, seed.collection, seed.object_id, rows[0]["patch_json"]
+    )
+    if actual_sha == intended_sha:
+        raise DefectStillPresent(
+            "the ACTUAL readback SHA must DIFFER from the intended (the lineage key did not land)"
+        )
 
 
 def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
@@ -1630,6 +1810,11 @@ _R9_REASON = (
     "today there is no outbox/reconciler and no stable per-op event_id, so a replayed/duplicate delivery "
     "re-applies and re-emits; R9 needs replay to be exactly-once: one FINAL, one event, one effective apply."
 )
+_R13_REASON = (
+    "today an apply is confirmed on version (and maybe state) alone, so a partial/corrupt mutation that "
+    "drops a lineage field is falsely accepted; R13 needs a FULL readback patch SHA over the intended key "
+    "set projected from ACTUAL data - a missing/wrong field must refuse (Ok(Pending), no marker/event/FINAL)."
+)
 _R10_REASON = (
     "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
     "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
@@ -1647,6 +1832,13 @@ _R12_REASON = (
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R9_REASON)
 def test_r9_idempotent_replay(env: tuple[QdrantClient, _Seed, Path]) -> None:
     _check_r9(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R13_REASON)
+def test_r13_conditional_apply_full_readback_patch_sha(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r13(*env)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
@@ -2140,6 +2332,15 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r9": (
         _check_r9,
         ["reconcile_no_readback", "finalize_dup_event_on_replay", "finalize_rekey_on_replay"],
+    ),
+    "r13": (
+        _check_r13,
+        [
+            "readback_none",
+            "readback_version_only",
+            "readback_version_state_no_sha",
+            "readback_hash_intended",
+        ],
     ),
     "r10": (
         _check_r10,
