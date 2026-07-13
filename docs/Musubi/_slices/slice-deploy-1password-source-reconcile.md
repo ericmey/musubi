@@ -65,6 +65,7 @@ listed in `blocks`.
 9. `test_lifecycle_worker_metrics_survive_source_reconciliation`
 10. `test_update_asserts_recreated_core_services_match_the_pinned_digest`
 11. `test_ansible_op_run_tasks_source_the_root_only_connect_environment`
+12. `test_deploy_preserves_prometheus_bind_inode_and_verifies_lifecycle_target`
 
 ## Work log
 
@@ -102,3 +103,7 @@ listed in `blocks`.
   they never load it, so Connect authentication variables cannot reach `op`.
   Added a strict red requiring value-safe export from the root-only file before
   either repository is applied.
+- 2026-07-13, codex-gpt5: Tama's independent cross-repo comparison confirmed
+  update/template parity and found the same bind-inode/reload/target-verification
+  contract missing from re-runnable `deploy.yml`. Added a deploy-specific strict
+  red; first deploy may no-op the reload, but re-deploy must be observably safe.
