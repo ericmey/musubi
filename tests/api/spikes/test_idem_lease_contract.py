@@ -7,8 +7,8 @@ implementation could clear those weak reds. Fixed here.
 
 Design:
   - `_LeaseCache` is the REFERENCE implementation of the acquire/release/store primitive:
-    injectable monotonic clock, owner-authenticated store/release, stale-lease reclaim, and TTL
-    cleanup of completed leases. It is the spec.
+    injectable monotonic clock, owner-authenticated store/release, NO time-based reclaim of a live
+    lease (freed only by its owner), and TTL cleanup of COMPLETED leases. It is the spec.
   - Every property test is PARAMETRIZED over two cache factories, both of which MUST pass:
       * `reference`  — the prototype (proves the contract is coherent).
       * `real-cache` — `musubi.api.idempotency.IdempotencyLeaseCache` (Phase B). It now satisfies
@@ -17,8 +17,8 @@ Design:
         `tests/api/test_idempotency_lease_cache.py`.)
 
 Identity is the full replay identity — (key, body_hash, route/operation, principal). The clock
-is injected (no wall-clock, no `Date.now`) so stale/TTL behaviour is deterministic. Tests/docs
-only; no src.
+is injected (no wall-clock, no `Date.now`) so the COMPLETED-lease TTL behaviour is deterministic
+(a live lease has no time-based behaviour at all). Tests/docs only; no src.
 
     uv run pytest tests/api/spikes/test_idem_lease_contract.py -v
 """
@@ -42,7 +42,6 @@ from musubi.api.idempotency import CompletedResponse, IdempotencyCache, Idempote
 @dataclass
 class _Lease:
     owner: str
-    created_at: float
     done: bool = False
     completed_at: float | None = None
     response: CompletedResponse | None = None
@@ -52,15 +51,15 @@ class _LeaseCache:
     """Reference acquire/release/store lease.
 
     - `clock`: injected monotonic source (seconds, float). No wall-clock.
-    - `stale_after_s`: an in-flight lease older than this is reclaimable (crash recovery).
     - `ttl_s`: a COMPLETED lease is replayable until this long after completion, then cleaned.
+
+    A LIVE in-flight lease is NEVER reclaimed by elapsed time — it is freed only by its owner
+    (`store` on success, `release` on error/cancel). Re-executing a slow-but-live request would be a
+    duplicate mutation, and a process-local cache cannot recover crash state anyway.
     """
 
-    def __init__(
-        self, *, clock: Callable[[], float], stale_after_s: float = 30.0, ttl_s: float = 24 * 3600
-    ) -> None:
+    def __init__(self, *, clock: Callable[[], float], ttl_s: float = 24 * 3600) -> None:
         self._clock = clock
-        self._stale = stale_after_s
         self._ttl = ttl_s
         self._leases: dict[object, _Lease] = {}
         self._lock = threading.Lock()
@@ -73,14 +72,11 @@ class _LeaseCache:
             self._cleanup_locked(now)
             lease = self._leases.get(identity)
             if lease is None:
-                self._leases[identity] = _Lease(owner=owner, created_at=now)
+                self._leases[identity] = _Lease(owner=owner)
                 return "acquired", None
             if lease.done:
                 return "hit", lease.response
-            if now - lease.created_at > self._stale:  # reclaim a crashed owner
-                self._leases[identity] = _Lease(owner=owner, created_at=now)
-                return "acquired", None
-            return "in_flight", None
+            return "in_flight", None  # a live lease is never reclaimed by elapsed time
 
     def store(self, identity: object, owner: str, *, response: CompletedResponse) -> None:
         with self._lock:
@@ -141,12 +137,12 @@ class _Clock:
 
 
 def _make_reference(clock: _Clock) -> _LeaseCache:
-    return _LeaseCache(clock=clock, stale_after_s=30.0, ttl_s=100.0)
+    return _LeaseCache(clock=clock, ttl_s=100.0)
 
 
 def _make_real(clock: _Clock) -> IdempotencyLeaseCache:
     # The real target now satisfies the SAME lease contract (Phase B).
-    return IdempotencyLeaseCache(clock=clock, stale_after_s=30.0, ttl_s=100.0)
+    return IdempotencyLeaseCache(clock=clock, ttl_s=100.0)
 
 
 CACHES = [
@@ -201,13 +197,19 @@ def test_p5_release_after_error_frees_slot(make_cache: Callable[[_Clock], Any]) 
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p6_stale_inflight_is_reclaimable(make_cache: Callable[[_Clock], Any]) -> None:
+def test_p6_inflight_is_never_reclaimed_by_elapsed_time(
+    make_cache: Callable[[_Clock], Any],
+) -> None:
+    """A LIVE in-flight lease must never be reclaimed by elapsed time — re-executing a slow-but-live
+    request is a duplicate mutation, and a process-local cache cannot recover crash state anyway (a
+    crash destroys the whole cache). Fail closed: the retry stays in_flight until the owner completes
+    or releases. (Durable cross-process crash recovery is a named future store concern.)"""
     clock = _Clock()
     c = make_cache(clock)
     c.acquire(IDENT, owner="o1", digest=_D)
-    clock.advance(31.0)  # past stale window (30s)
-    assert c.acquire(IDENT, owner="o2", digest=_D)[0] == "acquired", (
-        "a crashed owner must not wedge the key"
+    clock.advance(10_000_000.0)  # arbitrarily far past any elapsed-time window
+    assert c.acquire(IDENT, owner="o2", digest=_D)[0] == "in_flight", (
+        "a live in-flight lease must never be reclaimed by elapsed time"
     )
 
 
@@ -271,16 +273,17 @@ def test_p9_real_concurrency_executes_exactly_once(make_cache: Callable[[_Clock]
 
 
 @pytest.mark.parametrize("make_cache", CACHES)
-def test_p10_clock_is_injected_not_wallclock(make_cache: Callable[[_Clock], Any]) -> None:
-    """Stale/TTL must key off the INJECTED monotonic clock, so behaviour is deterministic and
-    testable. Proven by holding the clock still: a fresh in-flight lease is NOT reclaimed when
-    zero injected time has passed, regardless of real wall-clock elapsed."""
+def test_p10_ttl_keys_off_injected_clock_not_wallclock(make_cache: Callable[[_Clock], Any]) -> None:
+    """The COMPLETED-lease TTL must key off the INJECTED monotonic clock (the only time-based
+    behaviour left; a live lease has no time-based reclaim). Proven by holding the clock still: a
+    completed lease stays replayable regardless of real wall-clock elapsed."""
     clock = _Clock()
     c = make_cache(clock)
     c.acquire(IDENT, owner="o1", digest=_D)
-    # clock does NOT advance → the lease is not stale → second acquire is blocked
-    assert c.acquire(IDENT, owner="o2", digest=_D)[0] == "in_flight", (
-        "stale check must use the injected clock"
+    c.store(IDENT, owner="o1", response=_R)
+    # clock does NOT advance → the completed entry is not cleaned → still a replay hit
+    assert c.acquire(IDENT, owner="o2", digest=_D)[0] == "hit", (
+        "TTL cleanup must use the injected clock, not wall-clock"
     )
 
 

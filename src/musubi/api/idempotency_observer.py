@@ -41,8 +41,6 @@ from musubi.observability.registry import default_registry
 
 log = logging.getLogger("musubi.api.idempotency")
 
-_WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-
 _store_failure_total = default_registry().counter(
     "musubi_idempotency_store_failures_total",
     "Idempotency completed-response stores that failed AFTER the client response was committed "
@@ -68,14 +66,6 @@ def _lease(scope: Scope) -> tuple[IdempotencyRequestState, IdempotencyLeaseCache
     return None
 
 
-def _is_candidate(scope: Scope) -> bool:
-    """Only write requests carrying an ``Idempotency-Key`` can ever acquire a lease — buffer the
-    response for those alone, never for reads."""
-    if scope.get("method") not in _WRITE_METHODS:
-        return False
-    return any(k.lower() == b"idempotency-key" for k, _ in scope.get("headers", []))
-
-
 class IdempotencyObserver:
     """Store-only ASGI wrapper. Mount OUTERMOST so it observes the exact terminal response the
     client receives."""
@@ -84,23 +74,32 @@ class IdempotencyObserver:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not _is_candidate(scope):
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
+        active = False  # buffer ONLY when the routed dependency acquired a lease for this request
         status: int | None = None
         raw_headers: tuple[tuple[bytes, bytes], ...] = ()
         chunks: list[bytes] = []
         terminal = False
 
         async def _send(message: Message) -> None:
-            nonlocal status, raw_headers, chunks, terminal
+            nonlocal active, status, raw_headers, chunks, terminal
             if message["type"] == "http.response.start":
-                status = message["status"]
-                raw_headers = tuple(
-                    (bytes(k), bytes(v)) for k, v in message.get("headers", [])
-                )
-            elif message["type"] == "http.response.body":
+                # Eligibility is only knowable HERE: the routed idempotency dependency publishes the
+                # acquired-lease state during dependency resolution — strictly before the handler
+                # produces a response.start — so its presence now means this request holds a lease
+                # and its (small, JSON) response must be captured for replay. An INELIGIBLE route
+                # (no idempotency dependency, e.g. the retrieve StreamingResponse) never publishes
+                # that state, so `active` stays False and NOT ONE body chunk is retained — the
+                # stream flows straight through. Gating on method + header instead would buffer any
+                # keyed POST to an ineligible streaming route: an unbounded-memory DoS.
+                active = _lease(scope) is not None
+                if active:
+                    status = message["status"]
+                    raw_headers = tuple((bytes(k), bytes(v)) for k, v in message.get("headers", []))
+            elif message["type"] == "http.response.body" and active:
                 body = message.get("body", b"")
                 if body:
                     chunks.append(bytes(body))
@@ -140,8 +139,10 @@ class IdempotencyObserver:
                     cache.release(idem.identity, idem.owner)
                 except Exception:
                     # Release must never surface as a request failure either — the response has
-                    # already gone (or is being torn down). Log and move on; a stale in-flight
-                    # lease is reclaimed by the stale-owner window.
+                    # already gone (or is being torn down). Log and move on. (A live lease is only
+                    # ever freed by its owner's request exit; there is no time-based reclaim, so a
+                    # failed release fails closed — the key 409s until the process restarts, which
+                    # is safer than risking a duplicate mutation.)
                     log.exception(
                         "idempotency lease release failed",
                         extra={"idem_identity_hash": _identity_hash(idem.identity)},

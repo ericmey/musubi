@@ -149,7 +149,6 @@ _DIGEST_LEN = 32  # SHA-256
 class _LeaseEntry:
     owner: str
     digest: bytes  # non-optional: every eligible idempotent request carries a canonical digest
-    created_at: float
     done: bool = False
     completed_at: float | None = None
     response: CompletedResponse | None = None
@@ -164,13 +163,21 @@ class IdempotencyLeaseCache:
 
     - ``"acquired"`` — the caller owns the in-flight slot; it must ``store`` then the outer wrapper
       releases (or ``release`` on error/cancel).
-    - ``"in_flight"`` — another owner holds a fresh lease; the caller waits / 409s (never executes).
+    - ``"in_flight"`` — another owner holds a live lease; the caller 409s (never executes). A live
+      lease is NEVER reclaimed by elapsed time — see below.
     - ``"hit"``      — a completed response with the SAME digest exists; replay it.
     - ``"conflict"`` — a completed response with a DIFFERENT digest exists (same key, different
       body); NO lease is acquired (no leak) — the caller returns 409.
 
-    Process-local and thread-safe. Single-worker is guaranteed fail-closed by REQ-10 (Phase A);
-    this cache makes NO cross-process assumptions and is NOT durable. The clock is injectable for
+    **No time-based reclaim of a live lease.** An in-flight lease is freed ONLY by its owner —
+    ``store`` (success) or ``release`` (error/cancel). It is deliberately NOT reclaimed after any
+    elapsed-time window: this cache is process-local and single-worker (REQ-10), so a process crash
+    destroys the whole cache — a time-based "crash recovery" reclaim could never recover crash state
+    and would only let a legitimately SLOW live request be re-executed into a duplicate mutation.
+    Fail closed on a hung owner (the key 409s until the process restarts) is strictly safer than a
+    double write. Durable, cross-process crash recovery is a named FUTURE concern
+    (``slice-api-v0-write-distributed-idempotency``), not this in-memory primitive. Only COMPLETED
+    entries expire — after ``ttl_s`` — so replay is bounded; the clock is injectable for
     deterministic tests and defaults to :func:`time.monotonic`.
     """
 
@@ -178,18 +185,14 @@ class IdempotencyLeaseCache:
         self,
         *,
         clock: Callable[[], float] = time.monotonic,
-        stale_after_s: float = 30.0,
         ttl_s: float = _DEFAULT_TTL_S,
         max_entries: int = 10_000,
     ) -> None:
         if max_entries <= 0:
             raise ValueError("max_entries must be > 0")
-        if stale_after_s <= 0:
-            raise ValueError("stale_after_s must be > 0")
         if ttl_s <= 0:
             raise ValueError("ttl_s must be > 0")
         self._clock = clock
-        self._stale = stale_after_s
         self._ttl = ttl_s
         self._max = max_entries
         self._entries: OrderedDict[Any, _LeaseEntry] = OrderedDict()
@@ -214,7 +217,7 @@ class IdempotencyLeaseCache:
             self._cleanup_locked(now)
             entry = self._entries.get(identity)
             if entry is None:
-                self._entries[identity] = _LeaseEntry(owner=owner, digest=digest, created_at=now)
+                self._entries[identity] = _LeaseEntry(owner=owner, digest=digest)
                 self._entries.move_to_end(identity)
                 return "acquired", None
             if entry.done:
@@ -223,10 +226,10 @@ class IdempotencyLeaseCache:
                     return "conflict", None
                 self._entries.move_to_end(identity)  # LRU touch on replay
                 return "hit", entry.response
-            # in-flight: reclaim only if the owner is stale (crashed), else block.
-            if now - entry.created_at > self._stale:
-                self._entries[identity] = _LeaseEntry(owner=owner, digest=digest, created_at=now)
-                return "acquired", None
+            # in-flight: another owner holds a LIVE lease. Never reclaim by elapsed time — a
+            # slow-but-live request must not be re-executed into a duplicate mutation, and a
+            # process-local cache cannot recover crash state anyway. Fail closed: 409 until the
+            # owner completes (store) or releases (error/cancel).
             return "in_flight", None
 
     def store(self, identity: Any, owner: str, *, response: CompletedResponse) -> None:

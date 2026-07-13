@@ -127,6 +127,44 @@ until that issue exists (per Yua 2026-07-13T00:36).
 - The handler cannot be invoked without the `AuthorizedWrite` / idempotency context through the
   normal route graph (route `dependant` structurally enforces the edge; no bypass path).
 
+## Review blockers B1/B2/B3 + spec update (Yua 2026-07-13T01:48)
+
+Post-`b5ad26c` source review found two source-level blockers and one broken test instrument;
+fixed tests-first, each red demonstrated failing against `b5ad26c` before the fix.
+
+- **B1 — observer buffering by eligibility, not candidacy.** The observer must NOT decide to buffer
+  a response from method + `Idempotency-Key` header: an ineligible route (no idempotency dependency,
+  e.g. the `POST /v1/retrieve/stream` `StreamingResponse`) carrying a key would then have its entire
+  stream buffered — an unbounded-memory DoS (reproduced: 32 MiB stream → ~32 MiB retained). Fixed:
+  buffer ONLY when the routed dependency has published the acquired-lease state, checked at
+  `http.response.start` (the dependency runs strictly before the handler's response, so the state is
+  present by then). Ineligible/streaming responses flow through with zero retention. Red measures
+  non-retention via `tracemalloc` peak.
+
+- **B2 — no time-based reclaim of a live lease (SPEC CHANGE).** The lease cache previously reclaimed
+  any in-flight lease after `stale_after_s=30s`, framed as "crash recovery." That framing was wrong:
+  this cache is **process-local and single-worker**, so a process crash destroys the whole cache —
+  a time-based reclaim can never recover crash state and only lets a legitimately SLOW live request
+  be re-executed into a **duplicate mutation**. Removed the time-based reclaim and the
+  `stale_after_s` knob entirely. **New invariant:** a live in-flight lease is freed ONLY by its
+  owner's request exit — `store` (success) or `release` (error/cancel); a hung owner fails closed
+  (the key 409s until the process restarts), which is strictly safer than a double write. Only
+  COMPLETED entries expire (after `ttl_s`). **Durable, cross-process crash recovery remains a named
+  FUTURE store concern** (`slice-api-v0-write-distributed-idempotency`) — not this in-memory
+  primitive. Contract-suite property `p6` inverted (in-flight never reclaimed by elapsed time);
+  `p10` retargeted to prove clock-injection via the COMPLETED-lease TTL.
+
+- **B3 — concurrency test now counts the mutation.** The real-route concurrency test asserted a
+  single distinct `object_id`, which the content-addressed `EpisodicPlane` satisfies even if the
+  mutation ran N times. Replaced with a synchronized counting `EpisodicPlane` spy that holds the
+  winner's `create` in-flight (via Events) while 11 identical retries race the held lease; asserts
+  `plane.create` call count == 1 and all retries are visible in_flight 409s. Red-proven by bypassing
+  the acquire gate (every retry reaches `create`).
+
+spec-update: slice-idempotency-phase-b — live leases fail closed, freed only by owned request exit;
+no time-based reclaim; durable cross-process crash recovery is a named future store concern (Yua
+2026-07-13T01:48, T02:09).
+
 ## Verification gate
 
 First commit = transcribed contract tests + closure matrix. Then implementation commits.

@@ -140,6 +140,26 @@ def test_all_inflight_burst_then_store_converges_to_max() -> None:
     assert c2.acquire(("p", "b4"), "n", digest=_D)[0] == "hit", "b4 (newest) must survive"
 
 
+def test_in_flight_lease_is_never_reclaimed_by_elapsed_time() -> None:
+    """B2 (Yua): a LIVE in-flight lease must NEVER be reclaimed on elapsed time. A legitimately slow
+    request (owner1) that has not yet completed must keep the key held — a retry (owner2) stays
+    in_flight no matter how far the clock advances — because re-executing a slow-but-live request is
+    a duplicate mutation, and a process-local cache cannot recover crash state anyway (a crash
+    destroys the whole cache). Fail closed on a hung owner beats a double write. The lease is freed
+    ONLY by its owner completing (store) or explicitly releasing (error/cancel)."""
+    clock = _Clock()
+    c = IdempotencyLeaseCache(clock=clock)
+    assert c.acquire(ID, "owner-1", digest=DIGEST_A)[0] == "acquired"
+    for dt in (30.0, 300.0, 86_400.0, 10_000_000.0):  # arbitrary, well past any old stale window
+        clock.advance(dt)
+        assert c.acquire(ID, "owner-2", digest=DIGEST_A)[0] == "in_flight", (
+            f"a live in-flight lease was reclaimed after {dt}s — never reclaim by time"
+        )
+    # still freed by the OWNER's explicit exit (cancellation/error path preserved)
+    assert c.release(ID, "owner-1") is True
+    assert c.acquire(ID, "owner-3", digest=DIGEST_A)[0] == "acquired"
+
+
 def test_eviction_never_drops_an_in_flight_lease() -> None:
     c = IdempotencyLeaseCache(clock=_Clock(), max_entries=1)
     c.acquire(("p", "inflight"), "owner", digest=_D)  # in-flight, NOT stored
@@ -185,7 +205,7 @@ def test_deterministic_concurrency_exactly_one_acquires() -> None:
 
 
 @pytest.mark.parametrize(
-    "kwargs", [{"max_entries": 0}, {"stale_after_s": 0}, {"ttl_s": 0}, {"max_entries": -1}]
+    "kwargs", [{"max_entries": 0}, {"ttl_s": 0}, {"max_entries": -1}]
 )
 def test_pathological_config_rejected(kwargs: dict[str, float]) -> None:
     with pytest.raises(ValueError):

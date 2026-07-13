@@ -16,12 +16,16 @@ metered, and releases the lease so the retry re-executes.
 from __future__ import annotations
 
 import asyncio
+import threading
+import tracemalloc
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from typing import Any
 
 from starlette.testclient import TestClient
 from starlette.types import Message, Receive, Scope, Send
 
+from musubi.api.dependencies import get_episodic_plane
 from musubi.api.idempotency import CompletedResponse, IdempotencyLeaseCache, IdempotencyRequestState
 from musubi.api.idempotency_observer import IdempotencyObserver
 from musubi.settings import Settings
@@ -67,38 +71,154 @@ def test_conflict_same_key_different_body_is_409(client: TestClient, valid_token
 
 
 # --------------------------------------------------------------------------- #
-# real-route concurrency: N simultaneous identical requests → the mutation runs exactly ONCE
+# real-route concurrency: N simultaneous identical requests → the MUTATION runs exactly ONCE
 # --------------------------------------------------------------------------- #
 
 
-def test_real_route_concurrency_executes_exactly_once(
-    client: TestClient, valid_token: str
+class _CountingEpisodicPlane:
+    """An EpisodicPlane stand-in that COUNTS ``create`` calls and holds the FIRST call in-flight
+    deterministically via two Events: ``entered`` fires when a create begins; the create then parks
+    on ``release`` (offloaded to a worker thread so the event loop stays free to serve the racing
+    retries). Counting the mutation directly is the only sound exactly-once proof — EpisodicPlane is
+    content-addressed, so N executions of an identical body all return the SAME object_id, and an
+    object_id-distinctness check would pass even when the mutation ran N times."""
+
+    def __init__(self) -> None:
+        self.creates = 0
+        self._lock = threading.Lock()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    async def create(self, memory: Any, *, preserve_created_at: bool = False) -> Any:
+        with self._lock:
+            self.creates += 1
+            first = self.creates == 1
+        # ONLY the first create parks (holding the winner's lease in-flight); any subsequent create
+        # returns immediately, so a bypass-acquire red where every retry reaches create cannot
+        # deadlock — it just records creates > 1 and returns.
+        if first:
+            self.entered.set()
+            # Park WITHOUT blocking the event loop (offload the wait to a worker thread) so the 11
+            # retry requests still run and race the held lease.
+            await asyncio.get_event_loop().run_in_executor(None, self.release.wait)
+        return SimpleNamespace(object_id="fixed-object-id", state="provisional")
+
+
+def test_real_route_concurrency_mutation_runs_exactly_once(
+    app_factory: Any, valid_token: str
 ) -> None:
-    n = 12
+    """A winner capture request whose ``create`` is held in-flight, then 11 identical retries fired
+    while its lease is held: all 11 must be visible in_flight 409s and ``plane.create`` must have
+    run EXACTLY ONCE (the lease acquire is the gate). Deterministic — the overlap is proven by Events,
+    not scheduler timing. Asserts the real create call count through the real route + dependency +
+    observer (only the plane is a counting spy). Red-proven by bypassing acquire (an
+    always-``acquired`` cache), which lets every retry reach ``create`` → creates > 1."""
+    plane = _CountingEpisodicPlane()
+    app_factory.dependency_overrides[get_episodic_plane] = lambda: plane
+
     headers = _auth(valid_token, "race-key")
     body = _body("race")
 
-    def fire(_: int) -> tuple[int, str | None, str | None]:
-        r = client.post(CAPTURE, json=body, headers=headers)
-        oid = r.json().get("object_id") if r.headers.get("content-type", "").startswith(
-            "application/json"
-        ) else None
-        return r.status_code, r.headers.get(REPLAY), oid
+    with TestClient(app_factory) as client, ThreadPoolExecutor(max_workers=12) as pool:
+        winner = pool.submit(lambda: client.post(CAPTURE, json=body, headers=headers))
+        try:
+            assert plane.entered.wait(timeout=5.0), "winner never entered plane.create"
+            # The winner's lease is now held IN-FLIGHT. Fire 11 identical retries — every one must
+            # be a visible in_flight conflict and NONE may reach the mutation.
+            retries = [
+                pool.submit(lambda: client.post(CAPTURE, json=body, headers=headers))
+                for _ in range(11)
+            ]
+            retry_codes = [f.result(timeout=10.0).status_code for f in retries]
+            assert retry_codes == [409] * 11, (
+                f"retries must all be in_flight 409s, got {retry_codes}"
+            )
+            assert plane.creates == 1, (
+                f"a retry executed the mutation while the winner held the lease (create ran "
+                f"{plane.creates}x) — the acquire gate failed"
+            )
+        finally:
+            # ALWAYS free the winner, even on assertion failure, so the executor can shut down
+            # instead of hanging on a parked request.
+            plane.release.set()
 
-    with ThreadPoolExecutor(max_workers=n) as pool:
-        results = list(pool.map(fire, range(n)))
+        won = winner.result(timeout=10.0)
+        assert won.status_code == 202 and won.headers.get(REPLAY) != "true"
+        assert plane.creates == 1, "the winner must be the only execution"
 
-    # Every 2xx must describe the SAME single object — one distinct object_id across all successes.
-    success_ids = {oid for code, _, oid in results if code == 202 and oid is not None}
-    assert len(success_ids) == 1, (
-        f"{n} concurrent identical requests produced {len(success_ids)} distinct object_ids "
-        f"(must be exactly 1 — the mutation ran more than once): {success_ids}"
+
+# --------------------------------------------------------------------------- #
+# B1 — the observer must NOT buffer an INELIGIBLE response (no acquired lease), even one carrying an
+# Idempotency-Key on a streaming route. Buffering it would reintroduce an unbounded-memory DoS.
+# --------------------------------------------------------------------------- #
+
+
+def test_observer_does_not_buffer_ineligible_stream() -> None:
+    """An ineligible route (no idempotency dependency → no published lease state) that streams a
+    large body while carrying an Idempotency-Key must flow through the observer WITHOUT retention.
+    Measured, not asserted-by-output: tracemalloc peak during the stream must stay a small fraction
+    of the streamed size. Red-proven by the method+header candidacy gate, which buffers the whole
+    stream (peak ≈ full size)."""
+    chunk_size = 256 * 1024  # 256 KiB
+    n_chunks = 128  # 32 MiB total
+    delivered = 0
+
+    async def streaming_app(scope: Scope, receive: Receive, send: Send) -> None:
+        # NOTE: this app publishes NO idem state → ineligible, exactly like /v1/retrieve/stream.
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/octet-stream")],
+            }
+        )
+        for i in range(n_chunks):
+            # A DISTINCT object per chunk (fresh allocation, not one reused buffer) so that a
+            # buffering observer genuinely accumulates memory — otherwise 128 references to one
+            # immutable bytes object would cost only one chunk and mask the DoS.
+            body = bytes([i % 256]) * chunk_size
+            await send({"type": "http.response.body", "body": body, "more_body": i < n_chunks - 1})
+
+    observer = IdempotencyObserver(streaming_app)
+
+    async def drive() -> int:
+        nonlocal delivered
+        scope: Scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/retrieve/stream",
+            "headers": [(b"idempotency-key", b"k"), (b"content-type", b"application/json")],
+            "state": {},
+        }
+
+        async def receive() -> Message:
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(m: Message) -> None:
+            nonlocal delivered
+            if m["type"] == "http.response.body":
+                delivered += len(
+                    m.get("body", b"")
+                )  # count LENGTH only — the harness retains nothing
+
+        await observer(scope, receive, send)
+        return delivered
+
+    tracemalloc.start()
+    try:
+        total = asyncio.run(drive())
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    streamed = n_chunks * chunk_size
+    assert total == streamed, "every chunk must be delivered downstream (the stream is not dropped)"
+    # Non-retention: peak must be a small fraction of the streamed size. A buffering observer peaks
+    # at ≈ the full 32 MiB; a non-retaining one peaks at ≈ one chunk + overhead.
+    assert peak < streamed // 8, (
+        f"observer retained {peak} bytes streaming {streamed} — an ineligible stream must NOT be "
+        f"buffered (memory DoS)"
     )
-    # No caller may execute a SECOND mutation: non-2xx are the in-flight/duplicate 409s.
-    for code, replay_hdr, _ in results:
-        assert code in (202, 409), f"unexpected status under concurrency: {code}"
-        if code == 409:
-            assert replay_hdr != "true"
 
 
 # --------------------------------------------------------------------------- #
