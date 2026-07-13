@@ -35,14 +35,9 @@ def _assert_ndcg_at_k(ndcg_impl: Callable[[list[int], list[int], int], float]) -
     assert ndcg_impl([0, 0], [0, 0], 10) == 0.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: NDCG Metric implementation missing from module",
-)
 def test_eval_metric_formula_correctness() -> None:
     try:
-        from musubi.evals.metrics import ndcg_at_k  # type: ignore[import-untyped]
+        from musubi.evals.metrics import ndcg_at_k
     except ImportError:
         raise DefectStillPresent("musubi.evals.metrics module does not exist")
     _assert_ndcg_at_k(ndcg_at_k)
@@ -105,12 +100,9 @@ def _assert_schema_validation(model_class: Any) -> None:
         pass
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: Corpus Pydantic Schema loader missing"
-)
 def test_eval_corpus_schema_validation() -> None:
     try:
-        from musubi.evals.schema import GoldenQuery  # type: ignore[import-untyped]
+        from musubi.evals.schema import GoldenQuery
     except ImportError:
         raise DefectStillPresent("musubi.evals.schema module does not exist")
     _assert_schema_validation(GoldenQuery)
@@ -161,12 +153,9 @@ def _assert_manifest_checksum(
         pass
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: Corpus manifest checksum logic missing"
-)
 def test_eval_corpus_manifest_checksum(tmp_path: Path) -> None:
     try:
-        from musubi.evals.corpus import verify_manifest  # type: ignore[import-untyped]
+        from musubi.evals.corpus import verify_manifest
     except ImportError:
         raise DefectStillPresent("musubi.evals.corpus module does not exist")
     _assert_manifest_checksum(verify_manifest, tmp_path)
