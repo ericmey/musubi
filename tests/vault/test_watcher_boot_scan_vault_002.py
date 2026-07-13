@@ -194,10 +194,6 @@ def _make_watcher(
 # =============================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="VAULT-002 RED: the current relative-path bug short-circuits boot_scan before the handler reaches curated_plane.create(memory). The postcondition is observed on the typed CuratedKnowledge (relative vault_path, body_hash via real parse_frontmatter, frontmatter object_id/namespace). Today: 0 creates; postcondition not met. Flips to green when the fix lands.",
-)
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_relative_path_noop_red(
     tmp_path: Path,
@@ -299,7 +295,31 @@ async def test_boot_scan_vault_002_control_no_drift_no_write(
 async def test_boot_scan_vault_002_control_outside_root_skipped(
     tmp_path: Path,
 ) -> None:
-    """CONTROL 3: outside-root path is skipped by rglob (passes today AND after fix)."""
+    """CONTROL 3: outside-root path is skipped (healthy control after the fix).
+
+    The in-root file has a STALE body_hash in Qdrant
+    (drift is detected), and the outside file is created
+    at a path NOT under vault_root. After the VAULT-002
+    fix, the in-root file is processed (curated_plane.
+    create is called once with the in-root path); the
+    outside file is never seen by rglob (bounded by
+    vault_root) and is never processed. The test proves
+    BOTH:
+      - The in-root file IS processed (await_count == 1)
+      - The outside file is NOT processed (the typed
+        memory's vault_path is the in-root path, NOT the
+        outside path)
+
+    Today (pre-fix): the bug short-circuits before the
+    handler; await_count == 0. After fix: the in-root
+    file is processed; await_count == 1; the memory's
+    vault_path is the in-root path. The test was updated
+    from its pre-fix "await_count == 0" assertion
+    (which was true only because of the bug) to the
+    meaningful post-fix assertion that proves the
+    outside file is actually skipped while the in-root
+    file is processed.
+    """
     rel = "aoi/command-chair/curated/test-vault-002-control3.md"
     _write_md_with_frontmatter(tmp_path, rel, body="control 3 body")
 
@@ -320,13 +340,27 @@ async def test_boot_scan_vault_002_control_outside_root_skipped(
     assert len(captured) == 1
     await captured[0]
 
-    assert curated_plane.create.await_count == 0
+    # POST-FIX: the in-root file is processed (drift
+    # detected, create called once). The outside file is
+    # never seen by rglob and is never processed.
+    assert curated_plane.create.await_count == 1, (
+        "After the VAULT-002 fix, the in-root file with a "
+        "stale body_hash MUST be processed: curated_plane."
+        "create is called exactly once. The outside file "
+        "is never seen by rglob and is never processed."
+    )
+    # The typed memory MUST be for the in-root file, NOT
+    # the outside file. This proves the outside file is
+    # actually skipped.
+    memory = curated_plane.create.call_args.args[0]
+    assert memory.vault_path == rel, (
+        f"The typed memory's vault_path must be the in-root "
+        f"path {rel!r} (not the outside path "
+        f"{str(outside_md)!r}). The outside file MUST be "
+        f"skipped."
+    )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="VAULT-002 CONTROL 4: background exception OBSERVABILITY. boot_scan intentionally catches per-path exceptions and logs 'Boot scan failed on path ...'; the captured task does NOT raise. Today: the bug short-circuits before create(), so no log is produced. After fix: create() raises; the loop logs; the log is observable via caplog. Strict xfail flips to green when the log is present.",
-)
 @pytest.mark.asyncio
 async def test_boot_scan_vault_002_control_background_exception_observable(
     tmp_path: Path,
