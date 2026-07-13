@@ -55,17 +55,29 @@ AND two additional loss paths were found.
   make the two stores atomic — see "What C6 does NOT close" below. Consumers (`reflection.py` via
   `read_all()`) operate on whatever the sink persisted.
 
-## Desired contract (each red is strict-xfail against today)
+## Desired contract — ACCEPTED Option A / durable-on-accept (each red is strict-xfail against today)
 
-1. a failed flush preserves every event for retry;
-2. a successful retry writes each event exactly once (`event_id TEXT PRIMARY KEY` + `INSERT OR
-   REPLACE` make this achievable once events are retained);
-3. concurrent `record`/`flush` loses or duplicates nothing (**control** — the lock design must stay
-   sound across the fix);
-4. shutdown is explicit — `close()` must not silently discard buffered events;
-5. under sustained write failure the retained buffer is **bounded** with a **named** backpressure
-   policy (block / drop-oldest+counter) — the retention fix must not invent unbounded growth silently;
-6. a swallowed flush failure must be **observable** (telemetry/counter/state), never silent success.
+Architecture decided by Yua (2026-07-13): `record()` COMMITS the event to sqlite synchronously and
+returns `Result[None, LifecycleEventWriteError]`; "accepted" means COMMITTED. The RAM buffer + background
+flusher are removed as a durability mechanism; a failed write is refused immediately, so there is **no
+retry queue and no backpressure cap** (nothing accumulates in memory). Full decision:
+[[13-decisions/c6-lifecycle-durability-options]].
+
+1. a healthy `record()` returns `Ok` and the event is **immediately durable** (readable with no
+   flush/close);
+2. an injected write failure returns `Err`, persists **zero rows**, increments the shared metric by
+   exactly +1 (one unlabeled series), and logs a PII-free ERROR (no reason/namespace/object_id);
+3. a retry of the **same `event_id`** after a transient failure returns `Ok` and yields **exactly one
+   row** (`event_id TEXT PRIMARY KEY` + `INSERT OR REPLACE`);
+4. only `Ok`-accepted events survive an **abrupt crash** — a real subprocess asserts `returncode==0`
+   then `os._exit`, and only the committed markers survive on reopen (durable-on-accept);
+5. deterministic concurrent successes + one injected failure prove successful records persist **exactly
+   once**, the failed record returns `Err`, and there is **no cross-loss**;
+6. **sustained 1000 failures** all return `Err` promptly, persist zero rows, and retain **no in-memory
+   queue/backpressure growth** (`_buffer` stays empty);
+7. `close()` is **idempotent** and cannot discard an already-`Ok` event;
+8. **control/guard** — a mechanical `record()` callsite inventory proves no caller may silently ignore
+   the new `Result` (the only current callsite is `transitions.py`, the C6b boundary).
 
 ## Specs to implement
 
@@ -83,41 +95,56 @@ slice. Design-options + the durability recommendation: `docs/Musubi/13-decisions
 
 ## Test Contract
 
-`tests/lifecycle/test_c6_event_loss.py` — deterministic (background daemon disabled via
-`flush_every_s=3600`; a `_FailNThenReal` fault injector; all joins/waits bounded by `_JOIN_TIMEOUT` so
-a regression fails instead of hanging CI). Metric named before source:
+`tests/lifecycle/test_c6_event_loss.py` — deterministic (background daemon effectively disabled via
+`flush_every_n=1_000_000`, `flush_every_s=3600`; a `_FailN` fault injector wrapped in a `_write_fault`
+context manager that restores the real writer before `close()` so the fault cannot mask an assertion;
+all joins bounded by `_JOIN_TIMEOUT` so a regression fails instead of hanging CI). `record()`'s raw
+return is read through `_record()`/`_as_result()`, which raise `DefectStillPresent` when the value is
+not a `Result` — that is the named red reason today. Metric named before source:
 `musubi_lifecycle_event_write_failures_total` (bounded, no labels), asserted via the shared
-`default_registry` scrape delta — never a private attribute.
+`default_registry` **rendered exposition** delta — never a private attribute.
 
-Control (green now + post-fix):
-1. `test_concurrent_record_and_flush_no_loss_no_dup` — lock-protected append/drain is race-free under
-   a SUCCESSFUL write (insufficient alone; the failing-write race is red #5).
+The **legacy batch-model tests were removed, not kept** (Yua 2026-07-13): under durable-on-accept the
+buffer/flush is not the durability boundary, so `failed-flush-retention`, the `A+B` failing-write race,
+and `bounded-backpressure-queue` pass vacuously (they described a current defect, not an acceptance
+gate). The eight items below are the acceptance contract.
 
-Reds (strict-xfail; each red-proofed to flip green under the minimal fix):
-2. `test_failed_flush_preserves_events_for_retry` — a failed flush must not discard the batch.
-3. `test_successful_retry_writes_each_event_exactly_once` — retry yields each event exactly once.
-4. `test_close_does_not_silently_discard_buffered_events` — shutdown persists the buffer.
-5. `test_failing_write_race_preserves_a_and_b` — batch A failing while B is appended preserves A+B
-   (order/cardinality, no loss/dup) — deterministic Event barrier, bounded joins.
-6. `test_accepted_events_survive_abrupt_crash` — a subprocess `os._exit` without close()/flush() leaves
-   accepted events durable (durable-on-accept).
-7. `test_sustained_failure_bounded_backpressure_no_silent_loss` — sustained failure applies backpressure
-   (record refuses, not silent accept-then-lose) and loses no accepted event.
-8. `test_swallowed_flush_failure_observable_metric_and_log` — a suppressed failure increments the shared
-   `musubi_lifecycle_event_write_failures_total` and logs a PII-free ERROR (asserted via registry delta
-   + caplog, not a private attribute).
+Reds (strict-xfail; each red-proofed to flip to `XPASS(strict)` under the minimal Option-A fix):
+1. `test_record_success_is_ok_and_immediately_durable` — healthy record is `Ok` + readable with no
+   flush/close.
+2. `test_write_failure_is_err_zero_row_metric_and_pii_free_log` — failure is `Err`, zero rows, metric
+   exactly one unlabeled series +1, ERROR log excludes reason/namespace/object_id.
+3. `test_retry_same_event_id_is_ok_exactly_one_row` — retry of the same `event_id` is `Ok`, exactly one
+   row.
+4. `test_only_ok_accepted_events_survive_abrupt_crash` — subprocess asserts `returncode==0` then
+   `os._exit`; only committed markers survive reopen.
+5. `test_concurrent_success_and_failure_no_cross_loss` — 20 concurrent records, one injected failure:
+   successes persist exactly once, the failure is `Err`, no cross-loss.
+6. `test_sustained_failures_all_err_zero_rows_no_growth` — 1000 sustained failures all `Err`, zero rows,
+   `_buffer` stays empty (no retained queue/backpressure growth).
+7. `test_close_idempotent_cannot_discard_ok_event` — double `close()` is idempotent and keeps the `Ok`
+   event.
 
-**Closure at this head:** 1 passed + 7 xfailed; ruff/mypy/check.py clean; zero `src/musubi`.
-Red-proofed: a temporary minimal fix (write-before-clear + retain + durable-on-accept + backpressure +
-counter/log + close-drain) flips ALL 7 reds green (7 XPASS) while the control stays green; source
-restored, nothing committed to `src/`.
+Control/guard (green now + post-fix):
+8. `test_record_callsite_inventory_is_reviewed` — mechanical grep proves the only `sink.record(`
+   callsite is `transitions.py`, so a new caller forces review of the `Result` return (the C6b boundary).
+
+**Closure at this head:** 1 passed + 7 xfailed; ruff/mypy clean; zero `src/musubi`.
+Red-proofed: a temporary minimal Option-A fix (synchronous commit in `record()` returning
+`Ok(value=None)` / `Err(...)`, `default_registry` counter + PII-free ERROR on failure) flips ALL 7 reds
+to `XPASS(strict)` while the control stays green; source restored via `git checkout`, nothing committed
+to `src/`. (First red-proof attempt used `Ok(None)` positionally and produced 6 TypeErrors that *looked*
+like flips — corrected to `Ok(value=None)`; the instrument was verified before the claim.)
 
 ## Status
 
-**`in-progress`** (2026-07-13) — red contract only (tests + this doc); the source fix is a SEPARATE
-slice after Yua reviews this contract. Tracking Issue #433. Second reader: Tama or Shiori, requested
-only after their current lanes clear.
+**`in-progress`** (2026-07-13) — red contract only (tests + this doc), rebuilt to the ACCEPTED Option A
+/ durable-on-accept architecture (Yua 2026-07-13). The source fix is a SEPARATE slice after Yua reviews
+this contract; C6b (Qdrant↔SQLite atomicity) is named + linked and must precede any C6 source merge.
+Tracking Issue #433. Second reader: Tama or Shiori, requested only after their current lanes clear.
 
-spec-update: slice-c6-lifecycle-event-loss — NEW red contract for C6 lifecycle audit-event loss;
-proves failed-flush retention, exactly-once retry, concurrency safety (control), explicit shutdown,
-bounded-retention/backpressure (named), and observable failure; source fix deferred (Yua 2026-07-13).
+spec-update: slice-c6-lifecycle-event-loss — Option A durable-on-accept red contract for C6 lifecycle
+audit-event loss; proves immediate durability on Ok, Err+zero-row+metric+PII-free-log on failure,
+same-event_id retry exactly-once, crash survival of Ok-accepted events, concurrent no-cross-loss,
+sustained-failure no-growth, idempotent close, and a callsite-inventory guard; legacy batch-model reds
+removed as vacuous under Option A; source fix deferred (Yua 2026-07-13).

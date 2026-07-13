@@ -1,70 +1,73 @@
 ---
-title: "C6: lifecycle audit durability — design-options memo"
+title: "C6: lifecycle audit durability — accepted decision (Option A, durable-on-accept)"
 section: 13-decisions
 type: adr
-status: proposed
+status: accepted
 owner: aoi
 discoverer: eric
+decided-by: yua
 phase: "Lifecycle-audit 2026-07-13 — C6 event-loss"
-tags: [type/adr, status/proposed, lifecycle, audit, durability]
+tags: [type/adr, status/accepted, lifecycle, audit, durability]
 updated: 2026-07-13
 supersedes: []
 ---
 
-# C6 — lifecycle audit durability: design-options memo (no src; for Yua's decision)
+# C6: lifecycle audit durability — accepted decision (Option A, durable-on-accept)
 
-**Author:** Aoi · 2026-07-13 · **Status:** options memo accompanying the C6 red contract
-(`slice-c6-lifecycle-event-loss`, Issue #433). Names the durability model + the exact observability
-surface BEFORE source, and draws the C6 / C6b boundary. No source in this slice.
+**Author:** Aoi · **Decided by:** Yua (2026-07-13) · **Status:** ACCEPTED — durable-on-accept.
+This ADR fixes the durability model and the exact observability surface BEFORE source, and draws the
+C6 / C6b boundary. No source in this slice; the contract is `slice-c6-lifecycle-event-loss` (Issue #433).
 
 ## The hole (verified against `src/musubi/lifecycle/events.py`)
 
-`record()` only appends to an in-RAM buffer; the buffer is written to sqlite by a periodic/count
-flush. So an accepted audit event lives ONLY in RAM until the next flush — a process death (or a
+`record()` only appends to an in-RAM buffer; the buffer is written to sqlite by a periodic/count flush.
+So an accepted audit event lives ONLY in RAM until the next flush — a process death (or a
 failed-then-cleared flush) after the lifecycle mutation committed loses the audit with no signal. The
-retry comment is false; `_flush_loop` suppresses with no telemetry; `close()` drops the buffer.
+retry comment (L.158-160) is false; `flush()` clears before it writes (L.114-118); `_flush_loop`
+suppresses with no telemetry (L.161); `close()` drops the buffer via the `_closed` early-return
+(L.197-198).
 
-## Durability model — options
+## Decision — Option A, durable-on-accept
 
-- **Option A — durable-on-accept (recommended).** `record()` persists to sqlite synchronously (per
-  event or a tiny micro-batch under the lock); the buffer/batch becomes a throughput optimization, NOT
-  the durability boundary. *Pro:* an accepted event is durable immediately — closes the crash hole
-  directly. *Con:* a sqlite write per record; local sqlite autocommit is sub-ms, and WAL mode
-  amortizes fsync — acceptable for lifecycle event volume (small vs the planes it audits).
-- **Option B — batch-flush + retention.** Keep the buffer; fix flush to write-before-clear + retain on
-  failure + a bounded retry queue. *Pro:* batched writes. *Con:* events remain RAM-only until a flush,
-  so this ALONE does NOT close the crash hole — a crash between record and flush still loses them.
-- **Option C — durable staging (WAL/append-log on accept, index on flush).** Crash-safe AND batched.
-  *Con:* two structures + a recovery/replay path; more surface than the event volume warrants.
+`record()` persists the event to sqlite **synchronously** and returns `Result[None,
+LifecycleEventWriteError]` — an event is "accepted" ONLY after COMMIT (per AGENTS.md l.105: a mutation
+at a module boundary returns a Result, never a raised/suppressed exception). The RAM buffer and the
+background flusher are **removed as a durability mechanism**.
 
-**Recommendation:** Option A. It closes the crash hole with the least machinery; B/C add throughput
-that the lifecycle event rate does not need. Yua's call.
+- **Accepted (committed) ⇒ durable immediately.** No window where an accepted event lives only in RAM,
+  so the crash hole is closed directly.
+- **A failed write is refused, not queued.** `record()` returns `Err` immediately; nothing is retained
+  in memory. Because failures are refused at the boundary, **there is NO retry queue and NO backpressure
+  cap** — nothing accumulates, so nothing needs bounding. (The earlier "bounded buffer + block /
+  drop-oldest backpressure policy" framing is withdrawn: it only existed to bound a RAM queue this model
+  does not have. Silent loss was never on the table; refuse-immediately is strictly simpler than any cap.)
+- **Cost:** one sqlite write per record. Local sqlite autocommit is sub-ms and lifecycle event volume is
+  small relative to the memory planes it audits, so per-event commit is acceptable. A micro-batch under
+  the lock remains available later as a pure throughput optimization — NOT the durability boundary.
 
-## Bounded + backpressure policy (all options — canonical audit forbids silent loss)
-
-Under sustained sqlite unavailability the in-memory footprint MUST be bounded (a cap) and `record()`
-MUST apply backpressure once it cannot durably accept — **raise / return an error**. Explicitly:
-- **NOT drop-oldest** (or any silent drop): audit is canonical; silent loss is forbidden.
-- **NOT block forever**: backpressure must be prompt (raise), never an unbounded wait.
-So the caller learns "audit could not be accepted" and decides — which is also why the atomicity gap
-below is a caller concern, not the sink's.
+**Rejected alternatives (for the record):** *batch-flush + retention* (events stay RAM-only until a
+flush, so a crash between record and flush still loses them — does not close the hole); *durable staging
+/ append-log-then-index* (crash-safe and batched, but two structures + a recovery/replay path, more
+machinery than this event rate warrants).
 
 ## Observability (named before source)
 
 - **Metric:** `musubi_lifecycle_event_write_failures_total` on the shared `default_registry` —
-  **bounded, no labels** (a plain counter; no per-namespace/object cardinality). Incremented on every
-  write failure. Asserted in the contract via the registry scrape delta, never a private attribute.
-- **Log:** one ERROR line per failure with **no event body / namespace / object id** (PII-free) — the
-  count and the fact of failure, not the audited content.
+  **bounded, no labels** (a plain counter; no per-namespace/object cardinality), rendered as exactly one
+  unlabeled series. Incremented by exactly +1 on every write failure. Asserted in the contract via the
+  rendered exposition delta, never a private attribute.
+- **Log:** one ERROR line per failure with **no reason/body, no namespace, and no object_id** (PII-free)
+  — the count and the fact of failure, not the audited content.
 
 ## Boundary — what C6 closes vs C6b (atomicity)
 
-- **C6 (this slice) closes:** the LifecycleEventSink loses no *accepted* audit event — retention,
-  exactly-once retry, explicit shutdown, durable-on-accept crash survival, bounded backpressure, and
-  observable failure.
-- **C6 does NOT close — track as C6b (or an H5/H7 dependency):** Qdrant-mutation ↔ SQLite-audit
-  **atomicity**. `transitions.py:250-268` commits the Qdrant `set_payload` FIRST, then records
-  best-effort. Making the sink durable does NOT make the two stores atomic — a crash between the
-  mutation commit and even a durable-on-accept audit still leaves mutation-without-audit. Closing that
-  needs a transactional-outbox / two-phase / idempotent-replay pattern spanning both stores, which is a
-  larger design than sink durability. C6 must not claim to have closed it.
+- **C6 (this slice) closes:** the LifecycleEventSink loses no *accepted* audit event — success is
+  immediately durable; failure is a refused `Err` with zero rows + the observable metric/log; retry of
+  the same `event_id` is idempotent (exactly one row); crash and close cannot lose an Ok event.
+- **C6 does NOT close — tracked as C6b (an H5/H7 dependency, named + linked before any C6 source
+  merge):** Qdrant-mutation ↔ SQLite-audit **atomicity**. `transitions.py:250-268` commits the Qdrant
+  `set_payload` FIRST, then records. Durable-on-accept does NOT make the two stores atomic — a crash
+  between the mutation commit and even a durable-on-accept audit still leaves mutation-without-audit.
+  Closing that needs a transactional-outbox / two-phase / idempotent-replay pattern spanning both stores,
+  a larger design than sink durability. C6 must not claim to have closed it. Contract + inventory:
+  [[_slices/slice-c6-lifecycle-event-loss]].
