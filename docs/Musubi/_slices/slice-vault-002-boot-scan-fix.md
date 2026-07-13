@@ -22,7 +22,7 @@ blocks: []
 
 ## Specs to implement
 
-- [[projects/active/hermes-musubi-provider/artifacts/vault-002-boot-scan-noop]] (locked evidence doc; same-shape, same-line as the harem-ops slice)
+- [[_slices/slice-vault-002-boot-scan-fix|the locked contract for VAULT-002, this slice itself]] (the locked evidence doc lives at `../../projects/active/hermes-musubi-provider/artifacts/vault-002-boot-scan-noop` in the harem-ops vault; same-shape, same-line as the harem-ops slice)
 
 ## Owned paths
 
@@ -84,5 +84,5 @@ The path representation crossing internal component boundaries must be normalize
 
 ## Source of truth
 
-- `projects/active/hermes-musubi-provider/artifacts/vault-002-boot-scan-noop.md` (locked evidence doc, harem-ops; same-shape, same-line)
+- `../../projects/active/hermes-musubi-provider/artifacts/vault-002-boot-scan-noop.md` (locked evidence doc, harem-ops; same-shape, same-line)
 - The bug at `src/musubi/vault/watcher.py:386, 390, 396, 230-232` is the relative path silently swallowed by `except ValueError: return`.
