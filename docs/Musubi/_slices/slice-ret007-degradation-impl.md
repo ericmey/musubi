@@ -130,8 +130,9 @@ Controls (green now + post-impl): `test_context_healthy_response_default_empty_w
 warnings default-empty, additive); `test_context_json_preserves_warnings` (JSON path naturally
 preserves them).
 
-**Closure at this head:** full RET-007 set = 10 passed + 17 xfailed (inherited 6+11 plus this slice's
-4+6). tc-coverage/ruff/mypy/check.py clean; zero src in this red commit.
+**Closure at this head:** full RET-007 set = 12 passed + 19 xfailed (inherited #416 6+11 plus this
+slice's 6+8 — envelope/telemetry 4+6 and /v1/context 2+2). tc-coverage/ruff/mypy/check.py clean; zero
+src in the red commits.
 
 ## Status
 
