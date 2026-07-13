@@ -70,10 +70,11 @@ expected_version, state, event_id, ...) is committed BEFORE the Qdrant mutation.
 
 import ast
 import asyncio
-import os
+import hashlib
 import sqlite3
 import warnings
 from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -85,7 +86,7 @@ from musubi.embedding import FakeEmbedder
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
 from musubi.store.names import collection_for_plane
-from musubi.types.common import Err, Ok
+from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "musubi"
@@ -334,7 +335,14 @@ def test_g1_rule_discriminates_state_dataflow_from_unrelated_payloads() -> None:
 
 
 # ============================================================================
-# TRANCHE 2 - Phase-1 behavior harness + reds (drive the future coordinator)
+# TRANCHE 2 - Phase-1 behavior harness + reds (drive the LOCKED coordinator API)
+#
+# Evidence model (Yua 2026-07-13): the red-proof must be RERUNNABLE, not commit prose. So this file
+# COMMITS a reference coordinator (`_RefCoordinator`) + plausible-wrong candidates, and a green
+# `test_red_proof_*` harness the reviewer runs: the correct candidate must satisfy every check, and each
+# plausible-wrong candidate must fail its target check (the harness fails if any wrong candidate passes).
+# The candidates are test-local and reached only via an `_ACTIVE_CANDIDATE` override, so `src/musubi`
+# stays absent (the xfail reds still import the real, unbuilt coordinator and fail for their own reasons).
 # ============================================================================
 
 _NS = "eric/claude-code/episodic"
@@ -348,48 +356,342 @@ class _Seed:
     version: int
 
 
-@pytest.fixture
-def qdrant() -> Iterator[QdrantClient]:
-    """In-memory Qdrant with the canonical collection layout bootstrapped (one per test)."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        client = QdrantClient(":memory:")
-    bootstrap(client)
-    try:
-        yield client
-    finally:
-        client.close()
+# ---- LOCKED value types (mirrored here as the reference/candidate surface) ------------------------- #
 
 
-@pytest.fixture
-def seeded(qdrant: QdrantClient) -> _Seed:
-    """A provisional episodic object to transition (real create via the plane + FakeEmbedder)."""
-    plane = EpisodicPlane(client=qdrant, embedder=FakeEmbedder())
-    obj = asyncio.run(plane.create(EpisodicMemory(namespace=_NS, content="c6b-seed")))
-    return _Seed(
-        collection=str(collection_for_plane("episodic")),
-        object_id=str(obj.object_id),
-        namespace=_NS,
-        version=int(obj.version),
-    )
+@dataclass(frozen=True)
+class _RefIntent:
+    collection: str
+    object_id: str
+    namespace: str
+    expected_version: int
+    target_state: str
+    actor: str
+    reason: str
+    operation_key: str | None = None
 
 
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    return tmp_path / "lifecycle.db"
+@dataclass(frozen=True)
+class _RefFinal:
+    operation_key: str
+    event_id: str
+    kind: str = "final"
+
+
+@dataclass(frozen=True)
+class _RefPending:
+    operation_key: str
+    event_id: str
+    kind: str = "pending"
+
+
+@dataclass(frozen=True)
+class _RefError:
+    code: str
+
+
+@dataclass(frozen=True)
+class _RefReport:
+    claimed: int = 0
+    finalized: int = 0
+    pending: int = 0
+    abandoned: int = 0
+    failed: int = 0
 
 
 class _TransientQdrantError(RuntimeError):
-    """A transient/unknown Qdrant failure - the coordinator must keep the intent PENDING (retryable),
-    never ABANDON it and never emit a FINAL audit (Yua corrections B/J)."""
+    """A transient/unknown Qdrant failure - keep the intent PENDING (retryable) (Yua B/J)."""
 
     terminal = False
 
 
 class _TerminalQdrantError(RuntimeError):
-    """A proven-terminal Qdrant failure - the coordinator must ABANDON (never a FINAL event) (Yua J)."""
+    """A proven-terminal Qdrant failure - ABANDON, never a FINAL event (Yua J)."""
 
     terminal = True
+
+
+class _BeginStoreError(RuntimeError):
+    """Injected at the durable-intent persistence/commit failpoint (R2, deterministic - not chmod)."""
+
+
+def _patch_sha(target_state: str, next_version: int) -> str:
+    return hashlib.sha256(f"{target_state}:{next_version}".encode()).hexdigest()
+
+
+# ---- committed reference/candidate coordinator (test-local, NEVER written to src) ------------------ #
+
+
+class _RefCoordinator:
+    """A reference implementation of the locked Phase-1 API. `mode` selects the correct behavior or a
+    named plausible-wrong one so the red-proof discriminates each red. A private `_checkpoint(name)` seam
+    (default no-op; NOT a public switch, NO production os._exit) lets tests inject a deterministic fault
+    or crash at a named boundary."""
+
+    def __init__(self, *, client: Any, db_path: Path, mode: str = "correct") -> None:
+        self._client = client
+        self._db = str(db_path)
+        self._mode = mode
+        self._checkpoint: Any = lambda _name: None
+        con = sqlite3.connect(self._db)
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS lifecycle_outbox (operation_key TEXT PRIMARY KEY, object_id TEXT,"
+            " collection TEXT, target_state TEXT, expected_version INTEGER, patch_sha TEXT, state TEXT,"
+            " event_id TEXT)"
+        )
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS lifecycle_events (event_id TEXT PRIMARY KEY, object_id TEXT,"
+            " namespace TEXT, to_state TEXT)"
+        )
+        con.commit()
+        con.close()
+
+    # -- internals --------------------------------------------------------------------------------- #
+    def _key(self, i: _RefIntent) -> str:
+        return (
+            i.operation_key
+            or f"canon:{i.collection}:{i.object_id}:{i.expected_version}:{i.target_state}"
+        )
+
+    def _cur(self, collection: str, object_id: str) -> tuple[object, object]:
+        return _qdrant_state(self._client, collection, object_id)
+
+    def _write_pending(
+        self, i: _RefIntent, opk: str, event_id: str, state: str = "PENDING"
+    ) -> None:
+        self._checkpoint("before_pending_commit")
+        con = sqlite3.connect(self._db)
+        con.execute(
+            "INSERT OR IGNORE INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
+            "expected_version,patch_sha,state,event_id) VALUES (?,?,?,?,?,?,?,?)",
+            (
+                opk,
+                i.object_id,
+                i.collection,
+                i.target_state,
+                i.expected_version,
+                _patch_sha(i.target_state, i.expected_version + 1),
+                state,
+                event_id,
+            ),
+        )
+        con.commit()
+        con.close()
+        self._checkpoint("after_pending_commit")
+
+    def _mark(self, opk: str, state: str) -> None:
+        con = sqlite3.connect(self._db)
+        con.execute("UPDATE lifecycle_outbox SET state=? WHERE operation_key=?", (state, opk))
+        con.commit()
+        con.close()
+
+    def _apply_conditional(
+        self, collection: str, object_id: str, target_state: str, expected_version: int
+    ) -> bool:
+        """Server-side-conditional stand-in: only apply if the current version == expected (fence)."""
+        ver, _ = self._cur(collection, object_id)
+        if ver != expected_version:
+            return False
+        self._client.set_payload(
+            collection_name=collection,
+            payload={"state": target_state, "version": expected_version + 1},
+            points=models.Filter(
+                must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
+            ),
+        )
+        return True
+
+    def _finalize(
+        self, opk: str, event_id: str, object_id: str, namespace: str, target_state: str
+    ) -> None:
+        """Atomic FINAL: insert the FINAL lifecycle event AND mark the outbox FINAL in ONE txn."""
+        con = sqlite3.connect(self._db)
+        try:
+            con.execute("BEGIN")
+            con.execute(
+                "INSERT OR IGNORE INTO lifecycle_events (event_id,object_id,namespace,to_state) "
+                "VALUES (?,?,?,?)",
+                (event_id, object_id, namespace, target_state),
+            )
+            self._checkpoint("inside_finalize_after_event_insert")  # R8 fault point
+            con.execute("UPDATE lifecycle_outbox SET state='FINAL' WHERE operation_key=?", (opk,))
+            con.execute("COMMIT")
+        except Exception:
+            con.execute("ROLLBACK")
+            raise
+        finally:
+            con.close()
+
+    def _classify_terminal(self, exc: Exception) -> bool:
+        if self._mode == "classify_all_terminal":
+            return True
+        if self._mode == "classify_all_transient":
+            return False
+        return bool(getattr(exc, "terminal", False))
+
+    # -- public API -------------------------------------------------------------------------------- #
+    def transition(self, intent: _RefIntent) -> Any:
+        opk = self._key(intent)
+        event_id = generate_ksuid()
+        if self._mode != "mutate_first":
+            try:
+                self._write_pending(
+                    intent,
+                    opk,
+                    event_id,
+                    state=("FINAL" if self._mode == "premature_final" else "PENDING"),
+                )
+            except _BeginStoreError:
+                return Err(error=_RefError(code="durable_begin_failed"))
+        try:
+            applied = self._apply_conditional(
+                intent.collection, intent.object_id, intent.target_state, intent.expected_version
+            )
+            if not applied:
+                if self._mode != "mutate_first":
+                    self._mark(opk, "ABANDONED")
+                return Err(error=_RefError(code="version_fence_violation"))
+            self._checkpoint("after_qdrant_readback_before_applied_commit")
+            self._mark(opk, "APPLIED")
+            self._checkpoint("after_applied_commit_before_finalize")
+        except Exception as exc:
+            if self._classify_terminal(exc):
+                if self._mode != "mutate_first":
+                    self._mark(opk, "ABANDONED")
+                return Err(error=_RefError(code="terminal_apply_failure"))
+            return Ok(value=_RefPending(operation_key=opk, event_id=event_id))
+        if self._mode == "mutate_first":
+            self._write_pending(intent, opk, event_id)
+        self._finalize(opk, event_id, intent.object_id, intent.namespace, intent.target_state)
+        return Ok(value=_RefFinal(operation_key=opk, event_id=event_id))
+
+    def reconcile_once(self, *, limit: int = 100) -> _RefReport:
+        con = sqlite3.connect(self._db)
+        rows = con.execute(
+            "SELECT operation_key,object_id,collection,target_state,expected_version,event_id,state "
+            "FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED') LIMIT ?",
+            (limit,),
+        ).fetchall()
+        con.close()
+        fin = ab = pend = 0
+        for opk, oid, coll, tstate, ver, event_id, state in rows:
+            if state == "APPLIED":
+                self._finalize(opk, event_id, oid, _NS, tstate)
+                fin += 1
+                continue
+            if self._mode == "reconcile_no_apply":
+                self._mark(opk, "FINAL")  # WRONG: finalize without applying the mutation
+                fin += 1
+                continue
+            try:
+                applied = self._apply_conditional(coll, oid, tstate, ver)
+            except Exception as exc:
+                if self._classify_terminal(exc):
+                    self._mark(opk, "ABANDONED")
+                    ab += 1
+                else:
+                    pend += 1
+                continue
+            if not applied:
+                self._mark(opk, "ABANDONED")
+                ab += 1
+                continue
+            self._finalize(opk, event_id, oid, _NS, tstate)
+            fin += 1
+        return _RefReport(claimed=len(rows), finalized=fin, pending=pend, abandoned=ab)
+
+
+class _CandidateApi:
+    """Mimics the coordinator module namespace for a red-proof candidate."""
+
+    def __init__(self, mode: str) -> None:
+        self._mode = mode
+        self.TransitionIntent = _RefIntent
+        self.TransitionFinal = _RefFinal
+        self.TransitionPending = _RefPending
+
+    def LifecycleTransitionCoordinator(self, *, client: Any, db_path: Path) -> _RefCoordinator:
+        return _RefCoordinator(client=client, db_path=db_path, mode=self._mode)
+
+
+_ACTIVE_CANDIDATE: _CandidateApi | None = None
+
+
+@contextmanager
+def _candidate(mode: str) -> Iterator[None]:
+    global _ACTIVE_CANDIDATE
+    _ACTIVE_CANDIDATE = _CandidateApi(mode)
+    try:
+        yield
+    finally:
+        _ACTIVE_CANDIDATE = None
+
+
+def _api() -> Any:
+    """Resolve the Phase-1 API: an active red-proof candidate if set (rerunnable evidence), else the real
+    src coordinator. Absent today -> DefectStillPresent, so each xfail red fails for its OWN named reason."""
+    if _ACTIVE_CANDIDATE is not None:
+        return _ACTIVE_CANDIDATE
+    try:
+        from musubi.lifecycle import coordinator as _c  # type: ignore[attr-defined]
+    except ImportError as e:
+        raise DefectStillPresent(
+            "the Phase-1 coordinator module is not implemented (LifecycleTransitionCoordinator + "
+            "TransitionIntent + TransitionFinal/TransitionPending)"
+        ) from e
+    return _c
+
+
+# ---- fixtures + shared helpers --------------------------------------------------------------------- #
+
+
+def _make_env(base: Path) -> tuple[QdrantClient, _Seed, Path]:
+    base.mkdir(parents=True, exist_ok=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        client = QdrantClient(":memory:")
+    bootstrap(client)
+    plane = EpisodicPlane(client=client, embedder=FakeEmbedder())
+    obj = asyncio.run(plane.create(EpisodicMemory(namespace=_NS, content="c6b-seed")))
+    seed = _Seed(
+        collection=str(collection_for_plane("episodic")),
+        object_id=str(obj.object_id),
+        namespace=_NS,
+        version=int(obj.version),
+    )
+    return client, seed, base / "lifecycle.db"
+
+
+@pytest.fixture
+def env(tmp_path: Path) -> Iterator[tuple[QdrantClient, _Seed, Path]]:
+    client, seed, db_path = _make_env(tmp_path)
+    try:
+        yield (client, seed, db_path)
+    finally:
+        client.close()
+
+
+def _coordinator(client: QdrantClient, db_path: Path) -> Any:
+    return _api().LifecycleTransitionCoordinator(client=client, db_path=Path(db_path))
+
+
+def _intent(
+    seed: _Seed,
+    *,
+    to_state: str,
+    operation_key: str | None = None,
+    expected_version: int | None = None,
+) -> Any:
+    return _api().TransitionIntent(
+        collection=seed.collection,
+        object_id=seed.object_id,
+        namespace=seed.namespace,
+        expected_version=seed.version if expected_version is None else expected_version,
+        target_state=to_state,
+        actor="t",
+        reason="r",
+        operation_key=operation_key,
+    )
 
 
 def _fail_set_payload(client: QdrantClient, exc: Exception) -> None:
@@ -409,7 +711,6 @@ def _restore_set_payload(client: QdrantClient) -> None:
 
 
 def _qdrant_state(client: QdrantClient, collection: str, object_id: str) -> tuple[object, object]:
-    """(version, state) of the object in Qdrant, or (None, None) if absent."""
     points, _ = client.scroll(
         collection_name=collection,
         scroll_filter=models.Filter(
@@ -424,221 +725,250 @@ def _qdrant_state(client: QdrantClient, collection: str, object_id: str) -> tupl
     return (payload.get("version"), payload.get("state"))
 
 
-def _api() -> Any:
-    """Import-guard for the whole locked Phase-1 API (coordinator + TransitionIntent + outcome types).
-    Absent today -> DefectStillPresent, so each red xfails for its OWN named reason (the specific behavior
-    it asserts is unreachable), never a single shared 'coordinator absent'."""
-    try:
-        from musubi.lifecycle import coordinator as _c  # type: ignore[attr-defined]
-    except ImportError as e:
-        raise DefectStillPresent(
-            "the Phase-1 coordinator module is not implemented (LifecycleTransitionCoordinator + "
-            "TransitionIntent + TransitionFinal/TransitionPending)"
-        ) from e
-    return _c
-
-
-def _coordinator(client: QdrantClient, db_path: Path) -> Any:
-    return _api().LifecycleTransitionCoordinator(client=client, db_path=Path(db_path))
-
-
-def _intent(
-    seeded: _Seed,
-    *,
-    to_state: str,
-    operation_key: str | None = None,
-    expected_version: int | None = None,
-) -> Any:
-    """Build a frozen TransitionIntent (Yua-locked value object, not loose kwargs)."""
-    return _api().TransitionIntent(
-        collection=seeded.collection,
-        object_id=seeded.object_id,
-        namespace=seeded.namespace,
-        expected_version=seeded.version if expected_version is None else expected_version,
-        target_state=to_state,
-        actor="t",
-        reason="r",
-        operation_key=operation_key,
-    )
-
-
-def _final_event_exists(db_path: Path, event_id: object) -> bool:
-    """Whether a FINAL lifecycle_events row exists for this event_id (shared DB). False if the table is
-    absent (C6 source not merged) or no row."""
-    if event_id is None or not Path(db_path).exists():
-        return False
-    con = sqlite3.connect(str(db_path))
-    try:
-        try:
-            cur = con.execute("SELECT 1 FROM lifecycle_events WHERE event_id = ?", (event_id,))
-        except sqlite3.OperationalError:
-            return False
-        return cur.fetchone() is not None
-    finally:
-        con.close()
-
-
-def _outbox_rows(db_path: Path) -> list[dict[str, object]]:
-    """Read the durable outbox directly (empty if the table does not exist yet)."""
+def _outbox_rows(db_path: Path, operation_key: str) -> list[dict[str, object]]:
     if not Path(db_path).exists():
         return []
     con = sqlite3.connect(str(db_path))
     try:
         try:
             cur = con.execute(
-                "SELECT operation_key, object_id, state, event_id FROM lifecycle_outbox"
+                "SELECT operation_key,state,event_id FROM lifecycle_outbox WHERE operation_key=?",
+                (operation_key,),
             )
         except sqlite3.OperationalError:
-            return []  # table absent
-        return [
-            {"operation_key": r[0], "object_id": r[1], "state": r[2], "event_id": r[3]}
-            for r in cur.fetchall()
-        ]
+            return []
+        return [{"operation_key": r[0], "state": r[1], "event_id": r[2]} for r in cur.fetchall()]
     finally:
         con.close()
 
 
-# R1 - durable PENDING intent committed BEFORE the Qdrant mutation ------------------------------------ #
+def _final_event_count(db_path: Path, event_id: object) -> int:
+    if event_id is None or not Path(db_path).exists():
+        return 0
+    con = sqlite3.connect(str(db_path))
+    try:
+        try:
+            cur = con.execute("SELECT COUNT(*) FROM lifecycle_events WHERE event_id=?", (event_id,))
+        except sqlite3.OperationalError:
+            return 0
+        return int(cur.fetchone()[0])
+    finally:
+        con.close()
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="today transition() mutates Qdrant FIRST and records the audit only after, writing no PENDING "
-    "outbox intent - so a mutation that faults (or the process dies) leaves NO durable record that the "
-    "transition was even attempted. R1 requires a committed PENDING intent to exist before the mutation.",
-)
-def test_r1_durable_intent_persisted_before_qdrant_mutation(
-    qdrant: QdrantClient,
-    seeded: _Seed,
-    db_path: Path,
-) -> None:
-    coord = _coordinator(qdrant, db_path)  # DefectStillPresent (xfail) until the coordinator exists
-    _fail_set_payload(qdrant, _TransientQdrantError("injected transient during apply"))
-    # Drive a transition whose Qdrant mutation will fault. A durable intent MUST already be committed
-    # (written before the mutation) and, because the mutation did not succeed, it must be EXACTLY PENDING
-    # with NO FINAL audit — APPLIED/FINAL here would be a false pre-mutation completion (Yua 2026-07-13).
-    coord.transition(_intent(seeded, to_state="matured", operation_key="op-r1"))
-    rows = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r1"]
+def _set_checkpoint(coord: Any, hook: Any) -> None:
+    coord._checkpoint = hook
+
+
+# ---- check helpers (the actual behavioral assertions; run by both the xfail reds and the harness) -- #
+
+
+def _check_r1(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    coord = _coordinator(client, db_path)
+    _fail_set_payload(client, _TransientQdrantError("injected transient during apply"))
+    coord.transition(_intent(seed, to_state="matured", operation_key="op-r1"))
+    rows = _outbox_rows(db_path, "op-r1")
     if not rows:
-        raise DefectStillPresent(
-            "no durable intent was persisted before the Qdrant mutation "
-            "(a mutate-first coordinator leaves no record when the mutation faults)"
-        )
+        raise DefectStillPresent("no durable intent was persisted before the Qdrant mutation")
     if rows[0]["state"] != "PENDING":
         raise DefectStillPresent(
-            f"a transient-faulted mutation must leave the intent EXACTLY PENDING, got "
-            f"{rows[0]['state']!r} (APPLIED/FINAL would be a false pre-mutation completion)"
+            f"a transient-faulted mutation must leave the intent EXACTLY PENDING, got {rows[0]['state']!r}"
         )
-    if _final_event_exists(db_path, rows[0]["event_id"]):
+    if _final_event_count(db_path, rows[0]["event_id"]):
         raise DefectStillPresent("no FINAL lifecycle event may exist for a still-PENDING operation")
 
 
-# R2 - SQLite unavailable at begin => Qdrant UNTOUCHED + Err ------------------------------------------- #
+def _check_r2(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    coord = _coordinator(client, db_path)
+    before = _qdrant_state(client, seed.collection, seed.object_id)
 
+    def _fail_begin(name: str) -> None:
+        if name == "before_pending_commit":
+            raise _BeginStoreError("injected durable-begin failpoint")
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="today transition() mutates Qdrant BEFORE any durable write, so a SQLite failure cannot "
-    "prevent the mutation - the ordering guarantee (durable intent first) does not exist yet.",
-)
-def test_r2_sqlite_unavailable_blocks_qdrant_mutation(
-    qdrant: QdrantClient,
-    seeded: _Seed,
-    db_path: Path,
-) -> None:
-    coord = _coordinator(qdrant, db_path)  # xfail until the coordinator exists
-    before = _qdrant_state(qdrant, seeded.collection, seeded.object_id)
-    os.chmod(
-        db_path, 0
-    )  # make the shared events+outbox DB unwritable => the PENDING write must fail
+    _set_checkpoint(coord, _fail_begin)
     try:
-        try:
-            res = coord.transition(_intent(seeded, to_state="matured", operation_key="op-r2"))
-        except Exception as exc:
-            raise DefectStillPresent(
-                f"begin must return Err when the durable intent cannot be persisted, it raised: {exc!r}"
-            ) from exc
-    finally:
-        os.chmod(db_path, 0o644)
-    after = _qdrant_state(qdrant, seeded.collection, seeded.object_id)
+        res = coord.transition(_intent(seed, to_state="matured", operation_key="op-r2"))
+    except Exception as exc:
+        raise DefectStillPresent(
+            f"begin must return Err on durable-begin failure, it raised: {exc!r}"
+        ) from exc
+    if not isinstance(res, Err):
+        raise DefectStillPresent("a durable-begin failure must return Err (no future mutation)")
+    if getattr(res.error, "code", None) != "durable_begin_failed":
+        raise DefectStillPresent(
+            f"Err must identify the durable-begin failure, got code {getattr(res.error, 'code', None)!r}"
+        )
+    if _outbox_rows(db_path, "op-r2"):
+        raise DefectStillPresent("a failed durable begin must persist NO outbox row")
+    after = _qdrant_state(client, seed.collection, seed.object_id)
     if before != after:
         raise DefectStillPresent(
-            f"Qdrant was mutated despite the durable intent write being unavailable: {before} -> {after}"
-        )
-    if not isinstance(res, Err):
-        raise DefectStillPresent(
-            "SQLite unavailable at begin must yield Err (no future mutation), not a silent Ok/Pending"
+            f"Qdrant must be exactly unchanged when begin fails: {before} -> {after}"
         )
 
 
-# R3 - transient Qdrant failure => Ok(Pending), no FINAL, reconciler later completes ------------------- #
-
-
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="today a Qdrant failure returns a terminal Err with no durable intent and no reconciler, so a "
-    "TRANSIENT failure cannot become a recoverable Ok(Pending) that a later reconcile completes.",
-)
-def test_r3_transient_failure_is_ok_pending_then_reconciles(
-    qdrant: QdrantClient,
-    seeded: _Seed,
-    db_path: Path,
-) -> None:
-    coord = _coordinator(qdrant, db_path)  # xfail until the coordinator exists
-    _fail_set_payload(qdrant, _TransientQdrantError("injected transient during apply"))
-    res = coord.transition(_intent(seeded, to_state="matured", operation_key="op-r3"))
+def _check_r3(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    coord = _coordinator(client, db_path)
+    _fail_set_payload(client, _TransientQdrantError("injected transient during apply"))
+    res = coord.transition(_intent(seed, to_state="matured", operation_key="op-r3"))
     if not isinstance(res, Ok):
         raise DefectStillPresent("a transient Qdrant failure must return Ok(Pending), not Err")
-    outcome = res.value
-    if type(outcome).__name__ != "TransitionPending":
+    if not isinstance(res.value, _api().TransitionPending):
         raise DefectStillPresent(
-            f"a transient failure outcome must be TransitionPending, got {type(outcome).__name__}"
+            f"transient outcome must be TransitionPending, got {type(res.value).__name__}"
         )
-    if getattr(outcome, "operation_key", None) != "op-r3" or not getattr(outcome, "event_id", None):
-        raise DefectStillPresent("TransitionPending must carry operation_key + event_id")
-    rows = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r3"]
+    rows = _outbox_rows(db_path, "op-r3")
     if not rows or rows[0]["state"] != "PENDING":
         raise DefectStillPresent("the intent must remain PENDING after a transient failure")
-    if _final_event_exists(db_path, rows[0]["event_id"]):
+    if _final_event_count(db_path, rows[0]["event_id"]):
         raise DefectStillPresent("no FINAL event may exist while the op is transient-PENDING")
-    # Qdrant recovers; a reconciliation pass must complete the durable intent to FINAL.
-    _restore_set_payload(qdrant)
-    coord.reconcile_once(limit=10)
-    rows2 = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r3"]
-    if not rows2 or rows2[0]["state"] != "FINAL":
+    # Qdrant recovers; reconcile must ACTUALLY apply + finalize (not just flip a FINAL flag).
+    _restore_set_payload(client)
+    report = coord.reconcile_once(limit=10)
+    ver, st = _qdrant_state(client, seed.collection, seed.object_id)
+    if (ver, st) != (seed.version + 1, "matured"):
         raise DefectStillPresent(
-            "reconcile_once must finalize a recovered PENDING op (it stayed "
-            f"{rows2[0]['state'] if rows2 else 'absent'!r})"
+            f"reconcile must actually apply the mutation (object -> matured/v{seed.version + 1}), got {st}/{ver}"
         )
+    rows2 = _outbox_rows(db_path, "op-r3")
+    if not rows2 or rows2[0]["state"] != "FINAL":
+        raise DefectStillPresent("reconcile must mark the recovered op FINAL")
+    if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
+        raise DefectStillPresent("recovery must produce EXACTLY ONE FINAL event for the event_id")
+    if getattr(report, "finalized", None) != 1:
+        raise DefectStillPresent(
+            f"ReconcileReport must report exactly one finalized, got {report!r}"
+        )
+    # Second reconcile is a no-op: no second apply, no second event.
+    report2 = coord.reconcile_once(limit=10)
+    ver2, _ = _qdrant_state(client, seed.collection, seed.object_id)
+    if ver2 != seed.version + 1 or getattr(report2, "finalized", 0) != 0:
+        raise DefectStillPresent(
+            "a second reconcile must be a no-op (no re-apply, nothing finalized)"
+        )
+    if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
+        raise DefectStillPresent("a second reconcile must not emit a second FINAL event")
 
 
-# R4 - proven-terminal failure => Err + ABANDONED, never a FINAL event -------------------------------- #
-
-
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="today a Qdrant failure returns a bare terminal Err with no durable ABANDONED record and no "
-    "terminal-vs-transient classification, so a proven-terminal failure cannot be distinguished/recorded.",
-)
-def test_r4_terminal_failure_is_err_abandoned_no_final(
-    qdrant: QdrantClient,
-    seeded: _Seed,
-    db_path: Path,
-) -> None:
-    coord = _coordinator(qdrant, db_path)  # xfail until the coordinator exists
-    _fail_set_payload(qdrant, _TerminalQdrantError("injected terminal (proven)"))
-    res = coord.transition(_intent(seeded, to_state="matured", operation_key="op-r4"))
+def _check_r4(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    coord = _coordinator(client, db_path)
+    before = _qdrant_state(client, seed.collection, seed.object_id)
+    _fail_set_payload(client, _TerminalQdrantError("injected terminal (proven)"))
+    res = coord.transition(_intent(seed, to_state="matured", operation_key="op-r4"))
     if not isinstance(res, Err):
         raise DefectStillPresent("a proven-terminal failure must return Err (no future mutation)")
-    rows = [r for r in _outbox_rows(db_path) if r["operation_key"] == "op-r4"]
+    if not getattr(res.error, "code", None):
+        raise DefectStillPresent("Err must carry a bounded terminal error code")
+    after = _qdrant_state(client, seed.collection, seed.object_id)
+    if before != after:
+        raise DefectStillPresent(
+            f"a terminal failure must leave Qdrant exactly unchanged: {before} -> {after}"
+        )
+    rows = _outbox_rows(db_path, "op-r4")
     if not rows or rows[0]["state"] != "ABANDONED":
         raise DefectStillPresent(
-            f"a proven-terminal failure must mark the intent ABANDONED, got "
-            f"{rows[0]['state'] if rows else 'no row'!r}"
+            f"a proven-terminal failure must mark the intent ABANDONED, got {rows[0]['state'] if rows else 'no row'!r}"
         )
-    if _final_event_exists(db_path, rows[0]["event_id"]):
+    if _final_event_count(db_path, rows[0]["event_id"]):
         raise DefectStillPresent("ABANDONED must never create a FINAL lifecycle event")
+    # A later reconcile can never resurrect an ABANDONED op into a mutation or FINAL.
+    _restore_set_payload(client)
+    coord.reconcile_once(limit=10)
+    after2 = _qdrant_state(client, seed.collection, seed.object_id)
+    rows2 = _outbox_rows(db_path, "op-r4")
+    if after2 != before:
+        raise DefectStillPresent("reconcile must never mutate for an ABANDONED op")
+    if not rows2 or rows2[0]["state"] != "ABANDONED":
+        raise DefectStillPresent("an ABANDONED op must stay ABANDONED across reconcile")
+    if _final_event_count(db_path, rows2[0]["event_id"]):
+        raise DefectStillPresent("reconcile must never emit a FINAL event for an ABANDONED op")
+
+
+# ---- xfail reds: run the checks against the REAL (unbuilt) coordinator -> DefectStillPresent -------- #
+
+
+_R1_REASON = (
+    "today transition() mutates Qdrant FIRST and records the audit only after, writing no PENDING outbox "
+    "intent - a faulted mutation leaves no durable record. R1: a committed PENDING intent before mutation."
+)
+_R2_REASON = (
+    "today transition() mutates Qdrant before any durable write, so a durable-begin failure cannot keep "
+    "Qdrant untouched. R2: a deterministic begin-persist failpoint yields Err(durable_begin), no row, no "
+    "mutation."
+)
+_R3_REASON = (
+    "today a Qdrant failure is a bare terminal Err with no durable intent and no reconciler, so a TRANSIENT "
+    "failure cannot become Ok(Pending) that a later reconcile actually applies + finalizes exactly once."
+)
+_R4_REASON = (
+    "today a Qdrant failure returns a bare Err with no durable ABANDONED record and no terminal/transient "
+    "classification, so a proven-terminal failure cannot be recorded ABANDONED + provably never mutate."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R1_REASON)
+def test_r1_durable_intent_persisted_before_qdrant_mutation(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r1(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R2_REASON)
+def test_r2_durable_begin_failure_blocks_qdrant_mutation(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r2(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R3_REASON)
+def test_r3_transient_failure_is_ok_pending_then_reconciles(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r3(*env)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R4_REASON)
+def test_r4_terminal_failure_is_err_abandoned_no_final(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    _check_r4(*env)
+
+
+# ---- committed, RERUNNABLE red-proof harness (Yua evidence rule) ----------------------------------- #
+
+_RED_PROOF: dict[str, tuple[Any, list[str]]] = {
+    # red -> (check, plausible-wrong modes that MUST fail this check)
+    "r1": (_check_r1, ["mutate_first", "premature_final"]),
+    "r2": (_check_r2, ["mutate_first"]),
+    "r3": (_check_r3, ["classify_all_terminal", "reconcile_no_apply"]),
+    "r4": (_check_r4, ["classify_all_transient"]),
+}
+
+
+@pytest.mark.parametrize("red", sorted(_RED_PROOF))
+def test_red_proof_correct_passes_and_wrong_fails(red: str, tmp_path: Path) -> None:
+    """RERUNNABLE evidence: the CORRECT candidate must satisfy the check; every plausible-wrong candidate
+    must fail it (this test fails if any wrong candidate passes). Candidates are test-local; src stays
+    absent."""
+    check, wrongs = _RED_PROOF[red]
+
+    with _candidate("correct"):
+        client, seed, db_path = _make_env(tmp_path / f"{red}-correct")
+        try:
+            check(client, seed, db_path)  # must NOT raise
+        except (
+            DefectStillPresent
+        ) as e:  # pragma: no cover - a correct candidate failing is a real defect
+            raise AssertionError(f"correct candidate failed {red}: {e}") from e
+        finally:
+            client.close()
+
+    for mode in wrongs:
+        with _candidate(mode):
+            client, seed, db_path = _make_env(tmp_path / f"{red}-{mode}")
+            try:
+                with pytest.raises(DefectStillPresent):
+                    check(client, seed, db_path)
+            finally:
+                client.close()
