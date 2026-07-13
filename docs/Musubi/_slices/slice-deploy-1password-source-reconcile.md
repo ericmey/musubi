@@ -62,6 +62,7 @@ listed in `blocks`.
 6. `test_op_connect_inputs_are_root_only_and_secret_tasks_are_no_log`
 7. `test_ansible_templates_remain_parseable_controls`
 8. `test_update_preserves_prometheus_bind_inode_and_verifies_lifecycle_target`
+9. `test_lifecycle_worker_metrics_survive_source_reconciliation`
 
 ## Work log
 
@@ -85,3 +86,8 @@ listed in `blocks`.
   strict red before changing source. Issue #423 and `hw-ansible` issue #3 stay
   open until both repositories converge and the actual laptop operator path is
   check-mode reviewed.
+- 2026-07-13, codex-gpt5: The source-to-source diff also proved the candidate
+  removed the deployed lifecycle-worker metrics endpoint, healthcheck, and
+  Prometheus scrape job. Added a separate strict red before restoring those
+  operationally proven blocks; an internally green candidate is not sufficient
+  if it regresses the actual operator source.
