@@ -20,3 +20,4 @@ forbidden: any src/musubi/** change in this commit; any implementation of the
   main) and that is expected; the implementation lands in a follow-up slice after
   the test contract is accepted. NO deployment, NO merge to main yet, NO host
   action. No touch of Aoi's C6 (Issue 433) or Shiori's RET-004 (Issue 430).
+# Hermes adapter follow-up: see ADR 0035 (closeout gate). Separate slice; depends on this slice's wire contract.
