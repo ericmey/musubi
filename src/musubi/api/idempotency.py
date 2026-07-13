@@ -22,6 +22,8 @@ import hashlib
 import json
 import threading
 import time
+from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -110,4 +112,140 @@ def get_idempotency_cache() -> IdempotencyCache:
     return _GLOBAL_CACHE
 
 
-__all__ = ["IdempotencyCache", "get_idempotency_cache"]
+# --------------------------------------------------------------------------- #
+# Phase B — the routed post-authz idempotency LEASE cache.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _LeaseEntry:
+    owner: str
+    digest: bytes | None
+    created_at: float
+    done: bool = False
+    completed_at: float | None = None
+    response_status: int | None = None
+    response_body: Any = None
+
+
+class IdempotencyLeaseCache:
+    """In-flight lease + completed-response store for post-authz idempotent writes.
+
+    Semantics are independent of route parsing: the caller passes an opaque ``identity`` (built
+    from the validated principal + operation + authorized namespace + key), an ``owner`` token,
+    and the canonical request ``digest``. The single atomic ``acquire`` gates execution:
+
+    - ``"acquired"`` — the caller owns the in-flight slot; it must ``store`` then the outer wrapper
+      releases (or ``release`` on error/cancel).
+    - ``"in_flight"`` — another owner holds a fresh lease; the caller waits / 409s (never executes).
+    - ``"hit"``      — a completed response with the SAME digest exists; replay it.
+    - ``"conflict"`` — a completed response with a DIFFERENT digest exists (same key, different
+      body); NO lease is acquired (no leak) — the caller returns 409.
+
+    Process-local and thread-safe. Single-worker is guaranteed fail-closed by REQ-10 (Phase A);
+    this cache makes NO cross-process assumptions and is NOT durable. The clock is injectable for
+    deterministic tests and defaults to :func:`time.monotonic`.
+    """
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        stale_after_s: float = 30.0,
+        ttl_s: float = _DEFAULT_TTL_S,
+        max_entries: int = 10_000,
+    ) -> None:
+        self._clock = clock
+        self._stale = stale_after_s
+        self._ttl = ttl_s
+        self._max = max_entries
+        self._entries: OrderedDict[Any, _LeaseEntry] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def acquire(
+        self, identity: Any, owner: str, *, digest: bytes | None = None
+    ) -> tuple[str, Any, int | None]:
+        """Atomic gate. Returns ``(status, response_body, response_status)``."""
+        now = self._clock()
+        with self._lock:
+            self._cleanup_locked(now)
+            entry = self._entries.get(identity)
+            if entry is None:
+                self._entries[identity] = _LeaseEntry(owner=owner, digest=digest, created_at=now)
+                self._entries.move_to_end(identity)
+                self._evict_locked()
+                return "acquired", None, None
+            if entry.done:
+                if digest is not None and entry.digest is not None and entry.digest != digest:
+                    # same identity, DIFFERENT body — conflict; do NOT touch the lease (no leak).
+                    return "conflict", None, None
+                self._entries.move_to_end(identity)  # LRU touch on replay
+                return "hit", entry.response_body, entry.response_status
+            # in-flight: reclaim only if the owner is stale (crashed), else block.
+            if now - entry.created_at > self._stale:
+                self._entries[identity] = _LeaseEntry(owner=owner, digest=digest, created_at=now)
+                return "acquired", None, None
+            return "in_flight", None, None
+
+    def store(self, identity: Any, owner: str, *, response_status: int, response_body: Any) -> None:
+        """Complete the caller's lease with its response. Owner-only; raises otherwise."""
+        with self._lock:
+            entry = self._entries.get(identity)
+            if entry is None or entry.owner != owner or entry.done:
+                raise PermissionError("idempotency store by a non-owner or after completion")
+            entry.done = True
+            entry.completed_at = self._clock()
+            entry.response_status = response_status
+            entry.response_body = response_body
+
+    def release(self, identity: Any, owner: str) -> bool:
+        """Release an INCOMPLETE lease (error / cancel path). Owner-only; raises on a mismatched
+        owner. A completed lease is kept for replay and is NOT released."""
+        with self._lock:
+            entry = self._entries.get(identity)
+            if entry is None:
+                return False
+            if entry.owner != owner:
+                raise PermissionError("idempotency release by a non-owner")
+            if entry.done:
+                return False
+            del self._entries[identity]
+            return True
+
+    def cleanup(self) -> None:
+        with self._lock:
+            self._cleanup_locked(self._clock())
+
+    def _cleanup_locked(self, now: float) -> None:
+        expired = [
+            k
+            for k, v in self._entries.items()
+            if v.done and v.completed_at is not None and now - v.completed_at > self._ttl
+        ]
+        for k in expired:
+            del self._entries[k]
+
+    def _evict_locked(self) -> None:
+        # Bounded memory: evict the OLDEST COMPLETED entry when over capacity. An in-flight lease
+        # is NEVER evicted (dropping it would lose the lease → double execution).
+        while len(self._entries) > self._max:
+            victim = next((k for k, v in self._entries.items() if v.done), None)
+            if victim is None:
+                break  # everything is in-flight; accept temporary over-cap rather than drop a lease
+            del self._entries[victim]
+
+
+_GLOBAL_LEASE_CACHE = IdempotencyLeaseCache()
+
+
+def get_idempotency_lease_cache() -> IdempotencyLeaseCache:
+    """FastAPI dependency provider for the Phase B lease cache — overridable in tests."""
+    return _GLOBAL_LEASE_CACHE
+
+
+__all__ = [
+    "IdempotencyCache",
+    "IdempotencyLeaseCache",
+    "get_idempotency_cache",
+    "get_idempotency_lease_cache",
+]

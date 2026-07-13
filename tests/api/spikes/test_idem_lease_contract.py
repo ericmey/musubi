@@ -33,7 +33,7 @@ from typing import Any
 
 import pytest
 
-from musubi.api.idempotency import IdempotencyCache
+from musubi.api.idempotency import IdempotencyCache, IdempotencyLeaseCache
 
 # --------------------------------------------------------------------------- #
 # Reference implementation of the PROPOSED primitive (the spec, not src).
@@ -147,21 +147,14 @@ def _make_reference(clock: _Clock) -> _LeaseCache:
     return _LeaseCache(clock=clock, stale_after_s=30.0, ttl_s=100.0)
 
 
-def _make_real(clock: _Clock) -> IdempotencyCache:
-    # The real target. It has no clock-injecting lease API today; when it grows one to the SAME
-    # contract, these parametrizations flip. If the constructor cannot take a clock yet, the
-    # property still exercises acquire()/store()/release() which do not exist -> xfail.
-    return IdempotencyCache()
+def _make_real(clock: _Clock) -> IdempotencyLeaseCache:
+    # The real target now satisfies the SAME lease contract (Phase B).
+    return IdempotencyLeaseCache(clock=clock, stale_after_s=30.0, ttl_s=100.0)
 
-
-_XFAIL_REAL = pytest.mark.xfail(
-    strict=True,
-    reason="IdempotencyCache does not yet satisfy the lease property (no acquire/release) — fix pending",
-)
 
 CACHES = [
     pytest.param(_make_reference, id="reference"),
-    pytest.param(_make_real, id="real-cache", marks=_XFAIL_REAL),
+    pytest.param(_make_real, id="real-cache"),
 ]
 
 
@@ -296,11 +289,11 @@ def test_p10_clock_is_injected_not_wallclock(make_cache: Callable[[_Clock], Any]
 # --------------------------------------------------------------------------- #
 
 
-def test_real_cache_lacks_lease_primitive_today() -> None:
-    c = IdempotencyCache()
-    assert not hasattr(c, "acquire"), (
-        "unexpected: acquire exists — the parametrized reds should XPASS"
-    )
-    assert not hasattr(c, "release"), (
-        "unexpected: release exists — the parametrized reds should XPASS"
-    )
+def test_lease_primitive_lives_in_lease_cache_not_the_deprecated_one() -> None:
+    # Phase B: the lease primitive is on IdempotencyLeaseCache (the parametrized suite above runs
+    # the full property contract against it). The legacy IdempotencyCache — used only by the
+    # pre-auth middleware being removed — deliberately does NOT carry the lease.
+    lease = IdempotencyLeaseCache()
+    assert hasattr(lease, "acquire") and hasattr(lease, "release") and hasattr(lease, "store")
+    legacy = IdempotencyCache()
+    assert not hasattr(legacy, "acquire"), "the deprecated cache must not grow the lease primitive"
