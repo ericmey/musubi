@@ -37,11 +37,13 @@ The contract is 22 behavior-shaped strict-xfail reds (R1-R22) + 3 guards (G1/G2/
     G1  mechanical AST guard: NO direct `state`-writing `set_payload` outside the coordinator
 
 Tranche 1: **G1** (closure-gate) + its rule-discrimination proof (pure AST over src).
-Tranche 2 (in progress): the Phase-1 behavior harness + reds, starting with **R1**. These drive the
-future `LifecycleTransitionCoordinator` against an in-memory Qdrant + a real SQLite outbox. Each red is
-strict-xfail today because the coordinator is unbuilt, but its decorator names the SPECIFIC defect it
-targets and its assertion discriminates that behavior — so a WRONG coordinator leaves its own red
-unflipped (proven at red-proof), not a single shared "coordinator absent" reason.
+Tranche 2: the Phase-1 behavior reds **R1-R8** driving the future `LifecycleTransitionCoordinator`
+(R1-R4 durability/classification + R8 finalize atomicity over an in-memory Qdrant; R5-R7 crash matrix
+C1/C2/C3 over a REAL subprocess + on-disk Qdrant). Each red is strict-xfail today because the coordinator
+is unbuilt, but its decorator names the SPECIFIC defect and its assertion discriminates that behavior.
+The evidence is RERUNNABLE: `test_red_proof_*` / `test_crash_red_proof_*` run a committed reference
+coordinator + plausible-wrong candidates so the reviewer sees correct pass + every wrong fail (src stays
+absent). R9-R22 + G2/G3 continue.
 
 **LOCKED Phase-1 coordinator API** (Yua 2026-07-13):
 `LifecycleTransitionCoordinator(client=<qdrant>, db_path=<shared events+outbox sqlite>)` with
@@ -72,6 +74,9 @@ import ast
 import asyncio
 import hashlib
 import sqlite3
+import subprocess
+import sys
+import time
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -510,6 +515,26 @@ class _RefCoordinator:
         """Atomic FINAL: insert the FINAL lifecycle event AND mark the outbox FINAL in ONE txn. The
         outbox update is GUARDED on the exact APPLIED state (`WHERE state='APPLIED'`, exactly one row) so
         a PENDING row can never jump straight to FINAL (Yua R8 forward guard)."""
+        if self._mode == "finalize_not_atomic":
+            # WRONG: the event insert is its OWN committed txn, so a fault before the FINAL mark leaves the
+            # event orphaned (not rolled back) - caught by R8's "rollback leaves NO event".
+            con = sqlite3.connect(self._db)
+            con.execute(
+                "INSERT OR IGNORE INTO lifecycle_events (event_id,object_id,namespace,to_state) "
+                "VALUES (?,?,?,?)",
+                (event_id, object_id, namespace, target_state),
+            )
+            con.commit()
+            con.close()
+            self._checkpoint("inside_finalize_after_event_insert")
+            con = sqlite3.connect(self._db)
+            con.execute(
+                "UPDATE lifecycle_outbox SET state='FINAL' WHERE operation_key=? AND state='APPLIED'",
+                (opk,),
+            )
+            con.commit()
+            con.close()
+            return
         con = sqlite3.connect(self._db)
         try:
             con.execute("BEGIN")
@@ -579,7 +604,12 @@ class _RefCoordinator:
             return Ok(value=_RefPending(operation_key=opk, event_id=event_id))
         if self._mode == "mutate_first":
             self._write_pending(intent, opk, event_id)
-        self._finalize(opk, event_id, intent.object_id, intent.namespace, intent.target_state)
+        try:
+            self._finalize(opk, event_id, intent.object_id, intent.namespace, intent.target_state)
+        except Exception:
+            # finalize failed (e.g. R8's injected fault inside the txn) -> the mutation is durable and the
+            # row stays APPLIED; the reconciler will complete FINAL. Return Pending, not Final.
+            return Ok(value=_RefPending(operation_key=opk, event_id=event_id))
         return Ok(value=_RefFinal(operation_key=opk, event_id=event_id))
 
     def reconcile_once(self, *, limit: int = 100) -> _RefReport:
@@ -605,12 +635,26 @@ class _RefCoordinator:
                 )  # WRONG: re-affirm -> extra apply call
                 continue
             if state == "APPLIED":
+                if self._mode == "reconcile_always_apply":
+                    self._apply_conditional(
+                        coll, oid, tstate, ver
+                    )  # WRONG: re-apply an APPLIED row (C3)
                 self._finalize(opk, event_id, oid, _NS, tstate)
                 fin += 1
                 continue
             if self._mode == "reconcile_no_apply":
                 self._mark(opk, "APPLIED")
                 self._finalize(opk, event_id, oid, _NS, tstate)  # WRONG: finalize without applying
+                fin += 1
+                continue
+            # Readback FIRST (C2 recovery): if the mutation is already durably applied (a crash after the
+            # Qdrant apply but before the APPLIED commit), recognize it and finalize WITHOUT re-applying.
+            # reconcile_no_readback (WRONG) skips this and re-applies (an extra set_payload call, caught by
+            # R6's zero-apply instrumentation).
+            cur_ver, cur_st = self._cur(coll, oid)
+            if self._mode != "reconcile_no_readback" and (cur_ver, cur_st) == (ver + 1, tstate):
+                self._mark(opk, "APPLIED")
+                self._finalize(opk, event_id, oid, _NS, tstate)
                 fin += 1
                 continue
             try:
@@ -1005,6 +1049,323 @@ def test_r4_terminal_failure_is_err_abandoned_no_final(
     _check_r4(*env)
 
 
+# ---- R5-R8: crash matrix + finalize atomicity (Yua locked ruling) --------------------------------- #
+#
+# R5-R7 use a REAL subprocess that os._exit(DISTINCT_CODE) at a named checkpoint, over an ON-DISK local
+# Qdrant shared sequentially across processes (parent seeds+closes -> child opens/applies/exits ->
+# parent reopens; OS death releases the lock, bounded reopen retry). The mutation observed after the
+# child dies is the child's ACTUAL side effect (Yua rejected parent-modeled Qdrant). Every child exit is
+# the named nonzero failpoint code, never a timeout/kill. R8 is in-process: a fault injected INSIDE the
+# real SQLite FINAL transaction after the event insert.
+
+_C1_CODE = 41  # after_pending_commit
+_C2_CODE = 42  # after_qdrant_readback_before_applied_commit
+_C3_CODE = 43  # after_applied_commit_before_finalize
+
+
+def _make_ondisk_env(base: Path) -> tuple[_Seed, Path, Path]:
+    """An ON-DISK Qdrant (path mode) + shared SQLite, seeded, with the Qdrant client CLOSED so a child
+    process can open it. Returns (seed, db_path, qdrant_path)."""
+    base.mkdir(parents=True, exist_ok=True)
+    qdrant_path = base / "qd"
+    db_path = base / "lifecycle.db"
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        client = QdrantClient(path=str(qdrant_path))
+    bootstrap(client)
+    plane = EpisodicPlane(client=client, embedder=FakeEmbedder())
+    obj = asyncio.run(plane.create(EpisodicMemory(namespace=_NS, content="c6b-crash-seed")))
+    seed = _Seed(
+        collection=str(collection_for_plane("episodic")),
+        object_id=str(obj.object_id),
+        namespace=_NS,
+        version=int(obj.version),
+    )
+    client.close()  # release the lock so the child can open the same path
+    return seed, db_path, qdrant_path
+
+
+def _open_ondisk_qdrant(qdrant_path: Path) -> QdrantClient:
+    """Reopen the on-disk Qdrant with a BOUNDED retry (the child's os._exit releases the OS lock)."""
+    last: Exception | None = None
+    for _ in range(50):
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                return QdrantClient(path=str(qdrant_path))
+        except Exception as e:
+            last = e
+            time.sleep(0.1)
+    raise DefectStillPresent(f"could not reopen the on-disk Qdrant after the child exit: {last!r}")
+
+
+def _crash_child_source(
+    *,
+    use_reference: bool,
+    mode: str,
+    qdrant_path: Path,
+    db_path: Path,
+    seed: _Seed,
+    crash_at: str,
+    exit_code: int,
+    op_key: str,
+) -> str:
+    if use_reference:
+        imp = (
+            "from tests.lifecycle.test_c6b_atomicity import "
+            "_RefCoordinator as _Coord, _RefIntent as _Intent"
+        )
+        ctor = f"_Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})"
+    else:  # future: drive the REAL src coordinator (absent today -> the parent xfails at _api())
+        imp = (
+            "from musubi.lifecycle.coordinator import "
+            "LifecycleTransitionCoordinator as _Coord, TransitionIntent as _Intent"
+        )
+        ctor = f"_Coord(client=_client, db_path={str(db_path)!r})"
+    return (
+        "import os, warnings\n"
+        "from qdrant_client import QdrantClient\n"
+        f"{imp}\n"
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        f"    _client = QdrantClient(path={str(qdrant_path)!r})\n"
+        f"_c = {ctor}\n"
+        f"_c._checkpoint = lambda name: os._exit({exit_code}) if name == {crash_at!r} else None\n"
+        f"_c.transition(_Intent(collection={seed.collection!r}, object_id={seed.object_id!r}, "
+        f"namespace={seed.namespace!r}, expected_version={seed.version}, target_state='matured', "
+        f"actor='t', reason='r', operation_key={op_key!r}))\n"
+        "os._exit(99)\n"  # reached only if the checkpoint did NOT fire -> a distinct 'no crash' code
+    )
+
+
+def _drive_crash(
+    base: Path, crash_at: str, exit_code: int, op_key: str
+) -> tuple[_Seed, Path, Path]:
+    _api()  # xfail today (coordinator absent); in red-proof a candidate is active
+    use_ref = _ACTIVE_CANDIDATE is not None
+    mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
+    seed, db_path, qdrant_path = _make_ondisk_env(base)
+    src = _crash_child_source(
+        use_reference=use_ref,
+        mode=mode,
+        qdrant_path=qdrant_path,
+        db_path=db_path,
+        seed=seed,
+        crash_at=crash_at,
+        exit_code=exit_code,
+        op_key=op_key,
+    )
+    proc = subprocess.run([sys.executable, "-c", src], capture_output=True, timeout=90, check=False)
+    if proc.returncode != exit_code:
+        raise DefectStillPresent(
+            f"child must exit at the {crash_at} checkpoint with code {exit_code} (never timeout/kill), "
+            f"got {proc.returncode}: {proc.stderr.decode()[-300:]}"
+        )
+    return seed, db_path, qdrant_path
+
+
+def _check_r5(base: Path) -> None:  # C1: crash after PENDING, before Qdrant
+    seed, db_path, qdrant_path = _drive_crash(base, "after_pending_commit", _C1_CODE, "op-r5")
+    rows = _outbox_rows(db_path, "op-r5")
+    if len(rows) != 1 or rows[0]["state"] != "PENDING":
+        raise DefectStillPresent(
+            f"a crash before Qdrant must leave EXACTLY ONE PENDING row, got {[r['state'] for r in rows]}"
+        )
+    client = _open_ondisk_qdrant(qdrant_path)
+    try:
+        if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version, "provisional"):
+            raise DefectStillPresent("Qdrant must be UNCHANGED after a crash before the mutation")
+        coord = _coordinator(client, db_path)
+        calls = _count_set_payload(client)
+        n0 = calls["n"]
+        report = coord.reconcile_once(limit=10)
+        if calls["n"] - n0 != 1:
+            raise DefectStillPresent(f"reconcile must apply EXACTLY ONCE, got {calls['n'] - n0}")
+        if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+            raise DefectStillPresent("reconcile must apply the mutation (object -> matured/v+1)")
+        rows2 = _outbox_rows(db_path, "op-r5")
+        if len(rows2) != 1 or rows2[0]["state"] != "FINAL":
+            raise DefectStillPresent(
+                "reconcile must finalize the recovered op (exactly one FINAL row)"
+            )
+        if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
+            raise DefectStillPresent("recovery must produce EXACTLY ONE FINAL event")
+        if getattr(report, "finalized", None) != 1:
+            raise DefectStillPresent(f"report must show one finalized, got {report!r}")
+        n1 = calls["n"]
+        coord.reconcile_once(limit=10)
+        if calls["n"] - n1 != 0:
+            raise DefectStillPresent("a second reconcile must make ZERO applies")
+    finally:
+        client.close()
+
+
+def _check_r6(base: Path) -> None:  # C2: crash after Qdrant apply, before APPLIED commit
+    seed, db_path, qdrant_path = _drive_crash(
+        base, "after_qdrant_readback_before_applied_commit", _C2_CODE, "op-r6"
+    )
+    rows = _outbox_rows(db_path, "op-r6")
+    if len(rows) != 1 or rows[0]["state"] != "PENDING":
+        raise DefectStillPresent(
+            f"a crash post-apply/pre-APPLIED must leave EXACTLY ONE PENDING row, "
+            f"got {[r['state'] for r in rows]}"
+        )
+    client = _open_ondisk_qdrant(qdrant_path)
+    try:
+        if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+            raise DefectStillPresent(
+                "the child's Qdrant mutation must be durable (the ACTUAL cross-process side effect)"
+            )
+        coord = _coordinator(client, db_path)
+        calls = _count_set_payload(client)
+        n0 = calls["n"]
+        report = coord.reconcile_once(limit=10)
+        if calls["n"] - n0 != 0:
+            raise DefectStillPresent(
+                f"reconcile must RECOGNIZE the already-applied mutation and NOT re-apply, "
+                f"got {calls['n'] - n0} applies"
+            )
+        if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+            raise DefectStillPresent("reconcile must not change the already-correct Qdrant state")
+        rows2 = _outbox_rows(db_path, "op-r6")
+        if len(rows2) != 1 or rows2[0]["state"] != "FINAL":
+            raise DefectStillPresent(
+                "reconcile must finalize the recovered op (exactly one FINAL row)"
+            )
+        if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
+            raise DefectStillPresent("recovery must produce EXACTLY ONE FINAL event")
+        if getattr(report, "finalized", None) != 1:
+            raise DefectStillPresent(f"report must show one finalized, got {report!r}")
+        n1 = calls["n"]
+        coord.reconcile_once(limit=10)
+        if calls["n"] - n1 != 0:
+            raise DefectStillPresent("a second reconcile must make ZERO applies")
+    finally:
+        client.close()
+
+
+def _check_r7(base: Path) -> None:  # C3: crash after APPLIED commit, before finalize
+    seed, db_path, qdrant_path = _drive_crash(
+        base, "after_applied_commit_before_finalize", _C3_CODE, "op-r7"
+    )
+    rows = _outbox_rows(db_path, "op-r7")
+    if len(rows) != 1 or rows[0]["state"] != "APPLIED":
+        raise DefectStillPresent(
+            f"a crash post-APPLIED/pre-finalize must leave EXACTLY ONE APPLIED row, "
+            f"got {[r['state'] for r in rows]}"
+        )
+    if _final_event_count(db_path, rows[0]["event_id"]):
+        raise DefectStillPresent("no FINAL event may exist before finalize")
+    client = _open_ondisk_qdrant(qdrant_path)
+    try:
+        if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+            raise DefectStillPresent("the child's Qdrant mutation must be durable")
+        coord = _coordinator(client, db_path)
+        calls = _count_set_payload(client)
+        n0 = calls["n"]
+        report = coord.reconcile_once(limit=10)
+        if calls["n"] - n0 != 0:
+            raise DefectStillPresent(
+                f"reconcile of an APPLIED row must perform ONLY the atomic FINAL, no apply; "
+                f"got {calls['n'] - n0} applies"
+            )
+        rows2 = _outbox_rows(db_path, "op-r7")
+        if len(rows2) != 1 or rows2[0]["state"] != "FINAL":
+            raise DefectStillPresent(
+                "reconcile must finalize the APPLIED row (exactly one FINAL row)"
+            )
+        if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
+            raise DefectStillPresent("finalize must produce EXACTLY ONE event")
+        if getattr(report, "finalized", None) != 1:
+            raise DefectStillPresent(f"report must show one finalized, got {report!r}")
+        n1 = calls["n"]
+        coord.reconcile_once(limit=10)
+        if calls["n"] - n1 != 0:
+            raise DefectStillPresent("a second reconcile must be a no-op")
+    finally:
+        client.close()
+
+
+def _check_r8(client: QdrantClient, seed: _Seed, db_path: Path) -> None:  # finalize-txn atomicity
+    coord = _coordinator(client, db_path)
+
+    def _fault(name: str) -> None:
+        if name == "inside_finalize_after_event_insert":
+            raise RuntimeError("injected finalize-txn fault after the event insert")
+
+    _set_checkpoint(coord, _fault)
+    coord.transition(_intent(seed, to_state="matured", operation_key="op-r8"))
+    rows = _outbox_rows(db_path, "op-r8")
+    if len(rows) != 1 or rows[0]["state"] != "APPLIED":
+        raise DefectStillPresent(
+            f"a rolled-back finalize must leave the outbox EXACTLY APPLIED (not PENDING/FINAL), "
+            f"got {[r['state'] for r in rows]}"
+        )
+    if _final_event_count(db_path, rows[0]["event_id"]):
+        raise DefectStillPresent("a rolled-back finalize transaction must leave NO event")
+    if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+        raise DefectStillPresent("the Qdrant mutation must be applied + durable before finalize")
+    # finalize retried by reconcile: exactly one FINAL/event, NO second apply.
+    _set_checkpoint(coord, lambda _name: None)
+    calls = _count_set_payload(client)
+    n0 = calls["n"]
+    report = coord.reconcile_once(limit=10)
+    if calls["n"] - n0 != 0:
+        raise DefectStillPresent("reconcile of an APPLIED row must NOT re-apply Qdrant")
+    rows2 = _outbox_rows(db_path, "op-r8")
+    if len(rows2) != 1 or rows2[0]["state"] != "FINAL":
+        raise DefectStillPresent("reconcile must finalize the APPLIED row to FINAL")
+    if _final_event_count(db_path, rows2[0]["event_id"]) != 1:
+        raise DefectStillPresent("finalize must produce EXACTLY ONE event")
+    if getattr(report, "finalized", None) != 1:
+        raise DefectStillPresent(f"report must show one finalized, got {report!r}")
+    n1 = calls["n"]
+    coord.reconcile_once(limit=10)
+    if calls["n"] - n1 != 0:
+        raise DefectStillPresent("a second reconcile must be a no-op")
+
+
+_R5_REASON = (
+    "today there is no durable pre-Qdrant intent, so a process death before the mutation leaves no "
+    "recoverable record; R5 needs a committed PENDING that survives the crash and a reconcile that "
+    "applies + finalizes exactly once."
+)
+_R6_REASON = (
+    "today there is no outbox/reconciler, so a crash after the Qdrant mutation but before recording it "
+    "loses the audit; R6 needs reconcile to recognize the already-applied mutation and finalize WITHOUT "
+    "re-applying."
+)
+_R7_REASON = (
+    "today there is no APPLIED state, so a crash after the mutation but before the audit leaves "
+    "mutation-without-audit; R7 needs an APPLIED row whose reconcile performs only the atomic FINAL."
+)
+_R8_REASON = (
+    "today the audit write is not transactional with the outbox, so a fault mid-finalize can orphan an "
+    "event or half-finalize; R8 needs the FINAL event insert + outbox->FINAL in ONE txn that rolls back "
+    "cleanly to EXACTLY APPLIED."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R5_REASON)
+def test_r5_crash_after_pending_before_qdrant(tmp_path: Path) -> None:
+    _check_r5(tmp_path)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R6_REASON)
+def test_r6_crash_after_qdrant_before_applied(tmp_path: Path) -> None:
+    _check_r6(tmp_path)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R7_REASON)
+def test_r7_crash_after_applied_before_finalize(tmp_path: Path) -> None:
+    _check_r7(tmp_path)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R8_REASON)
+def test_r8_finalize_transaction_is_atomic(env: tuple[QdrantClient, _Seed, Path]) -> None:
+    _check_r8(*env)
+
+
 # ---- committed, RERUNNABLE red-proof harness (Yua evidence rule) ----------------------------------- #
 
 _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
@@ -1013,6 +1374,7 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r2": (_check_r2, ["mutate_first", "no_begin_catch"]),
     "r3": (_check_r3, ["classify_all_terminal", "reconcile_no_apply", "reconcile_greedy"]),
     "r4": (_check_r4, ["classify_all_transient"]),
+    "r8": (_check_r8, ["finalize_not_atomic"]),
 }
 
 
@@ -1042,3 +1404,27 @@ def test_red_proof_correct_passes_and_wrong_fails(red: str, tmp_path: Path) -> N
                     check(client, seed, db_path)
             finally:
                 client.close()
+
+
+_CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
+    "r5": (_check_r5, ["mutate_first", "reconcile_no_apply"]),
+    "r6": (_check_r6, ["reconcile_no_readback"]),
+    "r7": (_check_r7, ["reconcile_always_apply"]),
+}
+
+
+@pytest.mark.parametrize("red", sorted(_CRASH_PROOF))
+def test_crash_red_proof_correct_passes_and_wrong_fails(red: str, tmp_path: Path) -> None:
+    """RERUNNABLE crash-matrix evidence: a CORRECT candidate upholds the C1/C2/C3 invariant (real
+    subprocess + on-disk Qdrant); each plausible-wrong candidate fails it. Candidates are test-local."""
+    check, wrongs = _CRASH_PROOF[red]
+    with _candidate("correct"):
+        try:
+            check(tmp_path / f"{red}-correct")
+        except (
+            DefectStillPresent
+        ) as e:  # pragma: no cover - a correct candidate failing is a real defect
+            raise AssertionError(f"correct candidate failed {red}: {e}") from e
+    for mode in wrongs:
+        with _candidate(mode), pytest.raises(DefectStillPresent):
+            check(tmp_path / f"{red}-{mode}")
