@@ -103,20 +103,27 @@ def test_http_wire_shape_drops_warnings(
 @pytest.mark.xfail(
     raises=DefectStillPresent,
     strict=True,
-    reason="Telemetry: musubi_retrieval_warnings_total / musubi_retrieval_errors_total do not exist with bounded labels (contract §6)",
+    reason="Telemetry: musubi_retrieval_warnings_total (labelled exactly {warning, plane}) + musubi_retrieval_errors_total do not exist yet (contract §6)",
 )
 def test_telemetry_bounded_labels() -> None:
-    """The two required metrics must exist and their labels must be strictly bounded to the
-    allowlisted codes / fixed planes — never raw exception text (contract §6)."""
+    """Both required metrics must exist, and `musubi_retrieval_warnings_total` must carry EXACTLY the
+    bounded label set `{warning, plane}` (contract §6) — never a raw-exception-text or free-text
+    label NAME. Asserted genuinely against the counter's declared `labelnames`."""
     from musubi.observability import registry as _reg
 
     reg = _reg.default_registry()
-    names = {getattr(m, "name", None) for m in getattr(reg, "_metrics", {}).values()}
-    if (
-        "musubi_retrieval_warnings_total" not in names
-        or "musubi_retrieval_errors_total" not in names
-    ):
+    metrics = {getattr(m, "name", None): m for m in getattr(reg, "_metrics", {}).values()}
+    w = metrics.get("musubi_retrieval_warnings_total")
+    e = metrics.get("musubi_retrieval_errors_total")
+    if w is None or e is None:
         raise DefectStillPresent(
-            "Telemetry: the required bounded degradation metrics (musubi_retrieval_warnings_total, "
+            "Telemetry: the required degradation metrics (musubi_retrieval_warnings_total, "
             "musubi_retrieval_errors_total) do not exist"
+        )
+    # Genuinely assert boundedness: the warnings counter's label NAMES must be exactly {warning,
+    # plane} — an implementation that added an unbounded label (e.g. a raw exception string) fails.
+    warn_labels = set(getattr(w, "labelnames", ()))
+    if warn_labels != {"warning", "plane"}:
+        raise DefectStillPresent(
+            f"Telemetry: musubi_retrieval_warnings_total labels not bounded to {{warning, plane}}; got {warn_labels}"
         )

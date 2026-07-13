@@ -5,9 +5,10 @@ Owner slice: slice-ret007-degradation (Musubi MCP + LiveKit adapters). Tests/doc
 Contract §5: the adapters MUST surface the allowlisted ``warnings`` to the agent, not discard them.
 Today every adapter does ``res.get("results")`` and throws the rest of the response dict away, so the
 agent is blind to retrieval degradation. Each red fails for its named contract reason; the fix flips
-it. (The exact injection API for LiveKit — a ChatContext non-memory status message — is the fix's to
-define; the red asserts only that the warning code is REACHABLE after the call, which it is not
-today.)
+it. For LiveKit, **this red contract DEFINES ``last_warnings`` (a list of allowlisted codes) as the
+minimal surfacing channel** the fix must populate on FastTalker/SlowThinker after each retrieval; the
+ChatContext non-memory status-message rendering is layered on top of that channel and is out of scope
+for this red.
 
     uv run pytest tests/adapters/test_ret007_adapter_warnings.py -v
 """

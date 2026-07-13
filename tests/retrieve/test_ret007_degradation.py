@@ -33,11 +33,8 @@ class DefectStillPresent(Exception):
 
 
 class MockQdrantClient:
-    def __init__(
-        self, should_timeout: bool = False, empty: bool = False, return_hits: bool = False
-    ) -> None:
+    def __init__(self, should_timeout: bool = False, return_hits: bool = False) -> None:
         self.should_timeout = should_timeout
-        self.empty = empty
         self.return_hits = return_hits
 
     def query_points(self, *args: Any, **kwargs: Any) -> Any:
@@ -73,16 +70,22 @@ class MockSuccessReranker:
         return [1.0 for _ in candidates]
 
 
-_ALLOWLIST_PREFIXES = (
-    "sparse_embedding_failed",
-    "reranker_failed",
-    "plane_timeout_",
-    "plane_error_",
-)
+# Strict, whole-code allowlist (contract §4): a warning is allowlisted ONLY if it is EXACTLY one of
+# the simple codes, OR `plane_timeout_<plane>` / `plane_error_<plane>` where <plane> is EXACTLY a
+# fixed plane name — no free-text suffix, no bare prefix. So `plane_error_episodic: Timeout(...)`
+# and a bare `plane_timeout_` are BOTH rejected.
+_FIXED_PLANES = frozenset({"episodic", "curated", "concept", "artifact", "thought"})
+_SIMPLE_CODES = frozenset({"sparse_embedding_failed", "reranker_failed"})
+_PLANE_PREFIXES = ("plane_timeout_", "plane_error_")
 
 
 def _is_allowlisted(code: str) -> bool:
-    return any(code == p or code.startswith(p) for p in _ALLOWLIST_PREFIXES)
+    if code in _SIMPLE_CODES:
+        return True
+    for prefix in _PLANE_PREFIXES:
+        if code.startswith(prefix):
+            return code[len(prefix) :] in _FIXED_PLANES
+    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -93,7 +96,7 @@ def _is_allowlisted(code: str) -> bool:
 async def test_control_healthy_zero_match() -> None:
     """A legitimate zero-match query returns an empty Ok (not an error)."""
     result = await hybrid_search(
-        client=cast(Any, MockQdrantClient(empty=True)),
+        client=cast(Any, MockQdrantClient()),
         embedder=FakeEmbedder(),
         namespace="test/ns",
         query="test",
@@ -323,9 +326,13 @@ async def test_partial_plane_failure_surfaces_warning(monkeypatch: pytest.Monkey
     assert isinstance(result, Ok) and result.value.results, (
         "partial failure must still return the surviving plane's hits"
     )
-    if not any(_is_allowlisted(w) for w in result.value.warnings):
+    # Contract §4: the warnings must be NON-EMPTY and EVERY entry an allowlisted machine-readable
+    # code — a mix of free-text + one allowlisted code must NOT satisfy the contract.
+    warnings = result.value.warnings
+    if not warnings or not all(_is_allowlisted(w) for w in warnings):
         raise DefectStillPresent(
-            f"Partial-plane: warnings are not the bounded allowlisted codes (plane_timeout_/plane_error_): {result.value.warnings}"
+            f"Partial-plane: warnings must be non-empty and ALL bounded allowlisted codes "
+            f"(plane_timeout_<plane>/plane_error_<plane>); got: {warnings}"
         )
 
 
