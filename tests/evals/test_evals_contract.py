@@ -1,5 +1,5 @@
 import copy
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import log2
 from pathlib import Path
@@ -625,28 +625,27 @@ def test_discrimination_per_query_drop() -> None:
 
 
 def _assert_holdout_isolation(
-    loader_func: Callable[[], tuple[list[MockQuery], list[MockQuery]]],
-    trainer_func: Callable[[list[MockQuery]], Any],
+    run_eval_func: Callable[
+        [Callable[[], tuple[list[MockQuery], list[MockQuery]]], Callable[[list[MockQuery]], Any]],
+        Any,
+    ],
 ) -> None:
-    train_queries, test_queries = loader_func()
-    train_ids = {q.id for q in train_queries}
-    test_ids = {q.id for q in test_queries}
-    assert not train_ids.intersection(test_ids), "Holdout leakage: ID overlap in loader"
+    def loader() -> tuple[list[MockQuery], list[MockQuery]]:
+        return [MockQuery("1", "a", ["train_l1"])], [MockQuery("2", "b", ["test_l2"])]
 
-    actual_trained_queries = []
+    actual_trained_queries: list[MockQuery] = []
 
     def spy_trainer(q_list: list[MockQuery]) -> Any:
         actual_trained_queries.extend(q_list)
-        return trainer_func(q_list)
+        return "mock_model"
 
-    spy_trainer(train_queries)
+    run_eval_func(loader, spy_trainer)
 
     trained_ids = {q.id for q in actual_trained_queries}
     trained_labels = {lbl for q in actual_trained_queries for lbl in q.labels}
-    test_labels = {lbl for q in test_queries for lbl in q.labels}
 
-    assert not trained_ids.intersection(test_ids), "Holdout leakage: Trainer saw test IDs"
-    assert not trained_labels.intersection(test_labels), "Holdout leakage: Trainer saw test labels"
+    assert "2" not in trained_ids, "Holdout leakage: Trainer saw test IDs"
+    assert "test_l2" not in trained_labels, "Holdout leakage: Trainer saw test labels"
 
 
 @pytest.mark.xfail(
@@ -654,79 +653,64 @@ def _assert_holdout_isolation(
 )
 def test_eval_holdout_isolation() -> None:
     try:
-        from musubi.evals.runner import load_splits, run_isolated_trainer
+        from musubi.evals.runner import run_isolated_eval
     except ImportError:
         raise DefectStillPresent("musubi.evals modules missing holdout splits")
-    _assert_holdout_isolation(load_splits, run_isolated_trainer)
+    _assert_holdout_isolation(run_isolated_eval)
 
 
 def test_discrimination_holdout_isolation() -> None:
-    def correct_loader() -> tuple[list[MockQuery], list[MockQuery]]:
-        return [MockQuery("1", "a", ["train_l1"])], [MockQuery("2", "b", ["test_l2"])]
+    def correct_runner(ld: Any, tr: Any) -> Any:
+        train_q, _test_q = ld()
+        tr(train_q)
 
-    def correct_trainer(queries: list[MockQuery]) -> Any:
-        pass
+    _assert_holdout_isolation(correct_runner)
 
-    _assert_holdout_isolation(correct_loader, correct_trainer)
+    def wrong_runner_leaks_labels(ld: Any, tr: Any) -> Any:
+        train_q, _test_q = ld()
+        tr(train_q + _test_q)
 
-    def wrong_loader_leaks_labels() -> tuple[list[MockQuery], list[MockQuery]]:
-        return [MockQuery("1", "a", ["train_l1", "test_l2"])], [MockQuery("2", "b", ["test_l2"])]
-
-    with pytest.raises(AssertionError, match="Trainer saw test labels"):
-        _assert_holdout_isolation(wrong_loader_leaks_labels, correct_trainer)
-
-    def wrong_loader_leaks_ids() -> tuple[list[MockQuery], list[MockQuery]]:
-        return [MockQuery("1", "a", ["train"]), MockQuery("2", "b", ["test"])], [
-            MockQuery("2", "b", ["test"])
-        ]
-
-    with pytest.raises(AssertionError, match="ID overlap in loader"):
-        _assert_holdout_isolation(wrong_loader_leaks_ids, correct_trainer)
+    with pytest.raises(AssertionError, match=r"Trainer saw test IDs|Trainer saw test labels"):
+        _assert_holdout_isolation(wrong_runner_leaks_labels)
 
 
 def _assert_pr_smoke_fixed_embeddings(
-    run_func: Callable[[list[dict[str, Any]], str], Any], monkeypatch: pytest.MonkeyPatch
+    run_func: Callable[[list[dict[str, Any]]], Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixed_corpus = [
-        {"id": "doc1", "text": "alpha", "embedding": [0.1, 0.2]},
-        {"id": "doc2", "text": "beta", "embedding": [0.3, 0.4]},
+        {"id": "doc1", "text": "alpha", "embedding": [0.1, 0.2], "relevance": 1},
+        {"id": "doc2", "text": "beta", "embedding": [0.3, 0.4], "relevance": 0},
     ]
     import hashlib
     import json
 
-    corpus_json = json.dumps(fixed_corpus, sort_keys=True).encode("utf-8")
-    canonical_hash = hashlib.sha256(corpus_json).hexdigest()
+    canonical_hash = hashlib.sha256(
+        json.dumps(fixed_corpus, sort_keys=True).encode("utf-8")
+    ).hexdigest()
 
     network_called = False
 
-    def mock_urlopen(*args: Any, **kwargs: Any) -> Any:
+    def mock_network(*args: Any, **kwargs: Any) -> Any:
         nonlocal network_called
         network_called = True
         raise RuntimeError("Network call forbidden in smoke gate")
-
-    def mock_qdrant(*args: Any, **kwargs: Any) -> Any:
-        nonlocal network_called
-        network_called = True
-        raise RuntimeError("Qdrant call forbidden in smoke gate")
 
     import urllib.request
 
     import qdrant_client
 
-    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
-    monkeypatch.setattr(qdrant_client, "QdrantClient", mock_qdrant)
+    monkeypatch.setattr(urllib.request, "urlopen", mock_network)
+    monkeypatch.setattr(qdrant_client, "QdrantClient", mock_network)
 
-    res1 = run_func(fixed_corpus, canonical_hash)
-    res2 = run_func(fixed_corpus, canonical_hash)
+    res1 = run_func(fixed_corpus)
+    res2 = run_func(fixed_corpus)
 
     if network_called:
         raise ValueError("Qdrant/TEI network hit detected")
 
-    assert getattr(res1, "metrics", {}).get("ndcg@10", 0.0) == getattr(res2, "metrics", {}).get(
-        "ndcg@10", 0.0
-    )
-    assert getattr(res1, "metrics", {}).get("ndcg@10", 0.0) > 0.0, "ndcg@10 must be positive"
-    assert getattr(res1, "corpus_checksum", "") == canonical_hash
+    assert getattr(res1, "corpus_checksum", "") == canonical_hash, "Checksum mismatch"
+    assert getattr(res1, "metrics", {}).get("ndcg@10", 0.0) == 1.0, "Metrics mismatch"
+    assert getattr(res1, "metrics", {}) == getattr(res2, "metrics", {}), "Metrics non-deterministic"
 
 
 @pytest.mark.xfail(
@@ -743,51 +727,62 @@ def test_eval_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    def correct_smoke(corpus: list[dict[str, Any]], expected_hash: str) -> Any:
-        return type(
-            "MockResult", (), {"metrics": {"ndcg@10": 0.8}, "corpus_checksum": expected_hash}
-        )()
+    def correct_smoke(corpus: list[dict[str, Any]]) -> Any:
+        import hashlib
+        import json
 
-    def wrong_smoke_requires_qdrant(corpus: list[dict[str, Any]], expected_hash: str) -> Any:
+        h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
+        return type("MockResult", (), {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": h})()
+
+    def wrong_smoke_requires_qdrant(corpus: list[dict[str, Any]]) -> Any:
         import contextlib
 
         import qdrant_client
 
         with contextlib.suppress(Exception):
             qdrant_client.QdrantClient("http://localhost:6333")
+        return correct_smoke(corpus)
+
+    def wrong_smoke_wrong_hash(corpus: list[dict[str, Any]]) -> Any:
         return type(
-            "MockResult", (), {"metrics": {"ndcg@10": 0.8}, "corpus_checksum": expected_hash}
+            "MockResult", (), {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": "bad_hash"}
         )()
 
-    def wrong_smoke_wrong_hash(corpus: list[dict[str, Any]], expected_hash: str) -> Any:
-        return type(
-            "MockResult", (), {"metrics": {"ndcg@10": 0.8}, "corpus_checksum": "bad_hash"}
-        )()
+    def wrong_smoke_wrong_metrics(corpus: list[dict[str, Any]]) -> Any:
+        import hashlib
+        import json
 
-    def wrong_smoke_nondeterministic(corpus: list[dict[str, Any]], expected_hash: str) -> Any:
+        h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
+        return type("MockResult", (), {"metrics": {"ndcg@10": 0.5}, "corpus_checksum": h})()
+
+    def wrong_smoke_nondeterministic(corpus: list[dict[str, Any]]) -> Any:
+        import hashlib
+        import json
         import random
 
+        h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
         return type(
-            "MockResult",
-            (),
-            {"metrics": {"ndcg@10": random.random()}, "corpus_checksum": expected_hash},
+            "MockResult", (), {"metrics": {"ndcg@10": random.random()}, "corpus_checksum": h}
         )()
 
     _assert_pr_smoke_fixed_embeddings(correct_smoke, monkeypatch)
 
-    with pytest.raises(ValueError, match="network hit detected"):
+    with pytest.raises(ValueError, match="Qdrant/TEI network hit detected"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_requires_qdrant, monkeypatch)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="Checksum mismatch"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_hash, monkeypatch)
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="Metrics mismatch"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_metrics, monkeypatch)
+
+    with pytest.raises(AssertionError, match=r"Metrics non-deterministic|Metrics mismatch"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_nondeterministic, monkeypatch)
 
 
 @dataclass(frozen=True)
 class FrozenModelConfig:
-    thresholds: Mapping[str, float]
+    thresholds: tuple[tuple[str, float], ...]
     version: str
     calibrated_on: str
 
@@ -814,14 +809,14 @@ def _assert_abstention_fpr(
     eval_func: Callable[[FrozenModelConfig, dict[str, list[dict[str, Any]]]], MockEvalReport],
 ) -> None:
     config = FrozenModelConfig(
-        thresholds={"fast": 0.5, "deep": 0.8}, version="v1.0", calibrated_on="train_split_A"
+        thresholds=(("fast", 0.5), ("deep", 0.8)), version="v1.0", calibrated_on="train_split_A"
     )
 
     test_data = {
-        "fast_noise": [{"score": 0.4}, {"score": 0.6}],  # 1 TN, 1 FP (score >= 0.5)
-        "fast_answerable": [{"score": 0.6}, {"score": 0.4}],  # 1 TP, 1 FN (score < 0.5)
-        "deep_noise": [{"score": 0.7}],  # 1 TN (score < 0.8)
-        "deep_answerable": [{"score": 0.9}],  # 1 TP (score >= 0.8)
+        "fast_noise": [{"score": 0.4}, {"score": 0.6}],
+        "fast_answerable": [{"score": 0.6}, {"score": 0.4}],
+        "deep_noise": [{"score": 0.7}],
+        "deep_answerable": [{"score": 0.9}],
     }
 
     report = eval_func(config, test_data)
@@ -831,14 +826,22 @@ def _assert_abstention_fpr(
     if report.calibrated_on != "train_split_A":
         raise ValueError("Calibration mismatch")
 
-    if getattr(report, "fast_fpr") > 0.5:
-        raise ValueError("Fast FPR > 0.5")
-    if getattr(report, "fast_fnr") > 0.5:
-        raise ValueError("Fast FNR > 0.5")
-    if getattr(report, "deep_fpr") > 0.0:
-        raise ValueError("Deep FPR > 0.0")
-    if getattr(report, "deep_fnr") > 0.0:
-        raise ValueError("Deep FNR > 0.0")
+    if getattr(report, "fast_fpr") != 0.5:
+        raise ValueError("Fast FPR exact mismatch")
+    if getattr(report, "fast_fnr") != 0.5:
+        raise ValueError("Fast FNR exact mismatch")
+    if getattr(report, "deep_fpr") != 0.0:
+        raise ValueError("Deep FPR exact mismatch")
+    if getattr(report, "deep_fnr") != 0.0:
+        raise ValueError("Deep FNR exact mismatch")
+
+    if (
+        getattr(report, "fast_fpr") > 0.5
+        or getattr(report, "fast_fnr") > 0.5
+        or getattr(report, "deep_fpr") > 0.0
+        or getattr(report, "deep_fnr") > 0.0
+    ):
+        raise ValueError("Ceiling exceeded")
 
 
 @pytest.mark.xfail(
@@ -856,6 +859,8 @@ def test_discrimination_abstention_fpr() -> None:
     def correct_check(
         config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
     ) -> MockEvalReport:
+        thresh_dict = dict(config.thresholds)
+
         def calc_fpr(hits: list[dict[str, Any]], thresh: float) -> float:
             fp = sum(1 for h in hits if h["score"] >= thresh)
             return fp / len(hits) if hits else 0.0
@@ -867,10 +872,10 @@ def test_discrimination_abstention_fpr() -> None:
         return MockEvalReport(
             version=config.version,
             calibrated_on=config.calibrated_on,
-            fast_fpr=calc_fpr(results["fast_noise"], config.thresholds["fast"]),
-            fast_fnr=calc_fnr(results["fast_answerable"], config.thresholds["fast"]),
-            deep_fpr=calc_fpr(results["deep_noise"], config.thresholds["deep"]),
-            deep_fnr=calc_fnr(results["deep_answerable"], config.thresholds["deep"]),
+            fast_fpr=calc_fpr(results["fast_noise"], thresh_dict["fast"]),
+            fast_fnr=calc_fnr(results["fast_answerable"], thresh_dict["fast"]),
+            deep_fpr=calc_fpr(results["deep_noise"], thresh_dict["deep"]),
+            deep_fnr=calc_fnr(results["deep_answerable"], thresh_dict["deep"]),
         )
 
     _assert_abstention_fpr(correct_check)
@@ -892,8 +897,16 @@ def test_discrimination_abstention_fpr() -> None:
         rep.fast_fnr = 1.0
         return rep
 
-    with pytest.raises(ValueError, match=r"Fast FNR > 0\.5"):
+    with pytest.raises(ValueError, match=r"Fast FNR exact mismatch"):
         _assert_abstention_fpr(wrong_check_bad_fn)
+
+    def wrong_check_hardcoded(
+        config: FrozenModelConfig, results: dict[str, list[dict[str, Any]]]
+    ) -> MockEvalReport:
+        return MockEvalReport(config.version, config.calibrated_on, 0.0, 0.0, 0.0, 0.0)
+
+    with pytest.raises(ValueError, match=r"Fast FPR exact mismatch"):
+        _assert_abstention_fpr(wrong_check_hardcoded)
 
 
 # The remaining 2 tests are preserved as documentation of the pending inventory,
