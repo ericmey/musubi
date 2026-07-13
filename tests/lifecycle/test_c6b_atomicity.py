@@ -437,13 +437,20 @@ class _RefCoordinator:
         con = sqlite3.connect(self._db)
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_outbox (operation_key TEXT PRIMARY KEY, object_id TEXT,"
-            " collection TEXT, target_state TEXT, expected_version INTEGER, patch_sha TEXT, state TEXT,"
-            " event_id TEXT)"
+            " collection TEXT, target_state TEXT, expected_version INTEGER, patch_sha TEXT,"
+            " intent_digest TEXT, state TEXT, event_id TEXT)"
         )
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_events (event_id TEXT PRIMARY KEY, object_id TEXT,"
             " namespace TEXT, to_state TEXT)"
         )
+        if self._mode != "no_unique_index":
+            # ATOMIC single-active-intent (Yua R11): a DB-enforced partial unique index, NOT a
+            # check-then-insert. Two concurrent begins for one object can't both create a nonterminal row.
+            con.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_active_intent ON lifecycle_outbox "
+                "(collection, object_id) WHERE state IN ('PENDING','APPLIED')"
+            )
         con.commit()
         con.close()
 
@@ -457,27 +464,38 @@ class _RefCoordinator:
     def _cur(self, collection: str, object_id: str) -> tuple[object, object]:
         return _qdrant_state(self._client, collection, object_id)
 
+    def _intent_digest(self, i: _RefIntent) -> str:
+        """Canonical identity of the REQUESTED operation (Yua R10) - what an operation_key must map to.
+        A retry with the same key but a different intent (target/expected/namespace) is a conflict."""
+        canon = f"{i.collection}|{i.object_id}|{i.namespace}|{i.expected_version}|{i.target_state}"
+        return hashlib.sha256(canon.encode()).hexdigest()
+
     def _write_pending(
         self, i: _RefIntent, opk: str, event_id: str, state: str = "PENDING"
     ) -> None:
         self._checkpoint("before_pending_commit")
         con = sqlite3.connect(self._db)
-        con.execute(
-            "INSERT OR IGNORE INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
-            "expected_version,patch_sha,state,event_id) VALUES (?,?,?,?,?,?,?,?)",
-            (
-                opk,
-                i.object_id,
-                i.collection,
-                i.target_state,
-                i.expected_version,
-                _patch_sha(i.target_state, i.expected_version + 1),
-                state,
-                event_id,
-            ),
-        )
-        con.commit()
-        con.close()
+        try:
+            # NOT "OR IGNORE": a partial-unique-index violation (a second active intent for the object)
+            # must RAISE (IntegrityError) so the loser is rejected atomically, not silently ignored.
+            con.execute(
+                "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
+                "expected_version,patch_sha,intent_digest,state,event_id) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    opk,
+                    i.object_id,
+                    i.collection,
+                    i.target_state,
+                    i.expected_version,
+                    _patch_sha(i.target_state, i.expected_version + 1),
+                    self._intent_digest(i),
+                    state,
+                    event_id,
+                ),
+            )
+            con.commit()
+        finally:
+            con.close()
         self._checkpoint("after_pending_commit")
 
     def _mark(self, opk: str, state: str) -> None:
@@ -486,14 +504,15 @@ class _RefCoordinator:
         con.commit()
         con.close()
 
-    def _row_for_key(self, opk: str) -> tuple[str, str] | None:
+    def _row_for_key(self, opk: str) -> tuple[str, str, str] | None:
         con = sqlite3.connect(self._db)
         try:
             cur = con.execute(
-                "SELECT state, event_id FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+                "SELECT state, event_id, intent_digest FROM lifecycle_outbox WHERE operation_key=?",
+                (opk,),
             )
             row = cur.fetchone()
-            return (row[0], row[1]) if row else None
+            return (row[0], row[1], row[2]) if row else None
         finally:
             con.close()
 
@@ -601,18 +620,24 @@ class _RefCoordinator:
         # ignore_operation_key (WRONG): mint a fresh key each call -> a caller retry becomes a second
         # operation instead of the same one (caught by R10).
         opk = generate_ksuid() if self._mode == "ignore_operation_key" else self._key(intent)
-        # operation_key idempotency (R10): an existing row for this key short-circuits to its outcome.
-        if self._mode not in ("ignore_operation_key",):
+        digest = self._intent_digest(intent)
+        # operation_key idempotency + CONFLICT (R10): an existing row for this key short-circuits. If the
+        # stored intent digest differs, the same key was reused for a DIFFERENT intent -> conflict, no
+        # apply/new row/event. Only identical key+intent replays.
+        if self._mode != "ignore_operation_key":
             existing = self._row_for_key(opk)
             if existing is not None:
-                state, ev = existing
+                state, ev, stored_digest = existing
+                if stored_digest != digest and self._mode != "trust_key_only":
+                    return Err(error=_RefError(code="operation_key_conflict"))
                 if state == "FINAL":
                     return Ok(value=_RefFinal(operation_key=opk, event_id=ev))
                 if state == "ABANDONED":
                     return Err(error=_RefError(code="terminal_apply_failure"))
-                return Ok(value=_RefPending(operation_key=opk, event_id=ev))  # in-flight: reuse
-        # single active intent per (collection,object_id) (R11/D): a DIFFERENT op's nonterminal row rejects.
-        if self._mode != "no_single_intent":
+                return Ok(value=_RefPending(operation_key=opk, event_id=ev))  # in-flight: replay
+        # no_unique_index (WRONG): a NAIVE check-then-insert for single-active-intent instead of the atomic
+        # partial-unique index -> two simultaneous begins can both pass the check (caught by R11's race).
+        if self._mode == "no_unique_index":
             other = self._active_intent_for_object(intent.collection, intent.object_id, opk)
             if other is not None:
                 return Err(error=_RefError(code="active_intent_exists"))
@@ -625,6 +650,9 @@ class _RefCoordinator:
                     event_id,
                     state=("FINAL" if self._mode == "premature_final" else "PENDING"),
                 )
+            except sqlite3.IntegrityError:
+                # the ATOMIC partial-unique index rejected a second active intent for this object (R11).
+                return Err(error=_RefError(code="active_intent_exists"))
             except sqlite3.Error:
                 # A REAL SQLite failure at durable-begin (the checkpoint delivers sqlite3.OperationalError,
                 # the same class a genuine disk error raises) maps to a bounded Err; no row, no mutation.
@@ -1117,46 +1145,154 @@ def test_r4_terminal_failure_is_err_abandoned_no_final(
 
 
 def _check_r10(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
-    """operation_key idempotency across CALLER retries: the same logical request twice = one operation,
-    one FINAL, one event, one effective apply (Yua correction C)."""
+    """operation_key idempotency + CONFLICT (Yua correction C, a digest not key-alone):
+    (a) identical key + identical intent REPLAYS (one operation, one FINAL, one event, zero re-apply);
+    (b) same key + DIFFERENT intent => exact operation_key_conflict, no apply / no new row / no event."""
     coord = _coordinator(client, db_path)
     intent = _intent(seed, to_state="matured", operation_key="op-r10")
     r1 = coord.transition(intent)
     if not isinstance(r1, Ok):
         raise DefectStillPresent("the first transition must succeed")
+    # (a) identical retry replays with NO second apply.
     calls = _count_set_payload(client)
     n0 = calls["n"]
-    r2 = coord.transition(intent)  # a caller RETRY with the SAME operation_key
+    r2 = coord.transition(intent)  # a caller RETRY with the SAME key AND the SAME intent
     if calls["n"] - n0 != 0:
-        raise DefectStillPresent("a retried operation_key must NOT trigger a second Qdrant apply")
+        raise DefectStillPresent("an identical retry must NOT trigger a second Qdrant apply")
     if not isinstance(r2, Ok) or getattr(r2.value, "operation_key", None) != "op-r10":
-        raise DefectStillPresent(
-            "the retry must return the SAME completed operation (idempotent Ok)"
-        )
+        raise DefectStillPresent("an identical retry must replay the SAME completed operation (Ok)")
     rows = _outbox_for_object(db_path, seed.object_id)
     if len(rows) != 1 or rows[0]["state"] != "FINAL":
         raise DefectStillPresent(
-            f"a retried operation must leave EXACTLY ONE FINAL row, got {[r['state'] for r in rows]}"
+            f"an identical retry must leave EXACTLY ONE FINAL row, got {[r['state'] for r in rows]}"
         )
     if _final_event_count(db_path, rows[0]["event_id"]) != 1:
-        raise DefectStillPresent("a retried operation must produce EXACTLY ONE FINAL event")
+        raise DefectStillPresent("an identical retry must produce EXACTLY ONE FINAL event")
     if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
         raise DefectStillPresent("the object must be at target after exactly one effective apply")
-
-
-def _check_r11(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
-    """One nonterminal intent per (collection,object_id): while op-a is in-flight (PENDING), a DIFFERENT
-    op-b on the same object is rejected, never a second nonterminal intent (Yua correction D)."""
-    coord = _coordinator(client, db_path)
-    _fail_set_payload(client, _TransientQdrantError("hold op-a PENDING"))
-    ra = coord.transition(_intent(seed, to_state="matured", operation_key="op-a"))
-    if not isinstance(ra, Ok):  # Ok(Pending): op-a is a live, nonterminal intent
-        raise DefectStillPresent("op-a should be Ok(Pending) after a transient failure")
-    _restore_set_payload(client)
-    rb = coord.transition(_intent(seed, to_state="demoted", operation_key="op-b"))
-    if not isinstance(rb, Err) or getattr(rb.error, "code", None) != "active_intent_exists":
+    # (b) same key, DIFFERENT intent (different target) => operation_key_conflict; nothing changes.
+    n1 = calls["n"]
+    conflicting = _intent(seed, to_state="demoted", operation_key="op-r10")  # same key, new target
+    rc = coord.transition(conflicting)
+    if not isinstance(rc, Err) or getattr(rc.error, "code", None) != "operation_key_conflict":
         raise DefectStillPresent(
-            "a second nonterminal intent on the same object must be rejected (Err active_intent_exists)"
+            "reusing an operation_key for a DIFFERENT intent must be an exact operation_key_conflict Err"
+        )
+    if calls["n"] - n1 != 0:
+        raise DefectStillPresent("an operation_key conflict must NOT apply anything")
+    if len(_outbox_for_object(db_path, seed.object_id)) != 1:
+        raise DefectStillPresent("an operation_key conflict must NOT create a new outbox row")
+    if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
+        raise DefectStillPresent("an operation_key conflict must not change the object")
+
+
+# ---- R11: single active intent proven under a TWO-PROCESS begin race (Yua correction D) ------------ #
+#
+# Yua rejected the sequential version: `_active_intent_for_object` then INSERT is check-then-insert, so
+# two simultaneous begins can both pass. This proves the ATOMIC partial-unique index with two REAL OS
+# processes synchronized at the `before_pending_commit` boundary (a file barrier), so both hit the INSERT
+# together. Exactly one is accepted (exit _WIN); the other is rejected active_intent_exists (exit
+# _CONFLICT); the shared SQLite holds exactly one nonterminal row. A naive check-then-insert candidate
+# (no_unique_index) lets both through -> two _WIN exits (caught).
+
+_RACE_WIN = 21
+_RACE_CONFLICT = 22
+_RACE_BARRIER_TIMEOUT = 30.0
+
+
+def _barrier_source(barrier_dir: Path, tag: str, n: int) -> str:
+    """Inline source (used inside a child's checkpoint) that rendezvouses n processes at a file barrier."""
+    return (
+        "import os as _os, time as _time\n"
+        f"_bd = {str(barrier_dir)!r}\n"
+        "def _await_barrier():\n"
+        # write the ready-file AT the barrier (a true rendezvous): N files present => all N processes have
+        # REACHED this point, so nobody proceeds past the barrier until every process is here.
+        f"    open(_os.path.join(_bd, {tag!r} + '.' + str(_os.getpid())), 'w').close()\n"
+        f"    for _ in range(int({_RACE_BARRIER_TIMEOUT!r} / 0.02)):\n"
+        f"        if len([f for f in _os.listdir(_bd) if f.startswith({tag!r})]) >= {n}: return\n"
+        "        _time.sleep(0.02)\n"
+        "    raise SystemExit('barrier timeout')\n"
+    )
+
+
+def _race_child_source(
+    *, mode: str, db_path: Path, seed: _Seed, target: str, op_key: str, barrier_dir: Path
+) -> str:
+    return (
+        "import os, warnings\n"
+        "from qdrant_client import QdrantClient\n"
+        "from tests.lifecycle.test_c6b_atomicity import _RefCoordinator as _Coord, _RefIntent as _Intent\n"
+        + _barrier_source(barrier_dir, "begin", 2)
+        + "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        "    _client = QdrantClient(':memory:')\n"
+        f"_c = _Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})\n"
+        "def _cp(name):\n"
+        "    if name == 'before_pending_commit': _await_barrier()\n"
+        f"    if name == 'after_pending_commit': os._exit({_RACE_WIN})\n"
+        "_c._checkpoint = _cp\n"
+        f"_res = _c.transition(_Intent(collection={seed.collection!r}, object_id={seed.object_id!r}, "
+        f"namespace={seed.namespace!r}, expected_version={seed.version}, target_state={target!r}, "
+        f"actor='t', reason='r', operation_key={op_key!r}))\n"
+        "code = getattr(getattr(_res, 'error', None), 'code', None)\n"
+        f"os._exit({_RACE_CONFLICT} if code == 'active_intent_exists' else 99)\n"
+    )
+
+
+def _run_two_process_race(
+    base: Path, *, mode: str, targets: tuple[str, str], op_keys: tuple[str, str]
+) -> tuple[Path, _Seed, list[int]]:
+    """Pre-create the shared schema, then spawn two children that race the begin boundary. Returns
+    (db_path, seed, [returncode_a, returncode_b])."""
+    _api()  # xfail today (coordinator absent)
+    base.mkdir(parents=True, exist_ok=True)
+    db_path = base / "lifecycle.db"
+    barrier_dir = base / "barrier"
+    barrier_dir.mkdir(parents=True, exist_ok=True)
+    seed = _Seed(
+        collection=str(collection_for_plane("episodic")),
+        object_id="raceobj0000000000000000000",
+        namespace=_NS,
+        version=1,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _RefCoordinator(
+            client=QdrantClient(":memory:"), db_path=db_path, mode=mode
+        )  # create schema+index
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _race_child_source(
+                    mode=mode,
+                    db_path=db_path,
+                    seed=seed,
+                    target=targets[i],
+                    op_key=op_keys[i],
+                    barrier_dir=barrier_dir,
+                ),
+            ]
+        )
+        for i in range(2)
+    ]
+    codes = [p.wait(timeout=90) for p in procs]
+    return db_path, seed, codes
+
+
+def _check_r11(base: Path) -> None:
+    db_path, seed, codes = _run_two_process_race(
+        base,
+        mode=(_ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"),
+        targets=("matured", "matured"),
+        op_keys=("op-a11", "op-b11"),
+    )
+    if sorted(codes) != [_RACE_WIN, _RACE_CONFLICT]:
+        raise DefectStillPresent(
+            f"exactly one begin must be accepted and one rejected active_intent_exists; got exit codes "
+            f"{codes} (both {_RACE_WIN} = both accepted = the check-then-insert race)"
         )
     nonterminal = [
         r
@@ -1165,10 +1301,8 @@ def _check_r11(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     ]
     if len(nonterminal) != 1:
         raise DefectStillPresent(
-            f"there must be EXACTLY ONE nonterminal intent per object, got {len(nonterminal)}"
+            f"the shared outbox must hold EXACTLY ONE nonterminal intent, got {len(nonterminal)}"
         )
-    if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version, "provisional"):
-        raise DefectStillPresent("the rejected op-b must not have mutated the object")
 
 
 def _check_r12(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
@@ -1194,31 +1328,6 @@ def _check_r12(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         raise DefectStillPresent("a fenced-out transition must never emit a FINAL event")
 
 
-def _check_r22(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
-    """Two DIFFERENT requested transitions race on one object: exactly one wins; the loser (stale
-    expected) cannot mutate and cannot overwrite the winner's result (Yua R22)."""
-    coord = _coordinator(client, db_path)
-    ra = coord.transition(_intent(seed, to_state="matured", operation_key="op-a22"))
-    if not isinstance(ra, Ok):
-        raise DefectStillPresent("the first (winning) transition must succeed")
-    if _qdrant_state(client, seed.collection, seed.object_id) != (seed.version + 1, "matured"):
-        raise DefectStillPresent("the winner must land its mutation (matured/v+1)")
-    # the loser requests a DIFFERENT target from the now-STALE version
-    rb = coord.transition(
-        _intent(seed, to_state="demoted", operation_key="op-b22", expected_version=seed.version)
-    )
-    if not isinstance(rb, Err):
-        raise DefectStillPresent("the losing (stale) transition must be REFUSED, not applied")
-    ver, st = _qdrant_state(client, seed.collection, seed.object_id)
-    if (ver, st) != (seed.version + 1, "matured"):
-        raise DefectStillPresent(
-            f"the loser must not mutate/overwrite the winner; object is {st}/{ver}, expected matured/v+1"
-        )
-    rows_b = _outbox_rows(db_path, "op-b22")
-    if rows_b and rows_b[0]["state"] == "FINAL":
-        raise DefectStillPresent("the loser must never reach FINAL")
-
-
 _R10_REASON = (
     "today an event_id is minted per call with no operation_key, so a caller RETRY of the same logical "
     "request creates a second operation; R10 needs one operation/FINAL/event/apply per operation_key."
@@ -1231,10 +1340,6 @@ _R12_REASON = (
     "today expected_version is warn-only (last writer wins), so a stale writer clobbers; R12 needs a hard "
     "fence: stale expected => Err + ABANDONED, mutation not applied."
 )
-_R22_REASON = (
-    "today two different transitions on one object can both apply (lost update); R22 needs exactly one "
-    "winner with the loser fenced out, never overwriting the winner or reaching FINAL."
-)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
@@ -1245,20 +1350,13 @@ def test_r10_operation_key_idempotent_across_caller_retries(
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R11_REASON)
-def test_r11_single_active_intent_per_object(env: tuple[QdrantClient, _Seed, Path]) -> None:
-    _check_r11(*env)
+def test_r11_single_active_intent_per_object(tmp_path: Path) -> None:
+    _check_r11(tmp_path)
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R12_REASON)
 def test_r12_hard_version_fence_refuses_stale(env: tuple[QdrantClient, _Seed, Path]) -> None:
     _check_r12(*env)
-
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R22_REASON)
-def test_r22_two_different_transitions_race_loser_cannot_overwrite(
-    env: tuple[QdrantClient, _Seed, Path],
-) -> None:
-    _check_r22(*env)
 
 
 # ---- R5-R8: crash matrix + finalize atomicity (Yua locked ruling) --------------------------------- #
@@ -1588,9 +1686,7 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r4": (_check_r4, ["classify_all_transient"]),
     "r8": (_check_r8, ["finalize_not_atomic"]),
     "r10": (_check_r10, ["ignore_operation_key"]),
-    "r11": (_check_r11, ["no_single_intent"]),
     "r12": (_check_r12, ["warn_only_fence"]),
-    "r22": (_check_r22, ["warn_only_fence"]),
 }
 
 
@@ -1626,6 +1722,7 @@ _CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r5": (_check_r5, ["mutate_first", "reconcile_no_apply"]),
     "r6": (_check_r6, ["reconcile_no_readback"]),
     "r7": (_check_r7, ["reconcile_always_apply"]),
+    "r11": (_check_r11, ["no_unique_index"]),
 }
 
 
