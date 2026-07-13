@@ -430,8 +430,19 @@ class _RefCoordinator:
     (default no-op; NOT a public switch, NO production os._exit) lets tests inject a deterministic fault
     or crash at a named boundary."""
 
-    def __init__(self, *, client: Any, db_path: Path, mode: str = "correct") -> None:
+    def __init__(
+        self,
+        *,
+        client: Any = None,
+        db_path: Path,
+        qdrant_path: Path | None = None,
+        mode: str = "correct",
+    ) -> None:
         self._client = client
+        # LAZY on-disk Qdrant (R22): a two-process race passes a qdrant_path; Qdrant is opened only when a
+        # process actually reads/applies, so the loser (rejected at begin) never opens it and the winner
+        # holds the single-writer lock alone.
+        self._qdrant_path = str(qdrant_path) if qdrant_path is not None else None
         self._db = str(db_path)
         self._mode = mode
         self._checkpoint: Any = lambda _name: None
@@ -445,7 +456,7 @@ class _RefCoordinator:
             "CREATE TABLE IF NOT EXISTS lifecycle_events (event_id TEXT PRIMARY KEY, object_id TEXT,"
             " namespace TEXT, to_state TEXT)"
         )
-        if self._mode != "no_unique_index":
+        if self._mode not in ("no_unique_index", "non_atomic_cas"):
             # ATOMIC single-active-intent (Yua R11): a DB-enforced partial unique index, NOT a
             # check-then-insert. Two concurrent begins for one object can't both create a nonterminal row.
             con.execute(
@@ -456,6 +467,14 @@ class _RefCoordinator:
         con.close()
 
     # -- internals --------------------------------------------------------------------------------- #
+    def _qc(self) -> Any:
+        """The Qdrant client - lazily opened from qdrant_path if this coordinator was built for a race."""
+        if self._client is None and self._qdrant_path is not None:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                self._client = QdrantClient(path=self._qdrant_path)
+        return self._client
+
     def _key(self, i: _RefIntent) -> str:
         return (
             i.operation_key
@@ -463,7 +482,7 @@ class _RefCoordinator:
         )
 
     def _cur(self, collection: str, object_id: str) -> tuple[object, object]:
-        return _qdrant_state(self._client, collection, object_id)
+        return _qdrant_state(self._qc(), collection, object_id)
 
     def _intent_digest(self, i: _RefIntent) -> str:
         """Canonical identity of the REQUESTED operation (Yua R10) - what an operation_key must map to. It
@@ -573,20 +592,21 @@ class _RefCoordinator:
         must: list[models.Condition] = [
             models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))
         ]
-        if self._mode != "warn_only_fence":
+        non_atomic = self._mode in ("warn_only_fence", "non_atomic_cas")
+        if not non_atomic:
             must.append(
                 models.FieldCondition(
                     key="version", match=models.MatchValue(value=expected_version)
                 )
             )
-        self._client.set_payload(
+        self._qc().set_payload(
             collection_name=collection,
             payload={"state": target_state, "version": expected_version + 1},
             points=models.Filter(must=must),
         )
         ver, st = self._cur(collection, object_id)
-        if self._mode == "warn_only_fence":
-            return st == target_state  # ignores the version fence
+        if non_atomic:
+            return st == target_state  # ignores the version fence (non-atomic CAS)
         return ver == expected_version + 1 and st == target_state
 
     def _finalize(
@@ -1787,6 +1807,124 @@ def test_r8_finalize_transaction_is_atomic(env: tuple[QdrantClient, _Seed, Path]
     _check_r8(*env)
 
 
+# ---- R22: two DIFFERENT transitions race on one object, TWO REAL PROCESSES (Yua R22 rebuild) ------- #
+#
+# Yua rejected the sequential version. This is a real race: two OS processes with DIFFERENT operation
+# keys, DIFFERENT targets, the SAME expected_version, on ONE object, over a SHARED ON-DISK Qdrant + SQLite,
+# synchronized at before_pending_commit. Exactly one wins the atomic begin (partial unique index) and
+# ACTUALLY mutates the on-disk Qdrant (the winner lazy-opens it - the loser, rejected at begin, never
+# does, so no single-writer-lock contention); the loser exits active_intent_exists. Proven: exactly one
+# FINAL row, one effective mutation to the WINNER's target, one audit event, no overwrite. Wrong
+# candidates: no_unique_index (naive check-then-insert) and non_atomic_cas (no index + non-atomic apply)
+# -> both begins accepted -> two winners / two rows (caught).
+
+_R22_WIN = 31
+_R22_CONFLICT = 32
+_R22_FENCE = 33
+
+
+def _r22_child_source(
+    *,
+    mode: str,
+    db_path: Path,
+    qdrant_path: Path,
+    seed: _Seed,
+    target: str,
+    op_key: str,
+    barrier_dir: Path,
+) -> str:
+    return (
+        "import os, warnings\n"
+        "from qdrant_client import QdrantClient\n"
+        "from musubi.types.common import Ok\n"
+        "from tests.lifecycle.test_c6b_atomicity import _RefCoordinator as _Coord, _RefIntent as _Intent\n"
+        + _barrier_source(barrier_dir, "begin", 2)
+        + f"_c = _Coord(db_path={str(db_path)!r}, qdrant_path={str(qdrant_path)!r}, mode={mode!r})\n"
+        "def _cp(name):\n"
+        "    if name == 'before_pending_commit': _await_barrier()\n"
+        "_c._checkpoint = _cp\n"
+        f"_res = _c.transition(_Intent(collection={seed.collection!r}, object_id={seed.object_id!r}, "
+        f"namespace={seed.namespace!r}, expected_version={seed.version}, target_state={target!r}, "
+        f"actor='t', reason='r', operation_key={op_key!r}))\n"
+        "code = getattr(getattr(_res, 'error', None), 'code', None)\n"
+        f"os._exit({_R22_WIN} if isinstance(_res, Ok) else "
+        f"({_R22_CONFLICT} if code in ('active_intent_exists', 'operation_key_conflict') else "
+        f"({_R22_FENCE} if code == 'version_fence_violation' else 99)))\n"
+    )
+
+
+def _check_r22(base: Path) -> None:
+    _api()  # xfail today (coordinator absent)
+    mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
+    seed, db_path, qdrant_path = _make_ondisk_env(
+        base
+    )  # seeds object v1/provisional, closes Qdrant
+    barrier_dir = base / "barrier"
+    barrier_dir.mkdir(parents=True, exist_ok=True)
+    _RefCoordinator(
+        db_path=db_path, qdrant_path=qdrant_path, mode=mode
+    )  # create outbox schema+index
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _r22_child_source(
+                    mode=mode,
+                    db_path=db_path,
+                    qdrant_path=qdrant_path,
+                    seed=seed,
+                    target=target,
+                    op_key=op_key,
+                    barrier_dir=barrier_dir,
+                ),
+            ]
+        )
+        for target, op_key in (("matured", "op-a22"), ("demoted", "op-b22"))
+    ]
+    codes = [p.wait(timeout=120) for p in procs]
+    # EXACTLY ONE winner; the loser is rejected either at begin (active_intent_exists, concurrent) or at
+    # the fence (version_fence_violation, if the winner fully finalized first) - both are valid "loser
+    # cannot overwrite" outcomes (Yua: exact fence/conflict Err). Two winners = the lost-update / double-
+    # operation race a naive check-then-insert or non-atomic CAS produces.
+    if codes.count(_R22_WIN) != 1 or (codes.count(_R22_CONFLICT) + codes.count(_R22_FENCE)) != 1:
+        raise DefectStillPresent(
+            f"exactly one transition must WIN + mutate and the other be fenced/conflict-rejected; got "
+            f"exit codes {codes} (two {_R22_WIN} = both accepted = lost-update / double-operation race)"
+        )
+    rows = _outbox_for_object(db_path, seed.object_id)
+    finals = [r for r in rows if r["state"] == "FINAL"]
+    if (
+        len(finals) != 1
+    ):  # the loser may leave an ABANDONED row, but NEVER a second FINAL (no overwrite)
+        raise DefectStillPresent(
+            f"exactly ONE FINAL outbox row must exist (no double operation), got {[r['state'] for r in rows]}"
+        )
+    if _events_for_object(db_path, seed.object_id) != 1:
+        raise DefectStillPresent("exactly ONE audit event must exist for the object")
+    client = _open_ondisk_qdrant(qdrant_path)
+    try:
+        ver, st = _qdrant_state(client, seed.collection, seed.object_id)
+        if ver != seed.version + 1 or st not in ("matured", "demoted"):
+            raise DefectStillPresent(
+                f"exactly ONE effective mutation to the winner's target (matured|demoted); got {st}/{ver}"
+            )
+    finally:
+        client.close()
+
+
+_R22_REASON = (
+    "today two different transitions on one object can both apply (lost update / double operation); R22 "
+    "needs exactly one winner that mutates while the loser is atomically fenced/conflict-rejected, one "
+    "FINAL row, one event, no overwrite - proven with two real processes racing the begin boundary."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R22_REASON)
+def test_r22_two_process_race_one_winner_mutates_loser_fenced(tmp_path: Path) -> None:
+    _check_r22(tmp_path)
+
+
 # ---- committed, RERUNNABLE red-proof harness (Yua evidence rule) ----------------------------------- #
 
 _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
@@ -1843,6 +1981,7 @@ _CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r6": (_check_r6, ["reconcile_no_readback"]),
     "r7": (_check_r7, ["reconcile_always_apply"]),
     "r11": (_check_r11, ["no_unique_index"]),
+    "r22": (_check_r22, ["non_atomic_cas"]),
 }
 
 
