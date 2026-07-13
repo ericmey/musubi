@@ -47,7 +47,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 VALID_MODES = ("fast", "blended", "deep", "recent")
 ALL_STATES = ["provisional", "matured", "promoted", "demoted", "archived", "superseded"]
@@ -100,8 +100,12 @@ class Musubi:
         self._tok = e["MUSUBI_TOKEN"]
 
     def _req(
-        self, method: str, path: str, body: dict | None = None, query: dict | None = None
-    ) -> dict:
+        self,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        query: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         url = f"{self._url}/{path.lstrip('/')}"
         if query:
             url = f"{url}?{urllib.parse.urlencode(query)}"
@@ -111,7 +115,7 @@ class Musubi:
         req.add_header("Authorization", f"Bearer {self._tok}")
         req.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(req, timeout=30) as r:
-            return json.loads(r.read().decode() or "{}")
+            return cast("dict[str, Any]", json.loads(r.read().decode() or "{}"))
 
     def write(
         self, namespace: str, content: str, *, importance: int = 5, tags: list[str] | None = None
@@ -126,7 +130,7 @@ class Musubi:
                 "importance": importance,
             },
         )
-        return payload["object_id"]
+        return str(payload["object_id"])
 
     def recall(
         self,
@@ -136,7 +140,7 @@ class Musubi:
         mode: str = "blended",
         limit: int = 5,
         state_filter: list[str] | None = _SENTINEL,  # type: ignore[assignment]
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Raw ranked recall.
 
         ``state_filter=None`` means **send no filter** — i.e. exercise the SERVER
@@ -196,7 +200,7 @@ class Store:
             raise RuntimeError(f"store read failed: {out.stderr.strip()[:200]}")
         return out.stdout.strip()
 
-    def payload(self, object_id: str) -> dict | None:
+    def payload(self, object_id: str) -> dict[str, Any] | None:
         """The raw stored payload, with NO side effects. Returns None if absent."""
         # Built by concatenation (not %/format): the embedded script contains literal JSON
         # braces, which str.format/f-strings would mis-parse.
@@ -215,7 +219,7 @@ class Store:
             'p=json.load(urllib.request.urlopen(r,timeout=15))["result"]["points"]\n'
             'print(json.dumps(p[0]["payload"] if p else None))'
         )
-        return json.loads(self._exec(script))
+        return cast("dict[str, Any] | None", json.loads(self._exec(script)))
 
     def observe(self, object_id: str, key: str) -> Observation:
         """One field, from the store. **Absent is reported as absent, never as 0.**"""
@@ -315,7 +319,7 @@ class Fixture:
         oid = self.musubi.write(self.namespace, self._fresh_content(marker), importance=importance)
 
         deadline = time.time() + 25
-        pl: dict | None = None
+        pl: dict[str, Any] | None = None
         while time.time() < deadline:
             pl = self.store.payload(oid)
             if pl is not None:
@@ -394,7 +398,7 @@ class Fixture:
         """
         oid = self.musubi.write(self.namespace, content, importance=importance)
         deadline = time.time() + 25
-        pl: dict | None = None
+        pl: dict[str, Any] | None = None
         while time.time() < deadline:
             pl = self.store.payload(oid)
             if pl is not None:
@@ -414,9 +418,10 @@ class Fixture:
                 problems.append(f"{key}={pl[key]} (required == {want})")
         stored = pl.get("content")
         if stored != content:
+            stored_len = len(stored) if isinstance(stored, str) else 0
             problems.append(
                 "STORED CONTENT != REQUESTED — capture altered or deduped it. "
-                f"requested {len(content)} chars, stored {len(stored)}"
+                f"requested {len(content)} chars, stored {stored_len}"
             )
         if problems:
             raise RuntimeError(f"seed_exact INVARIANT VIOLATED for {oid}: " + "; ".join(problems))

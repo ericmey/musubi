@@ -29,6 +29,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import ALL_STATES, FRESH_STATES, Fixture, Musubi, Store
@@ -48,8 +49,12 @@ def _op_env() -> tuple[str, str]:
     s = OP_ENV.read_text()
     import re
 
-    url = re.search(r"(?m)^MUSUBI_API_URL=(.+)$", s).group(1).strip().rstrip("/")
-    tok = re.search(r"(?m)^MUSUBI_TOKEN=(.+)$", s).group(1).strip()
+    m_url = re.search(r"(?m)^MUSUBI_API_URL=(.+)$", s)
+    m_tok = re.search(r"(?m)^MUSUBI_TOKEN=(.+)$", s)
+    if m_url is None or m_tok is None:
+        raise RuntimeError(f"MUSUBI_API_URL / MUSUBI_TOKEN not found in {OP_ENV}")
+    url = m_url.group(1).strip().rstrip("/")
+    tok = m_tok.group(1).strip()
     return url, tok
 
 
@@ -61,7 +66,7 @@ def transition(
     reason: str,
     supersedes: list[str] | None = None,
     superseded_by: str | None = None,
-) -> tuple[int, dict]:
+) -> tuple[int, dict[str, Any]]:
     """Operator-scoped lifecycle transition. Returns (status, body).
 
     NOTE: superseded_by is a REQUEST field the caller must set (writes_lifecycle.py:23).
