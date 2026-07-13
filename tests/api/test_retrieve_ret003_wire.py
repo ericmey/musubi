@@ -1246,69 +1246,184 @@ def test_extra_score_components_path_preserved_for_all_modes(
 # =====================================================================
 
 
-def test_runtime_vs_snapshot_openapi_schema_parity(client: TestClient) -> None:
-    """The runtime /v1/openapi.json must match the committed repo-root openapi.yaml.
+# =====================================================================
+# Section: openapi parity (per Yua 12:45:46 #4 + 12:59:30 BLOCKER A)
+# Shared normalizer + full-document equality + red-proof + one_field_drift mutation
+# =====================================================================
 
-    Per spec §4.5 (API governance): the implementation must test
-    runtime-vs-snapshot schema parity. The two MUST agree (modulo
-    server-info fields like `title`, `version`). This guards against
-    drift between the live FastAPI app and the committed deploy-time
-    snapshot.
+
+def _normalize_openapi_for_parity(doc: Any) -> Any:
+    """Strip ONLY the EXPLICIT PERMIT SET (info.title + info.version).
+
+    Per Yua 2026-07-13 12:59:30 BLOCKER A: the normalizer must
+    change/remove ONLY info.title + info.version while preserving
+    every OTHER info field. ALL non-permitted fields are compared
+    FULLY. A one-field drift anywhere else is a parity failure.
+
+    The runtime FastAPI's `info` carries a generated title/version;
+    the committed openapi.yaml may pin a release version. Both are
+    EXPLICITLY permitted to differ. All other info fields (e.g.
+    `description`, `contact`, `license`, `termsOfService`,
+    `x-logo`) must agree across runtime and snapshot.
+    """
+    import copy as _copy
+
+    out = _copy.deepcopy(doc)
+    info = out.get("info")
+    if isinstance(info, dict):
+        # The EXPLICIT PERMIT SET -- strip only these two keys.
+        info.pop("title", None)
+        info.pop("version", None)
+    return out
+
+
+def test_runtime_vs_snapshot_openapi_schema_parity(client: TestClient) -> None:
+    """The runtime /v1/openapi.json must FULLY EQUAL the committed openapi.yaml
+    modulo the EXPLICIT PERMIT SET (info.title + info.version).
+
+    Per Yua 2026-07-13 12:59:30 BLOCKER A: the previous test
+    only checked SELECTED PRESENCE (a few named schemas + the
+    /v1/retrieve 200 schema); it did NOT assert full-document
+    equality. The OLD selective check is replaced with a strict
+    full-document equality using the shared normalizer above.
     """
     import yaml as _yaml
 
     r = requests_get("/v1/openapi.json", client)
     assert r.status_code == 200
     runtime = r.json()
-    # Read the committed snapshot. Tests run from the repo root, so the
-    # path is the repo-root `openapi.yaml`.
     snapshot_path = Path(__file__).resolve().parents[2] / "openapi.yaml"
     assert snapshot_path.exists(), f"committed openapi.yaml not found at {snapshot_path}"
     with snapshot_path.open() as f:
         snapshot = _yaml.safe_load(f)
-    # Allow server-info fields to differ (FastAPI's `info` carries the
-    # runtime app name/version; the snapshot may pin a release version).
-    runtime.pop("info", None)
-    snapshot.pop("info", None)
-    # Compare component schemas and paths (the locked contract surface).
-    # The runtime's full schema and the snapshot's full schema must agree
-    # on every path's response/request schema and every named component.
-    runtime_schemas = runtime.get("components", {}).get("schemas", {})
-    snapshot_schemas = snapshot.get("components", {}).get("schemas", {})
-    # The new contract surfaces MUST exist in BOTH.
-    for name in (
-        "RankedRetrieveResponse",
-        "RecentRetrieveResponse",
-        "RankedResultRow",
-        "RecentResultRow",
-        "RankedScoreComponents",
-        "RecentScoreComponents",
-        "RankedExtra",
-        "RecentExtra",
-    ):
-        assert name in runtime_schemas, (
-            f"runtime openapi.json missing required schema {name!r}; spec §4.1+§4.2"
+
+    # Apply the SHARED NORMALIZER to BOTH. Strips ONLY info.title
+    # and info.version. Preserves every other info field.
+    norm_runtime = _normalize_openapi_for_parity(runtime)
+    norm_snapshot = _normalize_openapi_for_parity(snapshot)
+
+    # FULL-DOCUMENT EQUALITY (modulo the EXPLICIT PERMIT SET).
+    # A one-field drift in any non-permitted field fails.
+    if norm_runtime != norm_snapshot:
+        import difflib as _difflib
+        import json as _json
+
+        rt = _json.dumps(norm_runtime, indent=2, sort_keys=True)
+        sn = _json.dumps(norm_snapshot, indent=2, sort_keys=True)
+        diff = list(
+            _difflib.unified_diff(
+                sn.splitlines(),
+                rt.splitlines(),
+                lineterm="",
+                n=2,
+            )
+        )[:30]
+        pytest.fail(
+            "runtime /v1/openapi.json != committed openapi.yaml "
+            "(normalized via _normalize_openapi_for_parity; strips "
+            "ONLY info.title and info.version; preserves every "
+            "other info field). First drift:\n" + chr(10).join(diff)
         )
-        assert name in snapshot_schemas, (
-            f"committed openapi.yaml missing required schema {name!r}; regenerate via the implementation slice"
+
+
+def test_runtime_vs_snapshot_parity_one_field_drift_mutation_proof() -> None:
+    """A one-field drift in a non-permitted field FAILS the parity check.
+
+    Per Yua 2026-07-13 12:59:30 BLOCKER A: the mutation proof must
+    "modify one arbitrary non-permitted field on a deep copy and
+    prove comparator fails." The mutation takes a deep copy of
+    the snapshot, mutates ONE field in a non-permitted location
+    (e.g. ``components.schemas.RankedScoreComponents.description``),
+    and asserts the new strict parity check rejects it.
+    """
+    import copy as _copy
+
+    import yaml as _yaml
+
+    snapshot_path = Path(__file__).resolve().parents[2] / "openapi.yaml"
+    assert snapshot_path.exists(), f"committed openapi.yaml not found at {snapshot_path}"
+    with snapshot_path.open() as f:
+        snapshot = _yaml.safe_load(f)
+
+    # Deep copy + mutate ONE non-permitted field.
+    mutated = _copy.deepcopy(snapshot)
+    mutated.setdefault("components", {}).setdefault("schemas", {}).setdefault(
+        "RankedScoreComponents", {}
+    )["description"] = (
+        "MUTATED one-field drift -- this should be caught by the strict "
+        "parity check (the OLD selective check would have missed it)."
+    )
+    assert snapshot != mutated, "test setup failed: mutation did not change snapshot"
+
+    # Apply the shared normalizer to BOTH and assert inequality.
+    norm_snapshot = _normalize_openapi_for_parity(snapshot)
+    norm_mutated = _normalize_openapi_for_parity(mutated)
+    assert norm_snapshot != norm_mutated, (
+        "strict parity check did not detect a one-field drift in "
+        "components.schemas.RankedScoreComponents.description; the test "
+        "is not sensitive to one-field drift"
+    )
+
+    # RED-PROOF: simulate the OLD selective checker (which only
+    # checked selected presence, NOT full equality) and show it
+    # would have PASSED on the mutated snapshot.
+    old_checker_schemas = ["RankedRetrieveResponse", "RecentRetrieveResponse"]
+    for name in old_checker_schemas:
+        assert name in mutated.get("components", {}).get("schemas", {}), (
+            f"old checker: schema {name!r} must be present (still passes under mutation)"
         )
-    # The retrieve path's 200 response schema MUST be a oneOf with a
-    # mode discriminator in BOTH.
-    for source_name, doc in [("runtime", runtime), ("snapshot", snapshot)]:
-        retrieve_path = doc.get("paths", {}).get("/v1/retrieve")
-        assert retrieve_path is not None, f"{source_name} openapi missing /v1/retrieve path"
-        post_op = retrieve_path.get("post")
-        assert post_op is not None, f"{source_name} /v1/retrieve missing POST"
-        response_200 = post_op.get("responses", {}).get("200")
-        assert response_200 is not None, f"{source_name} /v1/retrieve missing 200 response"
-        schema = response_200.get("content", {}).get("application/json", {}).get("schema", {})
-        one_of = schema.get("oneOf") or schema.get("anyOf")
-        assert one_of is not None, (
-            f"{source_name} /v1/retrieve 200 must be a oneOf/anyOf of RankedRetrieveResponse and RecentRetrieveResponse"
-        )
-        assert len(one_of) == 2, (
-            f"{source_name} /v1/retrieve 200 must have exactly 2 variants; got {len(one_of)}"
-        )
+    retrieve_path = mutated.get("paths", {}).get("/v1/retrieve", {})
+    schema = (
+        retrieve_path.get("post", {})
+        .get("responses", {})
+        .get("200", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema", {})
+    )
+    one_of = schema.get("oneOf") or schema.get("anyOf")
+    assert one_of is not None and len(one_of) == 2, (
+        "old checker: oneOf with 2 variants must be present (still passes under mutation)"
+    )
+    # The OLD selective checker would have PASSED on the mutated
+    # snapshot (the named schemas are present; the oneOf has 2
+    # variants). The NEW strict check FAILS. The new test is more
+    # sensitive.
+
+
+def test_runtime_vs_snapshot_parity_normalizer_preserves_other_info_fields() -> None:
+    """The normalizer strips ONLY info.title and info.version; preserves every other info field.
+
+    Per Yua 2026-07-13 12:59:30 BLOCKER A: the normalizer must
+    "change/remove ONLY info.title + info.version while preserving
+    every other info field." This test asserts the normalizer
+    preserves ``info.description``, ``info.contact``, ``info.license``,
+    and any other non-permitted info field it encounters.
+    """
+    import copy as _copy
+
+    doc: Any = {
+        "info": {
+            "title": "Musubi Core API",
+            "version": "0.1.0",
+            "description": "The canonical HTTP surface over Musubi Core.",
+            "contact": {"name": "Tama", "email": "tama@harem-ops"},
+            "license": {"name": "Apache-2.0"},
+        },
+        "openapi": "3.1.0",
+    }
+    normalized = _normalize_openapi_for_parity(doc)
+    info = normalized["info"]
+    # The PERMIT SET is stripped.
+    assert "title" not in info, "normalizer must strip info.title (permit set)"
+    assert "version" not in info, "normalizer must strip info.version (permit set)"
+    # All OTHER info fields are preserved EXACTLY.
+    assert info["description"] == "The canonical HTTP surface over Musubi Core."
+    assert info["contact"] == {"name": "Tama", "email": "tama@harem-ops"}
+    assert info["license"] == {"name": "Apache-2.0"}
+
+
+# Section: Hermes adapter wire-readiness (renamed from hernes_..., per Yua #5)
 
 
 def test_musubi_wire_readiness_passthrough_shape() -> None:
