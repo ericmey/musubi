@@ -98,9 +98,9 @@ Thresholds are hand-tuned on initial seed queries — they'll shift as the golde
 ## Tooling
 
 ```bash
-musubi-cli eval run --corpus household-2026-04 --mode fast
-musubi-cli eval run --corpus household-2026-04 --mode deep
-musubi-cli eval compare --before main --after pr-123
+uv run -m musubi.evals run --corpus household-2026-04 --mode fast
+uv run -m musubi.evals run --corpus household-2026-04 --mode deep
+uv run -m musubi.evals compare --before main --after pr-123
 ```
 
 `eval compare` diffs two runs and reports:
@@ -110,6 +110,13 @@ musubi-cli eval compare --before main --after pr-123
 - Queries where a relevant hit dropped out of top-10 (regression)
 
 All golden runs are reproducible: same corpus snapshot + same model versions + same weights + same seed = same metrics. Non-reproducible runs are a bug.
+
+### Continuous Integration (CI)
+- **PR Smoke Gate:** A fast, deterministic subset of the corpus runs entirely in-memory using pre-computed embeddings on every PR to `src/musubi/retrieve/`. This isolates logic regressions from model drift.
+- **Scheduled/Pre-Release Gate:** The full corpus runs against the live local Qdrant/TEI harness during nightly or pre-release checks, enforcing the absolute MRR/NDCG thresholds.
+
+### False-Positive Rate (FPR) & Abstention
+The evaluation framework does not assume the retrieval engine naturally returns empty results for noise. It requires explicit score thresholds. A dedicated metric (`Abstention FPR`) measures the engine's ability to return 0 hits for explicitly non-relevant queries.
 
 ## Corpus snapshots
 
