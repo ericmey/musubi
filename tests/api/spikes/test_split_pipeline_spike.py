@@ -48,12 +48,13 @@ def _build_app() -> tuple[FastAPI, dict]:
         try:
             resp = await call_next(request)
             if getattr(request.state, "idem_owned", False):
-                # STREAMING DETECTION under BaseHTTPMiddleware (Yua point 4), proven in
-                # the detection test below: EVERY response is wrapped as _StreamingResponse,
-                # so isinstance MISSES real streams AND body_iterator matches EVERYTHING. The
-                # actual discriminator is the ABSENCE of Content-Length: a buffered response
-                # has a known length; a genuine stream does not.
-                is_stream = resp.headers.get("content-length") is None
+                # STREAMING DETECTION IS UNSETTLED (Yua): isinstance is disproven (all
+                # wrapped as _StreamingResponse) and Content-Length absence is only a
+                # HEURISTIC (buffered/transform responses may omit it; a stream may set it).
+                # This spike uses it ONLY as a stand-in to exercise the store gate; the real
+                # design is an explicit route cacheability contract or an ASGI more_body
+                # observer. Not a production detector. See ADR D3.
+                is_stream = resp.headers.get("content-length") is None  # PLACEHOLDER, not proven
                 is_replay = resp.headers.get("X-Idempotent-Replay") == "true"
                 if 200 <= resp.status_code < 300 and not is_stream and not is_replay:
                     events["cached"].append(resp.status_code)
@@ -141,10 +142,18 @@ def test_store_gate_is_status_based_not_try_except() -> None:
         f"ownership must release in finally on all paths: {len(events['released'])}/4")
 
 
-def test_streaming_detection_needs_body_iterator_not_isinstance() -> None:
-    """Yua point 4: under BaseHTTPMiddleware a StreamingResponse is wrapped as
-    _StreamingResponse, so isinstance(resp, StreamingResponse) MISSES it and the stream
-    gets cached. hasattr(resp, "body_iterator") is the correct detector."""
+def test_streaming_detection_is_unsettled_isinstance_and_body_iterator_both_fail() -> None:
+    """Streaming detection under BaseHTTPMiddleware is UNSETTLED (Yua).
+
+    This test DISPROVES two candidate detectors and shows Content-Length is only a
+    heuristic, not a proven contract:
+      - isinstance(resp, StreamingResponse): FALSE for a real stream (wrapped as
+        _StreamingResponse) — misses it.
+      - hasattr(resp, "body_iterator"): TRUE for EVERYTHING under BaseHTTPMiddleware —
+        matches buffered responses too.
+      - Content-Length: present on buffered, absent on this stream — but that is a
+        HEURISTIC, not a contract (a transform can drop it; a stream can set it).
+    The real design is a route cacheability contract / ASGI more_body observer (ADR D3)."""
     seen: dict = {}
     app = FastAPI()
 
@@ -176,11 +185,12 @@ def test_streaming_detection_needs_body_iterator_not_isinstance() -> None:
     c = TestClient(app)
     c.get("/s")
     c.get("/j")
-    assert seen["isinstance"] is False, "isinstance MISSES the wrapped stream"
+    assert seen["isinstance"] is False, "isinstance MISSES the wrapped stream (detector #1 fails)"
+    assert seen["has_body_iterator"] is True, "body_iterator matches EVERYTHING (detector #2 fails)"
     assert seen["type"] == "_StreamingResponse", "everything is _StreamingResponse under BaseHTTPMiddleware"
-    # THE CORRECT DETECTOR: buffered has Content-Length, stream does not
-    assert seen2["/j"] is not None, "a buffered response HAS Content-Length"
-    assert seen2["/s"] is None, "a genuine stream has NO Content-Length — this is the detector"
+    # Content-Length happens to differ HERE, but this is a heuristic, not a proven contract:
+    assert seen2["/j"] is not None, "this buffered response has Content-Length (heuristic only)"
+    assert seen2["/s"] is None, "this stream lacks it (heuristic only — NOT the production detector)"
 
 
 def test_500_is_a_response_not_an_exception() -> None:
