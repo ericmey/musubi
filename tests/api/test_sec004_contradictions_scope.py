@@ -87,7 +87,7 @@ def test_no_token_must_be_401(client: TestClient) -> None:
 
 @pytest.mark.xfail(
     strict=True,
-    reason="SEC-004: ordinary token + omitted namespace scrolls the fleet — fix pending",
+    reason="SEC-004: ordinary token + omitted namespace scrolls the fleet — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #409)",
 )
 def test_ordinary_token_omitted_namespace_must_be_403(
     client: TestClient, api_settings: Settings, seeded: dict[str, str]
@@ -150,7 +150,7 @@ def test_ordinary_token_foreign_namespace_must_be_403(
 
 
 @pytest.mark.xfail(
-    strict=True, reason="SEC-004/RET-007: backend failure must not become empty 200 — fix pending"
+    strict=True, reason="SEC-004/RET-007: backend failure must not become empty 200 — deferred; closed by slice-auth-boundary-phase-a (PR #403, Issue #409)"
 )
 def test_backend_failure_must_not_be_empty_200(
     client: TestClient, api_settings: Settings, monkeypatch: pytest.MonkeyPatch

@@ -41,7 +41,7 @@ def _is_ok(result: object) -> TypeGuard[Ok[Any]]:
 
 
 @pytest.mark.xfail(
-    strict=True, reason="REQ-7: presence/scope consistency not enforced yet — fix pending"
+    strict=True, reason="REQ-7: presence/scope consistency not enforced yet — deferred; future REQ-7 slice (Issue #412)"
 )
 def test_inconsistent_presence_vs_scope_must_be_rejected(api_settings: Settings) -> None:
     """The hole: presence claims one tenant, the only scope grants another. Today ACCEPTED.
