@@ -3,22 +3,67 @@ title: "Slice: auth-boundary red-contract — SEC-002/003/004 + IDEM-001 consoli
 slice_id: slice-auth-boundary-red-contract
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: aoi
-phase: "Security audit 2026-07-12 (Eric, discoverer) — Yua router/reviewer"
-tags: [section/slices, status/in-progress, type/slice, security, p0, auth, idempotency]
-updated: 2026-07-12
-reviewed: false
+phase: "Security audit 2026-07-12/13 (Eric, discoverer) — Yua router/reviewer"
+tags: [section/slices, status/done, type/slice, security, p0, auth, idempotency]
+updated: 2026-07-13
+reviewed: true
 depends-on: [slice-sec-002-idempotency-auth-bypass, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
 blocks: []
+issue: 406
 ---
 
-# Auth-boundary red-contract — the first test-only commit  ·  P0
+# Slice: auth-boundary red-contract — SEC-002/003/004 + IDEM-001 consolidated
 
 Consolidates the three security reds (SEC-002/003/004) with the new **IDEM-001** race +
 cross-endpoint-replay reds and the FastAPI 0.136 split-pipeline spike, into **one rerunnable
 contract**. This is the "first commit" Yua authorized (REQ 2026-07-12T21:18): **test-only,
-no `src/musubi/**`.** After this, Yua decides whether `src` is authorized.
+no `src/musubi/**`.** Tracking: GitHub Issue #406; closed by **PR #402** (this red contract + ADR).
+
+## Specs to implement
+
+- [[_slices/slice-auth-boundary-red-contract]] — this is a red-contract slice; its contract IS the
+  `## Test Contract` below. At THIS PR's head the security reds are strict-xfail (documenting the
+  holes) and each xfail reason names its closing slice; the spike + controls pass. So
+  `make tc-coverage SLICE=slice-auth-boundary-red-contract` exits 0 at #402 head with no missing
+  bullet — no final-stack-only illusion.
+
+## Test Contract
+
+Numbered bullets resolve at THIS PR's (#402) head: reds are `⏭ skipped` (strict-xfail, reason names
+the closing slice); controls + spike are `✓ passing`.
+
+SEC-002 (closing slice: slice-idempotency-phase-b / #404):
+1. `test_no_bearer_must_not_replay` no-bearer replay must 401 (xfail here).
+2. `test_invalid_bearer_must_not_replay` invalid-bearer replay must 401 (xfail here).
+3. `test_cross_tenant_must_not_replay` cross-tenant replay must 403, no disclosure (xfail here).
+4. `test_owner_can_replay_its_own_write` owner replay preserved (control, passing).
+
+SEC-003 (closing slice: slice-auth-boundary-phase-a / #403):
+5. `test_upload_cross_tenant_namespace_must_be_403` Form namespace scope (xfail here).
+6. `test_namespace_stats_cross_tenant_must_be_403` Path namespace scope (xfail here).
+7. `test_upload_no_token_must_be_401` no-token control (passing).
+
+SEC-004 (closing slice: slice-auth-boundary-phase-a / #403):
+8. `test_ordinary_token_omitted_namespace_must_be_403` omitted-namespace fanout (xfail here).
+9. `test_backend_failure_must_not_be_empty_200` backend failure → 5xx (xfail here).
+10. `test_operator_omitted_namespace_succeeds_cross_namespace` operator fanout control (passing).
+
+IDEM-001 (closing slice: slice-idempotency-phase-b / #404):
+11. `test_same_key_body_must_not_replay_across_endpoints` cross-endpoint replay (xfail here).
+12. `test_second_concurrent_caller_must_not_get_free_miss` in-flight lease race (xfail here).
+13. `test_replay_on_same_endpoint_still_works` same-endpoint replay control (passing).
+
+FastAPI split-pipeline spike (mechanics proven, passing):
+14. `test_middleware_sees_dependency_state_after_call_next` dependency-edge topology.
+15. `test_typed_replay_becomes_a_response` typed Replay → response.
+16. `test_store_gate_is_status_based_not_try_except` status-based store gate.
+17. `test_500_is_a_response_not_an_exception` 500 is a response, not an exception.
+
+**Test Contract Closure state: ✓ satisfied at #402 head** — `make tc-coverage
+SLICE=slice-auth-boundary-red-contract` → 0 missing; reds skipped with closing-slice reasons, spike +
+controls passing.
 
 ## Scope
 
@@ -96,6 +141,8 @@ as `(key, body)` alone is the defect; the fix binds `(key, body, route, authoriz
 behind an in-flight lease.
 
 ## Status
-Red contract written and failing correctly (2 SEC files + IDEM-001 reds strict-xfail; spike
-6/6 green; controls green). No `src` change. Diff + command returned to Yua; awaiting her
-decision on whether `src` is authorized.
+
+**`done`** (2026-07-13) — red contract landed and accepted; `src` was authorized by the router and the fix
+implemented + accepted downstream (Phase A #403, Phase B #404). The reds here stay strict-xfail at
+#402 head (each reason now names its closing slice); they flip green at their closing PR's head.
+Closed by PR #402. Tracking Issue #406.

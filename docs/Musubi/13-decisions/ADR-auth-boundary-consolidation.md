@@ -2,20 +2,45 @@
 title: "ADR: consolidated auth boundary — SEC-002/003/004 + IDEM-001"
 section: 13-decisions
 type: adr
-status: proposed
+status: accepted
 owner: aoi
 discoverer: eric
 reviewed_by: yua
-phase: "Security audit 2026-07-12"
-tags: [type/adr, security, auth, idempotency, proposed]
-updated: 2026-07-12
+phase: "Security audit 2026-07-12/13"
+tags: [type/adr, status/accepted, security, auth, idempotency]
+updated: 2026-07-13
 supersedes: []
 ---
 
-# ADR — Consolidated auth boundary: authenticate early, authorize + replay AFTER parsed values
+# ADR: consolidated auth boundary — SEC-002/003/004 + IDEM-001
 
 **Discoverer of all four defects: Eric.** Source-confirmed and routed by Yua. Design: Aoi.
-**Status: PROPOSED (rev 3) — no `src/` changes until approved and a slice owner is assigned.**
+**Status: ACCEPTED (rev 4).** The decision is accepted. The implementation is **accepted-for-merge,
+NOT shipped**: it lives in the UNMERGED stacked PRs #403 (Phase A) and #404 (Phase B, independently
+accepted). **It is NOT merged to `main` and NOT deployed — production remains vulnerable to
+SEC-002/003/004 + IDEM-001 until this stack lands.** Every "accepted" claim below describes the
+accepted stack state, not production.
+
+## Rev 4 — reconciled to the accepted-for-merge implementation (PR #403 + accepted PR #404)
+
+Rev 1–3 were the pre-implementation design. **Git history preserves Rev 1–3 in full; Rev 4 REWRITES
+the superseded Decision sections (D1–D6, sequences, matrix) IN PLACE** — the Rev1–3 rev-note blocks
+remain below, but their Decision bodies are replaced, not kept verbatim. Rev 4 corrects the doc to
+the code that was actually implemented and independently accepted in the unmerged stack, SEPARATES
+the accepted subset from the still-deferred work, and removes the "no src until approved" gating —
+src was narrowly authorized by the router (Yua) and Phase B accepted at `fafca2c`. The design shape
+DID change during implementation and this Rev records the shape that landed in the PRs (unmerged),
+not the Rev3 sketch:
+
+- **Accepted subset:** D1 (authn co-located in the authz dependency), D2 (route-native authz on the
+  named Form/Path/body-field routes + contradictions fanout), D3 (routed AuthorizedWrite auth edge +
+  route-declared idempotency eligibility + pure-ASGI store-only observer), D4 Phase 0 (in-process
+  lease, single-worker fail-closed, **no time-based reclaim of a live lease**), D6 (identity tuple).
+- **Deferred, exact:** D4 Phase 1 (durable cross-process); D5 (Phase C — design PROVEN @239029a,
+  implementation not started); REQ7 (identity tuple-consistency validation — xfail); REQ8 (public
+  absent-vs-invalid bearer — xfail).
+
+Reminder throughout: "accepted" = the accepted stack state (PR #403/#404, unmerged), NOT production.
 
 ## Rev 3 — split pipeline (Yua's "option 1 MODIFIED"), every step PROVEN executable
 
@@ -82,14 +107,23 @@ base64-decodes the JWT **without verifying the signature** to pick a rate-limit 
 
 ## Decision
 
-### D1 — one canonical AUTHENTICATION step, early
+### D1 — AUTHENTICATION co-located in the route-native authz dependency (accepted PR #403/#404)
 
-An authentication middleware (or ASGI layer) runs first and sets
-`request.state.principal = {subject, presence, issuer, scopes}` for a valid, unexpired,
-correctly-signed token — else 401. This is **authentication only** (who are you), not
-authorization (may you do this). It has everything it needs from the bearer alone, so it
-can run before any body/route parsing. SEC-002's "replay before auth" cannot occur because
-there is no route-independent replay step anymore (see D3).
+> **Rev 4 (accepted):** the Rev1–3 "one canonical early authn middleware setting
+> `request.state.principal`" was NOT built. Authentication co-locates with authorization in the
+> route dependency, which removes the pre-auth surface entirely (the SEC-002 root cause) rather than
+> adding an early layer.
+
+Authentication is performed by `authenticate_request` INSIDE the route-native authorization
+dependency — not a standalone early ASGI middleware. For a valid, unexpired, correctly-signed bearer
+it yields an `AuthContext(issuer, subject, presence, scopes, audience, token_id)` attached to
+`request.state.auth`; an absent/invalid bearer on a **protected** route (one carrying the auth
+dependency) → 401. There is no separate early-authn layer and no `request.state.principal` dict —
+the validated principal tuple IS the AuthContext. **Routes that do not carry the protected auth
+dependency are unchanged by this ADR** (their auth posture is out of scope here; note the repo has no
+`/health` route today, and a metrics-exposure policy is a separate open finding — neither is claimed
+public by this ADR). SEC-002's "replay before auth" cannot occur because there is no
+route-independent replay step (see D3).
 
 ### D2 — route-native AUTHORIZATION from PARSED values
 
@@ -102,116 +136,107 @@ authorize(access, namespace_source)   where namespace_source ∈
 ```
 
 Omitted/nullable namespace is an **explicit fanout contract**: `require_operator`, or a
-named authorized-fanout dependency — never an implicit all-tenant scroll. The generic
-"read the query" default is deleted.
+named authorized-fanout dependency — never an implicit all-tenant scroll.
 
-**Enforcement is mechanical, not per-route discipline.** A CI check (extending
-`tests/api/sec003_route_inventory.py`) fails the build if any write/read route with a
-namespace lacks an explicit authorization source. Yua's point stands: per-route
-declaration must not be hand-rolled logic a new route can forget.
+> **Rev 4 (accepted, scoped):** what the accepted stack implements is the named, covered surface —
+> the Form namespace on `upload_artifact`, the Path namespace on `namespace_stats`, the body-field
+> namespaces on the three JSON captures (via D3's AuthorizedWrite edge), and the omitted-namespace
+> fanout on `GET /v1/contradictions` (operator-only, backend failure → 5xx not empty 200). This does
+> NOT claim generic query auth was deleted, nor that every namespace-bearing route was converted.
+> `tests/api/sec003_route_inventory.py` is a **regression guard for the covered surface** — it holds
+> that line against a new route silently forgetting authz on the surfaces in scope; it is not a proof
+> of universal enforcement across the whole API.
 
-### D3 — SPLIT pipeline: security decision in a dependency, store/release in a thin middleware
+### D3 — routed AuthorizedWrite auth edge + route-declared eligibility + pure-ASGI store-only observer (accepted PR #404)
 
-The replay check is a **dependency** (it can short-circuit before the handler); the store is
-a **thin outer middleware** (only it can see the serialized response after `call_next`).
-Neither the middleware does authz/lookup, nor the dependency captures the response.
+> **Rev 4 (accepted):** the Rev1–3 "thin store middleware after `call_next`" shape was superseded.
+> A `BaseHTTPMiddleware`/`call_next` store is REJECTED — it collapses the response to a lossy
+> `_StreamingResponse`. The accepted store is a **pure-ASGI store-only observer**.
 
-```
-[outer store middleware]  ← post-handler ONLY: read request.state, cache on 2xx success, release ownership
-  └─ [authn middleware]   D1: validate any presented bearer, attach principal (or 401 on protected routes)
-       └─ route:
-          Depends(authorize(parsed namespace, access))         D2: 403 if unauthorized
-            → Depends(idempotent_replay)                        D3: identity+op known HERE
-                 hit  → raise Replay(cached_response)   ─┐  (typed, caught by exception handler)
-                 miss → acquire in-flight, write authorized idem_ctx to request.state
-                   → handler                              │
-          (Replay/handler response flows back OUT) ───────┘
-  ← store middleware: if request.state.idem_ctx AND 2xx AND not streaming AND not replay → cache; ALWAYS release
-```
+The security decision is a routed dependency; the store is a pure-ASGI store-only observer. As
+accepted:
 
-**(a) Optional early authn middleware (D1).** Validates a *presented* bearer and attaches
-`request.state.principal`. It does NOT force auth — **public routes with no bearer stay
-public** (health/docs); protected routes require the principal via their authz dependency.
-This avoids the "global authn 401s `/health`" failure Yua flagged. Explicit public-route
-list is part of the spec (health, docs, openapi.json, metrics if public).
+- **AuthorizedWrite auth edge (Option A).** Each body-derived JSON capture (`POST /v1/episodic`,
+  `/v1/episodic/batch`, `/v1/curated`) has a body-auth dependency that parses the body ONCE,
+  authorizes the body-derived namespace, and returns `AuthorizedWrite(auth, namespace, body)`. The
+  idempotency dependency EXPLICITLY `Depends` on it, so authn + namespace authz run before any cache
+  lookup. In-handler `_check_body_scope` removed. **Hit** → `raise Replay(cached)` (typed; the
+  registered handler serves the byte-exact cached response with `X-Idempotent-Replay: true` added on
+  a fresh header list — the cached tuple is never mutated; the handler is not executed). **Miss** →
+  the dependency acquires the in-flight lease and publishes `request.state.idem` (a frozen
+  `IdempotencyRequestState`) + the exact lease cache, established BEFORE the response starts.
+- **Route-declared idempotency eligibility.** ONLY routes carrying the idempotency dependency are
+  cache-eligible; a route-inventory test guards that the three captures carry the edge and that no
+  handler is reachable without it. This is the cacheability contract.
+- **Pure-ASGI store-only observer (mounted outermost).** At `http.response.start` it reads whether
+  the request published a lease; ONLY THEN does it buffer, storing a clean terminal 2xx as an
+  immutable `CompletedResponse` (exact status / raw-headers / bytes). A **successful store RETAINS**
+  that completed entry as the replay cache and does NOT release. It performs no lookup, no authz, no
+  body read. The `finally` releases only a **NON-STORED** acquired lease — non-2xx, handler
+  exception, send failure, cancellation, and a store that itself raises (a post-send store failure is
+  swallowed + metered `musubi_idempotency_store_failures_total`, never fakes a cached success; the
+  lease is released so the retry re-executes).
 
-**(b) Parsed route-native authz (D2).** As above; **consumes** the validated
-`request.state.principal` — `require_auth`/`authorize` does NOT re-decode or re-validate the
-token, only checks scope against the parsed namespace.
+**Cacheability is SETTLED for the registered non-streaming JSON captures — and only for them.** The
+observer does NOT detect or classify streams and makes no `isinstance`/`Content-Length` inference.
+The mechanism is negative and contractual: the eligible routes are the three JSON captures, which
+are contractually non-streaming and inventory-guarded; every other route — including the
+`StreamingResponse` on `POST /v1/retrieve/stream` — publishes NO lease, so the observer NEVER
+buffers it (it streams straight through with zero retention). So this closes the Rev3 "streaming
+UNSETTLED" **for the registered surface**; it makes NO claim that streaming is universally settled,
+only that ineligible responses are never touched.
 
-**(c) Shared idempotency dependency (D3).** Runs after authz, so identity + authorized
-operation are known. Computes the canonical hash (D5), checks the cache / acquires in-flight
-ownership. **Hit** → `raise Replay(response)` (typed; caught by the existing `APIError`-style
-handler → becomes a real response). **Miss** → writes `request.state.idem_ctx =
-{identity_key, in_flight_token}` and proceeds to the handler.
+**Why the store gate is status-based (proven):** `HTTPException(500)` becomes a **500 response**,
+not an exception, so a try/except gate would cache the 500. The observer stores only on a clean
+terminal 2xx for an acquired lease; a successful store retains the entry, and the `finally` releases
+only the non-stored paths.
 
-**(d) Thin store middleware.** After `call_next`: if `request.state.idem_ctx` is set AND the
-response is **2xx AND non-streaming AND not a replay**, store it under the identity key. It
-performs **no lookup, no authz, no body read**. Ownership is released in a `finally` on
-**every** path — success, error response, or client cancel — so a crashed/cancelled request
-never leaves a stuck in-flight marker and never caches a failed or streaming response.
+Because D3 runs only after D1+D2, an unauthenticated or cross-tenant request is refused (401/403) and
+**never reaches lookup**. Cache identity (D6) is defense-in-depth on top.
 
-**Streaming / cacheability is an EXPLICIT CONTRACT, not a header heuristic (Yua, UNSETTLED).**
-`isinstance(StreamingResponse)` is disproven (everything wraps to `_StreamingResponse` under
-BaseHTTPMiddleware); "absence of Content-Length" is ALSO only a heuristic (buffered/transform
-responses may omit it; a stream may set it; a header can be manipulated). So cacheability is
-NOT inferred from the response shape. Two candidate mechanisms for the spike to settle:
-  (i)  a **route-level cacheability declaration** — only routes explicitly registered as
-       idempotent-JSON are cache-eligible; anything else (streams, SSE, downloads) is never
-       cached regardless of headers; OR
-  (ii) an **ASGI send-wrapper** that observes `http.response.body`'s `more_body` flag
-       directly (the true streaming signal at the protocol level) without lossy Response
-       reconstruction.
-Adversarial tests REQUIRED before this is proven: buffered 2xx WITHOUT Content-Length stays
-eligible if the route contract says cacheable; a stream WITH an explicit Content-Length is
-NEVER cached; GZip/transform middleware; 204; multi-frame bodies; background-task + duplicate
-headers. Until those pass, claim 3's streaming half is UNSETTLED.
+### D4 — IDEM-001 concurrency, PHASED (Phase 0 accepted PR #404; Phase 1 DEFERRED)
 
-**Why the gate is status-based, not exception-based (proven):** `HTTPException(500)` is
-converted by FastAPI into a **500 response**, not propagated as an exception, so a
-try/except store gate would cache the 500. The gate keys on `2xx && non-streaming &&
-not-replay`; release is unconditional (`finally`).
+Qdrant is not a lock/CAS store. Phase it:
 
-Because D3 runs only after D1+D2, an unauthenticated or cross-tenant request is refused
-(401/403) and **never reaches lookup**. Cache identity (D6) is defense-in-depth on top.
+- **Phase 0 (accepted PR #404):** secure authn/authz/replay (D1–D3, D6) **plus in-process atomic
+  lease ownership** of the miss→execute→store window, under a single-worker deployment fail-closed
+  and CONFIG-TESTED at three layers (REQ-10, accepted PR #403): `Settings.api_workers` (`le=1`),
+  `create_app` rejects `WEB_CONCURRENCY > 1`, systemd `--workers 1`. A concurrent same-identity miss
+  gets a visible `409` (in_flight) — never a double-execute.
+  > **Rev 4 correction vs Rev1–3:** a LIVE in-flight lease is **NEVER reclaimed by elapsed time.**
+  > Any stale/timeout "crash recovery" reclaim is wrong: the cache is process-local, so a crash
+  > destroys the WHOLE cache — a time-based reclaim can never recover crash state and only
+  > re-executes a slow-but-live request into a DUPLICATE mutation. A live lease is freed ONLY by its
+  > owner (`store` on success, `release` on error/cancel); a hung owner fails closed (409 until the
+  > process restarts). Only COMPLETED entries expire (TTL).
+- **Phase 1 (DEFERRED — distinct future store/ADR):** durable **cross-process** ownership for
+  multi-worker (`slice-api-v0-write-distributed-idempotency`). Not implemented; multi-worker
+  idempotency stays unimplemented and fail-closed by REQ-10.
 
-**Shape chosen: option 1 MODIFIED (dependency + thin store middleware).** The custom
-`APIRoute` option is **rejected unless a spike proves** it can insert between dependency
-resolution and the endpoint without reimplementing FastAPI internals — a bar the split
-pipeline clears today with proven primitives.
+### D5 — bound the body materialization (design PROVEN @239029a; implementation Phase C, DEFERRED)
 
-### D4 — IDEM-001 concurrency, PHASED
+> **Rev 4 (design proven, impl deferred):** Rev3's "UNPROVEN" is superseded — the design was proven
+> in a runnable spike at `slice/auth-boundary-design-spikes` @ **239029a**
+> (`tests/api/spikes/test_d5_multipart_digest_ingress.py`). The IMPLEMENTATION is **Phase C** and is
+> NOT in Phase A/B (explicitly forbidden in the Phase B scope). Two distinct concerns, do not
+> conflate them:
 
-Yua is right that the shared store is unspecified and **Qdrant is not a lock/CAS store.**
-Phase it:
+**(1) DoS control = a pure-ASGI ingress cap (the primary control).** A pure-ASGI layer counts the
+**actual total encoded bytes** of the request as they arrive **before any parsing**, and rejects at
+the per-route ceiling: exact-max **passes**, max+1 → **413**. It **distrusts `Content-Length`** (a
+header is not a measurement) and counts the **real multipart framing bytes** (boundaries, part
+headers), not just field/file payloads. Starlette's `max_part_size` separately bounds non-file
+fields; **files spool/roll to disk, they are not rejected** by the part cap — so the ingress byte cap
+is what actually bounds memory/disk for large uploads. Per-route (an upload route and a small JSON
+write have different legitimate ceilings).
 
-- **Phase 0 (P0 fix, ships first):** secure authn/authz/replay (D1–D3, D6) **plus
-  in-process atomic ownership** of the miss→execute→store window, **enforced under a
-  single-worker deployment**. A concurrent same-identity miss in one process waits on an
-  in-process lock or gets 409/425 — never double-executes. This closes the P0 without a new
-  datastore. **Single-worker is not a comment — it is enforced and CONFIG-TESTED:** a
-  startup assertion (or a test that fails if `workers > 1` while multi-process idempotency
-  is unimplemented) so the safety assumption cannot silently regress when someone scales the
-  deployment.
-- **Phase 1 (separate decision):** durable **cross-process** ownership for multi-worker.
-  Requires choosing a real CAS/lock store (Postgres advisory locks / Redis / etc. — a
-  distinct ADR). Do NOT ship multi-worker idempotency until Phase 1 lands.
-
-### D5 — bound the body materialization (DoS)
-
-The hash step must not read an unbounded upload into memory. Enforce a **max body size
-per route** (not a single global limit — an upload route and a small JSON write have
-different legitimate ceilings; 413 over the route's limit), and define a **canonical hash**
-that **still distinguishes two different files** without holding the whole upload in RAM —
-a **streamed digest** of the file part (chunked SHA-256) combined with a hash of the small
-structured fields. (Yua: the digest must distinguish different files; simply exempting the
-file from the hash would let two different uploads with the same form fields collide on the
-same idempotency key.) Multipart **part order cannot be a security convention** (FastAPI
-parses/spools independently); the design must not depend on `namespace` arriving before
-`file`. **STATUS: UNPROVEN.** Unlike the D3 pipeline claims, this digest design has NOT been
-prototyped — the streaming-chunked-SHA-256 + rewind/spool + per-route-limit behaviour and
-the "different files cannot collide" property must be demonstrated in a runnable spike
-before the D5 fix is authorized. Rev 3 does not claim it proven.
+**(2) Identity/fidelity = a streamed digest (NOT the DoS control).** Distinct from the cap, the
+canonical idempotency digest must distinguish two different files without holding the whole upload in
+RAM: a **domain-separated**, **length-prefixed** hash of the small structured fields combined with a
+**streamed SHA-256 of the file part**, **order-independent** (part order cannot be a security
+convention — FastAPI parses/spools independently, so the digest must not depend on `namespace`
+arriving before `file`). The digest+rewind/spool is for identity and replay fidelity, not for
+bounding ingress. Two different uploads with identical form fields cannot collide on one key.
 
 ### D6 — identity is issuer + subject + presence (NOT jti)
 
@@ -224,8 +249,14 @@ but is **not** part of the cache key. Chosen explicitly.
 must be mutually consistent per the token contract — e.g. `presence` must be the
 subject's declared presence, not an arbitrary claim — so a token cannot present a
 `(issuer, subject)` it owns with a `presence` it does not, and thereby key into another
-principal's idempotency slot. The identity tuple is validated as a unit in D1, not trusted
-field-by-field.
+principal's idempotency slot.
+
+> **Rev 4 (accepted, REQ7 OPEN):** the identity tuple `(issuer, subject, presence)` + method +
+> `operation_id` + authorized namespace + Idempotency-Key, with a byte-exact canonical digest
+> (domain-sep + content-type + exact bytes) persisted separately, is IMPLEMENTED and accepted (PR
+> #404). The tuple's internal-consistency VALIDATION is **NOT yet enforced**:
+> `tests/api/test_req7_token_identity_invariant.py` remains strict-xfail — **REQ7 is OPEN**
+> (deferred). (Related: REQ8, public absent-vs-invalid bearer, `test_req8_*` — also open/xfail.)
 
 This also resolves the rev-1 strategy comparison: "exact-token fingerprint" (A) is rejected
 precisely because it keys on the rotating secret; **(B) principal (issuer+subject+presence)
@@ -233,24 +264,27 @@ precisely because it keys on the rotating secret; **(B) principal (issuer+subjec
 
 ## Executable request sequences (post-fix)
 
+> **Rev 4:** authn co-locates in the authz dependency (D1), so the leading `authz-dep` step is
+> `authenticate_request` + namespace authz together; the store is the pure-ASGI observer (D3), not a
+> `store-only observer`. Multipart is Phase C (design proven @239029a, impl deferred).
+
 ```
-JSON write:
-  authn-mw(401?) → route: Depends(authorize(from_body_field "namespace"), "w")(403?)
-                        → Depends(idempotent_replay)(hit→replay | miss→) → handler → store
+JSON write (accepted PR #404):
+  authz-dep(authn+authz from body-field "namespace","w")(401/403?)  [AuthorizedWrite edge]
+    → Depends(idempotency)(hit→Replay | conflict/in_flight→409 | miss→acquire) → handler
+    → [pure-ASGI observer stores clean 2xx for an acquired lease]
 
-Multipart upload:  (the bounded-hash step is UNPROVEN — see D5; topology only, not a proven digest)
-  authn-mw(401?) → route: parse Form("namespace") → Depends(authorize(from_form_field,"w"))(403?)
-                        → Depends(idempotent_replay)(bounded-hash, D5 — UNPROVEN) → handler → store
+Multipart upload (Phase C — design proven @239029a, impl deferred):
+  ingress-cap(413?) → authz-dep(from_form_field,"w")(401/403?) → Depends(idempotency)(streamed digest) → handler → observer
 
-Path stats (GET, no idem):
-  authn-mw(401?) → route: Depends(authorize(from_path "namespace_path", "r"))(403?) → handler
+Path stats (GET, no idem — accepted PR #403):
+  authz-dep(authn+authz from_path "namespace_path","r")(401/403?) → handler
 
-Query read (unchanged behaviour):
-  authn-mw(401?) → route: Depends(authorize(from_query "namespace", "r"))(403?) → handler
+Query read (unchanged behaviour — NOT converted by this ADR):
+  route: Depends(require_auth(access="r")) → authenticate_request + query-"namespace" scope check(401/403?) → handler
 
-Nullable fanout (contradictions):
-  authn-mw(401?) → route: Depends(require_operator OR authorized_fanout)(403 if ordinary+omitted)
-                        → scroll (filtered per contract)
+Nullable fanout (contradictions — accepted PR #403):
+  authz-dep(operator required if namespace omitted)(403 if ordinary+omitted) → scroll (filtered) | backend fail → 5xx
 ```
 
 Every arrow is a real FastAPI dependency edge that runs in that order — no step consumes a
@@ -260,40 +294,47 @@ decision that has not yet been made.
 
 ```
 IDEMPOTENT WRITE — HIT:
-  authn-mw(principal) → authorize(403?) → idempotent_replay: lookup HIT
-    → raise Replay(cached) → exception handler → 2xx + X-Idempotent-Replay:true
-  → store-mw: idem_ctx set? yes, but replay=true → DO NOT re-store; release nothing (no lock acquired on a hit)
+  authz-dep(authn+authz) → idempotency dependency: acquire returns HIT
+    → raise Replay(cached) BEFORE publishing any lease state → handler exception handler → 2xx + X-Idempotent-Replay:true
+  → store-only observer: NO request.state.idem was ever set (Replay raised first), so the observer
+    sees no acquired lease → it does NOTHING: no buffer, no store, no release. The replay response
+    passes straight through.
 
 IDEMPOTENT WRITE — MISS, SUCCESS:
-  authn-mw → authorize → idempotent_replay: lookup MISS → ACQUIRE in-flight(identity_key)
-    → request.state.idem_ctx = {identity_key, token} → handler → 2xx
-  → store-mw: idem_ctx set, 2xx, non-streaming, non-replay → STORE(identity_key, response)
-    → finally: RELEASE in-flight(token)
+  authz-dep → idempotency dependency: acquire MISS → ACQUIRE lease
+    → request.state.idem = IdempotencyRequestState(identity, owner, digest); request.state.idem_cache = <cache>
+    → handler → 2xx
+  → store-only observer: lease published, clean terminal 2xx → STORE the CompletedResponse (does NOT
+    release — the completed entry IS the replay cache)
 
 IDEMPOTENT WRITE — MISS, HANDLER ERROR (4xx/5xx):
-  ... → ACQUIRE → handler raises/returns 5xx (as a RESPONSE)
-  → store-mw: idem_ctx set but status not 2xx → DO NOT store
-    → finally: RELEASE in-flight(token)   (nothing cached; next attempt re-executes)
+  ... → ACQUIRE → handler raises/returns non-2xx (as a RESPONSE)
+  → store-only observer: lease published but status not 2xx → DO NOT store
+    → finally: RELEASE the lease   (nothing cached; next attempt re-executes)
 
 CANCEL / DISCONNECT before response:
   ... → ACQUIRE → client disconnects mid-handler
-  → store-mw finally (runs on the cancellation/exception path): RELEASE in-flight(token)
+  → store-only observer finally (runs on the cancellation/exception path): RELEASE the lease
     (no stuck marker; no cache)
 
 CONCURRENT MISS (same identity, Phase 0 single-worker):
   req1: ACQUIRE ok → handler running
-  req2: ACQUIRE fails (in-flight held) → 409/425 (or bounded wait for req1's result)
+  req2: ACQUIRE returns in_flight (live lease held) → 409 (visible conflict; NO bounded wait, NO 425)
 ```
 
-The store middleware's **release is in `finally`** on all four paths; **cache write is
-guarded by 2xx + non-streaming + non-replay**. Proven against a live app.
+The store-only observer's **`finally` releases every NON-STORED acquired lease** (non-2xx, handler
+exception, cancel/send failure, and a store that itself fails) — a **successful store atomically
+completes and RETAINS the entry as the replay cache and does NOT release it** (and a HIT never
+acquired a lease, so there is nothing to release). The store is guarded by a clean terminal 2xx for
+an acquired lease (eligibility, not a stream heuristic). Accepted against a live app in PR #404.
 
 ## Error / status compatibility
 
 401 unauth · 403 unauthorized namespace / ordinary+omitted fanout · cross-tenant replay 403
 with **no cached body/object_id disclosed** · backend (Qdrant) failure **5xx, never empty
 200** (folds SEC-004/RET-007) · owner replay **2xx + `X-Idempotent-Replay: true`** · concurrent
-same-identity miss → first 2xx, second **409/425** · oversize body **413** (D5). No response
+same-identity miss → first 2xx, second **409** (visible in_flight conflict; no bounded wait, no
+425) · oversize body **413** (D5, Phase C). No response
 *schema* change → not an API version bump; it IS an auth-path behaviour change → ADR +
 changelog + client-compat note.
 
@@ -315,27 +356,33 @@ which does not exist today.
 
 ## Test closure matrix
 
-| test | today | closed by |
+Column = the ACCEPTED STACK state (PR #403/#404, unmerged), NOT production. "accepted" here means the
+red flipped green at that PR's head; production stays vulnerable until merge.
+
+| test | accepted-stack state | closed by |
 | --- | --- | --- |
-| no-bearer / invalid-bearer replay → 401 | XFAIL (sec002) | D1 + D3 (no pre-auth replay path) |
-| cross-tenant replay → 403 + no disclosure | XFAIL (sec002) | D3 + D6 |
-| owner replay → 2xx replay | PASS (sec002) | D3 + D6 (preserve) |
-| collision cross-route | SKIP (unreproduced) | D3 route-template key (revisit) |
-| upload cross-tenant Form ns → 403 | XFAIL (sec003) | D2 from_form_field |
-| stats cross-tenant Path ns → 403 | XFAIL (sec003) | D2 from_path |
-| own-ns upload/stats → 2xx (+shape) | PASS (sec003) | D2 (preserve) |
-| no-token routes → 401 | PASS (sec003) | D1 (preserve) |
-| ordinary + omitted ns → 403 | XFAIL (sec004) | D2 fanout contract |
-| operator + omitted → 2xx cross-ns | PASS (sec004) | D2 (preserve) |
-| own/foreign ns explicit | PASS (sec004) | D2 (preserve) |
-| backend failure → 5xx | XFAIL (sec004) | error-handling (RET-007) |
-| concurrent miss → no double-mutate | to write (IDEM-001) | D4 Phase 0 |
-| oversize body → 413 | to write | D5 |
+| no-bearer / invalid-bearer replay → 401 | accepted (#404) | D1 + D3 (no pre-auth replay path) |
+| cross-tenant replay → 403 + no disclosure | accepted (#404) | D3 + D6 |
+| owner replay → 2xx replay | accepted (#404) | D3 + D6 |
+| key+body must not replay across endpoints (IDEM-001A) | accepted (#404) | D3 op-bound identity |
+| upload cross-tenant Form ns → 403 (SEC-003) | accepted (#403) | D2 from_form_field |
+| stats cross-tenant Path ns → 403 (SEC-003) | accepted (#403) | D2 from_path |
+| own-ns upload/stats → 2xx; no-token → 401 | accepted (#403) | D1 + D2 |
+| ordinary + omitted ns → 403 (SEC-004) | accepted (#403) | D2 fanout contract |
+| backend failure → 5xx not empty 200 (SEC-004/RET-007) | accepted (#403) | error-handling |
+| concurrent miss → no double-mutate (IDEM-001B) | accepted (#404) | D4 Phase 0 |
+| faithful replay (headers/cookies/bytes/media, REQ-5) | accepted (#404) | D3 observer |
+| ineligible stream + key not buffered (B1) | accepted (#404) | D3 route-declared eligibility |
+| tuple issuer/subject/presence consistency (REQ-7) | XFAIL — OPEN | REQ7 (deferred) |
+| public absent-vs-invalid bearer (REQ-8) | XFAIL — OPEN | REQ8 (deferred) |
+| oversize multipart → 413 (D5) | deferred | Phase C (design proven @239029a) |
 
 ## Ownership / process (Yua's proposal, adopted)
 
-- **Implementation owner:** Aoi, **after approval** — on a `slice-auth-boundary` (or
-  `slice-api-v*`) slice, not this red-tests-only observation slice.
+- **Implementation owner:** Aoi — implemented and accepted-for-merge on `slice-auth-boundary-phase-a`
+  (Phase A src, PR #403) and `slice-idempotency-phase-b` (Phase B src, PR #404, accepted), NOT this
+  red-tests-only slice. (The Rev1–3 note that impl belongs on a separate slice is the reason the
+  canonical `slice-auth-boundary-phase-a` was added in #403.)
 - **Acceptance gate:** Yua.
 - **Security / runtime re-review:** Tama + Shiori.
 - **Merger:** a different party than the implementer.
@@ -348,9 +395,16 @@ which does not exist today.
 
 ## Deferred (flagged, not decided here)
 
-`_operator_scope_hint` signature-unverified rate-tier read; DQ-001 projection/summary;
-LIFE-007/008 / DATA-001 atomicity (different root cause, different ADR).
+Exact deferrals carried forward from the accepted stack:
+- **D4 Phase 1** — durable cross-process idempotency (`slice-api-v0-write-distributed-idempotency`).
+- **D5 Phase C** — multipart ingress-cap + streamed digest; design PROVEN @239029a, impl not started.
+- **REQ7** — identity tuple internal-consistency validation (`test_req7_*`, strict-xfail).
+- **REQ8** — public route absent-vs-invalid bearer (`test_req8_*`, strict-xfail).
+
+Pre-existing (different root cause / different ADR): `_operator_scope_hint` rate-tier read; DQ-001
+projection/summary; LIFE-007/008 / DATA-001 atomicity.
 
 ---
 
-**Bring to Yua before any code.** No `src/` change is authorized by this document.
+**Status: ACCEPTED (rev 4).** Implementation is accepted-for-merge in the unmerged stack (#403/#404),
+NOT merged and NOT deployed — production remains vulnerable until the stack lands.
