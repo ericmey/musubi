@@ -73,4 +73,50 @@ def require_operator() -> Callable[[Request, Settings], None]:
     return require_auth(operator=True)
 
 
-__all__ = ["require_auth", "require_operator"]
+def authorize_namespace(
+    request: Request,
+    namespace: str,
+    *,
+    settings: Settings,
+    access: Literal["r", "w"] = "r",
+) -> None:
+    """Route-native shared authorization for a namespace parsed OUTSIDE the query string.
+
+    ``require_auth`` reads the namespace only from the query string, so routes whose namespace
+    arrives via Form / Path / Body cannot use it to authorize the real target. This helper takes
+    the already-parsed namespace and runs the SAME authentication + scope check against it, so a
+    multipart upload or a path-stats read is authorized on the namespace it actually operates on.
+    Raises :class:`APIError` (401 missing/invalid token, 403 out-of-scope) on failure.
+    """
+    requirement = AuthRequirement(namespace=namespace, access=access)
+    result = authenticate_request(
+        request,  # type: ignore[arg-type]
+        requirement,
+        settings=settings,
+    )
+    if isinstance(result, Err):
+        err = result.error
+        code: ErrorCode = err.code  # type: ignore[assignment]
+        raise APIError(status_code=err.status_code, code=code, detail=err.detail)
+
+
+def require_operator_scope(request: Request, *, settings: Settings) -> None:
+    """Route-native shared authorization requiring OPERATOR scope.
+
+    For nullable-namespace fan-out routes (e.g. omitted-namespace contradictions): a request
+    that spans all tenants must present an operator token, never ordinary auth. Raises
+    :class:`APIError` (401/403) on failure.
+    """
+    requirement = AuthRequirement(operator=True)
+    result = authenticate_request(
+        request,  # type: ignore[arg-type]
+        requirement,
+        settings=settings,
+    )
+    if isinstance(result, Err):
+        err = result.error
+        code: ErrorCode = err.code  # type: ignore[assignment]
+        raise APIError(status_code=err.status_code, code=code, detail=err.detail)
+
+
+__all__ = ["authorize_namespace", "require_auth", "require_operator", "require_operator_scope"]
