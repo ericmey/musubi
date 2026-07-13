@@ -54,6 +54,10 @@
         owner: root
         group: "{{ musubi_service_group }}"
         mode: "0644"
+        # Preserve the inode seen through Prometheus's bind mount when this
+        # full deploy playbook is re-run against an existing installation.
+        unsafe_writes: true
+      notify: Reload prometheus
 
     - name: Render op-run reference template
       ansible.builtin.template:
@@ -131,4 +135,33 @@
       delay: 5
       register: core_health
       until: core_health.status == 200
+      changed_when: false
+
+  handlers:
+    - name: Reload prometheus
+      ansible.builtin.command:
+        cmd: >-
+          docker compose -f {{ musubi_config_dir }}/docker-compose.yml
+          kill -s HUP prometheus
+      register: prometheus_reload
+      failed_when:
+        - prometheus_reload.rc != 0
+        - "'no such service' not in (prometheus_reload.stderr | default(''))"
+        - "'not running' not in (prometheus_reload.stderr | default(''))"
+      changed_when: prometheus_reload.rc == 0
+
+    - name: Verify lifecycle-worker is scraped after reload
+      listen: Reload prometheus
+      ansible.builtin.uri:
+        url: >-
+          http://127.0.0.1:9090/api/v1/query?query=up%7Bjob%3D%22lifecycle-worker%22%7D
+        status_code: 200
+        return_content: true
+      register: prometheus_lifecycle_query
+      retries: 15
+      delay: 2
+      until:
+        - prometheus_lifecycle_query.json.status == 'success'
+        - prometheus_lifecycle_query.json.data.result | length == 1
+        - prometheus_lifecycle_query.json.data.result[0].value[1] == '1'
       changed_when: false

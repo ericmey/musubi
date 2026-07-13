@@ -25,7 +25,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,10 +33,6 @@ COMPOSE_TEMPLATE = ROOT / "deploy" / "ansible" / "templates" / "docker-compose.y
 GROUP_VARS = ROOT / "deploy" / "ansible" / "group_vars" / "all.yml"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
 UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
-
-
-class DefectStillPresent(Exception):
-    """Raised when a re-deploy can leave Prometheus on a stale bind inode."""
 
 
 def _load_prom_config() -> Any:
@@ -313,11 +308,6 @@ def test_update_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() 
     assert "until:" in check_text
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="deploy.yml re-renders the bind-mounted Prometheus config without inode preservation, reload, or lifecycle-target verification",
-)
 def test_deploy_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() -> None:
     play = yaml.safe_load(DEPLOY_PLAYBOOK.read_text())[0]
     prometheus_tasks = [
@@ -326,15 +316,10 @@ def test_deploy_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() 
         if task.get("ansible.builtin.template", {}).get("src")
         == "templates/prometheus.yml.j2"
     ]
-    if len(prometheus_tasks) != 1:
-        raise DefectStillPresent(
-            f"expected exactly one Prometheus template task, got {len(prometheus_tasks)}"
-        )
+    assert len(prometheus_tasks) == 1
     prom_task = prometheus_tasks[0]
-    if prom_task["ansible.builtin.template"].get("unsafe_writes") is not True:
-        raise DefectStillPresent("re-deploy replaces the bind-mounted Prometheus inode")
-    if not prom_task.get("notify"):
-        raise DefectStillPresent("Prometheus config change does not trigger a reload")
+    assert prom_task["ansible.builtin.template"].get("unsafe_writes") is True
+    assert prom_task.get("notify")
 
     handlers = play.get("handlers", [])
     lifecycle_checks = [
@@ -343,12 +328,12 @@ def test_deploy_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() 
         if "lifecycle-worker" in yaml.safe_dump(handler)
         and "/api/v1/query" in yaml.safe_dump(handler)
     ]
-    if len(lifecycle_checks) != 1:
-        raise DefectStillPresent("re-deploy has no lifecycle target verification")
+    assert len(lifecycle_checks) == 1
     check = lifecycle_checks[0]
     check_text = yaml.safe_dump(check)
-    if not check.get("listen") or "retries:" not in check_text or "until:" not in check_text:
-        raise DefectStillPresent("lifecycle verification is not attached, bounded, and asserted")
+    assert check.get("listen")
+    assert "retries:" in check_text
+    assert "until:" in check_text
 
 
 def test_scrape_targets_qdrant_with_bearer_auth() -> None:
