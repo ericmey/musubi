@@ -185,11 +185,7 @@ def test_discrimination_manifest_checksum(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Test 4: Deterministic Rerun Stability
 # ---------------------------------------------------------------------------
-class EvalResult:
-    def __init__(self, metrics: dict[str, float], ordered_hits: list[str]) -> None:
-        self.metrics = metrics
-        self.ordered_hits = ordered_hits
-
+from musubi.evals.runner import EvalResult
 
 def _assert_deterministic_rerun(
     run_eval_func: Callable[[list[dict[str, Any]], str, int], EvalResult],
@@ -217,10 +213,9 @@ def _assert_deterministic_rerun(
     )
 
 
-@pytest.mark.xfail(strict=True, raises=DefectStillPresent, reason="RET-004: Eval runner missing")
 def test_eval_deterministic_rerun() -> None:
     try:
-        from musubi.evals.runner import run_eval  # type: ignore[import-untyped]
+        from musubi.evals.runner import run_eval
     except ImportError:
         raise DefectStillPresent("musubi.evals.runner module does not exist")
     _assert_deterministic_rerun(run_eval)
@@ -651,9 +646,6 @@ def _assert_holdout_isolation(
     assert "test_l2" not in trained_labels, "Holdout leakage: Trainer saw test labels"
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: Holdout isolation unproven"
-)
 def test_eval_holdout_isolation() -> None:
     try:
         from musubi.evals.runner import run_isolated_eval
