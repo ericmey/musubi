@@ -12,7 +12,22 @@ reviewed: false
 
 How we measure retrieval quality. Without evals, tuning is vibes; with them, every weight change and model swap is defensible.
 
-## Layers
+## Current Implementation Status (v1.11.8)
+**The content of this document is a TARGET CONTRACT, not current executable reality.**
+As of `v1.11.8`, there is zero evaluation implementation in the source tree:
+- There is no `src/musubi/evals` module.
+- There are no golden query sets (query/answer pairs) or `evals/corpus/` directories. (`tests/integration/_corpus` contains a structured integration/performance fixture, but it completely lacks relevance labels or evaluation data).
+- There is no `musubi.evals` CLI tooling.
+- There is no GitHub Action workflow wired for quality metric testing.
+- Four distinct mathematical quality gate tests are currently skipped via `@pytest.mark.skip`:
+  - `test_eval_golden_query_set_mrr_ge_0_7_with_default_weights` (scoring.py:380)
+  - `test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points` (hybrid.py:403)
+  - `test_integration_deep_path_ndcg_10_on_golden_set_improves_vs_fast_path_by_ge_5_points` (rerank.py:210)
+  - `test_integration_end_to_end_deep_path_with_rerank_NDCG_10_on_golden_set_ge_threshold` (orchestration.py:50)
+
+The structures, commands, and workflows detailed below define the contract for the future `slice-ret004-evals` implementation.
+
+## Layers (Proposed Target)
 
 Three layers of evaluation, increasing in cost:
 
@@ -98,9 +113,9 @@ Thresholds are hand-tuned on initial seed queries — they'll shift as the golde
 ## Tooling
 
 ```bash
-musubi-cli eval run --corpus household-2026-04 --mode fast
-musubi-cli eval run --corpus household-2026-04 --mode deep
-musubi-cli eval compare --before main --after pr-123
+uv run python -m musubi.evals run --corpus household-2026-04 --mode fast # (proposed)
+uv run python -m musubi.evals run --corpus household-2026-04 --mode deep # (proposed)
+uv run python -m musubi.evals compare --before main --after pr-123       # (proposed)
 ```
 
 `eval compare` diffs two runs and reports:
@@ -110,6 +125,13 @@ musubi-cli eval compare --before main --after pr-123
 - Queries where a relevant hit dropped out of top-10 (regression)
 
 All golden runs are reproducible: same corpus snapshot + same model versions + same weights + same seed = same metrics. Non-reproducible runs are a bug.
+
+### Continuous Integration (CI)
+- **PR Smoke Gate:** A fast, deterministic subset of the corpus runs entirely in-memory using pre-computed embeddings on every PR to `src/musubi/retrieve/`. This isolates logic regressions from model drift.
+- **Scheduled/Pre-Release Gate:** The full corpus runs against the live local Qdrant/TEI harness during nightly or pre-release checks, enforcing the absolute MRR/NDCG thresholds.
+
+### False-Positive Rate (FPR) & Abstention
+The evaluation framework does not assume the retrieval engine naturally returns empty results for noise. It requires explicit score thresholds. A dedicated metric (`Abstention FPR`) measures the engine's ability to return 0 hits for explicitly non-relevant queries.
 
 ## Corpus snapshots
 
