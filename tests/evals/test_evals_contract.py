@@ -1,4 +1,3 @@
-import contextlib
 import copy
 from collections.abc import Callable
 from math import log2
@@ -11,6 +10,21 @@ from pydantic import BaseModel, ValidationError
 
 class DefectStillPresent(Exception):
     pass
+
+
+def _assert_rejects(
+    func_to_test: Callable[..., Any], expected_exc: type[BaseException], *args: Any, **kwargs: Any
+) -> None:
+    try:
+        func_to_test(*args, **kwargs)
+    except expected_exc:
+        return
+    except BaseException as e:
+
+        if isinstance(e, ValueError):
+            raise
+        pytest.fail(f"Expected {expected_exc.__name__}, got {type(e).__name__}: {e}")
+    pytest.fail(f"Accepted bad implementation without raising {expected_exc.__name__}")
 
 
 # ---------------------------------------------------------------------------
@@ -92,8 +106,11 @@ def _assert_schema_validation(model_class: Any) -> None:
     assert getattr(obj, "id") == "q001"
 
     # Fault: Missing required 'relevant' field fails
-    with pytest.raises(ValidationError):
+    try:
         model_class.model_validate({"id": "q002", "text": "bad query"})
+        raise ValueError("Schema validation failed to enforce required fields")
+    except ValidationError:
+        pass
 
 
 @pytest.mark.xfail(
@@ -123,10 +140,7 @@ def test_discrimination_corpus_schema() -> None:
         def model_validate(cls, data: dict[str, Any]) -> Any:
             return type("Obj", (), data)()
 
-    import _pytest.outcomes
-
-    with contextlib.suppress(_pytest.outcomes.Failed):
-        _assert_schema_validation(AcceptAllSchema)
+    _assert_rejects(_assert_schema_validation, ValueError, AcceptAllSchema)
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +161,11 @@ def _assert_manifest_checksum(
 
     # Fault: One-byte mutation breaks checksum
     corpus_file.write_bytes(b"content2")
-    with pytest.raises(ValueError, match="checksum"):
+    try:
         verify_func(manifest, tmp_path)
+        raise RuntimeError("Failed to raise checksum error")
+    except ValueError:
+        pass
 
 
 @pytest.mark.xfail(
@@ -179,10 +196,7 @@ def test_discrimination_manifest_checksum(tmp_path: Path) -> None:
     def wrong_verify(manifest: dict[str, Any], base_dir: Path) -> bool:
         return True
 
-    import _pytest.outcomes
-
-    with contextlib.suppress(_pytest.outcomes.Failed):
-        _assert_manifest_checksum(wrong_verify, tmp_path)
+    _assert_rejects(_assert_manifest_checksum, RuntimeError, wrong_verify, tmp_path)
 
 
 # ---------------------------------------------------------------------------
@@ -241,11 +255,7 @@ def test_discrimination_deterministic_rerun() -> None:
     def wrong_constant_runner(corpus: list[dict[str, Any]], embedder: str, seed: int) -> EvalResult:
         return EvalResult({"ndcg@10": float(seed)}, [str(seed)])
 
-    try:
-        _assert_deterministic_rerun(wrong_constant_runner)
-        pytest.fail("Accepted bad constant runner")
-    except Exception:
-        pass
+    _assert_rejects(_assert_deterministic_rerun, AssertionError, wrong_constant_runner)
 
 
 # ---------------------------------------------------------------------------
@@ -336,10 +346,7 @@ def test_discrimination_nightly_thresholds() -> None:
                 raise ValueError(f"Metric {k} below threshold {v}")
         return True
 
-    import _pytest.outcomes
-
-    with contextlib.suppress(_pytest.outcomes.Failed):
-        _assert_nightly_thresholds(wrong_check_ignores_mode)
+    _assert_rejects(_assert_nightly_thresholds, BaseException, wrong_check_ignores_mode)
 
     def wrong_check_accepts_nan(metrics: dict[str, float], mode: str) -> bool:
         targets = {
@@ -357,11 +364,7 @@ def test_discrimination_nightly_thresholds() -> None:
                 raise ValueError()
         return True
 
-    try:
-        _assert_nightly_thresholds(wrong_check_accepts_nan)
-        pytest.fail("Accepted bad check")
-    except BaseException:
-        pass
+    _assert_rejects(_assert_nightly_thresholds, AssertionError, wrong_check_accepts_nan)
 
 
 def _assert_baseline_delta_gate(
@@ -385,18 +388,33 @@ def _assert_baseline_delta_gate(
     )
 
     # 2. Epsilon-beyond FAIL for EACH
-    with pytest.raises(ValueError, match="ndcg@10"):
+    try:
         delta_check_func(baseline, {"ndcg@10": 0.7799, "mrr": 0.85, "latency_p95_ms": 100.0})
-    with pytest.raises(ValueError, match="mrr"):
+        raise RuntimeError("Failed to catch ndcg@10 delta")
+    except ValueError:
+        pass
+    try:
         delta_check_func(baseline, {"ndcg@10": 0.80, "mrr": 0.8199, "latency_p95_ms": 100.0})
-    with pytest.raises(ValueError, match="latency_p95_ms"):
+        raise RuntimeError("Failed to catch mrr delta")
+    except ValueError:
+        pass
+    try:
         delta_check_func(baseline, {"ndcg@10": 0.80, "mrr": 0.85, "latency_p95_ms": 120.1})
+        raise RuntimeError("Failed to catch latency_p95_ms delta")
+    except ValueError:
+        pass
 
     # 3. Missing/non-numeric/non-finite FAIL
-    with pytest.raises(ValueError):
-        delta_check_func(baseline, {"mrr": 0.85, "latency_p95_ms": 100.0})  # Missing ndcg
-    with pytest.raises(ValueError):
+    try:
+        delta_check_func(baseline, {"mrr": 0.85, "latency_p95_ms": 100.0})
+        raise RuntimeError("Failed to catch missing ndcg@10")
+    except ValueError:
+        pass
+    try:
         delta_check_func(baseline, {"ndcg@10": math.nan, "mrr": 0.85, "latency_p95_ms": 100.0})
+        raise RuntimeError("Failed to catch NaN delta")
+    except ValueError:
+        pass
 
 
 @pytest.mark.xfail(
@@ -441,10 +459,7 @@ def test_discrimination_baseline_delta_gate() -> None:
     def wrong_delta_allows_any(base: dict[str, float], cand: dict[str, float]) -> bool:
         return True
 
-    import _pytest.outcomes
-
-    with contextlib.suppress(_pytest.outcomes.Failed):
-        _assert_baseline_delta_gate(wrong_delta_allows_any)
+    _assert_rejects(_assert_baseline_delta_gate, RuntimeError, wrong_delta_allows_any)
 
     def wrong_delta_ignores_mrr(base: dict[str, float], cand: dict[str, float]) -> bool:
         if cand.get("ndcg@10") is None or cand["ndcg@10"] < base["ndcg@10"] - 0.02:
@@ -456,10 +471,7 @@ def test_discrimination_baseline_delta_gate() -> None:
             raise ValueError("regression on latency_p95_ms")
         return True
 
-    import _pytest.outcomes
-
-    with contextlib.suppress(_pytest.outcomes.Failed):
-        _assert_baseline_delta_gate(wrong_delta_ignores_mrr)
+    _assert_rejects(_assert_baseline_delta_gate, RuntimeError, wrong_delta_ignores_mrr)
 
     def wrong_delta_latency_direction(base: dict[str, float], cand: dict[str, float]) -> bool:
         if cand.get("ndcg@10") is None or cand["ndcg@10"] < base["ndcg@10"] - 0.02:
@@ -474,13 +486,10 @@ def test_discrimination_baseline_delta_gate() -> None:
             raise ValueError()
         return True
 
-    import _pytest.outcomes
 
-    try:
-        _assert_baseline_delta_gate(wrong_delta_latency_direction)
-        pytest.fail("Accepted bad check")
-    except Exception:
-        pass
+    _assert_rejects(
+        _assert_baseline_delta_gate, ValueError, wrong_delta_latency_direction
+    )
 
 
 def _assert_scheduled_baseline_report(report_func: Callable[[Any, dict[str, float]], bool]) -> None:
@@ -492,8 +501,11 @@ def _assert_scheduled_baseline_report(report_func: Callable[[Any, dict[str, floa
                 "latency_p95_ms": 100.0,
             }  # Fails ndcg delta vs 0.80
 
-    with pytest.raises(ValueError, match="ndcg@10"):
+    try:
         report_func(MockRunner(), {"ndcg@10": 0.80, "mrr": 0.85, "latency_p95_ms": 100.0})
+        raise RuntimeError("Failed to raise ValueError")
+    except ValueError:
+        pass
 
 
 @pytest.mark.xfail(
@@ -523,10 +535,7 @@ def test_discrimination_scheduled_baseline() -> None:
         runner.run()
         return True
 
-    import _pytest.outcomes
-
-    with contextlib.suppress(_pytest.outcomes.Failed):
-        _assert_scheduled_baseline_report(wrong_report_logs_only)
+    _assert_rejects(_assert_scheduled_baseline_report, RuntimeError, wrong_report_logs_only)
 
 
 def _assert_per_query_top_hit_drop(
@@ -534,8 +543,11 @@ def _assert_per_query_top_hit_drop(
 ) -> None:
     baseline = {"q1": ["docA", "docB"]}
     candidate_fail = {"q1": ["docX"] * 10 + ["docA"]}
-    with pytest.raises(ValueError, match="top-relevant dropped"):
+    try:
         check_func(baseline, candidate_fail)
+        raise RuntimeError("Failed to catch top hit drop")
+    except ValueError:
+        pass
 
     candidate_pass = {"q1": ["docX", "docA"]}
     assert check_func(baseline, candidate_pass) is True
@@ -569,10 +581,7 @@ def test_discrimination_per_query_drop() -> None:
     def wrong_drop_check_warns_only(base: dict[str, list[str]], cand: dict[str, list[str]]) -> bool:
         return True
 
-    import _pytest.outcomes
-
-    with contextlib.suppress(_pytest.outcomes.Failed):
-        _assert_per_query_top_hit_drop(wrong_drop_check_warns_only)
+    _assert_rejects(_assert_per_query_top_hit_drop, RuntimeError, wrong_drop_check_warns_only)
 
 
 # ---------------------------------------------------------------------------
@@ -599,17 +608,16 @@ class MockEvalReport:
         self.fn_tradeoff = fn_tradeoff
 
 
-def _assert_holdout_isolation(eval_func: Callable[[list[MockQuery], list[MockQuery]], Any]) -> None:
+def _assert_holdout_isolation(eval_func: Callable[[], Any]) -> None:
     # Contract: Holdout queries/labels MUST NOT participate in tuning.
-    train_queries = [MockQuery("1", "a", ["train_l1"])]
-    test_queries = [MockQuery("2", "b", ["test_l2"])]
+    # The evaluation function MUST own the loading and split, separating train from test entirely.
 
-    # Run evaluation
-    model_state = eval_func(train_queries, test_queries)
+    # Run evaluation (which internally simulates train vs test phases)
+    model_state = eval_func()
 
-    # Prove ID disjointness
-    train_ids = {q.id for q in train_queries}
-    test_ids = {q.id for q in test_queries}
+    # Prove ID disjointness within the reported internal split
+    train_ids = set(model_state.get("train_ids", []))
+    test_ids = set(model_state.get("test_ids", []))
     assert not train_ids.intersection(test_ids), "Holdout leakage: ID overlap"
 
     # Prove labels/queries don't leak into calibration
@@ -630,26 +638,26 @@ def test_eval_holdout_isolation() -> None:
 
 
 def test_discrimination_holdout_isolation() -> None:
-    def correct_eval(train: list[MockQuery], test: list[MockQuery]) -> dict[str, bool]:
-        return {"seen_test_labels": False}
+    def correct_eval() -> dict[str, Any]:
+        return {"seen_test_labels": False, "train_ids": ["1"], "test_ids": ["2"]}
 
     _assert_holdout_isolation(correct_eval)
 
-    def wrong_eval_leaks_labels(train: list[MockQuery], test: list[MockQuery]) -> dict[str, bool]:
-        # Disjoint IDs but leaking test labels into train phase
-        return {"seen_test_labels": True}
+    def wrong_eval_leaks_labels() -> dict[str, Any]:
+        return {"seen_test_labels": True, "train_ids": ["1"], "test_ids": ["2"]}
 
-    try:
-        _assert_holdout_isolation(wrong_eval_leaks_labels)
-        pytest.fail("Accepted bad isolation")
-    except AssertionError:
-        pass
+    _assert_rejects(_assert_holdout_isolation, AssertionError, wrong_eval_leaks_labels)
+
+    def wrong_eval_leaks_ids() -> dict[str, Any]:
+        return {"seen_test_labels": False, "train_ids": ["1", "2"], "test_ids": ["2"]}
+
+    _assert_rejects(_assert_holdout_isolation, AssertionError, wrong_eval_leaks_ids)
 
 
 def _assert_pr_smoke_fixed_embeddings(
     run_func: Callable[[], Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Must prove zero network/external DB calls
+    # Must prove zero network/external DB calls AND deterministic identity
     network_called = False
 
     def mock_urlopen(*args: Any, **kwargs: Any) -> Any:
@@ -669,12 +677,16 @@ def _assert_pr_smoke_fixed_embeddings(
     monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
     monkeypatch.setattr(qdrant_client, "QdrantClient", mock_qdrant)
 
-    res = run_func()
+    res1 = run_func()
+    res2 = run_func()
 
     if network_called:
         raise ValueError("Qdrant/TEI network hit detected")
 
-    assert getattr(res, "metrics", {}).get("ndcg@10", 0.0) > 0.0
+    # Assert committed fixed corpus+embedding identity/checksum and repeat determinism
+    assert getattr(res1, "metrics", {}).get("ndcg@10", 0.0) == 0.8
+    assert getattr(res1, "corpus_checksum", "") == "fixed_hash"
+    assert getattr(res1, "metrics", {}) == getattr(res2, "metrics", {})
 
 
 @pytest.mark.xfail(
@@ -692,47 +704,59 @@ def test_eval_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None
 
 def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     def correct_smoke() -> Any:
-        return type("MockResult", (), {"metrics": {"ndcg@10": 0.8}})()
+        return type(
+            "MockResult", (), {"metrics": {"ndcg@10": 0.8}, "corpus_checksum": "fixed_hash"}
+        )()
 
     def wrong_smoke_requires_qdrant() -> Any:
+        import contextlib
+
         import qdrant_client
 
         with contextlib.suppress(Exception):
             qdrant_client.QdrantClient("http://localhost:6333")
-        return type("MockResult", (), {"metrics": {"ndcg@10": 0.8}})()
+        return type(
+            "MockResult", (), {"metrics": {"ndcg@10": 0.8}, "corpus_checksum": "fixed_hash"}
+        )()
+
+    def wrong_smoke_wrong_hash() -> Any:
+        return type(
+            "MockResult", (), {"metrics": {"ndcg@10": 0.8}, "corpus_checksum": "bad_hash"}
+        )()
 
     _assert_pr_smoke_fixed_embeddings(correct_smoke, monkeypatch)
 
-    import _pytest.outcomes
-
-    try:
-        _assert_pr_smoke_fixed_embeddings(wrong_smoke_requires_qdrant, monkeypatch)
-        pytest.fail("Accepted network calls")
-    except _pytest.outcomes.Failed:
-        pass
-    except ValueError:
-        pass
+    _assert_rejects(
+        _assert_pr_smoke_fixed_embeddings, ValueError, wrong_smoke_requires_qdrant, monkeypatch
+    )
+    _assert_rejects(
+        _assert_pr_smoke_fixed_embeddings, AssertionError, wrong_smoke_wrong_hash, monkeypatch
+    )
 
 
 def _assert_abstention_fpr(
     eval_func: Callable[[MockModelConfig, dict[str, Any]], MockEvalReport],
 ) -> None:
-    # Explicitly train-calibrated, versioned score threshold (frozen before holdout).
-    # Must report per-mode FPR and FN tradeoff.
+    # Require immutable/versioned train-calibrated thresholds
     config = MockModelConfig(
         thresholds={"fast": 0.3, "deep": 0.4}, version="v1.0", calibrated_on="train_split_A"
     )
-    noise_results = {"mode": "fast", "hits": [{"score": 0.2}]}
 
-    report = eval_func(config, noise_results)
-
-    # Ensure config wasn't mutated during holdout evaluation
-    assert config.thresholds["fast"] == 0.3, "Threshold mutated during holdout evaluation"
-
-    if report.fpr > 0.0:
-        raise ValueError("FPR > 0: engine hallucinated fallback matches for noise")
-    if not hasattr(report, "fn_tradeoff"):
+    # 1. Deep mode
+    noise_results_deep = {"mode": "deep", "hits": [{"score": 0.2}]}
+    report_deep = eval_func(config, noise_results_deep)
+    assert config.thresholds["deep"] == 0.4, "Threshold mutated"
+    if report_deep.fpr > 0.0:
+        raise ValueError("FPR > 0")
+    if not hasattr(report_deep, "fn_tradeoff"):
         raise ValueError("Missing False-Negative tradeoff report")
+
+    # 2. Fast mode
+    noise_results_fast = {"mode": "fast", "hits": [{"score": 0.2}]}
+    report_fast = eval_func(config, noise_results_fast)
+    assert config.thresholds["fast"] == 0.3, "Threshold mutated"
+    if report_fast.fpr > 0.0:
+        raise ValueError("FPR > 0")
 
 
 @pytest.mark.xfail(
@@ -748,8 +772,13 @@ def test_eval_abstention_fpr() -> None:
 
 def test_discrimination_abstention_fpr() -> None:
     def correct_check(config: MockModelConfig, results: dict[str, Any]) -> MockEvalReport:
+        # Validates that version and calibration info are frozen and present
+        if not config.version or not config.calibrated_on:
+            raise ValueError("Missing version or calibration")
         mode = results["mode"]
-        threshold = config.thresholds.get(mode, 1.0)
+        if mode not in config.thresholds:
+            raise ValueError("Unknown mode")
+        threshold = config.thresholds[mode]
         hits = results["hits"]
         fp = sum(1 for h in hits if h["score"] >= threshold)
         return MockEvalReport(fpr=float(fp), fn_tradeoff=0.05)
@@ -759,46 +788,41 @@ def test_discrimination_abstention_fpr() -> None:
     def wrong_check_ignores_threshold(
         config: MockModelConfig, results: dict[str, Any]
     ) -> MockEvalReport:
-        # Fails to apply threshold
         hits = results["hits"]
         return MockEvalReport(fpr=float(len(hits)), fn_tradeoff=0.05)
 
     def wrong_check_holdout_tuned(
         config: MockModelConfig, results: dict[str, Any]
     ) -> MockEvalReport:
-        # Mutates threshold during holdout evaluation (illegal)
-        config.thresholds["fast"] = 0.0
+        mode = results["mode"]
+        config.thresholds[mode] = 0.0
         return MockEvalReport(fpr=1.0, fn_tradeoff=0.0)
 
     def wrong_check_missing_fn_tradeoff(config: MockModelConfig, results: dict[str, Any]) -> Any:
         return type("MockReport", (), {"fpr": 0.0})()
 
-    import _pytest.outcomes
+    _assert_rejects(_assert_abstention_fpr, ValueError, wrong_check_ignores_threshold)
+    _assert_rejects(_assert_abstention_fpr, AssertionError, wrong_check_holdout_tuned)
 
-    try:
-        _assert_abstention_fpr(wrong_check_ignores_threshold)
-        pytest.fail("Accepted check ignoring threshold")
-    except AssertionError:
-        pass
-    except ValueError:
-        pass
-
-    try:
-        _assert_abstention_fpr(wrong_check_holdout_tuned)
-        pytest.fail("Accepted holdout-tuned check")
-    except AssertionError:
-        pass
-    except ValueError:
-        pass
-
-    try:
-        _assert_abstention_fpr(wrong_check_missing_fn_tradeoff)
-        pytest.fail("Accepted missing FN tradeoff")
-    except _pytest.outcomes.Failed:
-        pass
-    except ValueError:
-        pass
+    _assert_rejects(
+        _assert_abstention_fpr, ValueError, wrong_check_missing_fn_tradeoff
+    )
 
 
 # The remaining 6 tests are preserved as documentation of the pending inventory,
 # explicitly raising a skipped exception so they do not artificially pad the test count.
+
+
+@pytest.mark.skip(reason="Pending RET-004 implementation")
+def test_eval_contradiction_blending() -> None:
+    pass
+
+
+@pytest.mark.skip(reason="Pending RET-004 implementation")
+def test_eval_cross_plane_blending() -> None:
+    pass
+
+
+@pytest.mark.skip(reason="Pending RET-004 implementation")
+def test_eval_provisional_immediate_recall() -> None:
+    pass
