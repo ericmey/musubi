@@ -287,8 +287,7 @@ def test_update_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() 
     prometheus_tasks = [
         task
         for task in play["tasks"]
-        if task.get("ansible.builtin.template", {}).get("src")
-        == "templates/prometheus.yml.j2"
+        if task.get("ansible.builtin.template", {}).get("src") == "templates/prometheus.yml.j2"
     ]
     assert len(prometheus_tasks) == 1
     assert prometheus_tasks[0]["ansible.builtin.template"].get("unsafe_writes") is True
@@ -313,8 +312,7 @@ def test_deploy_preserves_prometheus_bind_inode_and_verifies_lifecycle_target() 
     prometheus_tasks = [
         task
         for task in play["tasks"]
-        if task.get("ansible.builtin.template", {}).get("src")
-        == "templates/prometheus.yml.j2"
+        if task.get("ansible.builtin.template", {}).get("src") == "templates/prometheus.yml.j2"
     ]
     assert len(prometheus_tasks) == 1
     prom_task = prometheus_tasks[0]

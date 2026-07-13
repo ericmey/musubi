@@ -117,9 +117,9 @@ def test_playbook_idempotent_on_clean_vm() -> None:
         "ansible.builtin.template",
         "ansible.builtin.uri",
         "ansible.builtin.user",
-            "community.docker.docker_compose_v2",
-            "community.docker.docker_compose_v2_pull",
-            "community.docker.docker_container_info",
+        "community.docker.docker_compose_v2",
+        "community.docker.docker_compose_v2_pull",
+        "community.docker.docker_container_info",
         "community.general.ufw",
     }
     for playbook_path in PLAYBOOKS.values():
