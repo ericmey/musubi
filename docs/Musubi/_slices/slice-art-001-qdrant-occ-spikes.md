@@ -72,3 +72,14 @@ Named strict reds (each rejects one wrong candidate; `--runxfail` reaches all se
 
 `in-progress`, held and do-not-merge. Decision pending discriminator. Passing
 test-only mechanics are not an architecture recommendation or source authorization.
+
+## Work log
+
+- 2026-07-14: added the four-file tests/docs-only discriminator. Local evidence:
+  `11 passed, 7 xfailed`; `--runxfail` reached exactly seven named failures;
+  `make check` passed with `1725 passed, 197 skipped, 17 deselected, 9 xfailed`
+  and 89.46% coverage. All five crash boundaries passed and teardown left no
+  spike container, network, or volume. The global namespace visibility red,
+  upload orchestration, content-address/model reconciliation, and legacy rebuild
+  remain explicit non-closures. Status intentionally remains `in-progress` because
+  this is a held design discriminator, not a merge-ready source slice.
