@@ -11,14 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.1.0
         with:
-          python-version: '3.12'
-      - name: Install uv and deps
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          uv pip install -e .
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Sync dependencies
+        run: uv sync --extra dev
       - name: Run PR Smoke Gate
         if: github.event_name == 'pull_request'
         run: |
