@@ -406,6 +406,27 @@ def _enclosing_of(
     return cast("ast.AST | None", cur)
 
 
+def _is_coordinator_annotation(ann: ast.AST | None) -> bool:
+    """A BARE coordinator type annotation - `LifecycleTransitionCoordinator` or `module.LifecycleTransition
+    Coordinator`. An Optional/Union form (`X | None`, `Optional[X]`, `Union[...]`) is NOT bare and does NOT
+    match, so an optional injected coordinator fails closed (Yua: no optional unaudited fallback)."""
+    return (isinstance(ann, ast.Name) and ann.id == _COORDINATOR_CLASS) or (
+        isinstance(ann, ast.Attribute) and ann.attr == _COORDINATOR_CLASS
+    )
+
+
+def _params_with_defaults(args: ast.arguments) -> list[tuple[ast.arg, bool]]:
+    """Every parameter of a signature paired with whether it has a default (positional defaults align to the
+    tail; a kw-only default is a non-None `kw_defaults` slot)."""
+    positional = [*args.posonlyargs, *args.args]
+    n_def = len(args.defaults)
+    out: list[tuple[ast.arg, bool]] = [
+        (a, i >= len(positional) - n_def) for i, a in enumerate(positional)
+    ]
+    out.extend((a, d is not None) for a, d in zip(args.kwonlyargs, args.kw_defaults, strict=True))
+    return out
+
+
 def _coordinator_scopes(
     tree: ast.AST,
 ) -> tuple[
@@ -421,7 +442,11 @@ def _coordinator_scopes(
     - class_binds: {enclosing-class node -> {self.<attr> -> [is_coordinator_ctor, ...] for EVERY assignment
       to that attr across the class's methods}}. A self attribute resolves only within its owning class.
     Recording ALL writes (not only coordinator constructions) is what lets resolution reject a name/attr that
-    is rebound to something else - the map alone no longer implies coordinator provenance."""
+    is rebound to something else - the map alone no longer implies coordinator provenance.
+    INJECTED BOUNDARY (Yua): a REQUIRED, BARE-typed `coordinator: LifecycleTransitionCoordinator` parameter
+    is seeded as a coordinator binding at function entry (so a call in the body resolves), while an
+    optional/defaulted/Union-typed param is NOT seeded (fails closed), and a later body rebinding of that
+    name adds a second binding -> ambiguous -> fails closed."""
     parent = _parent_map(tree)
     func_binds: dict[ast.AST, dict[str, list[tuple[int, bool]]]] = {}
     class_binds: dict[ast.AST, dict[str, list[bool]]] = {}
@@ -451,6 +476,12 @@ def _coordinator_scopes(
             _record(
                 n.target, n, False
             )  # `c += ...` is a rebinding to a non-construction -> fail closed
+    # injected boundary: a required, bare-typed coordinator parameter is a coordinator binding at entry
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+            for arg, has_default in _params_with_defaults(fn.args):
+                if not has_default and _is_coordinator_annotation(arg.annotation):
+                    func_binds.setdefault(fn, {}).setdefault(arg.arg, []).append((arg.lineno, True))
     return parent, func_binds, class_binds
 
 
@@ -530,10 +561,12 @@ def _scan_coordinator_transition_callsites() -> list[tuple[str, str]]:
 
 _G2A_REASON = (
     "the reviewed LifecycleTransitionCoordinator.transition callsite (exactly one, in the canonical "
-    "transition wrapper of lifecycle/transitions.py) does not yet exist - the Phase-1 coordinator is "
-    "unbuilt, so the resolved inventory is empty and cannot equal the reviewed set. Flips to XPASS(strict) "
-    "when the coordinator lands and the single reviewed callsite is present (zero/missing/duplicate/extra "
-    "all fail). H5 updates the reviewed set as it migrates other state-mutating paths."
+    "transition wrapper of lifecycle/transitions.py, on a REQUIRED injected `coordinator: "
+    "LifecycleTransitionCoordinator` parameter) does not yet exist - the Phase-1 coordinator is unbuilt, so "
+    "the resolved inventory is empty and cannot equal the reviewed set. Flips to XPASS(strict) when the "
+    "coordinator lands and the single reviewed callsite is present on the injected boundary "
+    "(zero/missing/duplicate/extra, and an optional/defaulted/rebound/unrelated receiver, all fail). H5 "
+    "extends the reviewed set as it migrates other state-mutating paths."
 )
 
 
@@ -645,6 +678,47 @@ def test_g2a_rule_discriminates_coordinator_callsites() -> None:
         "    return c.transition(i)\n"
     )
     assert _resolve_callsites(branch_ambiguous, "m") == []
+
+    # ---- INJECTED BOUNDARY (Yua): a REQUIRED, bare-typed coordinator PARAMETER is the reviewed seam ----
+    # a required injected `coordinator: LifecycleTransitionCoordinator` param resolves the body call
+    injected_ok = ast.parse(
+        "def transition(client, coordinator: LifecycleTransitionCoordinator):\n"
+        "    return coordinator.transition(i)\n"
+    )
+    assert sorted(_resolve_callsites(injected_ok, "m")) == reviewed
+    # a module-qualified annotation is also recognized
+    injected_qual = ast.parse(
+        "def transition(client, coordinator: lifecycle.LifecycleTransitionCoordinator):\n"
+        "    return coordinator.transition(i)\n"
+    )
+    assert sorted(_resolve_callsites(injected_qual, "m")) == reviewed
+    # FAIL-CLOSED: a free name with NO injected coordinator param does not count
+    unbound_free = ast.parse("def transition(client):\n    return coordinator.transition(i)\n")
+    assert _resolve_callsites(unbound_free, "m") == []
+    # FAIL-CLOSED: an OPTIONAL/Union-typed injected coordinator (a fallback) does not count
+    optional_union = ast.parse(
+        "def transition(client, coordinator: LifecycleTransitionCoordinator | None):\n"
+        "    return coordinator.transition(i)\n"
+    )
+    assert _resolve_callsites(optional_union, "m") == []
+    # FAIL-CLOSED: a DEFAULTED injected coordinator (optional fallback) does not count
+    defaulted = ast.parse(
+        "def transition(client, coordinator: LifecycleTransitionCoordinator = FALLBACK):\n"
+        "    return coordinator.transition(i)\n"
+    )
+    assert _resolve_callsites(defaulted, "m") == []
+    # FAIL-CLOSED: an injected param REBOUND in the body is ambiguous
+    injected_rebound = ast.parse(
+        "def transition(client, coordinator: LifecycleTransitionCoordinator):\n"
+        "    coordinator = make_plane()\n"
+        "    return coordinator.transition(i)\n"
+    )
+    assert _resolve_callsites(injected_rebound, "m") == []
+    # FAIL-CLOSED: an UNRELATED-typed param whose .transition is called does not count
+    unrelated_param = ast.parse(
+        "def transition(client, plane: SomethingElse):\n    return plane.transition(i)\n"
+    )
+    assert _resolve_callsites(unrelated_param, "m") == []
 
 
 # G2b - cleanup_terminal SQL SHAPE (Phase-1 source-shape acceptance) ----------------------------------- #
