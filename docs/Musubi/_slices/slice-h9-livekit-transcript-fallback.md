@@ -26,6 +26,6 @@ When `LiveKitAdapter.on_session_end` lacks an `_upload_handler` (the fallback pa
 ## Tests-First Acceptance Contract (Strict Red)
 1. **Red Contract:** Replace the existing vacuous `test_transcript_fallback_capture_adds_typed_episode_tags` with a red-contract test (must `strict-xfail`) asserting that the fallback `episodic.capture` receives the exact scrubbed UTF-8 transcript as `content`, instead of the `[transcript:...]` stub. Existing typed tags and `session_id` must be preserved.
 2. **Control - Handler Success:** Verify that when `_upload_handler` is present and succeeds, the fallback capture is not triggered.
-3. **Control - Empty Transcript:** Verify that an empty or whitespace-only transcript is processed and passed exactly (post-scrub) without inventing a local truncation/stub logic, bounding behavior strictly to the upstream `capture` API payload expectations.
+3. **Control - Empty Transcript:** Verify that an empty or whitespace-only transcript is explicitly skipped rather than passing a useless stub or dispatching an invalid payload (which guarantees a 422 API rejection).
 
 **NO SRC CHANGES:** This slice implements the test constraints only.
