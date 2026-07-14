@@ -59,67 +59,116 @@ AUTO_PIN_WF = WORKFLOWS / "auto-digest-bump.yml"
 # prefix, optional pre-release suffix, no build metadata).
 # Mirrors what release-please emits and what the v* tag
 # push trigger accepts.
-# Release tag grammar accepted by this repo.
-# Per Yua 21:21:24 #2: SemVer 2.0.0 (with v prefix) + v* tag
-# push trigger acceptance.
+# Project release tag grammar (single source).
+# Per Yua 21:36:58 #1: one declared grammar that drives
+# the Python resolver, the Bash regex, AND CORRECTED_GUARD.
 #
-# Rules:
-#   - Core: non-zero-prefixed numbers (e.g., 1, 10; not 01)
-#   - Prerelease: dot-separated alphanumeric identifiers,
-#     no leading/trailing dots/hyphens
-#   - Build metadata: intentionally UNSUPPORTED
-# Rejects: leading zeros, empty/dot-only prerelease, trailing
-# hyphen/dot, junk suffixes, build metadata.
+# This is a DOCUMENTED BOUNDED SUBSET of SemVer 2.0.0
+# with v prefix. It is NOT a full SemVer 2.0.0 implementation.
+# The differences from full SemVer 2.0.0 are:
 #
-# Per Yua 21:27:31 #2: one bounded SemVer grammar source
-# that drives BOTH the Python resolver and the executable
-# Bash proof. The Python form uses (?:...) non-capturing
-# groups; the Bash form uses (...) capturing groups. Both
-# are functionally equivalent; the parity test verifies
-# cross-product agreement on a fixed corpus.
-RELEASE_TAG_GRAMMAR_PYTHON = re.compile(
-    r"^v"
-    r"(?:0|[1-9]\d*)"
-    r"\.(?:0|[1-9]\d*)"
-    r"\.(?:0|[1-9]\d*)"
-    r"(?:-"
-    # Per SemVer 2.0.0: identifiers may include hyphens
-    # but cannot start or end with one. An identifier
-    # is one or more alphanumerics optionally followed
-    # by hyphen-separated alphanumerics. Multiple
-    # identifiers are dot-separated.
-    r"(?:[0-9a-zA-Z]+(?:-[0-9a-zA-Z]+)*"
-    r"(?:\.[0-9a-zA-Z]+(?:-[0-9a-zA-Z]+)*)*)"
-    r")?"
-    r"$"
-)
-# Bash POSIX ERE equivalent (used in the executable proof).
-# bash regex `=~` does not support (?:...) non-capturing
-# groups; use (...) capturing groups instead.
-RELEASE_TAG_GRAMMAR_BASH = (
-    r"^v"
-    r"(0|[1-9][0-9]*)"
-    r"\.(0|[1-9][0-9]*)"
-    r"\.(0|[1-9][0-9]*)"
-    r"(-[0-9a-zA-Z]+(-[0-9a-zA-Z]+)*"
-    r"(\.[0-9a-zA-Z]+(-[0-9a-zA-Z]+)*)*)?"
-    r"$"
-)
-RELEASE_TAG_GRAMMAR = RELEASE_TAG_GRAMMAR_PYTHON
+#   1. Build metadata (+build) is explicitly UNSUPPORTED.
+#   2. Prerelease identifiers must be EITHER:
+#      a. Pure numeric (no leading zeros): 0, 1, 42
+#      b. Pure alphanumeric starting with a letter, may
+#         include digits and internal hyphens: alpha,
+#         rc-1, x-y-z
+#      Mixed identifiers like "1x" or "01alpha" are
+#      NOT supported (rarely used; document as bounded).
+#   3. Core: non-zero-prefixed numbers (e.g., 1, 10; not 01).
+#
+# All other SemVer 2.0.0 rules apply. See
+# https://semver.org/#spec-item-10 for the full spec.
+
+# Building blocks (Python form uses non-capturing groups;
+# Bash form uses capturing groups, derived by substitution).
+_CORE_NUM = r"(?:0|[1-9][0-9]*)"
+_CORE_3 = rf"{_CORE_NUM}\.{_CORE_NUM}\.{_CORE_NUM}"
+_IDENT_NUM = r"(?:0|[1-9][0-9]*)"  # numeric, no leading zeros
+_IDENT_ALNUM = r"(?:[a-zA-Z](?:[0-9a-zA-Z-]*[0-9a-zA-Z])?)"
+# Alphanumeric: starts with letter, ends with alphanumeric
+# (or is a single letter). May include internal hyphens.
+_IDENT = rf"(?:{_IDENT_NUM}|{_IDENT_ALNUM})"
+_PRERELEASE = rf"(?:-{_IDENT}(?:\.{_IDENT})*)?"
+# Full project release grammar (Python form).
+PROJECT_RELEASE_GRAMMAR_PYTHON = re.compile(rf"^v{_CORE_3}{_PRERELEASE}$")
+
+
+def _python_to_bash(pattern: str) -> str:
+    """Convert a Python regex to bash POSIX ERE.
+
+    bash regex `=~` does not support (?:...) non-capturing
+    groups; convert them to (...) capturing groups.
+    """
+    return pattern.replace("(?:", "(")
+
+
+# Bash POSIX ERE equivalent (derived from Python form).
+PROJECT_RELEASE_GRAMMAR_BASH = _python_to_bash(rf"^v{_CORE_3}{_PRERELEASE}$")
+RELEASE_TAG_GRAMMAR = PROJECT_RELEASE_GRAMMAR_PYTHON
+RELEASE_TAG_GRAMMAR_PYTHON = PROJECT_RELEASE_GRAMMAR_PYTHON
+RELEASE_TAG_GRAMMAR_BASH = PROJECT_RELEASE_GRAMMAR_BASH
+
+
+def _extract_guard_regex(guard: str) -> str:
+    """Extract the regex from CORRECTED_GUARD.
+
+    Per Yua 21:36:58 #1: derive/render the actual guard
+    regex from the same grammar source.
+    """
+    m = re.search(r"\[\[\s+\"(\$TAG)\"\s+=~\s+(.*?)\s+\]\]", guard)
+    if not m:
+        raise ValueError(f"Could not extract guard regex: {guard!r}")
+    return m.group(2)
+
+
+def _run_bash_regex_test(regex: str, value: str) -> bool:
+    """Test if the bash regex matches the value.
+
+    Returns True if the value matches, False otherwise.
+    """
+    # Use single-quoted value to avoid shell expansion.
+    escaped_value = value.replace("'", "'''")
+    script = (
+        "#!/bin/bash\n"
+        f"TAG='{escaped_value}'\n"
+        f'if [[ "$TAG" =~ {regex} ]]; then\n'
+        '  echo "BASH_MATCH=1"\n'
+        "else\n"
+        '  echo "BASH_MATCH=0"\n'
+        "fi\n"
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+        f.write(script)
+        path = f.name
+    try:
+        result = subprocess.run(
+            ["bash", path],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        return "BASH_MATCH=1" in result.stdout
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
 # The cross-product parity corpus: every value here MUST
 # have the same Python and Bash verdict.
 RELEASE_TAG_CORPUS: list[tuple[str, bool]] = [
-    # Valid
+    # Valid (per project release grammar)
     ("v0.0.0", True),
     ("v1.13.0", True),
     ("v0.7.0", True),
-    ("v2.0.0-rc.1", True),
-    ("v1.0.0-alpha", True),
-    ("v1.0.0-alpha.1", True),
-    ("v1.0.0-0.3.7", True),
-    ("v1.0.0-x.7.z.92", True),
     ("v10.20.30", True),
-    ("v1.0.0-alpha-a.b-c-somethinglong", True),
+    ("v2.0.0-rc.1", True),  # alphanumeric + numeric prerelease
+    ("v1.0.0-alpha", True),  # pure alphanumeric
+    ("v1.0.0-alpha.1", True),  # alphanumeric + numeric
+    ("v1.0.0-0.3.7", True),  # pure numeric prerelease
+    ("v1.0.0-x.7.z.92", True),  # mixed alphanumeric
+    ("v1.0.0-rc", True),  # simple alphanumeric
+    ("v1.0.0-1", True),  # simple numeric prerelease
     # Invalid
     ("main", False),
     ("", False),
@@ -128,17 +177,28 @@ RELEASE_TAG_CORPUS: list[tuple[str, bool]] = [
     ("v1.2", False),
     ("v1.2.3.4", False),
     ("1.13.0", False),
-    ("v01.02.003", False),  # leading zeros
+    # Leading zeros in core
+    ("v01.02.003", False),
     ("v01.0.0", False),
     ("v1.02.0", False),
     ("v1.0.03", False),
+    # Empty/dot-only prerelease
     ("v1.0.0-", False),  # trailing hyphen
     ("v1.0.0-.", False),  # dot-only prerelease
     ("v1.0.0-..", False),  # empty dot-only
-    ("v1.0.0-!", False),  # junk suffix
-    ("v1.0.0+build", False),  # build metadata (unsupported)
-    ("v1.0.0-rc.1+build", False),  # build metadata (unsupported)
     ("v1.2.3-alpha..1", False),  # empty identifier in prerelease
+    # Junk suffix
+    ("v1.0.0-!", False),
+    # Build metadata (unsupported)
+    ("v1.0.0+build", False),
+    ("v1.0.0-rc.1+build", False),
+    # Mixed alphanumeric with leading digit (not supported
+    # in this bounded subset; document as bounded)
+    ("v1.0.0-1x", False),
+    # Trailing hyphen in alphanumeric identifier
+    ("v1.0.0-alpha-", False),
+    # Leading zero in numeric prerelease identifier
+    ("v1.0.0-01", False),
     ("vgarbage", False),
 ]
 
@@ -1675,52 +1735,34 @@ def test_control_leading_zero_core_rejected() -> None:
 
 
 def test_control_python_bash_grammar_parity() -> None:
-    """Control 10: Python and Bash grammars agree on every
-    value in the cross-product corpus.
+    """Control 10: Python, Bash, and CORRECTED_GUARD grammars
+    agree on every value in the cross-product corpus.
 
-    Per Yua 21:27:31 #2: the Python resolver and the
-    executable Bash proof must share one bounded SemVer
-    grammar source. The cross-product parity test verifies
-    that for every value in RELEASE_TAG_CORPUS, the Python
-    regex and the Bash regex return the same verdict.
+    Per Yua 21:27:31 #2 + 21:36:58 #1: the Python resolver,
+    the executable Bash proof, AND the actual CORRECTED_GUARD
+    regex must share one bounded project release grammar
+    source. The cross-product parity test verifies that for
+    every value in RELEASE_TAG_CORPUS, all three return the
+    same verdict.
     """
+    # Extract the regex from CORRECTED_GUARD (the actual
+    # synthetic guard that represents the workflow fix).
+    guard_regex = _extract_guard_regex(CORRECTED_GUARD)
     for value, expected in RELEASE_TAG_CORPUS:
         python_match = bool(RELEASE_TAG_GRAMMAR_PYTHON.match(value))
-        # Run the bash regex via subprocess. Use distinct
-        # success/failure markers to avoid substring overlap.
-        bash_script = (
-            "#!/bin/bash\n"
-            "TAG=" + "'" + value + "'" + "\n"
-            'if [[ "$TAG" =~ ' + RELEASE_TAG_GRAMMAR_BASH + " ]]; then\n"
-            '  echo "BASH_MATCH=1"\n'
-            "else\n"
-            '  echo "BASH_MATCH=0"\n'
-            "fi\n"
-        )
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
-            f.write(bash_script)
-            path = f.name
-        try:
-            result = subprocess.run(
-                ["bash", path],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-            )
-            bash_match = "BASH_MATCH=1" in result.stdout
-        finally:
-            Path(path).unlink(missing_ok=True)
-        if python_match != expected or bash_match != expected:
+        bash_match = _run_bash_regex_test(RELEASE_TAG_GRAMMAR_BASH, value)
+        guard_match = _run_bash_regex_test(guard_regex, value)
+        if python_match != expected or bash_match != expected or guard_match != expected:
             raise AssertionError(
                 f"Grammar parity failed for {value!r}: "
                 f"expected {expected}, python={python_match}, "
-                f"bash={bash_match}"
+                f"bash={bash_match}, guard={guard_match}"
             )
-        if python_match != bash_match:
+        if python_match != bash_match or python_match != guard_match:
             raise AssertionError(
-                f"Python and Bash verdicts disagree for {value!r}: "
-                f"python={python_match}, bash={bash_match}"
+                f"Verdicts disagree for {value!r}: "
+                f"python={python_match}, bash={bash_match}, "
+                f"guard={guard_match}"
             )
 
 
@@ -1973,11 +2015,12 @@ def test_wrong_fixture_inv4_remove_v_gate_in_autopin(
 # the same bounded SemVer 2.0.0 grammar as the Python
 # resolver (Bash POSIX ERE equivalent: capturing groups
 # instead of non-capturing groups).
-CORRECTED_GUARD = """          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9a-zA-Z]+(\\.[0-9a-zA-Z]+)*)?$ ]]; then
-            echo "::error::Manual-dispatch tag must be a release tag (semver)"
-            exit 1
-          fi
-"""
+CORRECTED_GUARD = (
+    '          if ! [[ "$TAG" =~ ' + PROJECT_RELEASE_GRAMMAR_BASH + " ]]; then\n"
+    '            echo "::error::Manual-dispatch tag must be a release tag (project release grammar)"\n'
+    "            exit 1\n"
+    "          fi\n"
+)
 
 
 def _write_corrected_resolve_step(src: Path, dst: Path) -> None:

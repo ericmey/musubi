@@ -9,7 +9,7 @@ owner: tama
 phase: "8 Ops"
 tags: [section/slices, status/in-progress, type/slice, release-automation, v1.13.0-followup]
 updated: 2026-07-13
-spec-update: a5d95a7-to-following-commit per Yua 21:27:31 #3 (slice doc must match test file; bounded SemVer grammar + bash parity; semver guard)
+spec-update: fd6faaa-to-following-commit per Yua 21:36:58 #1 (one grammar source driving Python + Bash + CORRECTED_GUARD; bounded SemVer 2.0.0 subset; #2 stale accounting fixed)
 reviewed: true
 depends-on: []
 blocks: []
@@ -34,7 +34,7 @@ blocks: []
 
 - `docs/Musubi/_slices/slice-release-automation-issue449.md` (this file)
 - `docs/Musubi/_inbox/locks/slice-release-automation-issue449.lock` (slice lock)
-- `tests/release/test_release_automation_issue449.py` (the 6 architecture-contract invariants + 1 strict red + 6 wrong-fixture mutation tests + 6 legitimate controls)
+- `tests/release/test_release_automation_issue449.py` (the 6 architecture-contract invariants + 1 strict red + 56 wrong-fixture mutation tests + 10 legitimate controls; 73 total = 71 pass + 2 xfail)
 
 ## Out of owns_paths (intentionally not claimed by this slice)
 
