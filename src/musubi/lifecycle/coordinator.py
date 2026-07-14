@@ -135,6 +135,19 @@ class _CapExceeded(Exception):
     written and Qdrant is untouched."""
 
 
+class _AlreadyExists(Exception):
+    """Internal sentinel: the SERIALIZED admission (inside ``BEGIN IMMEDIATE``, before the cap
+    gate) found a row already exists for this operation_key — a caller whose out-of-transaction
+    ``_replay`` missed a concurrent winner (TOCTOU). ``transition()`` resolves it with the SAME
+    idempotency semantics as ``_replay`` (BEFORE the cap): the key never evaluates the cap twice."""
+
+    def __init__(self, state: str, event_id: str, digest: str) -> None:
+        super().__init__(state)
+        self.state = state
+        self.event_id = event_id
+        self.digest = digest
+
+
 def _intended_patch(intent: TransitionIntent) -> dict[str, object]:
     """The minimal canonical state-mutation patch persisted with the intent."""
     patch: dict[str, object] = {
@@ -229,6 +242,10 @@ class LifecycleTransitionCoordinator:
                 return replay
             # (2) durable admission: cap gate + single-active + PENDING row, atomically. No Qdrant.
             self._write_pending(intent, opk, event_id)
+        except _AlreadyExists as exc:
+            # the SERIALIZED admission re-check found a concurrent winner's row (our out-of-txn
+            # _replay missed it) — resolve idempotency BEFORE the cap, exactly like _replay.
+            return self._resolve_existing(opk, exc.state, exc.event_id, exc.digest, digest)
         except _CapExceeded:
             return Err(error=TransitionError(code="cap_exceeded"))
         except sqlite3.IntegrityError as exc:
@@ -364,6 +381,18 @@ class LifecycleTransitionCoordinator:
         try:
             con.execute("BEGIN IMMEDIATE")
             try:
+                # SERIALIZED operation_key re-check (closes the same-key/full-cap TOCTOU): inside the
+                # write lock, a row already existing for this key means a concurrent winner committed
+                # AFTER our out-of-transaction _replay. Resolve idempotency BEFORE the cap so the key
+                # never evaluates the cap twice. Same connection — no second txn while holding this one.
+                prior = con.execute(
+                    "SELECT state, event_id, intent_digest FROM lifecycle_outbox "
+                    "WHERE operation_key=?",
+                    (opk,),
+                ).fetchone()
+                if prior is not None:
+                    con.execute("ROLLBACK")
+                    raise _AlreadyExists(state=prior[0], event_id=prior[1], digest=prior[2])
                 if self._over_cap(con):
                     con.execute("ROLLBACK")
                     raise _CapExceeded()
@@ -391,23 +420,30 @@ class LifecycleTransitionCoordinator:
             con.close()
         return (row[0], row[1], row[2]) if row else None
 
-    def _replay(self, opk: str, digest: str) -> Ok[TransitionOutcome] | Err[TransitionError] | None:
-        """operation_key idempotency, resolved BEFORE the cap (S3 correction 5). An existing row
-        short-circuits to its recorded outcome with its STABLE event_id and no mutation/new event;
-        the SAME key with a DIFFERENT intent digest is an ``operation_key_conflict``. Returns
-        ``None`` when the key is new so the caller falls through to admission."""
-        existing = self._row_for_key(opk)
-        if existing is None:
-            return None
-        state, event_id, stored_digest = existing
+    def _resolve_existing(
+        self, opk: str, state: str, event_id: str, stored_digest: str, digest: str
+    ) -> Ok[TransitionOutcome] | Err[TransitionError]:
+        """Idempotency resolution shared by the out-of-transaction ``_replay`` fast path and the
+        in-transaction TOCTOU re-check: the SAME digest replays the recorded outcome with its stable
+        event_id (FINAL→Final, ABANDONED→terminal Err, else Pending); a DIFFERENT digest is an
+        ``operation_key_conflict``. No mutation, no new row/event."""
         if stored_digest != digest:
             return Err(error=TransitionError(code="operation_key_conflict"))
         if state == "FINAL":
             return Ok(value=TransitionFinal(operation_key=opk, event_id=event_id))
         if state == "ABANDONED":
             return Err(error=TransitionError(code="terminal_apply_failure"))
-        # PENDING / APPLIED: still in flight — the replay yields the same Pending outcome.
         return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
+
+    def _replay(self, opk: str, digest: str) -> Ok[TransitionOutcome] | Err[TransitionError] | None:
+        """operation_key idempotency FAST path, resolved BEFORE the cap (S3 correction 5). An
+        existing row short-circuits to its recorded outcome; ``None`` when the key is new so the
+        caller falls through to admission, where the SERIALIZED re-check closes the TOCTOU against a
+        concurrent winner whose row this out-of-transaction read may have missed."""
+        existing = self._row_for_key(opk)
+        if existing is None:
+            return None
+        return self._resolve_existing(opk, existing[0], existing[1], existing[2], digest)
 
     # -- S3: pre-apply read + persisted canonical event ------------------------------ #
 

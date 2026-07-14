@@ -438,3 +438,82 @@ def test_collection_object_type_mapping_matches_canonical() -> None:
     # fail-closed: an unknown collection is a pre-mutation terminal validation error.
     with pytest.raises(coord_mod._TerminalValidation):
         coord_mod._object_type_for_collection("musubi_unknown")
+
+
+# --------------------------------------------------------------------------- #
+# Same-key / full-cap TOCTOU regression (Yua 11:47 withhold at d44d051)
+# --------------------------------------------------------------------------- #
+
+
+def _run_full_cap_toctou(
+    env: tuple[QdrantClient, _Seed, Path], loser_target: str
+) -> tuple[Any, Path, QdrantClient, _Seed]:
+    """Deterministic (no-sleep) same-key/full-cap TOCTOU harness. The loser (``client=None`` — so it
+    makes ZERO Qdrant calls) passes ``_replay(None)`` and pauses at before_pending_commit BEFORE it
+    acquires the write lock; the winner then commits the SOLE ``pending_cap=1`` slot (paused at the
+    mutation boundary); the loser is released so its SERIALIZED in-transaction re-check resolves it
+    (never the cap); finally the winner is released to Final. Returns the loser outcome + db/client/
+    seed. A loser_target equal to the winner's (matured) is an identical replay; a different one
+    (e.g. demoted) is a stored_digest conflict — both flow through the in-txn ``_AlreadyExists``."""
+    client, seed, db = env
+    loser_reached, loser_gate = threading.Event(), threading.Event()
+
+    def _loser_cp(name: str) -> None:
+        if name == "before_pending_commit":
+            loser_reached.set()
+            if not loser_gate.wait(timeout=20):
+                raise RuntimeError("loser gate never released")
+
+    loser = _coord(None, db, pending_cap=1)  # client=None: the loser must never touch Qdrant
+    loser._checkpoint = _loser_cp
+    out: dict[str, Any] = {}
+
+    def _run_loser() -> None:
+        out["loser"] = loser.transition(_intent(seed, loser_target, opk="same"))
+
+    lt = threading.Thread(target=_run_loser)
+    lt.start()
+    assert loser_reached.wait(timeout=20), "loser never reached the admission boundary"
+
+    gate, reached = threading.Event(), threading.Event()
+    winner = _coord(_BarrierClient(client, gate, reached), db, pending_cap=1)
+
+    def _run_winner() -> None:
+        out["winner"] = winner.transition(_intent(seed, "matured", opk="same"))
+
+    wt = threading.Thread(target=_run_winner)
+    wt.start()
+    assert reached.wait(timeout=20), "winner never committed its PENDING slot"
+
+    loser_gate.set()  # release the loser into its serialized in-txn re-check
+    lt.join(timeout=20)
+    gate.set()  # release the winner to Final
+    wt.join(timeout=20)
+    assert isinstance(out["winner"], Ok) and out["winner"].value.kind == "final"
+    return out["loser"], db, client, seed
+
+
+def test_same_key_full_cap_toctou_replays_before_cap(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    # An IDENTICAL loser (same digest) that already passed _replay(None) must replay the winner
+    # (Pending/Final) under a full cap — NEVER cap_exceeded (idempotency-before-cap under contention).
+    loser, db, client, seed = _run_full_cap_toctou(env, "matured")
+    assert isinstance(loser, Ok), f"same-key loser must replay under a full cap, got {loser}"
+    assert loser.value.kind in ("pending", "final")
+    assert _counts(db) == (1, 1)  # zero duplicate mutation/event/marker
+    assert _qdrant_state(client, seed) == (seed.version + 1, "matured")
+
+
+def test_conflicting_key_full_cap_toctou_returns_conflict(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    # A DIFFERENT-intent loser that ALSO passed _replay(None) and paused before BEGIN: its in-txn
+    # re-check sees the winner's row with a DIFFERENT stored_digest -> operation_key_conflict, NOT
+    # cap_exceeded (discriminates the stored_digest handling inside _AlreadyExists). Zero Qdrant
+    # (client=None); still exactly one row/event/marker.
+    loser, db, client, seed = _run_full_cap_toctou(env, "demoted")  # demoted != the winner's matured
+    assert isinstance(loser, Err), f"conflicting loser must be Err, got {loser}"
+    assert loser.error.code == "operation_key_conflict"
+    assert _counts(db) == (1, 1)
+    assert _qdrant_state(client, seed) == (seed.version + 1, "matured")

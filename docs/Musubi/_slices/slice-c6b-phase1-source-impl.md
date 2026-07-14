@@ -123,8 +123,8 @@ Yua-authorized narrow).
 
 ## Test Contract
 
-> Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **116** functions in this
-> slice's own contract below + **8** from `08-deployment/compose-stack` = **124** `tc-coverage` bullets,
+> Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **118** functions in this
+> slice's own contract below + **8** from `08-deployment/compose-stack` = **126** `tc-coverage` bullets,
 > 0 missing. Status from runtime collection across the self files (atomicity file **84 passed / 49
 > xfailed / 0 failed / 0 XPASS** after the S2+S3 flips + stage guards), NOT from tc-coverage's classifier
 > — which mislabels variable-reason strict-xfail reds as "passing". **S2 flipped R2, R11, R14 two-process
@@ -256,7 +256,7 @@ Yua-authorized narrow).
 103. `test_operation_key_reuse_is_conflict_or_durable_begin` — GREEN — admission-direct: operation_key reuse for a different intent → `operation_key_conflict` at replay; a durable-path `store.connect` failure → `durable_begin_failed` (relocated WARN-2)
 104. `test_admission_crash_seam_faults` — GREEN — admission-direct: before_pending_commit fault → `durable_begin_failed`/no row; after_pending_commit fault PROPAGATES on a committed PENDING row (relocated WARN-1)
 
-### S3 direct real-source APPLY/FINALIZE proofs (`test_s3_coordinator_apply.py`) (12)
+### S3 direct real-source APPLY/FINALIZE proofs (`test_s3_coordinator_apply.py`) (14)
 105. `test_happy_full_transition_reaches_final` — GREEN — full transition → Ok(Final): FINAL row, exactly one event + one marker, object at v+1/matured
 106. `test_event_is_persisted_before_the_qdrant_mutation` — GREEN — the canonical event payload is durably persisted BEFORE `set_payload` (correction 1)
 107. `test_persist_event_requires_exactly_one_pending_row` — GREEN — a vanished PENDING row → pre-mutation terminal; Qdrant untouched (integrity hole 1)
@@ -269,6 +269,8 @@ Yua-authorized narrow).
 114. `test_terminal_vs_transient_apply_classification` — GREEN — known-terminal → ABANDONED/`terminal_apply_failure`; transient/unknown → PENDING (never abandoned by uncertainty)
 115. `test_finalize_fault_is_atomic_and_post_commit_crash_truth` — GREEN — a fault inside finalize rolls back the event too → EXACTLY APPLIED, no event, mutation durable, caller sees Pending
 116. `test_collection_object_type_mapping_matches_canonical` — GREEN — the private mapping stays in parity with `transitions.py`; an unknown collection fails closed (parity/coverage)
+117. `test_same_key_full_cap_toctou_replays_before_cap` — GREEN — deterministic no-sleep: an identical loser that passed `_replay(None)` under a FULL cap resolves via the SERIALIZED in-txn re-check to a replay (Pending/Final), never `cap_exceeded`; one event/marker (TOCTOU regression)
+118. `test_conflicting_key_full_cap_toctou_returns_conflict` — GREEN — deterministic no-sleep: a different-intent loser through the same in-txn path discriminates the stored digest → `operation_key_conflict` (not `cap_exceeded`), zero Qdrant, one event/marker
 
 **Cross-slice regression gate (NOT part of this parsed Test Contract):**
 `tests/lifecycle/test_c6_event_loss.py` (1 passed / 8 xfailed, frozen) is owned by the active C6 slice
