@@ -3,12 +3,12 @@ title: "Slice: reconcile 1Password Connect deployment source"
 slice_id: slice-deploy-1password-source-reconcile
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "SEC-005 containment"
-tags: [section/slices, status/in-progress, type/slice, security, p0, deploy]
-updated: 2026-07-13
-reviewed: false
+tags: [section/slices, status/done, type/slice, security, p0, deploy]
+updated: 2026-07-14
+reviewed: true
 issue: 423
 depends-on: []
 blocks: []
@@ -107,3 +107,8 @@ listed in `blocks`.
   update/template parity and found the same bind-inode/reload/target-verification
   contract missing from re-runnable `deploy.yml`. Added a deploy-specific strict
   red; first deploy may no-op the reload, but re-deploy must be observably safe.
+- 2026-07-14, Yua: Closed after the reconciled source shipped in v1.13.4 and a
+  normal full-stack restart proved the signed Core/lifecycle digest, healthy
+  dependencies, 8/8 Prometheus targets, the tmpfs-only Qdrant scrape-token
+  mount, removal of the legacy persistent token, and value-free parity between
+  the live Qdrant key and 1Password item version 5. Issue #423 is closed.
