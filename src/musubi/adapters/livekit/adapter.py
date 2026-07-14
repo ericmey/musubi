@@ -145,6 +145,8 @@ class LiveKitAdapter:
         """Upload the VTT transcript with bounded exponential retry.
         On exhaustion, enqueue for deferred retry instead of dropping."""
         scrubbed = self.maybe_redact(vtt_transcript)
+        if not scrubbed.strip():
+            return
         payload = {
             "namespace": self.artifact_namespace,
             "title": f"Voice session {session_id}",
@@ -167,7 +169,7 @@ class LiveKitAdapter:
                     # episodic.capture so the adapter is always live.
                     await self.client.episodic.capture(
                         namespace=self.namespace,
-                        content=f"[transcript:{session_id}]",
+                        content=scrubbed,
                         tags=["livekit-voice", "session-transcript", *_EPISODE_CONTEXT_TAGS],
                         importance=4,
                     )
