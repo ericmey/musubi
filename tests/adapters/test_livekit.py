@@ -583,7 +583,37 @@ def test_heuristic_capture_skipped_when_uninteresting() -> None:
     assert captures == []
 
 
-def test_transcript_fallback_capture_adds_typed_episode_tags() -> None:
+def test_transcript_fallback_capture_adds_typed_episode_tags_and_content() -> None:
+    fake = _fake()
+    adapter = LiveKitAdapter(
+        client=fake,
+        namespace=_NS,
+        artifact_namespace="eric/_shared/artifact",
+        config=LiveKitAdapterConfig(capture_transcripts=True),
+    )
+
+    vtt = "WEBVTT\n\n00:00 --> 00:05\nhello world"
+
+    async def _run() -> None:
+        await adapter.on_session_end(session_id="sess-typed-tags", vtt_transcript=vtt)
+
+    asyncio.run(_run())
+    captures = [c for c in fake.calls if c[0] == "episodic.capture"]
+    assert len(captures) == 1
+    # Red Contract: fallback must use exact scrubbed UTF-8 transcript.
+    # The existing stub `[transcript:sess-typed-tags]` fails this.
+    assert captures[0][1]["content"] == adapter.maybe_redact(vtt)
+    assert captures[0][1]["tags"] == [
+        "livekit-voice",
+        "session-transcript",
+        "kind:episode",
+        "staleness:episodic",
+    ]
+
+
+@pytest.mark.parametrize("vtt", ["", "   \n  "])
+def test_transcript_fallback_capture_empty_transcript(vtt: str) -> None:
+    """Control: Empty/whitespace transcripts are skipped rather than dispatching a stub or invalid payload to the API."""
     fake = _fake()
     adapter = LiveKitAdapter(
         client=fake,
@@ -593,15 +623,28 @@ def test_transcript_fallback_capture_adds_typed_episode_tags() -> None:
     )
 
     async def _run() -> None:
-        await adapter.on_session_end(session_id="sess-typed-tags", vtt_transcript="WEBVTT")
+        await adapter.on_session_end(session_id="sess-empty", vtt_transcript=vtt)
 
     asyncio.run(_run())
     captures = [c for c in fake.calls if c[0] == "episodic.capture"]
-    assert len(captures) == 1
-    assert captures[0][1]["content"] == "[transcript:sess-typed-tags]"
-    assert captures[0][1]["tags"] == [
-        "livekit-voice",
-        "session-transcript",
-        "kind:episode",
-        "staleness:episodic",
-    ]
+    assert len(captures) == 0
+
+
+def test_transcript_capture_skipped_if_handler_succeeds() -> None:
+    """Control: Fallback is NOT triggered if the canonical _upload_handler is present and succeeds."""
+    fake = _fake()
+    setattr(fake, "_upload_handler", lambda **kwargs: None)
+
+    adapter = LiveKitAdapter(
+        client=fake,
+        namespace=_NS,
+        artifact_namespace="eric/_shared/artifact",
+        config=LiveKitAdapterConfig(capture_transcripts=True),
+    )
+
+    async def _run() -> None:
+        await adapter.on_session_end(session_id="sess-handler", vtt_transcript="WEBVTT")
+
+    asyncio.run(_run())
+    captures = [c for c in fake.calls if c[0] == "episodic.capture"]
+    assert len(captures) == 0
