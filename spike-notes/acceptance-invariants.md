@@ -3,9 +3,44 @@
 The 8-row real-Qdrant matrix, the 8 corrected desired-property
 red/control tests, and the 7 wrong-candidate discriminators
 are executed against an ephemeral local Docker Qdrant pinned to
-qdrant/qdrant:v1.17.1 (linux/arm64, sha256:3fd57e61606ed61c48c91c4131cba6808f01b0879f5478fd011573189855bba1)
+qdrant/qdrant:v1.17.1 using an explicit verified per-architecture pin
+(linux/amd64 sha256:cd3e42737c684ee516ae5533218be93fd5288f41d0a466ed18dbdc22ef52a000;
+linux/arm64 sha256:3fd57e61606ed61c48c91c4131cba6808f01b0879f5478fd011573189855bba1)
 bound to 127.0.0.1 on a collision-free port with a temporary
 volume/network that is removed on exit.
+
+## Executed result — recovery successor
+
+The committed test file now executes the matrix and discrimination families;
+they are no longer stubs. Local arm64 run against the pinned v1.17.1 container:
+
+- normal: `18 passed, 7 xfailed`;
+- discrimination: `pytest --runxfail` gives exactly `7 failed, 18 passed`;
+- all seven failures reach their named desired-property assertion;
+- Property 6 (different-artifact concurrency) is the one desired property that
+  current source satisfies and therefore remains a normal green control;
+- the duplicate-delete setup regression is guarded by an exact call-count test;
+- teardown leaves no ART-001 container, network, or volume behind.
+
+The eight matrix observations are:
+
+1. a successful same-collection two-operation batch returns two completed
+   results and both points are visible; same-request partial-failure atomicity
+   remains explicitly unproven;
+2. `FilterSelector` applies the matched update but the result exposes neither a
+   trustworthy matched count nor modified count;
+3. two client connections accept serial writes to the same point; the final
+   payload reflects call order, but Qdrant supplies no concurrent-writer order
+   or ownership signal;
+4. cross-collection publication has a visible boundary: chunks can be present
+   while metadata remains absent;
+5. a successful batch is visible to the first following scroll;
+6. two ordinary upserts of a would-be lease both complete; presence/upsert is
+   not claim ownership or a fence;
+7. an explicit committed-generation filter hides an in-flight generation,
+   while the unfiltered view exposes both;
+8. current `ArtifactPlane` publication failure marks metadata failed while the
+   already-upserted chunk remains queryable.
 
 Per Yua 00:43:32, the "force network failure on operation 2 of
 a 2-op batch via network fault injection" claim is REMOVED. The

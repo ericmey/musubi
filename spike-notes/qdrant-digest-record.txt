@@ -5,6 +5,13 @@ resolved at: 2026-07-14T00:27:04-04:00
 verified by: ericmey per `uname -m` (aarch64 / arm64) and
   `docker manifest inspect qdrant/qdrant:v1.17.1`
   (per-platform manifests from the OCI image index)
+re-verified by: Tama recovery context on 2026-07-14 with BOTH
+  `docker buildx imagetools inspect --raw qdrant/qdrant:v1.17.1`
+  and `docker manifest inspect qdrant/qdrant:v1.17.1`; both returned
+  the exact amd64 and arm64 digests above
+runtime selection: `platform.machine()` maps x86_64/amd64 to the
+  linux/amd64 digest and arm64/aarch64 to the linux/arm64 digest;
+  `docker run --platform` is explicit and unsupported hosts fail closed
 ephemeral container: bound to 127.0.0.1 on a collision-free
   port, temporary volume/network, removed on exit
   (per Yua 00:24:28 + 00:28:44)

@@ -16,7 +16,7 @@ blocks: []
 
 # Slice: ART-001 artifact reindex spike
 
-> tests/docs-only real-Qdrant design-spike for the ART-001 defect. NO source authorization; production code is forbidden in this slice. The spike runs against an ephemeral local Docker Qdrant pinned to qdrant/qdrant:v1.17.1 (linux/arm64, sha256:3fd57e61606ed61c48c91c4131cba6808f01b0879f5478fd011573189855bba1) bound to 127.0.0.1 on a collision-free port with a temporary volume/network that is removed on exit. The spike runs the 8-row real-Qdrant matrix and the corrected red/control/wrong-candidate matrix. The spike does NOT close ART-001; ART-001 implementation ownership remains undecided.
+> tests/docs-only real-Qdrant design-spike for the ART-001 defect. NO source authorization; production code is forbidden in this slice. The spike runs against an ephemeral local Docker Qdrant pinned to qdrant/qdrant:v1.17.1 with verified per-architecture digests (linux/amd64 `sha256:cd3e42737c684ee516ae5533218be93fd5288f41d0a466ed18dbdc22ef52a000`; linux/arm64 `sha256:3fd57e61606ed61c48c91c4131cba6808f01b0879f5478fd011573189855bba1`) bound to 127.0.0.1 on a collision-free port with a temporary volume/network that is removed on exit. The spike runs the 8-row real-Qdrant matrix and the corrected red/control/wrong-candidate matrix. The spike does NOT close ART-001; ART-001 implementation ownership remains undecided.
 
 **Phase:** 4 Planes · **Status:** `in-progress` · **Owner:** `tama`
 
@@ -88,3 +88,19 @@ Owner: tama (the spike is a tests/docs-only deliverable). ART-001 implementation
 
 - The "force network failure on operation 2 of a 2-op batch" claim is REMOVED. Per Yua: "We already ruled that operation-specific network failure is not a controllable Qdrant semantic. Record same-request partial-apply atomicity as unproven unless you find a real server-supported, independently reproducible fault mechanism; do not simulate it with a client-side fake and do not call `batch_update_points` transactional/atomic."
 - The "durable lease in a third Qdrant collection" claim is REMOVED as a fence. Per Yua: "Ordinary upsert/presence is not claim ownership or CAS. A filtered `SetPayload` is not a fence unless the real API returns a trustworthy matched/modified result that the spike demonstrates under contention. The spike must falsify these candidates honestly and may conclude that an external coordinator or durable operation record is required."
+
+## Work log — 2026-07-14 recovery successor
+
+- Replaced the staged module-wide `integration` skip shortcut; the real-Qdrant
+  spike remains part of exact-head CI.
+- Re-verified both Qdrant v1.17.1 architecture digests through two independent
+  Docker manifest inspection paths and made host architecture selection
+  explicit/fail-closed.
+- Added an exact one-call regression guard for `_ensure_collection` deletion.
+- Replaced the placeholder-only test file with executable 8-row matrix,
+  8-property, and 7-wrong-candidate families.
+- Local arm64 evidence: `18 passed, 7 xfailed`; `--runxfail` reaches exactly
+  seven named property assertions (`7 failed, 18 passed`). Property 6 is the
+  healthy green control.
+- No `src/`, harem-ops ledger, production host, deploy, readiness promotion,
+  or merge action.
