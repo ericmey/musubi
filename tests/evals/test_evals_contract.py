@@ -672,24 +672,31 @@ def test_discrimination_holdout_isolation() -> None:
 
 
 def _assert_pr_smoke_fixed_embeddings(
-    run_func: Callable[[list[dict[str, Any]]], Any], monkeypatch: pytest.MonkeyPatch
+    run_func: Callable[..., Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Fixture 1: Perfect ordering (doc1 is relevant, doc2 is not)
-    fixed_corpus_1 = [
-        {"id": "doc1", "text": "alpha", "embedding": [0.1, 0.2], "relevance": 1},
-        {"id": "doc2", "text": "beta", "embedding": [0.3, 0.4], "relevance": 0},
+    corpus_q1 = [
+        {"id": "doc1", "text": "alpha", "embedding": [1.0, 0.0], "relevance": 1},
+        {"id": "doc2", "text": "beta", "embedding": [0.0, 1.0], "relevance": 0},
     ]
-    # Fixture 2: Imperfect ordering (doc4 is not relevant but returned first, doc3 is relevant but second)
-    fixed_corpus_2 = [
-        {"id": "doc4", "text": "delta", "embedding": [0.7, 0.8], "relevance": 0},
-        {"id": "doc3", "text": "gamma", "embedding": [0.5, 0.6], "relevance": 1},
+    q1_emb = [1.0, 0.0]
+
+    corpus_q2 = [
+        {"id": "doc1", "text": "alpha", "embedding": [1.0, 0.0], "relevance": 0},
+        {"id": "doc2", "text": "beta", "embedding": [0.0, 1.0], "relevance": 1},
     ]
+    q2_emb = [0.0, 1.0]
+
     import hashlib
     import json
     from math import log2
 
-    hash_1 = hashlib.sha256(json.dumps(fixed_corpus_1, sort_keys=True).encode("utf-8")).hexdigest()
-    hash_2 = hashlib.sha256(json.dumps(fixed_corpus_2, sort_keys=True).encode("utf-8")).hexdigest()
+    def compute_hash(c: list[dict[str, Any]]) -> str:
+        return hashlib.sha256(
+            json.dumps(sorted(c, key=lambda x: x["id"]), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+    hash_q1 = compute_hash(corpus_q1)
+    hash_q2 = compute_hash(corpus_q2)
 
     network_called = False
 
@@ -709,57 +716,74 @@ def _assert_pr_smoke_fixed_embeddings(
         res: Any,
         expected_hash: str,
         expected_ranking: list[str],
-        corpus: list[dict[str, Any]],
+        expected_relevances: list[int],
         fix_label: str,
     ) -> None:
         if network_called:
             raise ValueError("Qdrant/TEI network hit detected")
 
-        assert getattr(res, "corpus_checksum", "") == expected_hash, (
-            f"Checksum mismatch {fix_label}"
-        )
+        actual_hash = getattr(res, "corpus_checksum", "")
+        if actual_hash != expected_hash:
+            # specifically catch order dependence
+            raw_hash = hashlib.sha256(
+                json.dumps(corpus_q1, sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            rev_hash = hashlib.sha256(
+                json.dumps(list(reversed(corpus_q1)), sort_keys=True).encode("utf-8")
+            ).hexdigest()
+            if actual_hash in (raw_hash, rev_hash):
+                raise ValueError(f"Checksum depends on input order {fix_label}")
+            raise ValueError(f"Checksum mismatch {fix_label}")
 
         ordered_hits = getattr(res, "ordered_hits", [])
-        assert ordered_hits == expected_ranking, f"Ranking mismatch {fix_label}"
-
-        # Independently map returned IDs to relevance
-        id_to_rel = {d["id"]: d["relevance"] for d in corpus}
-        rels = [id_to_rel.get(doc_id, 0) for doc_id in ordered_hits]
+        if ordered_hits != expected_ranking:
+            raise ValueError(f"Ranking mismatch {fix_label}")
 
         def dcg(r_list: list[int]) -> float:
             return float(sum((2**r - 1) / log2(i + 2) for i, r in enumerate(r_list)))
 
-        idcg = dcg(sorted(id_to_rel.values(), reverse=True))
-        expected_ndcg = dcg(rels) / idcg if idcg > 0 else 0.0
+        idcg = dcg(sorted(expected_relevances, reverse=True))
+        expected_ndcg = dcg(expected_relevances) / idcg if idcg > 0 else 0.0
 
-        reported_ndcg = getattr(res, "metrics", {}).get("ndcg@10", 0.0)
-        assert abs(reported_ndcg - expected_ndcg) < 0.001, f"Metrics mismatch {fix_label}"
+        reported_ndcg = getattr(res, "metrics", {}).get("ndcg@10", -1.0)
+        if reported_ndcg < 0.0:
+            raise ValueError(f"Metric below 0 {fix_label}")
+        if reported_ndcg > 1.0:
+            raise ValueError(f"Metric above 1 {fix_label}")
+        if abs(reported_ndcg - expected_ndcg) > 0.001:
+            raise ValueError(f"Metrics mismatch {fix_label}")
 
-    # Fixture 1
-    res1_a = run_func(fixed_corpus_1)
-    res1_b = run_func(fixed_corpus_1)
+    try:
+        res1_a = run_func(corpus_q1, query_embedding=q1_emb)
+        res1_b = run_func(corpus_q1, query_embedding=q1_emb)
+    except TypeError as e:
+        if "query_embedding" in str(e):
+            raise DefectStillPresent("Runner missing query_embedding parameter") from e
+        raise
 
-    verify_result(res1_a, hash_1, ["doc1", "doc2"], fixed_corpus_1, "fix 1")
-    assert getattr(res1_a, "metrics", {}) == getattr(res1_b, "metrics", {}), (
-        "Metrics non-deterministic fix 1"
-    )
-    assert getattr(res1_a, "ordered_hits", []) == getattr(res1_b, "ordered_hits", []), (
-        "Ranking non-deterministic fix 1"
-    )
+    verify_result(res1_a, hash_q1, ["doc1", "doc2"], [1, 0], "q1")
+    if getattr(res1_a, "metrics", {}) != getattr(res1_b, "metrics", {}):
+        raise ValueError("Metrics non-deterministic q1")
+    if getattr(res1_a, "ordered_hits", []) != getattr(res1_b, "ordered_hits", []):
+        raise ValueError("Ranking non-deterministic q1")
 
-    # Fixture 2
-    res2_a = run_func(fixed_corpus_2)
-    res2_b = run_func(fixed_corpus_2)
+    res1_permuted = run_func(list(reversed(corpus_q1)), query_embedding=q1_emb)
+    verify_result(res1_permuted, hash_q1, ["doc1", "doc2"], [1, 0], "q1_permuted")
 
-    verify_result(res2_a, hash_2, ["doc4", "doc3"], fixed_corpus_2, "fix 2")
-    assert getattr(res2_a, "metrics", {}) == getattr(res2_b, "metrics", {}), (
-        "Metrics non-deterministic fix 2"
-    )
-    assert getattr(res2_a, "ordered_hits", []) == getattr(res2_b, "ordered_hits", []), (
-        "Ranking non-deterministic fix 2"
-    )
+    res2_a = run_func(corpus_q2, query_embedding=q2_emb)
+    res2_b = run_func(corpus_q2, query_embedding=q2_emb)
+    verify_result(res2_a, hash_q2, ["doc2", "doc1"], [1, 0], "q2")
+    if getattr(res2_a, "metrics", {}) != getattr(res2_b, "metrics", {}):
+        raise ValueError("Metrics non-deterministic q2")
+    if getattr(res2_a, "ordered_hits", []) != getattr(res2_b, "ordered_hits", []):
+        raise ValueError("Ranking non-deterministic q2")
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: PR Smoke Gate with fixed embeddings missing",
+)
 def test_eval_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     try:
         from musubi.evals.runner import run_smoke_gate
@@ -769,14 +793,26 @@ def test_eval_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
-    def correct_smoke(corpus: list[dict[str, Any]]) -> Any:
+    def correct_smoke(corpus: list[dict[str, Any]], query_embedding: list[float]) -> Any:
         import hashlib
         import json
         from math import log2
 
-        h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
-        ordered = [d["id"] for d in corpus]
-        relevances = [d["relevance"] for d in corpus]
+        h = hashlib.sha256(
+            json.dumps(sorted(corpus, key=lambda x: x["id"]), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+
+        def dot(a: list[float], b: list[float]) -> float:
+            return sum(x * y for x, y in zip(a, b))
+
+        scored = []
+        for c in corpus:
+            scored.append((c["id"], dot(query_embedding, c["embedding"]), c["relevance"]))
+
+        scored.sort(key=lambda x: x[1], reverse=True)
+        ordered_hits = [x[0] for x in scored]
+
+        relevances = [x[2] for x in scored]
 
         def dcg(rels: list[int]) -> float:
             return float(sum((2**r - 1) / log2(i + 2) for i, r in enumerate(rels)))
@@ -787,49 +823,90 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
         return type(
             "MockResult",
             (),
-            {"metrics": {"ndcg@10": ndcg}, "corpus_checksum": h, "ordered_hits": ordered},
+            {"metrics": {"ndcg@10": ndcg}, "corpus_checksum": h, "ordered_hits": ordered_hits},
         )()
 
-    def wrong_smoke_requires_qdrant(corpus: list[dict[str, Any]]) -> Any:
+    def wrong_smoke_requires_qdrant(
+        corpus: list[dict[str, Any]], query_embedding: list[float]
+    ) -> Any:
         import contextlib
 
         import qdrant_client
 
         with contextlib.suppress(Exception):
             qdrant_client.QdrantClient("http://localhost:6333")
-        return correct_smoke(corpus)
+        return correct_smoke(corpus, query_embedding=query_embedding)
 
-    def wrong_smoke_hardcodes_first_fixture_metric(corpus: list[dict[str, Any]]) -> Any:
+    def wrong_smoke_echoes_input_order(
+        corpus: list[dict[str, Any]], query_embedding: list[float]
+    ) -> Any:
         import hashlib
         import json
+        from math import log2
 
-        h = hashlib.sha256(json.dumps(corpus, sort_keys=True).encode("utf-8")).hexdigest()
+        h = hashlib.sha256(
+            json.dumps(sorted(corpus, key=lambda x: x["id"]), sort_keys=True).encode("utf-8")
+        ).hexdigest()
         ordered = [d["id"] for d in corpus]
+        relevances = [d["relevance"] for d in corpus]
+
+        def dcg(rels: list[int]) -> float:
+            return float(sum((2**r - 1) / log2(i + 2) for i, r in enumerate(rels)))
+
+        idcg = dcg(sorted(relevances, reverse=True))
+        ndcg = dcg(relevances) / idcg if idcg > 0 else 0.0
         return type(
             "MockResult",
             (),
-            {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": h, "ordered_hits": ordered},
+            {"metrics": {"ndcg@10": ndcg}, "corpus_checksum": h, "ordered_hits": ordered},
         )()
 
-    def wrong_smoke_wrong_ranking(corpus: list[dict[str, Any]]) -> Any:
-        res = correct_smoke(corpus)
-        res.ordered_hits = res.ordered_hits[::-1]
+    def wrong_smoke_hardcodes_first_fixture(
+        corpus: list[dict[str, Any]], query_embedding: list[float]
+    ) -> Any:
+        # Always ranks doc1 first
+        import hashlib
+        import json
+
+        h = hashlib.sha256(
+            json.dumps(sorted(corpus, key=lambda x: x["id"]), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return type(
+            "MockResult",
+            (),
+            {"metrics": {"ndcg@10": 1.0}, "corpus_checksum": h, "ordered_hits": ["doc1", "doc2"]},
+        )()
+
+    def wrong_smoke_ignores_query(
+        corpus: list[dict[str, Any]], query_embedding: list[float]
+    ) -> Any:
+        # Always uses q1_emb
+        return correct_smoke(corpus, query_embedding=[1.0, 0.0])
+
+    def wrong_smoke_metric_below_0(
+        corpus: list[dict[str, Any]], query_embedding: list[float]
+    ) -> Any:
+        res = correct_smoke(corpus, query_embedding=query_embedding)
+        res.metrics["ndcg@10"] = -0.5
         return res
 
-    def wrong_smoke_wrong_hash(corpus: list[dict[str, Any]]) -> Any:
-        res = correct_smoke(corpus)
-        res.corpus_checksum = "bad_hash"
+    def wrong_smoke_metric_above_1(
+        corpus: list[dict[str, Any]], query_embedding: list[float]
+    ) -> Any:
+        res = correct_smoke(corpus, query_embedding=query_embedding)
+        res.metrics["ndcg@10"] = 1.5
         return res
 
-    # Nondeterministic ranking alternating
-    call_count = 0
+    def wrong_smoke_checksum_depends_on_input_order(
+        corpus: list[dict[str, Any]], query_embedding: list[float]
+    ) -> Any:
+        res = correct_smoke(corpus, query_embedding=query_embedding)
+        import hashlib
+        import json
 
-    def wrong_smoke_nondeterministic(corpus: list[dict[str, Any]]) -> Any:
-        nonlocal call_count
-        call_count += 1
-        res = correct_smoke(corpus)
-        if call_count % 2 == 0:
-            res.ordered_hits = res.ordered_hits[::-1]
+        res.corpus_checksum = hashlib.sha256(
+            json.dumps(corpus, sort_keys=True).encode("utf-8")
+        ).hexdigest()
         return res
 
     _assert_pr_smoke_fixed_embeddings(correct_smoke, monkeypatch)
@@ -837,17 +914,23 @@ def test_discrimination_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(ValueError, match="Qdrant/TEI network hit detected"):
         _assert_pr_smoke_fixed_embeddings(wrong_smoke_requires_qdrant, monkeypatch)
 
-    with pytest.raises(AssertionError, match="Metrics mismatch fix 2"):
-        _assert_pr_smoke_fixed_embeddings(wrong_smoke_hardcodes_first_fixture_metric, monkeypatch)
+    with pytest.raises(ValueError, match="Ranking mismatch q1_permuted"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_echoes_input_order, monkeypatch)
 
-    with pytest.raises(AssertionError, match="Ranking mismatch fix 1"):
-        _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_ranking, monkeypatch)
+    with pytest.raises(ValueError, match="Ranking mismatch q2"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_hardcodes_first_fixture, monkeypatch)
 
-    with pytest.raises(AssertionError, match="Checksum mismatch fix 1"):
-        _assert_pr_smoke_fixed_embeddings(wrong_smoke_wrong_hash, monkeypatch)
+    with pytest.raises(ValueError, match="Ranking mismatch q2"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_ignores_query, monkeypatch)
 
-    with pytest.raises(AssertionError, match="Ranking non-deterministic fix 1"):
-        _assert_pr_smoke_fixed_embeddings(wrong_smoke_nondeterministic, monkeypatch)
+    with pytest.raises(ValueError, match="Metric below 0 q1"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_metric_below_0, monkeypatch)
+
+    with pytest.raises(ValueError, match="Metric above 1 q1"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_metric_above_1, monkeypatch)
+
+    with pytest.raises(ValueError, match="Checksum depends on input order q1_permuted"):
+        _assert_pr_smoke_fixed_embeddings(wrong_smoke_checksum_depends_on_input_order, monkeypatch)
 
 
 def _assert_abstention_fpr(
