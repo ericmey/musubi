@@ -408,23 +408,29 @@ def _enclosing_of(
 
 def _coordinator_scopes(
     tree: ast.AST,
-) -> tuple[dict[ast.AST, ast.AST], dict[ast.AST, set[str]], dict[ast.AST, set[str]]]:
-    """SCOPE-AWARE coordinator provenance (NOT module-wide). Returns (parent_map, func_names, class_attrs):
-    - func_names: {enclosing-function node -> local names bound to a LifecycleTransitionCoordinator(...)
-      construction INSIDE that function}. A local name resolves ONLY within the function that binds it, so a
-      same name bound to something unrelated in another function is shadowed/ignored.
-    - class_attrs: {enclosing-class node -> self.<attr> names bound to a coordinator construction in ANY
-      method of that class}. A self attribute resolves ONLY within its owning class, so the same attr name
-      on a different class is ignored."""
+) -> tuple[
+    dict[ast.AST, ast.AST],
+    dict[ast.AST, dict[str, list[tuple[int, bool]]]],
+    dict[ast.AST, dict[str, list[bool]]],
+]:
+    """SCOPE-AWARE coordinator provenance (NOT module-wide) that records EVERY binding, positive or negative,
+    so a REBINDING fails closed. Returns (parent_map, func_binds, class_binds):
+    - func_binds: {enclosing-function node -> {local name -> [(lineno, is_coordinator_ctor), ...] for EVERY
+      assignment to that name in the function}}. A local name resolves only within the function that binds
+      it; a same name bound in another function is shadowed.
+    - class_binds: {enclosing-class node -> {self.<attr> -> [is_coordinator_ctor, ...] for EVERY assignment
+      to that attr across the class's methods}}. A self attribute resolves only within its owning class.
+    Recording ALL writes (not only coordinator constructions) is what lets resolution reject a name/attr that
+    is rebound to something else - the map alone no longer implies coordinator provenance."""
     parent = _parent_map(tree)
-    func_names: dict[ast.AST, set[str]] = {}
-    class_attrs: dict[ast.AST, set[str]] = {}
+    func_binds: dict[ast.AST, dict[str, list[tuple[int, bool]]]] = {}
+    class_binds: dict[ast.AST, dict[str, list[bool]]] = {}
 
-    def _bind(tgt: ast.AST, node: ast.AST) -> None:
+    def _record(tgt: ast.AST, node: ast.stmt, is_ctor: bool) -> None:
         if isinstance(tgt, ast.Name):
             fn = _enclosing_of(parent, node, (ast.FunctionDef, ast.AsyncFunctionDef))
             if fn is not None:
-                func_names.setdefault(fn, set()).add(tgt.id)
+                func_binds.setdefault(fn, {}).setdefault(tgt.id, []).append((node.lineno, is_ctor))
         elif (
             isinstance(tgt, ast.Attribute)
             and isinstance(tgt.value, ast.Name)
@@ -432,42 +438,61 @@ def _coordinator_scopes(
         ):
             cls = _enclosing_of(parent, node, (ast.ClassDef,))
             if cls is not None:
-                class_attrs.setdefault(cls, set()).add(tgt.attr)
+                class_binds.setdefault(cls, {}).setdefault(tgt.attr, []).append(is_ctor)
 
     for n in ast.walk(tree):
-        if isinstance(n, ast.Assign) and _is_coordinator_ctor(n.value):
+        if isinstance(n, ast.Assign):
+            is_ctor = _is_coordinator_ctor(n.value)
             for tgt in n.targets:
-                _bind(tgt, n)
-        elif isinstance(n, ast.AnnAssign) and n.value is not None and _is_coordinator_ctor(n.value):
-            _bind(n.target, n)
-    return parent, func_names, class_attrs
+                _record(tgt, n, is_ctor)
+        elif isinstance(n, ast.AnnAssign) and n.value is not None:
+            _record(n.target, n, _is_coordinator_ctor(n.value))
+        elif isinstance(n, ast.AugAssign):
+            _record(
+                n.target, n, False
+            )  # `c += ...` is a rebinding to a non-construction -> fail closed
+    return parent, func_binds, class_binds
 
 
 def _receiver_is_coordinator(
     recv: ast.AST,
     call_fn: ast.AST | None,
     call_cls: ast.AST | None,
-    func_names: dict[ast.AST, set[str]],
-    class_attrs: dict[ast.AST, set[str]],
+    call_lineno: int,
+    func_binds: dict[ast.AST, dict[str, list[tuple[int, bool]]]],
+    class_binds: dict[ast.AST, dict[str, list[bool]]],
 ) -> bool:
-    """The receiver of a `.transition` call resolves to a coordinator instance, SCOPE-AWARE: a local Name
-    only if bound to a coordinator in the SAME enclosing function; a self.<attr> only if bound in the SAME
-    owning class; a direct `LifecycleTransitionCoordinator(...)` construction always. A same-named
-    `.transition` on an unrelated object (e.g. self._plane.transition) does NOT count."""
+    """The receiver of a `.transition` call resolves to a coordinator instance, SCOPE-AWARE and FAIL-CLOSED:
+    - a local Name only if it has EXACTLY ONE binding in the enclosing function, that binding is a
+      coordinator construction, and it is lexically BEFORE the call (rebinding, use-before-construct, or a
+      branch/duplicate assignment all fail closed);
+    - a self.<attr> only if it has EXACTLY ONE binding across the owning class and that binding is a
+      coordinator construction (any rebind/ambiguity fails closed);
+    - a direct `LifecycleTransitionCoordinator(...)` construction always.
+    A same-named `.transition` on an unrelated object (e.g. self._plane.transition) does NOT count."""
     if isinstance(recv, ast.Name):
-        return call_fn is not None and recv.id in func_names.get(call_fn, set())
+        if call_fn is None:
+            return False
+        binds = func_binds.get(call_fn, {}).get(recv.id, [])
+        if len(binds) != 1:
+            return False  # unbound, rebound, or branch/duplicate -> fail closed
+        (lineno, is_ctor) = binds[0]
+        return is_ctor and lineno < call_lineno
     if (
         isinstance(recv, ast.Attribute)
         and isinstance(recv.value, ast.Name)
         and recv.value.id == "self"
     ):
-        return call_cls is not None and recv.attr in class_attrs.get(call_cls, set())
+        if call_cls is None:
+            return False
+        attr_binds = class_binds.get(call_cls, {}).get(recv.attr, [])
+        return len(attr_binds) == 1 and attr_binds[0]  # single coordinator construction, no rebind
     return _is_coordinator_ctor(recv)  # LifecycleTransitionCoordinator(...).transition(...) chain
 
 
 def _coordinator_transition_calls(tree: ast.AST) -> list[ast.Call]:
-    """Every `.transition(...)` Call whose receiver resolves (scope-aware, structurally) to the coordinator."""
-    parent, func_names, class_attrs = _coordinator_scopes(tree)
+    """Every `.transition(...)` Call whose receiver resolves (scope-aware, fail-closed) to the coordinator."""
+    parent, func_binds, class_binds = _coordinator_scopes(tree)
     out: list[ast.Call] = []
     for n in ast.walk(tree):
         if (
@@ -477,7 +502,9 @@ def _coordinator_transition_calls(tree: ast.AST) -> list[ast.Call]:
         ):
             call_fn = _enclosing_of(parent, n, (ast.FunctionDef, ast.AsyncFunctionDef))
             call_cls = _enclosing_of(parent, n, (ast.ClassDef,))
-            if _receiver_is_coordinator(n.func.value, call_fn, call_cls, func_names, class_attrs):
+            if _receiver_is_coordinator(
+                n.func.value, call_fn, call_cls, n.lineno, func_binds, class_binds
+            ):
                 out.append(n)
     return out
 
@@ -586,6 +613,38 @@ def test_g2a_rule_discriminates_coordinator_callsites() -> None:
     assert _resolve_callsites(shadowed, "m") == []
     # only the coordinator class's self._c.transition counts; the other class's identical attr is ignored
     assert sorted(_resolve_callsites(attr_other_class, "m")) == [("m", "transition")]
+    # FAIL-CLOSED: a same-function local REBOUND to a non-coordinator does NOT count
+    local_rebind = ast.parse(
+        "def transition(self, i):\n"
+        "    c = LifecycleTransitionCoordinator(client=a)\n"
+        "    c = make_plane()\n"
+        "    return c.transition(i)\n"
+    )
+    assert _resolve_callsites(local_rebind, "m") == []
+    # FAIL-CLOSED: a self attr bound to the coordinator in one method, REBOUND in another, does NOT count
+    attr_rebind = ast.parse(
+        "class W:\n"
+        "    def build(self):\n        self._c = LifecycleTransitionCoordinator(client=a, db_path=b)\n"
+        "    def rebuild(self):\n        self._c = make_plane()\n"
+        "    def transition(self, i):\n        return self._c.transition(i)\n"
+    )
+    assert _resolve_callsites(attr_rebind, "m") == []
+    # FAIL-CLOSED: a call lexically BEFORE the (single) constructor binding does NOT count
+    use_before_construct = ast.parse(
+        "def transition(self, i):\n"
+        "    x = c.transition(i)\n"
+        "    c = LifecycleTransitionCoordinator(client=a)\n"
+        "    return x\n"
+    )
+    assert _resolve_callsites(use_before_construct, "m") == []
+    # FAIL-CLOSED: a branch-ambiguous binding (coordinator in one arm, other in the other) does NOT count
+    branch_ambiguous = ast.parse(
+        "def transition(self, i):\n"
+        "    if flag:\n        c = LifecycleTransitionCoordinator(client=a)\n"
+        "    else:\n        c = make_plane()\n"
+        "    return c.transition(i)\n"
+    )
+    assert _resolve_callsites(branch_ambiguous, "m") == []
 
 
 # G2b - cleanup_terminal SQL SHAPE (Phase-1 source-shape acceptance) ----------------------------------- #
@@ -635,43 +694,82 @@ def _coordinator_cleanup_methods(
     return out
 
 
+_NESTED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def _same_scope_nodes(node: ast.AST) -> list[ast.AST]:
+    """All descendant nodes of `node` that share its lexical scope - descending into control-flow blocks
+    (if/for/while/with/try) but NOT into nested function/class/lambda scopes (whose statements belong to a
+    different scope and must not be attributed to this method)."""
+    out: list[ast.AST] = []
+
+    def _visit(n: ast.AST) -> None:
+        for child in ast.iter_child_nodes(n):
+            out.append(child)
+            if not isinstance(child, _NESTED_SCOPES):
+                _visit(child)
+
+    _visit(node)
+    return out
+
+
 def _method_sql_args(method: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
-    """Every SQL string argument passed to a `.execute`/`.executemany` call INSIDE the given method node.
-    A first argument that is a LOCAL NAME assigned exactly ONE static literal/concatenation inside the method
-    is resolved to that string (the ordinary `sql = ...; execute(sql, params)` shape). A reassigned name, a
-    name whose value is dynamic, or any other non-static first argument FAILS CLOSED as a `<DYNAMIC>`
-    sentinel so it cannot pass the shape check rather than vanishing."""
-    assigned: dict[str, str] = {}
-    ambiguous: set[str] = set()
-    for n in ast.walk(method):
-        target_name: str | None = None
+    """Every SQL string argument passed to a `.execute`/`.executemany` call in the method's OWN lexical scope
+    (nested def/async-def/lambda/class bodies are EXCLUDED). A first argument that is a LOCAL NAME is resolved
+    ONLY when the name has exactly ONE static assignment that is a DIRECT statement of the method body (not
+    inside a branch/loop/nested scope) and is lexically BEFORE the execute. Reassignment, use-before-assign,
+    branch/nested-only assignment, or a dynamic value all FAIL CLOSED as a `<DYNAMIC>` sentinel so the shape
+    check cannot be fooled rather than silently vanishing."""
+    same_scope = _same_scope_nodes(method)
+    # every same-scope assignment target name -> count (any 2nd write, in ANY branch, is ambiguity)
+    write_counts: dict[str, int] = {}
+    for n in same_scope:
+        if isinstance(n, ast.Assign):
+            for tgt in n.targets:
+                if isinstance(tgt, ast.Name):
+                    write_counts[tgt.id] = write_counts.get(tgt.id, 0) + 1
+        elif isinstance(n, ast.AnnAssign | ast.AugAssign) and isinstance(n.target, ast.Name):
+            write_counts[n.target.id] = write_counts.get(n.target.id, 0) + 1
+    # static single assignments that are DIRECT statements of the method body (top-level control scope)
+    top_static: dict[str, tuple[int, str]] = {}
+    for stmt in method.body:
+        name: str | None = None
         value: ast.expr | None = None
-        if isinstance(n, ast.Assign) and len(n.targets) == 1 and isinstance(n.targets[0], ast.Name):
-            target_name, value = n.targets[0].id, n.value
-        elif (
-            isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name) and n.value is not None
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
         ):
-            target_name, value = n.target.id, n.value
-        if target_name is not None:
-            s = _static_str(value) if value is not None else None
-            if target_name in assigned or target_name in ambiguous or s is None:
-                ambiguous.add(target_name)  # reassigned / dynamic -> fail closed
-                assigned.pop(target_name, None)
-            else:
-                assigned[target_name] = s
+            name, value = stmt.targets[0].id, stmt.value
+        elif (
+            isinstance(stmt, ast.AnnAssign)
+            and isinstance(stmt.target, ast.Name)
+            and stmt.value is not None
+        ):
+            name, value = stmt.target.id, stmt.value
+        if name is not None and value is not None:
+            s = _static_str(value)
+            if s is not None:
+                top_static[name] = (stmt.lineno, s)
     out: list[str] = []
-    for c in ast.walk(method):
+    for c in same_scope:
         if (
             isinstance(c, ast.Call)
             and isinstance(c.func, ast.Attribute)
             and c.func.attr in ("execute", "executemany")
             and c.args
         ):
-            s = _static_str(c.args[0])
+            a0 = c.args[0]
+            s = _static_str(a0)
             if s is not None:
                 out.append(s)
-            elif isinstance(c.args[0], ast.Name) and c.args[0].id in assigned:
-                out.append(assigned[c.args[0].id])
+            elif (
+                isinstance(a0, ast.Name)
+                and a0.id in top_static
+                and write_counts.get(a0.id, 0) == 1
+                and top_static[a0.id][0] < c.lineno
+            ):
+                out.append(top_static[a0.id][1])
             else:
                 out.append("<DYNAMIC>")
     return out
@@ -903,6 +1001,41 @@ def test_g2b_rule_discriminates_cleanup_sql_shape() -> None:
         "        con.execute(build_sql(self.flag), params)\n"
     )
     assert n4 == 1 and args4 == ["<DYNAMIC>"] and _cleanup_sql_violations(args4) != []
+    # FAIL-CLOSED (order): execute BEFORE the sql assignment (use-before-assign) does not resolve
+    n5, args5 = scan(
+        "class LifecycleTransitionCoordinator:\n"
+        "    def cleanup_terminal(self):\n"
+        "        con.execute(sql, params)\n"
+        f"        sql = {_G2B_CORRECT!r}\n"
+    )
+    assert n5 == 1 and args5 == ["<DYNAMIC>"] and _cleanup_sql_violations(args5) != []
+    # FAIL-CLOSED (scope): sql assignment + execute live ONLY in a nested helper def -> not the method's
+    n6, args6 = scan(
+        "class LifecycleTransitionCoordinator:\n"
+        "    def cleanup_terminal(self):\n"
+        "        def helper():\n"
+        f"            sql = {_G2B_CORRECT!r}\n"
+        "            con.execute(sql, params)\n"
+        "        helper()\n"
+    )
+    assert n6 == 1 and args6 == [] and _cleanup_sql_violations(args6) != []
+    # FAIL-CLOSED (branch): a single assignment nested inside a branch is not a direct-body binding
+    n7, args7 = scan(
+        "class LifecycleTransitionCoordinator:\n"
+        "    def cleanup_terminal(self):\n"
+        "        if flag:\n"
+        f"            sql = {_G2B_CORRECT!r}\n"
+        "        con.execute(sql, params)\n"
+    )
+    assert n7 == 1 and args7 == ["<DYNAMIC>"] and _cleanup_sql_violations(args7) != []
+    # FAIL-CLOSED (multiple deletes): two DELETE executes cannot be shape-checked as one
+    n8, args8 = scan(
+        "class LifecycleTransitionCoordinator:\n"
+        "    def cleanup_terminal(self):\n"
+        f"        con.execute({_G2B_CORRECT!r}, params)\n"
+        f"        con.execute({_G2B_CORRECT!r}, params)\n"
+    )
+    assert n8 == 1 and "not_single_delete" in _cleanup_sql_violations(args8)
     # zero coordinator cleanup methods (unbuilt) and multiple (ambiguous) are both non-unique
     assert scan("class Other:\n    def cleanup_terminal(self):\n        pass\n")[0] == 0
     assert scan(correct_method + correct_method)[0] == 2
@@ -920,19 +1053,32 @@ def test_g2b_rule_discriminates_cleanup_sql_shape() -> None:
 # ============================================================================
 
 
+def _all_discard(target: ast.AST) -> bool:
+    """A recursively all-underscore assignment target: the bare name `_`, or a tuple/list/starred form whose
+    every leaf is `_` (`(_,)`, `[_, _]`, `(*_,)`). Any real name, attribute, or subscript leaf means a real
+    sink receives (part of) the value -> NOT a discard."""
+    if isinstance(target, ast.Name):
+        return target.id == "_"
+    if isinstance(target, ast.Starred):
+        return _all_discard(target.value)
+    if isinstance(target, ast.Tuple | ast.List):
+        return len(target.elts) > 0 and all(_all_discard(e) for e in target.elts)
+    return False
+
+
 def _call_result_dropped(parent: dict[ast.AST, ast.AST], call: ast.Call) -> bool:
     """A coordinator.transition Call whose Result is dropped: (1) a bare Expr statement, or (2) an
-    assignment to the conventional discard target `_` (`_ = ...`) or its annotated equivalent (`_: X = ...`)
-    - both explicitly throw the three-way TransitionOutcome away. A NAMED Assign/AnnAssign value, a Return
-    value, a Match subject, or an argument to another call all consume the Result. A multi-target assignment
-    that captures the Result under any non-`_` name (`x = _ = coordinator.transition(...)`) is consumed."""
+    assignment/unpacking in which EVERY bound target recursively resolves to the discard name `_` (`_ = ...`,
+    `_: X = ...`, `(_,) = ...`, `[_, _] = ...`, `(*_,) = ...`) - all explicitly throw the three-way
+    TransitionOutcome away. A NAMED Assign/AnnAssign value, a Return value, a Match subject, an argument to
+    another call, or ANY multi-target/unpack where a real name receives (part of) the value all consume it."""
     p = parent.get(call)
     if isinstance(p, ast.Expr):
         return True
     if isinstance(p, ast.Assign):
-        return all(isinstance(t, ast.Name) and t.id == "_" for t in p.targets)
+        return all(_all_discard(t) for t in p.targets)
     if isinstance(p, ast.AnnAssign):
-        return isinstance(p.target, ast.Name) and p.target.id == "_"
+        return _all_discard(p.target)
     return False
 
 
@@ -961,8 +1107,9 @@ _G3_REASON = (
     "coordinator unbuilt), so there is no resolved call whose three-way TransitionOutcome could be "
     "verified as consumed. Flips to XPASS(strict) when the callsite lands and its Result is consumed "
     "(NAMED assignment / return / match subject / argument forwarding); a bare-expression result OR an "
-    "assignment to the discard target `_` (`_ = ...` / `_: X = ...`) fails. G3 does NOT prove the three-way "
-    "Final/Pending/Err branching - that stays in the R21 behavior red."
+    "assignment/unpack whose every target is the discard name `_` (`_ = ...` / `_: X = ...` / `(_,) = ...` / "
+    "`[_, _] = ...` / `(*_,) = ...`) fails. G3 does NOT prove the three-way Final/Pending/Err branching - "
+    "that stays in the R21 behavior red."
 )
 
 
@@ -1015,6 +1162,12 @@ def test_g3_rule_discriminates_result_consumed() -> None:
     multi_capture = (
         head + "    def f(self, i):\n        x = _ = self._c.transition(i)\n        return x\n"
     )
+    tuple_discard = head + "    def f(self, i):\n        (_,) = self._c.transition(i)\n"
+    list_discard = head + "    def f(self, i):\n        [_, _] = self._c.transition(i)\n"
+    starred_discard = head + "    def f(self, i):\n        (*_,) = self._c.transition(i)\n"
+    mixed_unpack = (
+        head + "    def f(self, i):\n        (a, _) = self._c.transition(i)\n        return a\n"
+    )
 
     # an unrelated same-named .transition is not even a coordinator callsite -> ignored entirely
     assert _coordinator_transition_calls(ast.parse(unrelated)) == []
@@ -1022,13 +1175,18 @@ def test_g3_rule_discriminates_result_consumed() -> None:
     assert dropped_flags(bare) == [True]
     assert dropped_flags(discard) == [True]
     assert dropped_flags(discard_ann) == [True]
+    # RECURSIVE all-underscore unpacking (tuple / list / starred) is also a drop
+    assert dropped_flags(tuple_discard) == [True]
+    assert dropped_flags(list_discard) == [True]
+    assert dropped_flags(starred_discard) == [True]
     # each legitimate consumed form is NOT dropped
     assert dropped_flags(assign) == [False]
     assert dropped_flags(returned) == [False]
     assert dropped_flags(matched) == [False]
     assert dropped_flags(forwarded) == [False]
-    # a multi-target assignment that also captures under a real name is consumed
+    # a multi-target assign, and an unpack where a REAL name receives part, are consumed
     assert dropped_flags(multi_capture) == [False]
+    assert dropped_flags(mixed_unpack) == [False]
 
 
 # ============================================================================
