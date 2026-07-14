@@ -84,6 +84,7 @@ import subprocess
 import sys
 import time
 import warnings
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
@@ -109,6 +110,19 @@ from musubi.api.dependencies import (
     get_settings_dep,
 )
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.events import LifecycleEventSink
+from musubi.lifecycle.maturation import (
+    MaturationConfig,
+    MaturationCursor,
+    OllamaClient,
+    OllamaImportance,
+    OllamaTopic,
+    concept_demotion_sweep,
+    concept_maturation_sweep,
+    episodic_demotion_sweep,
+    episodic_maturation_sweep,
+    provisional_ttl_sweep,
+)
 from musubi.lifecycle.transitions import TransitionError
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
@@ -119,6 +133,7 @@ from musubi.store import bootstrap
 from musubi.store.names import collection_for_plane
 from musubi.types.artifact import SourceArtifact
 from musubi.types.common import Err, Ok, generate_ksuid
+from musubi.types.concept import SynthesizedConcept
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
 
@@ -7801,3 +7816,563 @@ def test_r21_route_pending_check_discriminates_each_failure_mode() -> None:
     # dropped-identifier: 202 + status=pending but one id missing
     assert not _pending_response_ok(202, {"status": "pending", "event_id": _R21_EVENT_ID})
     assert not _pending_response_ok(202, {"status": "pending", "operation_key": _R21_OPK})
+
+
+# ============================================================================
+# TASK 2 — six maturation path reds + a static callsite/branch inventory.
+#
+# The six sweep callsites of the primitive (maturation.py) each do
+# `isinstance(result, Ok) -> transitioned++`, a TWO-way Ok/not-Ok branch with no
+# Pending arm. Per the LOCKED contract, Pending means DEFERRED: not counted as a
+# completed transition, no post-transition dependent work (esp. the :479 supersession
+# back-link), no immediate direct retry, ids retained for the reconciler. Each red
+# drives the REAL sweep with `transition` monkeypatched to return a Pending outcome
+# and raises a DEDICATED DefectStillPresent for its own named missing behaviour.
+# ============================================================================
+
+
+class _TransitionSpy:
+    """A stand-in for the primitive that records every call and returns a fixed outcome. Call count is the
+    observable for "did post-transition dependent work run?" (the :479 back-link is a second call)."""
+
+    def __init__(self, outcome: Any) -> None:
+        self.calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+        self._outcome = outcome
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append((args, kwargs))
+        return self._outcome
+
+
+class _FakeOllama:
+    """Deterministic in-process OllamaClient — no network. Constant importance, empty topics."""
+
+    async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
+        return {item.object_id: 8 for item in items}
+
+    async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
+        return {item.object_id: [] for item in items}
+
+
+_: OllamaClient = _FakeOllama()  # sanity: the fake satisfies the Protocol
+
+
+def _mat_config() -> MaturationConfig:
+    return MaturationConfig()
+
+
+async def _seed_provisional_episodic(
+    plane: EpisodicPlane, qc: QdrantClient, ns: str, content: str, *, age_seconds: int
+) -> str:
+    """Create a provisional episodic row, back-dated so the sweep's age cutoff selects it."""
+    saved = await plane.create(EpisodicMemory(namespace=ns, content=content))
+    backdate = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    qc.set_payload(
+        collection_name="musubi_episodic",
+        payload={
+            "created_at": backdate.isoformat(),
+            "created_epoch": backdate.timestamp(),
+            "updated_at": backdate.isoformat(),
+            "updated_epoch": backdate.timestamp(),
+        },
+        points=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=saved.object_id)
+                )
+            ]
+        ),
+    )
+    return str(saved.object_id)
+
+
+async def _seed_matured_episodic(
+    plane: EpisodicPlane, qc: QdrantClient, ns: str, content: str, *, age_seconds: int
+) -> str:
+    """Create + transition an episodic row to matured (real, pre-patch), back-dated by ``age_seconds``."""
+    saved = await plane.create(EpisodicMemory(namespace=ns, content=content))
+    await plane.transition(
+        namespace=ns, object_id=saved.object_id, to_state="matured", actor="seed", reason="seed"
+    )
+    backdate = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    qc.set_payload(
+        collection_name="musubi_episodic",
+        payload={
+            "created_at": backdate.isoformat(),
+            "created_epoch": backdate.timestamp(),
+            "updated_at": backdate.isoformat(),
+            "updated_epoch": backdate.timestamp(),
+        },
+        points=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=saved.object_id)
+                )
+            ]
+        ),
+    )
+    return str(saved.object_id)
+
+
+async def _seed_synthesized_concept(
+    plane: ConceptPlane, qc: QdrantClient, ns: str, *, reinforce: int, age_seconds: int
+) -> str:
+    saved = await plane.create(
+        SynthesizedConcept(
+            namespace=ns,
+            title="r21 concept",
+            content="r21 concept content",
+            synthesis_rationale="r21 rationale",
+            merged_from=[generate_ksuid() for _ in range(3)],
+        )
+    )
+    for _ in range(reinforce):
+        await plane.reinforce(namespace=ns, object_id=saved.object_id)
+    backdate = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    qc.set_payload(
+        collection_name="musubi_concept",
+        payload={"created_at": backdate.isoformat(), "created_epoch": backdate.timestamp()},
+        points=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=saved.object_id)
+                )
+            ]
+        ),
+    )
+    return str(saved.object_id)
+
+
+async def _seed_matured_concept(
+    plane: ConceptPlane, qc: QdrantClient, ns: str, *, age_seconds: int
+) -> str:
+    saved = await plane.create(
+        SynthesizedConcept(
+            namespace=ns,
+            title="r21 concept demote",
+            content="r21 concept demote content",
+            synthesis_rationale="r21 rationale",
+            merged_from=[generate_ksuid() for _ in range(3)],
+        )
+    )
+    await plane.transition(
+        namespace=ns, object_id=saved.object_id, to_state="matured", actor="seed", reason="seed"
+    )
+    backdate = datetime.now(UTC) - timedelta(seconds=age_seconds)
+    qc.set_payload(
+        collection_name="musubi_concept",
+        payload={"updated_at": backdate.isoformat(), "updated_epoch": backdate.timestamp()},
+        points=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=saved.object_id)
+                )
+            ]
+        ),
+    )
+    return str(saved.object_id)
+
+
+def _mat_env(tmp_path: Path) -> tuple[QdrantClient, LifecycleEventSink, MaturationCursor]:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        qc = QdrantClient(":memory:")
+    bootstrap(qc)
+    sink = LifecycleEventSink(db_path=tmp_path / "events.db", flush_every_n=10, flush_every_s=1.0)
+    cursor = MaturationCursor(db_path=tmp_path / "cursor.db")
+    return qc, sink, cursor
+
+
+def _assert_pending_not_counted(report: Any, sweep: str) -> None:
+    """DEDICATED red assertion: a Pending forward transition must be DEFERRED, not counted as a completed
+    transition. Raised today because the callsite does isinstance(result, Ok) -> transitioned++."""
+    if report.transitioned != 0:
+        raise DefectStillPresent(
+            f"{sweep} counts a Pending forward transition as a completed transition "
+            f"(expected DEFERRED, transitioned==0); got transitioned={report.transitioned}"
+        )
+
+
+# ---- TASK 2 reds: one strict-xfail per distinct callsite shape (Pending must DEFER) ---------------- #
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="episodic_maturation_sweep forward callsite (maturation.py:458) does isinstance(result, Ok) "
+    "-> transitioned++, so an Ok(Pending) is counted as a completed maturation instead of DEFERRED "
+    "(not counted, ids retained for the reconciler). Flips XPASS when the callsite gains a Pending arm.",
+)
+async def test_r21_maturation_episodic_defers_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qc, sink, cursor = _mat_env(tmp_path)
+    try:
+        plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
+        ns = "eric/claude-code/episodic"
+        await _seed_provisional_episodic(plane, qc, ns, "plain provisional row", age_seconds=7200)
+        monkeypatch.setattr(
+            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
+        )
+        report = await episodic_maturation_sweep(
+            client=qc, sink=sink, ollama=_FakeOllama(), cursor=cursor, config=_mat_config()
+        )
+        _assert_pending_not_counted(report, "episodic_maturation_sweep")
+    finally:
+        sink.close()
+        qc.close()
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="episodic_maturation_sweep runs the supersession back-link (maturation.py:479) whenever the "
+    "forward result isinstance Ok — so on an Ok(Pending) forward transition it runs post-transition "
+    "dependent work (a SECOND transition on the predecessor) that must be deferred until the forward "
+    "finalizes. Flips XPASS when the forward Pending arm skips the back-link.",
+)
+async def test_r21_maturation_supersession_backlink_not_run_on_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qc, sink, cursor = _mat_env(tmp_path)
+    try:
+        plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
+        ns = "eric/claude-code/episodic"
+        # A matured predecessor whose content matches the correction row's needle, so
+        # _find_supersession_candidate resolves it and the back-link path is reached.
+        await _seed_matured_episodic(plane, qc, ns, "shared gpu upgrade note", age_seconds=3600)
+        await _seed_provisional_episodic(
+            plane, qc, ns, "correction: shared gpu upgrade note", age_seconds=7200
+        )
+        spy = _TransitionSpy(_pending_outcome())
+        monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
+        await episodic_maturation_sweep(
+            client=qc, sink=sink, ollama=_FakeOllama(), cursor=cursor, config=_mat_config()
+        )
+        if len(spy.calls) > 1:
+            raise DefectStillPresent(
+                "episodic_maturation_sweep runs the supersession back-link (dependent work) on a Pending "
+                f"forward transition; expected the forward call only, saw {len(spy.calls)} transition calls"
+            )
+    finally:
+        sink.close()
+        qc.close()
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="provisional_ttl_sweep callsite (maturation.py:571) does isinstance(result, Ok) -> "
+    "transitioned++, so an Ok(Pending) TTL archival is counted as completed instead of DEFERRED. "
+    "Flips XPASS when the callsite gains a Pending arm.",
+)
+async def test_r21_maturation_provisional_ttl_defers_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qc, sink, _cursor = _mat_env(tmp_path)
+    try:
+        plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
+        ns = "eric/claude-code/episodic"
+        await _seed_provisional_episodic(plane, qc, ns, "ttl row", age_seconds=8 * 86400)
+        monkeypatch.setattr(
+            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
+        )
+        report = await provisional_ttl_sweep(client=qc, sink=sink, config=_mat_config())
+        _assert_pending_not_counted(report, "provisional_ttl_sweep")
+    finally:
+        sink.close()
+        qc.close()
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="episodic_demotion_sweep callsite (maturation.py:634) does isinstance(result, Ok) -> "
+    "transitioned++, so an Ok(Pending) demotion is counted as completed instead of DEFERRED. "
+    "Flips XPASS when the callsite gains a Pending arm.",
+)
+async def test_r21_maturation_episodic_demotion_defers_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qc, sink, _cursor = _mat_env(tmp_path)
+    try:
+        plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
+        ns = "eric/claude-code/episodic"
+        await _seed_matured_episodic(plane, qc, ns, "demote row", age_seconds=31 * 86400)
+        monkeypatch.setattr(
+            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
+        )
+        report = await episodic_demotion_sweep(client=qc, sink=sink, config=_mat_config())
+        _assert_pending_not_counted(report, "episodic_demotion_sweep")
+    finally:
+        sink.close()
+        qc.close()
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="concept_maturation_sweep callsite (maturation.py:698) does isinstance(result, Ok) -> "
+    "transitioned++, so an Ok(Pending) concept maturation is counted as completed instead of DEFERRED. "
+    "Flips XPASS when the callsite gains a Pending arm.",
+)
+async def test_r21_maturation_concept_defers_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qc, sink, _cursor = _mat_env(tmp_path)
+    try:
+        plane = ConceptPlane(client=qc, embedder=FakeEmbedder())
+        ns = "eric/claude-code/concept"
+        await _seed_synthesized_concept(plane, qc, ns, reinforce=3, age_seconds=2 * 86400)
+        monkeypatch.setattr(
+            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
+        )
+        report = await concept_maturation_sweep(client=qc, sink=sink, config=_mat_config())
+        _assert_pending_not_counted(report, "concept_maturation_sweep")
+    finally:
+        sink.close()
+        qc.close()
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="concept_demotion_sweep callsite (maturation.py:740) does isinstance(result, Ok) -> "
+    "transitioned++, so an Ok(Pending) concept demotion is counted as completed instead of DEFERRED. "
+    "Flips XPASS when the callsite gains a Pending arm.",
+)
+async def test_r21_maturation_concept_demotion_defers_pending(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    qc, sink, _cursor = _mat_env(tmp_path)
+    try:
+        plane = ConceptPlane(client=qc, embedder=FakeEmbedder())
+        ns = "eric/claude-code/concept"
+        await _seed_matured_concept(plane, qc, ns, age_seconds=40 * 86400)
+        monkeypatch.setattr(
+            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
+        )
+        report = await concept_demotion_sweep(client=qc, sink=sink, config=_mat_config())
+        _assert_pending_not_counted(report, "concept_demotion_sweep")
+    finally:
+        sink.close()
+        qc.close()
+
+
+# ---- TASK 2: static callsite/branch inventory over maturation.py ----------------------------------- #
+
+_MATURATION_REL = "lifecycle/maturation.py"
+
+#: The reviewed present denominator: EXACTLY the six transition() callsites, pinned by enclosing sweep
+#: function (with multiplicity — episodic_maturation_sweep has both the forward :458 and the back-link
+#: :479). A skipped/added callsite fails the unmarked control loudly (like G1's present-denominator).
+_EXPECTED_MATURATION_CALLSITES: Counter[str] = Counter(
+    {
+        "episodic_maturation_sweep": 2,
+        "provisional_ttl_sweep": 1,
+        "episodic_demotion_sweep": 1,
+        "concept_maturation_sweep": 1,
+        "concept_demotion_sweep": 1,
+    }
+)
+
+
+def _maturation_transition_callsites() -> list[tuple[str, ast.AST]]:
+    """(enclosing-sweep-name, enclosing-func-node) for every bare ``transition(...)`` call in maturation.py."""
+    tree = ast.parse((_SRC / _MATURATION_REL).read_text())
+    parent = _parent_map(tree)
+    out: list[tuple[str, ast.AST]] = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "transition":
+            cur = parent.get(n)
+            while cur is not None and not isinstance(cur, ast.FunctionDef | ast.AsyncFunctionDef):
+                cur = parent.get(cur)
+            if cur is not None:
+                out.append((getattr(cur, "name", "<module>"), cur))
+    return out
+
+
+def _branches_on_pending(func: ast.AST) -> bool:
+    """Heuristic (function-scoped, mirroring G2/G3's coarse AST granularity): does the enclosing sweep
+    reference a Pending/deferred discriminator anywhere — a name/attr containing 'pending'/'deferred'
+    (e.g. TransitionPending, is_pending, n_deferred) or a 'pending'/'deferred' string literal? Today no
+    sweep does; a three-way Ok(Final)/Ok(Pending)/Err handler will."""
+    for n in ast.walk(func):
+        if isinstance(n, ast.Name) and ("pending" in n.id.lower() or "deferred" in n.id.lower()):
+            return True
+        if isinstance(n, ast.Attribute) and (
+            "pending" in n.attr.lower() or "deferred" in n.attr.lower()
+        ):
+            return True
+        if (
+            isinstance(n, ast.Constant)
+            and isinstance(n.value, str)
+            and n.value.strip().lower() in {"pending", "deferred"}
+        ):
+            return True
+    return False
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="none of the six maturation transition() callsites (maturation.py 458/479/571/634/698/740) "
+    "branch on a Pending/deferred outcome — each enclosing sweep does only isinstance(result, Ok) -> "
+    "transitioned++, a two-way Ok/not-Ok branch. Flips XPASS when every callsite gains an explicit "
+    "three-way branch handling Pending distinctly from Ok-success.",
+)
+def test_r21_maturation_callsite_inventory_branches_on_pending() -> None:
+    sites = _maturation_transition_callsites()
+    without_branch = sorted({fn for fn, node in sites if not _branches_on_pending(node)})
+    if without_branch:
+        raise DefectStillPresent(
+            "maturation transition() callsite(s) whose enclosing sweep does not branch on a "
+            f"Pending/deferred outcome: {without_branch}"
+        )
+
+
+def test_r21_maturation_callsite_inventory_control_sees_exact_six() -> None:
+    """GREEN control (unmarked): the scanner must see EXACTLY the six reviewed callsites. A callsite that
+    silently disappears (scanner regression / unaccounted migration) OR a new one appearing fails here."""
+    found = Counter(fn for fn, _ in _maturation_transition_callsites())
+    assert found == _EXPECTED_MATURATION_CALLSITES, (
+        f"maturation transition() callsite drift: found={dict(found)} "
+        f"expected={dict(_EXPECTED_MATURATION_CALLSITES)} — account for every change"
+    )
+
+
+def test_r21_branches_on_pending_rule_discriminates() -> None:
+    """GREEN mechanism proof (unmarked): the branch detector clears a two-way Ok/not-Ok sweep (today's
+    shape) and flags each three-way form — an isinstance(TransitionPending) arm, a kind=='pending'
+    literal, and an is_pending()/n_deferred deferred-accounting shape."""
+    two_way = cast(
+        ast.AST,
+        ast.parse(
+            "def s():\n"
+            "    r = transition()\n"
+            "    if isinstance(r, Ok):\n"
+            "        transitioned += 1\n"
+            "    else:\n"
+            "        failed += 1\n"
+        ).body[0],
+    )
+    three_way_isinstance = cast(
+        ast.AST,
+        ast.parse(
+            "def s():\n"
+            "    r = transition()\n"
+            "    if isinstance(r.value, TransitionPending):\n"
+            "        deferred.append(r)\n"
+            "    elif isinstance(r, Ok):\n"
+            "        transitioned += 1\n"
+            "    else:\n"
+            "        failed += 1\n"
+        ).body[0],
+    )
+    three_way_kind = cast(
+        ast.AST,
+        ast.parse(
+            "def s():\n"
+            "    r = transition()\n"
+            "    if r.value.kind == 'pending':\n"
+            "        defer(r)\n"
+            "    else:\n"
+            "        transitioned += 1\n"
+        ).body[0],
+    )
+    deferred_counter = cast(
+        ast.AST,
+        ast.parse(
+            "def s():\n    r = transition()\n    if is_pending(r):\n        n_deferred += 1\n"
+        ).body[0],
+    )
+    assert not _branches_on_pending(two_way)
+    assert _branches_on_pending(three_way_isinstance)
+    assert _branches_on_pending(three_way_kind)
+    assert _branches_on_pending(deferred_counter)
+
+
+# ---- TASK 2 discriminator: the deferred-accounting acceptance check catches each failure mode ------- #
+
+
+class _DeferAccount:
+    """Reference sweep accounting used only as a discriminator oracle (no src)."""
+
+    def __init__(self) -> None:
+        self.transitioned: int = 0
+        self.deferred: list[tuple[Any, Any]] = []
+        self.dependent_ran: int = 0
+        self.retried: int = 0
+
+
+def _apply_correct(
+    acc: _DeferAccount, kind: str, opk: str, ev: str | None, *, has_dependent: bool
+) -> None:
+    if kind == "final":
+        acc.transitioned += 1
+        if has_dependent:
+            acc.dependent_ran += 1
+    elif kind == "pending":
+        acc.deferred.append((opk, ev))  # retained; NOT counted, no dependent work, no retry
+
+
+def _apply_counts_pending(
+    acc: _DeferAccount, kind: str, opk: str, ev: str | None, *, has_dependent: bool
+) -> None:
+    if kind == "pending":
+        acc.transitioned += 1  # WRONG: a deferral counted as a completed transition
+
+
+def _apply_runs_dependent(
+    acc: _DeferAccount, kind: str, opk: str, ev: str | None, *, has_dependent: bool
+) -> None:
+    if kind == "pending":
+        acc.deferred.append((opk, ev))
+        if has_dependent:
+            acc.dependent_ran += 1  # WRONG: dependent work on a Pending forward
+
+
+def _apply_retries(
+    acc: _DeferAccount, kind: str, opk: str, ev: str | None, *, has_dependent: bool
+) -> None:
+    if kind == "pending":
+        acc.deferred.append((opk, ev))
+        acc.retried += 1  # WRONG: immediate direct retry
+
+
+def _apply_drops_id(
+    acc: _DeferAccount, kind: str, opk: str, ev: str | None, *, has_dependent: bool
+) -> None:
+    if kind == "pending":
+        acc.deferred.append((opk, None))  # WRONG: event_id dropped from deferred accounting
+
+
+def _deferred_ok_after_pending(acc: _DeferAccount) -> bool:
+    return (
+        acc.transitioned == 0
+        and acc.dependent_ran == 0
+        and acc.retried == 0
+        and len(acc.deferred) == 1
+        and all(x is not None and x != "" for x in acc.deferred[0])
+    )
+
+
+def test_r21_deferred_accounting_check_discriminates() -> None:
+    """GREEN mechanism proof (unmarked): the deferred-accounting acceptance check passes the correct
+    policy and independently REJECTS each failure mode — pending-counted-as-completed,
+    dependent-work-run-on-pending, immediate-retry-on-pending, and dropped-identifier."""
+
+    def run(apply: Callable[..., None]) -> _DeferAccount:
+        acc = _DeferAccount()
+        apply(acc, "pending", _R21_OPK, _R21_EVENT_ID, has_dependent=True)
+        return acc
+
+    assert _deferred_ok_after_pending(run(_apply_correct))
+    assert not _deferred_ok_after_pending(run(_apply_counts_pending))
+    assert not _deferred_ok_after_pending(run(_apply_runs_dependent))
+    assert not _deferred_ok_after_pending(run(_apply_retries))
+    assert not _deferred_ok_after_pending(run(_apply_drops_id))
+    # and the correct policy still COMPLETES a Final (with its dependent work), not a false deferral
+    facc = _DeferAccount()
+    _apply_correct(facc, "final", _R21_OPK, _R21_EVENT_ID, has_dependent=True)
+    assert facc.transitioned == 1 and facc.dependent_ran == 1 and facc.deferred == []
