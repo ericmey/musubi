@@ -56,23 +56,27 @@ row is a failure.
 Plain controls (unmarked):
 
 1. `test_real_server_and_cross_arch_pins_are_exact` — pinned 1.17.1 server and both architecture digests.
-2. `test_adversarial_matrix_names_every_required_visibility_state` — old committed, new staged, winning current, stale-high-score, and losing-owner states are explicit.
-3. `test_parent_head_iterative_refill_is_exact_and_bounded_when_quiescent` — static post-validation/refill returns exact K within the finite candidate bound.
-4. `test_per_chunk_published_filter_is_exact_when_activation_is_quiescent` — payload filtering works after a fully quiescent activation.
-5. `test_complete_collection_alias_cutover_preserves_exact_k_for_concurrent_reader` — an independent reader observes only complete old or complete new exact-K results.
-6. `test_process_death_before_during_and_after_activation_reconciles_by_alias_readback` — client death before request, after accepted request with ambiguous response, and after readback reconciles deterministically.
-7. `test_activation_retry_readback_and_cleanup_are_deterministic` — retry, alias readback, and old-collection cleanup preserve the winner.
-8. `test_complete_alias_candidate_meets_exact_k_safety_and_recall` — a full-query-domain candidate excludes staged/losing rows and retains all K current rows.
-9. `test_client_death_is_not_mislabeled_as_a_qdrant_snapshot_or_server_crash` — the harness refuses to call client death an injected server/consensus crash.
+2. `test_supported_architecture_selects_exact_platform_and_digest` — all four supported machine names resolve to the verified per-architecture digest.
+3. `test_unknown_architecture_fails_closed_without_skip_or_fallback` — unsupported machines receive an explicit error, never a raw key failure, skip, or fallback.
+4. `test_alias_observation_validator_rejects_every_visibility_defect` — parametrized controls reject reader errors, gaps, wrong lengths, mixed sets, missing old/new snapshots, and fewer than 100 samples.
+5. `test_adversarial_matrix_names_every_required_visibility_state` — old committed, new staged, winning current, stale-high-score, and losing-owner states are explicit.
+6. `test_parent_head_iterative_refill_is_exact_and_bounded_when_quiescent` — static post-validation/refill returns exact K within the finite candidate bound.
+7. `test_per_chunk_published_filter_is_exact_when_activation_is_quiescent` — payload filtering works after a fully quiescent activation.
+8. `test_complete_collection_alias_cutover_preserves_exact_k_for_concurrent_reader` — an independent reader records at least 100 samples and observes both complete old and complete new exact-K results, with bounded child cleanup.
+9. `test_process_death_before_during_and_after_activation_reconciles_by_alias_readback` — client death before request, after accepted request with ambiguous response, and after readback reconciles deterministically.
+10. `test_activation_retry_readback_and_cleanup_are_deterministic` — retry, alias readback, and old-collection cleanup preserve the winner.
+11. `test_complete_alias_candidate_meets_exact_k_safety_and_recall` — a full-query-domain candidate excludes staged/losing rows and retains all K current rows.
+12. `test_client_death_is_not_mislabeled_as_a_qdrant_snapshot_or_server_crash` — the harness refuses to call client death an injected server/consensus crash.
 
-Named strict reds (each rejects one wrong candidate; `--runxfail` reaches all six):
+Named strict reds (each rejects one wrong candidate; `--runxfail` reaches all seven):
 
-10. `test_red_naive_bounded_overfetch_loses_current_exact_k` — fixed 2K overfetch under enough stale high scorers.
-11. `test_red_iterative_refill_cannot_claim_concurrent_snapshot` — offset refill while ranking changes between pages.
-12. `test_red_flag_activation_crash_after_deactivate_loses_current_exact_k` — deactivate-old-first crash gap.
-13. `test_red_flag_activation_exposes_new_before_old_is_fenced` — activate-new-first overlap exposes an uncommitted generation.
-14. `test_red_per_artifact_alias_promotion_loses_unaffected_current_rows` — incomplete per-artifact copy behind a global alias.
-15. `test_red_ambiguous_client_death_proves_mid_server_crash_atomicity` — fabricated internal-server crash claim.
+13. `test_red_naive_bounded_overfetch_loses_current_exact_k` — fixed 2K overfetch under enough stale high scorers.
+14. `test_red_iterative_refill_cannot_claim_concurrent_snapshot` — offset refill while ranking changes between pages.
+15. `test_red_flag_activation_crash_after_deactivate_loses_current_exact_k` — deactivate-old-first crash gap.
+16. `test_red_flag_activation_exposes_new_before_old_is_fenced` — activate-new-first overlap exposes an uncommitted generation.
+17. `test_red_per_artifact_alias_promotion_loses_unaffected_current_rows` — incomplete per-artifact copy behind a global alias.
+18. `test_red_ambiguous_client_death_proves_mid_server_crash_atomicity` — fabricated internal-server crash claim.
+19. `test_red_non_atomic_split_alias_switch_exposes_a_real_query_gap` — separate delete/create calls expose an independent-client query error in the alias gap.
 
 ## Non-closure prerequisites
 
@@ -107,3 +111,13 @@ source authorization.
   coverage. Test-contract coverage is 15/15 (9 controls, 6 strict reds).
   Teardown left zero matching spike containers, networks, or volumes. The
   branch contains exactly the four owned additive files and remains held.
+- 2026-07-14: additive review correction preserved `cd023ec` and added an
+  explicit unsupported-architecture failure, a shared validator with a
+  deterministic 100-observation floor, bounded reader termination, and a real
+  split delete/create gap red. Focused evidence before the full successor gate:
+  `20 passed, 7 xfailed`; `--runxfail` reached exactly seven failures with
+  `20 passed`. `make check` passed with `1734 passed, 197 skipped, 17
+  deselected, 9 xfailed` and 89.46% coverage. Test-contract coverage is 19/19
+  (12 controls, 7 strict reds); teardown again left zero matching spike
+  containers, networks, or volumes. Exact-head remote results follow on PR
+  #454; the held state and four-file scope are unchanged.

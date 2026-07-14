@@ -52,12 +52,28 @@ instead of exact K.
 | parent-head validation + iterative refill | passes on a static finite result order | fails when ranking changes between offset pages; Qdrant query pages are not claimed as one snapshot | bounded only by an explicit finite candidate budget | useful read algorithm, not a publication snapshot |
 | per-chunk `published/current` flag | passes after activation is fully quiescent | deactivate-old-first creates a false-negative gap; activate-new-first exposes staged data before old is fenced | one query is bounded | no atomic multi-point activation proof |
 | complete staging/live collection + alias cutover | passes | independent reader sees complete old or complete new results at exact K | one query plus one alias update | only passing global visibility seam in this bounded test |
+| split `delete_alias` then `create_alias` | fails | an independent client receives a real query error while no alias exists | two bounded writes with an exposed gap | explicit wrong; contrasts with one atomic multi-action update |
 | naive fixed 2K overfetch | fails with enough stale high scorers | fails | bounded | explicit wrong; bounded overfetch cannot guarantee recall |
 
 The alias result is conditional on a *complete query-domain collection*. It is
 not evidence that rebuilding/copying that collection is affordable, that two
 artifact publications can safely build it concurrently, or that upload jobs
 can durably orchestrate the copy and cutover.
+
+## Harness strength and portability
+
+The committed concurrent-reader control accepts only after at least 100
+observations and requires both the complete old and complete new exact-K sets.
+One shared validator rejects each of these independently: query errors, empty
+gaps, wrong result length, mixed/unexpected sets, missing old, missing new, and
+samples below the floor. The reader process is terminated and waited in a
+bounded `finally`, with a bounded kill fallback, before either collection is
+deleted if any parent assertion or switch fails.
+
+Architecture selection is exact and fail-closed. `amd64`/`x86_64` select the
+verified amd64 digest; `arm64`/`aarch64` select the verified arm64 digest. Any
+other machine raises an explicit unsupported-architecture error. There is no
+skip, fallback image, or raw mapping `KeyError`.
 
 ## Crash, retry, readback, and cleanup evidence
 
@@ -87,9 +103,10 @@ concurrent reader:
 - zero stale, staged, uncommitted, or losing-owner delivery;
 - zero current false negatives whenever K current rows exist.
 
-Every observation is one complete old or complete new snapshot and terminates
-in one bounded query. The other three candidates fail a named assertion at the
-boundary described above.
+At least 100 committed observations are required; every accepted observation
+is one complete old or complete new snapshot and terminates in one bounded
+query. The four rejected alternatives fail a named assertion at the boundary
+described above.
 
 ## Architecture decision boundary
 
@@ -111,7 +128,7 @@ authorization, merge authorization, or Issue #451 closure.
 
 ## Executed evidence
 
-Local arm64 against digest-pinned Qdrant 1.17.1:
+Initial `cd023ec` local arm64 evidence against digest-pinned Qdrant 1.17.1:
 
 - normal spike: `11 passed, 6 xfailed`;
 - discrimination mode: `--runxfail` reached exactly six named failures and
@@ -122,3 +139,21 @@ Local arm64 against digest-pinned Qdrant 1.17.1:
 - teardown: zero matching containers, networks, or volumes;
 - scope: exactly four additive owned files, with no source, ledger, deploy,
   host, PR #452, or PR #453 mutation.
+
+Additive review-correction successor:
+
+- normal spike: `20 passed, 7 xfailed`;
+- discrimination mode: `--runxfail` reached exactly seven named failures and
+  retained `20 passed` controls;
+- full repository gate: `1734 passed, 197 skipped, 17 deselected, 9 xfailed`,
+  coverage `89.46%`;
+- test-contract audit: 19/19 accounted for (12 passing controls, 7 strict
+  reds);
+- the atomic alias control requires at least 100 observations, both complete
+  snapshots, exact K on every sample, and zero errors/gaps/mixes;
+- the split delete/create wrong executes a real query between calls and the
+  validator rejects its `UnexpectedResponse`;
+- teardown: zero matching containers, networks, or volumes;
+- cumulative PR scope remains exactly the same four additive owned files. The
+  successor modifies only the test, slice, and spike note; no source, ledger,
+  deploy, host, PR #452, or PR #453 mutation.
