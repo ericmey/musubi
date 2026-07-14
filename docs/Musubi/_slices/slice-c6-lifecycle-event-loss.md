@@ -1,27 +1,27 @@
 ---
-title: "Slice: C6 lifecycle audit-event loss — red contract (tests-only)"
+title: "Slice: C6 lifecycle audit-event loss — durable-on-accept implementation"
 slice_id: slice-c6-lifecycle-event-loss
 section: _slices
 type: slice
 status: in-progress
-owner: aoi
-phase: "Lifecycle-audit 2026-07-13 — C6 event-loss red contract (Yua-authorized, tests-first, zero src)"
+owner: yua
+phase: "Lifecycle-audit 2026-07-14 — C6 durable-on-accept implementation successor"
 tags: [section/slices, status/in-progress, type/slice, lifecycle, audit, durability]
-updated: 2026-07-13
+updated: 2026-07-14
 reviewed: false
 depends-on: []
 blocks: []
 issue: 433
 ---
 
-# Slice: C6 lifecycle audit-event loss — red contract (tests-only)
+# Slice: C6 lifecycle audit-event loss — durable-on-accept implementation
 
-Tests-first red contract for the C6 audit-event-loss defect (Issue #433). **Zero `src/musubi`** — the
-source fix follows in a separate slice after Yua reviews this contract. Eric's finding was
-independently reproduced against `main` (`src/musubi/lifecycle/events.py`); the prose was confirmed
-AND two additional loss paths were found.
+Implementation successor for the accepted C6 audit-event-loss red contract (Issue #433). The original
+tests-first evidence remains in history at `c7b95da`; this successor adds the reviewed synchronous
+durable-on-accept source and removes each strict-xfail decorator atomically with the behavior it fixes.
+Eric's finding was independently reproduced against `main`, and two additional loss paths were found.
 
-## Source observation (what the code DOES today — not the desired behavior)
+## Historical source observation (what the accepted pre-source snapshot did)
 
 `src/musubi/lifecycle/events.py`, verified at the merged head:
 
@@ -55,7 +55,7 @@ AND two additional loss paths were found.
   make the two stores atomic — see "What C6 does NOT close" below. Consumers (`reflection.py` via
   `read_all()`) operate on whatever the sink persisted.
 
-## Desired contract — ACCEPTED Option A / durable-on-accept (each red is strict-xfail against today)
+## Implemented contract — ACCEPTED Option A / durable-on-accept
 
 Architecture decided by Yua (2026-07-13): `record()` COMMITS the event to sqlite synchronously and
 returns `Result[None, LifecycleEventWriteError]`; "accepted" means COMMITTED. The RAM buffer + background
@@ -76,16 +76,17 @@ retry queue and no backpressure cap** (nothing accumulates in memory). Full deci
 6. **sustained 1000 failures** all return `Err` **promptly** — proven in a bounded subprocess so a
    blocking `record()` fails rather than hangs — persisting zero rows with **no in-memory
    queue/backpressure growth** (`_buffer` stays empty);
-7. `close()` is **idempotent** and cannot discard an already-`Ok` event;
+7. `close()` is **idempotent**, cannot discard an already-`Ok` event, and serializes with a concurrent
+   `record()` so the race returns either a committed `Ok` or a refused `Err`, never `Ok` without a row;
 8. the returned `Result` **must be consumed** at every callsite — a strict AST red rejects the bare
-   `sink.record(event)` expression at `transitions.py:268` (the Result is silently dropped today), and a
+   `sink.record(event)` expression at `transitions.py:268` in the pre-source snapshot, and a
    green guard asserts the callsite set is **exactly** `{transitions.py}` so a new caller forces review.
 
 ## Specs to implement
 
 - [[_slices/slice-c6-lifecycle-event-loss]] — this slice's contract is its `## Test Contract` below.
-  At this head the 9 reds are strict-xfail (each reason names the observed defect) and the guard
-  passes, so `make tc-coverage SLICE=slice-c6-lifecycle-event-loss` exits 0.
+  The accepted pre-source snapshot had 9 strict-xfails and one passing guard; this implementation
+  successor makes all 10 ordinary tests pass.
 - C6b / Issue #437 — the separate Qdrant↔SQLite atomicity track.
 
 ## What C6 does NOT close (C6b / Issue #437 — atomicity)
@@ -105,7 +106,7 @@ dependency), not this slice. The item-8 AST/callsite contract below proves the c
 context manager that restores the real writer before `close()` so the fault cannot mask an assertion;
 all joins bounded by `_JOIN_TIMEOUT` so a regression fails instead of hanging CI). `record()`'s raw
 return is read through `_record()`/`_as_result()`, which raise `DefectStillPresent` when the value is
-not a `Result` — that is the named red reason today. Metric named before source:
+not a `Result` — that was the named pre-source red reason. Metric named before source:
 `musubi_lifecycle_event_write_failures_total` (bounded, no labels), asserted via the shared
 `default_registry` **rendered exposition** delta — never a private attribute.
 
@@ -114,7 +115,7 @@ buffer/flush is not the durability boundary, so `failed-flush-retention`, the `A
 and `bounded-backpressure-queue` pass vacuously (they described a current defect, not an acceptance
 gate). The nine items below are the acceptance contract.
 
-Reds (9, strict-xfail; each red-proofed to flip to `XPASS(strict)` under the minimal Option-A fix):
+Acceptance tests (9; strict-xfail in the pre-source snapshot, ordinary passing tests with the fix):
 1. `test_record_success_is_ok_and_immediately_durable` — healthy record is `Ok` + readable with no
    flush/close.
 2. `test_write_failure_is_typed_err_zero_row_metric_and_pii_free_log` — failure is a **concrete
@@ -132,11 +133,11 @@ Reds (9, strict-xfail; each red-proofed to flip to `XPASS(strict)` under the min
 6. `test_sustained_failures_all_err_zero_rows_no_growth` — 1000 sustained failures run in a **bounded
    subprocess** (`_SUSTAINED_TIMEOUT`), so a `record()` that BLOCKS instead of refusing promptly fails
    via `TimeoutExpired` rather than hanging CI; all `Err`, zero rows, `_buffer` empty.
-7. `test_close_idempotent_cannot_discard_ok_event` — double `close()` is idempotent and keeps the `Ok`
-   event.
+7. `test_close_idempotent_cannot_discard_ok_event` — double `close()` is idempotent, keeps the `Ok`
+   event, and a bounded record/close race never returns `Ok` without the committed row.
 8. `test_record_result_is_consumed_not_bare_expression` — AST-parses `transitions.py` and **rejects a
-   bare `sink.record(...)` expression**; the `Result` must be consumed/propagated (today it is a bare
-   statement at L.268 → red).
+   bare `sink.record(...)` expression**; the `Result` must be consumed/propagated (the pre-source
+   snapshot dropped it as a bare statement).
 9. `test_transition_callsite_injects_sink_err_yields_caller_err` — injects a refused sink write after
    the Qdrant state mutation, proves the mutation is already visible, and requires `transition()` to
    return `Err(TransitionError(code="lifecycle_event_write_failed"))` rather than falsely reporting `Ok`.
@@ -146,26 +147,23 @@ Guard (green now + post-fix):
   callsite set is **exactly** `{transitions.py}` (equality, not subset), so a NEW caller fails the guard
   and forces `Result`-handling review (the C6b boundary).
 
-**Closure at this head:** 1 passed + 9 xfailed; ruff/mypy clean; zero `src/musubi`.
-Red-proofed: a temporary minimal Option-A fix (synchronous commit in `record()` returning
-`Ok(value=None)` / `Err(error=LifecycleEventWriteError(...))`, `default_registry` counter + PII-free
-static ERROR log; `transitions.py` consumes the `Result`) flips ALL 9 reds to `XPASS(strict)` while the
-guard stays green; source restored via `git checkout`, nothing committed to `src/`. The two subtle
-discriminators were proven to bite: a `logger.exception` leak (canaries in the traceback) and an untyped
-string error each leave red #2 *unflipped*, and the fully-correct typed+clean fix flips it.
+**Pre-source proof:** 1 guard passed + 9 strict-xfailed for their named reasons. **Implementation
+closure at this head:** all 9 acceptance tests + the inventory guard pass. The source commits each event
+synchronously before returning `Ok`, refuses failures as the exact typed error, increments the one
+unlabeled shared counter, emits one static PII-free ERROR, removes the RAM buffer/background flusher,
+and makes the sole caller propagate the refused write honestly. The two subtle discriminators remain
+load-bearing: a `logger.exception` leak and an error object with an extra field both fail test 2.
 
 ## Status
 
-**`in-progress`** (2026-07-13) — red contract only (tests + this doc), rebuilt to the ACCEPTED Option A
-/ durable-on-accept architecture (Yua 2026-07-13). The source fix follows after review; C6b
-(Qdrant↔SQLite atomicity) remains separately tracked as Issue #437.
-Tracking Issue #433. Second reader: Tama or Shiori, requested only after their current lanes clear.
+**`in-progress`** (2026-07-14) — Option-A source implemented on a clean main-based promotion branch and
+awaiting exact-head independent review. C6b (Qdrant↔SQLite atomicity) remains separately tracked as
+Issue #437. Tracking Issue #433. Second readers: Tama and Shiori.
 
 spec-update: slice-c6-lifecycle-event-loss — Option A durable-on-accept red contract for C6 lifecycle
-audit-event loss (9 reds + 1 guard, hardened per Yua's proof review): immediate durability on Ok;
+audit-event loss (9 acceptance tests + 1 guard, hardened per Yua's proof review): immediate durability on Ok;
 typed `LifecycleEventWriteError` + zero-row + one-unlabeled-series-metric + PII-free rendered log (incl.
 exc_info traceback) on failure; same-event_id retry exactly-once; crash survival of Ok-accepted events;
 concurrent no-cross-loss; bounded-subprocess sustained-failure no-growth; idempotent close; strict AST
-red requiring the `Result` be consumed at `transitions.py`; behavioral refused-write propagation;
-exact-set callsite guard. C6b atomicity
-remains separately tracked as Issue #437. Source fix deferred (Yua 2026-07-13).
+test requiring the `Result` be consumed at `transitions.py`; behavioral propagation of a refused write;
+exact-set callsite guard. C6b atomicity remains separately tracked as Issue #437.
