@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.3](https://github.com/ericmey/musubi/compare/v1.13.2...v1.13.3) (2026-07-14)
+
+
+### Bug Fixes
+
+* **deps:** clear fixed-version high findings ([#466](https://github.com/ericmey/musubi/issues/466)) ([17c002f](https://github.com/ericmey/musubi/commit/17c002f110858b11048f1509fc69613632c72f33))
+
 ## [1.13.2](https://github.com/ericmey/musubi/compare/v1.13.1...v1.13.2) (2026-07-14)
 
 
