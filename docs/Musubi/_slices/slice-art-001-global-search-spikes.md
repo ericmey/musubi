@@ -101,4 +101,9 @@ source authorization.
   `79cd13eee864983bf5caa93773285a452ced975c`; PRs #452 and #453 remained
   untouched. Pre-encoding real-Qdrant evidence and collection-scope design
   drift were routed to Yua before the first edit.
-
+- 2026-07-14: local pinned-arm64 evidence: `11 passed, 6 xfailed`; explicit
+  `--runxfail` reached all six named failures with `11 passed`; `make check`
+  passed with `1725 passed, 197 skipped, 17 deselected, 8 xfailed` and 89.44%
+  coverage. Test-contract coverage is 15/15 (9 controls, 6 strict reds).
+  Teardown left zero matching spike containers, networks, or volumes. The
+  branch contains exactly the four owned additive files and remains held.

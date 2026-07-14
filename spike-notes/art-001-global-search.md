@@ -109,3 +109,16 @@ architecture packet still needs evidence for:
 A passing alias test is not an architecture recommendation, source
 authorization, merge authorization, or Issue #451 closure.
 
+## Executed evidence
+
+Local arm64 against digest-pinned Qdrant 1.17.1:
+
+- normal spike: `11 passed, 6 xfailed`;
+- discrimination mode: `--runxfail` reached exactly six named failures and
+  retained `11 passed` controls;
+- full repository gate: `1725 passed, 197 skipped, 17 deselected, 8 xfailed`,
+  coverage `89.44%`;
+- test-contract audit: 15/15 accounted for (9 passing controls, 6 strict reds);
+- teardown: zero matching containers, networks, or volumes;
+- scope: exactly four additive owned files, with no source, ledger, deploy,
+  host, PR #452, or PR #453 mutation.
