@@ -114,6 +114,51 @@ control asserts every surface still resolves so a silently-broken extractor can'
 and restore currently disagree with each other** (backup reads the FILE variant, restore writes the DIR
 variant) — reconcile before S1.
 
+### E.1 LOCKED canonical layout + FILE→DIR migration contract (P0c storage-parity family)
+
+The active-storage family is **LOCKED to the DIRECTORY**. Source/deploy MUST NOT reinvent this — it is
+pinned here so the drift reds and the anchor controls in `test_c6b_atomicity.py` (the P0c storage-parity
+family) have one authority to converge on.
+
+**Canonical layout (the DIR family):**
+- Active-storage unit = the **directory** `/var/lib/musubi/lifecycle`, bind-mounted `…/lifecycle:…/lifecycle`
+  into **both** the `core` and the `lifecycle-worker` services (the worker shares the core image, different
+  entrypoint).
+- Shared DB file = `/var/lib/musubi/lifecycle/work.sqlite` (siblings `work.sqlite-wal`/`-shm` under WAL,
+  plus any `locks/` and `vault-writelog.db` cursor state live under the same directory parent).
+- `LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite`.
+- The directory is created by `bootstrap.yml` ("Create Musubi data directories" over `musubi_data_dirs`,
+  which includes `/var/lib/musubi/lifecycle`) as `musubi:musubi` mode `0750`.
+- The bare FILE `/var/lib/musubi/lifecycle-work.sqlite` (parent `/var/lib/musubi`) is **RETIRED**.
+
+**ANCHORS already on the DIR (preserve-green controls — must not regress to FILE):** ansible
+`docker-compose.yml.j2:16,52` (core+worker mounts) + `env.production.j2:13`; `bootstrap.yml:130` perms;
+live scheduler `musubi-backup.sh:211` (`SQLITE_SRC`); `restore.yml:176`.
+
+**DRIFT surfaces to align to the DIR (each a strict-xfail red until aligned):** root compose
+`docker-compose.yml:123` (bare-FILE mount **and** no `lifecycle-worker` service — align to the DIR mount +
+add the worker); `.env.example:38`; `deploy/docker/.env.production.example:17`; legacy offsite
+`deploy/backup/backup.yml:87-88`; runbook `deploy/runbooks/manual-recovery.md:118-131` (restores the DIR
+snapshot `$SNAP/sqlite/work.sqlite` INTO the bare FILE — retarget to `…/lifecycle/work.sqlite`); backup
+`deploy/backup/README.md:62` (stale `lifecycle-work.sqlite` wording).
+
+**FILE→DIR migration contract (DOWNSTREAM, R20-gated — spec only; do NOT execute here).** The migration
+that moves an existing bare-FILE deployment onto the DIR runs later, under R20 maintenance-mode quiescence.
+Its fail-closed contract (encoded as a reference-candidate red-proof in
+`test_p0c_storage_migration_contract_red_proof`, and marked UNBUILT-in-`deploy/` by
+`test_p0c_storage_migration_task_unbuilt`):
+1. **Fail closed on ambiguity.** If BOTH `/var/lib/musubi/lifecycle-work.sqlite` and
+   `/var/lib/musubi/lifecycle/work.sqlite` hold a DB (or a sibling `locks/` / `vault-writelog.db` exists at
+   both parents), REFUSE + signal — never silently pick one.
+2. **Verify before cutover.** `PRAGMA integrity_check` + a schema check + a row-count check on the DIR DB
+   before starting services; a bad DB must abort, never reach the started services.
+3. **Rollback rule.** The old FILE is a PRE-migration snapshot: restoring it is valid ONLY before writes
+   resume. AFTER the DIR DB has taken new writes, NEVER restore the stale old FILE — instead
+   `wal_checkpoint(TRUNCATE)` and copy the CURRENT DIR DB back under quiescence.
+
+The red `test_p0c_storage_migration_task_unbuilt` flips green when the migration task is **authored** per
+this contract (not when it is executed) — execution + deploy remain downstream of R20.
+
 ## F. Corrected source-commit series + flip matrix (rulings 3, 10, 11, S1 active-storage)
 
 Each source commit = source + ATOMIC decorator flip in `test_c6b_atomicity.py` (no strict XPASS left) +
