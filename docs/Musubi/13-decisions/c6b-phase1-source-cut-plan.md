@@ -233,3 +233,19 @@ intent, coordinator owns atomicity + rechecks fence (§B). 5. G2a injected bound
 readiness red (P0c, §H). 8. shared-file concurrency confirmed → mandatory multi-process test (§D). 9.
 cross-process schema init (§D). 10. S1 ACTIVE-STORAGE (§F). 11. flip matrix follows actual checks —
 R10/R12 need full transition, R22 is coordinator-race (§F). 12. complete validated settings inventory (§G).
+
+## J. NAMED PRE-S1 BLOCKER — R22 crash-proof nondeterminism (flake-hardening required)
+
+`test_crash_red_proof_correct_passes_and_wrong_fails[r22]` — the two-process race crash-proof (real
+subprocesses + on-disk Qdrant) — is **nondeterministic under load**: on 2026-07-14 the FIRST CI run on
+`b77c2ff` FAILED with the CORRECT candidate producing TWO winners (exit codes `[31, 34]` = a lost-update /
+double-operation race); the rerun passed, and it passes reliably locally. The failure was a harness timing
+race, NOT a regression (the failing commit touched only the P0c config parsers).
+
+**Blocker (Yua ruling, 2026-07-14):** S1 coordinator source MUST NOT proceed while a nondeterministic crash
+proof gates it — a flaky red-proof cannot certify the single-winner invariant it exists to prove. Before S1
+that exercises the R22 race, the R22 crash harness must be **flake-hardened to determinism** (e.g. an
+explicit rendezvous/barrier so both processes are provably in-flight before the fenced apply, bounded
+retries removed, or a deterministic scheduler seam) and shown stable across N repeated runs in CI. This is
+a **separate scoped task** — do NOT fix R22 inside the P0c parity work. Tracked here as a pre-S1 gate;
+promote to an issue when S1 is scheduled.

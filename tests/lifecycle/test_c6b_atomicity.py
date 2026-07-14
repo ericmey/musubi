@@ -80,6 +80,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -9611,7 +9612,11 @@ def _readme_stores_section_lines(text: str) -> list[str]:
                 out.append(line)
             continue
         if not in_fence and re.match(r"^#{1,6}\s", line):
-            in_section = re.match(r"^#{1,6}\s+Stores\b", line.strip(), re.IGNORECASE) is not None
+            # EXACT heading text (Yua round-3 ruling): the normalized heading must be precisely "Stores"
+            # (case-insensitive policy) — a prefix/suffix lookalike ("Stores history", "Stores-old") is NOT
+            # the ## Stores section.
+            heading = re.sub(r"^#{1,6}\s+", "", line.strip()).strip()
+            in_section = heading.casefold() == "stores"
             continue
         if in_section:
             out.append(line)
@@ -9923,6 +9928,16 @@ def test_p0c_drift_parsers_discriminate() -> None:
         _readme_operational_storage_line(
             "## Stores\n- `lifecycle/work.sqlite` copy hourly\n- `lifecycle-work.sqlite` copy hourly"
         )
+        is None
+    )
+    # Yua exact-review (round 3): the heading must be EXACTLY '## Stores' — a prefix/suffix lookalike is NOT
+    # the Stores section, so its DIR bullet must NOT green the README (the real Stores bullet still names FILE).
+    assert not _readme_resolves_dir("## Stores history\n- `lifecycle/work.sqlite` copy hourly")
+    assert not _readme_resolves_dir("## Stores-old\n- `lifecycle/work.sqlite` copy hourly")
+    # exact '## Stores' (case-insensitive) still binds
+    assert _readme_resolves_dir("## stores\n- `lifecycle/work.sqlite` copy hourly")
+    assert (
+        _readme_operational_storage_line("## Stores history\n- `lifecycle/work.sqlite` copy hourly")
         is None
     )
 
@@ -10310,53 +10325,115 @@ def test_p0c_storage_migration_verify_checks_all_three(tmp_path: Path) -> None:
     assert _mig_row_count(dir_db) == 2
 
 
-#: A migration task is an EXECUTABLE artifact — prose/runbooks (.md) mentioning both paths do NOT build it.
-_MIGRATION_TASK_SUFFIXES = frozenset({".py", ".sh", ".yml", ".yaml"})
-#: Tokens that evidence an ACTUAL data-move operation bridging the two storage units (not mere mention).
-_MIGRATION_OPERATION_TOKENS = (
-    ".backup",
-    "shutil.copy",
-    "shutil.move",
-    "cp -a",
-    "cp ",
-    "mv ",
-    "rsync",
-    "ansible.builtin.copy",
+#: The ONE authored migration format supported in this tests-only slice (Yua round-3 ruling): a shell
+#: script parsed by REAL command invocations, NOT whole-text token co-occurrence. A .py/.yml migration
+#: would need AST/yaml-task semantics; it is out of scope here and is NOT accepted by token matching.
+_MIGRATION_ARTIFACT_SUFFIX = ".sh"
+
+#: Shell line heads that are NOT a data command — their operands/args are never migration evidence.
+_SH_NONCOMMAND_HEADS = frozenset(
+    {
+        "echo",
+        "printf",
+        "cat",
+        "true",
+        "false",
+        ":",
+        "set",
+        "export",
+        "local",
+        "declare",
+        "read",
+        "if",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "for",
+        "while",
+        "until",
+        "do",
+        "done",
+        "case",
+        "esac",
+        "function",
+        "return",
+        "exit",
+        "shift",
+        "trap",
+        "[",
+        "[[",
+        "test",
+        "source",
+        ".",
+    }
 )
 
 
-def _strip_hash_line_comments(text: str) -> str:
-    """Remove ``#``-to-EOL line comments (the comment syntax shared by the supported executable formats
-    .sh/.py/.yml/.yaml) so migration EVIDENCE that appears ONLY inside a comment does not count. A bounded
-    line-based strip: everything from the first ``#`` on a line to EOL is dropped. This deliberately narrows
-    the accepted format to comment-stripped executable content rather than heuristic whole-text co-occurrence
-    (Yua ruling); the migration is downstream + narrow, not arbitrary multi-language source."""
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+def _resolve_sh_operand(tok: str, assigns: Mapping[str, str]) -> str:
+    """Resolve a `$VAR` / `${VAR}` operand against literal assignments; a non-variable token is literal."""
+    m = re.fullmatch(r"\$\{?(\w+)\}?", tok)
+    return assigns.get(m.group(1), tok) if m is not None else tok
+
+
+def _sh_migration_evidence(text: str) -> tuple[bool, bool, bool]:
+    """Parse a .sh migration script by REAL command invocations (shlex, line-based, heredoc-aware) and
+    return (moves_old_to_new, runs_integrity_check, runs_wal_checkpoint). Literal `VAR=path` assignments are
+    resolved for `$VAR`/`${VAR}` operands. EVIDENCE is only a real command: a `cp`/`mv` whose resolved
+    source is the retired FILE and dest is the canonical DIR DB, and `sqlite3 <db> <sql>` whose SQL runs
+    integrity_check / wal_checkpoint. Tokens inside echo/printf/here-doc/comments/assignments/control words
+    are NOT evidence (Yua round-3 ruling — reject string/metadata co-occurrence)."""
+    assigns: dict[str, str] = {}
+    moves = integrity = checkpoint = False
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        i += 1
+        if not line or line.startswith("#"):
+            continue
+        hd = re.search(r"<<-?\s*[\"']?(\w+)[\"']?", line)  # here-doc: skip its data body entirely
+        if hd is not None:
+            term = hd.group(1)
+            while i < len(lines) and lines[i].strip() != term:
+                i += 1
+            i += 1
+            continue
+        am = re.match(r"^(\w+)=(\S+)$", line)  # a bare `VAR=value` assignment (no command)
+        if am is not None:
+            assigns[am.group(1)] = am.group(2).strip("\"'")
+            continue
+        try:
+            toks = shlex.split(line, comments=True)
+        except ValueError:
+            continue
+        if not toks:
+            continue
+        base = toks[0].rsplit("/", 1)[-1]
+        if base in _SH_NONCOMMAND_HEADS:
+            continue
+        if base in {"cp", "mv"}:
+            ops = [_resolve_sh_operand(t, assigns) for t in toks[1:] if not t.startswith("-")]
+            if len(ops) >= 2 and ops[-2] == _RETIRED_FILE_DB and ops[-1] == _CANONICAL_DIR_DB:
+                moves = True
+        elif base == "sqlite3":
+            sql = " ".join(toks[1:])
+            integrity = integrity or "integrity_check" in sql
+            checkpoint = checkpoint or "wal_checkpoint" in sql
+    return moves, integrity, checkpoint
 
 
 def _is_lifecycle_migration_artifact(suffix: str, text: str) -> bool:
-    """True iff a deploy artifact actually BUILDS the FILE->DIR lifecycle storage migration, rather than
-    merely co-mentioning the two paths. It must be:
-    - an EXECUTABLE task artifact (``.py/.sh/.yml/.yaml`` — NOT ``.md`` prose/runbook);
-    - bridge BOTH the retired FILE and the canonical DIR DB path;
-    - perform an actual data-move OPERATION (a copy/move/`.backup` between the units); AND
-    - carry the §E fail-closed CONTRACT markers — verify-before-cutover (``integrity_check``) + the
-      checkpoint used by the rollback rule (``wal_checkpoint``).
-    Co-occurrence of both paths in prose, or an unrelated script that names them without the migration
-    operation + contract markers, is NOT a built migration. All EVIDENCE (paths, operation, contract
-    markers) must appear in REAL (non-comment) content — a marker that appears only inside a ``#`` comment
-    does NOT count (Yua ruling)."""
-    if suffix not in _MIGRATION_TASK_SUFFIXES:
+    """True iff a deploy artifact actually BUILDS the FILE->DIR lifecycle storage migration. NARROWED to the
+    single supported ``.sh`` format (Yua round-3 ruling) and recognized by PARSED REAL COMMANDS, not token
+    co-occurrence: it must contain a real ``cp``/``mv`` whose resolved operands move the retired FILE ->
+    the canonical DIR DB, AND a real ``sqlite3`` command running ``integrity_check``, AND one running
+    ``wal_checkpoint``. Tokens inside echo/printf/here-doc/comments/assignments/docstrings, or in a
+    ``.py``/``.yml`` file, do NOT count."""
+    if suffix != _MIGRATION_ARTIFACT_SUFFIX:
         return False
-    code = _strip_hash_line_comments(text)  # evidence must be in real command content, not comments
-    names_file = re.search(r"/var/lib/musubi/lifecycle-work\.sqlite", code) is not None
-    names_dir = re.search(r"/var/lib/musubi/lifecycle/work\.sqlite", code) is not None
-    if not (names_file and names_dir):
-        return False
-    has_operation = any(tok in code for tok in _MIGRATION_OPERATION_TOKENS)
-    verifies_before_cutover = "integrity_check" in code
-    checkpoints_for_rollback = "wal_checkpoint" in code
-    return has_operation and verifies_before_cutover and checkpoints_for_rollback
+    moves, integrity, checkpoint = _sh_migration_evidence(text)
+    return moves and integrity and checkpoint
 
 
 def _lifecycle_storage_migration_task_files() -> list[str]:
@@ -10366,7 +10443,9 @@ def _lifecycle_storage_migration_task_files() -> list[str]:
     deploy = _P0C_REPO_ROOT / "deploy"
     hits: list[str] = []
     for p in sorted(deploy.rglob("*")):
-        if not p.is_file() or p.suffix not in ({".md"} | _MIGRATION_TASK_SUFFIXES):
+        if (
+            not p.is_file() or p.suffix != _MIGRATION_ARTIFACT_SUFFIX
+        ):  # only the supported .sh format
             continue
         try:
             text = p.read_text()
@@ -10455,6 +10534,54 @@ def test_p0c_storage_migration_task_detection_discriminates() -> None:
             else comment_only_sh + marker + "\n"
         )
         assert not _is_lifecycle_migration_artifact(".sh", one_uncommented)
+
+    # ---- Yua exact-review (round 3): PARSED real commands, NOT whole-text token co-occurrence ----
+    # markers inside an echo/printf STRING argument are not real commands (the line head is echo/printf)
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        '#!/bin/sh\necho "cp -a /var/lib/musubi/lifecycle-work.sqlite '
+        '/var/lib/musubi/lifecycle/work.sqlite integrity_check wal_checkpoint"\ntrue\n',
+    )
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        '#!/bin/sh\nprintf "%s" "cp -a /var/lib/musubi/lifecycle-work.sqlite '
+        '/var/lib/musubi/lifecycle/work.sqlite integrity_check wal_checkpoint"\n',
+    )
+    # a here-doc BODY is data, not commands — cp/sqlite3 lines inside it do not count
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        "#!/bin/sh\ncat <<EOF\ncp -a /var/lib/musubi/lifecycle-work.sqlite "
+        "/var/lib/musubi/lifecycle/work.sqlite\nsqlite3 x integrity_check\n"
+        "sqlite3 x wal_checkpoint\nEOF\ntrue\n",
+    )
+    # tokens only in ASSIGNMENTS (a MSG=... string), with no real move command, do not count
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        "#!/bin/sh\nOLD=/var/lib/musubi/lifecycle-work.sqlite\n"
+        "NEW=/var/lib/musubi/lifecycle/work.sqlite\n"
+        'MSG="cp -a integrity_check wal_checkpoint"\ntrue\n',
+    )
+    # the move OPERANDS must resolve old -> new; a REVERSED move (new -> old) does NOT count
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        "#!/bin/sh\nOLD=/var/lib/musubi/lifecycle-work.sqlite\n"
+        "NEW=/var/lib/musubi/lifecycle/work.sqlite\n"
+        'cp -a "$NEW" "$OLD"\nsqlite3 "$OLD" integrity_check\nsqlite3 "$OLD" wal_checkpoint\n',
+    )
+    # format is NARROWED to .sh: a .py docstring or .yml metadata carrying every token is NOT a migration
+    assert not _is_lifecycle_migration_artifact(
+        ".py",
+        '"""cp /var/lib/musubi/lifecycle-work.sqlite /var/lib/musubi/lifecycle/work.sqlite '
+        'shutil.copy integrity_check wal_checkpoint"""\nprint("noop")\n',
+    )
+    assert not _is_lifecycle_migration_artifact(
+        ".yml",
+        'name: "cp -a /var/lib/musubi/lifecycle-work.sqlite '
+        '/var/lib/musubi/lifecycle/work.sqlite integrity_check wal_checkpoint"\ntasks: []\n',
+    )
+    # POSITIVE control: the real contract-shaped .sh (variable-resolved operands) DOES count
+    assert _is_lifecycle_migration_artifact(".sh", _MIG_REAL_TASK_SH)
+
     # today the REAL deploy tree builds no such task -> the UNBUILT red stays RED
     assert _lifecycle_storage_migration_task_files() == []
 
