@@ -9,7 +9,7 @@ owner: tama
 phase: "8 Ops"
 tags: [section/slices, status/in-progress, type/slice, release-automation, v1.13.0-followup]
 updated: 2026-07-13
-spec-update: 6ea08a9-to-following-commit per Yua 20:57:08 #7 (slice doc must match test file)
+spec-update: c6f78e2-to-following-commit per Yua 21:21:24 #3 (slice doc must match test file; bounded SemVer grammar; semver guard)
 reviewed: true
 depends-on: []
 blocks: []

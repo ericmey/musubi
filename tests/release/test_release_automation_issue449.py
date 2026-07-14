@@ -59,7 +59,27 @@ AUTO_PIN_WF = WORKFLOWS / "auto-digest-bump.yml"
 # prefix, optional pre-release suffix, no build metadata).
 # Mirrors what release-please emits and what the v* tag
 # push trigger accepts.
-RELEASE_TAG_GRAMMAR = re.compile(r"^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$")
+# Release tag grammar accepted by this repo.
+# Per Yua 21:21:24 #2: SemVer 2.0.0 (with v prefix) + v* tag
+# push trigger acceptance.
+#
+# Rules:
+#   - Core: non-zero-prefixed numbers (e.g., 1, 10; not 01)
+#   - Prerelease: dot-separated alphanumeric identifiers,
+#     no leading/trailing dots/hyphens
+#   - Build metadata: intentionally UNSUPPORTED
+# Rejects: leading zeros, empty/dot-only prerelease, trailing
+# hyphen/dot, junk suffixes, build metadata.
+RELEASE_TAG_GRAMMAR = re.compile(
+    r"^v"
+    r"(?:0|[1-9]\d*)"
+    r"\.(?:0|[1-9]\d*)"
+    r"\.(?:0|[1-9]\d*)"
+    r"(?:-"
+    r"(?:[0-9a-zA-Z]+(?:\.[0-9a-zA-Z]+)*)"
+    r")?"
+    r"$"
+)
 
 
 # =============================================================
@@ -421,11 +441,41 @@ def assert_distinct_mutex_tags(path: Path) -> None:
     semver = semver_rules[0]
     ref = ref_rules[0]
     raw = raw_rules[0]
-    # Semver rule must have pattern and prefix=v
-    if "pattern" not in semver:
-        raise MutexChannelMissingError(f"semver rule missing 'pattern': {semver!r}")
+    # Per Yua 21:21:24 #1: pin exact allowed key sets and
+    # values for all three metadata rules. Reject unknown
+    # or duplicate fields.
+    semver_expected_keys = {"type", "pattern", "prefix", "enable"}
+    ref_expected_keys = {"type", "event", "enable"}
+    raw_expected_keys = {"type", "value", "enable"}
+    if set(semver.keys()) != semver_expected_keys:
+        raise MutexChannelMissingError(
+            f"semver rule keys must be exactly {sorted(semver_expected_keys)}, got {sorted(semver.keys())}: {semver!r}"
+        )
+    if set(ref.keys()) != ref_expected_keys:
+        raise MutexChannelMissingError(
+            f"main-ref rule keys must be exactly {sorted(ref_expected_keys)}, got {sorted(ref.keys())}: {ref!r}"
+        )
+    if set(raw.keys()) != raw_expected_keys:
+        raise MutexChannelMissingError(
+            f"raw rule keys must be exactly {sorted(raw_expected_keys)}, got {sorted(raw.keys())}: {raw!r}"
+        )
+    # Per Yua 21:21:24 #1: pin exact values
+    if semver.get("pattern") != "{{version}}":
+        raise MutexChannelMissingError(
+            f"semver rule pattern must be exactly '{{{{version}}}}', got {semver.get('pattern')!r}: {semver!r}"
+        )
     if semver.get("prefix") != "v":
-        raise MutexChannelMissingError(f"semver rule prefix must be 'v': {semver!r}")
+        raise MutexChannelMissingError(
+            f"semver rule prefix must be exactly 'v', got {semver.get('prefix')!r}: {semver!r}"
+        )
+    if ref.get("event") != "branch":
+        raise MutexChannelMissingError(
+            f"main-ref rule event must be exactly 'branch', got {ref.get('event')!r}: {ref!r}"
+        )
+    if raw.get("value") != "${{ github.event.inputs.tag }}":
+        raise MutexChannelMissingError(
+            f"raw rule value must be exactly '${{{{ github.event.inputs.tag }}}}', got {raw.get('value')!r}: {raw!r}"
+        )
     semver_enable = semver.get("enable", "")
     # Per Yua 21:05:45 #2: strict shape check. Reject
     # false/true/token-smear/OR broadening.
@@ -433,10 +483,8 @@ def assert_distinct_mutex_tags(path: Path) -> None:
     # Ref rule enable must gate on main (strict shape)
     ref_enable = ref.get("enable", "")
     _assert_supported_shape(ref_enable, MAIN_ENABLE_SHAPE, "main-ref")
-    # Raw rule must have value and gate on workflow_dispatch
-    # with non-blank input (strict shape)
-    if "value" not in raw:
-        raise MutexChannelMissingError(f"raw rule missing 'value': {raw!r}")
+    # Raw rule must gate on workflow_dispatch with non-blank
+    # input (strict shape)
     raw_enable = raw.get("enable", "")
     _assert_supported_shape(raw_enable, RAW_ENABLE_SHAPE, "manual-raw")
 
@@ -1382,6 +1430,149 @@ def test_wrong_fixture_inv4_job_if_disabled_by_false(fixture_dir: Any) -> None:
     raise InvariantError(
         "Wrong-fixture FAIL: job-if disabled by `false &&` did NOT cause the production helper to raise."
     )
+
+
+def _mutate_yaml_raw_value_main(src: Path, dst: Path) -> None:
+    """Change the raw rule's value to `main`."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "value=${{ github.event.inputs.tag }}",
+                    "value=main",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_raw_value_main(fixture_dir: Any) -> None:
+    """Wrong-fixture: raw value=main recreates channel overlap.
+
+    Per Yua 21:21:24 #1: pin raw value to exactly
+    `${{ github.event.inputs.tag }}`. Hard-coding `main`
+    lets a manual rule recreate the channel overlap.
+    """
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_raw_value_main(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: raw value=main did NOT cause the production helper to raise."
+    )
+
+
+def _mutate_yaml_semver_pattern_main(src: Path, dst: Path) -> None:
+    """Change the semver rule's pattern from `{{version}}` to `main`."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "pattern={{version}}",
+                    "pattern=main",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_semver_pattern_main(fixture_dir: Any) -> None:
+    """Wrong-fixture: semver pattern=main breaks Invariant 2.
+
+    Per Yua 21:21:24 #1: pin semver pattern to exactly
+    `{{version}}`.
+    """
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_semver_pattern_main(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: semver pattern=main did NOT cause the production helper to raise."
+    )
+
+
+def _mutate_yaml_unknown_field(src: Path, dst: Path) -> None:
+    """Add an unknown `priority=999` field to the semver rule."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                # Add a priority=999 field to the semver rule
+                tags_value = tags_value.replace(
+                    "type=semver,pattern={{version}}",
+                    "type=semver,pattern={{version}},priority=999",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_unknown_field(fixture_dir: Any) -> None:
+    """Wrong-fixture: unknown `priority=999` field breaks
+    Invariant 2.
+
+    Per Yua 21:21:24 #1: reject unknown fields.
+    """
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_unknown_field(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: unknown field did NOT cause the production helper to raise."
+    )
+
+
+def test_control_malformed_prerelease_rejected() -> None:
+    """Control 8: malformed prerelease values are rejected
+    by the bounded SemVer grammar.
+
+    Per Yua 21:21:24 #2 + #4: the resolver rejects malformed
+    prerelease (empty, dot-only, trailing hyphen/dot).
+    """
+    for bad in [
+        "v1.0.0-",  # trailing hyphen
+        "v1.0.0-.",  # dot-only prerelease
+        "v1.0.0-..",  # empty dot-only
+        "v1.0.0-!",  # junk suffix
+        "v1.0.0+build",  # build metadata not supported
+        "v1.0.0-rc.1+build",  # build metadata not supported
+    ]:
+        with pytest.raises(TagResolutionRejectError):
+            _resolve_release_tag(bad, None)
+        with pytest.raises(TagResolutionRejectError):
+            _resolve_release_tag("", bad)
+
+
+def test_control_leading_zero_core_rejected() -> None:
+    """Control 9: leading-zero core identifiers are rejected.
+
+    Per Yua 21:21:24 #2 + #4: SemVer 2.0.0 requires non-zero-
+    prefixed core numbers.
+    """
+    for bad in [
+        "v01.02.003",
+        "v01.0.0",
+        "v1.02.0",
+        "v1.0.03",
+    ]:
+        with pytest.raises(TagResolutionRejectError):
+            _resolve_release_tag(bad, None)
+        with pytest.raises(TagResolutionRejectError):
+            _resolve_release_tag("", bad)
 
 
 def _mutate_yaml_add_if_to_step(src: Path, dst: Path, exact_name: str, if_condition: str) -> None:
