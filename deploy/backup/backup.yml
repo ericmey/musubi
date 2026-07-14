@@ -84,7 +84,7 @@
     - name: Back up sqlite lifecycle ledger
       ansible.builtin.command:
         cmd: >-
-          sqlite3 /var/lib/musubi/lifecycle-work.sqlite
+          sqlite3 /var/lib/musubi/lifecycle/work.sqlite
           ".backup /mnt/snapshots/sqlite/lifecycle-work-{{ backup_timestamp }}.sqlite"
       changed_when: true
 

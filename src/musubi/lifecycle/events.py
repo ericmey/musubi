@@ -24,35 +24,18 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from musubi.lifecycle import store
 from musubi.observability.registry import default_registry
 from musubi.types.common import Err, Ok
 from musubi.types.lifecycle_event import LifecycleEvent
 
 log = logging.getLogger(__name__)
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS lifecycle_events (
-    event_id TEXT PRIMARY KEY,
-    object_id TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    object_type TEXT NOT NULL,
-    from_state TEXT NOT NULL,
-    to_state TEXT NOT NULL,
-    occurred_epoch REAL NOT NULL,
-    payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_events_object ON lifecycle_events (object_id);
-CREATE INDEX IF NOT EXISTS idx_events_ns_epoch ON lifecycle_events (namespace, occurred_epoch);
-"""
-
-_DEFAULT_BUSY_TIMEOUT_MS = 5_000
 
 _WRITE_FAILURES = default_registry().counter(
     "musubi_lifecycle_event_write_failures_total",
@@ -80,7 +63,7 @@ class LifecycleEventSink:
         db_path: Path,
         flush_every_n: int = 100,
         flush_every_s: float = 5.0,
-        busy_timeout_ms: int = _DEFAULT_BUSY_TIMEOUT_MS,
+        busy_timeout_ms: int = store.DEFAULT_BUSY_TIMEOUT_MS,
     ) -> None:
         if flush_every_n < 1:
             raise ValueError("flush_every_n must be >= 1")
@@ -94,16 +77,18 @@ class LifecycleEventSink:
         # opens through the same shared-store policy, not a bare connection.
         self._busy_timeout_ms = busy_timeout_ms
 
-        # Keep the existing standalone event-store boundary on main. C6b owns
-        # the later migration to the shared lifecycle store; C6 only changes
-        # acceptance durability and caller error propagation.
-        self._conn = sqlite3.connect(
-            str(self._db_path),
-            check_same_thread=False,
+        # Connection + schema come from the shared lifecycle store (WAL +
+        # busy_timeout policy). The sink keeps a single cross-thread autocommit
+        # connection and serialises access through ``_lock``; transactions stay
+        # explicit (``BEGIN IMMEDIATE`` in ``_write_batch``). C6's synchronous
+        # durable-on-accept contract remains unchanged.
+        self._conn = store.connect(
+            self._db_path,
+            busy_timeout_ms=busy_timeout_ms,
             isolation_level=None,  # autocommit; transactions are explicit.
+            check_same_thread=False,
         )
-        self._conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
-        self._conn.executescript(_SCHEMA)
+        store.ensure_schema(self._conn)
 
         self._lock = threading.Lock()
         self._closed = False
@@ -250,9 +235,10 @@ def _deserialise(payload: str) -> LifecycleEvent:
 
 
 def _read_all_on_new_connection(db_path: Path, busy_timeout_ms: int) -> list[LifecycleEvent]:
-    conn = sqlite3.connect(str(db_path))
+    # Post-close reads open through the shared lifecycle store so the configured
+    # busy_timeout + WAL policy applies here too — no bare-connection escape.
+    conn = store.connect(db_path, busy_timeout_ms=busy_timeout_ms)
     try:
-        conn.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
         cur = conn.execute(
             "SELECT payload FROM lifecycle_events ORDER BY occurred_epoch ASC, event_id ASC"
         )

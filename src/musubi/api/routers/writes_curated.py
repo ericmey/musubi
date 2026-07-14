@@ -7,11 +7,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from qdrant_client import QdrantClient, models
 
 from musubi.api.auth import authorize_namespace, require_auth
-from musubi.api.dependencies import get_curated_plane, get_qdrant_client, get_settings_dep
+from musubi.api.dependencies import (
+    get_curated_plane,
+    get_lifecycle_service,
+    get_qdrant_client,
+    get_settings_dep,
+)
 from musubi.api.errors import APIError
 from musubi.api.idempotency_dependency import IdempotentContext, make_idempotency_dependency
+from musubi.api.lifecycle_responses import TransitionPendingBody, pending_response
 from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
 from musubi.api.write_auth import AuthorizedWrite
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, is_transition_pending
 from musubi.lifecycle.transitions import transition
 from musubi.planes.curated import CuratedPlane
 from musubi.settings import Settings
@@ -176,12 +183,14 @@ async def patch_curated(
     "/{object_id}",
     operation_id="delete_curated.bucket=default",
     dependencies=[Depends(require_auth(access="w"))],
+    responses={202: {"model": TransitionPendingBody, "description": "Transition durably pending."}},
 )
 async def delete_curated(
     object_id: str,
     namespace: str = Query(...),
     qdrant: QdrantClient = Depends(get_qdrant_client),
     plane: CuratedPlane = Depends(get_curated_plane),
+    coordinator: LifecycleTransitionCoordinator = Depends(get_lifecycle_service),
 ) -> Response:
     # exists(), not get(): the transition below goes by object_id and never touches the
     # deserialized row, so a corrupted payload must not be able to block the archive.
@@ -195,6 +204,7 @@ async def delete_curated(
         )
     result = transition(
         qdrant,
+        coordinator=coordinator,
         object_id=object_id,
         target_state="archived",
         actor="api-delete",
@@ -206,6 +216,8 @@ async def delete_curated(
             code="BAD_REQUEST",
             detail=f"delete transition rejected: {result.error.message}",
         )
+    if is_transition_pending(result.value):
+        return pending_response(result.value)
     return Response(
         status_code=200, content=b'{"status":"archived"}', media_type="application/json"
     )

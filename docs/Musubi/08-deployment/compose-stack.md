@@ -39,7 +39,7 @@ No gateway runs on the Musubi host. **Kong on `<kong-gateway>`** terminates TLS 
 | `ollama-models` | ollama | Ollama model weights |
 | bind `/var/lib/musubi/vault` | core | Obsidian vault (read/write) |
 | bind `/var/lib/musubi/artifact-blobs` | core | Content-addressed artifact blobs |
-| bind `/var/lib/musubi/lifecycle-work.sqlite` | core | Write-log + schedule locks |
+| bind `/var/lib/musubi/lifecycle` | core + lifecycle-worker | Lifecycle DB `work.sqlite` + write-log + schedule locks |
 | bind `/var/log/musubi` | core | Structured log output |
 
 Bind mounts stay on the host (`/var/lib/musubi/...`) for easy backup + external access.
@@ -121,7 +121,7 @@ LLM_MODEL=qwen2.5:7b-instruct-q4_K_M
 BRAIN_PORT=8100
 VAULT_PATH=/var/lib/musubi/vault
 ARTIFACT_BLOB_PATH=/var/lib/musubi/artifact-blobs
-LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle-work.sqlite
+LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite
 LOG_DIR=/var/log/musubi
 
 # Auth
@@ -296,7 +296,7 @@ services:
     volumes:
       - /var/lib/musubi/vault:/var/lib/musubi/vault
       - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
-      - /var/lib/musubi/lifecycle-work.sqlite:/var/lib/musubi/lifecycle-work.sqlite
+      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
       - /var/log/musubi:/var/log/musubi
     networks: [musubi-net]
     ports:

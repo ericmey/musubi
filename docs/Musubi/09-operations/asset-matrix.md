@@ -26,9 +26,9 @@ Where each piece of data lives, who owns it, and what happens when the store is 
 | Artifact (metadata) | Qdrant (artifact head row) | — | Qdrant snapshot (6h) | 6 hours |
 | Artifact chunks (text + vector) | Qdrant `musubi_artifact_chunks` | (regenerable from blob) | Qdrant snapshot (6h) | 6 hours (faster via re-chunk) |
 | Thoughts | Qdrant `musubi_thoughts` | — | Qdrant snapshot (6h) | 6 hours |
-| Lifecycle events | sqlite `lifecycle-work.sqlite:lifecycle_events` | — | sqlite `.backup` (daily) → SATA | 24 hours |
-| Write-log (vault ↔ Qdrant echo) | sqlite `lifecycle-work.sqlite:write_log` | — | sqlite `.backup` (daily) | (can regenerate partially) |
-| Schedule locks | sqlite `lifecycle-work.sqlite:schedule_locks` | — | sqlite `.backup` (daily) | (stateless; fine to lose) |
+| Lifecycle events | sqlite `lifecycle/work.sqlite:lifecycle_events` | — | sqlite `.backup` (daily) → SATA | 24 hours |
+| Write-log (vault ↔ Qdrant echo) | sqlite `lifecycle/work.sqlite:write_log` | — | sqlite `.backup` (daily) | (can regenerate partially) |
+| Schedule locks | sqlite `lifecycle/work.sqlite:schedule_locks` | — | sqlite `.backup` (daily) | (stateless; fine to lose) |
 | Config | `/etc/musubi/` + `.env` | — | Ansible git repo + `.vault.yml` | Git push (per change) |
 | Secrets | 1Password + `.vault.yml` | — | 1Password | Real-time |
 | OAuth tokens (issued) | JWT signed, not persisted | — | Re-issue from signing key | — |
@@ -80,7 +80,7 @@ Where each piece of data lives, who owns it, and what happens when the store is 
 
 **Backup:** full snapshot every 6 hours (via Qdrant snapshot API) → rsync to SATA.
 
-### sqlite (`/var/lib/musubi/lifecycle-work.sqlite`)
+### sqlite (`/var/lib/musubi/lifecycle/work.sqlite`)
 
 **Owns:**
 
@@ -92,7 +92,7 @@ Where each piece of data lives, who owns it, and what happens when the store is 
 
 **Write access:** Lifecycle Worker, Vault Watcher.
 
-**Backup:** daily `sqlite3 lifecycle-work.sqlite .backup /mnt/snapshots/lifecycle.sqlite.<ts>`. Point-in-time restore via replay of `lifecycle_events`.
+**Backup:** daily `sqlite3 lifecycle/work.sqlite .backup /mnt/snapshots/lifecycle.sqlite.<ts>`. Point-in-time restore via replay of `lifecycle_events`.
 
 ## Derivability
 

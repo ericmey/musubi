@@ -115,12 +115,12 @@ to the snapshot created by the 6-hour timer right before the attempt.
 
 ```bash
 # Backup the current sqlite aside, in case you need to diff later.
-sudo cp -a /var/lib/musubi/lifecycle-work.sqlite \
-  /var/lib/musubi/lifecycle-work.sqlite.pre-restore.$(date -u +%s) || true
+sudo cp -a /var/lib/musubi/lifecycle/work.sqlite \
+  /var/lib/musubi/lifecycle/work.sqlite.pre-restore.$(date -u +%s) || true
 
-sudo cp -a "$SNAP/sqlite/work.sqlite" /var/lib/musubi/lifecycle-work.sqlite
-sudo chown musubi:musubi /var/lib/musubi/lifecycle-work.sqlite
-sudo chmod 0640 /var/lib/musubi/lifecycle-work.sqlite
+sudo cp -a "$SNAP/sqlite/work.sqlite" /var/lib/musubi/lifecycle/work.sqlite
+sudo chown musubi:musubi /var/lib/musubi/lifecycle/work.sqlite
+sudo chmod 0640 /var/lib/musubi/lifecycle/work.sqlite
 ```
 
 **Expected output:** no output on success (the `cp` is quiet).
@@ -128,7 +128,7 @@ sudo chmod 0640 /var/lib/musubi/lifecycle-work.sqlite
 **Destructive:** yes — overwrites the current lifecycle-work SQLite.
 The `.pre-restore.<epoch>` copy is your immediate undo.
 
-**Rollback:** `sudo cp -a /var/lib/musubi/lifecycle-work.sqlite.pre-restore.<epoch> /var/lib/musubi/lifecycle-work.sqlite`
+**Rollback:** `sudo cp -a /var/lib/musubi/lifecycle/work.sqlite.pre-restore.<epoch> /var/lib/musubi/lifecycle/work.sqlite`
 restores the pre-recovery state.
 
 ---

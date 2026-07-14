@@ -59,7 +59,7 @@ pending operator review.
 
 - Qdrant collections snapshot every six hours and copy to `/var/lib/musubi/backups/<timestamp>/qdrant/` (host-local, live). The ansible path below additionally copies to `/mnt/snapshots/qdrant/` when that tier exists.
 - The vault pushes to its private git remote every 15 minutes; rsync to warm snapshots is the fallback.
-- `lifecycle-work.sqlite` and cursor files copy hourly into `/mnt/snapshots/sqlite/` and `/mnt/snapshots/cursors/`.
+- `lifecycle/work.sqlite` and cursor files copy hourly into `/mnt/snapshots/sqlite/` and `/mnt/snapshots/cursors/`.
 - Artifact blobs rsync hourly with `--delete-after`; content-addressed paths make repeats idempotent.
 - Warm snapshots can be pushed to encrypted offsite storage with restic and Backblaze B2 credentials from Ansible Vault.
 

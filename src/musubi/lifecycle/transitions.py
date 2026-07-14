@@ -27,6 +27,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 from qdrant_client import QdrantClient, models
 
+from musubi.lifecycle.coordinator import (
+    LifecycleTransitionCoordinator,
+    TransitionFinal,
+    TransitionIntent,
+    TransitionPending,
+)
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.store.names import COLLECTION_NAMES
 from musubi.types.common import (
@@ -134,6 +140,7 @@ _COLLECTION_TO_OBJECT_TYPE: dict[str, ObjectType] = {
 def transition(
     client: QdrantClient,
     *,
+    coordinator: LifecycleTransitionCoordinator,
     object_id: KSUID,
     target_state: LifecycleState,
     actor: str,
@@ -142,16 +149,14 @@ def transition(
     correlation_id: str = "",
     sink: LifecycleEventSink | None = None,
     expected_version: int | None = None,
-) -> Result[TransitionResult, TransitionError]:
+) -> Result[TransitionResult | TransitionPending, TransitionError]:
     """Apply a state change to ``object_id``, recording an audit event.
 
-    The ``sink`` argument may be ``None`` in contexts that have not yet
-    configured a persistent events store (early boot, ad-hoc tests). When
-    provided, the event is recorded via :meth:`LifecycleEventSink.record`
-    *after* the Qdrant payload update — the order matters because a failed
-    sqlite write is surfaced as ``lifecycle_event_write_failed`` rather than
-    falsely reporting success. Repairing the already-applied Qdrant mutation
-    is the linked C6b transactional-outbox responsibility.
+    Lookup, legal-transition checks, lineage-cycle validation, and deterministic
+    intent construction remain here. The required injected ``coordinator`` owns
+    durable admission, version-fenced mutation, readback, event persistence, and
+    reconciliation. ``sink`` remains as a source-compatible argument for callers
+    being migrated in H5; it is deliberately not a second persistence path.
     """
     if not reason:
         return Err(
@@ -224,63 +229,49 @@ def transition(
             )
         )
 
+    del sink
     now = utc_now()
-    new_payload = dict(payload)
-    new_payload.update(
-        state=target_state,
-        version=current_version + 1,
-        updated_at=now.isoformat(),
-        updated_epoch=epoch_of(now),
-    )
-    new_payload.update(lineage_patch)
-
-    event = LifecycleEvent(
+    lineage = lineage_updates or LineageUpdates()
+    intent = TransitionIntent(
+        collection=collection,
         object_id=object_id,
-        object_type=object_type,
-        namespace=payload["namespace"],
-        from_state=current_state,
-        to_state=target_state,
+        namespace=str(payload["namespace"]),
+        expected_version=current_version if expected_version is None else expected_version,
+        target_state=target_state,
         actor=actor,
         reason=reason,
-        lineage_changes=(lineage_updates.to_event_changes() if lineage_updates else {}),
-        correlation_id=correlation_id,
+        updated_at=now.isoformat(),
+        updated_epoch=epoch_of(now),
+        superseded_by=lineage.superseded_by,
+        supersedes=tuple(lineage.supersedes),
+        merged_from=tuple(lineage.merged_from),
+        contradicts=tuple(lineage.contradicts),
     )
-
-    # Only commit the payload after the event has been validated — the
-    # LifecycleEvent constructor itself checks the transition is legal. Any
-    # ValueError at this point is an invariant bug, not a caller error.
-    try:
-        _point_id = _lookup_point_id(client, collection=collection, object_id=object_id)
-        client.set_payload(
-            collection_name=collection,
-            payload=new_payload,
-            points=[_point_id],
-        )
-    except Exception as exc:  # pragma: no cover - only hit on qdrant client bug
+    outcome = coordinator.transition(intent)
+    if isinstance(outcome, Err):
         return Err(
             error=TransitionError(
-                code="invariant_violation",
-                message=f"qdrant set_payload failed: {exc!r}",
+                code=outcome.error.code,
+                message=f"lifecycle transition failed: {outcome.error.code}",
                 from_state=current_state,
                 to_state=target_state,
             )
         )
-
-    if sink is not None:
-        event_result = sink.record(event)
-        if isinstance(event_result, Err):
-            return Err(
-                error=TransitionError(
-                    code="lifecycle_event_write_failed",
-                    message=(
-                        "Lifecycle mutation committed, but lifecycle event persistence failed; "
-                        "atomic recovery remains tracked by C6b."
-                    ),
-                    from_state=current_state,
-                    to_state=target_state,
-                )
-            )
-
+    if isinstance(outcome.value, TransitionPending):
+        return Ok(value=outcome.value)
+    assert isinstance(outcome.value, TransitionFinal)
+    event = LifecycleEvent(
+        event_id=outcome.value.event_id,
+        object_id=object_id,
+        object_type=object_type,
+        namespace=str(payload["namespace"]),
+        from_state=current_state,
+        to_state=target_state,
+        actor=actor,
+        reason=reason,
+        lineage_changes=lineage.to_event_changes(),
+        correlation_id=correlation_id,
+    )
     return Ok(
         value=TransitionResult(
             object_id=object_id,

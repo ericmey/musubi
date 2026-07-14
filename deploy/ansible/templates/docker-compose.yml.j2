@@ -51,11 +51,10 @@ services:
       - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
       - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
       - /var/log/musubi:/var/log/musubi
-    # The core image ships a HEALTHCHECK against :8100. The worker exposes
-    # `/metrics` on :8101 instead — use that for liveness signal so
-    # `restart: unless-stopped` actually fires when the scrape server dies.
+    # Readiness, not merely scrape-server liveness: the gauge rises only after
+    # shared lifecycle storage opens and a worker-only reconcile pass succeeds.
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8101/metrics', timeout=2).status == 200 else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; b=urllib.request.urlopen('http://localhost:8101/metrics', timeout=2).read().decode(); sys.exit(0 if 'musubi_lifecycle_coordinator_ready 1.0' in b else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3

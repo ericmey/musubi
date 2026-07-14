@@ -63,7 +63,7 @@ Worker:
 2. For each point, fetches content.
 3. Encodes with the new model.
 4. `update_vectors` on the point with the new named vector.
-5. Tracks progress via `backfill_cursor` in `lifecycle-work.sqlite`.
+5. Tracks progress via `backfill_cursor` in `lifecycle/work.sqlite`.
 
 Resumable. Takes ~N minutes where N ≈ points / (batch × throughput).
 

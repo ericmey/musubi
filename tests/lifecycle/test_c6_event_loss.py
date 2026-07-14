@@ -46,8 +46,9 @@ import pytest
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, PointStruct, VectorParams
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.events import LifecycleEventSink
-from musubi.lifecycle.transitions import TransitionError, transition
+from musubi.lifecycle.transitions import transition
 from musubi.observability.registry import default_registry, render_text_format
 from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
@@ -486,8 +487,8 @@ def _record_callsites() -> set[str]:
 def test_record_callsite_inventory_is_exactly_reviewed() -> None:
     """Guard (green now + post-fix): the set of `sink.record(` callsites must be EXACTLY the reviewed
     set — equality, not subset — so a NEW callsite fails this guard and forces Result-handling review.
-    The one current callsite is transitions.py (the C6b mutation-first boundary)."""
-    reviewed = {"transitions.py"}
+    C6b removed the legacy callsite: the coordinator now persists the event atomically with FINAL."""
+    reviewed: set[str] = set()
     seen = _record_callsites()
     assert seen == reviewed, (
         f"record() callsite inventory changed: seen={seen} reviewed={reviewed} — "
@@ -520,7 +521,7 @@ class _MockFailingSink:
         return Err(error=object())
 
 
-def test_transition_callsite_injects_sink_err_yields_caller_err() -> None:
+def test_transition_ignores_retired_legacy_sink_boundary(tmp_path: Path) -> None:
     client = QdrantClient(":memory:")
     client.create_collection(
         collection_name="musubi_episodic",
@@ -545,6 +546,9 @@ def test_transition_callsite_injects_sink_err_yields_caller_err() -> None:
 
     result = transition(
         client,
+        coordinator=LifecycleTransitionCoordinator(
+            client=client, db_path=tmp_path / "lifecycle.db"
+        ),
         object_id=object_id,
         target_state="matured",
         actor="test",
@@ -561,8 +565,4 @@ def test_transition_callsite_injects_sink_err_yields_caller_err() -> None:
     assert points[0].payload is not None
     assert points[0].payload["state"] == "matured"
 
-    if isinstance(result, Ok):
-        raise DefectStillPresent("transition() returned Ok after sink.record() returned Err")
-    assert isinstance(result, Err)
-    assert isinstance(result.error, TransitionError)
-    assert result.error.code == "lifecycle_event_write_failed"
+    assert isinstance(result, Ok)
