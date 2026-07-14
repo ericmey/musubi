@@ -25,6 +25,14 @@ contract. **G1 stays strict-RED throughout Phase 1** (flips only under H5,
 [[_slices/slice-h5-unify-state-mutation]]). No merge/deploy until independent
 review.
 
+## Specs to implement
+
+- [[_slices/slice-c6b-phase1-source-impl]] — this slice's own Test Contract (below): the full accepted
+  C6b atomicity contract this source cut flips (`tests/lifecycle/test_c6b_atomicity.py`, 90 functions
+  incl. 6 async R21 maturation reds), plus the S1/D0 source proofs it introduced.
+- [[08-deployment/compose-stack]] — the compose-stack spec whose Test Contract owns the 8 root-compose
+  regression tests that D0's `lifecycle-worker` co-change touches.
+
 ## Sequencing
 
 - **Deliverable-0 (this slice, pre-S1, ZERO src):** §E config-drift resolution —
@@ -110,6 +118,133 @@ stays the frozen, accepted contract (PR434 draft), and this branch carries only 
 flips. `docker-compose.yml` + `tests/ops/test_compose.py` overlap only with the `done`
 `slice-ops-compose` (advisory warning by design; the ops-inventory co-change is
 Yua-authorized narrow).
+
+## Test Contract
+
+> Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **100** functions in this
+> slice's own contract below + **8** from `08-deployment/compose-stack` = **108** `tc-coverage` bullets,
+> 0 missing. Status from runtime collection (92 passed / 59 xfailed instances across the self files),
+> NOT from tc-coverage's classifier — which mislabels variable-reason strict-xfail reds as "passing".
+> Strict-xfail acceptance reds (R1–R22, guards G2a/G2b/G3) are owed to S2–S7; **G1
+> (`test_g1_no_direct_state_transition_setpayload_outside_coordinator`) is closure-only and flips ONLY
+> under H5** ([[_slices/slice-h5-unify-state-mutation]]).
+
+### Accepted atomicity — R acceptance reds & controls (`test_c6b_atomicity.py`) (46)
+1. `test_r1_durable_intent_persisted_before_qdrant_mutation` — strict-xfail — acceptance red (owed S2-S7)
+2. `test_r2_durable_begin_failure_blocks_qdrant_mutation` — strict-xfail — acceptance red (owed S2-S7)
+3. `test_r3_transient_failure_is_ok_pending_then_reconciles` — strict-xfail — acceptance red (owed S2-S7)
+4. `test_r4_terminal_failure_is_err_abandoned_no_final` — strict-xfail — acceptance red (owed S2-S7)
+5. `test_r5_crash_after_pending_before_qdrant` — strict-xfail — acceptance red (owed S2-S7)
+6. `test_r6_crash_after_qdrant_before_applied` — strict-xfail — acceptance red (owed S2-S7)
+7. `test_r7_crash_after_applied_before_finalize` — strict-xfail — acceptance red (owed S2-S7)
+8. `test_r8_finalize_transaction_is_atomic` — strict-xfail — acceptance red (owed S2-S7)
+9. `test_r9_idempotent_replay` — strict-xfail — acceptance red (owed S2-S7)
+10. `test_r10_operation_key_idempotent_across_caller_retries` — strict-xfail — acceptance red (owed S2-S7)
+11. `test_r11_single_active_intent_per_object` — strict-xfail — acceptance red (owed S2-S7)
+12. `test_r12_hard_version_fence_refuses_stale` — strict-xfail — acceptance red (owed S2-S7)
+13. `test_r13_conditional_apply_full_readback_patch_sha` — strict-xfail — acceptance red (owed S2-S7)
+14. `test_r14_hard_pending_cap_admission_backpressure` — strict-xfail — acceptance red (owed S2-S7)
+15. `test_r14_two_process_admission_race_holds_cap` — strict-xfail — acceptance red (owed S2-S7)
+16. `test_r15_transient_never_abandoned_by_attempt_count` — strict-xfail — acceptance red (owed S2-S7)
+17. `test_r16_two_process_claim_race_one_owner` — strict-xfail — acceptance red (owed S2-S7)
+18. `test_r16_valid_lease_exclusive_processing` — strict-xfail — acceptance red (owed S2-S7)
+19. `test_r17_crash_reclaim_readback_confirms_no_reapply` — strict-xfail — acceptance red (owed S2-S7)
+20. `test_r17_expired_owner_reclaim_safe` — strict-xfail — acceptance red (owed S2-S7)
+21. `test_r18_no_poison_row_starvation` — strict-xfail — acceptance red (owed S2-S7)
+22. `test_r19_pii_free_content_and_bounded_observability` — strict-xfail — acceptance red (owed S2-S7)
+23. `test_r20_rollback_refuses_nonterminal_maintenance_lifecycle_and_cleanup` — strict-xfail — acceptance red (owed S2-S7)
+24. `test_r20_two_process_admission_drain_barrier_no_overlap` — strict-xfail — acceptance red (owed S2-S7)
+25. `test_r20_two_process_reconciler_drain_barrier_no_overlap` — strict-xfail — acceptance red (owed S2-S7)
+26. `test_r21_callsite_pending_arm_rule_discriminates` — GREEN — control/discriminator
+27. `test_r21_deferred_accounting_check_discriminates` — GREEN — control/discriminator
+28. `test_r21_full_defer_acceptance_discriminates` — GREEN — control/discriminator
+29. `test_r21_maturation_callsite_inventory_control_sees_exact_six` — GREEN — control/discriminator
+30. `test_r21_maturation_callsite_pending_arm_inventory` — strict-xfail — acceptance red (owed S2-S7)
+31. `test_r21_maturation_concept_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
+32. `test_r21_maturation_concept_demotion_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
+33. `test_r21_maturation_episodic_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
+34. `test_r21_maturation_episodic_demotion_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
+35. `test_r21_maturation_provisional_ttl_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
+36. `test_r21_maturation_supersession_backlink_not_run_on_pending` — strict-xfail — acceptance red (owed S2-S7)
+37. `test_r21_pending_body_schema_discriminates` — GREEN — control/discriminator
+38. `test_r21_route_artifact_pending_maps_to_202` — strict-xfail — acceptance red (owed S2-S7)
+39. `test_r21_route_controls_final_200_and_err_typed` — GREEN — route control
+40. `test_r21_route_curated_pending_maps_to_202` — strict-xfail — acceptance red (owed S2-S7)
+41. `test_r21_route_episodic_pending_maps_to_202` — strict-xfail — acceptance red (owed S2-S7)
+42. `test_r21_route_lifecycle_pending_maps_to_202` — strict-xfail — acceptance red (owed S2-S7)
+43. `test_r21_route_pending_body_matches_typed_schema` — strict-xfail — acceptance red (owed S2-S7)
+44. `test_r21_route_pending_check_discriminates_each_failure_mode` — GREEN — control/discriminator
+45. `test_r22_outcome_validator_discriminates` — GREEN — control/discriminator
+46. `test_r22_two_process_race_one_winner_mutates_loser_fenced` — strict-xfail — acceptance red (owed S2-S7)
+
+### Accepted atomicity — guards G1/G2a/G2b/G3 (9)
+47. `test_g1_no_direct_state_transition_setpayload_outside_coordinator` — strict-xfail — G1 closure-only, flips ONLY under H5
+48. `test_g1_present_denominator_control_sees_all_known_bypasses` — GREEN — control/discriminator
+49. `test_g1_rule_discriminates_state_dataflow_from_unrelated_payloads` — GREEN — control/discriminator
+50. `test_g2a_coordinator_transition_callsite_inventory` — strict-xfail — acceptance red (owed S2-S7)
+51. `test_g2a_rule_discriminates_coordinator_callsites` — GREEN — control/discriminator
+52. `test_g2b_cleanup_terminal_sql_shape` — strict-xfail — acceptance red (owed S2-S7)
+53. `test_g2b_rule_discriminates_cleanup_sql_shape` — GREEN — control/discriminator
+54. `test_g3_coordinator_transition_result_consumed` — strict-xfail — acceptance red (owed S2-S7)
+55. `test_g3_rule_discriminates_result_consumed` — GREEN — control/discriminator
+
+### Accepted atomicity — P0c wiring/storage/settings (33)
+56. `test_p0c_active_storage_parity_rule_discriminates` — GREEN — control/discriminator
+57. `test_p0c_anchor_ansible_compose_dir_mount_and_worker` — GREEN — control/discriminator
+58. `test_p0c_anchor_ansible_env_production_dir` — GREEN — control/discriminator
+59. `test_p0c_anchor_bootstrap_creates_lifecycle_dir_with_musubi_0750` — GREEN — control/discriminator
+60. `test_p0c_anchor_live_scheduler_backup_dir` — GREEN — control/discriminator
+61. `test_p0c_anchor_restore_yml_dir` — GREEN — control/discriminator
+62. `test_p0c_api_and_worker_resolve_same_active_storage_path` — strict-xfail — acceptance red (owed S2-S7)
+63. `test_p0c_bootstrap_injection_rule_discriminates` — GREEN — control/discriminator
+64. `test_p0c_bootstrap_injects_app_lifetime_coordinator` — strict-xfail — acceptance red (owed S2-S7)
+65. `test_p0c_config_surfaces_all_resolve` — GREEN — control/discriminator
+66. `test_p0c_connection_policy_rule_discriminates` — GREEN — control/discriminator
+67. `test_p0c_deployment_active_storage_parity` — GREEN — D0/S1 flip
+68. `test_p0c_drift_backup_readme` — GREEN — D0/S1 flip
+69. `test_p0c_drift_backup_yml` — GREEN — D0/S1 flip
+70. `test_p0c_drift_docker_env_production_example` — GREEN — D0/S1 flip
+71. `test_p0c_drift_env_example` — GREEN — D0/S1 flip
+72. `test_p0c_drift_manual_recovery_runbook` — GREEN — D0/S1 flip
+73. `test_p0c_drift_parsers_discriminate` — GREEN — control/discriminator
+74. `test_p0c_drift_root_compose_dir_mount_and_worker` — GREEN — D0/S1 flip
+75. `test_p0c_new_lifecycle_setting_exists_and_validates` — MIXED — busy_timeout GREEN (S1); 8 other params strict-xfail (S2-S6)
+76. `test_p0c_readiness_probe_rule_discriminates` — GREEN — control/discriminator
+77. `test_p0c_reconcile_is_worker_only` — strict-xfail — acceptance red (owed S2-S7)
+78. `test_p0c_same_active_storage_rule_discriminates` — GREEN — control/discriminator
+79. `test_p0c_settings_validators_discriminate` — GREEN — control/discriminator
+80. `test_p0c_shared_file_requires_wal_and_busy_timeout` — GREEN — D0/S1 flip
+81. `test_p0c_storage_migration_contract_red_proof` — GREEN — migration contract red-proof control
+82. `test_p0c_storage_migration_task_detection_discriminates` — GREEN — control/discriminator
+83. `test_p0c_storage_migration_task_unbuilt` — strict-xfail — acceptance red (owed S2-S7)
+84. `test_p0c_storage_migration_verify_checks_all_three` — GREEN — D0/S1 flip
+85. `test_p0c_worker_builds_coordinator_and_wires_reconcile` — strict-xfail — acceptance red (owed S2-S7)
+86. `test_p0c_worker_healthcheck_consumes_readiness_signal` — strict-xfail — acceptance red (owed S2-S7)
+87. `test_p0c_worker_only_reconcile_rule_discriminates` — GREEN — control/discriminator
+88. `test_p0c_worker_reconcile_rule_discriminates` — GREEN — control/discriminator
+
+### Accepted atomicity — red-proof discriminator controls (2)
+89. `test_crash_red_proof_correct_passes_and_wrong_fails` — GREEN — crash red-proof discriminator control
+90. `test_red_proof_correct_passes_and_wrong_fails` — GREEN — red-proof discriminator control
+
+### S1 store-policy proofs (`test_s1_store_policy.py`) (8)
+91. `test_post_close_read_uses_shared_store_policy_with_configured_timeout` — GREEN — D0/S1 flip
+92. `test_establish_wal_does_not_retry_a_non_lock_error` — GREEN — D0/S1 flip
+93. `test_establish_wal_zero_timeout_is_a_single_attempt` — GREEN — D0/S1 flip
+94. `test_establish_wal_retry_respects_total_deadline_without_multiplying` — GREEN — D0/S1 flip
+95. `test_establish_wal_succeeds_after_lock_and_restores_configured_timeout` — GREEN — D0/S1 flip
+96. `test_connect_rejects_invalid_busy_timeout_before_opening_sqlite` — GREEN — D0/S1 flip
+97. `test_settings_busy_timeout_accepts_in_bounds` — GREEN — D0/S1 flip
+98. `test_settings_busy_timeout_rejects_out_of_bounds` — GREEN — D0/S1 flip
+
+### D0 lifecycle-storage doc-drift (`test_lifecycle_storage_doc_drift.py`) (2)
+99. `test_named_current_state_docs_reject_the_retired_lifecycle_file` — GREEN — D0/S1 flip
+100. `test_scan_discriminates_retired_vs_canonical` — GREEN — control/discriminator
+
+**Cross-slice regression gate (NOT part of this parsed Test Contract):**
+`tests/lifecycle/test_c6_event_loss.py` (1 passed / 8 xfailed, frozen) is owned by the active C6 slice
+[[_slices/slice-c6-lifecycle-event-loss]]. This source cut keeps its disposition byte-for-byte unchanged
+(verified every gate) but does not implement or own it, so it is excluded from the parsed denominator.
 
 ## Status
 
