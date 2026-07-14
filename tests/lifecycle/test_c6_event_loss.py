@@ -43,10 +43,13 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from musubi.lifecycle.events import LifecycleEventSink
+from musubi.lifecycle.transitions import TransitionError, transition
 from musubi.observability.registry import default_registry, render_text_format
-from musubi.types.common import Err, Ok
+from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
 
 #: Named before source (Yua): a BOUNDED, NO-LABEL shared-registry counter; the fix increments it +1 per
@@ -507,3 +510,64 @@ def test_record_result_is_consumed_not_bare_expression() -> None:
         raise DefectStillPresent(
             f"sink.record() Result ignored as a bare expression at transitions.py:{bare}"
         )
+
+
+class _MockFailingSink:
+    """Return a refused write so the sole production caller must propagate it."""
+
+    def record(self, event: LifecycleEvent) -> object:
+        del event
+        return Err(error=object())
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="C6 caller drops sink.record() Err and falsely returns Ok after Qdrant mutation",
+)
+def test_transition_callsite_injects_sink_err_yields_caller_err() -> None:
+    client = QdrantClient(":memory:")
+    client.create_collection(
+        collection_name="musubi_episodic",
+        vectors_config=VectorParams(size=2, distance=Distance.COSINE),
+    )
+    object_id = generate_ksuid()
+    client.upsert(
+        collection_name="musubi_episodic",
+        points=[
+            PointStruct(
+                id="11111111-1111-1111-1111-111111111111",
+                vector=[0.1, 0.2],
+                payload={
+                    "object_id": object_id,
+                    "namespace": "test/presence/episodic",
+                    "state": "provisional",
+                    "version": 1,
+                },
+            )
+        ],
+    )
+
+    result = transition(
+        client,
+        object_id=object_id,
+        target_state="matured",
+        actor="test",
+        reason="test lifecycle event refusal",
+        sink=cast(LifecycleEventSink, _MockFailingSink()),
+        expected_version=1,
+    )
+
+    points, _ = client.scroll(
+        collection_name="musubi_episodic",
+        with_payload=True,
+        limit=1,
+    )
+    assert points[0].payload is not None
+    assert points[0].payload["state"] == "matured"
+
+    if isinstance(result, Ok):
+        raise DefectStillPresent("transition() returned Ok after sink.record() returned Err")
+    assert isinstance(result, Err)
+    assert isinstance(result.error, TransitionError)
+    assert result.error.code == "lifecycle_event_write_failed"
