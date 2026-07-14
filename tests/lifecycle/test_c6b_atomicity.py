@@ -6486,18 +6486,21 @@ def test_r8_finalize_transaction_is_atomic(env: tuple[QdrantClient, _Seed, Path]
 # ---- R22: two DIFFERENT transitions race on one object, TWO REAL PROCESSES (Yua R22 rebuild) ------- #
 #
 # Yua rejected the sequential version. This is a real race: two OS processes with DIFFERENT operation
-# keys, DIFFERENT targets, the SAME expected_version, on ONE object, over a SHARED ON-DISK Qdrant + SQLite,
-# synchronized at before_pending_commit. Exactly one wins the atomic begin (partial unique index) and
-# ACTUALLY mutates the on-disk Qdrant (the winner lazy-opens it). The loser is rejected either at begin
-# (active_intent_exists - never opens Qdrant) OR at the version fence (version_fence_violation - it DOES
-# lazy-open Qdrant and issues a zero-match conditional attempt, so its readback shows the winner's target
-# and it never mutates). Each child exits with an op-DISTINCT winner code so the parent correlates the
-# winning op to the single FINAL row, its audit event to_state, the single effective-apply marker, and the
-# exact Qdrant target/version - a loser that overwrote-then-abandoned while the other finalized cannot
-# pass. Wrong candidate: non_atomic_cas ONLY (index off AND fence off -> the real lost update / two
-# effective applies). R11 owns the naive-check-then-insert (no_unique_index) proof; in R22 the index and
-# the fence are belt-and-suspenders, so removing only the index is caught by the fence and is not an R22
-# discriminator.
+# keys, DIFFERENT targets, the SAME expected_version, on ONE object, over a SHARED ON-DISK Qdrant + SQLite.
+# It is DETERMINISTIC by an EXPLICIT cross-process rendezvous at the atomic apply boundary (Yua's
+# flake-harden ruling; see _r22_child_source for the mechanism + the two-winner diagnosis it fixes), NOT by
+# scheduler luck: the WINNER runs its whole transition and FREES the on-disk Qdrant lock before signalling;
+# the LOSER blocks at before_pending_commit until then, so it inserts AFTER the winner's row is FINAL (its
+# PENDING insert passes ux_active_intent) and issues a version-fenced conditional apply against a FREE
+# Qdrant already at the winner's version -> a guaranteed ZERO-match -> version_fence_violation, so its
+# readback shows the winner's target and it NEVER mutates. Each child exits with an op-DISTINCT winner code
+# (a WIN requires an Ok that actually FINALIZED) so the parent correlates the winning op to the single FINAL
+# row, its audit event to_state, the single effective-apply marker, and the exact Qdrant target/version - a
+# loser that overwrote-then-abandoned while the other finalized cannot pass. Wrong candidate: non_atomic_cas
+# ONLY (index off AND fence off -> the real lost update / two effective applies: the loser applies WITHOUT
+# the version fence and finalizes a second winner). R11 owns the naive-check-then-insert (no_unique_index)
+# proof; in R22 the index and the fence are belt-and-suspenders, so removing only the index is caught by the
+# fence and is not an R22 discriminator - R22 discriminates on the FENCE at the apply boundary.
 
 _R22_WIN_A = 31  # op-a22 (-> matured) won
 _R22_WIN_B = 34  # op-b22 (-> demoted) won
@@ -6507,6 +6510,7 @@ _R22_FENCE = 33
 
 def _r22_child_source(
     *,
+    role: str,
     mode: str,
     db_path: Path,
     qdrant_path: Path,
@@ -6516,21 +6520,60 @@ def _r22_child_source(
     win_code: int,
     barrier_dir: Path,
 ) -> str:
+    """A child of the R22 two-process apply-boundary proof, hardened to DETERMINISM by an EXPLICIT
+    cross-process rendezvous at the claimed atomic boundary (Yua's flake-harden ruling — no timing,
+    no scheduler-luck). The WINNER runs its whole transition (INSERT PENDING -> version-fenced apply
+    -> APPLIED -> FINAL), then RELEASES the on-disk Qdrant single-writer lock (closes its client)
+    and only THEN signals `winner_done`. The LOSER blocks at `before_pending_commit` until
+    `winner_done`, so it ALWAYS inserts AFTER the winner's row is FINAL (its PENDING insert passes
+    ux_active_intent, which fences only PENDING/APPLIED) and applies against a FREE Qdrant already at
+    the winner's version -> its version-fenced conditional apply is a guaranteed ZERO-match ->
+    version_fence_violation, EVERY run. This removes BOTH nondeterminisms the original harness left
+    free-raced: (1) which child finalizes first, and (2) the on-disk Qdrant lock artifact, where a
+    loser whose lazy-open lost the storage lock raised a RuntimeError that classified 'unknown' ->
+    non-terminal -> Ok(Pending) and was mis-scored as a WIN (the two-winner flake). A WIN now
+    additionally requires an Ok whose value is FINAL, so a stuck-Pending can never count as an
+    effective winner. The correct reference is deterministically one-winner (loser fenced) while
+    non_atomic_cas (fence off) still lets the loser mutate+finalize -> two winners, every run."""
+    done = f"os.path.join({str(barrier_dir)!r}, 'winner_done')"
+    if role == "winner":
+        cp = "def _cp(name):\n    pass\n"
+        after = (
+            # RELEASE the on-disk Qdrant single-writer lock so the loser can open the shared store,
+            # THEN publish the rendezvous signal (order matters: signal only after the lock is free).
+            "try:\n"
+            "    if _c._client is not None: _c._client.close()\n"
+            "except Exception:\n"
+            "    pass\n"
+            f"open({done}, 'w').close()\n"
+        )
+    else:  # loser: block at the atomic boundary until the winner has finalized AND freed Qdrant
+        cp = (
+            "def _cp(name):\n"
+            "    if name == 'before_pending_commit':\n"
+            f"        for _ in range(int({_RACE_BARRIER_TIMEOUT!r} / 0.02)):\n"
+            f"            if os.path.exists({done}): break\n"
+            "            _time.sleep(0.02)\n"
+            "        else:\n"
+            "            raise SystemExit('r22 winner_done rendezvous timeout')\n"
+        )
+        after = ""
     return (
-        "import os, warnings\n"
+        "import os, time as _time, warnings\n"
         "from qdrant_client import QdrantClient\n"
         "from musubi.types.common import Ok\n"
         "from tests.lifecycle.test_c6b_atomicity import _RefCoordinator as _Coord, _RefIntent as _Intent\n"
-        + _barrier_source(barrier_dir, "begin", 2)
-        + f"_c = _Coord(db_path={str(db_path)!r}, qdrant_path={str(qdrant_path)!r}, mode={mode!r})\n"
-        "def _cp(name):\n"
-        "    if name == 'before_pending_commit': _await_barrier()\n"
-        "_c._checkpoint = _cp\n"
+        f"_c = _Coord(db_path={str(db_path)!r}, qdrant_path={str(qdrant_path)!r}, mode={mode!r})\n"
+        + cp
+        + "_c._checkpoint = _cp\n"
         f"_res = _c.transition(_Intent(collection={seed.collection!r}, object_id={seed.object_id!r}, "
         f"namespace={seed.namespace!r}, expected_version={seed.version}, target_state={target!r}, "
         f"actor='t', reason='r', operation_key={op_key!r}))\n"
-        "code = getattr(getattr(_res, 'error', None), 'code', None)\n"
-        f"os._exit({win_code} if isinstance(_res, Ok) else "
+        + after
+        + "code = getattr(getattr(_res, 'error', None), 'code', None)\n"
+        # a WIN is an Ok that actually FINALIZED (not a stuck Ok(Pending) - the old phantom winner).
+        "_won = isinstance(_res, Ok) and getattr(_res.value, 'kind', None) == 'final'\n"
+        f"os._exit({win_code} if _won else "
         f"({_R22_CONFLICT} if code in ('active_intent_exists', 'operation_key_conflict') else "
         f"({_R22_FENCE} if code == 'version_fence_violation' else 99)))\n"
     )
@@ -6547,14 +6590,21 @@ def _check_r22(base: Path) -> None:
     _RefCoordinator(
         db_path=db_path, qdrant_path=qdrant_path, mode=mode
     )  # create outbox schema+index
-    # op-a22 -> matured (win code _R22_WIN_A); op-b22 -> demoted (win code _R22_WIN_B).
-    specs = (("matured", "op-a22", _R22_WIN_A), ("demoted", "op-b22", _R22_WIN_B))
+    # DETERMINISTIC roles (Yua flake-harden): the "winner" (op-a22 -> matured) runs its full
+    # transition and frees Qdrant before signalling; the "loser" (op-b22 -> demoted) blocks at the
+    # atomic boundary until then, so it inserts past the (FINAL) winner's ux_active_intent and is
+    # version-fenced against the winner's already-applied version. Pin the winner as op-a22.
+    specs = (
+        ("winner", "matured", "op-a22", _R22_WIN_A),
+        ("loser", "demoted", "op-b22", _R22_WIN_B),
+    )
     procs = [
         subprocess.Popen(
             [
                 sys.executable,
                 "-c",
                 _r22_child_source(
+                    role=role,
                     mode=mode,
                     db_path=db_path,
                     qdrant_path=qdrant_path,
@@ -6566,8 +6616,11 @@ def _check_r22(base: Path) -> None:
                 ),
             ]
         )
-        for target, op_key, win_code in specs
+        for role, target, op_key, win_code in specs
     ]
+    # Deterministic outcome collection: wait on each child BY IDENTITY (not arrival order). With the
+    # rendezvous the winner always finalizes (codes[0]==_R22_WIN_A) and the loser is always fenced
+    # (codes[1]==_R22_FENCE) for the correct reference; non_atomic_cas yields a second FINAL winner.
     codes = [p.wait(timeout=120) for p in procs]
     # EXACTLY ONE winner (identified by its op-distinct code); the loser is rejected at begin
     # (active_intent_exists) OR at the fence (version_fence_violation) - both valid "cannot overwrite".

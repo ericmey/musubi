@@ -249,3 +249,52 @@ explicit rendezvous/barrier so both processes are provably in-flight before the 
 retries removed, or a deterministic scheduler seam) and shown stable across N repeated runs in CI. This is
 a **separate scoped task** — do NOT fix R22 inside the P0c parity work. Tracked here as a pre-S1 gate;
 promote to an issue when S1 is scheduled.
+
+### J.1 RESOLVED-in-harness (2026-07-14, tests-only, zero src) — Yua option-B flake-harden
+
+**Root cause (reproduced deterministically, not inferred).** The flake is a HARNESS rendezvous gap plus an
+on-disk-Qdrant lock artifact — NOT a reference-apply bug. The original harness released both children at
+`before_pending_commit` and then let them race FREELY with no further rendezvous. The two-winner interleaving
+is: the winner (op-a22) runs its whole transition (INSERT PENDING → version-fenced apply → APPLIED → FINAL)
+BEFORE the loser (op-b22) inserts. Because the winner's row is now FINAL, the partial-unique `ux_active_intent`
+(which fences only `PENDING`/`APPLIED`) no longer blocks the loser, so the loser inserts PENDING successfully
+and proceeds to apply. It SHOULD then be caught by the version fence — and it is, *when it can open Qdrant*.
+But local Qdrant (path mode) is a **single-writer store**: the winner holds the storage lock from its lazy-open
+until `os._exit`. If the loser lazy-opens Qdrant while the winner is FINAL-but-not-yet-exited, `QdrantClient(path=…)`
+raises `RuntimeError("… already accessed by another instance")`, which `_classify` maps to `unknown` → NOT
+terminal → `transition` returns `Ok(_RefPending)`. The child scored **any** `Ok` as a WIN → the loser exits
+`_R22_WIN_B` → **two winners**.
+
+Direct reproduction (forced interleaving, winner holds vs releases the Qdrant lock):
+
+| variant | loser exit | loser result | outbox (op-b22) | apply markers | Qdrant end | winners |
+| --- | --- | --- | --- | --- | --- | --- |
+| winner HOLDS Qdrant lock | `34` (WIN_B) | `Ok(Pending)` | `PENDING` (stuck) | `[(op-a22, matured)]` only | `(2, matured)` | **2 (flake)** |
+| winner RELEASES then signals | `33` (FENCE) | `Err(version_fence_violation)` | `ABANDONED` | `[(op-a22, matured)]` only | `(2, matured)` | 1 (correct) |
+
+The tells prove the reference apply is genuinely version-conditional: in the two-winner case the loser wrote
+NO second apply marker and did NOT mutate Qdrant (still `(2, matured)`) — it was a *phantom* winner produced
+solely by the `Ok(Pending)` mis-score, not a real lost update. The fix belongs in the harness, not the reference.
+
+**Hardening (explicit cross-process rendezvous at the atomic boundary).** `_r22_child_source` now takes a
+`role`. The **winner** runs its full transition, then RELEASES the on-disk Qdrant lock (closes its client)
+and only THEN signals `winner_done`. The **loser** blocks at `before_pending_commit` until `winner_done`, so
+it deterministically inserts AFTER the winner's row is FINAL (past `ux_active_intent`) and issues its
+version-fenced conditional apply against a FREE Qdrant already at the winner's version → a guaranteed
+zero-match → `version_fence_violation`, **every run**. Belt-and-suspenders: a WIN now requires an `Ok` whose
+value actually FINALIZED (`kind == 'final'`), so a stuck `Ok(Pending)` can never again be scored a winner.
+Outcome collection waits on each child by identity (not arrival order): `codes[0]==_R22_WIN_A`,
+`codes[1]==_R22_FENCE` for the correct reference. `non_atomic_cas` (fence OFF) still lets the loser apply
+without the fence → it mutates + finalizes a second FINAL → two winners, every run — the R22 discriminator is
+preserved (R22 discriminates on the FENCE, not the insert race, which is R11's).
+
+**Stress evidence.** 70 iterations of `_check_r22` (40 unloaded + 30 under 8-way CPU load simulating CI
+scheduling pressure): **0** two-winner failures for the correct reference; `non_atomic_cas` failed (two
+winners) on **every** iteration. Full CI gate green at the changed head: `ruff format --check`, `ruff check`,
+`mypy src tests`, and the full `uv run pytest` suite (1733 passed / 78 xfailed — G1 `test_r22_two_process_race_…`
+stays strict-xfail; all pre-existing dispositions unchanged). Zero `src/musubi` changes.
+
+**Status: RESOLVED-in-harness.** The pre-S1 gate on R22 *harness* nondeterminism is cleared. NOTE this does
+NOT relieve S1: when the real coordinator source lands and exercises a genuine multi-process apply, S1's own
+implementation MUST preserve the single-winner determinism this harness now pins (a real winner releases its
+store handle / the loser's apply is genuinely version-fenced) rather than relying on the test's rendezvous.
