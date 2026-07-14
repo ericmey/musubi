@@ -7,7 +7,7 @@ status: in-progress
 owner: aoi
 phase: "Lifecycle-audit 2026-07-13 — C6b atomicity design + red contract"
 tags: [section/slices, status/in-progress, type/slice, lifecycle, audit, atomicity]
-updated: 2026-07-13
+updated: 2026-07-14
 reviewed: false
 depends-on: []
 blocks: ["[[_slices/slice-c6-lifecycle-event-loss]]", "[[_slices/slice-h5-unify-state-mutation]]"]
@@ -103,16 +103,25 @@ entrypoint.
 
 ## Phase 1 vs defect closure + H5 (correction G; Yua sequencing 2026-07-13)
 
-`transitions.py` is not the only mutation path: 5 plane `transition()` methods + direct `set_payload`
-of `state` in maturation/synthesis/demotion bypass any coordinator. **No circular dependency** — the
-relationship is two-phase and acyclic:
+`transitions.py` is not the only mutation path: the `state`-writing transition bypasses are **6 sites
+across 6 files** — `transitions.py::transition` + the 5 plane `transition()` methods (the committed
+`_PRESENT_TRANSITION_BYPASSES` G1 inventory: episodic, concept, thoughts, artifact, curated). The
+maturation/synthesis/demotion `set_payload`s write **non-state** enrichment/contradiction/reinforcement
+fields and are correctly EXCLUDED (repair 3) — they are not state writers. **No circular dependency** —
+the relationship is two-phase and acyclic:
 
 - **C6b Phase 1** = the `LifecycleTransitionCoordinator` + `LifecycleOutbox` API + implementation. It
   lands with **C6b still OPEN**. Phase-1 source acceptance is proven by reds R1–R22 + guards G2/G3 (they
   flip green with the coordinator implementation).
 - **[[_slices/slice-h5-unify-state-mutation]]** (Issue #439) then **consumes** the coordinator API and
   migrates every bypassing path. H5 `depends-on` C6b (it needs the API); it does **not** `blocks` C6b in
-  the DAG (that would be circular). C6b `blocks` H5.
+  the DAG (that would be circular). C6b `blocks` H5. **The real gate: H5 is WITHHELD until the C6b source
+  phases S1–S7 land AND the caller `Pending` semantics are specified** — the internal maturation /
+  non-HTTP caller contract where `Pending` = DEFERRED
+  ([[13-decisions/c6b-phase1-source-cut-plan]] §F source-commit series + § "Internal caller contract").
+  H5 has no coordinator to migrate onto until the full `coord.transition()` exists (S3) and the seam is
+  wired (S7), and it cannot define migration behavior for a `Pending` outcome whose caller semantics are
+  still unspecified.
 - **Defect closure** = guard **G1** (AST/rg forbidding direct `state`-writing `set_payload` outside the
   coordinator) goes green. G1 is **RED today** and stays RED through Phase 1 — it flips green **only when
   H5 lands**. So C6b closes as a defect only after H5. C6b does NOT claim atomicity for the canonical
