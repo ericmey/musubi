@@ -1243,7 +1243,6 @@ _G2B_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_G2B_REASON)
 def test_g2b_cleanup_terminal_sql_shape() -> None:
     """Phase-1 source-shape acceptance: the UNIQUE LifecycleTransitionCoordinator.cleanup_terminal method's
     actual SQL argument (with a local one-static-assignment `sql = ...` resolved) must be the pinned atomic
@@ -3386,6 +3385,7 @@ class _CandidateApi:
         self.TransitionIntent = _RefIntent
         self.TransitionFinal = _RefFinal
         self.TransitionPending = _RefPending
+        self.CleanupConfigError = _CleanupConfigError
 
     def LifecycleTransitionCoordinator(
         self,
@@ -6875,7 +6875,6 @@ def _check_r20(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     generation, holds the EX barrier through the deploy handoff, stays quiesced on handoff failure, and
     the terminal-row cleanup is a bounded, deterministic, atomic CTE that preserves young / NULL-age /
     every nonterminal row. Each sub-scenario runs on its own isolated DB (its own maintlock)."""
-    _require_real_stage("rollback", _R20_REASON)
     base = db_path.parent
     coll = seed.collection
 
@@ -7074,14 +7073,14 @@ def _check_r20(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     for bad_cut in (0, -1.0, float("inf"), float("nan"), "x", True):
         try:
             coord.cleanup_terminal(cutoff_epoch=bad_cut, batch_limit=5)
-        except _CleanupConfigError:
+        except getattr(_api(), "CleanupConfigError", _CleanupConfigError):
             pass
         else:
             raise DefectStillPresent(f"cleanup must reject cutoff_epoch={bad_cut!r}")
     for bad_batch in (0, -1, 2.5, "x", True):
         try:
             coord.cleanup_terminal(cutoff_epoch=100.0, batch_limit=bad_batch)
-        except _CleanupConfigError:
+        except getattr(_api(), "CleanupConfigError", _CleanupConfigError):
             pass
         else:
             raise DefectStillPresent(f"cleanup must reject batch_limit={bad_batch!r}")
@@ -7348,7 +7347,6 @@ def _check_r20_drain(base: Path) -> None:
     in-flight barrier-aware admission's LOCK_SH critical section, and must not destroy its committing
     intent. A LOCK_EX|LOCK_NB probe must raise BlockingIOError while B is inside; a leak flag catches a
     rollback that reaches its post-lock point while B is inside; B's committed intent must survive."""
-    _require_real_stage("rollback", _R20_DRAIN_REASON)
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     coll = str(collection_for_plane("episodic"))
     src = _r20_reader_child_source(
@@ -7383,7 +7381,6 @@ def _check_r20_reconciler_drain(base: Path) -> None:
     in-flight reconciler holds LOCK_SH inside its pass; a rollback's exclusive barrier must not overlap it
     (LOCK_EX|LOCK_NB probe raises BlockingIOError; no post-lock overlap). reconcile_bypasses_barrier makes
     ONLY the reconciler skip LOCK_SH+the recheck - caught HERE (probe succeeds), invisible to admission."""
-    _require_real_stage("rollback", _R20_RECONCILER_DRAIN_REASON)
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     src = _r20_reconciler_child_source(
         mode=mode, db_path=base / "lifecycle.db", barrier_dir=base / "barrier"
@@ -7412,7 +7409,6 @@ _R20_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R20_REASON)
 def test_r20_rollback_refuses_nonterminal_maintenance_lifecycle_and_cleanup(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
@@ -7428,7 +7424,6 @@ _R20_DRAIN_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R20_DRAIN_REASON)
 def test_r20_two_process_admission_drain_barrier_no_overlap(tmp_path: Path) -> None:
     _check_r20_drain(tmp_path)
 
@@ -7443,7 +7438,6 @@ _R20_RECONCILER_DRAIN_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R20_RECONCILER_DRAIN_REASON)
 def test_r20_two_process_reconciler_drain_barrier_no_overlap(tmp_path: Path) -> None:
     _check_r20_reconciler_drain(tmp_path)
 

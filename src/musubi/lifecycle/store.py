@@ -37,9 +37,9 @@ synthesis cursors, the ``lifecycle_outbox`` admission table (S2) with its ``ux_a
 partial-unique index, the S3 ``event_payload``/``terminal_epoch`` columns + the
 ``lifecycle_apply_markers`` table, and — as of S4 — the outbox's
 ``lease_owner``/``lease_expires_epoch``/``attempts``/``next_attempt_epoch``/``failure_class``
-reconciliation columns. The ``lifecycle_control`` table and the cleanup/backfill logic are
-owned by S6 and are intentionally NOT declared here yet; S6 owns cleanup/backfill/control (not
-the S3 ``terminal_epoch`` nor the S4 lease/attempt/``failure_class`` columns). S5 owns the
+reconciliation columns. As of S6, the single-row ``lifecycle_control`` table durably coordinates
+maintenance/rollback generations; S6 also owns terminal-row cleanup/backfill (not the S3
+``terminal_epoch`` nor the S4 lease/attempt/``failure_class`` columns). S5 owns the
 emission/metrics/logs of ``failure_class`` — not the column, which S4 persists for R15.
 
 S3 note: the coordinator's ``_finalize`` writes the C6-owned ``lifecycle_events`` table
@@ -71,7 +71,7 @@ DEFAULT_BUSY_TIMEOUT_MS = 5000
 #: server-fenced reapply + event rebuild even before ``event_payload`` exists, e.g. an R5 crash])
 #: and the S3
 #: ``lifecycle_apply_markers`` effective-apply table. The cleanup/backfill logic and
-#: ``lifecycle_control`` are added by S6 (cleanup/backfill/control), which does NOT own the
+#: ``lifecycle_control`` are owned by S6 (cleanup/backfill/control), which does NOT own the
 #: ``terminal_epoch`` [S3] or the lease/attempt/``failure_class`` columns [S4]. S5 owns the
 #: emission/metrics/logs OF ``failure_class`` — not the column itself.
 _LIFECYCLE_SCHEMA = """
@@ -144,6 +144,14 @@ CREATE TABLE IF NOT EXISTS lifecycle_apply_markers (
     object_id TEXT,
     target_state TEXT
 );
+
+CREATE TABLE IF NOT EXISTS lifecycle_control (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    maintenance_active INTEGER NOT NULL DEFAULT 0,
+    generation INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO lifecycle_control (id, maintenance_active, generation)
+    VALUES (1, 0, 0);
 """
 
 

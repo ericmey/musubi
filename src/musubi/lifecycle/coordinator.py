@@ -20,8 +20,8 @@
 Outcomes are three-way: ``Ok(TransitionFinal)`` (confirmed apply + finalize), ``Ok(TransitionPending)``
 (corrupt readback, or a transient/unknown apply failure, or a post-commit finalize fault — all left
 for the S4 reconciler), or a bounded ``Err``. A known version fence and a pre-mutation validation
-failure are terminal (ABANDONED). Reconciliation/leases (S4) and the maintenance/rollback barrier
-(S6) are later slices.
+failure are terminal (ABANDONED). Reconciliation/leases (S4) and the durable maintenance/rollback
+barrier plus bounded terminal cleanup (S6) are implemented here.
 
 Connection + schema come from the shared lifecycle store (WAL + busy_timeout). A private
 ``_checkpoint(name)`` seam (default no-op) lets tests inject a deterministic fault/crash at a named
@@ -30,14 +30,17 @@ boundary; it is not a public switch and performs no production ``os._exit``.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import logging
 import math
+import os
 import secrets
 import sqlite3
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -147,6 +150,27 @@ class ReconcileReport:
     failed: int = 0
 
 
+@dataclass(frozen=True)
+class RollbackDone:
+    """A completed rollback/abort under the durable maintenance generation."""
+
+    generation: int
+    kind: str = "rolled_back"
+
+
+@dataclass(frozen=True)
+class CleanupReport:
+    """One bounded terminal-row cleanup result."""
+
+    deleted: int = 0
+    remaining_eligible: int = 0
+    terminal_total: int = 0
+
+
+class CleanupConfigError(ValueError):
+    """Raised when terminal cleanup receives an unsafe cutoff or batch bound."""
+
+
 def _validate_pending_cap(cap: object) -> int:
     """The cap must be a positive int. ``bool`` is a subclass of ``int`` — reject it
     explicitly; reject any non-int type and any value ``<= 0``. No None/unbounded."""
@@ -243,7 +267,7 @@ def _object_type_for_collection(collection: str) -> str:
 
 
 class LifecycleTransitionCoordinator:
-    """Durable-intent transition coordinator (S2 admission + S3 conditional apply/finalize). One
+    """Durable-intent transition coordinator (S2-S6 admission/apply/reconcile/maintenance). One
     instance per process owns the connection policy and transition logic against the shared
     lifecycle SQLite DB and the injected Qdrant client."""
 
@@ -267,6 +291,10 @@ class LifecycleTransitionCoordinator:
             )
         self._client = client
         self._db = Path(db_path)
+        # S6 rollback barrier: one stable inode beside the lifecycle DB. Every transition and
+        # reconcile pass holds LOCK_SH for its full operation; rollback drains them with LOCK_EX.
+        self._maintlock = str(self._db) + ".maintlock"
+        self._deploy_handoff: Callable[[], bool] = lambda: True
         #: Private fault-injection seam (default no-op); tests set it to raise/crash at
         #: a named boundary. Not a public switch.
         self._checkpoint: Callable[[str], None] = lambda _name: None
@@ -276,7 +304,250 @@ class LifecycleTransitionCoordinator:
         finally:
             conn.close()
 
+    def _maintenance_active(self) -> bool:
+        """Read the durable cross-process maintenance flag."""
+        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        try:
+            row = con.execute(
+                "SELECT maintenance_active FROM lifecycle_control WHERE id=1"
+            ).fetchone()
+            return bool(row and row[0])
+        finally:
+            con.close()
+
+    def _set_maintenance(self, active: bool, *, bump_generation: bool) -> int:
+        """Durably set maintenance state and return its current generation."""
+        con = store.connect(
+            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+        )
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            if bump_generation:
+                con.execute(
+                    "UPDATE lifecycle_control SET maintenance_active=?, generation=generation+1 "
+                    "WHERE id=1",
+                    (int(active),),
+                )
+            else:
+                con.execute(
+                    "UPDATE lifecycle_control SET maintenance_active=? WHERE id=1", (int(active),)
+                )
+            row = con.execute("SELECT generation FROM lifecycle_control WHERE id=1").fetchone()
+            con.execute("COMMIT")
+            if row is None:
+                raise store.LifecycleStoreError("lifecycle_control singleton is missing")
+            return int(row[0])
+        except Exception:
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
+        finally:
+            con.close()
+
+    @contextmanager
+    def _barrier_admit(self, *, role: str) -> Iterator[bool | None]:
+        """Hold a shared flock for a full transition/reconcile operation.
+
+        Maintenance is checked only after acquiring the stable shared lock. This closes the
+        check-to-lock race: a rollback first sets the durable flag, then waits for LOCK_EX; old
+        holders drain, and new holders acquire LOCK_SH only after cutover and refuse while active.
+        """
+        if role not in ("admission", "reconcile"):
+            raise ValueError(f"unknown maintenance-barrier role: {role!r}")
+        fd = os.open(self._maintlock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH)
+            self._checkpoint("shared_lease_acquired")
+            try:
+                maintenance_active = self._maintenance_active()
+            except (sqlite3.Error, store.LifecycleStoreError):
+                # Fail closed without entering the mutation/reconcile body. Admission maps this
+                # sentinel to its established durable_begin_failed outcome; reconcile is a no-op.
+                yield None
+                return
+            if maintenance_active:
+                yield False
+                return
+            yield True
+            self._checkpoint("before_shared_release")
+        finally:
+            os.close(fd)
+
+    def _count_nonterminal(self, con: sqlite3.Connection | None = None) -> int:
+        """Count PENDING/APPLIED rows, optionally inside a caller's write transaction."""
+        owned = con is None
+        if con is None:
+            con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        try:
+            row = con.execute(
+                "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED')"
+            ).fetchone()
+            return int(row[0]) if row else 0
+        finally:
+            if owned:
+                con.close()
+
+    def rollback(self, *, expected_generation: int) -> Ok[RollbackDone] | Err[TransitionError]:
+        """Reverse the outbox schema only after durably quiescing and draining all readers.
+
+        A refused rollback intentionally leaves maintenance active. Operators must call
+        :meth:`abort_maintenance` with the current generation to resume safely.
+        """
+        new_generation = self._set_maintenance(True, bump_generation=True)
+        fd = os.open(self._maintlock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            self._checkpoint("rollback_pre_lock")
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            self._checkpoint("ex_acquired")
+            con = store.connect(
+                self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+            )
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                row = con.execute("SELECT generation FROM lifecycle_control WHERE id=1").fetchone()
+                current_generation = int(row[0]) if row else -1
+                if expected_generation != new_generation or current_generation != new_generation:
+                    con.execute("COMMIT")
+                    return Err(error=TransitionError(code="rollback_refused_stale_generation"))
+                if self._count_nonterminal(con) > 0:
+                    con.execute("COMMIT")
+                    return Err(error=TransitionError(code="rollback_refused_nonterminal"))
+                self._checkpoint("rollback_before_drop")
+                con.execute("DROP TABLE lifecycle_outbox")
+                con.execute("COMMIT")
+            except Exception:
+                if con.in_transaction:
+                    con.execute("ROLLBACK")
+                raise
+            finally:
+                con.close()
+            if not self._deploy_handoff():
+                return Err(error=TransitionError(code="handoff_failed"))
+            self._set_maintenance(False, bump_generation=False)
+            return Ok(value=RollbackDone(generation=new_generation))
+        finally:
+            os.close(fd)
+
+    def abort_maintenance(
+        self, *, expected_generation: int
+    ) -> Ok[RollbackDone] | Err[TransitionError]:
+        """Explicitly resume a refused/failed maintenance window under its generation fence."""
+        fd = os.open(self._maintlock, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            con = store.connect(
+                self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+            )
+            try:
+                con.execute("BEGIN IMMEDIATE")
+                row = con.execute("SELECT generation FROM lifecycle_control WHERE id=1").fetchone()
+                current_generation = int(row[0]) if row else -1
+                if current_generation != expected_generation:
+                    con.execute("COMMIT")
+                    return Err(error=TransitionError(code="abort_refused_stale_generation"))
+                con.execute("UPDATE lifecycle_control SET maintenance_active=0 WHERE id=1")
+                con.execute("COMMIT")
+            except Exception:
+                if con.in_transaction:
+                    con.execute("ROLLBACK")
+                raise
+            finally:
+                con.close()
+            return Ok(value=RollbackDone(generation=expected_generation, kind="aborted"))
+        finally:
+            os.close(fd)
+
+    def backfill_terminal_epoch(self) -> int:
+        """Backfill known terminal ages from persisted patch JSON; preserve unknown ages as NULL."""
+        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        updated = 0
+        try:
+            rows = con.execute(
+                "SELECT operation_key, patch_json FROM lifecycle_outbox "
+                "WHERE state IN ('FINAL','ABANDONED') AND terminal_epoch IS NULL"
+            ).fetchall()
+            for operation_key, patch_json in rows:
+                try:
+                    age = json.loads(patch_json).get("updated_epoch") if patch_json else None
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    age = None
+                if (
+                    isinstance(age, (int, float))
+                    and not isinstance(age, bool)
+                    and math.isfinite(float(age))
+                ):
+                    con.execute(
+                        "UPDATE lifecycle_outbox SET terminal_epoch=? WHERE operation_key=?",
+                        (float(age), operation_key),
+                    )
+                    updated += 1
+            con.commit()
+            return updated
+        finally:
+            con.close()
+
+    def cleanup_terminal(self, *, cutoff_epoch: object, batch_limit: object) -> CleanupReport:
+        """Delete one deterministic bounded batch of old terminal outbox rows atomically."""
+        if (
+            isinstance(cutoff_epoch, bool)
+            or not isinstance(cutoff_epoch, (int, float))
+            or not math.isfinite(float(cutoff_epoch))
+            or cutoff_epoch <= 0
+        ):
+            raise CleanupConfigError(
+                f"cutoff_epoch must be a positive finite number, got {cutoff_epoch!r}"
+            )
+        if isinstance(batch_limit, bool) or not isinstance(batch_limit, int) or batch_limit <= 0:
+            raise CleanupConfigError(f"batch_limit must be a positive int, got {batch_limit!r}")
+        sql = (
+            "WITH sel AS (SELECT operation_key FROM lifecycle_outbox WHERE state IN "
+            "('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND "
+            "terminal_epoch < :cutoff ORDER BY terminal_epoch, operation_key LIMIT :batch) "
+            "DELETE FROM lifecycle_outbox WHERE operation_key IN "
+            "(SELECT operation_key FROM sel) AND state IN ('FINAL','ABANDONED') AND "
+            "terminal_epoch IS NOT NULL AND terminal_epoch < :cutoff RETURNING operation_key"
+        )
+        con = store.connect(
+            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+        )
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            deleted = len(
+                con.execute(sql, {"cutoff": float(cutoff_epoch), "batch": batch_limit}).fetchall()
+            )
+            remaining_row = con.execute(
+                "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED') "
+                "AND terminal_epoch IS NOT NULL AND terminal_epoch < ?",
+                (float(cutoff_epoch),),
+            ).fetchone()
+            total_row = con.execute(
+                "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED')"
+            ).fetchone()
+            con.execute("COMMIT")
+            return CleanupReport(
+                deleted=deleted,
+                remaining_eligible=int(remaining_row[0]) if remaining_row else 0,
+                terminal_total=int(total_row[0]) if total_row else 0,
+            )
+        except Exception:
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
+        finally:
+            con.close()
+
     def transition(self, intent: TransitionIntent) -> Ok[TransitionOutcome] | Err[TransitionError]:
+        """Run one full transition while holding the S6 shared maintenance barrier."""
+        with self._barrier_admit(role="admission") as admitted:
+            if admitted is None:
+                return Err(error=TransitionError(code="durable_begin_failed"))
+            if not admitted:
+                return Err(error=TransitionError(code="maintenance_active"))
+            return self._transition_locked(intent)
+
+    def _transition_locked(
+        self, intent: TransitionIntent
+    ) -> Ok[TransitionOutcome] | Err[TransitionError]:
         """Full lifecycle transition (S3): resolve operation_key idempotency, admit a durable
         PENDING row, persist a canonical lifecycle event BEFORE any mutation, conditionally apply
         the version-fenced mutation with a full readback, then atomically finalize.
@@ -1030,6 +1301,13 @@ class LifecycleTransitionCoordinator:
         return bool(row and row[0])
 
     def reconcile_once(self, *, limit: int = 100) -> ReconcileReport:
+        """Run one reconcile pass while holding the S6 shared maintenance barrier."""
+        with self._barrier_admit(role="reconcile") as admitted:
+            if admitted is not True:
+                return ReconcileReport()
+            return self._reconcile_locked(limit=limit)
+
+    def _reconcile_locked(self, *, limit: int = 100) -> ReconcileReport:
         """One reconcile pass (S4). Select DUE non-terminal rows (fair, oldest-first: never-scheduled
         first, then earliest ``next_attempt_epoch``, then insertion order), atomically CLAIM each,
         then drive it toward a terminal outcome:
@@ -1044,6 +1322,7 @@ class LifecycleTransitionCoordinator:
           transient/unknown → keep PENDING + increment + bounded backoff (an unknown is never
           abandoned by count). The lease is held through APPLIED and released atomically at the
           terminal/pending disposition; every post-claim write is owner-guarded."""
+        self._checkpoint("reconcile_entered")
         now = self._now()
         con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
         try:

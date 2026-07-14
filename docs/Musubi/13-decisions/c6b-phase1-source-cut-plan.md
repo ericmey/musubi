@@ -187,7 +187,10 @@ implementation — no paper mapping (ruling 11).** Controls green throughout: al
 **Checkpoint B — reconciliation/leases/maintenance:**
 - **S4** `reconcile_once` + leases + backoff + classification + crash matrix → R5–R7, R9, R15–R18.
 - **S5** observability → R19.
-- **S6** rollback/maintenance flock barrier + `cleanup_terminal` → R20 + G2b.
+- **S6 — DONE:** rollback/maintenance flock barrier + `cleanup_terminal` → R20 + G2b. The
+  durable control row is set before the exclusive drain; transition and reconcile hold the stable
+  per-DB shared lock for their full operations; rollback/abort are generation-fenced; terminal
+  backfill preserves unknown ages; cleanup is one bounded deterministic named-CTE DELETE.
 
 **Checkpoint C — injection/API/runner wiring (ACTIVE):**
 - **S7** inject the app-lifetime + worker coordinators (§C); rewire `transitions.py` seam onto the required
