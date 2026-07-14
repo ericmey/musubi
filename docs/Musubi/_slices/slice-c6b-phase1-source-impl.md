@@ -11,6 +11,7 @@ updated: 2026-07-14
 reviewed: false
 depends-on: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
 blocks: []
+issue: 456
 ---
 
 # Slice: C6b Phase-1 source cut (S1-S7 implementation)
@@ -62,8 +63,12 @@ review.
 - `docs/Musubi/11-migration/phase-2-hybrid-search.md`
 - `docs/Musubi/11-migration/re-embedding.md`
 - `docs/Musubi/11-migration/phase-6-lifecycle.md`
+- `docs/Musubi/_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity.md`
 
-*(Overlap: `docker-compose.yml`+`tests/ops/test_compose.py`→`slice-ops-compose` (done);
+*(The red-contract slice doc is claimed here ONLY for the reciprocal-DAG `blocks` entry
+(edit⇒own, AGENTS.md); its test contract + red assertions are untouched. It has no
+`## Owned paths` section, so this is a clean first claim. Overlap:
+`docker-compose.yml`+`tests/ops/test_compose.py`→`slice-ops-compose` (done);
 `.env.example`+`compose-stack.md`→`slice-config` (done); `runbooks.md`→`slice-ops-first-deploy`
 (done); `index.md`→`slice-ops-core-image-publish` (done); all other named docs UNOWNED. Every
 overlap is with a `done` slice — advisory only, no active-lane conflict.)*

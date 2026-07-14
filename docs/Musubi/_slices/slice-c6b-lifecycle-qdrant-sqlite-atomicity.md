@@ -10,7 +10,7 @@ tags: [section/slices, status/in-progress, type/slice, lifecycle, audit, atomici
 updated: 2026-07-14
 reviewed: false
 depends-on: []
-blocks: ["[[_slices/slice-c6-lifecycle-event-loss]]", "[[_slices/slice-h5-unify-state-mutation]]"]
+blocks: ["[[_slices/slice-c6-lifecycle-event-loss]]", "[[_slices/slice-h5-unify-state-mutation]]", "[[_slices/slice-c6b-phase1-source-impl]]"]
 issue: 437
 ---
 
