@@ -297,6 +297,90 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
     return rules
 
 
+# Supported expression grammar (bound and fail closed).
+# Per Yua 21:05:45 #2: parse/normalize the supported
+# expression grammar and prove each rule is positively
+# enabled on its intended channel, disabled on the other
+# channels. Reject false/true/token-smear/OR broadening.
+
+# After stripping ${{ ... }} and normalizing whitespace,
+# the semver enable MUST match this exact shape.
+# Match: startsWith(github.ref, 'refs/tags/v')
+SEMVER_PATTERN = (
+    r"^startsWith"
+    r"\s*"
+    r"\("
+    r"\s*github\.ref"
+    r"\s*,"
+    r"\s*"
+    r"'refs/tags/v'"
+    r"\s*"
+    r"\)"
+    r"\s*$"
+)
+SEMVER_ENABLE_SHAPE = re.compile(SEMVER_PATTERN)
+# The main-ref enable MUST match this exact shape.
+# Match: github.ref == 'refs/heads/main'
+MAIN_PATTERN = (
+    r"^github\.ref"
+    r"\s*=="
+    r"\s*"
+    r"'refs/heads/main'"
+    r"\s*$"
+)
+MAIN_ENABLE_SHAPE = re.compile(MAIN_PATTERN)
+# The manual-raw enable MUST match this exact shape.
+# Match: github.event_name == 'workflow_dispatch' &&
+# github.event.inputs.tag != ''
+RAW_PATTERN = (
+    r"^github\.event_name"
+    r"\s*=="
+    r"\s*"
+    r"'workflow_dispatch'"
+    r"\s*&&"
+    r"\s*"
+    r"github\.event\.inputs\.tag"
+    r"\s*!="
+    r"\s*"
+    r"''"
+    r"\s*$"
+)
+RAW_ENABLE_SHAPE = re.compile(RAW_PATTERN)
+
+
+def _normalize_enable(expr: str) -> str:
+    """Strip ${{ ... }} and normalize whitespace.
+
+    Per Yua 21:05:45 #2: bound and fail closed on unsupported
+    shapes.
+    """
+    e = expr.strip()
+    # Strip ${{ ... }}
+    if e.startswith("${{") and e.endswith("}}"):
+        e = e[3:-2].strip()
+    # Normalize whitespace
+    e = re.sub(r"\s+", " ", e)
+    return e
+
+
+def _assert_supported_shape(expr: str, shape: re.Pattern[str], channel: str) -> None:
+    """Assert the expression matches the supported shape for
+    the given channel.
+
+    Per Yua 21:05:45 #2: reject false/true/token-smear/
+    OR broadening. Do not claim a full GitHub expression
+    parser; bound and fail closed on unsupported shapes.
+    """
+    normalized = _normalize_enable(expr)
+    if not shape.match(normalized):
+        raise MutexChannelMissingError(
+            f"{channel} enable does not match the supported "
+            f"shape (expected {shape.pattern!r}, got "
+            f"{normalized!r}). Rejecting false/true/token-smear/"
+            f"OR broadening."
+        )
+
+
 def assert_distinct_mutex_tags(path: Path) -> None:
     """Assert the docker/metadata-action with.tags has exactly
     three distinct, non-overlapping rules.
@@ -312,6 +396,13 @@ def assert_distinct_mutex_tags(path: Path) -> None:
     Reject extra overlapping rules.
     """
     rules = _parse_tag_rules(path)
+    # Per Yua 21:05:45 #1: pin exact rule cardinality. Reject
+    # any extra non-comment metadata rule (e.g., a 4th
+    # `type=sha,format=short` rule).
+    if len(rules) != 3:
+        raise MutexChannelMissingError(
+            f"Expected exactly 3 tag rules (semver + ref + raw), got {len(rules)}: {rules!r}"
+        )
     semver_rules = [r for r in rules if r.get("type") == "semver"]
     ref_rules = [r for r in rules if r.get("type") == "ref" and r.get("event") == "branch"]
     raw_rules = [r for r in rules if r.get("type") == "raw"]
@@ -336,33 +427,18 @@ def assert_distinct_mutex_tags(path: Path) -> None:
     if semver.get("prefix") != "v":
         raise MutexChannelMissingError(f"semver rule prefix must be 'v': {semver!r}")
     semver_enable = semver.get("enable", "")
-    if "startsWith" not in semver_enable:
-        raise MutexChannelMissingError(f"semver rule enable must use startsWith: {semver_enable!r}")
-    if "refs/tags/v" not in semver_enable:
-        raise MutexChannelMissingError(
-            f"semver rule enable must gate on refs/tags/v: {semver_enable!r}"
-        )
-    # Ref rule enable must gate on main
+    # Per Yua 21:05:45 #2: strict shape check. Reject
+    # false/true/token-smear/OR broadening.
+    _assert_supported_shape(semver_enable, SEMVER_ENABLE_SHAPE, "semver")
+    # Ref rule enable must gate on main (strict shape)
     ref_enable = ref.get("enable", "")
-    if "refs/heads/main" not in ref_enable:
-        raise MutexChannelMissingError(
-            f"main-ref rule enable must gate on refs/heads/main: {ref_enable!r}"
-        )
+    _assert_supported_shape(ref_enable, MAIN_ENABLE_SHAPE, "main-ref")
     # Raw rule must have value and gate on workflow_dispatch
-    # with non-blank input
+    # with non-blank input (strict shape)
     if "value" not in raw:
         raise MutexChannelMissingError(f"raw rule missing 'value': {raw!r}")
     raw_enable = raw.get("enable", "")
-    if "workflow_dispatch" not in raw_enable:
-        raise MutexChannelMissingError(
-            f"raw rule enable must gate on workflow_dispatch: {raw_enable!r}"
-        )
-    if "github.event.inputs.tag" not in raw_enable:
-        raise MutexChannelMissingError(f"raw rule enable must reference inputs.tag: {raw_enable!r}")
-    if "!= ''" not in raw_enable and '!= ""' not in raw_enable:
-        raise MutexChannelMissingError(
-            f"raw rule enable must check non-blank input: {raw_enable!r}"
-        )
+    _assert_supported_shape(raw_enable, RAW_ENABLE_SHAPE, "manual-raw")
 
 
 # =============================================================
@@ -453,6 +529,37 @@ def assert_all_required_steps_present(path: Path) -> None:
 # =============================================================
 
 
+# Per Yua 21:05:45 #3: prove the supported job-if shape
+# semantically. The supported shape is:
+#   github.event_name == 'workflow_dispatch' ||
+#   (github.event.workflow_run.conclusion == 'success'
+#    && startsWith(github.event.workflow_run.head_branch, 'v'))
+# After stripping ${{ ... }} and normalizing whitespace.
+JOB_IF_PATTERN = (
+    r"^github\.event_name"
+    r"\s*=="
+    r"\s*"
+    r"'workflow_dispatch'"
+    r"\s*\|\|"
+    r"\s*\("
+    r"\s*github\.event\.workflow_run\.conclusion"
+    r"\s*=="
+    r"\s*"
+    r"'success'"
+    r"\s*&&"
+    r"\s*startsWith"
+    r"\s*\("
+    r"\s*github\.event\.workflow_run\.head_branch"
+    r"\s*,"
+    r"\s*"
+    r"'v'"
+    r"\s*\)"
+    r"\s*\)"
+    r"\s*$"
+)
+JOB_IF_SHAPE = re.compile(JOB_IF_PATTERN)
+
+
 def assert_workflow_run_v_gate(path: Path) -> None:
     """Assert the auto-pin workflow gates on workflow_run with
     conclusion == 'success' AND startsWith(head_branch, 'v').
@@ -461,6 +568,8 @@ def assert_workflow_run_v_gate(path: Path) -> None:
     both the production guard and every corresponding wrong.
     Per Yua 20:57:08 #4: the gate is at jobs.bump.if, NOT at
     workflow_run.branches.
+    Per Yua 21:05:45 #3: prove the supported job-if shape
+    semantically. Reject false/true/token-smear/OR broadening.
     """
     config = _load_workflow_yaml(path)
     job = config.get("jobs", {}).get("bump", {})
@@ -469,21 +578,16 @@ def assert_workflow_run_v_gate(path: Path) -> None:
     if_conditions = job.get("if", "")
     if not isinstance(if_conditions, str):
         raise WorkflowRunVGateError(f"jobs.bump.if is not a string: {if_conditions!r}")
-    # Must check workflow_run conclusion == success
-    if not re.search(
-        r"github\.event\.workflow_run\.conclusion\s*==\s*['\"]success['\"]",
-        if_conditions,
-    ):
+    # Per Yua 21:05:45 #3: strict shape check. Reject
+    # false/true/token-smear/OR broadening.
+    normalized = _normalize_enable(if_conditions)
+    if not JOB_IF_SHAPE.match(normalized):
         raise WorkflowRunVGateError(
-            f"jobs.bump.if missing workflow_run.conclusion == success check: {if_conditions!r}"
-        )
-    # Must check startsWith(head_branch, 'v')
-    if not re.search(
-        r"startsWith\s*\(\s*github\.event\.workflow_run\.head_branch\s*,\s*['\"]v['\"]",
-        if_conditions,
-    ):
-        raise WorkflowRunVGateError(
-            f"jobs.bump.if missing startsWith(head_branch, v) check: {if_conditions!r}"
+            f"jobs.bump.if does not match the supported shape. "
+            f"Expected: github.event_name == 'workflow_dispatch' || "
+            f"(github.event.workflow_run.conclusion == 'success' && "
+            f"startsWith(github.event.workflow_run.head_branch, 'v')). "
+            f"Got: {normalized!r}"
         )
 
 
@@ -519,16 +623,19 @@ def _run_bash_harness(guard_block: str, tag_value: str) -> int:
 
 
 def _extract_guard_block(run_script: str) -> str | None:
-    """Extract the if ! [[ \"$TAG\" == v* ]]; then ... exit N;
+    """Extract the if ! [[ \"$TAG\" =~ semver ]]; then ... exit N;
     fi block from the Resolve step's run script.
 
     Per Yua 20:57:08 #1: require the nonzero exit INSIDE the
     matched if block before its fi, not merely any later exit.
+    Per Yua 21:05:45 #4: the guard uses the bounded release
+    grammar (semver regex) to align with the decision model.
     """
-    # Find the if block: if ! [[ "$TAG" == v* ]]; then
+    # Find the if block: if ! [[ "$TAG" =~ semver ]]; then
     # ... exit N; fi
     pattern = (
-        r"if\s+!\s*\[\[\s*\"?\$TAG\"?\s*==\s*v\*\s*\]\][^;]*;"
+        r"if\s+!\s*\[\[\s*\"?\$TAG\"?\s*=~\s*\^v\[0-9\]"
+        r"[^;]*;"
         r"(.*?)"
         r"^\s*fi\b"
     )
@@ -592,10 +699,21 @@ def assert_release_only_manual_dispatch_guard(path: Path) -> None:
                 )
     # Executable bash proof: actually run the guard with
     # various TAG values and check the exit code.
-    # The bash glob `v*` matches any string starting with `v`.
-    # Valid tags: v* prefix. Invalid tags: anything else.
+    # Per Yua 21:05:45 #4: the guard uses the same bounded
+    # release grammar as the resolver. Valid: semver tags.
+    # Invalid: anything else (including v* glob matches like
+    # vgarbage).
     valid_tags = ["v1.13.0", "v0.7.0", "v2.0.0-rc.1"]
-    invalid_tags = ["main", "", "refs/tags/v1.0.0", "1.13.0"]
+    invalid_tags = [
+        "main",
+        "",
+        "refs/tags/v1.0.0",
+        "1.13.0",
+        "vgarbage",
+        "v",
+        "v1.2",
+        "v1.2.3.4",
+    ]
     for tag in valid_tags:
         rc = _run_bash_harness(guard_block, tag)
         if rc != 0:
@@ -1109,6 +1227,163 @@ def test_wrong_fixture_inv2_missing_value(
 # --- Invariant 3 wrong-fixtures (path-aware checker) ---
 
 
+def _mutate_yaml_semver_disabled(src: Path, dst: Path) -> None:
+    """Prepend `false &&` to the semver enable (rule disabled)."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "enable=${{ startsWith(github.ref, 'refs/tags/v') }}",
+                    "enable=${{ false && startsWith(github.ref, 'refs/tags/v') }}",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_semver_disabled_by_false(fixture_dir: Any) -> None:
+    """Wrong-fixture: semver disabled by `false &&` breaks
+    Invariant 2.
+
+    Per Yua 21:05:45 #2: token-presence check accepts this
+    because startsWith and refs/tags/v are still present.
+    Strict shape check rejects.
+    """
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_semver_disabled(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: semver disabled by `false &&` did NOT cause the production helper to raise."
+    )
+
+
+def _mutate_yaml_main_disabled(src: Path, dst: Path) -> None:
+    """Prepend `false &&` to the main enable (rule disabled)."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "enable=${{ github.ref == 'refs/heads/main' }}",
+                    "enable=${{ false && github.ref == 'refs/heads/main' }}",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_main_disabled_by_false(fixture_dir: Any) -> None:
+    """Wrong-fixture: main disabled by `false &&` breaks Invariant 2."""
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_main_disabled(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: main disabled by `false &&` did NOT cause the production helper to raise."
+    )
+
+
+def _mutate_yaml_raw_disabled(src: Path, dst: Path) -> None:
+    """Prepend `false &&` to the raw enable (rule disabled)."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "enable=${{ github.event_name == 'workflow_dispatch'",
+                    "enable=${{ false && github.event_name == 'workflow_dispatch'",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_raw_disabled_by_false(fixture_dir: Any) -> None:
+    """Wrong-fixture: raw disabled by `false &&` breaks Invariant 2."""
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_raw_disabled(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: raw disabled by `false &&` did NOT cause the production helper to raise."
+    )
+
+
+def _mutate_yaml_extra_sha_rule(src: Path, dst: Path) -> None:
+    """Add an extra `type=sha,format=short` rule (4th rule)."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value + "\ntype=sha,format=short"
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_extra_sha_rule(fixture_dir: Any) -> None:
+    """Wrong-fixture: extra `type=sha,format=short` rule breaks
+    Invariant 2.
+
+    Per Yua 21:05:45 #1: cardinality check rejects any extra
+    non-comment metadata rule.
+    """
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_extra_sha_rule(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: extra sha rule did NOT cause the production helper to raise."
+    )
+
+
+def _mutate_yaml_job_if_false(src: Path, dst: Path) -> None:
+    """Prepend `false &&` to the job-if (gate disabled)."""
+    config = _load_workflow_yaml(src)
+    job = config.get("jobs", {}).get("bump", {})
+    if isinstance(job, dict):
+        if_conditions = job.get("if", "")
+        if isinstance(if_conditions, str):
+            job["if"] = "false && " + if_conditions
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv4_job_if_disabled_by_false(fixture_dir: Any) -> None:
+    """Wrong-fixture: job-if disabled by `false &&` breaks
+    Invariant 4.
+
+    Per Yua 21:05:45 #3: token-presence check accepts this.
+    Strict shape check rejects.
+    """
+    dst = fixture_dir / "auto-digest-bump.yml"
+    _mutate_yaml_job_if_false(AUTO_PIN_WF, dst)
+    try:
+        assert_workflow_run_v_gate(dst)
+    except WorkflowRunVGateError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: job-if disabled by `false &&` did NOT cause the production helper to raise."
+    )
+
+
 def _mutate_yaml_add_if_to_step(src: Path, dst: Path, exact_name: str, if_condition: str) -> None:
     """Add an 'if' key to the named step."""
     config = _load_workflow_yaml(src)
@@ -1352,8 +1627,8 @@ def test_wrong_fixture_inv4_remove_v_gate_in_autopin(
 
 
 # Synthetic corrected guard block (the parent artifact)
-CORRECTED_GUARD = """          if ! [[ "$TAG" == v* ]]; then
-            echo "::error::Manual-dispatch tag must start with v"
+CORRECTED_GUARD = """          if ! [[ "$TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Manual-dispatch tag must be a release tag (semver)"
             exit 1
           fi
 """
