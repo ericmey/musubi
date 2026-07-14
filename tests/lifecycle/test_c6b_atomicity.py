@@ -6579,6 +6579,21 @@ def _r22_child_source(
     )
 
 
+def _r22_assert_exact_outcome(codes: list[int]) -> None:
+    """The ONE correct DETERMINISTIC R22 outcome (Yua): the winner/loser rendezvous forces the winner
+    (op-a22, `codes[0]`) to FINALIZE and the loser (op-b22, `codes[1]`) to insert PAST the FINAL winner and
+    be version-fenced AT APPLY, so the only correct result is exactly ``[WIN_A, FENCE]``. This is stricter
+    than "one win + one conflict-or-fence": a begin-CONFLICT (loser rejected before the winner finalized -
+    the rendezvous broke), a ROLE REVERSAL (B wins / A fenced), TWO winners (A, B - a lost update), or an
+    UNKNOWN code each falsely-greened the apply-fence proof under the old len()-based check and must fail."""
+    if codes != [_R22_WIN_A, _R22_FENCE]:
+        raise DefectStillPresent(
+            f"correct R22 must be exactly [winner op-a22 FINAL, loser op-b22 APPLY-fenced] = "
+            f"[{_R22_WIN_A}, {_R22_FENCE}]; got {codes} (a two-winner lost-update, a begin-conflict instead "
+            "of the deterministic apply fence, or a role reversal)"
+        )
+
+
 def _check_r22(base: Path) -> None:
     _api()  # xfail today (coordinator absent)
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
@@ -6622,18 +6637,12 @@ def _check_r22(base: Path) -> None:
     # rendezvous the winner always finalizes (codes[0]==_R22_WIN_A) and the loser is always fenced
     # (codes[1]==_R22_FENCE) for the correct reference; non_atomic_cas yields a second FINAL winner.
     codes = [p.wait(timeout=120) for p in procs]
-    # EXACTLY ONE winner (identified by its op-distinct code); the loser is rejected at begin
-    # (active_intent_exists) OR at the fence (version_fence_violation) - both valid "cannot overwrite".
-    wins = [c for c in codes if c in (_R22_WIN_A, _R22_WIN_B)]
-    losers = [c for c in codes if c in (_R22_CONFLICT, _R22_FENCE)]
-    if len(wins) != 1 or len(losers) != 1:
-        raise DefectStillPresent(
-            f"exactly one transition must WIN + mutate and the other be fenced/conflict-rejected; got "
-            f"exit codes {codes} (two winners = the lost-update / double-operation race)"
-        )
-    winner_op, winner_target = (
-        ("op-a22", "matured") if wins[0] == _R22_WIN_A else ("op-b22", "demoted")
-    )
+    # The rendezvous makes the outcome DETERMINISTIC and SINGULAR: the winner (op-a22) finalizes and frees
+    # the store, then the loser (op-b22) inserts PAST the FINAL winner and is version-fenced AT APPLY. So
+    # the ONLY correct outcome is exactly [WIN_A, FENCE] (Yua) - a begin-conflict, a role reversal, or two
+    # winners each falsely-green the apply-fence proof under the old len()-based check and must fail here.
+    _r22_assert_exact_outcome(codes)
+    winner_op, winner_target = "op-a22", "matured"  # locked by the deterministic rendezvous
     # CORRELATE the winning op to the single FINAL row, its event, its effective-apply marker, and Qdrant.
     rows = _outbox_for_object(db_path, seed.object_id)
     finals = [r for r in rows if r["state"] == "FINAL"]
@@ -6671,14 +6680,40 @@ def _check_r22(base: Path) -> None:
 
 _R22_REASON = (
     "today two different transitions on one object can both apply (lost update / double operation); R22 "
-    "needs exactly one winner that mutates while the loser is atomically fenced/conflict-rejected, one "
-    "FINAL row, one event, no overwrite - proven with two real processes racing the begin boundary."
+    "needs exactly one winner that mutates while the loser is version-fenced AT APPLY - one FINAL row, one "
+    "event, no overwrite. Proven DETERMINISTICALLY with two real processes: the winner (op-a22) finalizes "
+    "and frees the store, then the loser (op-b22) inserts PAST the FINAL winner and its version-fenced "
+    "apply against the winner's already-applied version is a guaranteed zero-match - the singular "
+    "[winner-FINAL, loser-apply-fenced] outcome, not a begin-boundary race or a conflict-OR-fence."
 )
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R22_REASON)
 def test_r22_two_process_race_one_winner_mutates_loser_fenced(tmp_path: Path) -> None:
     _check_r22(tmp_path)
+
+
+def test_r22_outcome_validator_discriminates() -> None:
+    """GREEN mechanism proof (Yua): the DETERMINISTIC R22 outcome validator accepts ONLY the singular
+    [winner op-a22 FINAL, loser op-b22 APPLY-fenced] result and REJECTS - each at the exact-outcome
+    assertion - a begin-conflict (rendezvous broke), a role reversal, two winners, and an unknown code.
+    Without this, the old len(one-win)+len(one-conflict-or-fence) check would false-green a begin-conflict
+    or role reversal and never actually prove the deterministic APPLY fence."""
+    _r22_assert_exact_outcome(
+        [_R22_WIN_A, _R22_FENCE]
+    )  # the one correct deterministic outcome -> no raise
+    for bad in (
+        [
+            _R22_WIN_A,
+            _R22_CONFLICT,
+        ],  # loser rejected at BEGIN, not the apply fence -> rendezvous broke
+        [_R22_WIN_B, _R22_FENCE],  # role reversal: op-b22 won
+        [_R22_WIN_B, _R22_CONFLICT],  # role reversal + begin-conflict
+        [_R22_WIN_A, _R22_WIN_B],  # two winners = lost update
+        [99, 99],  # unknown outcome codes
+    ):
+        with pytest.raises(DefectStillPresent):
+            _r22_assert_exact_outcome(bad)
 
 
 # ---- R20: rollback-refuses-nonterminal + maintenance lifecycle + terminal-row cleanup -------------- #
