@@ -32,9 +32,11 @@ direct callers (tests) inherit the default. A configured value of ``0`` disables
 waiting — SQLite returns ``SQLITE_BUSY`` immediately on contention rather than
 blocking; it is a deliberate operator override, not a fail-closed guard.
 
-This module owns ONLY today's tables (lifecycle events plus the maturation and
-synthesis cursors). ``lifecycle_outbox`` / ``lifecycle_control`` belong to a later
-slice (S2) and are intentionally NOT declared here.
+This module owns the shared lifecycle tables: lifecycle events, the maturation and
+synthesis cursors, and — as of S2 — the ``lifecycle_outbox`` admission table with its
+``ux_active_intent`` partial-unique index (only the columns S2's admission writes/reads).
+The reconcile/lease/attempt/``terminal_epoch`` columns and the ``lifecycle_control`` table
+are owned by later slices (S4/S6) and are intentionally NOT declared here yet.
 """
 
 from __future__ import annotations
@@ -49,9 +51,10 @@ from typing import Literal
 #: setting explicitly at the composition sites.
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 
-#: The union schema of every component that shares the lifecycle SQLite file — exactly
-#: the tables/indexes those components create today, nothing more. (lifecycle_outbox /
-#: lifecycle_control belong to S2 and are NOT declared here.)
+#: The union schema of every component that shares the lifecycle SQLite file. The
+#: sink/cursor tables plus the C6b ``lifecycle_outbox`` admission table (S2). The
+#: outbox carries only the columns S2's admission writes/reads; the reconcile/lease/
+#: cleanup columns and the ``lifecycle_control`` table are added by later slices (S4/S6).
 _LIFECYCLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS lifecycle_events (
     event_id TEXT PRIMARY KEY,
@@ -91,6 +94,21 @@ CREATE TABLE IF NOT EXISTS synthesis_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_candidates_age
     ON synthesis_candidates(identity_family, first_seen_epoch);
+
+CREATE TABLE IF NOT EXISTS lifecycle_outbox (
+    operation_key TEXT PRIMARY KEY,
+    object_id TEXT,
+    collection TEXT,
+    target_state TEXT,
+    expected_version INTEGER,
+    patch_sha TEXT,
+    patch_json TEXT,
+    intent_digest TEXT,
+    state TEXT,
+    event_id TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_active_intent
+    ON lifecycle_outbox (collection, object_id) WHERE state IN ('PENDING','APPLIED');
 """
 
 

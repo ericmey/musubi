@@ -3415,13 +3415,33 @@ def _api() -> Any:
     if _ACTIVE_CANDIDATE is not None:
         return _ACTIVE_CANDIDATE
     try:
-        from musubi.lifecycle import coordinator as _c  # type: ignore[attr-defined]
+        from musubi.lifecycle import coordinator as _c
     except ImportError as e:
         raise DefectStillPresent(
             "the Phase-1 coordinator module is not implemented (LifecycleTransitionCoordinator + "
             "TransitionIntent + TransitionFinal/TransitionPending)"
         ) from e
     return _c
+
+
+def _real_lacks_stage(method: str) -> bool:
+    """True when NO red-proof candidate is active AND the real src coordinator does not yet expose
+    `method` (a later-slice capability, e.g. `reconcile_once`=S4, `rollback`=S6, `_apply_conditional`
+    =S3). NO-OP (returns False) whenever `_ACTIVE_CANDIDATE` is set, so the wrong-candidate
+    discriminator matrix — which always carries full capability — is never touched."""
+    if _ACTIVE_CANDIDATE is not None:
+        return False
+    coord_cls = getattr(_api(), "LifecycleTransitionCoordinator", None)
+    return coord_cls is None or not hasattr(coord_cls, method)
+
+
+def _require_real_stage(method: str, reason: str) -> None:
+    """Stage-capability guard for the frozen reds. When S2's admission-only real coordinator has not
+    built a later-slice capability, raise the red's OWN intended DefectStillPresent — so a
+    partially-built coordinator keeps each owed red strict-xfail, not a raw AttributeError/
+    OperationalError that would break the strict-xfail contract. NO-OP under an active candidate."""
+    if _real_lacks_stage(method):
+        raise DefectStillPresent(reason)
 
 
 # ---- fixtures + shared helpers --------------------------------------------------------------------- #
@@ -3992,7 +4012,17 @@ def _probe_barrier_free(maintlock: str) -> bool:
 def _check_r1(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     coord = _coordinator(client, db_path)
     _fail_set_payload(client, _TransientQdrantError("injected transient during apply"))
+    # count apply ATTEMPTS (delegates to the failing set_payload)
+    calls = _count_set_payload(client)
     coord.transition(_intent(seed, to_state="matured", operation_key="op-r1"))
+    if _ACTIVE_CANDIDATE is None and calls["n"] != 1:
+        # Non-vacuity (Yua): R1 proves durable-intent-BEFORE-mutation only if the mutation was
+        # actually ATTEMPTED. S2 admission stops at PENDING and attempts zero applies, so the claim
+        # is not yet proven — R1 is owed to S3 conditional apply.
+        raise DefectStillPresent(
+            "R1 requires EXACTLY ONE attempted apply (the transient-faulted mutation) before it can "
+            f"accept PENDING as durable-before-mutation; S2 admission attempted {calls['n']}, owed to S3"
+        )
     rows = _outbox_rows(db_path, "op-r1")
     if not rows:
         raise DefectStillPresent("no durable intent was persisted before the Qdrant mutation")
@@ -4037,6 +4067,7 @@ def _check_r2(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
 
 
 def _check_r3(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    _require_real_stage("reconcile_once", _R3_REASON)
     coord = _coordinator(client, db_path)
     _fail_set_payload(client, _TransientQdrantError("injected transient during apply"))
     res = coord.transition(_intent(seed, to_state="matured", operation_key="op-r3"))
@@ -4164,7 +4195,6 @@ def test_r1_durable_intent_persisted_before_qdrant_mutation(
     _check_r1(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R2_REASON)
 def test_r2_durable_begin_failure_blocks_qdrant_mutation(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
@@ -4524,6 +4554,7 @@ def _check_r15(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     attempts is observability only (increments once per DUE, CLAIMED, ACTUAL Qdrant attempt), bounded
     overflow-safe backoff, atomic (attempts+schedule) persistence. Termination boundary is EXACTLY
     {success -> FINAL, proven-terminal -> ABANDONED} - never attempt count. Each scenario is a fresh env."""
+    _require_real_stage("reconcile_once", _R15_REASON)
     base = Path(db_path).parent
     op = _R15_OP
 
@@ -4821,6 +4852,7 @@ def _check_r17(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     ABA-match; and a stale/expired owner can neither finalize a row the current owner holds nor apply
     effectively (the R13/R22 version fence makes its late attempt a zero-match no-op). Each scenario is a
     fresh env with an injected clock. The reclaim CRASH matrix (real process death) is _check_r17_reclaim."""
+    _require_real_stage("reconcile_once", _R17_REASON)
     base = Path(db_path).parent
     E = 5_000.0  # a lease's expiry epoch
 
@@ -4928,6 +4960,7 @@ def _check_r16(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     guarded UPDATE, rowcount==1 IS ownership); an unexpired owner is exclusive; every post-claim
     disposition is owner-guarded and clears the lease atomically; `claimed` counts successful claims, not
     scanned rows; lease_ttl is positive-finite. Each scenario is a fresh env with an injected clock."""
+    _require_real_stage("reconcile_once", _R16_REASON)
     base = Path(db_path).parent
     T = 5_000.0
 
@@ -5194,6 +5227,7 @@ def _check_r16_race(base: Path) -> None:
     due, unleased row. Exactly ONE claims (WIN) and one loses (LOSE); the durable claim is observed by the
     loser (its rowcount is 0). The row's exact snapshot shows only the winner's claim - one owner, PENDING,
     attempts 0, next_attempt NULL, no event/marker. select_then_update admits BOTH (two WINs)."""
+    _require_real_stage("reconcile_once", _R16_RACE_REASON)
     _api()  # xfail today
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     base.mkdir(parents=True, exist_ok=True)
@@ -5285,6 +5319,7 @@ def _check_r18(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     lets other rows through under both limit=1 (repeated calls) and limit>1 (one batch). The poison stays
     PENDING forever (R15 no-abandon), never dropped, and is processed through the normal claim/apply/fence
     (no lease/cap/version bypass). Each scenario is a fresh env with an injected clock."""
+    _require_real_stage("reconcile_once", _R18_REASON)
     base = Path(db_path).parent
     T = 5_000.0
 
@@ -5366,6 +5401,7 @@ def _check_r19(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     namespace/reason, and the exception message, then checked across the row, the captured log, and the
     Prometheus exposition. R13 full-readback SHA and R15 unknown classification (without leaking reason)
     are preserved."""
+    _require_real_stage("reconcile_once", _R19_REASON)
     base = Path(db_path).parent
     c, s, d = _make_env(base / "r19")
     op = f"{_PII_SENTINEL}-op"
@@ -5471,6 +5507,7 @@ def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Idempotent replay: a PENDING op processed, then REPLAYED (duplicate delivery), yields EXACTLY ONE
     FINAL, ONE audit event, and ONE EFFECTIVE apply (measured by set_payload calls, not readback), leaving
     the object at target/v+1 - never a second event or a second mutation."""
+    _require_real_stage("reconcile_once", _R9_REASON)
     coord = _coordinator(client, db_path)
     _fail_set_payload(client, _TransientQdrantError("hold op-r9 PENDING"))
     r1 = coord.transition(_intent(seed, to_state="matured", operation_key="op-r9"))
@@ -6003,7 +6040,6 @@ def test_r10_operation_key_idempotent_across_caller_retries(
     _check_r10(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R11_REASON)
 def test_r11_single_active_intent_per_object(tmp_path: Path) -> None:
     _check_r11(tmp_path)
 
@@ -6015,7 +6051,6 @@ _R14_RACE_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R14_RACE_REASON)
 def test_r14_two_process_admission_race_holds_cap(tmp_path: Path) -> None:
     _check_r14_race(tmp_path)
 
@@ -6166,6 +6201,7 @@ def _drive_crash(
 
 
 def _check_r5(base: Path) -> None:  # C1: crash after PENDING, before Qdrant
+    _require_real_stage("reconcile_once", _R5_REASON)
     seed, db_path, qdrant_path = _drive_crash(base, "after_pending_commit", _C1_CODE, "op-r5")
     rows = _outbox_rows(db_path, "op-r5")
     if len(rows) != 1 or rows[0]["state"] != "PENDING":
@@ -6595,6 +6631,7 @@ def _r22_assert_exact_outcome(codes: list[int]) -> None:
 
 
 def _check_r22(base: Path) -> None:
+    _require_real_stage("_apply_conditional", _R22_REASON)
     _api()  # xfail today (coordinator absent)
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     seed, db_path, qdrant_path = _make_ondisk_env(
@@ -6729,6 +6766,7 @@ def _check_r20(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     generation, holds the EX barrier through the deploy handoff, stays quiesced on handoff failure, and
     the terminal-row cleanup is a bounded, deterministic, atomic CTE that preserves young / NULL-age /
     every nonterminal row. Each sub-scenario runs on its own isolated DB (its own maintlock)."""
+    _require_real_stage("rollback", _R20_REASON)
     base = db_path.parent
     coll = seed.collection
 
@@ -7201,6 +7239,7 @@ def _check_r20_drain(base: Path) -> None:
     in-flight barrier-aware admission's LOCK_SH critical section, and must not destroy its committing
     intent. A LOCK_EX|LOCK_NB probe must raise BlockingIOError while B is inside; a leak flag catches a
     rollback that reaches its post-lock point while B is inside; B's committed intent must survive."""
+    _require_real_stage("rollback", _R20_DRAIN_REASON)
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     coll = str(collection_for_plane("episodic"))
     src = _r20_reader_child_source(
@@ -7235,6 +7274,7 @@ def _check_r20_reconciler_drain(base: Path) -> None:
     in-flight reconciler holds LOCK_SH inside its pass; a rollback's exclusive barrier must not overlap it
     (LOCK_EX|LOCK_NB probe raises BlockingIOError; no post-lock overlap). reconcile_bypasses_barrier makes
     ONLY the reconciler skip LOCK_SH+the recheck - caught HERE (probe succeeds), invisible to admission."""
+    _require_real_stage("rollback", _R20_RECONCILER_DRAIN_REASON)
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     src = _r20_reconciler_child_source(
         mode=mode, db_path=base / "lifecycle.db", barrier_dir=base / "barrier"
@@ -9352,7 +9392,7 @@ _P0C_T4_REASON = (
             _field,
             _constraint,
             marks=()
-            if _field == "lifecycle_sqlite_busy_timeout_ms"
+            if _field in ("lifecycle_sqlite_busy_timeout_ms", "lifecycle_pending_cap")
             else (
                 pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T4_REASON),
             ),

@@ -111,6 +111,15 @@ class Settings(BaseSettings):
             "not a fail-closed guard."
         ),
     )
+    lifecycle_pending_cap: int = Field(
+        default=10_000,
+        gt=0,
+        description=(
+            "Global cap on non-terminal (PENDING/APPLIED) lifecycle_outbox rows. The "
+            "coordinator's atomic admission rejects a new transition with cap_exceeded "
+            "once the backlog reaches this cap. Positive int; there is no unbounded option."
+        ),
+    )
     log_dir: Path = Field(description="Host path for structured log output.")
 
     # ------------------------------------------------------------------

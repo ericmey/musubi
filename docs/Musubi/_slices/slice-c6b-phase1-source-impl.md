@@ -79,6 +79,7 @@ review.
 - `tests/ops/test_compose.py`
 - `tests/lifecycle/test_c6b_atomicity.py`
 - `tests/lifecycle/test_s1_store_policy.py`
+- `tests/lifecycle/test_s2_coordinator_admission.py`
 - `tests/ops/test_lifecycle_storage_doc_drift.py`
 - `docs/Musubi/08-deployment/compose-stack.md`
 - `docs/Musubi/08-deployment/host-profile.md`
@@ -121,17 +122,22 @@ Yua-authorized narrow).
 
 ## Test Contract
 
-> Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **100** functions in this
-> slice's own contract below + **8** from `08-deployment/compose-stack` = **108** `tc-coverage` bullets,
-> 0 missing. Status from runtime collection (92 passed / 59 xfailed instances across the self files),
-> NOT from tc-coverage's classifier — which mislabels variable-reason strict-xfail reds as "passing".
-> Strict-xfail acceptance reds (R1–R22, guards G2a/G2b/G3) are owed to S2–S7; **G1
-> (`test_g1_no_direct_state_transition_setpayload_outside_coordinator`) is closure-only and flips ONLY
-> under H5** ([[_slices/slice-h5-unify-state-mutation]]).
+> Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **105** functions in this
+> slice's own contract below + **8** from `08-deployment/compose-stack` = **113** `tc-coverage` bullets,
+> 0 missing. Status from runtime collection (101 passed / 55 xfailed instances across the self files;
+> the atomicity file is 78 passed / 55 xfailed / 0 failed / 0 XPASS after the S2 flips + non-vacuity
+> stage guards), NOT from tc-coverage's classifier — which mislabels variable-reason strict-xfail reds
+> as "passing". **S2 flips exactly R2, R11, R14 two-process admission race, and the `lifecycle_pending_cap`
+> setting**, backed by the 5 direct real-source proofs in `tests/lifecycle/test_s2_coordinator_admission.py`.
+> Every other acceptance red stays strict-xfail: now that S2's admission-only coordinator exists, a
+> NO-OP-under-candidate stage-capability guard (`_require_real_stage`) keeps each owed red raising its
+> OWN DefectStillPresent — not the AttributeError/OperationalError that a partially-built coordinator
+> would otherwise surface (`reconcile_once`=S4, `rollback`=S6, `_apply_conditional`=S3; R1 requires a
+> real attempted apply). **G1 is closure-only and flips ONLY under H5** ([[_slices/slice-h5-unify-state-mutation]]).
 
 ### Accepted atomicity — R acceptance reds & controls (`test_c6b_atomicity.py`) (46)
 1. `test_r1_durable_intent_persisted_before_qdrant_mutation` — strict-xfail — acceptance red (owed S2-S7)
-2. `test_r2_durable_begin_failure_blocks_qdrant_mutation` — strict-xfail — acceptance red (owed S2-S7)
+2. `test_r2_durable_begin_failure_blocks_qdrant_mutation` — GREEN — S2 flip (load-bearing; direct proof in test_s2)
 3. `test_r3_transient_failure_is_ok_pending_then_reconciles` — strict-xfail — acceptance red (owed S2-S7)
 4. `test_r4_terminal_failure_is_err_abandoned_no_final` — strict-xfail — acceptance red (owed S2-S7)
 5. `test_r5_crash_after_pending_before_qdrant` — strict-xfail — acceptance red (owed S2-S7)
@@ -140,11 +146,11 @@ Yua-authorized narrow).
 8. `test_r8_finalize_transaction_is_atomic` — strict-xfail — acceptance red (owed S2-S7)
 9. `test_r9_idempotent_replay` — strict-xfail — acceptance red (owed S2-S7)
 10. `test_r10_operation_key_idempotent_across_caller_retries` — strict-xfail — acceptance red (owed S2-S7)
-11. `test_r11_single_active_intent_per_object` — strict-xfail — acceptance red (owed S2-S7)
+11. `test_r11_single_active_intent_per_object` — GREEN — S2 flip (import-gate mechanical; behavioral proof in test_s2)
 12. `test_r12_hard_version_fence_refuses_stale` — strict-xfail — acceptance red (owed S2-S7)
 13. `test_r13_conditional_apply_full_readback_patch_sha` — strict-xfail — acceptance red (owed S2-S7)
 14. `test_r14_hard_pending_cap_admission_backpressure` — strict-xfail — acceptance red (owed S2-S7)
-15. `test_r14_two_process_admission_race_holds_cap` — strict-xfail — acceptance red (owed S2-S7)
+15. `test_r14_two_process_admission_race_holds_cap` — GREEN — S2 flip (import-gate mechanical; behavioral proof in test_s2)
 16. `test_r15_transient_never_abandoned_by_attempt_count` — strict-xfail — acceptance red (owed S2-S7)
 17. `test_r16_two_process_claim_race_one_owner` — strict-xfail — acceptance red (owed S2-S7)
 18. `test_r16_valid_lease_exclusive_processing` — strict-xfail — acceptance red (owed S2-S7)
@@ -208,7 +214,7 @@ Yua-authorized narrow).
 72. `test_p0c_drift_manual_recovery_runbook` — GREEN — D0/S1 flip
 73. `test_p0c_drift_parsers_discriminate` — GREEN — control/discriminator
 74. `test_p0c_drift_root_compose_dir_mount_and_worker` — GREEN — D0/S1 flip
-75. `test_p0c_new_lifecycle_setting_exists_and_validates` — MIXED — busy_timeout GREEN (S1); 8 other params strict-xfail (S2-S6)
+75. `test_p0c_new_lifecycle_setting_exists_and_validates` — MIXED — busy_timeout (S1) + lifecycle_pending_cap (S2) GREEN; 7 other params strict-xfail (S3-S6)
 76. `test_p0c_readiness_probe_rule_discriminates` — GREEN — control/discriminator
 77. `test_p0c_reconcile_is_worker_only` — strict-xfail — acceptance red (owed S2-S7)
 78. `test_p0c_same_active_storage_rule_discriminates` — GREEN — control/discriminator
@@ -240,6 +246,13 @@ Yua-authorized narrow).
 ### D0 lifecycle-storage doc-drift (`test_lifecycle_storage_doc_drift.py`) (2)
 99. `test_named_current_state_docs_reject_the_retired_lifecycle_file` — GREEN — D0/S1 flip
 100. `test_scan_discriminates_retired_vs_canonical` — GREEN — control/discriminator
+
+### S2 direct real-source admission proofs (`test_s2_coordinator_admission.py`) (5)
+101. `test_admission_writes_pending_and_returns_ok_pending` — GREEN — S2 direct: admission → Ok(pending) + one PENDING row (also folds the WARN-1 post-commit-fault propagation proof and the WARN-2 `store.connect`→`durable_begin_failed` proof)
+102. `test_cap_rejects_at_cap` — GREEN — S2 direct: at-cap admission → `cap_exceeded`, no row
+103. `test_single_active_same_object_rejects` — GREEN — S2 direct: second active intent → `active_intent_exists` (also folds the correction-3 dup-`operation_key` → `durable_begin_failed` classification)
+104. `test_two_process_single_active_admits_one_rejects_conflict` — GREEN — S2 direct: two real-source processes, one admits / one `active_intent_exists`, zero Qdrant touch
+105. `test_two_process_cap_admission_holds_cap` — GREEN — S2 direct: two real-source processes race the cap, backlog settles at exactly the cap, zero Qdrant touch
 
 **Cross-slice regression gate (NOT part of this parsed Test Contract):**
 `tests/lifecycle/test_c6_event_loss.py` (1 passed / 8 xfailed, frozen) is owned by the active C6 slice
