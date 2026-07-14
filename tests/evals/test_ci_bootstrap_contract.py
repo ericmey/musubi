@@ -37,9 +37,15 @@ def _assert_workflow_contract(content: str) -> None:
             assert "uv pip install -e ." not in run_cmd, "Must not use raw pip install"
             assert "--system" not in run_cmd, "Must not use system python flag"
 
-            if "uv python install 3.12" in run_cmd:
+            # Extract exact non-comment command lines
+            normalized_lines = [line.strip() for line in run_cmd.splitlines()]
+            executable_lines = [
+                line for line in normalized_lines if line and not line.startswith("#")
+            ]
+
+            if "uv python install 3.12" in executable_lines:
                 uv_python_idx = idx
-            if "uv sync --extra dev" in run_cmd:
+            if "uv sync --extra dev" in executable_lines:
                 uv_sync_idx = idx
 
         if step.get("uses") == "astral-sh/setup-uv@v8.1.0":
@@ -124,3 +130,19 @@ jobs:
         AssertionError, match="Bootstrap steps must occur in order before the smoke gate"
     ):
         _assert_workflow_contract(wrong_order)
+
+
+def test_evals_workflow_discriminator_echo_decoy() -> None:
+    """Contract: Prove that echo decoys inside run blocks fail the exact-line assertion."""
+    decoy_content = """
+jobs:
+  smoke:
+    steps:
+      - uses: astral-sh/setup-uv@v8.1.0
+      - run: echo uv python install 3.12
+      - run: echo uv sync --extra dev
+      - name: Run PR Smoke Gate
+        run: echo gate
+    """
+    with pytest.raises(AssertionError, match="Must use canonical uv python install"):
+        _assert_workflow_contract(decoy_content)
