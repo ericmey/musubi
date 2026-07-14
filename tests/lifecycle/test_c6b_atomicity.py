@@ -809,28 +809,106 @@ def _split_cte(flat: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+_TERMINAL_STATE_VALUES = {
+    "FINAL",
+    "ABANDONED",
+}  #: the ONLY string literals the pinned shape may contain
+
+
+def _sql_lex(raw: str) -> tuple[list[str], list[str]] | None:
+    """A BOUNDED SQLite-ish lexer (NOT a full parser). Strips `--` line and `/* */` block comments and
+    recognizes single-quoted string literals (with `''` escape) so structural keywords are NEVER matched
+    inside a comment or a string. Returns (statements, string_values):
+    - statements: the top-level `;`-separated pieces, comments removed, uppercased + whitespace-collapsed,
+      empties (whitespace/comment-only) dropped. A `;` inside a string does NOT split.
+    - string_values: the uppercased inner content of every string literal encountered.
+    Returns None (fail closed) on an unterminated string or block comment."""
+    stmts: list[str] = []
+    buf: list[str] = []
+    strings: list[str] = []
+    i, n = 0, len(raw)
+    while i < n:
+        pair = raw[i : i + 2]
+        if pair == "--":
+            j = raw.find("\n", i)
+            i = n if j < 0 else j + 1
+            buf.append(" ")
+        elif pair == "/*":
+            j = raw.find("*/", i + 2)
+            if j < 0:
+                return None  # unterminated block comment
+            i = j + 2
+            buf.append(" ")
+        elif raw[i] == "'":
+            i += 1
+            val: list[str] = []
+            closed = False
+            while i < n:
+                if raw[i] == "'":
+                    if i + 1 < n and raw[i + 1] == "'":
+                        val.append("'")
+                        i += 2
+                        continue
+                    i += 1
+                    closed = True
+                    break
+                val.append(raw[i])
+                i += 1
+            if not closed:
+                return None  # unterminated string literal
+            content = "".join(val)
+            strings.append(content.upper())
+            buf.append("'" + content + "'")
+        elif raw[i] == ";":
+            stmts.append("".join(buf))
+            buf = []
+            i += 1
+        else:
+            buf.append(raw[i])
+            i += 1
+    stmts.append("".join(buf))
+    normalized = [" ".join(s.upper().split()) for s in stmts]
+    return [s for s in normalized if s], strings
+
+
 def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
-    """Token-aware shape violations of the cleanup DELETE. [] = the pinned atomic shape (a `WITH <sel>`
-    CTE ordered by terminal_epoch THEN operation_key with a bounded LIMIT; a DELETE restricted to the
-    selected operation keys; the FULL terminal-eligibility predicate - state IN ('FINAL','ABANDONED') AND
-    terminal_epoch IS NOT NULL AND terminal_epoch < <cutoff> - repeated in BOTH the inner selector AND the
-    outer DELETE WHERE; RETURNING). Each of the three eligibility components is required INDEPENDENTLY in
-    each half. The count SELECTs (no operation_key + no LIMIT) are ignored."""
+    """Bounded-lexer shape violations of the cleanup DELETE (NOT a full SQL parser; fails closed when the
+    supported shape cannot be recognized unambiguously). [] = the pinned atomic shape: ONE executable
+    statement that is a `WITH <sel>` CTE ordered by terminal_epoch THEN operation_key with a bounded LIMIT;
+    a DELETE restricted to the selected operation keys; the FULL terminal-eligibility predicate - state IN
+    ('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND terminal_epoch < <cutoff> - repeated in BOTH the
+    inner selector AND the outer DELETE WHERE; RETURNING; and NO other statement/token after it. Comments and
+    string contents never satisfy a keyword; any string literal other than the terminal state values fails
+    closed. The count SELECTs (no operation_key + no LIMIT) are ignored."""
     v: list[str] = []
-    deletes = [s for s in sql_args if "DELETE" in s.upper()]
-    batch_selectors = [
-        s
-        for s in sql_args
-        if "DELETE" not in s.upper() and "OPERATION_KEY" in s.upper() and "LIMIT" in s.upper()
-    ]
-    if batch_selectors and deletes:
+    lexed = [_sql_lex(raw) for raw in sql_args]
+    if any(lx is None for lx in lexed):
+        return ["unlexable_sql"]  # unterminated string/comment -> fail closed
+    delete_args: list[tuple[list[str], list[str]]] = []
+    batch_selectors: list[tuple[list[str], list[str]]] = []
+    for lx in lexed:
+        assert lx is not None
+        stmts, strings = lx
+        joined = " ".join(stmts)
+        if "DELETE" in joined:
+            delete_args.append((stmts, strings))
+        elif "OPERATION_KEY" in joined and "LIMIT" in joined:
+            batch_selectors.append((stmts, strings))
+    if batch_selectors and delete_args:
         v.append(
             "split_select_delete"
         )  # a standalone batch SELECT + a separate DELETE (two statements)
-    if len(deletes) != 1:
+    if len(delete_args) != 1:
         v.append("not_single_delete")
         return v  # cannot shape-check the delete without exactly one
-    norm = " ".join(deletes[0].upper().split())
+    stmts, strings = delete_args[0]
+    if len(stmts) != 1:
+        v.append("multiple_statements")  # trailing SELECT/DELETE/etc after the single CTE DELETE
+        return v  # more than one executable statement -> fail closed
+    if any(s not in _TERMINAL_STATE_VALUES for s in strings):
+        v.append("unexpected_string_literal")  # a keyword/value hidden in a string -> fail closed
+        return v
+    norm = stmts[0]
     flat = norm.replace(" ", "")
     if "WITH" not in norm or "AS(" not in flat:
         v.append("missing_cte")
@@ -871,8 +949,10 @@ _G2B_REASON = (
     "statement: a WITH <sel> CTE ordered by terminal_epoch THEN operation_key with a bounded LIMIT, a "
     "DELETE restricted to the selected operation keys, the FULL terminal-eligibility predicate (state IN "
     "('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND terminal_epoch < cutoff) repeated in BOTH the "
-    "inner selector AND the outer DELETE WHERE, and RETURNING. Zero or multiple coordinator cleanup methods, "
-    "a split select/delete, any missing inner/outer state/non-null/age component, a missing "
+    "inner selector AND the outer DELETE WHERE, RETURNING, and NO other statement/token after it. Recognition "
+    "is via a bounded lexer (comments and string contents never satisfy a keyword; a non-terminal string "
+    "literal fails closed), not substring matching. Zero or multiple coordinator cleanup methods, a split "
+    "select/delete, a trailing statement, any missing inner/outer state/non-null/age component, a missing "
     "tiebreak/LIMIT/RETURNING, or a dynamic/unresolvable SQL argument each fail."
 )
 
@@ -965,6 +1045,29 @@ def test_g2b_rule_discriminates_cleanup_sql_shape() -> None:
     assert _cleanup_sql_violations([nondeterministic]) == ["nondeterministic_tie"]
     assert _cleanup_sql_violations([missing_bound]) == ["missing_bound"]
     assert _cleanup_sql_violations([missing_returning]) == ["missing_returning"]
+
+    # ---- bounded lexer: comments/strings never satisfy a keyword; exactly ONE executable statement ----
+    # a trailing SELECT or DELETE after the single CTE DELETE is rejected (not one atomic statement)
+    assert "multiple_statements" in _cleanup_sql_violations([_G2B_CORRECT + "; SELECT 1"])
+    assert "multiple_statements" in _cleanup_sql_violations(
+        [_G2B_CORRECT + "; DELETE FROM unrelated"]
+    )
+    # RETURNING only inside a `--` comment is NOT a RETURNING keyword -> missing_returning
+    comment_returning = _G2B_CORRECT.replace(
+        "RETURNING operation_key", "-- RETURNING operation_key"
+    )
+    assert _cleanup_sql_violations([comment_returning]) == ["missing_returning"]
+    # an eligibility token present ONLY in a comment does not count (here the outer age)
+    comment_outer_age = missing_outer_age + " -- and terminal_epoch < :cutoff on the outer"
+    assert _cleanup_sql_violations([comment_outer_age]) == ["missing_outer_age"]
+    # a keyword hidden in a STRING literal is not a keyword, and the non-terminal literal fails closed
+    string_returning = _G2B_CORRECT.replace("RETURNING operation_key", "AND note = 'RETURNING'")
+    assert _cleanup_sql_violations([string_returning]) == ["unexpected_string_literal"]
+    # an unterminated string/comment fails closed
+    assert _cleanup_sql_violations([_G2B_CORRECT + " /* unterminated"]) == ["unlexable_sql"]
+    # CONTROLS: harmless comments and a bare `;` terminator keep the correct shape green
+    assert _cleanup_sql_violations(["-- cleanup terminal rows\n" + _G2B_CORRECT + " -- done"]) == []
+    assert _cleanup_sql_violations([_G2B_CORRECT + " ;  "]) == []
 
     # ---- through the ACTUAL method scanner (unique coordinator method + local SQL var resolution) ----
     def scan(src: str) -> tuple[int, list[str]]:
