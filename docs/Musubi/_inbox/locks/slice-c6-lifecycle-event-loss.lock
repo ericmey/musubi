@@ -1,8 +1,8 @@
-owner: aoi
-branch: slice/c6-lifecycle-event-loss-red
-worktree: /Users/ericmey/Projects/musubi-worktrees/aoi-c6-event-loss
-claimed: 2026-07-13
-scope: C6 lifecycle audit-event-loss RED CONTRACT — tests + slice doc only, ZERO src/musubi.
-authorization: Yua (C6 lane 2026-07-13) — tests/spec first, no src until she reviews the packet.
-second-reader: Tama or Shiori (only after their current lanes clear).
-forbidden: src/musubi (zero src); the frozen RET-007 v1.11.8 packet; host/deploy state.
+owner: yua
+branch: slice/c6-durable-on-accept-impl
+worktree: /Users/ericmey/Projects/musubi-worktrees/yua-c6-durable-on-accept
+claimed: 2026-07-14
+scope: C6 lifecycle audit-event-loss Option-A source successor plus its accepted red contract.
+authorization: Yua (C6 implementation lane 2026-07-14) — synchronous durable-on-accept only.
+second-reader: Tama, with Shiori available for an additional independent read.
+forbidden: C6b coordinator/store changes; RET/ART source; host/deploy state; merge before C6b reviewable.

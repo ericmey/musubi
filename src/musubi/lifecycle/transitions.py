@@ -109,6 +109,7 @@ class TransitionError:
     - ``missing_reason``       — the ``reason`` argument was empty.
     - ``circular_supersession`` — supersession would create A → B → A.
     - ``invariant_violation``  — model validation failed on the updated payload.
+    - ``lifecycle_event_write_failed`` — mutation committed, audit persistence refused.
     """
 
     code: str
@@ -148,8 +149,9 @@ def transition(
     configured a persistent events store (early boot, ad-hoc tests). When
     provided, the event is recorded via :meth:`LifecycleEventSink.record`
     *after* the Qdrant payload update — the order matters because a failed
-    sqlite write must not leave the mutation un-audited (we retry the sink
-    write on flush; the mutation is idempotent).
+    sqlite write is surfaced as ``lifecycle_event_write_failed`` rather than
+    falsely reporting success. Repairing the already-applied Qdrant mutation
+    is the linked C6b transactional-outbox responsibility.
     """
     if not reason:
         return Err(
@@ -265,7 +267,19 @@ def transition(
         )
 
     if sink is not None:
-        sink.record(event)
+        event_result = sink.record(event)
+        if isinstance(event_result, Err):
+            return Err(
+                error=TransitionError(
+                    code="lifecycle_event_write_failed",
+                    message=(
+                        "Lifecycle mutation committed, but lifecycle event persistence failed; "
+                        "atomic recovery remains tracked by C6b."
+                    ),
+                    from_state=current_state,
+                    to_state=target_state,
+                )
+            )
 
     return Ok(
         value=TransitionResult(
