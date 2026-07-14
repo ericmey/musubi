@@ -3,10 +3,10 @@ title: "Slice: H5 — unify all lifecycle state mutation behind LifecycleTransit
 slice_id: slice-h5-unify-state-mutation
 section: _slices
 type: slice
-status: blocked
-owner: unassigned
+status: in-progress
+owner: codex-gpt5
 phase: "Lifecycle-audit 2026-07-13 — H5 mutation-path unification (C6b dependency)"
-tags: [section/slices, status/blocked, type/slice, lifecycle, atomicity, refactor]
+tags: [section/slices, status/in-progress, type/slice, lifecycle, atomicity, refactor]
 updated: 2026-07-14
 reviewed: false
 depends-on: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
@@ -45,6 +45,64 @@ Migrate all of the above to `LifecycleTransitionCoordinator`. The mechanical gua
 ([[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] guard G1: AST/rg forbidding direct
 `state`-writing `set_payload` outside the coordinator) flips green when this slice lands.
 
+The migration is a three-way outcome migration, not merely a syntactic delegation:
+
+- each plane `transition()` requires a coordinator and returns a consumed
+  `Result[TransitionResult | TransitionPending, TransitionError]`;
+- `Pending` is preserved as deferred work (never fabricated into the historical tuple success shape);
+- `Err` remains terminal and typed;
+- `Final` is the only arm that may run completed/dependent work;
+- concept promotion carries `promoted_to` and `promoted_at` in the coordinator's deterministic intended
+  patch, version fence, readback digest, and replay path. A post-Final second `set_payload` is forbidden;
+- the two concept HTTP callers map Pending to the same exact typed 202 body used by the four S7 routes.
+
+## Owned paths
+
+- `docs/Musubi/_slices/slice-h5-unify-state-mutation.md`
+- `docs/Musubi/13-decisions/h5-canonical-plane-transition-design.md`
+- `src/musubi/planes/episodic/plane.py`
+- `src/musubi/planes/concept/plane.py`
+- `src/musubi/planes/thoughts/plane.py`
+- `src/musubi/planes/artifact/plane.py`
+- `src/musubi/planes/curated/plane.py`
+- `src/musubi/lifecycle/coordinator.py`
+- `src/musubi/lifecycle/transitions.py`
+- `src/musubi/lifecycle/promotion.py`
+- `src/musubi/lifecycle/demotion.py`
+- `src/musubi/lifecycle/runner.py`
+- `src/musubi/api/bootstrap.py`
+- `src/musubi/api/dependencies.py`
+- `src/musubi/api/lifecycle_responses.py`
+- `src/musubi/api/routers/writes_concept.py`
+- `openapi.yaml`
+- `tests/lifecycle/test_h5_unify_state_mutation.py`
+- `tests/lifecycle/test_c6b_atomicity.py`
+- `tests/lifecycle/test_promotion.py`
+- `tests/lifecycle/test_demotion.py`
+- `tests/api/test_concept_writes.py`
+
+## Forbidden paths
+
+- deployment and migration paths (owned by the subsequent FILE-to-DIR migration gate)
+- adapters and retrieval code
+- plane create/capture methods and curated initial-state writes
+- C6 durable sink acceptance/flush behavior
+
+## Test Contract
+
+1. `test_h5_g1_no_direct_state_transition_setpayload_outside_coordinator`
+2. `test_h5_present_denominator_is_empty_after_accounted_migration`
+3. `test_h5_each_plane_transition_requires_coordinator_and_preserves_final_pending_err`
+4. `test_h5_concept_promotion_receipt_is_in_the_atomic_intended_patch`
+5. `test_h5_concept_promotion_receipt_participates_in_replay_and_full_readback`
+6. `test_h5_promotion_pending_defers_notification_and_rejection`
+7. `test_h5_promotion_final_runs_dependent_work_once`
+8. `test_h5_demotion_pending_does_not_increment_completed`
+9. `test_h5_demotion_final_increments_completed_once`
+10. `test_h5_concept_promote_http_pending_is_typed_202`
+11. `test_h5_concept_delete_http_pending_is_typed_202`
+12. `test_h5_coordinator_result_is_consumed_at_every_migrated_caller`
+
 ## Relationship (acyclic — no circular dependency)
 
 - **Depends on:** [[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]] **Phase 1** — H5 consumes the
@@ -56,8 +114,13 @@ Migrate all of the above to `LifecycleTransitionCoordinator`. The mechanical gua
 
 ## Status
 
-**`blocked`** (2026-07-14) — **WITHHELD pending C6b source phases S1–S7 + the caller `Pending`
-semantics**; spec stub only, discovered by C6b's inventory. Owner: unassigned. Tracking **Issue #439**
-(`status:blocked`). Design + contract are future work; this slice exists so the dependency is concrete and
-C6b's guard red (G1) has a named destination — H5 cannot start until the coordinator it migrates onto
-exists (S1–S7) and the `Pending` caller semantics are specified.
+**`in-progress`** (2026-07-14) — C6b source phases S1-S7 merged on main at `dd0f971`; the dependency is
+now satisfied. Tracking **Issue #439** (`status:in-progress`). The first H5 commit is contract/tests-only;
+source follows only after the five-plane, caller-outcome, concept-receipt, and HTTP-202 reds discriminate
+the unsafe alternatives.
+
+## Work log
+
+- 2026-07-14 — `codex-gpt5` claimed H5 after PR #455 merged. Re-derived the live denominator as the five
+  plane `transition()` methods. Locked three-way plane/caller semantics and the concept promotion receipt
+  into the test contract before source work; release/deploy remains held behind H5 and the storage migration.
