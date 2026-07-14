@@ -190,15 +190,15 @@ remain green." and "the test asserts EQUALITY, not divergence"
 
 ## 7 wrong-candidate discriminators
 
-Per Yua 00:43:32, the wrong-candidate tests use a
-test-only/reference model: a "candidate fix" is a small
-wrapper around the current `index()` method that
-implements ONE wrong fix. Each wrong candidate must fail
-its named acceptance assertion; the correct reference
-satisfies it. The wrong-candidate tests do NOT modify
-`src/musubi/`. The withdrawn "force network failure on
-operation 2" and "lease as ordinary upsert" claims are
-NOT in this list.
+Per Yua 00:43:32, the wrong-candidate tests use direct
+live-Qdrant test-only reference seams that model one
+candidate ordering each; they do NOT wrap the current
+`ArtifactPlane.index()` method. Each wrong candidate must
+fail its named acceptance assertion; a live correct-reference
+artifact satisfies the same assertion. The wrong-candidate
+tests do NOT modify `src/musubi/`. The withdrawn "force
+network failure on operation 2" and "lease as ordinary
+upsert" claims are NOT in this list.
 
 1. **Deterministic IDs only (Option A without
    fence).** Fails Property 5 (concurrent
@@ -209,13 +209,16 @@ NOT in this list.
    mixed content/generation, stale tail, or publisher
    loss—not merely doubled counts.
 2. **Delete-before-upsert (compensating cleanup
-   without fence).** Fails Property 5 (concurrent
-   race; both writers' delete-then-upsert interleave;
-   loser wipes the winner).
+   without fence).** Fails Property 5: the executable
+   seam performs delete/delete, then winner and loser
+   upserts with distinct point IDs; both generations
+   remain visible, so there is no single serialized
+   winner.
 3. **Upsert-before-delete (competing order;
-   dangerous).** Fails Property 3 (publish failure;
-   prior generation left visible because the loser's
-   delete ran first).
+   dangerous).** Fails Property 3: the executable seam
+   writes the failed generation, then performs an
+   unfenced artifact-wide delete; the prior committed
+   generation is lost and the resulting view is empty.
 4. **Generation pointer without read filtering.**
    Fails Property 1 (second index without fence
    re-points the metadata; reads see the new

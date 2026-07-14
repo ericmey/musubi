@@ -66,11 +66,11 @@ The spike demonstrates, not this slice, but the spike acceptance tests for the s
 
 ## 7 wrong-candidate discriminators (per Yua 00:43:32)
 
-The wrong-candidate tests use a test-only/reference model: a "candidate fix" is a small wrapper around the current `index()` method that implements ONE wrong fix. Each wrong candidate must fail its named acceptance assertion; the correct reference satisfies it. The wrong-candidate tests do NOT modify `src/musubi/`. Per Yua 00:43:32:
+The wrong-candidate tests use direct live-Qdrant test-only reference seams that model one candidate ordering each; they do NOT wrap the current `ArtifactPlane.index()` method. Each wrong candidate must fail its named acceptance assertion; a live correct-reference artifact satisfies the same assertion. The wrong-candidate tests do NOT modify `src/musubi/`. Per Yua 00:43:32:
 
 1. **Deterministic IDs only (Option A without fence).** Fails Property 5 (concurrent same-artifact race; both writers' generations visible because the second overwrites by chunks_index and the fence is missing). The deterministic-ID wrong candidate must detect mixed content/generation, stale tail, or publisher loss—not merely doubled counts.
-2. **Delete-before-upsert (compensating cleanup without fence).** Fails Property 5 (concurrent race; both writers' delete-then-upsert interleave; loser wipes the winner).
-3. **Upsert-before-delete (competing order; dangerous).** Fails Property 3 (publish failure; prior generation left visible because the loser's delete ran first).
+2. **Delete-before-upsert (compensating cleanup without fence).** Fails Property 5: the executable seam performs delete/delete, then winner and loser upserts with distinct point IDs; both generations remain visible, so there is no single serialized winner.
+3. **Upsert-before-delete (competing order; dangerous).** Fails Property 3: the executable seam writes the failed generation, then performs an unfenced artifact-wide delete; the prior committed generation is lost and the resulting view is empty.
 4. **Generation pointer without read filtering.** Fails Property 1 (second index without fence re-points the metadata; reads see the new generation but the prior generation's chunks are still in the collection; the read returns both).
 5. **Unfenced last-writer-wins generation switch.** Fails Property 5 (concurrent; both writers' generations are visible; metadata races).
 6. **Compensating rollback that deletes a concurrent winner.** Fails Property 5 (a loser that cleans up at the end of `index()` may wipe the winner's chunks; the loser's lease must prevent this).
