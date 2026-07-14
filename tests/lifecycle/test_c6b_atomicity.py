@@ -6193,7 +6193,6 @@ _R17_RECLAIM_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R17_RECLAIM_REASON)
 def test_r17_crash_reclaim_readback_confirms_no_reapply(tmp_path: Path) -> None:
     _check_r17_reclaim(tmp_path)
 

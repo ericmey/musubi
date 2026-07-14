@@ -1177,6 +1177,10 @@ class LifecycleTransitionCoordinator:
         # confirmed: the attempt happened (increment, no reschedule); hold the lease through APPLIED,
         # release it in the FINAL move.
         self._persist_attempt(opk, reschedule=False, owner=token)
+        # R17 crash seam: Qdrant is mutated and the row is still PENDING (+leased); a crash HERE, before
+        # the APPLIED commit, leaves a durable side effect that a later reclaim readback-confirms and
+        # finalizes WITHOUT a second apply (the readback branch above). Default no-op; no production exit.
+        self._checkpoint("after_qdrant_before_applied")
         self._mark_applied(opk, oid, tstate, owner=token)
         self._finalize(opk, owner=token)
         counts["finalized"] += 1
