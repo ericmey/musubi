@@ -3,12 +3,12 @@ title: "Slice: C6b Phase-1 source cut (S1-S7 implementation)"
 slice_id: slice-c6b-phase1-source-impl
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: aoi
 phase: "Lifecycle 2026-07-14 — C6b Phase-1 source cut S1-S7"
-tags: [section/slices, status/in-progress, type/slice, lifecycle, atomicity, source]
+tags: [section/slices, status/done, type/slice, lifecycle, atomicity, source]
 updated: 2026-07-14
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
 blocks: []
 issue: 456
@@ -47,6 +47,12 @@ review.
 - **S1+ :** shared store/schema+connection owner + connection policy (WAL +
   busy_timeout), then S2-S7 per §F — each the smallest owned-red flip, routed
   for independent review at its exact SHA.
+
+## Closeout
+
+- 2026-07-14 — S1-S7 merged to `main` in PR #455 at `dd0f971`. Exact-main CI, Vault check,
+  Publish Musubi Core image, and Release Please all completed successfully. H5/G1 and the FILE-to-DIR
+  migration remain explicit downstream release holds; this Phase-1 implementation slice itself is done.
 
 ## Owned paths
 

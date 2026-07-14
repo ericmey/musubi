@@ -601,6 +601,7 @@ async def test_high_similarity_match_reinforces_existing(
         to_state="matured",
         actor="test",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
 
     for i in range(3):
@@ -843,6 +844,7 @@ async def test_concept_demotes_after_30d_no_reinforcement(
         to_state="matured",
         actor="test",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
 
     backdate = utc_now() - timedelta(days=31)

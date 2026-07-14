@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -15,8 +16,11 @@ with warnings.catch_warnings():
     from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+from musubi.lifecycle.transitions import TransitionResult
 from musubi.planes.thoughts import ThoughtsPlane
 from musubi.store import bootstrap
+from musubi.types.common import Err, Ok
 from musubi.types.thought import Thought
 
 
@@ -35,6 +39,26 @@ def qdrant() -> Iterator[QdrantClient]:
 @pytest.fixture
 def plane(qdrant: QdrantClient) -> ThoughtsPlane:
     return ThoughtsPlane(client=qdrant, embedder=FakeEmbedder())
+
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, tmp_path: Path) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
+
+
+def _final(result: object) -> TransitionResult:
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, TransitionResult)
+    return result.value
 
 
 @pytest.fixture
@@ -211,14 +235,16 @@ async def test_cross_tenant_thought_requires_multi_tenant_scope(
     # "namespace isolation on the write path. Your plane owns the namespace filter on read and the namespace field on write, so this bullet lands HERE, not in slice-auth."
     # Let's test that get() across namespace fails, and transition() across namespace fails.
     t = await plane.send(_make("cross", ns, "a", "b"))
-    with pytest.raises(LookupError):
-        await plane.transition(
-            namespace="other/ns/thought",
-            object_id=t.object_id,
-            to_state="archived",
-            actor="test",
-            reason="test",
-        )
+    result = await plane.transition(
+        namespace="other/ns/thought",
+        object_id=t.object_id,
+        to_state="archived",
+        actor="test",
+        reason="test",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "not_found"
 
 
 async def test_thought_embedding_deferred_under_load_does_not_block_send(
@@ -253,13 +279,19 @@ async def test_thought_embedding_deferred_under_load_does_not_block_send(
 
 async def test_thought_transition_valid_state_change(plane: ThoughtsPlane, ns: str) -> None:
     t = await plane.send(_make("transition me", ns, "a", "b"))
-    updated, event = await plane.transition(
-        namespace=ns,
-        object_id=t.object_id,
-        to_state="matured",
-        actor="test",
-        reason="test-change",
+    outcome = _final(
+        await plane.transition(
+            namespace=ns,
+            object_id=t.object_id,
+            to_state="matured",
+            actor="test",
+            reason="test-change",
+            coordinator=_coord(),
+        )
     )
+    updated = await plane.get(namespace=ns, object_id=t.object_id)
+    assert updated is not None
+    event = outcome.event
 
     assert updated.state == "matured"
     assert updated.version == t.version + 1
@@ -274,27 +306,31 @@ async def test_thought_transition_valid_state_change(plane: ThoughtsPlane, ns: s
     assert event.reason == "test-change"
 
     # Wrong namespace -> LookupError
-    import pytest
-
-    with pytest.raises(LookupError):
-        await plane.transition(
-            namespace="wrong-namespace",
-            object_id=t.object_id,
-            to_state="archived",
-            actor="test",
-            reason="test-isolation",
-        )
+    result = await plane.transition(
+        namespace="wrong-namespace",
+        object_id=t.object_id,
+        to_state="archived",
+        actor="test",
+        reason="test-isolation",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "not_found"
 
 
 async def test_thought_transition_on_missing_object_raises_lookup(
     plane: ThoughtsPlane, ns: str
 ) -> None:
-    import pytest
-
-    with pytest.raises(LookupError):
-        await plane.transition(
-            namespace=ns, object_id="0" * 27, to_state="matured", actor="test", reason="missing"
-        )
+    result = await plane.transition(
+        namespace=ns,
+        object_id="0" * 27,
+        to_state="matured",
+        actor="test",
+        reason="missing",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "not_found"
 
 
 # ---------------------------------------------------------------------------

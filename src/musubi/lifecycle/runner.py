@@ -479,6 +479,7 @@ async def _main_async() -> None:
     dem_jobs = build_demotion_jobs(
         deps=DemotionDeps(
             qdrant=qdrant,
+            coordinator=coordinator,
             episodic_plane=episodic_plane,
             concept_plane=concept_plane,
             events=sink,
@@ -515,6 +516,7 @@ async def _main_async() -> None:
     prom_jobs = build_promotion_jobs(
         deps=PromotionDeps(
             qdrant=qdrant,
+            coordinator=coordinator,
             concept_plane=concept_plane,
             curated_plane=curated_plane,
             events=sink,

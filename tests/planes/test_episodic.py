@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -44,8 +45,11 @@ with warnings.catch_warnings():
     from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+from musubi.lifecycle.transitions import TransitionResult
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
+from musubi.types.common import Err, Ok
 from musubi.types.episodic import EpisodicMemory
 from musubi.types.lifecycle_event import LifecycleEvent
 
@@ -69,6 +73,26 @@ def qdrant() -> Iterator[QdrantClient]:
 @pytest.fixture
 def plane(qdrant: QdrantClient) -> EpisodicPlane:
     return EpisodicPlane(client=qdrant, embedder=FakeEmbedder())
+
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, tmp_path: Path) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
+
+
+def _final(result: object) -> TransitionResult:
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, TransitionResult)
+    return result.value
 
 
 @pytest.fixture
@@ -216,13 +240,19 @@ async def test_create_dedup_threshold_is_per_plane_configurable(
 
 async def test_transition_to_matured_emits_lifecycle_event(plane: EpisodicPlane, ns: str) -> None:
     saved = await plane.create(_make("mature me", ns))
-    updated, event = await plane.transition(
-        namespace=ns,
-        object_id=saved.object_id,
-        to_state="matured",
-        actor="test-suite",
-        reason="unit-test",
+    outcome = _final(
+        await plane.transition(
+            namespace=ns,
+            object_id=saved.object_id,
+            to_state="matured",
+            actor="test-suite",
+            reason="unit-test",
+            coordinator=_coord(),
+        )
     )
+    updated = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert updated is not None
+    event = outcome.event
     assert updated.state == "matured"
     assert isinstance(event, LifecycleEvent)
     assert event.object_id == saved.object_id
@@ -233,13 +263,18 @@ async def test_transition_to_matured_emits_lifecycle_event(plane: EpisodicPlane,
 
 async def test_transition_bumps_version_and_updated_at(plane: EpisodicPlane, ns: str) -> None:
     saved = await plane.create(_make("bump on transition", ns))
-    updated, _ = await plane.transition(
-        namespace=ns,
-        object_id=saved.object_id,
-        to_state="matured",
-        actor="test",
-        reason="unit-test",
+    _final(
+        await plane.transition(
+            namespace=ns,
+            object_id=saved.object_id,
+            to_state="matured",
+            actor="test",
+            reason="unit-test",
+            coordinator=_coord(),
+        )
     )
+    updated = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert updated is not None
     assert updated.version == saved.version + 1
     assert updated.updated_epoch is not None and saved.updated_epoch is not None
     assert updated.updated_epoch >= saved.updated_epoch
@@ -248,14 +283,16 @@ async def test_transition_bumps_version_and_updated_at(plane: EpisodicPlane, ns:
 async def test_transition_illegal_raises(plane: EpisodicPlane, ns: str) -> None:
     saved = await plane.create(_make("illegal", ns))
     # provisional -> demoted is illegal per _ALLOWED["episodic"].
-    with pytest.raises(ValueError):
-        await plane.transition(
-            namespace=ns,
-            object_id=saved.object_id,
-            to_state="demoted",
-            actor="test",
-            reason="unit-test",
-        )
+    result = await plane.transition(
+        namespace=ns,
+        object_id=saved.object_id,
+        to_state="demoted",
+        actor="test",
+        reason="unit-test",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "illegal_transition"
 
 
 async def test_transition_to_demoted_keeps_record_but_filters_default_reads(
@@ -268,6 +305,7 @@ async def test_transition_to_demoted_keeps_record_but_filters_default_reads(
         to_state="matured",
         actor="t",
         reason="rm",
+        coordinator=_coord(),
     )
     await plane.transition(
         namespace=ns,
@@ -275,6 +313,7 @@ async def test_transition_to_demoted_keeps_record_but_filters_default_reads(
         to_state="demoted",
         actor="t",
         reason="rm",
+        coordinator=_coord(),
     )
     # Still fetchable by id.
     fetched = await plane.get(namespace=ns, object_id=saved.object_id)
@@ -294,6 +333,7 @@ async def test_transition_to_archived_removes_from_default_queries(
         to_state="archived",
         actor="t",
         reason="rm",
+        coordinator=_coord(),
     )
     results = await plane.query(namespace=ns, query="archived-me", limit=10)
     assert all(r.object_id != saved.object_id for r in results)
@@ -325,14 +365,16 @@ async def test_isolation_write_enforcement(plane: EpisodicPlane) -> None:
     b_ns = "eric/livekit/episodic"
     a = await plane.create(_make("write-isolation", a_ns))
     # Transitioning with the wrong namespace must fail rather than mutate A.
-    with pytest.raises(LookupError):
-        await plane.transition(
-            namespace=b_ns,
-            object_id=a.object_id,
-            to_state="matured",
-            actor="t",
-            reason="unit-test",
-        )
+    result = await plane.transition(
+        namespace=b_ns,
+        object_id=a.object_id,
+        to_state="matured",
+        actor="t",
+        reason="unit-test",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "not_found"
     # A is unchanged.
     still = await plane.get(namespace=a_ns, object_id=a.object_id)
     assert still is not None and still.state == "provisional"
@@ -358,6 +400,7 @@ async def test_query_includes_matured(plane: EpisodicPlane, ns: str) -> None:
         to_state="matured",
         actor="t",
         reason="unit",
+        coordinator=_coord(),
     )
     results = await plane.query(namespace=ns, query="include-me", limit=10)
     assert any(r.object_id == saved.object_id for r in results)
@@ -371,6 +414,7 @@ async def test_query_respects_include_demoted_flag(plane: EpisodicPlane, ns: str
         to_state="matured",
         actor="t",
         reason="u",
+        coordinator=_coord(),
     )
     await plane.transition(
         namespace=ns,
@@ -378,6 +422,7 @@ async def test_query_respects_include_demoted_flag(plane: EpisodicPlane, ns: str
         to_state="demoted",
         actor="t",
         reason="u",
+        coordinator=_coord(),
     )
     default = await plane.query(namespace=ns, query="demoted-flag", limit=10)
     assert all(r.object_id != saved.object_id for r in default)
@@ -396,6 +441,7 @@ async def test_query_returns_at_most_limit_results(plane: EpisodicPlane, ns: str
             to_state="matured",
             actor="t",
             reason="u",
+            coordinator=_coord(),
         )
     results = await plane.query(namespace=ns, query="matured", limit=3)
     assert len(results) <= 3
@@ -539,7 +585,12 @@ async def test_access_count_update_is_not_N_plus_1(plane: EpisodicPlane, ns: str
     for i in range(5):
         mem = await plane.create(EpisodicMemory(namespace=ns, content=f"Hit {i}"))
         await plane.transition(
-            namespace=ns, object_id=mem.object_id, to_state="matured", actor="test", reason="test"
+            namespace=ns,
+            object_id=mem.object_id,
+            to_state="matured",
+            actor="test",
+            reason="test",
+            coordinator=_coord(),
         )
 
     hits = await plane.query(namespace=ns, query="Hit", limit=5, include_demoted=True)
@@ -552,10 +603,20 @@ async def test_demotion_keeps_record_but_filters_from_default_reads(
 
     mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
     await plane.transition(
-        namespace=ns, object_id=mem.object_id, to_state="matured", actor="test", reason="mature"
+        namespace=ns,
+        object_id=mem.object_id,
+        to_state="matured",
+        actor="test",
+        reason="mature",
+        coordinator=_coord(),
     )
     await plane.transition(
-        namespace=ns, object_id=mem.object_id, to_state="demoted", actor="test", reason="demote"
+        namespace=ns,
+        object_id=mem.object_id,
+        to_state="demoted",
+        actor="test",
+        reason="demote",
+        coordinator=_coord(),
     )
     hits = await plane.query(namespace=ns, query="Hit")
     assert not hits
@@ -569,7 +630,12 @@ async def test_archival_removes_from_default_queries_but_returns_from_get_by_id(
 
     mem = await plane.create(EpisodicMemory(namespace=ns, content="Hit"))
     await plane.transition(
-        namespace=ns, object_id=mem.object_id, to_state="archived", actor="test", reason="archive"
+        namespace=ns,
+        object_id=mem.object_id,
+        to_state="archived",
+        actor="test",
+        reason="archive",
+        coordinator=_coord(),
     )
     hits = await plane.query(namespace=ns, query="Hit", include_demoted=True)
     assert not hits
