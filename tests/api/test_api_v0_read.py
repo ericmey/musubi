@@ -898,9 +898,26 @@ def test_retrieve_result_carries_score_components_in_extra(
     extra = results[0]["extra"]
     assert "score_components" in extra
     components = extra["score_components"]
-    # At minimum the three components the scoring-model tests assert.
-    for key in ("relevance", "recency", "reinforcement"):
+    # RET-003 spec §6.6: ranked mode now exposes all 5 real contributors at
+    # the existing `extra.score_components` path. The 3-key legacy
+    # assertion is updated to 5 keys at the same path; the path is
+    # preserved (v1 compat) — this is the ONLY required test update
+    # per spec §6.6.
+    for key in ("relevance", "recency", "importance", "provenance", "reinforcement"):
         assert key in components, f"score_components missing {key!r}: {components!r}"
+    # Per Yua 2026-07-13 11:57:59 #5: the implementation must expose
+    # exactly the 5 public contributors; no fabricated keys. This is
+    # the v1 compat test for the path; the strict-key test lives in
+    # tests/api/test_retrieve_ret003_wire.py.
+    assert set(components.keys()) == {
+        "relevance",
+        "recency",
+        "importance",
+        "provenance",
+        "reinforcement",
+    }, (
+        f"score_components keys must be exactly the 5 public contributors; got {sorted(components.keys())}"
+    )
 
 
 # ---------------------------------------------------------------------------
