@@ -512,7 +512,9 @@ def test_conflicting_key_full_cap_toctou_returns_conflict(
     # re-check sees the winner's row with a DIFFERENT stored_digest -> operation_key_conflict, NOT
     # cap_exceeded (discriminates the stored_digest handling inside _AlreadyExists). Zero Qdrant
     # (client=None); still exactly one row/event/marker.
-    loser, db, client, seed = _run_full_cap_toctou(env, "demoted")  # demoted != the winner's matured
+    loser, db, client, seed = _run_full_cap_toctou(
+        env, "demoted"
+    )  # demoted != the winner's matured
     assert isinstance(loser, Err), f"conflicting loser must be Err, got {loser}"
     assert loser.error.code == "operation_key_conflict"
     assert _counts(db) == (1, 1)
