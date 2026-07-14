@@ -296,29 +296,15 @@ def _scan_src_state_transition_violators() -> dict[str, list[tuple[str, int]]]:
 #: The strict-xfail G1 only proves >=1 violation; this pinned set proves the scanner still sees ALL of
 #: them, so a bypass that silently disappears (scanner regression, or an unaccounted migration) FAILS
 #: here instead of quietly shrinking the red. H5 updates this set as it migrates each path.
-_PRESENT_TRANSITION_BYPASSES: set[tuple[str, str]] = {
-    ("planes/episodic/plane.py", "transition"),
-    ("planes/concept/plane.py", "transition"),
-    ("planes/thoughts/plane.py", "transition"),
-    ("planes/artifact/plane.py", "transition"),
-    ("planes/curated/plane.py", "transition"),
-}
+_PRESENT_TRANSITION_BYPASSES: set[tuple[str, str]] = set()
 
 
 # G1 - CLOSURE-GATE (not Phase-1 acceptance): no direct state mutation outside the coordinator --------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="lifecycle state is still mutated directly by set_payload in the 5 plane transition() "
-    "methods, bypassing LifecycleTransitionCoordinator and producing mutation-without-audit. "
-    "transitions.py is now canonical under S7; this closure gate flips green ONLY under "
-    "slice-h5-unify-state-mutation.",
-)
 def test_g1_no_direct_state_transition_setpayload_outside_coordinator() -> None:
     """Closure-gate (NOT Phase-1 acceptance): C6b atomicity is not closed until EVERY state-writing
-    transition `set_payload` routes through the coordinator. RED today; green only when H5 migrates them."""
+    transition `set_payload` routes through the coordinator."""
     violators = _scan_src_state_transition_violators()
     if violators:
         flat = sorted(f"{f}:{ln}({fn})" for f, sites in violators.items() for fn, ln in sites)
@@ -8243,12 +8229,23 @@ async def _seed_provisional_episodic(
 
 
 async def _seed_matured_episodic(
-    plane: EpisodicPlane, qc: QdrantClient, ns: str, content: str, *, age_seconds: int
+    plane: EpisodicPlane,
+    qc: QdrantClient,
+    coordinator: Any,
+    ns: str,
+    content: str,
+    *,
+    age_seconds: int,
 ) -> str:
     """Create + transition an episodic row to matured (real, pre-patch), back-dated by ``age_seconds``."""
     saved = await plane.create(EpisodicMemory(namespace=ns, content=content))
     await plane.transition(
-        namespace=ns, object_id=saved.object_id, to_state="matured", actor="seed", reason="seed"
+        namespace=ns,
+        object_id=saved.object_id,
+        to_state="matured",
+        actor="seed",
+        reason="seed",
+        coordinator=coordinator,
     )
     backdate = datetime.now(UTC) - timedelta(seconds=age_seconds)
     qc.set_payload(
@@ -8300,7 +8297,12 @@ async def _seed_synthesized_concept(
 
 
 async def _seed_matured_concept(
-    plane: ConceptPlane, qc: QdrantClient, ns: str, *, age_seconds: int
+    plane: ConceptPlane,
+    qc: QdrantClient,
+    coordinator: Any,
+    ns: str,
+    *,
+    age_seconds: int,
 ) -> str:
     saved = await plane.create(
         SynthesizedConcept(
@@ -8312,7 +8314,12 @@ async def _seed_matured_concept(
         )
     )
     await plane.transition(
-        namespace=ns, object_id=saved.object_id, to_state="matured", actor="seed", reason="seed"
+        namespace=ns,
+        object_id=saved.object_id,
+        to_state="matured",
+        actor="seed",
+        reason="seed",
+        coordinator=coordinator,
     )
     backdate = datetime.now(UTC) - timedelta(seconds=age_seconds)
     qc.set_payload(
@@ -8433,7 +8440,14 @@ async def test_r21_maturation_supersession_backlink_not_run_on_pending(
         ns = "eric/claude-code/episodic"
         # A matured predecessor whose content matches the correction row's needle, so
         # _find_supersession_candidate resolves it and the back-link path is reached.
-        await _seed_matured_episodic(plane, qc, ns, "shared gpu upgrade note", age_seconds=3600)
+        await _seed_matured_episodic(
+            plane,
+            qc,
+            _coordinator(qc, sink._db_path),
+            ns,
+            "shared gpu upgrade note",
+            age_seconds=3600,
+        )
         await _seed_provisional_episodic(
             plane, qc, ns, "correction: shared gpu upgrade note", age_seconds=7200
         )
@@ -8483,7 +8497,14 @@ async def test_r21_maturation_episodic_demotion_defers_pending(
     try:
         plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
         ns = "eric/claude-code/episodic"
-        await _seed_matured_episodic(plane, qc, ns, "demote row", age_seconds=31 * 86400)
+        await _seed_matured_episodic(
+            plane,
+            qc,
+            _coordinator(qc, sink._db_path),
+            ns,
+            "demote row",
+            age_seconds=31 * 86400,
+        )
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await episodic_demotion_sweep(
@@ -8521,7 +8542,13 @@ async def test_r21_maturation_concept_demotion_defers_pending(
     try:
         plane = ConceptPlane(client=qc, embedder=FakeEmbedder())
         ns = "eric/claude-code/concept"
-        await _seed_matured_concept(plane, qc, ns, age_seconds=40 * 86400)
+        await _seed_matured_concept(
+            plane,
+            qc,
+            _coordinator(qc, sink._db_path),
+            ns,
+            age_seconds=40 * 86400,
+        )
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await concept_demotion_sweep(

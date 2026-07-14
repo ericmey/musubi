@@ -516,6 +516,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -1152,6 +1158,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SynthesizedConcept'
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:

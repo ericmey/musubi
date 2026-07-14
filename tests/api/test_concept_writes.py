@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from fastapi.testclient import TestClient
 
 from musubi.api.dependencies import get_concept_plane
@@ -26,10 +25,6 @@ class _PendingConceptPlane:
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: concept promote does not yet map Pending to the typed HTTP 202 body",
-)
 def test_h5_concept_promote_http_pending_is_typed_202(
     app_factory: Any,
     api_settings: Any,
@@ -51,10 +46,6 @@ def test_h5_concept_promote_http_pending_is_typed_202(
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: concept delete does not yet map Pending to the typed HTTP 202 body",
-)
 def test_h5_concept_delete_http_pending_is_typed_202(
     app_factory: Any,
     api_settings: Any,

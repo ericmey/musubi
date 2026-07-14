@@ -23,8 +23,30 @@ from fastapi.testclient import TestClient
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.episodic import EpisodicPlane
+from musubi.settings import Settings
 from musubi.types.episodic import EpisodicMemory
+
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    from qdrant_client import QdrantClient
+
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, api_settings: Settings) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(
+        client=qdrant, db_path=api_settings.lifecycle_sqlite_path
+    )
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
 
 
 def _seed(plane: EpisodicPlane, namespace: str, content: str) -> None:
@@ -36,6 +58,7 @@ def _seed(plane: EpisodicPlane, namespace: str, content: str) -> None:
             to_state="matured",
             actor="seed",
             reason="seed",
+            coordinator=_coord(),
         )
 
     asyncio.run(_go())

@@ -37,10 +37,6 @@ _PLANES: tuple[type[Any], ...] = (
 )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: five plane transition methods still write state directly instead of delegating",
-)
 def test_h5_g1_no_direct_state_transition_setpayload_outside_coordinator() -> None:
     offenders = [
         plane.__name__
@@ -50,10 +46,6 @@ def test_h5_g1_no_direct_state_transition_setpayload_outside_coordinator() -> No
     assert offenders == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: the accounted five-plane transition bypass denominator has not reached zero",
-)
 def test_h5_present_denominator_is_empty_after_accounted_migration() -> None:
     direct_writers = {
         f"{plane.__module__}:{plane.transition.__name__}"
@@ -63,10 +55,6 @@ def test_h5_present_denominator_is_empty_after_accounted_migration() -> None:
     assert direct_writers == set()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: plane transition signatures do not yet require the coordinator/three-way Result",
-)
 def test_h5_each_plane_transition_requires_coordinator_and_preserves_final_pending_err() -> None:
     defects: list[str] = []
     for plane in _PLANES:
@@ -79,19 +67,11 @@ def test_h5_each_plane_transition_requires_coordinator_and_preserves_final_pendi
     assert defects == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: concept promotion receipt fields are not yet part of the atomic TransitionIntent",
-)
 def test_h5_concept_promotion_receipt_is_in_the_atomic_intended_patch() -> None:
     intent_fields = {field.name for field in fields(TransitionIntent)}
     assert {"promoted_to", "promoted_at"} <= intent_fields
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: concept receipt fields do not yet participate in digest/reconcile/readback",
-)
 def test_h5_concept_promotion_receipt_participates_in_replay_and_full_readback() -> None:
     promoted_to = generate_ksuid()
     promoted_at = utc_now().isoformat()
@@ -203,6 +183,7 @@ def _promotion_deps(tmp_path: Path, outcome: object) -> tuple[Any, list[Any], li
 
     return (
         SimpleNamespace(
+            coordinator=object(),
             llm=LLM(),
             vault_writer=Vault(),
             curated_plane=Curated(),
@@ -232,10 +213,6 @@ def _eligible_concept() -> SynthesizedConcept:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: promotion currently tuple-unpacks Pending and records a false rejection",
-)
 async def test_h5_promotion_pending_defers_notification_and_rejection(tmp_path: Path) -> None:
     from musubi.lifecycle.promotion import _promote_concept
 
@@ -247,10 +224,6 @@ async def test_h5_promotion_pending_defers_notification_and_rejection(tmp_path: 
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: promotion currently tuple-unpacks the typed Final result",
-)
 async def test_h5_promotion_final_runs_dependent_work_once(tmp_path: Path) -> None:
     from musubi.lifecycle.promotion import _promote_concept
 
@@ -292,14 +265,18 @@ def _demotion_deps(outcome: object) -> tuple[Any, list[Any]]:
         async def emit(self, *args: Any, **kwargs: Any) -> None:
             thoughts.append((args, kwargs))
 
-    return SimpleNamespace(qdrant=Qdrant(), concept_plane=Concept(), thoughts=Thoughts()), thoughts
+    return (
+        SimpleNamespace(
+            qdrant=Qdrant(),
+            coordinator=object(),
+            concept_plane=Concept(),
+            thoughts=Thoughts(),
+        ),
+        thoughts,
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: demotion currently counts Pending as completed",
-)
 async def test_h5_demotion_pending_does_not_increment_completed() -> None:
     from musubi.lifecycle.demotion import demotion_concept
 
@@ -310,10 +287,6 @@ async def test_h5_demotion_pending_does_not_increment_completed() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: demotion currently ignores rather than consumes the typed Final result",
-)
 async def test_h5_demotion_final_increments_completed_once() -> None:
     from musubi.lifecycle.demotion import demotion_concept
 
@@ -330,10 +303,6 @@ async def test_h5_demotion_final_increments_completed_once() -> None:
     assert len(thoughts) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="H5: migrated callers do not yet consume every typed transition Result",
-)
 def test_h5_coordinator_result_is_consumed_at_every_migrated_caller() -> None:
     roots = Path(__file__).parents[2] / "src" / "musubi"
     paths = (

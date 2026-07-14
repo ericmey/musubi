@@ -110,6 +110,8 @@ class TransitionIntent:
     supersedes: tuple[str, ...] = ()
     merged_from: tuple[str, ...] = ()
     contradicts: tuple[str, ...] = ()
+    promoted_to: str | None = None
+    promoted_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -250,6 +252,10 @@ def _intended_patch(intent: TransitionIntent) -> dict[str, object]:
         patch["merged_from"] = list(intent.merged_from)
     if intent.contradicts:
         patch["contradicts"] = list(intent.contradicts)
+    if intent.promoted_to is not None:
+        patch["promoted_to"] = intent.promoted_to
+    if intent.promoted_at is not None:
+        patch["promoted_at"] = intent.promoted_at
     return patch
 
 
@@ -715,6 +721,8 @@ class LifecycleTransitionCoordinator:
             "supersedes": list(intent.supersedes),
             "merged_from": list(intent.merged_from),
             "contradicts": list(intent.contradicts),
+            "promoted_to": intent.promoted_to,
+            "promoted_at": intent.promoted_at,
         }
         canon = json.dumps(fields, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canon.encode()).hexdigest()
@@ -876,7 +884,15 @@ class LifecycleTransitionCoordinator:
             lineage_changes = {
                 key: value
                 for key, value in _intended_patch(intent).items()
-                if key in {"superseded_by", "supersedes", "merged_from", "contradicts"}
+                if key
+                in {
+                    "superseded_by",
+                    "supersedes",
+                    "merged_from",
+                    "contradicts",
+                    "promoted_to",
+                    "promoted_at",
+                }
             }
             # model_validate over a dict: the object_type/from_state/to_state come from runtime
             # data (mapping + readback + intent) as plain strings; pydantic validates them against
@@ -1362,7 +1378,8 @@ class LifecycleTransitionCoordinator:
         try:
             rows = con.execute(
                 "SELECT operation_key,object_id,collection,target_state,expected_version,namespace,"
-                "actor,reason,event_id,state FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED') "
+                "actor,reason,event_id,state,patch_json FROM lifecycle_outbox "
+                "WHERE state IN ('PENDING','APPLIED') "
                 "AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
                 "ORDER BY (next_attempt_epoch IS NOT NULL), next_attempt_epoch, rowid LIMIT ?",
                 (now, limit),
@@ -1370,7 +1387,7 @@ class LifecycleTransitionCoordinator:
         finally:
             con.close()
         counts = {"claimed": 0, "finalized": 0, "pending": 0, "abandoned": 0}
-        for opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state in rows:
+        for opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state, patch_json in rows:
             token = self._new_token()
             self._checkpoint(
                 "before_claim"
@@ -1388,7 +1405,19 @@ class LifecycleTransitionCoordinator:
             counts["claimed"] += 1
             self._checkpoint("after_claim_before_qdrant")  # durable-claim barrier / crash point
             self._reconcile_claimed(
-                opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state, token, counts
+                opk,
+                oid,
+                coll,
+                tstate,
+                ver,
+                ns,
+                actor,
+                reason,
+                event_id,
+                state,
+                patch_json,
+                token,
+                counts,
             )
         # R19 (S5): emit the UNLABELED pending-depth gauge exactly ONCE per reconcile pass.
         self._observe_pending()
@@ -1406,6 +1435,7 @@ class LifecycleTransitionCoordinator:
         reason: str,
         event_id: str,
         state: str,
+        patch_json: str,
         token: str,
         counts: dict[str, int],
     ) -> None:
@@ -1423,6 +1453,7 @@ class LifecycleTransitionCoordinator:
             return
         # ACTUAL apply. Reconstruct the intent from stored admission truth (self-sufficient) and
         # rebuild the persisted event with the PRESERVED event_id if the row is pre-persist.
+        stored_patch = json.loads(patch_json)
         intent = TransitionIntent(
             collection=coll,
             object_id=oid,
@@ -1432,6 +1463,14 @@ class LifecycleTransitionCoordinator:
             actor=actor,
             reason=reason,
             operation_key=opk,
+            updated_at=str(stored_patch["updated_at"]),
+            updated_epoch=float(stored_patch["updated_epoch"]),
+            superseded_by=stored_patch.get("superseded_by"),
+            supersedes=tuple(stored_patch.get("supersedes", ())),
+            merged_from=tuple(stored_patch.get("merged_from", ())),
+            contradicts=tuple(stored_patch.get("contradicts", ())),
+            promoted_to=stored_patch.get("promoted_to"),
+            promoted_at=stored_patch.get("promoted_at"),
         )
         if not self._has_event_payload(opk):
             try:

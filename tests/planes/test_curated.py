@@ -37,6 +37,7 @@ import hashlib
 import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -46,8 +47,11 @@ with warnings.catch_warnings():
     from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+from musubi.lifecycle.transitions import TransitionResult
 from musubi.planes.curated import CuratedPlane
 from musubi.store import bootstrap
+from musubi.types.common import Err, Ok
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.lifecycle_event import LifecycleEvent
 
@@ -71,6 +75,26 @@ def qdrant() -> Iterator[QdrantClient]:
 @pytest.fixture
 def plane(qdrant: QdrantClient) -> CuratedPlane:
     return CuratedPlane(client=qdrant, embedder=FakeEmbedder())
+
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, tmp_path: Path) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
+
+
+def _final(result: object) -> TransitionResult:
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, TransitionResult)
+    return result.value
 
 
 @pytest.fixture
@@ -384,13 +408,19 @@ def test_hard_delete_requires_operator_scope() -> None:
 
 async def test_transition_to_superseded_emits_lifecycle_event(plane: CuratedPlane, ns: str) -> None:
     saved = await plane.create(_make(namespace=ns))
-    updated, event = await plane.transition(
-        namespace=ns,
-        object_id=saved.object_id,
-        to_state="superseded",
-        actor="test",
-        reason="unit",
+    outcome = _final(
+        await plane.transition(
+            namespace=ns,
+            object_id=saved.object_id,
+            to_state="superseded",
+            actor="test",
+            reason="unit",
+            coordinator=_coord(),
+        )
     )
+    updated = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert updated is not None
+    event = outcome.event
     assert updated.state == "superseded"
     assert isinstance(event, LifecycleEvent)
     assert event.from_state == "matured"
@@ -410,6 +440,7 @@ async def test_transition_to_archived_keeps_record_but_filters_default_reads(
         to_state="archived",
         actor="t",
         reason="rm",
+        coordinator=_coord(),
     )
     fetched = await plane.get(namespace=ns, object_id=saved.object_id)
     assert fetched is not None and fetched.state == "archived"
@@ -420,40 +451,46 @@ async def test_transition_to_archived_keeps_record_but_filters_default_reads(
 async def test_transition_illegal_raises(plane: CuratedPlane, ns: str) -> None:
     saved = await plane.create(_make(namespace=ns))
     # matured → demoted is not in the curated transition table.
-    with pytest.raises(ValueError):
-        await plane.transition(
-            namespace=ns,
-            object_id=saved.object_id,
-            to_state="demoted",
-            actor="t",
-            reason="unit",
-        )
+    result = await plane.transition(
+        namespace=ns,
+        object_id=saved.object_id,
+        to_state="demoted",
+        actor="t",
+        reason="unit",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "illegal_transition"
 
 
 async def test_transition_unknown_object_raises_lookup_error(plane: CuratedPlane, ns: str) -> None:
     missing = "0" * 27
-    with pytest.raises(LookupError):
-        await plane.transition(
-            namespace=ns,
-            object_id=missing,
-            to_state="superseded",
-            actor="t",
-            reason="unit",
-        )
+    result = await plane.transition(
+        namespace=ns,
+        object_id=missing,
+        to_state="superseded",
+        actor="t",
+        reason="unit",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "not_found"
 
 
 async def test_isolation_write_enforcement(plane: CuratedPlane) -> None:
     a_ns = "eric/claude-code/curated"
     b_ns = "yua/livekit/curated"
     a = await plane.create(_make(namespace=a_ns, content="write-iso-a"))
-    with pytest.raises(LookupError):
-        await plane.transition(
-            namespace=b_ns,
-            object_id=a.object_id,
-            to_state="archived",
-            actor="t",
-            reason="unit",
-        )
+    result = await plane.transition(
+        namespace=b_ns,
+        object_id=a.object_id,
+        to_state="archived",
+        actor="t",
+        reason="unit",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "not_found"
     still = await plane.get(namespace=a_ns, object_id=a.object_id)
     assert still is not None and still.state == "matured"
 
@@ -599,6 +636,7 @@ async def test_query_excludes_archived_by_default(plane: CuratedPlane, ns: str) 
         to_state="archived",
         actor="t",
         reason="rm",
+        coordinator=_coord(),
     )
     results = await plane.query(namespace=ns, query="hidden-me", limit=10)
     assert all(r.object_id != saved.object_id for r in results)

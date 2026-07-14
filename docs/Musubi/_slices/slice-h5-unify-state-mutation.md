@@ -83,6 +83,19 @@ The migration is a three-way outcome migration, not merely a syntactic delegatio
 - `tests/lifecycle/test_promotion.py`
 - `tests/lifecycle/test_demotion.py`
 - `tests/api/test_concept_writes.py`
+- `tests/planes/test_thoughts.py` (required-coordinator compatibility migration only)
+- `tests/planes/test_episodic.py` (required-coordinator compatibility migration only)
+- `tests/planes/test_curated.py` (required-coordinator compatibility migration only)
+- `tests/planes/test_concept.py` (required-coordinator compatibility migration only)
+- `tests/planes/test_artifact.py` (required-coordinator compatibility migration only)
+- `tests/lifecycle/test_lifecycle.py` (required-coordinator compatibility migration only)
+- `tests/lifecycle/test_reflection.py` (required-coordinator compatibility migration only)
+- `tests/lifecycle/test_synthesis.py` (required-coordinator compatibility migration only)
+- `tests/lifecycle/test_maturation.py` (required-coordinator compatibility migration only)
+- `tests/api/test_retrieve_wildcards.py` (required-coordinator compatibility migration only)
+- `tests/api/test_retrieve_recent.py` (required-coordinator compatibility migration only)
+- `tests/api/test_api_v0_write.py` (required-coordinator compatibility migration only)
+- `tests/api/test_api_v0_read.py` (required-coordinator compatibility migration only)
 
 ## Forbidden paths
 
@@ -90,6 +103,10 @@ The migration is a three-way outcome migration, not merely a syntactic delegatio
 - adapters and retrieval code
 - plane create/capture methods and curated initial-state writes
 - C6 durable sink acceptance/flush behavior
+
+## Specs to implement
+
+- [[13-decisions/h5-canonical-plane-transition-design]]
 
 ## Test Contract
 
@@ -127,3 +144,11 @@ the unsafe alternatives.
 - 2026-07-14 — `codex-gpt5` claimed H5 after PR #455 merged. Re-derived the live denominator as the five
   plane `transition()` methods. Locked three-way plane/caller semantics and the concept promotion receipt
   into the test contract before source work; release/deploy remains held behind H5 and the storage migration.
+- 2026-07-14 — The required coordinator/typed Result API correctly invalidated the historical tuple-return
+  assumptions in 13 completed-slice test modules. Added those files to H5 for compatibility migration only
+  after confirming their owning feature slices are complete (the one RET-003 API wire slice remains ready,
+  not active) and the slice validator reports ownership overlap as warnings rather than an active lock error.
+- 2026-07-14 — Completed the compatibility migration across the owned plane, lifecycle, and API suites.
+  Full `make check` passed with 1,927 passed, 197 skipped, 17 deselected, and three expected xfails at
+  89.01% coverage; `make agent-check` completed with warnings only. Linked the H5 decision's identical
+  12-bullet Test Contract so the mechanical closure audit evaluates this slice's actual acceptance surface.

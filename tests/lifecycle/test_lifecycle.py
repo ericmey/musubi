@@ -108,16 +108,26 @@ def _coordinator(qdrant: QdrantClient, sink: LifecycleEventSink) -> LifecycleTra
     return LifecycleTransitionCoordinator(client=qdrant, db_path=sink._db_path)
 
 
-async def _seed_matured(plane: EpisodicPlane, ns: str, content: str = "seeded") -> EpisodicMemory:
+async def _seed_matured(
+    plane: EpisodicPlane,
+    ns: str,
+    coordinator: LifecycleTransitionCoordinator,
+    content: str = "seeded",
+) -> EpisodicMemory:
     """Helper: create + mature an episodic so it is eligible for demote/supersede."""
     saved = await plane.create(EpisodicMemory(namespace=ns, content=content))
-    matured, _ = await plane.transition(
+    result = await plane.transition(
         namespace=ns,
         object_id=saved.object_id,
         to_state="matured",
         actor="test-fixture",
         reason="seed",
+        coordinator=coordinator,
     )
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, TransitionResult)
+    matured = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert matured is not None
     return matured
 
 
@@ -222,8 +232,9 @@ async def test_transition_preserves_lineage_through_supersession(
     sink: LifecycleEventSink,
 ) -> None:
     """Bullet 4 — matured → superseded with lineage_updates sets superseded_by."""
-    old = await _seed_matured(plane, ns, content="old-version")
-    new = await _seed_matured(plane, ns, content="new-version")
+    coordinator = _coordinator(qdrant, sink)
+    old = await _seed_matured(plane, ns, coordinator, content="old-version")
+    new = await _seed_matured(plane, ns, coordinator, content="new-version")
     result = transition(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
@@ -251,8 +262,9 @@ async def test_circular_supersession_rejected(
     sink: LifecycleEventSink,
 ) -> None:
     """Bullet 5 — A → B → A supersession chain is rejected."""
-    a = await _seed_matured(plane, ns, content="alpha")
-    b = await _seed_matured(plane, ns, content="beta")
+    coordinator = _coordinator(qdrant, sink)
+    a = await _seed_matured(plane, ns, coordinator, content="alpha")
+    b = await _seed_matured(plane, ns, coordinator, content="beta")
     # A superseded by B — legal.
     ok_first = transition(
         qdrant,
@@ -287,7 +299,7 @@ async def test_demotion_requires_reason(
     sink: LifecycleEventSink,
 ) -> None:
     """Bullet 6 — transition to demoted with empty reason is rejected."""
-    matured = await _seed_matured(plane, ns, content="demote-me")
+    matured = await _seed_matured(plane, ns, _coordinator(qdrant, sink), content="demote-me")
     result = transition(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
@@ -377,7 +389,7 @@ async def test_concurrent_transitions_last_writer_wins_with_logged_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Bullet 13 — concurrent transitions: last writer wins; warning logged."""
-    saved = await _seed_matured(plane, ns, content="concurrent")
+    saved = await _seed_matured(plane, ns, _coordinator(qdrant, sink), content="concurrent")
     caplog.set_level(logging.WARNING, logger="musubi.lifecycle.transitions")
     # Two sequential transitions simulating the race — the second must see the
     # version bumped by the first and log a concurrent-modification warning.
@@ -422,7 +434,9 @@ async def test_event_batch_flushed_within_5s_under_load(
     # contract is the same: time-based flush kicks in even without count pressure.
     short_sink = LifecycleEventSink(db_path=events_db, flush_every_n=1000, flush_every_s=0.2)
     try:
-        seeded = await _seed_matured(plane, ns, content="flush-load")
+        seeded = await _seed_matured(
+            plane, ns, _coordinator(qdrant, short_sink), content="flush-load"
+        )
         started = time.monotonic()
         result = transition(
             qdrant,
@@ -455,7 +469,12 @@ async def test_sqlite_event_db_survives_worker_restart(
     ns: str,
 ) -> None:
     """Bullet 15 — committed events are readable by a fresh sink on the same file."""
-    seeded = await _seed_matured(plane, ns, content="restart-survivor")
+    seeded = await _seed_matured(
+        plane,
+        ns,
+        LifecycleTransitionCoordinator(client=qdrant, db_path=events_db),
+        content="restart-survivor",
+    )
     first = LifecycleEventSink(db_path=events_db, flush_every_n=100, flush_every_s=5.0)
     try:
         result = transition(
@@ -813,7 +832,12 @@ async def test_events_survive_worker_restart(
     ns: str,
 ) -> None:
     """Bullet 16 — events.db rows survive a sink close + re-open cycle."""
-    seeded = await _seed_matured(plane, ns, content="restart-events")
+    seeded = await _seed_matured(
+        plane,
+        ns,
+        LifecycleTransitionCoordinator(client=qdrant, db_path=events_db),
+        content="restart-events",
+    )
     s1 = LifecycleEventSink(db_path=events_db, flush_every_n=1, flush_every_s=0.1)
     try:
         result = transition(

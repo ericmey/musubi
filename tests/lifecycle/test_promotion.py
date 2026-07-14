@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from qdrant_client import QdrantClient
 
 from musubi.embedding.fake import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.promotion import PromotionRender, _is_eligible, compute_path
 from musubi.observability import default_registry, render_text_format
@@ -79,6 +80,11 @@ def events_sink(tmp_path: Path) -> Any:
 
 
 @pytest.fixture
+def coordinator(qdrant: QdrantClient, tmp_path: Path) -> LifecycleTransitionCoordinator:
+    return LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+
+
+@pytest.fixture
 def vault_root(tmp_path: Path) -> Path:
     return tmp_path / "vault"
 
@@ -90,11 +96,13 @@ def deps(
     curated_plane: CuratedPlane,
     events_sink: LifecycleEventSink,
     vault_root: Path,
+    coordinator: LifecycleTransitionCoordinator,
 ) -> Any:
     from musubi.lifecycle.promotion import PromotionDeps
 
     return PromotionDeps(
         qdrant=qdrant,
+        coordinator=coordinator,
         concept_plane=concept_plane,
         curated_plane=curated_plane,
         events=events_sink,
@@ -275,7 +283,12 @@ async def test_path_conflict_with_same_concept_rewrites_in_place(deps: Any) -> N
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     path_str = compute_path(c)
     full_path = deps.vault_writer.vault_root / path_str
@@ -301,7 +314,12 @@ async def test_path_conflict_with_other_concept_writes_sibling(deps: Any) -> Non
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     path_str = compute_path(c)
     full_path = deps.vault_writer.vault_root / path_str
@@ -328,7 +346,12 @@ async def test_path_conflict_with_human_file_writes_sibling_and_logs(deps: Any) 
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     path_str = compute_path(c)
     full_path = deps.vault_writer.vault_root / path_str
@@ -389,7 +412,12 @@ async def test_curated_point_upserted_with_promoted_from(deps: Any) -> None:
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     _set_old(deps, "concept", str(c.object_id))
@@ -420,7 +448,12 @@ async def test_concept_state_set_to_promoted(deps: Any) -> None:
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     _set_old(deps, "concept", str(c.object_id))
@@ -440,7 +473,12 @@ async def test_bidirectional_links_set_in_single_batch(deps: Any) -> None:
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     _set_old(deps, "concept", str(c.object_id))
@@ -464,7 +502,12 @@ async def test_lifecycle_events_emitted_for_both_sides(deps: Any) -> None:
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     _set_old(deps, "concept", str(c.object_id))
@@ -493,7 +536,12 @@ async def test_thought_emitted_to_ops_alerts(deps: Any) -> None:
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     _set_old(deps, "concept", str(c.object_id))
@@ -524,7 +572,12 @@ async def test_rendering_failure_increments_attempts_not_promotes(deps: Any) -> 
     c = _concept()
     await failing_deps.concept_plane.create(c)
     await failing_deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=failing_deps.coordinator,
     )
     _set_old(failing_deps, "concept", str(c.object_id))
 
@@ -556,6 +609,7 @@ async def test_post_render_failure_also_bumps_attempts(
     curated_plane: CuratedPlane,
     events_sink: LifecycleEventSink,
     vault_root: Path,
+    coordinator: LifecycleTransitionCoordinator,
 ) -> None:
     # Render succeeds (FakePromotionLLM returns a valid body), but the
     # vault writer raises. The three-strikes gate has to cover this too
@@ -566,6 +620,7 @@ async def test_post_render_failure_also_bumps_attempts(
 
     deps = PromotionDeps(
         qdrant=qdrant,
+        coordinator=coordinator,
         concept_plane=concept_plane,
         curated_plane=curated_plane,
         events=events_sink,
@@ -577,7 +632,12 @@ async def test_post_render_failure_also_bumps_attempts(
     c = _concept()
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     _set_old(deps, "concept", str(c.object_id))
 
@@ -603,7 +663,12 @@ async def test_promotion_rejected_after_3_attempts_stops_retrying(deps: Any) -> 
     c = _concept()
     await failing_deps.concept_plane.create(c)
     await failing_deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=failing_deps.coordinator,
     )
     _set_old(failing_deps, "concept", str(c.object_id))
 

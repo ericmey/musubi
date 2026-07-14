@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -73,6 +74,8 @@ class LineageUpdates(BaseModel):
     supersedes: list[KSUID] = Field(default_factory=list)
     merged_from: list[KSUID] = Field(default_factory=list)
     contradicts: list[KSUID] = Field(default_factory=list)
+    promoted_to: KSUID | None = None
+    promoted_at: datetime | None = None
 
     def to_payload_patch(self) -> dict[str, Any]:
         """Serialise as a dict suitable for ``set_payload``; empty keys omitted."""
@@ -85,6 +88,10 @@ class LineageUpdates(BaseModel):
             patch["merged_from"] = list(self.merged_from)
         if self.contradicts:
             patch["contradicts"] = list(self.contradicts)
+        if self.promoted_to is not None:
+            patch["promoted_to"] = self.promoted_to
+        if self.promoted_at is not None:
+            patch["promoted_at"] = self.promoted_at.isoformat()
         return patch
 
     def to_event_changes(self) -> dict[str, Any]:
@@ -246,6 +253,8 @@ def transition(
         supersedes=tuple(lineage.supersedes),
         merged_from=tuple(lineage.merged_from),
         contradicts=tuple(lineage.contradicts),
+        promoted_to=lineage.promoted_to,
+        promoted_at=lineage.promoted_at.isoformat() if lineage.promoted_at is not None else None,
     )
     outcome = coordinator.transition(intent)
     if isinstance(outcome, Err):

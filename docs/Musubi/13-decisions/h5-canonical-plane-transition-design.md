@@ -49,3 +49,18 @@ same exact 202 OpenAPI schema as the S7 transition routes. Final response shapes
 H5 may merge after its exact-head independent review. C6b still may not be released or deployed as fixed
 until the FILE-to-DIR migration artifact is authored, executed under maintenance quiescence, and its
 rollback/readiness evidence is accepted.
+
+## Test Contract
+
+1. `test_h5_g1_no_direct_state_transition_setpayload_outside_coordinator`
+2. `test_h5_present_denominator_is_empty_after_accounted_migration`
+3. `test_h5_each_plane_transition_requires_coordinator_and_preserves_final_pending_err`
+4. `test_h5_concept_promotion_receipt_is_in_the_atomic_intended_patch`
+5. `test_h5_concept_promotion_receipt_participates_in_replay_and_full_readback`
+6. `test_h5_promotion_pending_defers_notification_and_rejection`
+7. `test_h5_promotion_final_runs_dependent_work_once`
+8. `test_h5_demotion_pending_does_not_increment_completed`
+9. `test_h5_demotion_final_increments_completed_once`
+10. `test_h5_concept_promote_http_pending_is_typed_202`
+11. `test_h5_concept_delete_http_pending_is_typed_202`
+12. `test_h5_coordinator_result_is_consumed_at_every_migrated_caller`

@@ -254,6 +254,7 @@ async def test_selects_only_provisional_older_than_min_age(
         to_state="matured",
         actor="test",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
 
     report = await episodic_maturation_sweep(
@@ -504,6 +505,7 @@ async def test_supersession_sets_both_sides_of_link(
         to_state="matured",
         actor="test",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
     # New provisional row hints at supersession.
     new_row = await _seed_provisional(
@@ -829,6 +831,7 @@ async def test_episodic_demotion_sweep_demotes_inactive_matured_rows(
         to_state="matured",
         actor="seed",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
     backdate = datetime.now(UTC) - timedelta(days=40)
     qdrant.set_payload(
@@ -852,6 +855,7 @@ async def test_episodic_demotion_sweep_demotes_inactive_matured_rows(
         to_state="matured",
         actor="seed",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
 
     report = await episodic_demotion_sweep(
@@ -970,6 +974,7 @@ async def test_concept_demotion_sweep_demotes_inactive(
         to_state="matured",
         actor="seed",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
     backdate = datetime.now(UTC) - timedelta(days=40)
     qdrant.set_payload(

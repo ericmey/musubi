@@ -36,13 +36,17 @@ from typing import Any, Literal, cast, get_args
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
+from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.common import (
     KSUID,
+    Err,
     LifecycleState,
     Namespace,
+    Result,
     epoch_of,
     utc_now,
     validate_namespace,
@@ -778,43 +782,27 @@ class EpisodicPlane:
         to_state: LifecycleState,
         actor: str,
         reason: str,
-    ) -> tuple[EpisodicMemory, LifecycleEvent]:
-        """Mutate ``state`` and emit a :class:`LifecycleEvent`.
-
-        Raises :class:`LookupError` if the object doesn't exist in the given
-        namespace (this enforces write-side namespace isolation). Raises
-        :class:`ValueError` if the transition is illegal per the episodic
-        transition table.
-        """
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> Result[TransitionResult | TransitionPending, TransitionError]:
+        """Delegate the namespace-scoped state change to the canonical coordinator."""
         current = await self.get(namespace=namespace, object_id=object_id, bump_access=False)
         if current is None:
-            raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
-        # LifecycleEvent's own validator raises ValueError on illegal
-        # transitions — that's the single source of truth for legality.
-        event = LifecycleEvent(
+            return Err(
+                error=TransitionError(
+                    code="not_found",
+                    message=(f"episodic object {object_id!r} not found in namespace {namespace!r}"),
+                    to_state=to_state,
+                )
+            )
+        return transition(
+            self._client,
+            coordinator=coordinator,
             object_id=object_id,
-            object_type="episodic",
-            namespace=namespace,
-            from_state=current.state,
-            to_state=to_state,
+            target_state=to_state,
             actor=actor,
             reason=reason,
+            expected_version=current.version,
         )
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            state=to_state,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        updated = EpisodicMemory.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated, event
 
     # ------------------------------------------------------------------
     # Helpers

@@ -20,6 +20,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field, model_validator
 from qdrant_client import QdrantClient, models
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.observability import default_registry
@@ -143,6 +144,7 @@ class _NotConfiguredThoughtEmitter:
 @dataclass
 class PromotionDeps:
     qdrant: QdrantClient
+    coordinator: LifecycleTransitionCoordinator
     concept_plane: ConceptPlane
     curated_plane: CuratedPlane
     events: LifecycleEventSink
@@ -383,7 +385,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         await deps.curated_plane.create(memory)
 
         # Transition concept
-        await deps.concept_plane.transition(
+        result = await deps.concept_plane.transition(
             namespace=concept.namespace,
             object_id=concept.object_id,
             to_state="promoted",
@@ -391,7 +393,19 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             reason="lifecycle-promotion-sweep",
             promoted_to=curated_id,
             promoted_at=now,
+            coordinator=deps.coordinator,
         )
+        if result.kind == "err":
+            raise RuntimeError(result.error.message)
+        outcome = result.value
+        if isinstance(outcome, TransitionPending):
+            log.info(
+                "Promotion transition deferred for concept %s: operation=%s event=%s",
+                concept.object_id,
+                outcome.operation_key,
+                outcome.event_id,
+            )
+            return False
 
         # Notification Thought
         await deps.thoughts.emit(
