@@ -28,4 +28,6 @@ When `LiveKitAdapter.on_session_end` lacks an `_upload_handler` (the fallback pa
 2. **Control - Handler Success:** Verify that when `_upload_handler` is present and succeeds, the fallback capture is not triggered.
 3. **Control - Empty Transcript:** Verify that an empty or whitespace-only transcript is explicitly skipped rather than passing a useless stub or dispatching an invalid payload (which guarantees a 422 API rejection).
 
-**NO SRC CHANGES:** This slice implements the test constraints only.
+**Owned Paths:**
+- `src/musubi/adapters/livekit/adapter.py`
+- `tests/adapters/test_livekit.py`

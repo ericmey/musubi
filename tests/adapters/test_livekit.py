@@ -583,9 +583,6 @@ def test_heuristic_capture_skipped_when_uninteresting() -> None:
     assert captures == []
 
 
-@pytest.mark.xfail(
-    strict=True, reason="H9: LiveKit adapter drops transcript content on fallback write path"
-)
 def test_transcript_fallback_capture_adds_typed_episode_tags_and_content() -> None:
     fake = _fake()
     adapter = LiveKitAdapter(
@@ -615,9 +612,6 @@ def test_transcript_fallback_capture_adds_typed_episode_tags_and_content() -> No
 
 
 @pytest.mark.parametrize("vtt", ["", "   \n  "])
-@pytest.mark.xfail(
-    strict=True, reason="H9: LiveKit adapter drops transcript content on fallback write path"
-)
 def test_transcript_fallback_capture_empty_transcript(vtt: str) -> None:
     """Control: Empty/whitespace transcripts are skipped rather than dispatching a stub or invalid payload to the API."""
     fake = _fake()
