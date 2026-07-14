@@ -1,4 +1,4 @@
-"""C6 — lifecycle audit durability red contract, OPTION A / durable-on-accept (tests-only, NO src).
+"""C6 — lifecycle audit durability, OPTION A / durable-on-accept.
 
 Owner slice: slice-c6-lifecycle-event-loss (Issue #433). Architecture ACCEPTED by Yua: durable-on-accept.
 `record()` synchronously COMMITS the event to SQLite and returns `Result[None, LifecycleEventWriteError]`
@@ -25,8 +25,8 @@ Discriminators hardened per Yua's proof review (2026-07-13):
 - the callsite item is split: a green guard asserts EXACTLY one reviewed callsite, and a strict red
   AST-rejects the bare `sink.record(event)` expression (the Result must be consumed, not dropped).
 
-8 strict-xfail reds + 1 green guard. Current code returns `None` and buffers in RAM, so every red fails
-now for its named reason.
+The accepted pre-source snapshot proved 9 strict-xfail reds + 1 green guard. This implementation
+successor removes those decorators atomically with the source fix; all 10 tests are ordinary positives.
 
     uv run pytest tests/lifecycle/test_c6_event_loss.py -v
 """
@@ -43,10 +43,13 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from musubi.lifecycle.events import LifecycleEventSink
+from musubi.lifecycle.transitions import TransitionError, transition
 from musubi.observability.registry import default_registry, render_text_format
-from musubi.types.common import Err, Ok
+from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
 
 #: Named before source (Yua): a BOUNDED, NO-LABEL shared-registry counter; the fix increments it +1 per
@@ -181,11 +184,6 @@ def _record(sink: LifecycleEventSink, ev: LifecycleEvent) -> object:
 # 1 — success => Ok + immediately durable (no flush/close) ------------------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="record() returns None and only buffers in RAM — it is neither a Result nor durable-on-accept",
-)
 def test_record_success_is_ok_and_immediately_durable(tmp_path: Path) -> None:
     sink = _mk_sink(tmp_path / "e.db")
     try:
@@ -202,11 +200,6 @@ def test_record_success_is_ok_and_immediately_durable(tmp_path: Path) -> None:
 # 2 — write failure => typed Err + zero row + exact metric + PII-free (rendered) log ---------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="a write failure today buffers (no Err), persists nothing, and is suppressed with no typed error/metric/log — indistinguishable from success",
-)
 def test_write_failure_is_typed_err_zero_row_metric_and_pii_free_log(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -265,11 +258,6 @@ def test_write_failure_is_typed_err_zero_row_metric_and_pii_free_log(
 # 3 — retry the SAME event_id after a transient failure => Ok + exactly one row #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="record() is not a Result and not durable-on-accept, so a same-event_id retry-to-exactly-one-row cannot hold",
-)
 def test_retry_same_event_id_is_ok_exactly_one_row(tmp_path: Path) -> None:
     sink = _mk_sink(tmp_path / "e.db")
     try:
@@ -291,11 +279,6 @@ def test_retry_same_event_id_is_ok_exactly_one_row(tmp_path: Path) -> None:
 # 4 — subprocess: returncode 0 then os._exit; only Ok-accepted markers survive #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="record() only appends to RAM; a process death before a flush loses every accepted event — not durable-on-accept",
-)
 def test_only_ok_accepted_events_survive_abrupt_crash(tmp_path: Path) -> None:
     db = tmp_path / "e.db"
     prog = textwrap.dedent(
@@ -336,11 +319,6 @@ def test_only_ok_accepted_events_survive_abrupt_crash(tmp_path: Path) -> None:
 # 5 — concurrent successes + one failure: successes persist once, failure Errs, no cross-loss #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="record() is not durable-on-accept and returns no Result, so a concurrent success/failure mix cannot guarantee exactly-once successes + an Err failure with no cross-loss",
-)
 def test_concurrent_success_and_failure_no_cross_loss(tmp_path: Path) -> None:
     sink = _mk_sink(tmp_path / "e.db")
     real_write = sink._write_batch
@@ -387,11 +365,6 @@ def test_concurrent_success_and_failure_no_cross_loss(tmp_path: Path) -> None:
 # 6 — sustained 1000 failures: all Err PROMPTLY (bounded subprocess), zero rows, no in-memory growth #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="record() accepts into an unbounded RAM buffer and returns None; under sustained failure it neither refuses (Err) nor stays bounded",
-)
 def test_sustained_failures_all_err_zero_rows_no_growth(tmp_path: Path) -> None:
     # The workload runs in a SUBPROCESS with a bounded wall-clock, so a `record()` that BLOCKS under
     # sustained failure (instead of promptly returning Err) fails via TimeoutExpired rather than hanging.
@@ -436,14 +409,9 @@ def test_sustained_failures_all_err_zero_rows_no_growth(tmp_path: Path) -> None:
         )
 
 
-# 7 — close is idempotent and cannot discard an already-Ok event -------------- #
+# 7 — close is idempotent; a record/close race never loses an Ok event -------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="an Ok event is not durable-on-accept today, and close() drops the buffer via the _closed early-return — a committed event could be lost / close is not proven idempotent",
-)
 def test_close_idempotent_cannot_discard_ok_event(tmp_path: Path) -> None:
     db = tmp_path / "e.db"
     sink = _mk_sink(db)
@@ -459,6 +427,46 @@ def test_close_idempotent_cannot_discard_ok_event(tmp_path: Path) -> None:
             raise DefectStillPresent(f"close() must not discard an Ok event; rows={rows}")
     finally:
         reopened.close()
+
+    # Exercise both legal serializations of the shared lock. If record wins,
+    # Ok is returned only after the row commits. If close wins, record refuses
+    # with Err. No scheduling outcome may return Ok without the durable row.
+    for index in range(16):
+        race_db = tmp_path / f"race-{index}.db"
+        racing_sink = _mk_sink(race_db)
+        rendezvous = threading.Barrier(3)
+        result_box: list[object] = []
+
+        def racing_record() -> None:
+            rendezvous.wait(timeout=_JOIN_TIMEOUT)
+            result_box.append(_record(racing_sink, _ev(f"race-{index}")))
+
+        def racing_close() -> None:
+            rendezvous.wait(timeout=_JOIN_TIMEOUT)
+            racing_sink.close()
+
+        record_thread = threading.Thread(target=racing_record)
+        close_thread = threading.Thread(target=racing_close)
+        record_thread.start()
+        close_thread.start()
+        rendezvous.wait(timeout=_JOIN_TIMEOUT)
+        record_thread.join(timeout=_JOIN_TIMEOUT)
+        close_thread.join(timeout=_JOIN_TIMEOUT)
+        assert not record_thread.is_alive(), "record side of close race hung"
+        assert not close_thread.is_alive(), "close side of record race hung"
+        assert len(result_box) == 1
+
+        race_result = _as_result(result_box[0])
+        race_rows = _mk_sink(race_db)
+        try:
+            reasons = [event.reason for event in race_rows.read_all()]
+        finally:
+            race_rows.close()
+        expected = [f"race-{index}"] if race_result.is_ok() else []
+        if reasons != expected:
+            raise DefectStillPresent(
+                f"record/close race returned {type(race_result).__name__} but rows={reasons}"
+            )
 
 
 # 8 — the Result must be CONSUMED at the callsite (guard + strict red) ---------- #
@@ -487,11 +495,6 @@ def test_record_callsite_inventory_is_exactly_reviewed() -> None:
     )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="transitions.py:268 calls sink.record(event) as a bare expression statement — the Result is silently dropped, so a caller cannot learn a write was refused",
-)
 def test_record_result_is_consumed_not_bare_expression() -> None:
     """Strict red: AST-parse transitions.py and reject a bare `sink.record(...)` expression. The Result
     must be consumed (assigned / returned / propagated), never discarded as an expression statement."""
@@ -507,3 +510,59 @@ def test_record_result_is_consumed_not_bare_expression() -> None:
         raise DefectStillPresent(
             f"sink.record() Result ignored as a bare expression at transitions.py:{bare}"
         )
+
+
+class _MockFailingSink:
+    """Return a refused write so the sole production caller must propagate it."""
+
+    def record(self, event: LifecycleEvent) -> object:
+        del event
+        return Err(error=object())
+
+
+def test_transition_callsite_injects_sink_err_yields_caller_err() -> None:
+    client = QdrantClient(":memory:")
+    client.create_collection(
+        collection_name="musubi_episodic",
+        vectors_config=VectorParams(size=2, distance=Distance.COSINE),
+    )
+    object_id = generate_ksuid()
+    client.upsert(
+        collection_name="musubi_episodic",
+        points=[
+            PointStruct(
+                id="11111111-1111-1111-1111-111111111111",
+                vector=[0.1, 0.2],
+                payload={
+                    "object_id": object_id,
+                    "namespace": "test/presence/episodic",
+                    "state": "provisional",
+                    "version": 1,
+                },
+            )
+        ],
+    )
+
+    result = transition(
+        client,
+        object_id=object_id,
+        target_state="matured",
+        actor="test",
+        reason="test lifecycle event refusal",
+        sink=cast(LifecycleEventSink, _MockFailingSink()),
+        expected_version=1,
+    )
+
+    points, _ = client.scroll(
+        collection_name="musubi_episodic",
+        with_payload=True,
+        limit=1,
+    )
+    assert points[0].payload is not None
+    assert points[0].payload["state"] == "matured"
+
+    if isinstance(result, Ok):
+        raise DefectStillPresent("transition() returned Ok after sink.record() returned Err")
+    assert isinstance(result, Err)
+    assert isinstance(result.error, TransitionError)
+    assert result.error.code == "lifecycle_event_write_failed"

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.4](https://github.com/ericmey/musubi/compare/v1.13.3...v1.13.4) (2026-07-14)
+
+
+### Bug Fixes
+
+* **c6:** make lifecycle event acceptance durable ([#470](https://github.com/ericmey/musubi/issues/470)) ([acf97dd](https://github.com/ericmey/musubi/commit/acf97ddf65d0fc00a5c8e184982bf16ca1e04173))
+
 ## [1.13.3](https://github.com/ericmey/musubi/compare/v1.13.2...v1.13.3) (2026-07-14)
 
 
