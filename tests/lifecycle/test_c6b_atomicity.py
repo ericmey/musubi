@@ -723,8 +723,15 @@ class _RefCoordinator:
         maintenance is active (yields True). role='admission' (transition) | 'reconcile'."""
         mode = self._mode
         if mode == "old_binary_ignores_lock":
-            # WRONG: a pre-barrier reader that never takes LOCK_SH -> a rollback's LOCK_EX cannot drain
-            # it, so it can mutate concurrently with (or after) the schema drop.
+            # WRONG: a pre-barrier reader (BOTH roles) that never takes LOCK_SH -> a rollback's LOCK_EX
+            # cannot drain it, so it can mutate concurrently with (or after) the schema drop.
+            yield True
+            return
+        if mode == "reconcile_bypasses_barrier" and role == "reconcile":
+            # WRONG (role-specific): the RECONCILER skips LOCK_SH + the maintenance recheck while admission
+            # still locks correctly, so a rollback cannot drain an in-flight reconcile pass. This is
+            # invisible to the admission proof (admission locks fine) and caught ONLY by the reconciler
+            # proof - which is why reconcile_once needs its OWN process drain proof, not shared code alone.
             yield True
             return
         # worker_stopped_but_admission_live (WRONG): only reconcilers are quiesced; admission ignores the
@@ -1575,6 +1582,9 @@ class _RefCoordinator:
             return self._reconcile_locked(limit=limit)
 
     def _reconcile_locked(self, *, limit: int = 100) -> _RefReport:
+        # inside the reconcile critical section, holding LOCK_SH: a two-process drain proof parks here to
+        # prove an in-flight RECONCILER is drained by a rollback (a no-op by default; transparent).
+        self._checkpoint("reconcile_entered")
         # reconcile_greedy (WRONG): also claims already-FINAL rows and re-affirms the payload -> a second
         # reconcile makes extra set_payload calls (caught by R3's exactly-one/zero-apply instrumentation).
         claim_states = (
@@ -1974,10 +1984,14 @@ class _RefCoordinator:
             else:
                 notnull = " AND terminal_epoch IS NOT NULL"
                 age_col = "terminal_epoch"
-            if mode == "outer_predicate_missing":
-                # WRONG: the inner subquery is a bare state-terminal batch selector and the outer DELETE
-                # OMITS the repeated eligibility predicate, so NULL-age / young rows that sort into the
-                # oldest batch are deleted (the outer predicate is the load-bearing safety filter).
+            if mode == "outer_and_inner_predicates_missing":
+                # WRONG: the eligibility predicate is missing from BOTH the inner subquery (a bare
+                # state-terminal batch selector) AND the outer DELETE, so NULL-age / young rows that sort
+                # into the oldest batch are deleted. This proves MISSING ELIGIBILITY, not the repeated-outer
+                # -predicate specifically: with an uncorrelated IN-subquery + a unique operation_key PK the
+                # OUTER-ONLY form is behaviorally REDUNDANT (correct-vs-outer-dropped delete identical rows,
+                # verified), so the exact repeated-outer SQL SHAPE is routed to a future G2/G3 static guard.
+                # (The CORRECT SQL below still repeats the predicate on the outer DELETE, per correction 5.)
                 inner = "SELECT operation_key FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED')"
                 sql = (
                     f"DELETE FROM lifecycle_outbox WHERE operation_key IN ({inner} {order}{limit}) "
@@ -1992,10 +2006,14 @@ class _RefCoordinator:
                 f"SELECT operation_key FROM lifecycle_outbox WHERE {inner_where} {order}{limit}"
             )
             inner_params: list[object] = [cutoff_epoch, *([] if not limit else [batch_limit])]
-            if mode == "non_atomic_cleanup_select_delete":
-                # WRONG: the SELECT (batch) and the DELETE are NOT one atomic statement, and the DELETE is
-                # re-scoped to EVERY eligible row instead of the atomically-selected batch (the batch bound
-                # is lost), so it can delete far more than the batch it claims.
+            if mode == "delete_outside_selected_batch":
+                # WRONG: the DELETE is re-scoped to EVERY eligible row instead of the atomically-selected
+                # batch (the LIMIT/batch bound is lost), so it deletes OUTSIDE the selected batch and can
+                # remove far more than it claims. This proves BATCH MISMATCH, not non-atomic
+                # select-then-delete: since terminal rows are IMMUTABLE, a two-statement select-then-delete
+                # of the selected keys is behaviorally EQUIVALENT to the single-statement CTE here, so exact
+                # atomic-SQL-SHAPE enforcement is routed to a future G2/G3 static guard. (CORRECT keeps the
+                # single-statement CTE below.)
                 con.execute("BEGIN")
                 con.execute(inner_sql, inner_params).fetchall()  # the "selected" batch (discarded)
                 deleted = len(
@@ -5573,18 +5591,19 @@ def _check_r20(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         )
 
 
-# ---- R20: DETERMINISTIC NO-SLEEP TWO-PROCESS DRAIN PROOF (the key novelty) -------------------------- #
+# ---- R20: TWO-PROCESS DRAIN PROOF via event-rendezvoused bounded polling (the key novelty) --------- #
 #
 # A real in-flight reader (child B) enters its barrier-aware critical section holding LOCK_SH and PARKS at
-# a file barrier (writes B.inside, waits for `go`) - it never sleeps-to-hope, it waits for a definite
-# rendezvous. The parent proves NON-OVERLAP deterministically with a LOCK_EX|LOCK_NB PROBE: while B holds
+# a file barrier (writes B.inside, waits for `go`) - it does not sleep-to-hope, it waits for a definite
+# rendezvous. The parent proves NON-OVERLAP with a LOCK_EX|LOCK_NB PROBE: while B holds
 # LOCK_SH, fcntl.flock(LOCK_EX|LOCK_NB) MUST raise BlockingIOError (exclusive unavailable). A concurrent
 # rollback (child C) is then required to DRAIN B: it must reach its post-lock point ("ex_acquired") only
 # AFTER B has left (B.inside removed at LOCK_SH release). old_binary_ignores_lock lets the parent probe
 # SUCCEED (B never took LOCK_SH); ack_without_drain / in_flight_old_generation / replaced_lock_inode reach
 # "ex_acquired" while B is still inside (B.inside present -> C.leaked); check_before_quiesce drains but
-# drops on a STALE presample -> destroys B's committed intent. No sleeps gate the discriminators - every
-# catch is a durable file/lock fact, deterministic across runs.
+# drops on a STALE presample -> destroys B's committed intent. Each discriminator is a durable file/lock
+# fact reached by event-rendezvoused bounded polling (with a bounded negative-progress window), stable
+# across 5x - not a fixed timing guess.
 
 _R20_DRAIN_OBJECT = "r20drain00000000000000000000"
 
@@ -5650,12 +5669,50 @@ def _r20_rollback_child_source(*, mode: str, db_path: Path, barrier_dir: Path) -
     )
 
 
-def _check_r20_drain(base: Path) -> None:
-    """DETERMINISTIC no-sleep drain proof (Yua R20 key novelty): a rollback's exclusive barrier must NOT
-    overlap an in-flight barrier-aware admission's LOCK_SH critical section, and must not destroy its
-    committed intent. Proven with a LOCK_EX|LOCK_NB probe (must raise BlockingIOError while B is inside),
-    a leak flag (C reaches its post-lock point while B is still inside), and B's intent surviving the race.
-    """
+def _r20_reconciler_child_source(*, mode: str, db_path: Path, barrier_dir: Path) -> str:
+    """Child B (RECONCILER role): a barrier-aware reconcile_once that holds LOCK_SH for the whole pass. It
+    marks B.inside on entry to the critical section (its own wrapper, via role='reconcile'), PARKS until
+    the parent writes `go`, then finishes, clearing B.inside just before releasing LOCK_SH. A distinct
+    proof from admission: reconcile_once has its OWN barrier wrapper/role/selection - reconcile_bypasses_
+    barrier bypasses LOCK_SH for the reconciler ONLY, so it is invisible to the admission proof."""
+    return (
+        "import os, time, warnings\n"
+        "from qdrant_client import QdrantClient\n"
+        "from tests.lifecycle.test_c6b_atomicity import _RefCoordinator as _Coord\n"
+        f"_bd = {str(barrier_dir)!r}\n"
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        "    _client = QdrantClient(':memory:')\n"
+        f"_c = _Coord(client=_client, db_path={str(db_path)!r}, mode={mode!r})\n"
+        "def _cp(name):\n"
+        "    if name == 'reconcile_entered':\n"
+        "        open(os.path.join(_bd, 'B.inside'), 'w').close()\n"
+        f"        for _ in range(int({_RACE_BARRIER_TIMEOUT!r} / 0.01)):\n"
+        "            if os.path.exists(os.path.join(_bd, 'go')): break\n"
+        "            time.sleep(0.01)\n"
+        "    if name == 'before_shared_release':\n"
+        "        try:\n"
+        "            os.unlink(os.path.join(_bd, 'B.inside'))\n"
+        "        except FileNotFoundError:\n"
+        "            pass\n"
+        "_c._checkpoint = _cp\n"
+        # a non-draining WRONG rollback may have DROPPED the (empty) outbox while this reconciler was
+        # parked; the post-`go` pass then finds no table. That is exactly the overlap the proof already
+        # flagged (probe/leak), so swallow it and exit cleanly rather than emit a scary child traceback.
+        "try:\n"
+        "    _c.reconcile_once()\n"
+        "except Exception:\n"
+        "    pass\n"
+        "os._exit(0)\n"
+    )
+
+
+def _r20_drain_core(base: Path, *, reader_src: str, role_label: str) -> tuple[Path, bool, bool]:
+    """Shared two-process drain harness: spawn an in-flight barrier-aware reader (child B, given as source)
+    that PARKS holding LOCK_SH; prove exclusive is unavailable with a LOCK_EX|LOCK_NB probe; run a
+    concurrent rollback (child C) that must DRAIN B; release B; return (db_path, probe_free, leaked).
+    Every wait is event-rendezvoused bounded polling (with a bounded negative-progress window), stable
+    across 5x - not a fixed timing guess."""
     _api()  # xfail today (coordinator absent)
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     base.mkdir(parents=True, exist_ok=True)
@@ -5663,30 +5720,22 @@ def _check_r20_drain(base: Path) -> None:
     bdir = base / "barrier"
     bdir.mkdir(parents=True, exist_ok=True)
     maintlock = str(db_path) + _MAINTLOCK_SUFFIX
-    coll = str(collection_for_plane("episodic"))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         _RefCoordinator(client=QdrantClient(":memory:"), db_path=db_path, mode=mode)  # schema
 
-    b = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            _r20_reader_child_source(mode=mode, db_path=db_path, coll=coll, barrier_dir=bdir),
-        ]
-    )
-    # rendezvous: wait until B has entered its LOCK_SH critical section and PARKED (a definite condition,
-    # not a timing guess). If B dies or never parks, the reader never held the barrier.
+    b = subprocess.Popen([sys.executable, "-c", reader_src])
+    # rendezvous: wait until B has entered its LOCK_SH critical section and PARKED (a definite condition).
     inside = bdir / "B.inside"
     deadline = time.time() + _RACE_BARRIER_TIMEOUT
     while not inside.exists():
         if b.poll() is not None or time.time() > deadline:
             raise DefectStillPresent(
-                "the in-flight admission never reached its LOCK_SH critical section"
+                f"the in-flight {role_label} never reached its LOCK_SH critical section"
             )
         time.sleep(0.01)
 
-    # THE deterministic drain proof: exclusive must be UNAVAILABLE while B holds LOCK_SH.
+    # THE drain proof: exclusive must be UNAVAILABLE while B holds LOCK_SH.
     pfd = os.open(maintlock, os.O_CREAT | os.O_RDWR, 0o600)
     probe_free = False
     try:
@@ -5698,11 +5747,10 @@ def _check_r20_drain(base: Path) -> None:
         os.close(pfd)
 
     # a concurrent rollback must DRAIN B before it acts. B stays parked (holding LOCK_SH, B.inside present)
-    # until the parent releases it, so a NON-draining rollback deterministically reaches its post-lock
-    # point WHILE B is inside (-> C.leaked) BEFORE B is ever released. A CORRECT (blocking-LOCK_EX)
-    # rollback cannot reach that point until B releases, so it never leaks; it makes NO progress here, so
-    # the poll runs to its bound exactly once (for the correct candidate) - a definite terminal condition,
-    # not a timing guess: a leak is proven by a durable file, its absence by a drained blocking-lock.
+    # until the parent releases it, so a NON-draining rollback reaches its post-lock point WHILE B is
+    # inside (-> C.leaked) BEFORE B is ever released. A CORRECT (blocking-LOCK_EX) rollback cannot reach
+    # that point until B releases, so it never leaks; it makes NO progress within the bounded window - a
+    # durable file proves a leak, its absence a drained blocking-lock.
     leaked = bdir / "C.leaked"
     quiesced = bdir / "C.quiesced"
     c = subprocess.Popen(
@@ -5712,28 +5760,40 @@ def _check_r20_drain(base: Path) -> None:
             _r20_rollback_child_source(mode=mode, db_path=db_path, barrier_dir=bdir),
         ]
     )
-    # wait until C has imported + durably quiesced and is at its lock boundary (a definite rendezvous, not
-    # a timing guess). The module import in the child dominates and is what the generous barrier timeout
-    # covers.
+    # wait until C has imported + durably quiesced and is at its lock boundary (a definite rendezvous). The
+    # module import in the child dominates and is what the generous barrier timeout covers.
     qdeadline = time.time() + _RACE_BARRIER_TIMEOUT
     while not quiesced.exists() and c.poll() is None and time.time() < qdeadline:
         time.sleep(0.01)
     # from the lock boundary the discriminator is a handful of syscalls: a non-draining rollback reaches
     # its post-lock point (C.leaked) essentially immediately; a correct blocking-LOCK_EX rollback makes NO
-    # progress until B releases. A short bound past the rendezvous cleanly separates the two.
+    # progress until B releases. A short bounded negative-progress window cleanly separates the two.
     ldeadline = time.time() + 3.0
     while not leaked.exists() and c.poll() is None and time.time() < ldeadline:
         time.sleep(0.005)
-    (bdir / "go").write_text("1")  # release B: commit its intent, then release LOCK_SH
+    (bdir / "go").write_text("1")  # release B: finish its critical section, then release LOCK_SH
     b.wait(timeout=90)
     c.wait(timeout=90)
+    return db_path, probe_free, leaked.exists()
 
+
+def _check_r20_drain(base: Path) -> None:
+    """ADMISSION-role drain proof (Yua R20 key novelty): a rollback's exclusive barrier must NOT overlap an
+    in-flight barrier-aware admission's LOCK_SH critical section, and must not destroy its committing
+    intent. A LOCK_EX|LOCK_NB probe must raise BlockingIOError while B is inside; a leak flag catches a
+    rollback that reaches its post-lock point while B is inside; B's committed intent must survive."""
+    mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
+    coll = str(collection_for_plane("episodic"))
+    src = _r20_reader_child_source(
+        mode=mode, db_path=base / "lifecycle.db", coll=coll, barrier_dir=base / "barrier"
+    )
+    db_path, probe_free, leaked = _r20_drain_core(base, reader_src=src, role_label="admission")
     if probe_free:
         raise DefectStillPresent(
             "LOCK_EX was acquired while an in-flight LOCK_SH admission was inside its critical section - "
             "the barrier did not hold (a reader that never took the shared lease is not drainable)"
         )
-    if (bdir / "C.leaked").exists():
+    if leaked:
         raise DefectStillPresent(
             "the rollback reached its post-lock disposition WHILE an in-flight admission was still inside "
             "- it did not drain the shared holder (ack_without_drain / in_flight_old_generation / "
@@ -5747,6 +5807,31 @@ def _check_r20_drain(base: Path) -> None:
     if not any(r["state"] in ("PENDING", "APPLIED") for r in rows):
         raise DefectStillPresent(
             "the in-flight admission's durable intent was destroyed by a racing rollback (data loss)"
+        )
+
+
+def _check_r20_reconciler_drain(base: Path) -> None:
+    """RECONCILER-role drain proof (Yua R20 correction): reconcile_once has its OWN barrier wrapper and
+    role selection, so it is proven SEPARATELY - the shared _barrier_admit code does not substitute. An
+    in-flight reconciler holds LOCK_SH inside its pass; a rollback's exclusive barrier must not overlap it
+    (LOCK_EX|LOCK_NB probe raises BlockingIOError; no post-lock overlap). reconcile_bypasses_barrier makes
+    ONLY the reconciler skip LOCK_SH+the recheck - caught HERE (probe succeeds), invisible to admission."""
+    mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
+    src = _r20_reconciler_child_source(
+        mode=mode, db_path=base / "lifecycle.db", barrier_dir=base / "barrier"
+    )
+    _db_path, probe_free, leaked = _r20_drain_core(base, reader_src=src, role_label="reconciler")
+    if probe_free:
+        raise DefectStillPresent(
+            "LOCK_EX was acquired while an in-flight LOCK_SH RECONCILER was inside its critical section - "
+            "the reconciler did not hold the shared barrier (old_binary_ignores_lock / "
+            "reconcile_bypasses_barrier)"
+        )
+    if leaked:
+        raise DefectStillPresent(
+            "the rollback reached its post-lock disposition WHILE an in-flight reconciler was still inside "
+            "- it did not drain the shared holder (ack_without_drain / in_flight_old_generation / "
+            "replaced_lock_inode)"
         )
 
 
@@ -5767,16 +5852,32 @@ def test_r20_rollback_refuses_nonterminal_maintenance_lifecycle_and_cleanup(
 
 
 _R20_DRAIN_REASON = (
-    "today there is no cross-process flock barrier, so a schema rollback cannot drain in-flight admissions; "
-    "R20 needs a LOCK_SH admission barrier that an exclusive rollback drains - no LOCK_EX overlap while a "
-    "shared holder is inside (proven by a LOCK_EX|LOCK_NB probe raising BlockingIOError) and no destruction "
-    "of a committing intent - with two real processes, deterministic, no sleeps."
+    "today there is no cross-process flock barrier, so a schema rollback cannot drain an in-flight "
+    "ADMISSION; R20 needs a LOCK_SH admission barrier that an exclusive rollback drains - no LOCK_EX "
+    "overlap while a shared holder is inside (proven by a LOCK_EX|LOCK_NB probe raising BlockingIOError) "
+    "and no destruction of a committing intent - two real processes, via event-rendezvoused bounded "
+    "polling (with a bounded negative-progress window), stable across 5x."
 )
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R20_DRAIN_REASON)
-def test_r20_two_process_drain_barrier_no_overlap(tmp_path: Path) -> None:
+def test_r20_two_process_admission_drain_barrier_no_overlap(tmp_path: Path) -> None:
     _check_r20_drain(tmp_path)
+
+
+_R20_RECONCILER_DRAIN_REASON = (
+    "today there is no cross-process flock barrier, so a schema rollback cannot drain an in-flight "
+    "RECONCILER; reconcile_once has its OWN barrier wrapper/role/selection, so it needs its own process "
+    "drain proof - an exclusive rollback must not overlap an in-flight reconcile pass (LOCK_EX|LOCK_NB "
+    "probe raising BlockingIOError; no post-lock overlap), with reconcile_bypasses_barrier caught here "
+    "and NOWHERE in the admission proof - two real processes, via event-rendezvoused bounded polling "
+    "(with a bounded negative-progress window), stable across 5x."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R20_RECONCILER_DRAIN_REASON)
+def test_r20_two_process_reconciler_drain_barrier_no_overlap(tmp_path: Path) -> None:
+    _check_r20_reconciler_drain(tmp_path)
 
 
 # ---- committed, RERUNNABLE red-proof harness (Yua evidence rule) ----------------------------------- #
@@ -5911,8 +6012,8 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
             "cleanup_unbounded_batch",  # ignores batch_limit
             "no_cleanup",  # a no-op cleanup
             "null_terminal_epoch",  # sweeps NULL-age terminal rows instead of preserving them
-            "non_atomic_cleanup_select_delete",  # select then delete not bound to the atomic batch
-            "outer_predicate_missing",  # outer DELETE drops the repeated eligibility predicate
+            "delete_outside_selected_batch",  # DELETE scoped past the selected batch (batch mismatch)
+            "outer_and_inner_predicates_missing",  # eligibility predicate absent from inner AND outer
             "nondeterministic_tie",  # ORDER BY terminal_epoch only, no operation_key tiebreak
             "check_then_drop_without_single_txn",  # count and drop in separate txns -> a racing loss
         ],
@@ -5958,13 +6059,23 @@ _CRASH_PROOF: dict[str, tuple[Any, list[str]]] = {
     "r17reclaim": (_check_r17_reclaim, ["reclaim_reapplies_after_readback"]),
     "r22": (_check_r22, ["non_atomic_cas"]),
     "r20drain": (
-        _check_r20_drain,
+        _check_r20_drain,  # ADMISSION-role process proof
         [
-            "old_binary_ignores_lock",  # never takes LOCK_SH -> the probe acquires EX while B is inside
+            "old_binary_ignores_lock",  # never takes LOCK_SH (both roles) -> probe acquires EX while inside
             "ack_without_drain",  # LOCK_EX|NB -> reaches disposition while an in-flight holder is inside
             "in_flight_old_generation",  # does not wait out an old-generation in-flight holder
             "replaced_lock_inode",  # swaps the lock inode -> no exclusion vs old-inode holders
             "check_before_quiesce",  # samples the backlog before EX -> drops a drained-window commit
+        ],
+    ),
+    "r20reconciler": (
+        _check_r20_reconciler_drain,  # RECONCILER-role process proof (non-redundant with admission)
+        [
+            "old_binary_ignores_lock",  # never takes LOCK_SH (both roles) -> probe succeeds while inside
+            "reconcile_bypasses_barrier",  # role-specific: ONLY reconcile skips LOCK_SH -> caught ONLY here
+            "ack_without_drain",  # LOCK_EX|NB -> overlaps the in-flight reconciler
+            "in_flight_old_generation",  # does not wait out the in-flight reconciler
+            "replaced_lock_inode",  # swaps the lock inode -> no exclusion vs the reconciler's old inode
         ],
     ),
 }
