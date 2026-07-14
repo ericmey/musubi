@@ -9534,14 +9534,29 @@ def test_p0c_active_storage_parity_rule_discriminates() -> None:
 
 #: The one locked active-storage family every surface must resolve to.
 _CANONICAL_DIR_FAMILY = "DIR:/var/lib/musubi/lifecycle/work.sqlite"
+#: The canonical DB FILE every DB-bearing surface must name EXACTLY (env / backup source / runbook restore
+#: destination / restore target). Not "some path under the DIR" — a wrong child is a different DB.
 _CANONICAL_DIR_DB = "/var/lib/musubi/lifecycle/work.sqlite"
+#: The canonical DIRECTORY a compose host MOUNT must name EXACTLY (the bind-mounted unit shared by core +
+#: worker). Not "some path under it" — a wrong child is a different mount.
+_CANONICAL_DIR_MOUNT = "/var/lib/musubi/lifecycle"
 _RETIRED_FILE_DB = "/var/lib/musubi/lifecycle-work.sqlite"
 
 
-def _resolves_canonical_dir(path: str | None) -> bool:
-    """True iff ``path`` classifies into the LOCKED directory family (a path at or under
-    ``/var/lib/musubi/lifecycle``), i.e. it resolves the canonical DIR DB rather than the bare FILE."""
-    return path is not None and _storage_family(path) == _CANONICAL_DIR_FAMILY
+def _resolves_canonical_dir_db(path: str | None) -> bool:
+    """True iff a DB-bearing surface names EXACTLY the canonical DIR DB file
+    ``/var/lib/musubi/lifecycle/work.sqlite`` — NOT merely some path under ``/var/lib/musubi/lifecycle``.
+    A wrong child (e.g. ``…/lifecycle/wrong.sqlite``) is a DIFFERENT database and MUST be rejected: a
+    surface that named it would silently point the coordinator, backup, or restore at the wrong file while
+    a family-membership check waved it through."""
+    return path is not None and path.rstrip("/") == _CANONICAL_DIR_DB
+
+
+def _resolves_canonical_mount(path: str | None) -> bool:
+    """True iff a compose host MOUNT names EXACTLY the canonical DIRECTORY ``/var/lib/musubi/lifecycle`` —
+    NOT a wrong child (e.g. ``…/lifecycle/sub``), which would bind-mount a different subtree and break the
+    shared-unit invariant while a family-membership check waved it through."""
+    return path is not None and path.rstrip("/") == _CANONICAL_DIR_MOUNT
 
 
 def _has_lifecycle_worker_service(text: str) -> bool:
@@ -9561,11 +9576,45 @@ def _runbook_restore_dest(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _sqlite_backup_command_src(playbook_text: str) -> str | None:
+    """The SOURCE DB path of the NAMED sqlite ``.backup`` command in a backup playbook — the
+    ``sqlite3 <SRC> ".backup <DEST>"`` task that performs the lifecycle-ledger backup. Parsed from the
+    ACTUAL command (via the YAML task structure, so comments and other lifecycle-path mentions elsewhere in
+    the file are ignored). This is why a backup.yml whose *comment* mentions the DIR while its *command*
+    still reads the FILE does NOT mask the drift — the check binds to the command that actually runs, not
+    the first lifecycle path anywhere in the file."""
+    for task in _yaml_tasks(playbook_text):
+        cmd = task.get("ansible.builtin.command") or task.get("command")
+        cmd_str = cmd.get("cmd") if isinstance(cmd, dict) else cmd
+        if not isinstance(cmd_str, str):
+            continue
+        m = re.search(r'sqlite3\s+(\S+)\s+"?\.backup\b', cmd_str)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _readme_operational_storage_line(text: str) -> str | None:
+    """The OPERATIONAL current-storage statement in the backup README — the 'Stores' bullet describing the
+    hourly SQLite copy (``… work.sqlite … copy hourly …``). Only THIS line binds the active-storage unit;
+    historical/migration prose elsewhere in the README is intentionally NOT inspected."""
+    for line in text.splitlines():
+        if "hourly" in line and "work.sqlite" in line:
+            return line
+    return None
+
+
 def _readme_resolves_dir(text: str) -> bool:
-    """True iff the backup README names the canonical DIR DB (``lifecycle/work.sqlite``) and NOT the bare
-    retired FILE basename (``lifecycle-work.sqlite``)."""
-    names_file = re.search(r"lifecycle-work\.sqlite", text) is not None
-    names_dir = re.search(r"lifecycle/work\.sqlite", text) is not None
+    """True iff the backup README's OPERATIONAL storage statement (the hourly-copy 'Stores' bullet) names
+    the canonical DIR DB ``lifecycle/work.sqlite`` and NOT the bare retired FILE ``lifecycle-work.sqlite``.
+    A historical/migration mention of the retired FILE ELSEWHERE in the README does NOT trip the red — only
+    the operational line is inspected, so we ban the FILE in the current-storage statement, not the filename
+    anywhere in the document."""
+    line = _readme_operational_storage_line(text)
+    if line is None:
+        return False
+    names_file = re.search(r"lifecycle-work\.sqlite", line) is not None
+    names_dir = re.search(r"lifecycle/work\.sqlite", line) is not None
     return names_dir and not names_file
 
 
@@ -9585,10 +9634,10 @@ def test_p0c_drift_root_compose_dir_mount_and_worker() -> None:
     text = (_P0C_REPO_ROOT / "docker-compose.yml").read_text()
     mount = _compose_lifecycle_host_path(text)
     worker = _has_lifecycle_worker_service(text)
-    if not (_resolves_canonical_dir(mount) and worker):
+    if not (_resolves_canonical_mount(mount) and worker):
         raise DefectStillPresent(
             "root compose docker-compose.yml does not resolve the canonical DIR storage: lifecycle host "
-            f"mount={mount!r} (needs {_CANONICAL_DIR_DB!r} via /var/lib/musubi/lifecycle), "
+            f"mount={mount!r} (needs EXACTLY {_CANONICAL_DIR_MOUNT!r}), "
             f"lifecycle-worker service present={worker}. §E: root compose must mount the DIR and run a "
             "lifecycle-worker before coordinator source lands."
         )
@@ -9604,9 +9653,9 @@ _P0C_DRIFT_ENV_EXAMPLE_REASON = (
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_DRIFT_ENV_EXAMPLE_REASON)
 def test_p0c_drift_env_example() -> None:
     path = _env_lifecycle_path((_P0C_REPO_ROOT / ".env.example").read_text())
-    if not _resolves_canonical_dir(path):
+    if not _resolves_canonical_dir_db(path):
         raise DefectStillPresent(
-            f".env.example LIFECYCLE_SQLITE_PATH={path!r} does not resolve the canonical DIR DB "
+            f".env.example LIFECYCLE_SQLITE_PATH={path!r} does not name EXACTLY the canonical DIR DB "
             f"{_CANONICAL_DIR_DB!r} (it names the retired FILE {_RETIRED_FILE_DB!r})."
         )
 
@@ -9624,28 +9673,32 @@ def test_p0c_drift_docker_env_production_example() -> None:
     path = _env_lifecycle_path(
         (_P0C_REPO_ROOT / "deploy/docker/.env.production.example").read_text()
     )
-    if not _resolves_canonical_dir(path):
+    if not _resolves_canonical_dir_db(path):
         raise DefectStillPresent(
-            f"deploy/docker/.env.production.example LIFECYCLE_SQLITE_PATH={path!r} does not resolve the "
-            f"canonical DIR DB {_CANONICAL_DIR_DB!r} (it names the retired FILE {_RETIRED_FILE_DB!r})."
+            f"deploy/docker/.env.production.example LIFECYCLE_SQLITE_PATH={path!r} does not name EXACTLY "
+            f"the canonical DIR DB {_CANONICAL_DIR_DB!r} (it names the retired FILE {_RETIRED_FILE_DB!r})."
         )
 
 
 _P0C_DRIFT_BACKUP_YML_REASON = (
     "the legacy offsite playbook deploy/backup/backup.yml still drifts from the LOCKED DIR storage family: "
-    "its 'Back up sqlite lifecycle ledger' task reads the bare FILE /var/lib/musubi/lifecycle-work.sqlite "
-    "(backup.yml:87-88), not the live scheduler's DIR DB. Flips green ONLY when it backs up "
-    "/var/lib/musubi/lifecycle/work.sqlite (parity with musubi-backup.sh + restore.yml)."
+    "its NAMED 'Back up sqlite lifecycle ledger' sqlite `.backup` COMMAND reads the bare FILE "
+    "/var/lib/musubi/lifecycle-work.sqlite (backup.yml:87-88), not the live scheduler's DIR DB. Flips green "
+    "ONLY when that command's source is /var/lib/musubi/lifecycle/work.sqlite (parity with "
+    "musubi-backup.sh + restore.yml)."
 )
 
 
 @pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_DRIFT_BACKUP_YML_REASON)
 def test_p0c_drift_backup_yml() -> None:
-    path = _first_lifecycle_sqlite((_P0C_REPO_ROOT / "deploy/backup/backup.yml").read_text())
-    if not _resolves_canonical_dir(path):
+    # Bind to the SOURCE of the actual sqlite `.backup` command, not the first lifecycle path anywhere in
+    # the file, so a comment/migration reference to the DIR cannot mask a command that still reads the FILE.
+    path = _sqlite_backup_command_src((_P0C_REPO_ROOT / "deploy/backup/backup.yml").read_text())
+    if not _resolves_canonical_dir_db(path):
         raise DefectStillPresent(
-            f"deploy/backup/backup.yml backs up {path!r}, not the canonical DIR DB {_CANONICAL_DIR_DB!r} "
-            f"(it reads the retired FILE {_RETIRED_FILE_DB!r}); backup and restore disagree on the unit."
+            f"deploy/backup/backup.yml's sqlite `.backup` command reads {path!r}, not the canonical DIR DB "
+            f"{_CANONICAL_DIR_DB!r} (it reads the retired FILE {_RETIRED_FILE_DB!r}); the offsite backup "
+            "must source the same DIR DB the live scheduler + restore.yml use."
         )
 
 
@@ -9662,7 +9715,7 @@ def test_p0c_drift_manual_recovery_runbook() -> None:
     dest = _runbook_restore_dest(
         (_P0C_REPO_ROOT / "deploy/runbooks/manual-recovery.md").read_text()
     )
-    if not _resolves_canonical_dir(dest):
+    if not _resolves_canonical_dir_db(dest):
         raise DefectStillPresent(
             f"deploy/runbooks/manual-recovery.md restores the DIR snapshot $SNAP/sqlite/work.sqlite INTO "
             f"{dest!r}, not the canonical DIR DB {_CANONICAL_DIR_DB!r} (it targets the retired FILE "
@@ -9689,16 +9742,26 @@ def test_p0c_drift_backup_readme() -> None:
 
 def test_p0c_drift_parsers_discriminate() -> None:
     """GREEN mechanism proof: every TASK-1 drift parser distinguishes the LOCKED DIR unit from the retired
-    FILE unit — feeding it DIR-shaped text resolves the canonical DIR, FILE-shaped text does not. Without
-    this, a mis-parse could make a drift red pass (or an aligned surface still fail) silently."""
-    # env parser (shared by .env.example + docker/.env.production.example)
-    assert _resolves_canonical_dir(
+    FILE unit — AND, crucially, rejects a WRONG CHILD under the canonical parent (a DB-bearing surface must
+    name EXACTLY ``…/lifecycle/work.sqlite``, a mount EXACTLY ``…/lifecycle``). A family-membership check
+    would wave ``…/lifecycle/wrong.sqlite`` / ``…/lifecycle/sub`` through and flip a red falsely green;
+    exact-equality predicates catch it. Without this, a mis-parse could make a drift red pass (or an aligned
+    surface still fail) silently."""
+    wrong_child_db = "/var/lib/musubi/lifecycle/wrong.sqlite"
+    wrong_child_mount = "/var/lib/musubi/lifecycle/sub"
+
+    # env parser (shared by .env.example + docker/.env.production.example) — DB-bearing, EXACT DB.
+    assert _resolves_canonical_dir_db(
         _env_lifecycle_path("LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite")
     )
-    assert not _resolves_canonical_dir(
+    assert not _resolves_canonical_dir_db(
         _env_lifecycle_path("LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle-work.sqlite")
     )
-    # root-compose mount + worker service
+    assert not _resolves_canonical_dir_db(  # wrong child under the DIR is a DIFFERENT db — REJECTED
+        _env_lifecycle_path(f"LIFECYCLE_SQLITE_PATH={wrong_child_db}")
+    )
+
+    # root-compose mount + worker service — mount is EXACT DIR (not a wrong child), plus a worker service.
     dir_compose = (
         "services:\n  core:\n    volumes:\n"
         "      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle\n"
@@ -9708,34 +9771,87 @@ def test_p0c_drift_parsers_discriminate() -> None:
         "services:\n  core:\n    volumes:\n"
         "      - /var/lib/musubi/lifecycle-work.sqlite:/var/lib/musubi/lifecycle-work.sqlite\n"
     )
-    assert _resolves_canonical_dir(
+    child_compose = (
+        "services:\n  core:\n    volumes:\n"
+        "      - /var/lib/musubi/lifecycle/sub:/var/lib/musubi/lifecycle\n"
+        "  lifecycle-worker:\n    image: x\n"
+    )
+    assert _resolves_canonical_mount(
         _compose_lifecycle_host_path(dir_compose)
     ) and _has_lifecycle_worker_service(dir_compose)
     assert not (
-        _resolves_canonical_dir(_compose_lifecycle_host_path(file_compose))
+        _resolves_canonical_mount(_compose_lifecycle_host_path(file_compose))
         and _has_lifecycle_worker_service(file_compose)
     )
-    # backup.yml sqlite source
-    assert _resolves_canonical_dir(
-        _first_lifecycle_sqlite('sqlite3 /var/lib/musubi/lifecycle/work.sqlite ".backup x"')
+    assert not _resolves_canonical_mount(  # wrong child mount — REJECTED even with a worker service
+        _compose_lifecycle_host_path(child_compose)
     )
-    assert not _resolves_canonical_dir(
-        _first_lifecycle_sqlite('sqlite3 /var/lib/musubi/lifecycle-work.sqlite ".backup x"')
+    assert _compose_lifecycle_host_path(child_compose) == wrong_child_mount
+
+    # backup.yml NAMED sqlite `.backup` command source — bound to the command, not the first path anywhere.
+    dir_backup = (
+        "- hosts: all\n  tasks:\n    - name: Back up sqlite lifecycle ledger\n"
+        "      ansible.builtin.command:\n"
+        '        cmd: sqlite3 /var/lib/musubi/lifecycle/work.sqlite ".backup /mnt/x.sqlite"\n'
     )
-    # runbook restore destination
-    assert _resolves_canonical_dir(
+    file_backup = (
+        "- hosts: all\n  tasks:\n    - name: Back up sqlite lifecycle ledger\n"
+        "      ansible.builtin.command:\n"
+        '        cmd: sqlite3 /var/lib/musubi/lifecycle-work.sqlite ".backup /mnt/x.sqlite"\n'
+    )
+    # WRONG: a comment mentions the DIR, but the actual command still reads the FILE -> still RED.
+    comment_dir_command_file = (
+        "- hosts: all\n  tasks:\n"
+        "    # migrate to /var/lib/musubi/lifecycle/work.sqlite (the canonical DIR DB) later\n"
+        "    - name: Back up sqlite lifecycle ledger\n"
+        "      ansible.builtin.command:\n"
+        '        cmd: sqlite3 /var/lib/musubi/lifecycle-work.sqlite ".backup /mnt/x.sqlite"\n'
+    )
+    assert _resolves_canonical_dir_db(_sqlite_backup_command_src(dir_backup))
+    assert not _resolves_canonical_dir_db(_sqlite_backup_command_src(file_backup))
+    assert _sqlite_backup_command_src(comment_dir_command_file) == _RETIRED_FILE_DB
+    assert not _resolves_canonical_dir_db(_sqlite_backup_command_src(comment_dir_command_file))
+    assert not _resolves_canonical_dir_db(  # wrong child in the command source — REJECTED
+        _sqlite_backup_command_src(
+            "- hosts: all\n  tasks:\n    - name: b\n      ansible.builtin.command:\n"
+            f'        cmd: sqlite3 {wrong_child_db} ".backup /mnt/x.sqlite"\n'
+        )
+    )
+
+    # runbook restore destination — DB-bearing, EXACT DB.
+    assert _resolves_canonical_dir_db(
         _runbook_restore_dest(
             'cp -a "$SNAP/sqlite/work.sqlite" /var/lib/musubi/lifecycle/work.sqlite'
         )
     )
-    assert not _resolves_canonical_dir(
+    assert not _resolves_canonical_dir_db(
         _runbook_restore_dest(
             'cp -a "$SNAP/sqlite/work.sqlite" /var/lib/musubi/lifecycle-work.sqlite'
         )
     )
-    # backup README wording
-    assert _readme_resolves_dir("copy `lifecycle/work.sqlite` hourly")
-    assert not _readme_resolves_dir("copy `lifecycle-work.sqlite` hourly")
+    assert not _resolves_canonical_dir_db(  # wrong child restore target — REJECTED
+        _runbook_restore_dest(f'cp -a "$SNAP/sqlite/work.sqlite" {wrong_child_db}')
+    )
+
+    # backup README — the OPERATIONAL storage statement is inspected, not the filename anywhere.
+    assert _readme_resolves_dir(
+        "## Stores\n- `lifecycle/work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
+    )
+    assert not _readme_resolves_dir(
+        "## Stores\n- `lifecycle-work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
+    )
+    # MIXED: a historical/migration mention of the retired FILE, but the OPERATIONAL line names the DIR
+    # -> PASSES (the history does not trip the red).
+    assert _readme_resolves_dir(
+        "## History\nBefore the DIR cutover the ledger lived at `lifecycle-work.sqlite`.\n\n"
+        "## Stores\n- `lifecycle/work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
+    )
+    # Inverse MIXED: an operational FILE statement is RED even if the DIR name appears in history prose.
+    assert not _readme_resolves_dir(
+        "## History\nThe canonical DIR DB is `lifecycle/work.sqlite`.\n\n"
+        "## Stores\n- `lifecycle-work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
+    )
+    assert _readme_operational_storage_line("no operational storage statement here") is None
 
 
 # ---- TASK 2: preserve-green anchor CONTROLS (UNMARKED — pass today, fail loudly on a FILE regress) -- #
@@ -9764,8 +9880,8 @@ def test_p0c_anchor_ansible_compose_dir_mount_and_worker() -> None:
     text = (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
     mounts = _all_lifecycle_host_mounts(text)
     assert len(mounts) >= 2, f"expected core+worker lifecycle mounts, got {mounts!r}"
-    assert all(_resolves_canonical_dir(m) for m in mounts), (
-        f"ansible compose lifecycle mounts regressed off the DIR: {mounts!r}"
+    assert all(_resolves_canonical_mount(m) for m in mounts), (
+        f"ansible compose lifecycle mounts regressed off the exact DIR mount: {mounts!r}"
     )
     assert _has_lifecycle_worker_service(text), (
         "ansible compose template dropped the lifecycle-worker service"
@@ -9777,8 +9893,8 @@ def test_p0c_anchor_ansible_env_production_dir() -> None:
     path = _env_lifecycle_path(
         (_P0C_REPO_ROOT / "deploy/ansible/templates/env.production.j2").read_text()
     )
-    assert _resolves_canonical_dir(path), (
-        f"env.production.j2 LIFECYCLE_SQLITE_PATH regressed off the DIR: {path!r}"
+    assert _resolves_canonical_dir_db(path), (
+        f"env.production.j2 LIFECYCLE_SQLITE_PATH regressed off the exact DIR DB: {path!r}"
     )
     assert path == _CANONICAL_DIR_DB
 
@@ -9812,8 +9928,8 @@ def test_p0c_anchor_live_scheduler_backup_dir() -> None:
     src = _bash_scalar(
         (_P0C_REPO_ROOT / "deploy/backup/musubi-backup.sh").read_text(), "SQLITE_SRC"
     )
-    assert _resolves_canonical_dir(src), (
-        f"musubi-backup.sh SQLITE_SRC regressed off the DIR: {src!r}"
+    assert _resolves_canonical_dir_db(src), (
+        f"musubi-backup.sh SQLITE_SRC regressed off the exact DIR DB: {src!r}"
     )
     assert src == _CANONICAL_DIR_DB
 
@@ -9821,9 +9937,10 @@ def test_p0c_anchor_live_scheduler_backup_dir() -> None:
 def test_p0c_anchor_restore_yml_dir() -> None:
     """ANCHOR CONTROL: restore.yml (paired with the live scheduler) restores into the canonical DIR DB."""
     path = _first_lifecycle_sqlite((_P0C_REPO_ROOT / "deploy/backup/restore.yml").read_text())
-    assert _resolves_canonical_dir(path), (
-        f"restore.yml lifecycle target regressed off the DIR: {path!r}"
+    assert _resolves_canonical_dir_db(path), (
+        f"restore.yml lifecycle restore target regressed off the exact DIR DB: {path!r}"
     )
+    assert path == _CANONICAL_DIR_DB
 
 
 # ---- TASK 3: migration CONTRACT spec (reference-candidate red-proof) — CONTRACT ONLY, R20-gated ----- #
@@ -9921,9 +10038,12 @@ def _ref_verify(dir_db: Path, expected_rows: int) -> None:
 
 
 def _ref_rollback(old_file: Path, dir_db: Path, resumed_writes: bool) -> None:
-    """CONTRACT: the old FILE is a PRE-migration snapshot. Restoring it is valid ONLY before resumed
-    writes. AFTER the DIR DB has taken new writes, NEVER restore the stale old FILE — instead
-    wal_checkpoint(TRUNCATE) and copy the CURRENT DIR DB back under quiescence."""
+    """CONTRACT (locked disposition): the old FILE is a PRE-migration snapshot. Restoring it onto the DIR is
+    valid ONLY before resumed writes. AFTER the DIR DB has taken new writes:
+    - the canonical DIR DB is PRESERVED with its current rows — the stale old FILE NEVER becomes canonical;
+    - a compatibility export to the retired FILE (if kept for compat) MUST wal_checkpoint(TRUNCATE) then
+      copy the CURRENT DIR DB to that EXACT retired-FILE target, so the FILE reflects the live DIR data —
+      NOT the stale pre-migration snapshot, and NOT merely a side ``*.rollback-backup`` file."""
     if not resumed_writes:
         dir_db.write_bytes(old_file.read_bytes())  # valid pre-write restore of the snapshot
         return
@@ -9932,8 +10052,8 @@ def _ref_rollback(old_file: Path, dir_db: Path, resumed_writes: bool) -> None:
         con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     finally:
         con.close()
-    # Durable copy of the CURRENT DIR DB; the live DIR DB (with its new writes) is left intact.
-    (dir_db.parent / "work.sqlite.rollback-backup").write_bytes(dir_db.read_bytes())
+    # DIR DB left intact + canonical; export the CURRENT DIR data to the EXACT retired FILE target for compat.
+    old_file.write_bytes(dir_db.read_bytes())
 
 
 def _wrong_silently_picks_one(old_file: Path, dir_db: Path) -> bool:
@@ -9947,7 +10067,24 @@ def _wrong_skips_integrity(dir_db: Path, expected_rows: int) -> None:
 def _wrong_restores_stale_file(old_file: Path, dir_db: Path, resumed_writes: bool) -> None:
     dir_db.write_bytes(
         old_file.read_bytes()
-    )  # restores the stale FILE even post-write => data loss
+    )  # restores the stale FILE even post-write => data loss (DIR not preserved)
+
+
+def _wrong_noop_rollback(old_file: Path, dir_db: Path, resumed_writes: bool) -> None:
+    return (
+        None  # does NOTHING — no compatibility export; the retired FILE stays at its stale snapshot
+    )
+
+
+def _wrong_side_backup_only(old_file: Path, dir_db: Path, resumed_writes: bool) -> None:
+    # checkpoints + writes a SIDE `work.sqlite.rollback-backup`, but never exports the CURRENT DIR data to
+    # the EXACT retired FILE target -> the retired FILE stays stale, so a compat consumer reads old data.
+    con = sqlite3.connect(dir_db)
+    try:
+        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    finally:
+        con.close()
+    (dir_db.parent / "work.sqlite.rollback-backup").write_bytes(dir_db.read_bytes())
 
 
 def _migration_candidate(name: str) -> _MigCandidate:
@@ -9958,6 +10095,10 @@ def _migration_candidate(name: str) -> _MigCandidate:
         cand.verify = _wrong_skips_integrity
     elif name == "restores_stale_file_post_write":
         cand.rollback = _wrong_restores_stale_file
+    elif name == "noop_rollback":
+        cand.rollback = _wrong_noop_rollback
+    elif name == "side_backup_only_rollback":
+        cand.rollback = _wrong_side_backup_only
     elif name != "correct":  # pragma: no cover - guard against a typo'd candidate name
         raise AssertionError(f"unknown migration candidate {name!r}")
     return cand
@@ -9991,18 +10132,39 @@ def _clause_verify(cand: _MigCandidate, base: Path) -> None:
 
 
 def _clause_rollback(cand: _MigCandidate, base: Path) -> None:
-    """The DIR DB has taken new writes (7 rows) past the pre-migration FILE snapshot (3 rows); a post-write
-    rollback MUST NOT restore the stale FILE (which would drop the new writes)."""
+    """LOCKED post-write rollback disposition. The DIR DB has taken new writes (N=7 rows) past the
+    pre-migration FILE snapshot (3 rows). A conforming rollback MUST:
+    (a) PRESERVE the canonical DIR DB with its current N=7 rows — the stale old FILE never becomes canonical
+        (so a rollback that restores the 3-row snapshot onto the DIR fails HERE); AND
+    (b) leave the retired FILE — if kept for compatibility — holding the CURRENT DIR data (N=7), produced by
+        wal_checkpoint(TRUNCATE)+copy of the DIR to that EXACT target; a no-op (FILE stays at 3) or a
+        side-``*.rollback-backup``-only disposition (FILE never updated) fails HERE.
+    This is not usable proof unless BOTH targets are asserted at N=7 — a rowcount-of-DIR-only check let a
+    no-op pass."""
+    n = 7
     old_file = base / "lifecycle-work.sqlite"
     dir_db = base / "lifecycle" / "work.sqlite"
-    _mig_make_db(old_file, 3)  # pre-migration snapshot
-    _mig_make_db(dir_db, 7)  # DIR DB has resumed writes post-cutover
+    _mig_make_db(old_file, 3)  # pre-migration snapshot (stale)
+    _mig_make_db(dir_db, n)  # DIR DB has resumed writes post-cutover
     cand.rollback(old_file, dir_db, True)
+
+    # (a) the canonical DIR DB is preserved with its current rows, and IS the canonical target (the DIR db).
+    assert dir_db.name == "work.sqlite" and dir_db.parent.name == "lifecycle"
     live = _mig_row_count(dir_db)
-    if live < 7:
+    if live != n:
         raise DefectStillPresent(
-            f"rollback: post-write rollback restored the STALE old FILE — the live DIR DB dropped to "
-            f"{live} rows (the 7 post-cutover writes were lost)."
+            f"rollback: the canonical DIR DB was NOT preserved — it holds {live} rows (expected the current "
+            f"{n}); a post-write rollback must never let the stale old FILE become canonical."
+        )
+    # (b) the retired FILE, kept for compat, reflects the CURRENT DIR data (N=7) at the EXACT target — not
+    #     the stale 3-row snapshot, and not merely a side *.rollback-backup file.
+    if not _db_present(old_file) or _mig_row_count(old_file) != n:
+        exported = _mig_row_count(old_file) if _db_present(old_file) else None
+        raise DefectStillPresent(
+            f"rollback: the compatibility export to the retired FILE is not usable — {old_file.name} holds "
+            f"{exported} rows (expected the CURRENT DIR's {n}). A no-op or side-backup-only disposition "
+            "leaves the retired FILE stale; the export must wal_checkpoint(TRUNCATE)+copy the CURRENT DIR "
+            "DB to that exact target so BOTH hold N=7."
         )
 
 
@@ -10017,6 +10179,8 @@ _MIGRATION_WRONG_CLAUSE: dict[str, str] = {
     "silently_picks_one": "ambiguity",
     "skips_integrity": "verify",
     "restores_stale_file_post_write": "rollback",
+    "noop_rollback": "rollback",
+    "side_backup_only_rollback": "rollback",
 }
 
 
@@ -10073,24 +10237,119 @@ def test_p0c_storage_migration_verify_checks_all_three(tmp_path: Path) -> None:
     assert _mig_row_count(dir_db) == 2
 
 
+#: A migration task is an EXECUTABLE artifact — prose/runbooks (.md) mentioning both paths do NOT build it.
+_MIGRATION_TASK_SUFFIXES = frozenset({".py", ".sh", ".yml", ".yaml"})
+#: Tokens that evidence an ACTUAL data-move operation bridging the two storage units (not mere mention).
+_MIGRATION_OPERATION_TOKENS = (
+    ".backup",
+    "shutil.copy",
+    "shutil.move",
+    "cp -a",
+    "cp ",
+    "mv ",
+    "rsync",
+    "ansible.builtin.copy",
+)
+
+
+def _is_lifecycle_migration_artifact(suffix: str, text: str) -> bool:
+    """True iff a deploy artifact actually BUILDS the FILE->DIR lifecycle storage migration, rather than
+    merely co-mentioning the two paths. It must be:
+    - an EXECUTABLE task artifact (``.py/.sh/.yml/.yaml`` — NOT ``.md`` prose/runbook);
+    - bridge BOTH the retired FILE and the canonical DIR DB path;
+    - perform an actual data-move OPERATION (a copy/move/`.backup` between the units); AND
+    - carry the §E fail-closed CONTRACT markers — verify-before-cutover (``integrity_check``) + the
+      checkpoint used by the rollback rule (``wal_checkpoint``).
+    Co-occurrence of both paths in prose, or an unrelated script that names them without the migration
+    operation + contract markers, is NOT a built migration."""
+    if suffix not in _MIGRATION_TASK_SUFFIXES:
+        return False
+    names_file = re.search(r"/var/lib/musubi/lifecycle-work\.sqlite", text) is not None
+    names_dir = re.search(r"/var/lib/musubi/lifecycle/work\.sqlite", text) is not None
+    if not (names_file and names_dir):
+        return False
+    has_operation = any(tok in text for tok in _MIGRATION_OPERATION_TOKENS)
+    verifies_before_cutover = "integrity_check" in text
+    checkpoints_for_rollback = "wal_checkpoint" in text
+    return has_operation and verifies_before_cutover and checkpoints_for_rollback
+
+
 def _lifecycle_storage_migration_task_files() -> list[str]:
-    """deploy/ files that BUILD a FILE->DIR lifecycle storage migration — i.e. bridge BOTH the retired FILE
-    path and the canonical DIR DB path in one artifact. Today none exist (deploy/migration/ is the POC->v1
-    Qdrant migration, unrelated to lifecycle SQLite storage)."""
+    """deploy/ files that BUILD a FILE->DIR lifecycle storage migration per ``_is_lifecycle_migration_artifact``.
+    Today none exist (deploy/migration/ is the POC->v1 Qdrant migration, unrelated to lifecycle SQLite
+    storage; the runbooks are prose)."""
     deploy = _P0C_REPO_ROOT / "deploy"
     hits: list[str] = []
     for p in sorted(deploy.rglob("*")):
-        if not p.is_file() or p.suffix not in {".py", ".sh", ".yml", ".yaml", ".md"}:
+        if not p.is_file() or p.suffix not in ({".md"} | _MIGRATION_TASK_SUFFIXES):
             continue
         try:
             text = p.read_text()
         except (UnicodeDecodeError, OSError):  # pragma: no cover - defensive
             continue
-        if re.search(r"/var/lib/musubi/lifecycle-work\.sqlite", text) and re.search(
-            r"/var/lib/musubi/lifecycle/work\.sqlite", text
-        ):
+        if _is_lifecycle_migration_artifact(p.suffix, text):
             hits.append(str(p.relative_to(_P0C_REPO_ROOT)))
     return hits
+
+
+# ---- fixtures for the migration-task DETECTION discriminator (operation-shaped, executable-only) ----- #
+_MIG_BOTH_PATHS = (
+    "src /var/lib/musubi/lifecycle-work.sqlite dst /var/lib/musubi/lifecycle/work.sqlite\n"
+)
+#: prose-only: both paths + operation + contract markers, but a .md is NOT an executable task.
+_MIG_PROSE_MD = (
+    "# Migration runbook\n"
+    "Copy /var/lib/musubi/lifecycle-work.sqlite to /var/lib/musubi/lifecycle/work.sqlite.\n"
+    "Run PRAGMA integrity_check then wal_checkpoint. Use cp -a for the move.\n"
+)
+#: unrelated executable: both paths co-occur, but no migration operation + no contract markers.
+_MIG_UNRELATED_SH = (
+    "#!/usr/bin/env bash\n"
+    "# audit that both /var/lib/musubi/lifecycle-work.sqlite and "
+    "/var/lib/musubi/lifecycle/work.sqlite exist\n"
+    "ls -l /var/lib/musubi/lifecycle-work.sqlite /var/lib/musubi/lifecycle/work.sqlite\n"
+)
+#: a real contract-shaped migration task: both paths + a copy operation + verify + checkpoint markers.
+_MIG_REAL_TASK_SH = (
+    "#!/usr/bin/env bash\n"
+    "set -euo pipefail\n"
+    "OLD=/var/lib/musubi/lifecycle-work.sqlite\n"
+    "NEW=/var/lib/musubi/lifecycle/work.sqlite\n"
+    'if [[ -s "$OLD" && -s "$NEW" ]]; then echo refuse-ambiguous >&2; exit 3; fi\n'
+    'sqlite3 "$OLD" "PRAGMA integrity_check"\n'
+    'sqlite3 "$OLD" "PRAGMA wal_checkpoint(TRUNCATE)"\n'
+    'cp -a "$OLD" "$NEW"\n'
+)
+
+
+def test_p0c_storage_migration_task_detection_discriminates() -> None:
+    """GREEN mechanism proof for correction (5): the migration-task detector is OPERATION-SHAPED and
+    EXECUTABLE-ONLY. A prose .md that names both paths (even with operation/marker words) does NOT count;
+    an unrelated .sh that merely co-mentions both paths without the operation + contract markers does NOT
+    count; only a real contract-shaped executable task (both paths + a data-move operation + verify +
+    checkpoint markers) counts — which is what would flip the UNBUILT red green."""
+    # executable-only: prose .md never counts, even shaped like a migration
+    assert not _is_lifecycle_migration_artifact(".md", _MIG_PROSE_MD)
+    # mere co-occurrence in an executable is NOT a migration
+    assert not _is_lifecycle_migration_artifact(".sh", _MIG_UNRELATED_SH)
+    # both paths alone, without operation/markers, is NOT a migration
+    assert not _is_lifecycle_migration_artifact(".py", _MIG_BOTH_PATHS)
+    # a real contract-shaped executable task DOES count (flips the red)
+    assert _is_lifecycle_migration_artifact(".sh", _MIG_REAL_TASK_SH)
+    # …and the SAME real content as .md prose still does NOT count (suffix gate)
+    assert not _is_lifecycle_migration_artifact(".md", _MIG_REAL_TASK_SH)
+    # each contract marker is load-bearing: dropping operation, verify, or checkpoint drops the hit
+    assert not _is_lifecycle_migration_artifact(
+        ".sh", _MIG_REAL_TASK_SH.replace("cp -a", "true #").replace(".backup", "x")
+    )
+    assert not _is_lifecycle_migration_artifact(
+        ".sh", _MIG_REAL_TASK_SH.replace("integrity_check", "noop")
+    )
+    assert not _is_lifecycle_migration_artifact(
+        ".sh", _MIG_REAL_TASK_SH.replace("wal_checkpoint", "noop")
+    )
+    # today the REAL deploy tree builds no such task -> the UNBUILT red stays RED
+    assert _lifecycle_storage_migration_task_files() == []
 
 
 _P0C_MIGRATION_UNBUILT_REASON = (

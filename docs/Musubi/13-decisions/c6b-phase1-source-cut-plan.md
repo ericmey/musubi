@@ -110,9 +110,15 @@ classifies each surface — ansible compose mount, `env.production.j2`, `restore
 and asserts a single family. It flips green ONLY when (a) the surfaces are reconciled to one family, OR
 (b) every dissenting surface is named in `_OUT_OF_SCOPE_STORAGE_SURFACES` (the test-local out-of-scope
 registry, each entry carrying a rationale + this pointer). The `test_p0c_config_surfaces_all_resolve`
-control asserts every surface still resolves so a silently-broken extractor can't fake parity. **Backup
-and restore currently disagree with each other** (backup reads the FILE variant, restore writes the DIR
-variant) — reconcile before S1.
+control asserts every surface still resolves so a silently-broken extractor can't fake parity. **The
+active backup/restore pair AGREES on the DIR** — the LIVE scheduler `deploy/backup/musubi-backup.sh`
+(`SQLITE_SRC=/var/lib/musubi/lifecycle/work.sqlite`) and `deploy/backup/restore.yml` (restores into
+`/var/lib/musubi/lifecycle/work.sqlite`) are the sound paired anchor. The FILE drift is confined to the
+non-live surfaces in FOUR groups: the LEGACY/offsite `deploy/backup/backup.yml` (its `sqlite3 … ".backup"`
+command still reads the bare FILE), the two env examples (`.env.example`,
+`deploy/docker/.env.production.example`), root `docker-compose.yml`, and the stale docs
+(`deploy/runbooks/manual-recovery.md`, `deploy/backup/README.md`). Align those to the DIR before S1 — the
+live scheduler and restore do NOT disagree.
 
 ### E.1 LOCKED canonical layout + FILE→DIR migration contract (P0c storage-parity family)
 
