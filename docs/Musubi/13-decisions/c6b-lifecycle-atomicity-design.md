@@ -178,8 +178,9 @@ unification slice** ([[_slices/slice-h5-unify-state-mutation]], Issue TBD) that 
 through `LifecycleTransitionCoordinator`; **C6b atomicity closure is BLOCKED on H5.** C6b ships:
 
 - a **mechanical guard red** (AST/rg) that FORBIDS direct `state`-writing `set_payload` outside the
-  coordinator — it is **RED today** (it lists the ≥8 current violators) and flips green only when H5
-  lands. C6b must NOT claim atomicity for the maturation/API canonical paths alone.
+  coordinator — it is **RED today** (it lists the **6** current post-create transition violators — see the
+  committed `_PRESENT_TRANSITION_BYPASSES` control) and flips green only when H5 lands. C6b must NOT claim
+  atomicity for the maturation/API canonical paths alone.
 
 ## Behavior-shaped RED INVENTORY v2 (to encode; strict-xfail vs current no-outbox code)
 
@@ -224,8 +225,9 @@ Reds:
 
 Guards:
 - G1 **mechanical AST/rg guard: NO direct `state`-writing `set_payload` outside
-  `LifecycleTransitionCoordinator`** — RED today (lists the ≥8 violators); flips green only under H5
-  (G). **Closure-gate, not Phase-1 acceptance.**
+  `LifecycleTransitionCoordinator`** — RED today (lists the **6** post-create transition violators:
+  `lifecycle/transitions.py::transition` + the 5 plane `transition()` methods, per the committed
+  `_PRESENT_TRANSITION_BYPASSES`); flips green only under H5 (G). **Closure-gate, not Phase-1 acceptance.**
 - G2 callsite inventory: `coordinator.transition(` callsites are exactly the reviewed set.
 - G3 AST "Result consumed": no caller may drop the three-way `TransitionOutcome`.
 

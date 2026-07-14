@@ -91,7 +91,10 @@ version fence (R12), conditional apply + full readback (R13), hard cap (R14), tr
 (R19), rollback-refuses-nonterminal (R20), three-way caller outcome (R21), **two-different-transitions
 race — loser cannot mutate/overwrite (R22)**. Guards: G2 coordinator callsite inventory + G3 AST
 "TransitionOutcome consumed" (Phase-1); **G1 — RED today, closure-gate — AST/rg forbidding direct
-`state`-writing `set_payload` outside the coordinator** (enumerates the ≥8 bypass violators; flips green
+`state`-writing `set_payload` outside the coordinator** (enumerates the **6** post-create transition bypass
+violators — `transitions.py::transition` + the 5 plane `transition()` methods, per the committed
+`_PRESENT_TRANSITION_BYPASSES` control; the maturation/synthesis/demotion `set_payload`s are non-state
+enrichment/contradiction/reinforcement writes and are correctly EXCLUDED; flips green
 only under [[_slices/slice-h5-unify-state-mutation]]). R1–R22 + G2 + G3 are **Phase-1 source acceptance**
 (flip green with the coordinator impl); **G1 is defect closure** (green only under H5). Fixtures:
 in-memory Qdrant (`QdrantClient(":memory:")`), real shared SQLite events+outbox, transient/terminal
