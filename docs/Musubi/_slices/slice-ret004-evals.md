@@ -60,3 +60,8 @@ This slice must implement a tests-first evaluation harness. The existing skipped
 | `test_eval_contradiction_blending` | Query targeting two matured but contradictory facts. | Assert both facts appear in top-K context. |
 | `test_eval_cross_plane_blending` | Query requiring one hit from `curated` and one from `episodic`. | Assert both retrieved accurately via hybrid/RRF. |
 | `test_eval_provisional_immediate_recall` | Query targeting a fresh write lacking `matured` provenance. | Include provisional in `state_filter`; assert immediate query ranks target within bounded K while preserving lower authority label. |
+
+## Design Constraints: PR-Smoke Seam Contract
+Before implementing the CLI and runner source, the following CLI/workflow seam contract is strictly enforced:
+- **Fixture Shape (`smoke_fixture.json`)**: Deterministic, network-free, manifest-covered typed extension containing both `query_embedding` and a list of `corpus` documents, each with exact text, `relevance` labels, and `embedding` vectors. (Does not silently reinterpret `GoldenQuery` which lacks embeddings).
+- **CLI Seam Verification (`test_eval_cli_seam_fixed_embeddings_red`)**: The `musubi.evals smoke` command MUST read the fixture and pass `corpus` and `query_embedding` verbatim into `run_smoke_gate`. The contract strictly fails if the CLI drops `query_embedding` or strips document embeddings from the passed dictionaries.
