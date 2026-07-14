@@ -155,5 +155,7 @@ FILE-to-DIR migration, rollback/readiness, release, and deployment proof remain 
   12-bullet Test Contract so the mechanical closure audit evaluates this slice's actual acceptance surface.
 - 2026-07-14 — Exact-head CI run `29372253658` and Vault run `29372253639` passed. Tama independently
   inspected the clean exact-head bytes and returned APPROVE after retracting non-authoritative piped rerun
-  claims. The branch diff from main is 35 files across five commits, including the five plane compatibility
-  suites omitted from the reviewer's first narrative count; Yua independently enumerated the exact scope.
+  claims. The reviewed source-head diff from main was 35 files across five commits, including the five
+  plane compatibility suites omitted from the reviewer's first narrative count; this closeout successor
+  retires the H5 lock and therefore leaves 34 net changed files from main. Yua independently enumerated
+  both exact scopes.
