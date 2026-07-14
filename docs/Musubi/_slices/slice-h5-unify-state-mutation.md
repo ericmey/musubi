@@ -3,11 +3,11 @@ title: "Slice: H5 — unify all lifecycle state mutation behind LifecycleTransit
 slice_id: slice-h5-unify-state-mutation
 section: _slices
 type: slice
-status: ready
+status: blocked
 owner: unassigned
 phase: "Lifecycle-audit 2026-07-13 — H5 mutation-path unification (C6b dependency)"
-tags: [section/slices, status/ready, type/slice, lifecycle, atomicity, refactor]
-updated: 2026-07-13
+tags: [section/slices, status/blocked, type/slice, lifecycle, atomicity, refactor]
+updated: 2026-07-14
 reviewed: false
 depends-on: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
 blocks: []
@@ -56,6 +56,8 @@ Migrate all of the above to `LifecycleTransitionCoordinator`. The mechanical gua
 
 ## Status
 
-**`ready`** (2026-07-13) — spec stub only; discovered by C6b's inventory. Owner: unassigned. Tracking
-**Issue #439**. Design + contract are future work; this slice exists so the dependency is concrete and
-C6b's guard red has a named destination.
+**`blocked`** (2026-07-14) — **WITHHELD pending C6b source phases S1–S7 + the caller `Pending`
+semantics**; spec stub only, discovered by C6b's inventory. Owner: unassigned. Tracking **Issue #439**
+(`status:blocked`). Design + contract are future work; this slice exists so the dependency is concrete and
+C6b's guard red (G1) has a named destination — H5 cannot start until the coordinator it migrates onto
+exists (S1–S7) and the `Pending` caller semantics are specified.

@@ -132,5 +132,6 @@ The red contract labels each red as **Phase-1-acceptance** (R1–R22, G2, G3) or
 ## Status
 
 **`in-progress`** (2026-07-13) — claimed by aoi (Issue #437, lock in `_inbox/locks/`). Direction accepted
-+ design revised to v2 for Yua's fork rulings + corrections A–J. Now encoding the 21-red + 3-guard
-behavior contract (zero src). Blocked-by H5 (#439) for closure; blocks C6 (#433 stays C6 only).
++ design revised to v2 for Yua's fork rulings + corrections A–J. The **22-red + 3-guard** tests-only
+contract (R1–R22 + G1/G2/G3) is **encoded and accepted** (zero src); the **Phase-1 source is unbuilt**,
+and **G1 stays strict-RED pending H5**. Blocked-by H5 (#439) for closure; blocks C6 (#433 stays C6 only).
