@@ -47,14 +47,9 @@ def _assert_verbatim_projection(
         "CLI must pass the exact query_embedding"
     )
 
-    assert len(passed_corpus) == len(expected_fixture["corpus"]), "Corpus length mismatch"
-    for i, doc in enumerate(passed_corpus):
-        expected_doc = expected_fixture["corpus"][i]
-        assert "embedding" in doc, "CLI must not strip document embeddings"
-        assert doc["id"] == expected_doc["id"]
-        assert doc["text"] == expected_doc["text"]
-        assert doc["relevance"] == expected_doc["relevance"]
-        assert doc["embedding"] == expected_doc["embedding"]
+    assert passed_corpus == expected_fixture["corpus"], (
+        "CLI must pass the verbatim corpus without adding, removing, or transforming fields"
+    )
 
 
 def _run_cli_and_catch_legacy_defect(
@@ -143,7 +138,7 @@ def test_discrimination_stripped_doc_embedding() -> None:
     }
     stripped_corpus = [{"id": "1", "text": "A", "relevance": 1}]
     calls = [{"corpus": stripped_corpus, "query_embedding": [0.1]}]
-    with pytest.raises(AssertionError, match="CLI must not strip document embeddings"):
+    with pytest.raises(AssertionError, match="verbatim corpus"):
         _assert_verbatim_projection(calls, fixture)
 
 
@@ -154,6 +149,22 @@ def test_discrimination_bypassed_runner() -> None:
     }
     calls: list[dict[str, Any]] = []  # Bypassed
     with pytest.raises(AssertionError, match="CLI must invoke run_smoke_gate exactly once"):
+        _assert_verbatim_projection(calls, fixture)
+
+
+def test_discrimination_modified_corpus_fails() -> None:
+    fixture = {
+        "query_embedding": [0.1],
+        "corpus": [{"id": "1", "text": "A", "relevance": 1, "embedding": [0.1]}],
+    }
+    modified_corpus = [
+        {"id": "1", "text": "A", "relevance": 1, "embedding": [0.1], "extra": "data"}
+    ]
+    calls = [{"corpus": modified_corpus, "query_embedding": [0.1]}]
+    with pytest.raises(
+        AssertionError,
+        match="CLI must pass the verbatim corpus without adding, removing, or transforming fields",
+    ):
         _assert_verbatim_projection(calls, fixture)
 
 
@@ -175,34 +186,6 @@ def test_discrimination_unrelated_exception_not_swallowed(
 
 
 # --- Schema Validation Invariants ---
-
-
-# Define a mock schema validation logic to prove shape validation rules
-# Since we are tests/docs only, we write a red contract for the schema parser.
-def _parse_smoke_fixture(payload: dict[str, Any]) -> None:
-    # The actual implementation will use Pydantic. This helper represents the assertion that the schema validator enforces these rules.
-    # To prove the contract, we can just assert that Pydantic/CLI *would* raise on these.
-    # Actually, we should test the actual `GoldenQuery` or the new schema if it existed, but we are doing tests-first.
-    # We can write a RED test that tries to parse using the FUTURE parser, but since we don't have the future parser yet,
-    # we can define a red test that imports the target schema and validates it.
-    pass
-
-
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: SmokeFixture schema not yet implemented",
-)
-def test_schema_validation_invariants_red() -> None:
-    _get_smoke_fixture_schema()
-
-
-# To satisfy Yua's requirement 5:
-# "Name the source-side schema/model boundary and validation invariants: non-empty finite query vector; at least two docs; unique non-empty ids; finite document vectors with dimension equal to query vector; integer relevance labels; unknown/missing fields fail closed.
-# Add focused red/control cases for dimension mismatch and non-finite values, or explicitly narrow the claim from typed to shape-validated. Do not leave the word "typed" backed only by a dict literal."
-
-# We will define tests for these schema invariants. We can create a dummy schema parser in the test file that implements what we WANT the source to do, and assert that the FUTURE source schema does this.
-# Since we can't test the future schema, we can write the tests against a dummy parser to PROVE the discrimination works, and later swap it for the real one. Or we can just test the real one and mark it xfail.
 
 
 def _get_smoke_fixture_schema() -> Any:
@@ -251,7 +234,7 @@ def test_schema_invalid_dimension_mismatch() -> None:
 @pytest.mark.xfail(
     strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
 )
-def test_schema_invalid_non_finite() -> None:
+def test_schema_invalid_non_finite_query_vector() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     import math
 
@@ -259,6 +242,24 @@ def test_schema_invalid_non_finite() -> None:
         "query_embedding": [math.inf, 0.2],
         "corpus": [
             {"id": "d1", "text": "A", "relevance": 1, "embedding": [0.1, 0.2]},
+            {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
+        ],
+    }
+    with pytest.raises(ValueError):
+        SmokeFixture.model_validate(payload)
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
+)
+def test_schema_invalid_non_finite_doc_vector() -> None:
+    SmokeFixture = _get_smoke_fixture_schema()
+    import math
+
+    payload = {
+        "query_embedding": [0.1, 0.2],
+        "corpus": [
+            {"id": "d1", "text": "A", "relevance": 1, "embedding": [math.inf, 0.2]},
             {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
         ],
     }
@@ -307,6 +308,86 @@ def test_schema_invalid_extra_fields() -> None:
             {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
         ],
         "unknown_field": True,
+    }
+    with pytest.raises(ValueError):
+        SmokeFixture.model_validate(payload)
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
+)
+def test_schema_invalid_empty_query_vector() -> None:
+    SmokeFixture = _get_smoke_fixture_schema()
+    payload = {
+        "query_embedding": [],
+        "corpus": [
+            {"id": "d1", "text": "A", "relevance": 1, "embedding": []},
+            {"id": "d2", "text": "B", "relevance": 0, "embedding": []},
+        ],
+    }
+    with pytest.raises(ValueError):
+        SmokeFixture.model_validate(payload)
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
+)
+def test_schema_invalid_empty_id() -> None:
+    SmokeFixture = _get_smoke_fixture_schema()
+    payload = {
+        "query_embedding": [0.1, 0.2],
+        "corpus": [
+            {"id": "", "text": "A", "relevance": 1, "embedding": [0.1, 0.2]},
+            {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
+        ],
+    }
+    with pytest.raises(ValueError):
+        SmokeFixture.model_validate(payload)
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
+)
+def test_schema_invalid_non_integer_relevance() -> None:
+    SmokeFixture = _get_smoke_fixture_schema()
+    payload = {
+        "query_embedding": [0.1, 0.2],
+        "corpus": [
+            {"id": "d1", "text": "A", "relevance": 1.5, "embedding": [0.1, 0.2]},
+            {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
+        ],
+    }
+    with pytest.raises(ValueError):
+        SmokeFixture.model_validate(payload)
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
+)
+def test_schema_invalid_missing_required_field() -> None:
+    SmokeFixture = _get_smoke_fixture_schema()
+    payload = {
+        "query_embedding": [0.1, 0.2],
+        "corpus": [
+            {"id": "d1", "relevance": 1, "embedding": [0.1, 0.2]},  # Missing text
+            {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
+        ],
+    }
+    with pytest.raises(ValueError):
+        SmokeFixture.model_validate(payload)
+
+
+@pytest.mark.xfail(
+    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
+)
+def test_schema_invalid_unknown_doc_field() -> None:
+    SmokeFixture = _get_smoke_fixture_schema()
+    payload = {
+        "query_embedding": [0.1, 0.2],
+        "corpus": [
+            {"id": "d1", "text": "A", "relevance": 1, "embedding": [0.1, 0.2], "extra_field": 123},
+            {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
+        ],
     }
     with pytest.raises(ValueError):
         SmokeFixture.model_validate(payload)

@@ -63,5 +63,11 @@ This slice must implement a tests-first evaluation harness. The existing skipped
 
 ## Design Constraints: PR-Smoke Seam Contract
 Before implementing the CLI and runner source, the following CLI/workflow seam contract is strictly enforced:
-- **Fixture Shape (`smoke_fixture.json`)**: Deterministic, network-free, manifest-covered typed extension containing both `query_embedding` and a list of `corpus` documents, each with exact text, `relevance` labels, and `embedding` vectors. (Does not silently reinterpret `GoldenQuery` which lacks embeddings).
-- **CLI Seam Verification (`test_eval_cli_seam_fixed_embeddings_red`)**: The `musubi.evals smoke` command MUST read the fixture and pass `corpus` and `query_embedding` verbatim into `run_smoke_gate`. The contract strictly fails if the CLI drops `query_embedding` or strips document embeddings from the passed dictionaries.
+- **Fixture Shape (`smoke_fixture.json`):** Deterministic, network-free, manifest-covered typed extension schema (`musubi.evals.schema.SmokeFixture`) containing both a finite `query_embedding` array and a list of `corpus` documents, each with unique non-empty `id`, exact `text`, integer `relevance` labels, and finite `embedding` vectors equal in dimension to the query vector. Unknown fields fail closed.
+- **CLI Seam Verification (`test_eval_cli_seam_fixed_embeddings_red`):** The `musubi.evals smoke` command MUST read the fixture and pass `corpus` and `query_embedding` exactly verbatim into `run_smoke_gate`. The contract strictly fails if the CLI drops `query_embedding`, strips/transforms document fields, or exits early on legacy validations.
+
+## Test Accounting
+The `tests/evals/` test suite holds the structural contracts for the bootstrap and seam:
+- `tests/evals/test_evals_contract.py`: Holds the discrimination tests for `run_smoke_gate` behavior.
+- `tests/evals/test_cli.py`: Holds the PR-Smoke Seam CLI behavior and `SmokeFixture` structural validation strict reds (13 tests: 6 passes, 7 strict xfails).
+- `tests/evals/test_ci_bootstrap_contract.py`: Holds the `.github/workflows/evals.yml` exact structural bootstrap validations.
