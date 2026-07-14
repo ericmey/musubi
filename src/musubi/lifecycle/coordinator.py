@@ -1,29 +1,31 @@
-"""LifecycleTransitionCoordinator — C6b Phase-1 durable-intent outbox (S2: admission only).
+"""LifecycleTransitionCoordinator — C6b Phase-1 durable-intent outbox (S2 admission + S3 apply).
 
-S2 implements the ADMISSION half of the transactional outbox. A transition is
-admitted by writing a durable ``PENDING`` row to ``lifecycle_outbox`` inside ONE
-``BEGIN IMMEDIATE`` write transaction that:
+``transition()`` is the full lifecycle transition:
 
-- enforces a global non-terminal pending **cap** (count of ``PENDING``/``APPLIED``
-  rows ``>= pending_cap`` → reject, write no row), and
-- enforces **one active intent per ``(collection, object_id)``** via the partial
-  unique index ``ux_active_intent`` (a second concurrent begin raises
-  ``IntegrityError``).
+1. **operation_key idempotency** (before the cap): an existing row for the key short-circuits
+   to its recorded outcome with a stable event_id; the same key with a DIFFERENT intent digest
+   is an ``operation_key_conflict``. A concurrent same-key insert race re-resolves on the PK.
+2. **Durable admission** (S2): write a ``PENDING`` row inside ONE ``BEGIN IMMEDIATE`` that
+   enforces a global non-terminal **cap** and **one active intent per ``(collection, object_id)``**
+   (the partial unique index ``ux_active_intent``). A bounded ``Err`` here leaves Qdrant untouched.
+3. **Persisted event before mutation** (S3): from an exact pre-apply read, build a canonical
+   :class:`~musubi.types.lifecycle_event.LifecycleEvent` and persist its JSON on the outbox row
+   BEFORE any Qdrant mutation, so a post-crash finalize needs no fabricated fields.
+4. **Conditional apply** (S3): a server-side version-fenced ``set_payload`` + a full readback that
+   proves identity/namespace/version/state/every-key + a SHA over the actual projection.
+5. **Marker + APPLIED** (S3): the effective-apply marker and ``PENDING→APPLIED`` commit together.
+6. **Atomic finalize** (S3): the 8-column FINAL ``lifecycle_events`` row and ``APPLIED→FINAL``
+   move in ONE transaction (R8 forward guard), stamping ``terminal_epoch``.
 
-A successful admission returns ``Ok(TransitionPending)``; the durable row is
-committed BEFORE any Qdrant mutation would occur, so a bounded ``Err`` on
-cap / single-active / durable-begin failure guarantees Qdrant is untouched.
+Outcomes are three-way: ``Ok(TransitionFinal)`` (confirmed apply + finalize), ``Ok(TransitionPending)``
+(corrupt readback, or a transient/unknown apply failure, or a post-commit finalize fault — all left
+for the S4 reconciler), or a bounded ``Err``. A known version fence and a pre-mutation validation
+failure are terminal (ABANDONED). Reconciliation/leases (S4) and the maintenance/rollback barrier
+(S6) are later slices.
 
-S2 STOPS at ``PENDING``. Conditional apply + full-readback finalize
-(``Ok(TransitionFinal)``), reconciliation/leases, ``operation_key`` idempotent
-replay, and the maintenance/rollback barrier are LATER slices (S3/S4/S6). This
-module therefore never mutates Qdrant and never finalizes.
-
-Connection + schema come from the shared lifecycle store (WAL + busy_timeout);
-admission uses an explicit ``BEGIN IMMEDIATE`` so concurrent admissions serialize
-on the write lock. A private ``_checkpoint(name)`` seam (default no-op) lets tests
-inject a deterministic fault/crash at a named boundary; it is not a public switch
-and performs no production ``os._exit``.
+Connection + schema come from the shared lifecycle store (WAL + busy_timeout). A private
+``_checkpoint(name)`` seam (default no-op) lets tests inject a deterministic fault/crash at a named
+boundary; it is not a public switch and performs no production ``os._exit``.
 """
 
 from __future__ import annotations
@@ -31,14 +33,19 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+from qdrant_client import models
+
 from musubi.lifecycle import store
 from musubi.types.common import Err, Ok, generate_ksuid
+from musubi.types.lifecycle_event import LifecycleEvent
 
 #: Default global cap on non-terminal (PENDING/APPLIED) outbox rows. A positive int;
 #: there is no unbounded/None option (admission must always have a bound).
@@ -147,9 +154,37 @@ def _canonical_patch_sha(patch: dict[str, object]) -> str:
     ).hexdigest()
 
 
+#: Private, fail-closed collection -> object_type mapping (Yua S3 micro-ruling). Derived from the
+#: canonical mapping (``transitions.py::_COLLECTION_TO_OBJECT_TYPE``) but NOT imported from it — S3
+#: must not touch the S7 seam. A parity/coverage test pins these against the canonical source; an
+#: unknown collection fails closed (a pre-mutation terminal validation error).
+_COLLECTION_TO_OBJECT_TYPE: dict[str, str] = {
+    "musubi_episodic": "episodic",
+    "musubi_curated": "curated",
+    "musubi_concept": "concept",
+    "musubi_artifact": "artifact",
+    "musubi_thought": "thought",
+}
+
+
+class _TerminalValidation(Exception):
+    """A pre-mutation validation/invariant failure (unknown collection, missing object, illegal
+    transition). ``transition()`` maps it to a typed terminal ``Err`` and marks the durable row
+    ABANDONED — the Qdrant mutation is never attempted (Yua S3 correction 6)."""
+
+
+def _object_type_for_collection(collection: str) -> str:
+    """The canonical object_type for a Qdrant collection, fail-closed on an unknown collection."""
+    object_type = _COLLECTION_TO_OBJECT_TYPE.get(collection)
+    if object_type is None:
+        raise _TerminalValidation(f"unknown collection {collection!r}: cannot derive object_type")
+    return object_type
+
+
 class LifecycleTransitionCoordinator:
-    """Durable-intent admission coordinator (S2). One instance per process owns the
-    connection policy and admission logic against the shared lifecycle SQLite DB."""
+    """Durable-intent transition coordinator (S2 admission + S3 conditional apply/finalize). One
+    instance per process owns the connection policy and transition logic against the shared
+    lifecycle SQLite DB and the injected Qdrant client."""
 
     def __init__(
         self,
@@ -173,37 +208,96 @@ class LifecycleTransitionCoordinator:
             conn.close()
 
     def transition(self, intent: TransitionIntent) -> Ok[TransitionOutcome] | Err[TransitionError]:
-        """Admit ``intent``: derive a stable operation key, write the durable PENDING
-        outbox row atomically, and return ``Ok(TransitionPending)``. On admission
-        failure return a bounded ``Err`` (cap / single-active / durable-begin) — no row
-        is committed and Qdrant is never touched (admission precedes any apply)."""
+        """Full lifecycle transition (S3): resolve operation_key idempotency, admit a durable
+        PENDING row, persist a canonical lifecycle event BEFORE any mutation, conditionally apply
+        the version-fenced mutation with a full readback, then atomically finalize.
+
+        Returns ``Ok(TransitionFinal)`` on a confirmed apply + finalize; ``Ok(TransitionPending)``
+        on a recoverable outcome (corrupt readback, or a transient/unknown apply failure) left for
+        the S4 reconciler; or a bounded ``Err`` — ``cap_exceeded`` / ``active_intent_exists`` /
+        ``durable_begin_failed`` / ``operation_key_conflict`` / ``version_fence_violation`` /
+        ``terminal_apply_failure``."""
         opk = self._key(intent)
+        digest = self._intent_digest(intent)
         event_id = generate_ksuid()
         try:
+            # (1) operation_key idempotency BEFORE the cap (S3 correction 5): an existing row for
+            # this key short-circuits to its recorded outcome; the SAME key with a DIFFERENT intent
+            # digest is a conflict. No cap gate, no mutation, no new row/event.
+            replay = self._replay(opk, digest)
+            if replay is not None:
+                return replay
+            # (2) durable admission: cap gate + single-active + PENDING row, atomically. No Qdrant.
             self._write_pending(intent, opk, event_id)
         except _CapExceeded:
             return Err(error=TransitionError(code="cap_exceeded"))
         except sqlite3.IntegrityError as exc:
-            # Classify ONLY the ux_active_intent partial-unique (collection, object_id)
-            # violation as active_intent_exists (SQLITE_CONSTRAINT_UNIQUE). A duplicate
-            # operation_key (PRIMARYKEY) or any other constraint is a generic
-            # durable-begin failure — do not conflate them with the single-active guard.
-            if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_CONSTRAINT_UNIQUE:
+            errorcode = getattr(exc, "sqlite_errorcode", None)
+            # ONLY the ux_active_intent partial-unique (collection, object_id) violation is
+            # active_intent_exists (SQLITE_CONSTRAINT_UNIQUE).
+            if errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE:
                 return Err(error=TransitionError(code="active_intent_exists"))
+            # operation_key PRIMARY KEY collision: a concurrent caller with our EXACT key won the
+            # insert race (replay-before-insert is check-then-insert). Re-resolve AFTER the winner
+            # committed — the same digest replays its stable outcome, a different digest is an
+            # operation_key_conflict; only then does an unrelated constraint fall through to a
+            # generic durable-begin failure (S3 integrity: concurrent same-key idempotency).
+            if errorcode == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY:
+                resolved = self._replay(opk, digest)
+                if resolved is not None:
+                    return resolved
+                return Err(error=TransitionError(code="durable_begin_failed"))
             return Err(error=TransitionError(code="durable_begin_failed"))
         except (sqlite3.Error, store.LifecycleStoreError):
-            # A real durable-begin failure: either a SQLite error (same class a genuine
-            # disk error raises) OR a per-operation store.connect that could not establish
-            # the WAL policy (LifecycleStoreError is a RuntimeError, NOT sqlite3.Error, so
-            # it must be named explicitly). Bounded Err; no row, no mutation.
+            # A durable-begin failure in EITHER the replay read OR the admission write (a SQLite
+            # error, or a store.connect that could not establish the WAL policy — LifecycleStoreError
+            # is a RuntimeError, named explicitly). No row, no mutation.
             return Err(error=TransitionError(code="durable_begin_failed"))
-        # The PENDING row is durably COMMITTED here. The post-commit crash/race seam is
-        # deliberately OUTSIDE the durable-begin catch: a fault at after_pending_commit
-        # propagates (or os._exit crashes the process) — it must NEVER be mapped to
-        # durable_begin_failed, because that would report a false failure on a row that is
-        # already committed, driving a spurious retry.
+        # The durable PENDING row exists and Qdrant is untouched: the admission/mutation race +
+        # crash seam. The two-process race barrier pauses the winner HERE (post-admission,
+        # pre-Qdrant) so a rejected loser makes zero Qdrant calls. A fault here propagates — it is
+        # OUTSIDE the durable-begin catch and must NEVER map to durable_begin_failed (the row is
+        # committed).
         self._checkpoint("after_pending_commit")
-        return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
+        # (3) persist the canonical lifecycle event on the outbox BEFORE any mutation (S3
+        # correction 1): derived from an exact pre-apply read so a post-Qdrant crash finalizes from
+        # the stored payload with no fabricated from_state/actor/reason. A pre-mutation validation
+        # failure (unknown collection, missing object, illegal transition) is terminal.
+        try:
+            self._persist_event(intent, opk, event_id)
+        except _TerminalValidation:
+            self._mark_terminal(opk)
+            return Err(error=TransitionError(code="terminal_apply_failure"))
+        # (4) conditional apply: server-side fenced mutation + full readback + confirm.
+        try:
+            status = self._apply_conditional(intent, opk)
+        except Exception as exc:  # classified into terminal vs recoverable next
+            if self._classify_terminal(exc):
+                self._mark_terminal(opk)
+                return Err(error=TransitionError(code="terminal_apply_failure"))
+            # transport/unknown failure -> keep PENDING for the S4 reconciler (correction 6).
+            return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
+        if status == "fence":
+            # a known version fence is terminal (the intent is stale) — abandon, never retry.
+            self._mark_terminal(opk)
+            return Err(error=TransitionError(code="version_fence_violation"))
+        if status == "corrupt":
+            # the version landed but a deeper patch key mismatched — recoverable; S4 reconciles.
+            return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
+        # (5) confirmed: the effective-apply marker + PENDING->APPLIED commit TOGETHER (correction
+        # 3), so a crash can never leave an APPLIED row without its marker (or vice versa).
+        self._mark_applied(intent, opk)
+        self._checkpoint("after_applied_commit_before_finalize")
+        # (6) atomic finalize: the 8-column FINAL lifecycle_events row (from the persisted payload)
+        # AND the APPLIED->FINAL move in ONE transaction, guarded on state='APPLIED' (R8). A fault
+        # INSIDE finalize rolls the whole txn back; the mutation is ALREADY durable (APPLIED), so the
+        # row stays APPLIED and the S4 reconciler completes it to FINAL. Return Pending (never Final)
+        # so a caller cannot observe Final for an un-finalized op.
+        try:
+            self._finalize(opk)
+        except Exception:
+            return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
+        return Ok(value=TransitionFinal(operation_key=opk, event_id=event_id))
 
     # -- internals ------------------------------------------------------------------ #
 
@@ -282,6 +376,328 @@ class LifecycleTransitionCoordinator:
             con.close()
         # NOTE: the after_pending_commit checkpoint is fired by transition(), OUTSIDE the
         # durable-begin catch — a post-commit fault must not map to durable_begin_failed.
+
+    # -- S3: idempotent replay ------------------------------------------------------- #
+
+    def _row_for_key(self, opk: str) -> tuple[str, str, str] | None:
+        """``(state, event_id, intent_digest)`` for an existing outbox row, or ``None``."""
+        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        try:
+            row = con.execute(
+                "SELECT state, event_id, intent_digest FROM lifecycle_outbox WHERE operation_key=?",
+                (opk,),
+            ).fetchone()
+        finally:
+            con.close()
+        return (row[0], row[1], row[2]) if row else None
+
+    def _replay(self, opk: str, digest: str) -> Ok[TransitionOutcome] | Err[TransitionError] | None:
+        """operation_key idempotency, resolved BEFORE the cap (S3 correction 5). An existing row
+        short-circuits to its recorded outcome with its STABLE event_id and no mutation/new event;
+        the SAME key with a DIFFERENT intent digest is an ``operation_key_conflict``. Returns
+        ``None`` when the key is new so the caller falls through to admission."""
+        existing = self._row_for_key(opk)
+        if existing is None:
+            return None
+        state, event_id, stored_digest = existing
+        if stored_digest != digest:
+            return Err(error=TransitionError(code="operation_key_conflict"))
+        if state == "FINAL":
+            return Ok(value=TransitionFinal(operation_key=opk, event_id=event_id))
+        if state == "ABANDONED":
+            return Err(error=TransitionError(code="terminal_apply_failure"))
+        # PENDING / APPLIED: still in flight — the replay yields the same Pending outcome.
+        return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
+
+    # -- S3: pre-apply read + persisted canonical event ------------------------------ #
+
+    def _require_client(self) -> Any:
+        if self._client is None:
+            raise _TerminalValidation("no Qdrant client injected: cannot read or apply")
+        return self._client
+
+    def _read_object(
+        self, collection: str, object_id: str, namespace: str
+    ) -> tuple[dict[str, Any], int]:
+        """Read the object's payload, requesting enough rows to PROVE exactly one match for
+        ``object_id`` within ``namespace`` (returns ``(payload, count)``; empty payload if none)."""
+        points, _ = self._require_client().scroll(
+            collection_name=collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=object_id)
+                    ),
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=namespace)
+                    ),
+                ]
+            ),
+            limit=2,
+            with_payload=True,
+        )
+        payload = dict(points[0].payload or {}) if points else {}
+        return payload, len(points)
+
+    def _persist_event(self, intent: TransitionIntent, opk: str, event_id: str) -> None:
+        """Build the canonical :class:`LifecycleEvent` from an exact pre-apply read and persist its
+        ``model_dump_json`` on the outbox row BEFORE any Qdrant mutation (S3 correction 1), so a
+        post-Qdrant crash finalizes from the stored payload without fabricating
+        ``from_state``/``actor``/``reason``. A pre-mutation invariant failure (unknown collection,
+        missing/ambiguous object, illegal transition) raises :class:`_TerminalValidation`."""
+        object_type = _object_type_for_collection(intent.collection)
+        current, count = self._read_object(intent.collection, intent.object_id, intent.namespace)
+        if count != 1:
+            raise _TerminalValidation(
+                f"pre-apply read for {intent.object_id} in "
+                f"{intent.collection}/{intent.namespace} matched {count} points (need exactly 1)"
+            )
+        from_state = current.get("state")
+        if not isinstance(from_state, str):
+            raise _TerminalValidation(f"object {intent.object_id} has no readable lifecycle state")
+        try:
+            # model_validate over a dict: the object_type/from_state/to_state come from runtime
+            # data (mapping + readback + intent) as plain strings; pydantic validates them against
+            # the ObjectType/LifecycleState literals at runtime and the legal-transition rule.
+            event = LifecycleEvent.model_validate(
+                {
+                    "event_id": event_id,
+                    "object_id": intent.object_id,
+                    "object_type": object_type,
+                    "namespace": intent.namespace,
+                    "from_state": from_state,
+                    "to_state": intent.target_state,
+                    "actor": intent.actor,
+                    "reason": intent.reason,
+                }
+            )
+        except (ValidationError, ValueError) as exc:
+            # illegal transition / invalid field — a pre-mutation invariant failure -> terminal.
+            raise _TerminalValidation(str(exc)) from exc
+        payload_json = event.model_dump_json()
+        con = store.connect(
+            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+        )
+        try:
+            cur = con.execute(
+                "UPDATE lifecycle_outbox SET event_payload=? "
+                "WHERE operation_key=? AND state='PENDING'",
+                (payload_json, opk),
+            )
+            con.commit()
+        finally:
+            con.close()
+        if cur.rowcount != 1:
+            # zero PENDING rows means the row vanished/changed under us: fail pre-mutation and
+            # NEVER proceed to Qdrant after a no-op event persist (S3 integrity hole 1).
+            raise _TerminalValidation(
+                f"persist-event matched {cur.rowcount} PENDING rows for {opk} (need exactly 1)"
+            )
+
+    # -- S3: conditional apply + full readback confirm ------------------------------- #
+
+    def _apply_conditional(self, intent: TransitionIntent, opk: str) -> str:
+        """Send the EXACT patch fenced server-side (collection + object_id + namespace +
+        expected_version), then FULL-readback and confirm (S3 correction 4). Returns
+        ``'confirmed'`` | ``'fence'`` | ``'corrupt'``. The fenced ``set_payload`` matches zero
+        points when the object is not at ``expected_version`` (a stale intent) -> the readback
+        proves a fence."""
+        patch = _intended_patch(intent)
+        client = self._require_client()
+        client.set_payload(
+            collection_name=intent.collection,
+            payload=dict(patch),
+            points=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=intent.object_id)
+                    ),
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=intent.namespace)
+                    ),
+                    models.FieldCondition(
+                        key="version", match=models.MatchValue(value=intent.expected_version)
+                    ),
+                ]
+            ),
+        )
+        actual, count = self._read_object(intent.collection, intent.object_id, intent.namespace)
+        return self._confirm(patch, intent, actual, count)
+
+    def _confirm(
+        self, patch: dict[str, object], intent: TransitionIntent, actual: dict[str, Any], count: int
+    ) -> str:
+        """Confirm an apply from the ACTUAL readback (S3 correction 4). ``'fence'`` = stale /
+        not-exactly-one / wrong identity-version-state (the fenced write matched zero points);
+        ``'corrupt'`` = the version+state landed but an intended patch key is missing/mismatched
+        (recoverable); ``'confirmed'`` = exactly one point, identity + namespace + version + state
+        all correct, every intended key present, and the SHA over the ACTUAL-projected patch equals
+        the intended SHA."""
+        if count != 1:
+            return "fence"
+        if str(actual.get("namespace", "")) != intent.namespace:
+            return "fence"
+        object_id = actual.get("object_id")
+        if object_id is not None and str(object_id) != intent.object_id:
+            return "fence"
+        if actual.get("version") != intent.expected_version + 1:
+            return "fence"
+        if actual.get("state") != intent.target_state:
+            return "fence"
+        for key in patch:
+            if key not in actual:
+                return "corrupt"
+        projected = {key: actual[key] for key in patch}
+        if _canonical_patch_sha(projected) != _canonical_patch_sha(patch):
+            return "corrupt"
+        return "confirmed"
+
+    # -- S3: marker + APPLIED (one txn) and atomic finalize -------------------------- #
+
+    def _mark_applied(self, intent: TransitionIntent, opk: str) -> None:
+        """The confirmed effective-apply marker AND the PENDING->APPLIED move commit TOGETHER (S3
+        correction 3). A marker key collision must verify identical object/target — never silently
+        hide a mismatch."""
+        con = store.connect(
+            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+        )
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                con.execute(
+                    "INSERT INTO lifecycle_apply_markers "
+                    "(operation_key, object_id, target_state) VALUES (?,?,?)",
+                    (opk, intent.object_id, intent.target_state),
+                )
+            except sqlite3.IntegrityError:
+                existing = con.execute(
+                    "SELECT object_id, target_state FROM lifecycle_apply_markers "
+                    "WHERE operation_key=?",
+                    (opk,),
+                ).fetchone()
+                if (
+                    existing is None
+                    or existing[0] != intent.object_id
+                    or existing[1] != intent.target_state
+                ):
+                    # a genuine marker mismatch — surfaced (the single outer handler rolls back).
+                    raise
+                # identical marker (idempotent re-apply) — fall through to the APPLIED move.
+            cur = con.execute(
+                "UPDATE lifecycle_outbox SET state='APPLIED' "
+                "WHERE operation_key=? AND state='PENDING'",
+                (opk,),
+            )
+            if cur.rowcount != 1:
+                # the marker + APPLIED must move EXACTLY one PENDING row in this txn, else an apply
+                # marker would orphan (committed with no APPLIED row) — refuse (S3 integrity hole 2).
+                raise RuntimeError(
+                    f"mark-applied matched {cur.rowcount} PENDING rows for {opk} (need exactly 1)"
+                )
+            con.execute("COMMIT")
+        except Exception:
+            # ONE rollback owner (S3 integrity hole 3): guard on in_transaction so a failure that
+            # already ended the txn is not masked by a second "no transaction" rollback error.
+            if con.in_transaction:
+                con.execute("ROLLBACK")
+            raise
+        finally:
+            con.close()
+
+    def _finalize(self, opk: str) -> None:
+        """Atomic FINAL (S3 correction 1, R8 forward guard): insert the 8-column FINAL
+        ``lifecycle_events`` row FROM the persisted event payload AND move APPLIED->FINAL (stamping
+        ``terminal_epoch``) in ONE transaction, guarded on ``state='APPLIED'`` (exactly one row).
+        A replayed ``event_id`` must be byte-identical to the stored payload — a conflicting
+        collision is surfaced, never silently accepted."""
+        con = store.connect(
+            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+        )
+        try:
+            row = con.execute(
+                "SELECT event_payload FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+            ).fetchone()
+            if row is None or not row[0]:
+                raise RuntimeError(f"finalize: no persisted event payload for {opk}")
+            payload_json = str(row[0])
+            event = LifecycleEvent.model_validate_json(payload_json)
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                try:
+                    con.execute(
+                        "INSERT INTO lifecycle_events (event_id, object_id, namespace, object_type,"
+                        " from_state, to_state, occurred_epoch, payload) VALUES (?,?,?,?,?,?,?,?)",
+                        (
+                            event.event_id,
+                            event.object_id,
+                            event.namespace,
+                            event.object_type,
+                            event.from_state,
+                            event.to_state,
+                            event.occurred_epoch,
+                            payload_json,
+                        ),
+                    )
+                except sqlite3.IntegrityError:
+                    existing = con.execute(
+                        "SELECT payload FROM lifecycle_events WHERE event_id=?", (event.event_id,)
+                    ).fetchone()
+                    if existing is None or existing[0] != payload_json:
+                        # a conflicting event collision — surfaced (the single outer handler rolls
+                        # back), never silently accepted.
+                        raise
+                    # identical event (idempotent re-finalize) — proceed to the FINAL move.
+                # Crash/fault seam INSIDE the finalize txn (R8): a fault here must roll back the
+                # event insert too, leaving the row EXACTLY APPLIED (never a half-finalized FINAL
+                # with no event, nor an orphaned event).
+                self._checkpoint("inside_finalize_after_event_insert")
+                cur = con.execute(
+                    "UPDATE lifecycle_outbox SET state='FINAL', terminal_epoch=? "
+                    "WHERE operation_key=? AND state='APPLIED'",
+                    (self._now(), opk),
+                )
+                if cur.rowcount != 1:
+                    raise RuntimeError(
+                        f"finalize guard: expected exactly one APPLIED row for {opk}, "
+                        f"updated {cur.rowcount}"
+                    )
+                con.execute("COMMIT")
+            except Exception:
+                # ONE rollback owner (S3 integrity hole 3): guard on in_transaction so the original
+                # failure is preserved, never masked by a redundant "no transaction" rollback.
+                if con.in_transaction:
+                    con.execute("ROLLBACK")
+                raise
+        finally:
+            con.close()
+
+    # -- S3: classification + terminal marking --------------------------------------- #
+
+    def _classify_terminal(self, exc: Exception) -> bool:
+        """A KNOWN-terminal apply failure -> abandon; transport/unknown -> transient (keep PENDING,
+        never abandoned by uncertainty); a pre-mutation invariant failure is terminal (S3
+        correction 6)."""
+        if isinstance(exc, _TerminalValidation):
+            return True
+        return bool(getattr(exc, "terminal", False))
+
+    def _mark_terminal(self, opk: str) -> None:
+        """Move a non-terminal row to ABANDONED, stamping ``terminal_epoch`` atomically."""
+        con = store.connect(
+            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+        )
+        try:
+            con.execute(
+                "UPDATE lifecycle_outbox SET state='ABANDONED', terminal_epoch=? "
+                "WHERE operation_key=? AND state IN ('PENDING','APPLIED')",
+                (self._now(), opk),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def _now(self) -> float:
+        return time.time()
 
 
 __all__ = [

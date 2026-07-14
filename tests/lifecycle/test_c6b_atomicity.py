@@ -4129,6 +4129,7 @@ def _check_r3(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
 
 
 def _check_r4(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
+    _require_real_stage("reconcile_once", _R4_REASON)
     coord = _coordinator(client, db_path)
     before = _qdrant_state(client, seed.collection, seed.object_id)
     _fail_set_payload(client, _TerminalQdrantError("injected terminal (proven)"))
@@ -4188,7 +4189,6 @@ _R4_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R1_REASON)
 def test_r1_durable_intent_persisted_before_qdrant_mutation(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
@@ -5614,7 +5614,7 @@ def _check_r10(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     ra = coord.transition(
         _intent(
             seed,
-            to_state="matured",
+            to_state="demoted",
             operation_key=op,
             expected_version=seed.version + 1,
             actor="a|b",
@@ -5632,7 +5632,7 @@ def _check_r10(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     rb = coord.transition(
         _intent(
             seed,
-            to_state="matured",
+            to_state="demoted",
             operation_key=op,
             expected_version=seed.version + 1,
             actor="a",
@@ -5984,14 +5984,12 @@ def test_r9_idempotent_replay(env: tuple[QdrantClient, _Seed, Path]) -> None:
     _check_r9(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R13_REASON)
 def test_r13_conditional_apply_full_readback_patch_sha(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r13(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R14_REASON)
 def test_r14_hard_pending_cap_admission_backpressure(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
@@ -6033,7 +6031,6 @@ def test_r19_pii_free_content_and_bounded_observability(
     _check_r19(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R10_REASON)
 def test_r10_operation_key_idempotent_across_caller_retries(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
@@ -6080,7 +6077,6 @@ def test_r17_crash_reclaim_readback_confirms_no_reapply(tmp_path: Path) -> None:
     _check_r17_reclaim(tmp_path)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R12_REASON)
 def test_r12_hard_version_fence_refuses_stale(env: tuple[QdrantClient, _Seed, Path]) -> None:
     _check_r12(*env)
 
@@ -6282,6 +6278,7 @@ def _check_r6(base: Path) -> None:  # C2: crash after Qdrant apply, before APPLI
 
 
 def _check_r7(base: Path) -> None:  # C3: crash after APPLIED commit, before finalize
+    _require_real_stage("reconcile_once", _R7_REASON)
     seed, db_path, qdrant_path = _drive_crash(
         base, "after_applied_commit_before_finalize", _C3_CODE, "op-r7"
     )
@@ -6440,6 +6437,7 @@ def _check_r17_reclaim(base: Path) -> None:
 
 
 def _check_r8(client: QdrantClient, seed: _Seed, db_path: Path) -> None:  # finalize-txn atomicity
+    _require_real_stage("reconcile_once", _R8_REASON)
     coord = _coordinator(client, db_path)
 
     def _fault(name: str) -> None:
@@ -6631,7 +6629,6 @@ def _r22_assert_exact_outcome(codes: list[int]) -> None:
 
 
 def _check_r22(base: Path) -> None:
-    _require_real_stage("_apply_conditional", _R22_REASON)
     _api()  # xfail today (coordinator absent)
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     seed, db_path, qdrant_path = _make_ondisk_env(
@@ -6725,7 +6722,6 @@ _R22_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R22_REASON)
 def test_r22_two_process_race_one_winner_mutates_loser_fenced(tmp_path: Path) -> None:
     _check_r22(tmp_path)
 

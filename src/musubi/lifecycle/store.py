@@ -33,10 +33,17 @@ waiting — SQLite returns ``SQLITE_BUSY`` immediately on contention rather than
 blocking; it is a deliberate operator override, not a fail-closed guard.
 
 This module owns the shared lifecycle tables: lifecycle events, the maturation and
-synthesis cursors, and — as of S2 — the ``lifecycle_outbox`` admission table with its
-``ux_active_intent`` partial-unique index (only the columns S2's admission writes/reads).
-The reconcile/lease/attempt/``terminal_epoch`` columns and the ``lifecycle_control`` table
-are owned by later slices (S4/S6) and are intentionally NOT declared here yet.
+synthesis cursors, the ``lifecycle_outbox`` admission table (S2) with its ``ux_active_intent``
+partial-unique index, and — as of S3 — the outbox's ``event_payload``/``terminal_epoch``
+columns plus the ``lifecycle_apply_markers`` table. The reconcile/lease/attempt columns and
+the ``lifecycle_control`` table are owned by later slices (S4/S6) and are intentionally NOT
+declared here yet; S6 owns cleanup/backfill/control (not the ``terminal_epoch`` column, S3).
+
+S3 note: the coordinator's ``_finalize`` writes the C6-owned ``lifecycle_events`` table
+DIRECTLY (all 8 columns, in the same txn as the outbox APPLIED→FINAL move) rather than
+through the buffered ``LifecycleEventSink`` — this is required for R8 atomicity. The
+coordinator path owns its own FINAL event; ``events.py`` is unchanged and its sink callers
+are not composed on this path (Yua S3 ruling 1). See the slice boundary note.
 """
 
 from __future__ import annotations
@@ -52,9 +59,12 @@ from typing import Literal
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 
 #: The union schema of every component that shares the lifecycle SQLite file. The
-#: sink/cursor tables plus the C6b ``lifecycle_outbox`` admission table (S2). The
-#: outbox carries only the columns S2's admission writes/reads; the reconcile/lease/
-#: cleanup columns and the ``lifecycle_control`` table are added by later slices (S4/S6).
+#: sink/cursor tables plus the C6b ``lifecycle_outbox`` (admission S2 + apply/finalize S3:
+#: ``event_payload`` persisted pre-mutation so a post-crash finalize needs no fabricated
+#: fields, ``terminal_epoch`` stamped atomically on FINAL/ABANDONED) and the S3
+#: ``lifecycle_apply_markers`` effective-apply table. The reconcile/lease columns, the
+#: cleanup/backfill logic, and ``lifecycle_control`` are added by later slices (S4/S6) —
+#: S6 owns cleanup/backfill/control, NOT the ``terminal_epoch`` column introduction (S3).
 _LIFECYCLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS lifecycle_events (
     event_id TEXT PRIMARY KEY,
@@ -105,10 +115,18 @@ CREATE TABLE IF NOT EXISTS lifecycle_outbox (
     patch_json TEXT,
     intent_digest TEXT,
     state TEXT,
-    event_id TEXT
+    event_id TEXT,
+    event_payload TEXT,
+    terminal_epoch REAL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_active_intent
     ON lifecycle_outbox (collection, object_id) WHERE state IN ('PENDING','APPLIED');
+
+CREATE TABLE IF NOT EXISTS lifecycle_apply_markers (
+    operation_key TEXT PRIMARY KEY,
+    object_id TEXT,
+    target_state TEXT
+);
 """
 
 
