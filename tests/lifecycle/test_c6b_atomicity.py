@@ -723,6 +723,103 @@ def test_g2b_rule_discriminates_cleanup_sql_shape() -> None:
 
 
 # ============================================================================
+# G3 - Phase-1 acceptance guard (static AST over src): the coordinator TransitionOutcome is consumed
+#
+# Reuses G2a's receiver-provenance resolution (_coordinator_transition_calls) and REJECTS a bare-expression
+# result - a coordinator.transition(...) call as a bare expression statement, its three-way Result dropped.
+# Assignment, return, a match subject, or deliberate argument forwarding all COUNT as consumed. G3 proves
+# only that the Result is not silently dropped; it does NOT prove the stronger three-way business branching
+# (Final vs Pending vs Err) - that stays in the R21 behavior red. RED today (source absent); XPASS(strict)
+# when the reviewed callsite lands and consumes its Result.
+# ============================================================================
+
+
+def _call_result_dropped(parent: dict[ast.AST, ast.AST], call: ast.Call) -> bool:
+    """A coordinator.transition Call whose DIRECT parent is an Expr statement -> its Result is dropped.
+    Assign/AnnAssign value, Return value, a Match subject, or an argument to another call all nest the Call
+    under a non-Expr parent -> consumed."""
+    return isinstance(parent.get(call), ast.Expr)
+
+
+def _scan_coordinator_transition_consumption() -> list[tuple[str, str, bool]]:
+    """(relpath, enclosing-function, dropped) for each resolved coordinator.transition callsite in src."""
+    out: list[tuple[str, str, bool]] = []
+    for p in sorted(_SRC.rglob("*.py")):
+        try:
+            tree = ast.parse(p.read_text())
+        except SyntaxError:
+            continue
+        parent = _parent_map(tree)
+        for c in _coordinator_transition_calls(tree):
+            out.append(
+                (
+                    str(p.relative_to(_SRC)),
+                    _enclosing_func_name(parent, c),
+                    _call_result_dropped(parent, c),
+                )
+            )
+    return out
+
+
+_G3_REASON = (
+    "the reviewed LifecycleTransitionCoordinator.transition callsite does not yet exist (Phase-1 "
+    "coordinator unbuilt), so there is no resolved call whose three-way TransitionOutcome could be "
+    "verified as consumed. Flips to XPASS(strict) when the callsite lands and its Result is consumed "
+    "(assignment / return / match subject / argument forwarding); a bare-expression result fails. G3 does "
+    "NOT prove the three-way Final/Pending/Err branching - that stays in the R21 behavior red."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_G3_REASON)
+def test_g3_coordinator_transition_result_consumed() -> None:
+    """Phase-1 acceptance: no resolved coordinator.transition callsite may drop its Result (a bare
+    expression statement). RED today - there is no callsite yet to verify."""
+    sites = _scan_coordinator_transition_consumption()
+    if not sites:
+        raise DefectStillPresent(
+            "no resolved coordinator.transition callsite to verify (the Phase-1 coordinator is unbuilt)"
+        )
+    dropped = [(f, fn) for f, fn, d in sites if d]
+    if dropped:
+        raise DefectStillPresent(
+            f"coordinator.transition result dropped as a bare expression at {sorted(dropped)} "
+            "(assign/return/match/forward the three-way TransitionOutcome)"
+        )
+
+
+def test_g3_rule_discriminates_result_consumed() -> None:
+    """GREEN mechanism proof: an UNRELATED same-named .transition bare expression is IGNORED; a REAL
+    coordinator bare expression is dropped; each allowed consumed form (assign/return/match/arg-forward)
+    passes. Reuses G2a's provenance resolution."""
+
+    def dropped_flags(src: str) -> list[bool]:
+        tree = ast.parse(src)
+        parent = _parent_map(tree)
+        return [_call_result_dropped(parent, c) for c in _coordinator_transition_calls(tree)]
+
+    ctor = "def build(self):\n    self._c = LifecycleTransitionCoordinator(client=a, db_path=b)\n"
+    unrelated = "def f(self, i):\n    self._plane.transition(i)\n"  # bare, but unrelated object
+    bare = ctor + "def f(self, i):\n    self._c.transition(i)\n"
+    assign = ctor + "def f(self, i):\n    r = self._c.transition(i)\n    return r\n"
+    returned = ctor + "def f(self, i):\n    return self._c.transition(i)\n"
+    matched = (
+        ctor
+        + "def f(self, i):\n    match self._c.transition(i):\n        case _:\n            return None\n"
+    )
+    forwarded = ctor + "def f(self, i):\n    return _map_http_202(self._c.transition(i))\n"
+
+    # an unrelated same-named .transition is not even a coordinator callsite -> ignored entirely
+    assert _coordinator_transition_calls(ast.parse(unrelated)) == []
+    # a real coordinator bare expression is dropped
+    assert dropped_flags(bare) == [True]
+    # each consumed form is NOT dropped
+    assert dropped_flags(assign) == [False]
+    assert dropped_flags(returned) == [False]
+    assert dropped_flags(matched) == [False]
+    assert dropped_flags(forwarded) == [False]
+
+
+# ============================================================================
 # TRANCHE 2 - Phase-1 behavior harness + reds (drive the LOCKED coordinator API)
 #
 # Evidence model (Yua 2026-07-13): the red-proof must be RERUNNABLE, not commit prose. So this file
