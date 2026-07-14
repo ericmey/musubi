@@ -10376,15 +10376,28 @@ def _resolve_sh_operand(tok: str, assigns: Mapping[str, str]) -> str:
     return assigns.get(m.group(1), tok) if m is not None else tok
 
 
-def _sh_migration_evidence(text: str) -> tuple[bool, bool, bool]:
-    """Parse a .sh migration script by REAL command invocations (shlex, line-based, heredoc-aware) and
-    return (moves_old_to_new, runs_integrity_check, runs_wal_checkpoint). Literal `VAR=path` assignments are
-    resolved for `$VAR`/`${VAR}` operands. EVIDENCE is only a real command: a `cp`/`mv` whose resolved
-    source is the retired FILE and dest is the canonical DIR DB, and `sqlite3 <db> <sql>` whose SQL runs
-    integrity_check / wal_checkpoint. Tokens inside echo/printf/here-doc/comments/assignments/control words
-    are NOT evidence (Yua round-3 ruling — reject string/metadata co-occurrence)."""
+#: shell composition operators — a migration command joined by these is unsupported (fail closed).
+_SH_COMPOSITION = frozenset({"&&", "||", "|", ";", "&"})
+#: exact SQL structures (whole-argument) for the two required pre-cutover checks (case-insensitive).
+_RE_PRAGMA_INTEGRITY = re.compile(r"(?i)^\s*PRAGMA\s+integrity_check\s*;?\s*$")
+_RE_PRAGMA_CHECKPOINT = re.compile(
+    r"(?i)^\s*PRAGMA\s+wal_checkpoint(\s*\(\s*TRUNCATE\s*\))?\s*;?\s*$"
+)
+
+
+def _sh_migration_ok(text: str) -> bool:
+    """ORDERED command-event analysis of a .sh migration (Yua round-4 ruling). True ONLY when the parsed
+    real-command sequence is EXACTLY: one `sqlite3 <OLD> "PRAGMA integrity_check"` AND one
+    `sqlite3 <OLD> "PRAGMA wal_checkpoint[(TRUNCATE)]"` — the DB operand resolving EXACTLY to the retired
+    FILE and the SQL being an ACTUAL PRAGMA (not a SELECT/echo string) — BOTH occurring BEFORE exactly one
+    `cp|mv <OLD> <NEW>` move with EXACTLY TWO non-option operands resolving retired-FILE -> canonical-DIR-DB.
+    Duplicate/ambiguous move or check commands, a check on the wrong DB, a marker-string (SELECT/echo)
+    instead of a real PRAGMA, a multi-operand cp, checks AFTER the move, or shell composition
+    (&&/||/|/;/$()/backtick) around a migration command all fail CLOSED."""
     assigns: dict[str, str] = {}
-    moves = integrity = checkpoint = False
+    events: list[
+        tuple[str, bool]
+    ] = []  # ordered: ('integrity'|'checkpoint'|'move', valid_on_our_units)
     lines = text.splitlines()
     i = 0
     while i < len(lines):
@@ -10392,7 +10405,9 @@ def _sh_migration_evidence(text: str) -> tuple[bool, bool, bool]:
         i += 1
         if not line or line.startswith("#"):
             continue
-        hd = re.search(r"<<-?\s*[\"']?(\w+)[\"']?", line)  # here-doc: skip its data body entirely
+        hd = re.search(
+            r"<<-?\s*[\"']?(\w+)[\"']?", line
+        )  # here-doc body is data — skip it entirely
         if hd is not None:
             term = hd.group(1)
             while i < len(lines) and lines[i].strip() != term:
@@ -10406,21 +10421,46 @@ def _sh_migration_evidence(text: str) -> tuple[bool, bool, bool]:
         try:
             toks = shlex.split(line, comments=True)
         except ValueError:
-            continue
+            return False  # unparseable shell -> fail closed
         if not toks:
             continue
         base = toks[0].rsplit("/", 1)[-1]
         if base in _SH_NONCOMMAND_HEADS:
             continue
+        # a migration command must be a SIMPLE command — reject shell composition / substitution
+        if base in {"cp", "mv", "sqlite3"} and (
+            any(t in _SH_COMPOSITION for t in toks) or any("$(" in t or "`" in t for t in toks)
+        ):
+            return False
         if base in {"cp", "mv"}:
             ops = [_resolve_sh_operand(t, assigns) for t in toks[1:] if not t.startswith("-")]
-            if len(ops) >= 2 and ops[-2] == _RETIRED_FILE_DB and ops[-1] == _CANONICAL_DIR_DB:
-                moves = True
+            touches = _RETIRED_FILE_DB in ops or _CANONICAL_DIR_DB in ops
+            if touches:  # a move candidate on our units — valid ONLY as exactly [OLD, NEW]
+                events.append(("move", ops == [_RETIRED_FILE_DB, _CANONICAL_DIR_DB]))
         elif base == "sqlite3":
-            sql = " ".join(toks[1:])
-            integrity = integrity or "integrity_check" in sql
-            checkpoint = checkpoint or "wal_checkpoint" in sql
-    return moves, integrity, checkpoint
+            operands = [t for t in toks[1:] if not t.startswith("-")]
+            if len(operands) < 2:
+                continue
+            db = _resolve_sh_operand(operands[0], assigns)
+            sql = operands[1]
+            on_old = db == _RETIRED_FILE_DB
+            if _RE_PRAGMA_INTEGRITY.match(sql):
+                events.append(("integrity", on_old))
+            elif _RE_PRAGMA_CHECKPOINT.match(sql):
+                events.append(("checkpoint", on_old))
+    moves = [k for k, _ in enumerate(events) if events[k][0] == "move"]
+    if len(moves) != 1 or not events[moves[0]][1]:  # exactly one, exactly OLD->NEW
+        return False
+    before = events[: moves[0]]
+    integ = [
+        e for e in before if e[0] == "integrity" and e[1]
+    ]  # real PRAGMA on OLD, before the move
+    chkpt = [e for e in before if e[0] == "checkpoint" and e[1]]
+    # any check present at all (even on the wrong DB / after the move) that is not the single valid pre-move
+    # one is ambiguity -> fail closed
+    total_integ = [e for e in events if e[0] == "integrity"]
+    total_chkpt = [e for e in events if e[0] == "checkpoint"]
+    return len(integ) == 1 and len(chkpt) == 1 and len(total_integ) == 1 and len(total_chkpt) == 1
 
 
 def _is_lifecycle_migration_artifact(suffix: str, text: str) -> bool:
@@ -10432,8 +10472,7 @@ def _is_lifecycle_migration_artifact(suffix: str, text: str) -> bool:
     ``.py``/``.yml`` file, do NOT count."""
     if suffix != _MIGRATION_ARTIFACT_SUFFIX:
         return False
-    moves, integrity, checkpoint = _sh_migration_evidence(text)
-    return moves and integrity and checkpoint
+    return _sh_migration_ok(text)
 
 
 def _lifecycle_storage_migration_task_files() -> list[str]:
@@ -10581,6 +10620,52 @@ def test_p0c_storage_migration_task_detection_discriminates() -> None:
     )
     # POSITIVE control: the real contract-shaped .sh (variable-resolved operands) DOES count
     assert _is_lifecycle_migration_artifact(".sh", _MIG_REAL_TASK_SH)
+
+    # ---- Yua exact-review (round 4): ORDERED command-event semantics, not per-marker presence ----
+    _mig_head = (
+        "#!/bin/sh\nOLD=/var/lib/musubi/lifecycle-work.sqlite\n"
+        "NEW=/var/lib/musubi/lifecycle/work.sqlite\n"
+    )
+    # (1) move BEFORE the checks + the checks are SELECT marker STRINGS on the WRONG db -> not a migration
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        _mig_head + 'cp -a "$OLD" "$NEW"\n'
+        "sqlite3 /tmp/unrelated.db \"SELECT 'integrity_check'\"\n"
+        "sqlite3 /tmp/unrelated.db \"SELECT 'wal_checkpoint'\"\n",
+    )
+    # (2) REAL PRAGMAs but on the WRONG db (not OLD) -> the verify did not run on the migrated unit
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        _mig_head + 'sqlite3 /tmp/unrelated.db "PRAGMA integrity_check"\n'
+        'sqlite3 /tmp/unrelated.db "PRAGMA wal_checkpoint(TRUNCATE)"\ncp -a "$OLD" "$NEW"\n',
+    )
+    # (3) real PRAGMAs on OLD, then a MULTI-OPERAND cp (3 operands) — not a clean OLD->NEW move
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        _mig_head + 'sqlite3 "$OLD" "PRAGMA integrity_check"\n'
+        'sqlite3 "$OLD" "PRAGMA wal_checkpoint(TRUNCATE)"\ncp -a /tmp/extra "$OLD" "$NEW"\n',
+    )
+    # ordering + uniqueness fail-closed: checks-after-move, a duplicate move, and && composition all reject
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        _mig_head + 'cp -a "$OLD" "$NEW"\nsqlite3 "$OLD" "PRAGMA integrity_check"\n'
+        'sqlite3 "$OLD" "PRAGMA wal_checkpoint"\n',
+    )
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        _mig_head + 'sqlite3 "$OLD" "PRAGMA integrity_check"\n'
+        'sqlite3 "$OLD" "PRAGMA wal_checkpoint"\ncp -a "$OLD" "$NEW"\ncp -a "$OLD" "$NEW"\n',
+    )
+    assert not _is_lifecycle_migration_artifact(
+        ".sh",
+        _mig_head + 'sqlite3 "$OLD" "PRAGMA integrity_check" && cp -a "$OLD" "$NEW"\n',
+    )
+    # POSITIVE variable control: real PRAGMAs on OLD (via $OLD) BEFORE a single 2-operand move -> counts
+    assert _is_lifecycle_migration_artifact(
+        ".sh",
+        _mig_head + 'sqlite3 "$OLD" "PRAGMA integrity_check"\n'
+        'sqlite3 "$OLD" "PRAGMA wal_checkpoint(TRUNCATE)"\ncp -a "$OLD" "$NEW"\n',
+    )
 
     # today the REAL deploy tree builds no such task -> the UNBUILT red stays RED
     assert _lifecycle_storage_migration_task_files() == []
