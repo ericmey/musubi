@@ -362,9 +362,18 @@ async def _main_async() -> None:
         api_key=settings.qdrant_api_key.get_secret_value(),
         https=not settings.musubi_allow_plaintext,
     )
-    sink = LifecycleEventSink(db_path=settings.lifecycle_sqlite_path)
-    cursor = MaturationCursor(db_path=settings.lifecycle_sqlite_path)
-    synth_cursor = SynthesisCursor(db_path=settings.lifecycle_sqlite_path)
+    sink = LifecycleEventSink(
+        db_path=settings.lifecycle_sqlite_path,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    cursor = MaturationCursor(
+        db_path=settings.lifecycle_sqlite_path,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    synth_cursor = SynthesisCursor(
+        db_path=settings.lifecycle_sqlite_path,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
     # One HttpxOllamaClient satisfies both the maturation + synthesis
     # Protocols — see src/musubi/llm/ollama.py.
     ollama = default_ollama_client()

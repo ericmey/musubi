@@ -44,6 +44,24 @@ review.
 
 - `docs/Musubi/_slices/slice-c6b-phase1-source-impl.md`
 - `src/musubi/lifecycle`
+- `src/musubi/settings.py`
+- `src/musubi/api/routers/ops.py`
+- `src/musubi/lifecycle/runner.py`
+
+### §F file/function boundary note (S1)
+
+- **`src/musubi/lifecycle/events.py`** (owned by the ACTIVE `slice-c6-lifecycle-event-loss`):
+  S1 touches ONLY the `LifecycleEventSink.__init__` connection/schema acquisition (delegate to
+  `lifecycle/store.py`, keep `self._conn`, add a backward-compatible `busy_timeout_ms=5000` param).
+  **C6 retains exclusive ownership of `record`/`flush`/`close`/`__del__`/durable-accept semantics** —
+  S1 does NOT modify them. events.py is NOT claimed as an owned path (that would be a hard both-active
+  conflict); this boundary note is the coordination record. No R4 destructor / R6 barrier changes (not S1).
+- **`src/musubi/settings.py`** (slice-auth-boundary-phase-a, done — advisory): add the
+  `lifecycle_sqlite_busy_timeout_ms` field only.
+- **`src/musubi/api/routers/ops.py`** (slice-ops-observability, done — advisory) +
+  **`src/musubi/lifecycle/runner.py`** (slice-lifecycle-reflection-builder, done — advisory; also under
+  the `src/musubi/lifecycle` dir claim): wire `busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms`
+  at the two production composition sites only.
 - `docker-compose.yml`
 - `.env.example`
 - `deploy/docker/.env.production.example`
@@ -52,6 +70,7 @@ review.
 - `deploy/runbooks/manual-recovery.md`
 - `tests/ops/test_compose.py`
 - `tests/lifecycle/test_c6b_atomicity.py`
+- `tests/lifecycle/test_s1_store_policy.py`
 - `tests/ops/test_lifecycle_storage_doc_drift.py`
 - `docs/Musubi/08-deployment/compose-stack.md`
 - `docs/Musubi/08-deployment/host-profile.md`

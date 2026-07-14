@@ -63,6 +63,7 @@ from typing import Any, Protocol
 from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
+from musubi.lifecycle import store
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.lifecycle.transitions import LineageUpdates, TransitionError, transition
@@ -219,14 +220,6 @@ def default_ollama_client() -> OllamaClient:
 # ---------------------------------------------------------------------------
 
 
-_CURSOR_SCHEMA = """
-CREATE TABLE IF NOT EXISTS maturation_cursor (
-    sweep_name TEXT PRIMARY KEY,
-    last_processed_epoch REAL NOT NULL
-);
-"""
-
-
 class MaturationCursor:
     """Per-sweep cursor persisted to sqlite.
 
@@ -237,14 +230,17 @@ class MaturationCursor:
     reset a cursor by deleting the row from sqlite.
     """
 
-    def __init__(self, *, db_path: Path) -> None:
+    def __init__(
+        self, *, db_path: Path, busy_timeout_ms: int = store.DEFAULT_BUSY_TIMEOUT_MS
+    ) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._busy_timeout_ms = busy_timeout_ms
         with self._connect() as conn:
-            conn.executescript(_CURSOR_SCHEMA)
+            store.ensure_schema(conn)
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self._db_path))
+        return store.connect(self._db_path, busy_timeout_ms=self._busy_timeout_ms)
 
     def get(self, sweep_name: str) -> float:
         with self._connect() as conn:

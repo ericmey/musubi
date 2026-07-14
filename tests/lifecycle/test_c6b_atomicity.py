@@ -9221,16 +9221,6 @@ def _t3_child_source(*, db_path: Path, barrier_dir: Path, tag: str, n_writes: in
     )
 
 
-_P0C_T3_REASON = (
-    "today the shared lifecycle file is opened with a bare connection: events.py:79-84 sets neither "
-    "journal_mode=WAL nor a busy_timeout (its docstring:19 only CLAIMS WAL), and MaturationCursor/"
-    "SynthesisCursor open plain connections too — so the connection policy the shared file REQUIRES for "
-    "cross-process writer contention (§D: WAL + busy_timeout) is absent and observable on the real sink "
-    "connection across multiple processes."
-)
-
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T3_REASON)
 def test_p0c_shared_file_requires_wal_and_busy_timeout(tmp_path: Path) -> None:
     base = tmp_path / "t3"
     base.mkdir()
@@ -9355,9 +9345,21 @@ _P0C_T4_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T4_REASON)
 @pytest.mark.parametrize(
-    ("field", "constraint"), _P0C_NEW_SETTINGS, ids=[f for f, _ in _P0C_NEW_SETTINGS]
+    ("field", "constraint"),
+    [
+        pytest.param(
+            _field,
+            _constraint,
+            marks=()
+            if _field == "lifecycle_sqlite_busy_timeout_ms"
+            else (
+                pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T4_REASON),
+            ),
+            id=_field,
+        )
+        for _field, _constraint in _P0C_NEW_SETTINGS
+    ],
 )
 def test_p0c_new_lifecycle_setting_exists_and_validates(field: str, constraint: str) -> None:
     if field not in Settings.model_fields:

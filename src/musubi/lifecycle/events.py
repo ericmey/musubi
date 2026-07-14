@@ -25,28 +25,13 @@ from __future__ import annotations
 
 import contextlib
 import json
-import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from musubi.lifecycle import store
 from musubi.types.lifecycle_event import LifecycleEvent
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS lifecycle_events (
-    event_id TEXT PRIMARY KEY,
-    object_id TEXT NOT NULL,
-    namespace TEXT NOT NULL,
-    object_type TEXT NOT NULL,
-    from_state TEXT NOT NULL,
-    to_state TEXT NOT NULL,
-    occurred_epoch REAL NOT NULL,
-    payload TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_events_object ON lifecycle_events (object_id);
-CREATE INDEX IF NOT EXISTS idx_events_ns_epoch ON lifecycle_events (namespace, occurred_epoch);
-"""
 
 
 class LifecycleEventSink:
@@ -64,6 +49,7 @@ class LifecycleEventSink:
         db_path: Path,
         flush_every_n: int = 100,
         flush_every_s: float = 5.0,
+        busy_timeout_ms: int = store.DEFAULT_BUSY_TIMEOUT_MS,
     ) -> None:
         if flush_every_n < 1:
             raise ValueError("flush_every_n must be >= 1")
@@ -73,15 +59,22 @@ class LifecycleEventSink:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         self._flush_every_n = flush_every_n
         self._flush_every_s = flush_every_s
+        # Retained so the post-close read path (``read_all`` -> a fresh connection)
+        # opens through the same shared-store policy, not a bare connection.
+        self._busy_timeout_ms = busy_timeout_ms
 
-        # sqlite connection is shared across threads, so disable per-thread
-        # check — we serialise access through ``_lock``.
-        self._conn = sqlite3.connect(
-            str(self._db_path),
-            check_same_thread=False,
+        # Connection + schema come from the shared lifecycle store (WAL +
+        # busy_timeout policy). The sink keeps a single cross-thread autocommit
+        # connection and serialises access through ``_lock``; transactions stay
+        # explicit (``BEGIN IMMEDIATE`` in ``_write_batch``). Accept/flush
+        # durability semantics are unchanged (owned by C6).
+        self._conn = store.connect(
+            self._db_path,
+            busy_timeout_ms=busy_timeout_ms,
             isolation_level=None,  # autocommit; transactions are explicit.
+            check_same_thread=False,
         )
-        self._conn.executescript(_SCHEMA)
+        store.ensure_schema(self._conn)
 
         self._buffer: list[LifecycleEvent] = []
         self._lock = threading.Lock()
@@ -128,7 +121,7 @@ class LifecycleEventSink:
         with self._lock:
             if self._closed:
                 # Allow reading even after close — the file is still there.
-                return _read_all_on_new_connection(self._db_path)
+                return _read_all_on_new_connection(self._db_path, self._busy_timeout_ms)
             cur = self._conn.execute(
                 "SELECT payload FROM lifecycle_events ORDER BY occurred_epoch ASC, event_id ASC"
             )
@@ -246,8 +239,10 @@ def _deserialise(payload: str) -> LifecycleEvent:
     return LifecycleEvent.model_validate(data)
 
 
-def _read_all_on_new_connection(db_path: Path) -> list[LifecycleEvent]:
-    conn = sqlite3.connect(str(db_path))
+def _read_all_on_new_connection(db_path: Path, busy_timeout_ms: int) -> list[LifecycleEvent]:
+    # Post-close reads open through the shared lifecycle store so the configured
+    # busy_timeout + WAL policy applies here too — no bare-connection escape.
+    conn = store.connect(db_path, busy_timeout_ms=busy_timeout_ms)
     try:
         cur = conn.execute(
             "SELECT payload FROM lifecycle_events ORDER BY occurred_epoch ASC, event_id ASC"

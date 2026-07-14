@@ -100,6 +100,17 @@ class Settings(BaseSettings):
     vault_path: Path = Field(description="Host path to the Obsidian vault mount.")
     artifact_blob_path: Path = Field(description="Host path to content-addressed blobs.")
     lifecycle_sqlite_path: Path = Field(description="Host path to lifecycle-work sqlite.")
+    lifecycle_sqlite_busy_timeout_ms: int = Field(
+        default=5000,
+        ge=0,
+        le=600_000,
+        description=(
+            "SQLite busy_timeout (ms) for every shared lifecycle-store connection "
+            "(WAL). Default 5000. A value of 0 disables waiting — SQLite returns "
+            "SQLITE_BUSY immediately on contention; a deliberate operator override, "
+            "not a fail-closed guard."
+        ),
+    )
     log_dir: Path = Field(description="Host path for structured log output.")
 
     # ------------------------------------------------------------------
