@@ -69,5 +69,5 @@ Before implementing the CLI and runner source, the following CLI/workflow seam c
 ## Test Accounting
 The `tests/evals/` test suite holds the structural contracts for the bootstrap and seam:
 - `tests/evals/test_evals_contract.py`: Holds the discrimination tests for `run_smoke_gate` behavior.
-- `tests/evals/test_cli.py`: Holds the PR-Smoke Seam CLI behavior and `SmokeFixture` structural validation strict reds (13 tests: 6 passes, 7 strict xfails).
+- `tests/evals/test_cli.py`: Holds the PR-Smoke Seam CLI behavior and `SmokeFixture` structural validation strict reds (29 tests: 6 passes, 23 strict xfails).
 - `tests/evals/test_ci_bootstrap_contract.py`: Holds the `.github/workflows/evals.yml` exact structural bootstrap validations.
