@@ -1,0 +1,14 @@
+qdrant/qdrant:v1.17.1
+linux/amd64: sha256:cd3e42737c684ee516ae5533218be93fd5288f41d0a466ed18dbdc22ef52a000
+linux/arm64: sha256:3fd57e61606ed61c48c91c4131cba6808f01b0879f5478fd011573189855bba1
+resolved at: 2026-07-14T00:27:04-04:00
+verified by: ericmey per `uname -m` (aarch64 / arm64) and
+  `docker manifest inspect qdrant/qdrant:v1.17.1`
+  (per-platform manifests from the OCI image index)
+ephemeral container: bound to 127.0.0.1 on a collision-free
+  port, temporary volume/network, removed on exit
+  (per Yua 00:24:28 + 00:28:44)
+production host: NOT touched (per Yua 00:24:28)
+harem-ops central ledger: NOT edited (per Yua 00:24:28)
+src/: NOT modified (per Yua 00:24:28)
+ready/merge: NOT marked (per Yua 00:24:28)

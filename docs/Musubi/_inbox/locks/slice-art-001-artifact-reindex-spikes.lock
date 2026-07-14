@@ -1,0 +1,14 @@
+{
+  "agent": "tama",
+  "branch": "slice/art-001-artifact-generation-spikes",
+  "timestamp": "2026-07-14T00:30:00Z",
+  "reason": "ART-001 tests/docs-only real-Qdrant design-spike (per Yua 2026-07-14 00:24:28 acceptance + spike authorization; Yua 2026-07-14 00:28:44 HOLD CLEARED). Production source remains forbidden. Spike runs against ephemeral local Docker Qdrant pinned to qdrant/qdrant:v1.17.1 (linux/arm64 digest sha256:3fd57e61606ed61c48c91c4131cba6808f01b0879f5478fd011573189855bba1; host is aarch64 per `uname -m`) bound to 127.0.0.1 on a collision-free port with a temporary volume/network removed on exit. The spike runs the 8-row real-Qdrant matrix (same-collection batch_update_points failure semantics; FilterSelector CAS; multi-connection write ordering; cross-collection transactional claim; partial-publish search consistency; concurrent same-artifact indexing with fence; in-flight generation visibility; failure-after-publish recovery) and the corrected red/control/wrong-candidate matrix. Spike recommends an architecture; ART-001 implementation ownership remains unassigned.",
+  "owns_paths": [
+    "tests/planes/artifact/test_artifact_reindex_spikes.py",
+    "spike-notes/",
+    "docs/Musubi/_slices/slice-art-001-artifact-reindex-spikes.md",
+    "docs/Musubi/_inbox/locks/slice-art-001-artifact-reindex-spikes.lock"
+  ],
+  "sid": "slice-art-001-artifact-reindex-spikes",
+  "scope": "ART-001 tests/docs-only real-Qdrant design-spike. NO source authorization; production code is FORBIDDEN in this slice. The spike runs against an ephemeral local Docker Qdrant pinned to qdrant/qdrant:v1.17.1 (linux/arm64) bound to 127.0.0.1 on a collision-free port with a temporary volume/network removed on exit. Local `:memory:` Qdrant tests may be controls only; the 8-row matrix must run against a persistent Qdrant. The spike does NOT close ART-001; ART-001 implementation ownership remains undecided. Sequential deviation recorded at spike-notes/00-sequencing-deviation.md per Yua 2026-07-14 00:28:44 (local empty branch/worktree created before issue; no mutation/commit/push; branch has no own commits and is not tracking/pushed before spike work begins)."
+}
