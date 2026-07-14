@@ -649,16 +649,11 @@ def test_g2a_rule_discriminates_coordinator_callsites() -> None:
 
 # G2b - cleanup_terminal SQL SHAPE (Phase-1 source-shape acceptance) ----------------------------------- #
 #
-# TOKEN-AWARE inspection of the ACTUAL SQL string argument passed to the DB call inside cleanup_terminal -
-# NOT a full SQL parse and NOT a global source substring scan. It NORMALIZES the string (uppercase +
-# whitespace-collapsed, plus a whitespace-stripped form for operator-adjacent tokens) and checks for the
-# pinned shape. This is honest token matching, not a SQL grammar; exact grammar validation is out of scope.
-
-_ELIG = "TERMINAL_EPOCH<"  #: the age-eligibility token (normalized, whitespace-stripped)
-_STATE = (
-    "STATEIN('FINAL','ABANDONED')"  #: the terminal-state token (normalized, whitespace-stripped)
-)
-_NOTNULL = "TERMINAL_EPOCHISNOTNULL"  #: the non-null-age token (normalized, whitespace-stripped)
+# A BOUNDED TOKENIZER + token-SEQUENCE matching over the ACTUAL SQL string argument passed to the DB call
+# inside cleanup_terminal - NOT substring matching and NOT a full SQL parser. It tokenizes with real
+# identifier boundaries, skips comments, treats string literals and quoted identifiers as opaque (their
+# contents never satisfy a keyword), validates balanced parentheses, and matches exact token runs for the
+# pinned shape. If the supported shape cannot be recognized unambiguously, it fails closed.
 
 
 def _static_str(node: ast.AST) -> str | None:
@@ -791,58 +786,42 @@ def _scan_cleanup_terminal_sql() -> tuple[int, list[str]]:
     return len(methods), []
 
 
-def _split_cte(flat: str) -> tuple[str | None, str | None]:
-    """Split a whitespace-stripped SQL into (inner CTE body, outer DELETE) at the first `AS(...)`, matching
-    balanced parens so nested `(...)` inside the CTE stays with the inner."""
-    i = flat.find("AS(")
-    if i < 0:
-        return None, None
-    open_idx = i + 2  # the '('
-    depth = 0
-    for k in range(open_idx, len(flat)):
-        if flat[k] == "(":
-            depth += 1
-        elif flat[k] == ")":
-            depth -= 1
-            if depth == 0:
-                return flat[open_idx + 1 : k], flat[k + 1 :]
-    return None, None
-
-
 _TERMINAL_STATE_VALUES = {
     "FINAL",
     "ABANDONED",
 }  #: the ONLY string literals the pinned shape may contain
 
+_Tok = tuple[str, str]  #: (kind, value) - kind in WORD/STR/QID/NUM/PARAM/PUNCT
 
-def _sql_lex(raw: str) -> tuple[list[str], list[str]] | None:
-    """A BOUNDED SQLite-ish lexer (NOT a full parser). Strips `--` line and `/* */` block comments and
-    recognizes single-quoted string literals (with `''` escape) so structural keywords are NEVER matched
-    inside a comment or a string. Returns (statements, string_values):
-    - statements: the top-level `;`-separated pieces, comments removed, uppercased + whitespace-collapsed,
-      empties (whitespace/comment-only) dropped. A `;` inside a string does NOT split.
-    - string_values: the uppercased inner content of every string literal encountered.
-    Returns None (fail closed) on an unterminated string or block comment."""
-    stmts: list[str] = []
-    buf: list[str] = []
-    strings: list[str] = []
+
+def _sql_tokens(raw: str) -> list[_Tok] | None:
+    """A BOUNDED SQLite-ish TOKENIZER (NOT a full parser) with real identifier boundaries. Emits (kind,
+    value) tokens:
+      WORD  a bare identifier/keyword, uppercased - boundary-delimited, so SOMEWITH / NOTRETURNING / LIMITX
+            are each ONE word and never the WITH / RETURNING / LIMIT keyword;
+      STR   a single-quoted string literal value, uppercased ('' escape handled);
+      QID   a quoted identifier ("x" / `x` / [x]), uppercased - its content NEVER matches a keyword;
+      NUM   a digit run;  PARAM  a bound parameter (:name / ? / @name / $name);
+      PUNCT one significant punctuation char, e.g. ( ) , ; < > = . *
+    `--` line and `/* */` block comments are skipped. Returns None (fail closed) on an unterminated string,
+    block comment, or quoted identifier."""
+    toks: list[_Tok] = []
     i, n = 0, len(raw)
     while i < n:
+        ch = raw[i]
         pair = raw[i : i + 2]
         if pair == "--":
             j = raw.find("\n", i)
             i = n if j < 0 else j + 1
-            buf.append(" ")
         elif pair == "/*":
             j = raw.find("*/", i + 2)
             if j < 0:
-                return None  # unterminated block comment
+                return None
             i = j + 2
-            buf.append(" ")
-        elif raw[i] == "'":
+        elif ch.isspace():
             i += 1
-            val: list[str] = []
-            closed = False
+        elif ch == "'":
+            i, val, closed = i + 1, [], False
             while i < n:
                 if raw[i] == "'":
                     if i + 1 < n and raw[i + 1] == "'":
@@ -855,45 +834,161 @@ def _sql_lex(raw: str) -> tuple[list[str], list[str]] | None:
                 val.append(raw[i])
                 i += 1
             if not closed:
-                return None  # unterminated string literal
-            content = "".join(val)
-            strings.append(content.upper())
-            buf.append("'" + content + "'")
-        elif raw[i] == ";":
-            stmts.append("".join(buf))
-            buf = []
+                return None
+            toks.append(("STR", "".join(val).upper()))
+        elif ch in ('"', "`"):
+            q = ch
+            i, val, closed = i + 1, [], False
+            while i < n:
+                if raw[i] == q:
+                    if i + 1 < n and raw[i + 1] == q:
+                        val.append(q)
+                        i += 2
+                        continue
+                    i += 1
+                    closed = True
+                    break
+                val.append(raw[i])
+                i += 1
+            if not closed:
+                return None
+            toks.append(("QID", "".join(val).upper()))
+        elif ch == "[":
+            j = raw.find("]", i + 1)
+            if j < 0:
+                return None
+            toks.append(("QID", raw[i + 1 : j].upper()))
+            i = j + 1
+        elif ch.isdigit():
+            j = i
+            while j < n and raw[j].isdigit():
+                j += 1
+            toks.append(("NUM", raw[i:j]))
+            i = j
+        elif ch.isalpha() or ch == "_":
+            j = i
+            while j < n and (raw[j].isalnum() or raw[j] == "_"):
+                j += 1
+            toks.append(("WORD", raw[i:j].upper()))
+            i = j
+        elif ch in ":@$":
+            j = i + 1
+            while j < n and (raw[j].isalnum() or raw[j] == "_"):
+                j += 1
+            toks.append(("PARAM", raw[i:j]))
+            i = j
+        elif ch == "?":
+            toks.append(("PARAM", "?"))
             i += 1
         else:
-            buf.append(raw[i])
+            toks.append(("PUNCT", ch))
             i += 1
-    stmts.append("".join(buf))
-    normalized = [" ".join(s.upper().split()) for s in stmts]
-    return [s for s in normalized if s], strings
+    return toks
+
+
+def _split_top_statements(toks: list[_Tok]) -> list[list[_Tok]]:
+    """Split a token list on top-level `;` (a `;` is always a PUNCT token, never inside a string/comment),
+    dropping empty (whitespace/comment-only) statements."""
+    stmts: list[list[_Tok]] = []
+    cur: list[_Tok] = []
+    for t in toks:
+        if t == ("PUNCT", ";"):
+            stmts.append(cur)
+            cur = []
+        else:
+            cur.append(t)
+    stmts.append(cur)
+    return [s for s in stmts if s]
+
+
+def _paren_balanced(toks: list[_Tok]) -> bool:
+    depth = 0
+    for t in toks:
+        if t == ("PUNCT", "("):
+            depth += 1
+        elif t == ("PUNCT", ")"):
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0
+
+
+def _has_seq(toks: list[_Tok], seq: list[_Tok]) -> bool:
+    """True if `seq` appears as a CONTIGUOUS run of tokens in `toks` (exact (kind,value) match)."""
+    m = len(seq)
+    return any(toks[i : i + m] == seq for i in range(len(toks) - m + 1))
+
+
+def _split_cte_tokens(
+    toks: list[_Tok],
+) -> tuple[str | None, list[_Tok] | None, list[_Tok] | None]:
+    """(cte_name, inner_tokens, outer_tokens) for a `WITH <name> AS ( ... ) <outer>` head, matching the
+    CTE's balanced parens so nested `(...)` stays with the inner. (None, None, None) if the head is absent
+    or its parens are unbalanced."""
+    for i in range(len(toks) - 3):
+        if (
+            toks[i] == ("WORD", "WITH")
+            and toks[i + 1][0] == "WORD"
+            and toks[i + 2] == ("WORD", "AS")
+            and toks[i + 3] == ("PUNCT", "(")
+        ):
+            name = toks[i + 1][1]
+            depth, k = 0, i + 3
+            while k < len(toks):
+                if toks[k] == ("PUNCT", "("):
+                    depth += 1
+                elif toks[k] == ("PUNCT", ")"):
+                    depth -= 1
+                    if depth == 0:
+                        return name, toks[i + 4 : k], toks[k + 1 :]
+                k += 1
+            return None, None, None
+    return None, None, None
+
+
+def _has_terminal_state(toks: list[_Tok]) -> bool:
+    """`state IN ('FINAL','ABANDONED')` as an exact token sequence with the two terminal string values."""
+    for i in range(len(toks) - 6):
+        if (
+            toks[i] == ("WORD", "STATE")
+            and toks[i + 1] == ("WORD", "IN")
+            and toks[i + 2] == ("PUNCT", "(")
+            and toks[i + 3][0] == "STR"
+            and toks[i + 4] == ("PUNCT", ",")
+            and toks[i + 5][0] == "STR"
+            and toks[i + 6] == ("PUNCT", ")")
+            and {toks[i + 3][1], toks[i + 5][1]} == _TERMINAL_STATE_VALUES
+        ):
+            return True
+    return False
 
 
 def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
-    """Bounded-lexer shape violations of the cleanup DELETE (NOT a full SQL parser; fails closed when the
-    supported shape cannot be recognized unambiguously). [] = the pinned atomic shape: ONE executable
-    statement that is a `WITH <sel>` CTE ordered by terminal_epoch THEN operation_key with a bounded LIMIT;
-    a DELETE restricted to the selected operation keys; the FULL terminal-eligibility predicate - state IN
-    ('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND terminal_epoch < <cutoff> - repeated in BOTH the
-    inner selector AND the outer DELETE WHERE; RETURNING; and NO other statement/token after it. Comments and
-    string contents never satisfy a keyword; any string literal other than the terminal state values fails
-    closed. The count SELECTs (no operation_key + no LIMIT) are ignored."""
+    """Bounded-PARSER shape violations of the cleanup DELETE (a real tokenizer + token-SEQUENCE matching,
+    NOT substring matching and NOT a full SQL parser; fails closed when the supported shape cannot be
+    recognized unambiguously). [] = the pinned atomic shape: ONE executable statement whose parentheses are
+    balanced; a `WITH <sel>` CTE whose inner selector is ORDER BY terminal_epoch THEN operation_key with a
+    bounded LIMIT; an outer DELETE restricted to `operation_key IN (SELECT operation_key FROM <sel>)`; the
+    FULL terminal-eligibility predicate - state IN ('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND
+    terminal_epoch < <cutoff> - as exact token runs in BOTH halves; RETURNING; and NO other statement after
+    it. Comments, string contents, and quoted identifiers never satisfy a keyword; a string literal other
+    than the terminal state values, or unbalanced parens, fail closed. Count SELECTs are ignored."""
     v: list[str] = []
-    lexed = [_sql_lex(raw) for raw in sql_args]
-    if any(lx is None for lx in lexed):
-        return ["unlexable_sql"]  # unterminated string/comment -> fail closed
-    delete_args: list[tuple[list[str], list[str]]] = []
-    batch_selectors: list[tuple[list[str], list[str]]] = []
-    for lx in lexed:
-        assert lx is not None
-        stmts, strings = lx
-        joined = " ".join(stmts)
-        if "DELETE" in joined:
-            delete_args.append((stmts, strings))
-        elif "OPERATION_KEY" in joined and "LIMIT" in joined:
-            batch_selectors.append((stmts, strings))
+    tokenized = [_sql_tokens(raw) for raw in sql_args]
+    if any(t is None for t in tokenized):
+        return ["unlexable_sql"]  # unterminated string/comment/quoted-id -> fail closed
+    delete_args: list[list[list[_Tok]]] = []
+    batch_selectors: list[list[list[_Tok]]] = []
+    for toks in tokenized:
+        assert toks is not None
+        stmts = _split_top_statements(toks)
+        has_delete = any(("WORD", "DELETE") in s for s in stmts)
+        has_opkey = any(("WORD", "OPERATION_KEY") in s for s in stmts)
+        has_limit = any(("WORD", "LIMIT") in s for s in stmts)
+        if has_delete:
+            delete_args.append(stmts)
+        elif has_opkey and has_limit:
+            batch_selectors.append(stmts)
     if batch_selectors and delete_args:
         v.append(
             "split_select_delete"
@@ -901,37 +996,55 @@ def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
     if len(delete_args) != 1:
         v.append("not_single_delete")
         return v  # cannot shape-check the delete without exactly one
-    stmts, strings = delete_args[0]
+    stmts = delete_args[0]
     if len(stmts) != 1:
-        v.append("multiple_statements")  # trailing SELECT/DELETE/etc after the single CTE DELETE
-        return v  # more than one executable statement -> fail closed
-    if any(s not in _TERMINAL_STATE_VALUES for s in strings):
-        v.append("unexpected_string_literal")  # a keyword/value hidden in a string -> fail closed
+        v.append("multiple_statements")  # trailing statement after the single CTE DELETE
         return v
-    norm = stmts[0]
-    flat = norm.replace(" ", "")
-    if "WITH" not in norm or "AS(" not in flat:
+    toks = stmts[0]
+    if not _paren_balanced(toks):
+        v.append("unbalanced_parens")
+        return v
+    if any(val not in _TERMINAL_STATE_VALUES for kind, val in toks if kind == "STR"):
+        v.append("unexpected_string_literal")  # a keyword/value smuggled in a string -> fail closed
+        return v
+    name, inner, outer = _split_cte_tokens(toks)
+    if name is None or inner is None or outer is None:
         v.append("missing_cte")
-    if "RETURNING" not in norm:
+        return v
+    if ("WORD", "RETURNING") not in outer:
         v.append("missing_returning")
-    if "LIMIT" not in norm:
+    if ("WORD", "LIMIT") not in inner:
         v.append("missing_bound")
-    if "ORDERBYTERMINAL_EPOCH,OPERATION_KEY" not in flat:
+    tie = [
+        ("WORD", "ORDER"),
+        ("WORD", "BY"),
+        ("WORD", "TERMINAL_EPOCH"),
+        ("PUNCT", ","),
+        ("WORD", "OPERATION_KEY"),
+    ]
+    if not _has_seq(inner, tie):
         v.append("nondeterministic_tie")  # ORDER BY missing the operation_key tiebreak
-    if "IN(SELECTOPERATION_KEYFROM" not in flat:
+    restrict = [
+        ("WORD", "OPERATION_KEY"),
+        ("WORD", "IN"),
+        ("PUNCT", "("),
+        ("WORD", "SELECT"),
+        ("WORD", "OPERATION_KEY"),
+        ("WORD", "FROM"),
+        ("WORD", name),
+        ("PUNCT", ")"),
+    ]
+    if not _has_seq(outer, restrict):
         v.append("delete_not_restricted")  # DELETE not restricted to the selected operation keys
-    inner, outer = _split_cte(flat)
-    if inner is None or outer is None:
-        if "missing_cte" not in v:
-            v.append("missing_cte")
-    else:
-        for half, body in (("inner", inner), ("outer", outer)):
-            if _STATE not in body:
-                v.append(f"missing_{half}_state")
-            if _NOTNULL not in body:
-                v.append(f"missing_{half}_notnull")
-            if _ELIG not in body:
-                v.append(f"missing_{half}_age")
+    notnull = [("WORD", "TERMINAL_EPOCH"), ("WORD", "IS"), ("WORD", "NOT"), ("WORD", "NULL")]
+    age = [("WORD", "TERMINAL_EPOCH"), ("PUNCT", "<")]
+    for half, body in (("inner", inner), ("outer", outer)):
+        if not _has_terminal_state(body):
+            v.append(f"missing_{half}_state")
+        if not _has_seq(body, notnull):
+            v.append(f"missing_{half}_notnull")
+        if not _has_seq(body, age):
+            v.append(f"missing_{half}_age")
     return v
 
 
@@ -949,11 +1062,13 @@ _G2B_REASON = (
     "statement: a WITH <sel> CTE ordered by terminal_epoch THEN operation_key with a bounded LIMIT, a "
     "DELETE restricted to the selected operation keys, the FULL terminal-eligibility predicate (state IN "
     "('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND terminal_epoch < cutoff) repeated in BOTH the "
-    "inner selector AND the outer DELETE WHERE, RETURNING, and NO other statement/token after it. Recognition "
-    "is via a bounded lexer (comments and string contents never satisfy a keyword; a non-terminal string "
-    "literal fails closed), not substring matching. Zero or multiple coordinator cleanup methods, a split "
-    "select/delete, a trailing statement, any missing inner/outer state/non-null/age component, a missing "
-    "tiebreak/LIMIT/RETURNING, or a dynamic/unresolvable SQL argument each fail."
+    "inner selector AND the outer DELETE WHERE, RETURNING, and NO other statement after it. Recognition is "
+    "via a bounded tokenizer with real identifier boundaries + exact token-SEQUENCE matching (comments, "
+    "string contents, and quoted identifiers never satisfy a keyword; parentheses must balance; a "
+    "non-terminal string literal fails closed), not substring matching. Zero or multiple coordinator cleanup "
+    "methods, a split select/delete, a trailing statement, unbalanced parens, any missing inner/outer "
+    "state/non-null/age component, a missing tiebreak/LIMIT/RETURNING, or a dynamic/unresolvable SQL "
+    "argument each fail."
 )
 
 
@@ -1065,9 +1180,44 @@ def test_g2b_rule_discriminates_cleanup_sql_shape() -> None:
     assert _cleanup_sql_violations([string_returning]) == ["unexpected_string_literal"]
     # an unterminated string/comment fails closed
     assert _cleanup_sql_violations([_G2B_CORRECT + " /* unterminated"]) == ["unlexable_sql"]
-    # CONTROLS: harmless comments and a bare `;` terminator keep the correct shape green
+
+    # ---- token BOUNDARIES: a substring of a keyword is a DIFFERENT word; quoted ids never match ----
+    # RETURNING as a substring of another identifier is not the keyword -> missing_returning
+    assert _cleanup_sql_violations(
+        [_G2B_CORRECT.replace("RETURNING operation_key", "AND NOTRETURNING = 1")]
+    ) == ["missing_returning"]
+    # RETURNING as a quoted IDENTIFIER (double-quote / backtick / bracket) is not the keyword
+    for q_open, q_close in (('"', '"'), ("`", "`"), ("[", "]")):
+        quoted = _G2B_CORRECT.replace(
+            "RETURNING operation_key", f"AND {q_open}RETURNING{q_close} = 1"
+        )
+        assert _cleanup_sql_violations([quoted]) == ["missing_returning"]
+    # LIMIT / WITH / operation_key as a substring of a longer identifier are different words
+    assert _cleanup_sql_violations(
+        [_G2B_CORRECT.replace(" LIMIT :batch", " AND LIMITX = :batch")]
+    ) == ["missing_bound"]
+    assert _cleanup_sql_violations([_G2B_CORRECT.replace("WITH sel AS", "SOMEWITH sel AS")]) == [
+        "missing_cte"
+    ]
+    assert _cleanup_sql_violations(
+        [
+            _G2B_CORRECT.replace(
+                "ORDER BY terminal_epoch, operation_key",
+                "ORDER BY terminal_epoch, operation_key_suffix",
+            )
+        ]
+    ) == ["nondeterministic_tie"]
+    # an unmatched ')' after the CTE is malformed structure -> fail closed
+    assert _cleanup_sql_violations([_G2B_CORRECT + ")"]) == ["unbalanced_parens"]
+
+    # CONTROLS: harmless comments, a bare `;` terminator, and a LEGALLY quoted non-structural identifier
+    # (the table name) with correct balanced nesting all keep the correct shape green
     assert _cleanup_sql_violations(["-- cleanup terminal rows\n" + _G2B_CORRECT + " -- done"]) == []
     assert _cleanup_sql_violations([_G2B_CORRECT + " ;  "]) == []
+    assert (
+        _cleanup_sql_violations([_G2B_CORRECT.replace("lifecycle_outbox", '"lifecycle_outbox"')])
+        == []
+    )
 
     # ---- through the ACTUAL method scanner (unique coordinator method + local SQL var resolution) ----
     def scan(src: str) -> tuple[int, list[str]]:
