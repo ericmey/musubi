@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.2](https://github.com/ericmey/musubi/compare/v1.13.1...v1.13.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **livekit:** preserve LiveKit transcript content on fallback write path ([#462](https://github.com/ericmey/musubi/issues/462)) ([bb282ed](https://github.com/ericmey/musubi/commit/bb282ed643049ac56d28a5eaaea9e8ccfda00030))
+
 ## [1.13.1](https://github.com/ericmey/musubi/compare/v1.13.0...v1.13.1) (2026-07-14)
 
 
