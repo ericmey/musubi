@@ -64,6 +64,11 @@ from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
 from musubi.lifecycle import store
+from musubi.lifecycle.coordinator import (
+    LifecycleTransitionCoordinator,
+    TransitionPending,
+    is_transition_pending,
+)
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.lifecycle.transitions import LineageUpdates, TransitionError, transition
@@ -299,6 +304,7 @@ class SweepReport:
     enriched: int = 0
     failed: int = 0
     cursor_advanced_to: float | None = None
+    deferred: list[TransitionPending] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -350,6 +356,7 @@ async def episodic_maturation_sweep(
     *,
     client: QdrantClient,
     sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
     ollama: OllamaClient,
     cursor: MaturationCursor,
     config: MaturationConfig | None = None,
@@ -416,6 +423,7 @@ async def episodic_maturation_sweep(
     transitioned = 0
     enriched = 0
     failed = 0
+    deferred: list[TransitionPending] = []
     max_epoch = cursor_value
 
     for row in candidates:
@@ -453,6 +461,7 @@ async def episodic_maturation_sweep(
         # ------------------------------------------------------------------
         result = transition(
             client,
+            coordinator=coordinator,
             object_id=object_id,
             target_state="matured",
             actor=_LIFECYCLE_ACTOR,
@@ -468,12 +477,16 @@ async def episodic_maturation_sweep(
                 result.error,
             )
             continue
+        if is_transition_pending(result.value):
+            deferred.append(result.value)
+            continue
 
         # If we marked an old row as the predecessor, flip it to
         # "superseded" with the back-pointer. Bullet 13 covers both sides.
         if superseded_target_id is not None:
             back_result = transition(
                 client,
+                coordinator=coordinator,
                 object_id=superseded_target_id,
                 target_state="superseded",
                 actor=_LIFECYCLE_ACTOR,
@@ -490,6 +503,8 @@ async def episodic_maturation_sweep(
                     superseded_target_id,
                     back_result.error,
                 )
+            elif is_transition_pending(back_result.value):
+                deferred.append(back_result.value)
 
         # ------------------------------------------------------------------
         # Enrichment write — non-state fields, applied via set_payload on
@@ -523,6 +538,7 @@ async def episodic_maturation_sweep(
         enriched=enriched,
         failed=failed,
         cursor_advanced_to=advanced_to,
+        deferred=deferred,
     )
 
 
@@ -536,6 +552,7 @@ async def provisional_ttl_sweep(
     *,
     client: QdrantClient,
     sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
     config: MaturationConfig | None = None,
     now: datetime | None = None,
 ) -> SweepReport:
@@ -562,22 +579,31 @@ async def provisional_ttl_sweep(
 
     transitioned = 0
     failed = 0
+    deferred: list[TransitionPending] = []
     for row in candidates:
         object_id: KSUID = row["object_id"]
         result = transition(
             client,
+            coordinator=coordinator,
             object_id=object_id,
             target_state="archived",
             actor=_LIFECYCLE_ACTOR,
             reason="provisional-ttl",
             sink=sink,
         )
-        if isinstance(result, Ok):
+        if isinstance(result, Ok) and is_transition_pending(result.value):
+            deferred.append(result.value)
+        elif isinstance(result, Ok):
             transitioned += 1
         else:
             failed += 1
             log.warning("provisional-ttl-failed object_id=%s err=%r", object_id, result.error)
-    return SweepReport(selected=len(candidates), transitioned=transitioned, failed=failed)
+    return SweepReport(
+        selected=len(candidates),
+        transitioned=transitioned,
+        failed=failed,
+        deferred=deferred,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +625,7 @@ async def episodic_demotion_sweep(
     *,
     client: QdrantClient,
     sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
     config: MaturationConfig | None = None,
     now: datetime | None = None,
 ) -> SweepReport:
@@ -626,20 +653,29 @@ async def episodic_demotion_sweep(
 
     transitioned = 0
     failed = 0
+    deferred: list[TransitionPending] = []
     for row in candidates:
         result = transition(
             client,
+            coordinator=coordinator,
             object_id=row["object_id"],
             target_state="demoted",
             actor=_LIFECYCLE_ACTOR,
             reason="maturation-demotion",
             sink=sink,
         )
-        if isinstance(result, Ok):
+        if isinstance(result, Ok) and is_transition_pending(result.value):
+            deferred.append(result.value)
+        elif isinstance(result, Ok):
             transitioned += 1
         else:
             failed += 1
-    return SweepReport(selected=len(candidates), transitioned=transitioned, failed=failed)
+    return SweepReport(
+        selected=len(candidates),
+        transitioned=transitioned,
+        failed=failed,
+        deferred=deferred,
+    )
 
 
 @_instrument_maturation_job
@@ -647,6 +683,7 @@ async def concept_maturation_sweep(
     *,
     client: QdrantClient,
     sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
     config: MaturationConfig | None = None,
     now: datetime | None = None,
 ) -> SweepReport:
@@ -676,6 +713,7 @@ async def concept_maturation_sweep(
 
     transitioned = 0
     failed = 0
+    deferred: list[TransitionPending] = []
     for row in candidates:
         if int(row.get("reinforcement_count", 0)) < cfg.concept_reinforcement_threshold:
             continue
@@ -693,17 +731,25 @@ async def concept_maturation_sweep(
             continue
         result = transition(
             client,
+            coordinator=coordinator,
             object_id=row["object_id"],
             target_state="matured",
             actor=_LIFECYCLE_ACTOR,
             reason="concept-maturation",
             sink=sink,
         )
-        if isinstance(result, Ok):
+        if isinstance(result, Ok) and is_transition_pending(result.value):
+            deferred.append(result.value)
+        elif isinstance(result, Ok):
             transitioned += 1
         else:
             failed += 1
-    return SweepReport(selected=len(candidates), transitioned=transitioned, failed=failed)
+    return SweepReport(
+        selected=len(candidates),
+        transitioned=transitioned,
+        failed=failed,
+        deferred=deferred,
+    )
 
 
 @_instrument_maturation_job
@@ -711,6 +757,7 @@ async def concept_demotion_sweep(
     *,
     client: QdrantClient,
     sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
     config: MaturationConfig | None = None,
     now: datetime | None = None,
 ) -> SweepReport:
@@ -732,20 +779,29 @@ async def concept_demotion_sweep(
 
     transitioned = 0
     failed = 0
+    deferred: list[TransitionPending] = []
     for row in candidates:
         result = transition(
             client,
+            coordinator=coordinator,
             object_id=row["object_id"],
             target_state="demoted",
             actor=_LIFECYCLE_ACTOR,
             reason="concept-demotion",
             sink=sink,
         )
-        if isinstance(result, Ok):
+        if isinstance(result, Ok) and is_transition_pending(result.value):
+            deferred.append(result.value)
+        elif isinstance(result, Ok):
             transitioned += 1
         else:
             failed += 1
-    return SweepReport(selected=len(candidates), transitioned=transitioned, failed=failed)
+    return SweepReport(
+        selected=len(candidates),
+        transitioned=transitioned,
+        failed=failed,
+        deferred=deferred,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -956,6 +1012,7 @@ def build_maturation_jobs(
     *,
     client: QdrantClient,
     sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
     ollama: OllamaClient,
     cursor: MaturationCursor,
     lock_dir: Path,
@@ -1017,16 +1074,25 @@ def build_maturation_jobs(
         _wrap(
             "maturation_episodic",
             lambda: episodic_maturation_sweep(
-                client=client, sink=sink, ollama=ollama, cursor=cursor, config=cfg
+                client=client,
+                sink=sink,
+                coordinator=coordinator,
+                ollama=ollama,
+                cursor=cursor,
+                config=cfg,
             ),
         ),
         _wrap(
             "provisional_ttl",
-            lambda: provisional_ttl_sweep(client=client, sink=sink, config=cfg),
+            lambda: provisional_ttl_sweep(
+                client=client, sink=sink, coordinator=coordinator, config=cfg
+            ),
         ),
         _wrap(
             "concept_maturation",
-            lambda: concept_maturation_sweep(client=client, sink=sink, config=cfg),
+            lambda: concept_maturation_sweep(
+                client=client, sink=sink, coordinator=coordinator, config=cfg
+            ),
         ),
     ]
 

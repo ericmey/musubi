@@ -126,8 +126,8 @@ Yua-authorized narrow).
 
 > Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **127** functions in this
 > slice's own contract below + **8** from `08-deployment/compose-stack` = **135** `tc-coverage` bullets,
-> 0 missing. Status from runtime collection across the self files (atomicity file **106 passed / 27
-> xfailed / 0 failed / 0 XPASS** after the S2+S3+S4+S5+S6 flips + remaining stage guards), NOT from tc-coverage's
+> 0 missing. Status from runtime collection across the self files (atomicity file **131 passed / 2
+> xfailed / 0 failed / 0 XPASS** after the S2+S3+S4+S5+S6+S7 flips + remaining closure/release guards), NOT from tc-coverage's
 > classifier — which mislabels variable-reason strict-xfail reds as "passing". **S2 flipped R2, R11, R14
 > two-process race, `lifecycle_pending_cap`; S3 flips R1, R10, R12, R13, R14-single, R22; S4 flips R3, R4,
 > R5, R6, R7, R8, R9, R15, R16 (valid + two-process claim), R17, R18 + the 4 reconciler settings
@@ -139,7 +139,8 @@ Yua-authorized narrow).
 > NO-OP-under-candidate stage guard (`_require_real_stage`) keeps each owed red raising its OWN
 > DefectStillPresent — not the AttributeError/OperationalError a partially-built coordinator would surface
 > (R19's `_observe_pending` guard was REMOVED at S5; all three R20 `rollback` guards were REMOVED at
-> S6). **G1 is closure-only and flips ONLY under H5**
+> S6). **S7 flips R21, G2a, G3, and the P0c injection/worker/readiness/settings wiring while reducing
+> the pinned G1 denominator from six bypasses to five. G1 is closure-only and flips ONLY under H5**
 > ([[_slices/slice-h5-unify-state-mutation]]).
 > Direct real-source proofs: `test_s2_coordinator_admission.py` (admission, client-free) +
 > `test_s3_coordinator_apply.py` (apply/finalize + wrong-shape + parity) + `test_s4_reconcile.py`
@@ -175,20 +176,20 @@ Yua-authorized narrow).
 27. `test_r21_deferred_accounting_check_discriminates` — GREEN — control/discriminator
 28. `test_r21_full_defer_acceptance_discriminates` — GREEN — control/discriminator
 29. `test_r21_maturation_callsite_inventory_control_sees_exact_six` — GREEN — control/discriminator
-30. `test_r21_maturation_callsite_pending_arm_inventory` — strict-xfail — acceptance red (owed S2-S7)
-31. `test_r21_maturation_concept_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
-32. `test_r21_maturation_concept_demotion_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
-33. `test_r21_maturation_episodic_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
-34. `test_r21_maturation_episodic_demotion_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
-35. `test_r21_maturation_provisional_ttl_defers_pending` — strict-xfail — acceptance red (owed S2-S7)
-36. `test_r21_maturation_supersession_backlink_not_run_on_pending` — strict-xfail — acceptance red (owed S2-S7)
+30. `test_r21_maturation_callsite_pending_arm_inventory` — GREEN — S7 flip (all six callsites consume Pending before success/dependent work)
+31. `test_r21_maturation_concept_defers_pending` — GREEN — S7 flip (Pending retained as deferred; not counted)
+32. `test_r21_maturation_concept_demotion_defers_pending` — GREEN — S7 flip (Pending retained as deferred; not counted)
+33. `test_r21_maturation_episodic_defers_pending` — GREEN — S7 flip (Pending retained as deferred; not counted)
+34. `test_r21_maturation_episodic_demotion_defers_pending` — GREEN — S7 flip (Pending retained as deferred; not counted)
+35. `test_r21_maturation_provisional_ttl_defers_pending` — GREEN — S7 flip (Pending retained as deferred; not counted)
+36. `test_r21_maturation_supersession_backlink_not_run_on_pending` — GREEN — S7 flip (dependent backlink deferred)
 37. `test_r21_pending_body_schema_discriminates` — GREEN — control/discriminator
-38. `test_r21_route_artifact_pending_maps_to_202` — strict-xfail — acceptance red (owed S2-S7)
+38. `test_r21_route_artifact_pending_maps_to_202` — GREEN — S7 flip (typed Pending maps to HTTP 202)
 39. `test_r21_route_controls_final_200_and_err_typed` — GREEN — route control
-40. `test_r21_route_curated_pending_maps_to_202` — strict-xfail — acceptance red (owed S2-S7)
-41. `test_r21_route_episodic_pending_maps_to_202` — strict-xfail — acceptance red (owed S2-S7)
-42. `test_r21_route_lifecycle_pending_maps_to_202` — strict-xfail — acceptance red (owed S2-S7)
-43. `test_r21_route_pending_body_matches_typed_schema` — strict-xfail — acceptance red (owed S2-S7)
+40. `test_r21_route_curated_pending_maps_to_202` — GREEN — S7 flip (typed Pending maps to HTTP 202)
+41. `test_r21_route_episodic_pending_maps_to_202` — GREEN — S7 flip (typed Pending maps to HTTP 202)
+42. `test_r21_route_lifecycle_pending_maps_to_202` — GREEN — S7 flip (typed Pending maps to HTTP 202)
+43. `test_r21_route_pending_body_matches_typed_schema` — GREEN — S7 flip (all four routes validate without Final-field widening)
 44. `test_r21_route_pending_check_discriminates_each_failure_mode` — GREEN — control/discriminator
 45. `test_r22_outcome_validator_discriminates` — GREEN — control/discriminator
 46. `test_r22_two_process_race_one_winner_mutates_loser_fenced` — GREEN — S3 flip (two-process apply race; deterministic barrier proof in test_s3)
@@ -197,11 +198,11 @@ Yua-authorized narrow).
 47. `test_g1_no_direct_state_transition_setpayload_outside_coordinator` — strict-xfail — G1 closure-only, flips ONLY under H5
 48. `test_g1_present_denominator_control_sees_all_known_bypasses` — GREEN — control/discriminator
 49. `test_g1_rule_discriminates_state_dataflow_from_unrelated_payloads` — GREEN — control/discriminator
-50. `test_g2a_coordinator_transition_callsite_inventory` — strict-xfail — acceptance red (owed S2-S7)
+50. `test_g2a_coordinator_transition_callsite_inventory` — GREEN — S7 flip (canonical wrapper is the sole production coordinator callsite)
 51. `test_g2a_rule_discriminates_coordinator_callsites` — GREEN — control/discriminator
 52. `test_g2b_cleanup_terminal_sql_shape` — GREEN — S6 flip (single named-CTE bounded deterministic DELETE; repeated inner/outer eligibility + terminal RETURNING)
 53. `test_g2b_rule_discriminates_cleanup_sql_shape` — GREEN — control/discriminator
-54. `test_g3_coordinator_transition_result_consumed` — strict-xfail — acceptance red (owed S2-S7)
+54. `test_g3_coordinator_transition_result_consumed` — GREEN — S7 flip (canonical callsite consumes the Result)
 55. `test_g3_rule_discriminates_result_consumed` — GREEN — control/discriminator
 
 ### Accepted atomicity — P0c wiring/storage/settings (33)
@@ -211,9 +212,9 @@ Yua-authorized narrow).
 59. `test_p0c_anchor_bootstrap_creates_lifecycle_dir_with_musubi_0750` — GREEN — control/discriminator
 60. `test_p0c_anchor_live_scheduler_backup_dir` — GREEN — control/discriminator
 61. `test_p0c_anchor_restore_yml_dir` — GREEN — control/discriminator
-62. `test_p0c_api_and_worker_resolve_same_active_storage_path` — strict-xfail — acceptance red (owed S2-S7)
+62. `test_p0c_api_and_worker_resolve_same_active_storage_path` — GREEN — S7 flip
 63. `test_p0c_bootstrap_injection_rule_discriminates` — GREEN — control/discriminator
-64. `test_p0c_bootstrap_injects_app_lifetime_coordinator` — strict-xfail — acceptance red (owed S2-S7)
+64. `test_p0c_bootstrap_injects_app_lifetime_coordinator` — GREEN — S7 flip (one API-lifetime coordinator)
 65. `test_p0c_config_surfaces_all_resolve` — GREEN — control/discriminator
 66. `test_p0c_connection_policy_rule_discriminates` — GREEN — control/discriminator
 67. `test_p0c_deployment_active_storage_parity` — GREEN — D0/S1 flip
@@ -224,9 +225,9 @@ Yua-authorized narrow).
 72. `test_p0c_drift_manual_recovery_runbook` — GREEN — D0/S1 flip
 73. `test_p0c_drift_parsers_discriminate` — GREEN — control/discriminator
 74. `test_p0c_drift_root_compose_dir_mount_and_worker` — GREEN — D0/S1 flip
-75. `test_p0c_new_lifecycle_setting_exists_and_validates` — MIXED — busy_timeout (S1) + lifecycle_pending_cap (S2) GREEN; 7 other params strict-xfail (S3-S6)
+75. `test_p0c_new_lifecycle_setting_exists_and_validates` — GREEN — S1-S7 settings inventory validates and is consumed
 76. `test_p0c_readiness_probe_rule_discriminates` — GREEN — control/discriminator
-77. `test_p0c_reconcile_is_worker_only` — strict-xfail — acceptance red (owed S2-S7)
+77. `test_p0c_reconcile_is_worker_only` — GREEN — S7 flip (API never reconciles; worker startup + interval only)
 78. `test_p0c_same_active_storage_rule_discriminates` — GREEN — control/discriminator
 79. `test_p0c_settings_validators_discriminate` — GREEN — control/discriminator
 80. `test_p0c_shared_file_requires_wal_and_busy_timeout` — GREEN — D0/S1 flip
@@ -234,8 +235,8 @@ Yua-authorized narrow).
 82. `test_p0c_storage_migration_task_detection_discriminates` — GREEN — control/discriminator
 83. `test_p0c_storage_migration_task_unbuilt` — strict-xfail — acceptance red (owed S2-S7)
 84. `test_p0c_storage_migration_verify_checks_all_three` — GREEN — D0/S1 flip
-85. `test_p0c_worker_builds_coordinator_and_wires_reconcile` — strict-xfail — acceptance red (owed S2-S7)
-86. `test_p0c_worker_healthcheck_consumes_readiness_signal` — strict-xfail — acceptance red (owed S2-S7)
+85. `test_p0c_worker_builds_coordinator_and_wires_reconcile` — GREEN — S7 flip (one worker-lifetime coordinator)
+86. `test_p0c_worker_healthcheck_consumes_readiness_signal` — GREEN — S7 flip (production healthcheck consumes coordinator-ready gauge)
 87. `test_p0c_worker_only_reconcile_rule_discriminates` — GREEN — control/discriminator
 88. `test_p0c_worker_reconcile_rule_discriminates` — GREEN — control/discriminator
 

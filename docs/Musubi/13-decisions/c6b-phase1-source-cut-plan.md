@@ -192,8 +192,8 @@ implementation — no paper mapping (ruling 11).** Controls green throughout: al
   per-DB shared lock for their full operations; rollback/abort are generation-fenced; terminal
   backfill preserves unknown ages; cleanup is one bounded deterministic named-CTE DELETE.
 
-**Checkpoint C — injection/API/runner wiring (ACTIVE):**
-- **S7** inject the app-lifetime + worker coordinators (§C); rewire `transitions.py` seam onto the required
+**Checkpoint C — injection/API/runner wiring (DONE; awaiting exact-head independent review):**
+- **S7 — DONE:** inject the app-lifetime + worker coordinators (§C); rewire `transitions.py` seam onto the required
   injected coordinator (§B, adapter never erasing Pending); map Pending→202 at the 4 routes; branch the 6
   maturation callsites to DEFERRED (§A); wire `reconcile_once` in the worker. Flips G2a, G3, R21 + the
   P0c wiring reds. **Same commit:** G1 present-denominator 6→5 (transitions.py migrated), red-proofed;
@@ -213,19 +213,19 @@ readiness / reconcile-failure thresholds. **API and worker must resolve the SAME
 ## H. Release hold + readiness (rulings 9, P0c/2)
 
 Phase-1 source may be reviewed/merged behind the hold but MUST NOT be released/deployed as "C6b fixed"
-while C6 sink durability (#433) and H5/G1 (#439) remain open. S1–S6 inert-except-S1-storage; **S7 is
-active** (canonical rewire = production behavior). **Worker readiness:** the deploy healthcheck proves only
-`/metrics` liveness (`docker-compose.yml.j2:57-62`) — an executable strict red pins a FUTURE readiness
-signal proving coordinator storage/schema is open + reconcile can safely participate; release stays blocked
-until the production healthcheck consumes it. A gauge is not a readiness gate until deployment consumes it.
+while H5/G1 (#439) and the FILE→DIR migration gate remain open. C6 sink durability (#433) is merged,
+released, deployed, and pinned in v1.13.4 (`acf97dd` / `927f84e` / `8379afe`); it is no longer a blocker.
+S1–S6 are inert-except-S1-storage; **S7 is active** (canonical rewire = production behavior). **Worker
+readiness:** S7 publishes `musubi_lifecycle_coordinator_ready` only after shared storage opens and a
+worker-only reconcile pass succeeds, and the production healthcheck consumes that exact signal. This
+closes the readiness wiring red but does not waive H5 or the migration/release proof.
 
 **Pinned readiness signal (P0c):** `musubi_lifecycle_coordinator_ready` — a gauge on the worker metrics
 port set to 1 ONLY when the coordinator's shared SQLite/outbox schema is open AND `reconcile_once` can
 safely participate (equivalently, a dedicated `/readyz`-style readiness endpoint). The executable
-`test_p0c_worker_healthcheck_consumes_readiness_signal` (strict-xfail) parses the REAL ansible template
-and asserts the lifecycle-worker healthcheck CONSUMES this signal rather than probing `/metrics` for HTTP
-200; it flips green only when the deploy healthcheck reads the pinned gauge (or endpoint).
-Deploy is out of scope; live is v1.11.7 vs pinned v1.13.0, not converged.
+`test_p0c_worker_healthcheck_consumes_readiness_signal` parses the REAL ansible template and is GREEN:
+the lifecycle-worker healthcheck consumes this signal rather than treating `/metrics` HTTP 200 as ready.
+The deployed baseline before this S7 branch is v1.13.4; S7 itself is not yet merged or deployed.
 
 ## I. The twelve REV2 rulings — disposition
 

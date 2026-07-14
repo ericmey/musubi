@@ -153,6 +153,27 @@ class Settings(BaseSettings):
             "lifecycle_backoff_base_s. Positive finite float."
         ),
     )
+    lifecycle_cleanup_retention_s: int = Field(
+        default=30 * 86400,
+        gt=0,
+        description=(
+            "Retention window (seconds) for terminal lifecycle outbox rows. "
+            "The worker deletes only rows strictly older than this window."
+        ),
+    )
+    lifecycle_cleanup_batch: int = Field(
+        default=1000,
+        gt=0,
+        description="Maximum terminal lifecycle outbox rows deleted per reconcile pass.",
+    )
+    lifecycle_readiness_max_reconcile_failures: int = Field(
+        default=3,
+        gt=0,
+        description=(
+            "Consecutive reconcile failures tolerated before the lifecycle-worker "
+            "readiness gauge is forced to zero."
+        ),
+    )
     log_dir: Path = Field(description="Host path for structured log output.")
 
     # ------------------------------------------------------------------

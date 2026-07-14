@@ -109,6 +109,7 @@ from musubi.api.dependencies import (
     get_curated_plane,
     get_embedder,
     get_episodic_plane,
+    get_lifecycle_service,
     get_qdrant_client,
     get_reranker,
     get_settings_dep,
@@ -296,7 +297,6 @@ def _scan_src_state_transition_violators() -> dict[str, list[tuple[str, int]]]:
 #: them, so a bypass that silently disappears (scanner regression, or an unaccounted migration) FAILS
 #: here instead of quietly shrinking the red. H5 updates this set as it migrates each path.
 _PRESENT_TRANSITION_BYPASSES: set[tuple[str, str]] = {
-    ("lifecycle/transitions.py", "transition"),
     ("planes/episodic/plane.py", "transition"),
     ("planes/concept/plane.py", "transition"),
     ("planes/thoughts/plane.py", "transition"),
@@ -311,9 +311,10 @@ _PRESENT_TRANSITION_BYPASSES: set[tuple[str, str]] = {
 @pytest.mark.xfail(
     raises=DefectStillPresent,
     strict=True,
-    reason="lifecycle state is mutated by set_payload in the 5 plane transition() methods + "
-    "transitions.py - every one bypasses the (unbuilt) LifecycleTransitionCoordinator, so a bypassing "
-    "path still produces mutation-without-audit. Flips green ONLY under slice-h5-unify-state-mutation.",
+    reason="lifecycle state is still mutated directly by set_payload in the 5 plane transition() "
+    "methods, bypassing LifecycleTransitionCoordinator and producing mutation-without-audit. "
+    "transitions.py is now canonical under S7; this closure gate flips green ONLY under "
+    "slice-h5-unify-state-mutation.",
 )
 def test_g1_no_direct_state_transition_setpayload_outside_coordinator() -> None:
     """Closure-gate (NOT Phase-1 acceptance): C6b atomicity is not closed until EVERY state-writing
@@ -611,7 +612,6 @@ _G2A_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_G2A_REASON)
 def test_g2a_coordinator_transition_callsite_inventory() -> None:
     """Phase-1 acceptance: the resolved set of LifecycleTransitionCoordinator.transition callsites in src
     must equal the EXPLICIT reviewed set - fails on zero, missing, duplicate, or extra."""
@@ -1595,7 +1595,6 @@ _G3_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_G3_REASON)
 def test_g3_coordinator_transition_result_consumed() -> None:
     """Phase-1 acceptance: no resolved coordinator.transition callsite may drop its Result (a bare
     expression statement). RED today - there is no callsite yet to verify."""
@@ -7797,6 +7796,7 @@ def route_env(tmp_path: Path) -> Iterator[_RouteEnv]:
     app.dependency_overrides[get_curated_plane] = lambda: curated
     app.dependency_overrides[get_concept_plane] = lambda: concept
     app.dependency_overrides[get_artifact_plane] = lambda: artifact
+    app.dependency_overrides[get_lifecycle_service] = lambda: object()
     _reset_api_globals()
     with TestClient(app, raise_server_exceptions=False) as client:
         yield _RouteEnv(client, settings, qdrant, episodic, curated, concept, artifact)
@@ -7937,13 +7937,6 @@ def _pending_response_ok(status: int, body: Any) -> bool:
 # ---- TASK 1 reds: one strict-xfail per REAL transition route (Pending -> 202 typed body) ----------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="writes_lifecycle.lifecycle_transition (writes_lifecycle.py:50) treats every Ok as a Final "
-    "and reads TransitionResult attributes off it -> a Pending outcome yields AttributeError -> 500; "
-    "there is no Ok(Pending)->202 typed-body branch. Flips XPASS when S7 wires the 202 pending mapping.",
-)
 def test_r21_route_lifecycle_pending_maps_to_202(
     route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -7954,13 +7947,6 @@ def test_r21_route_lifecycle_pending_maps_to_202(
         )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="writes_artifact.archive_artifact (writes_artifact.py:101) maps any Ok to a hardcoded 200 "
-    "'archived' body -> a Pending outcome is reported as an applied archive (200), never a 202 typed "
-    "pending body. Flips XPASS when S7 wires the 202 pending mapping.",
-)
 def test_r21_route_artifact_pending_maps_to_202(
     route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -7971,13 +7957,6 @@ def test_r21_route_artifact_pending_maps_to_202(
         )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="writes_curated.delete_curated (writes_curated.py:196) maps any Ok to a hardcoded 200 "
-    "'archived' body -> a Pending outcome is reported as an applied soft-delete (200), never a 202 "
-    "typed pending body. Flips XPASS when S7 wires the 202 pending mapping.",
-)
 def test_r21_route_curated_pending_maps_to_202(
     route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -7988,13 +7967,6 @@ def test_r21_route_curated_pending_maps_to_202(
         )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="writes_episodic.delete_episodic soft path (writes_episodic.py:509) maps any Ok to a "
-    "hardcoded 200 'archived' body -> a Pending outcome is reported as an applied soft-delete (200), "
-    "never a 202 typed pending body. Flips XPASS when S7 wires the 202 pending mapping.",
-)
 def test_r21_route_episodic_pending_maps_to_202(
     route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8133,15 +8105,31 @@ def _pending_body_validates(status: int, body: Any) -> bool:
     return True
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="no transition route DECLARES/RETURNS a typed Pending variant (Yua ruling 4): writes_lifecycle "
-    "reads Final attributes off any Ok -> 500 on Pending; the archive/curated/episodic soft paths map any "
-    "Ok to a hardcoded 200 'archived' body. None returns a 202 body that validates against the typed "
-    "Pending schema (status=pending + non-empty operation_key/event_id, no Final fields). Flips XPASS when "
-    "S7 wires the typed 202 Pending response model at all four routes without widening the Final/Err shape.",
-)
+_R21_OPENAPI_PATHS = {
+    "lifecycle": ("/v1/lifecycle/transition", "post"),
+    "artifact": ("/v1/artifacts/{object_id}/archive", "post"),
+    "curated": ("/v1/curated/{object_id}", "delete"),
+    "episodic": ("/v1/episodic/{object_id}", "delete"),
+}
+
+
+def _pending_openapi_declared(client: TestClient, route: str) -> bool:
+    """True iff the route declares its 202 body as exactly TransitionPendingBody."""
+    path, method = _R21_OPENAPI_PATHS[route]
+    doc = client.get("/v1/openapi.json").json()
+    schema = (
+        doc.get("paths", {})
+        .get(path, {})
+        .get(method, {})
+        .get("responses", {})
+        .get("202", {})
+        .get("content", {})
+        .get("application/json", {})
+        .get("schema")
+    )
+    return bool(schema == {"$ref": "#/components/schemas/TransitionPendingBody"})
+
+
 @pytest.mark.parametrize("route", ["lifecycle", "artifact", "curated", "episodic"])
 def test_r21_route_pending_body_matches_typed_schema(
     route: str, route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
@@ -8151,6 +8139,10 @@ def test_r21_route_pending_body_matches_typed_schema(
         raise DefectStillPresent(
             f"route {route} does not return a 202 body validating against the typed Pending schema "
             f"(status=pending + non-empty str operation_key/event_id + no Final fields); got {status}/{body!r}"
+        )
+    if not _pending_openapi_declared(route_env.client, route):
+        raise DefectStillPresent(
+            f"route {route} does not declare HTTP 202 as TransitionPendingBody in runtime OpenAPI"
         )
 
 
@@ -8408,15 +8400,6 @@ def _assert_pending_deferred(
 # ---- TASK 2 reds: one strict-xfail per distinct callsite shape (Pending must DEFER) ---------------- #
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="episodic_maturation_sweep forward callsite (maturation.py:458) does isinstance(result, Ok) "
-    "-> transitioned++, so an Ok(Pending) is counted as a completed maturation instead of DEFERRED. The "
-    "red asserts the FULL contract (exactly one transition call AND transitioned==0 AND report.deferred "
-    "retains the operation_key+event_id); today it fails at transitioned==0. Flips XPASS when the callsite "
-    "gains a Pending arm that defers (not counted, no dependent work, ids retained for the reconciler).",
-)
 async def test_r21_maturation_episodic_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8428,7 +8411,12 @@ async def test_r21_maturation_episodic_defers_pending(
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await episodic_maturation_sweep(
-            client=qc, sink=sink, ollama=_FakeOllama(), cursor=cursor, config=_mat_config()
+            client=qc,
+            sink=sink,
+            coordinator=cast(Any, object()),
+            ollama=_FakeOllama(),
+            cursor=cursor,
+            config=_mat_config(),
         )
         _assert_pending_deferred(report, spy, "episodic_maturation_sweep")
     finally:
@@ -8436,15 +8424,6 @@ async def test_r21_maturation_episodic_defers_pending(
         qc.close()
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="episodic_maturation_sweep runs the supersession back-link (maturation.py:479) whenever the "
-    "forward result isinstance Ok — so on an Ok(Pending) forward transition it runs post-transition "
-    "dependent work (a SECOND transition on the predecessor) that must be deferred until the forward "
-    "finalizes. The red asserts the FULL contract (forward_calls==1); today it fails at the call-count "
-    "sub-condition (two transition calls). Flips XPASS when the forward Pending arm skips the back-link.",
-)
 async def test_r21_maturation_supersession_backlink_not_run_on_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8461,7 +8440,12 @@ async def test_r21_maturation_supersession_backlink_not_run_on_pending(
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await episodic_maturation_sweep(
-            client=qc, sink=sink, ollama=_FakeOllama(), cursor=cursor, config=_mat_config()
+            client=qc,
+            sink=sink,
+            coordinator=cast(Any, object()),
+            ollama=_FakeOllama(),
+            cursor=cursor,
+            config=_mat_config(),
         )
         # forward_calls=1 pins the (d) sub-condition: the supersession back-link (a SECOND transition on
         # the predecessor) is post-transition dependent work that must NOT fire on a Pending forward.
@@ -8473,14 +8457,6 @@ async def test_r21_maturation_supersession_backlink_not_run_on_pending(
         qc.close()
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="provisional_ttl_sweep callsite (maturation.py:571) does isinstance(result, Ok) -> "
-    "transitioned++, so an Ok(Pending) TTL archival is counted as completed instead of DEFERRED. The red "
-    "asserts the FULL contract (one call AND transitioned==0 AND report.deferred retains the ids); today "
-    "it fails at transitioned==0. Flips XPASS when the callsite gains a deferring Pending arm.",
-)
 async def test_r21_maturation_provisional_ttl_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8491,21 +8467,15 @@ async def test_r21_maturation_provisional_ttl_defers_pending(
         await _seed_provisional_episodic(plane, qc, ns, "ttl row", age_seconds=8 * 86400)
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
-        report = await provisional_ttl_sweep(client=qc, sink=sink, config=_mat_config())
+        report = await provisional_ttl_sweep(
+            client=qc, sink=sink, coordinator=cast(Any, object()), config=_mat_config()
+        )
         _assert_pending_deferred(report, spy, "provisional_ttl_sweep")
     finally:
         sink.close()
         qc.close()
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="episodic_demotion_sweep callsite (maturation.py:634) does isinstance(result, Ok) -> "
-    "transitioned++, so an Ok(Pending) demotion is counted as completed instead of DEFERRED. The red "
-    "asserts the FULL contract (one call AND transitioned==0 AND report.deferred retains the ids); today "
-    "it fails at transitioned==0. Flips XPASS when the callsite gains a deferring Pending arm.",
-)
 async def test_r21_maturation_episodic_demotion_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8516,21 +8486,15 @@ async def test_r21_maturation_episodic_demotion_defers_pending(
         await _seed_matured_episodic(plane, qc, ns, "demote row", age_seconds=31 * 86400)
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
-        report = await episodic_demotion_sweep(client=qc, sink=sink, config=_mat_config())
+        report = await episodic_demotion_sweep(
+            client=qc, sink=sink, coordinator=cast(Any, object()), config=_mat_config()
+        )
         _assert_pending_deferred(report, spy, "episodic_demotion_sweep")
     finally:
         sink.close()
         qc.close()
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="concept_maturation_sweep callsite (maturation.py:698) does isinstance(result, Ok) -> "
-    "transitioned++, so an Ok(Pending) concept maturation is counted as completed instead of DEFERRED. "
-    "The red asserts the FULL contract (one call AND transitioned==0 AND report.deferred retains the ids); "
-    "today it fails at transitioned==0. Flips XPASS when the callsite gains a deferring Pending arm.",
-)
 async def test_r21_maturation_concept_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8541,21 +8505,15 @@ async def test_r21_maturation_concept_defers_pending(
         await _seed_synthesized_concept(plane, qc, ns, reinforce=3, age_seconds=2 * 86400)
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
-        report = await concept_maturation_sweep(client=qc, sink=sink, config=_mat_config())
+        report = await concept_maturation_sweep(
+            client=qc, sink=sink, coordinator=cast(Any, object()), config=_mat_config()
+        )
         _assert_pending_deferred(report, spy, "concept_maturation_sweep")
     finally:
         sink.close()
         qc.close()
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="concept_demotion_sweep callsite (maturation.py:740) does isinstance(result, Ok) -> "
-    "transitioned++, so an Ok(Pending) concept demotion is counted as completed instead of DEFERRED. The "
-    "red asserts the FULL contract (one call AND transitioned==0 AND report.deferred retains the ids); "
-    "today it fails at transitioned==0. Flips XPASS when the callsite gains a deferring Pending arm.",
-)
 async def test_r21_maturation_concept_demotion_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -8566,7 +8524,9 @@ async def test_r21_maturation_concept_demotion_defers_pending(
         await _seed_matured_concept(plane, qc, ns, age_seconds=40 * 86400)
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
-        report = await concept_demotion_sweep(client=qc, sink=sink, config=_mat_config())
+        report = await concept_demotion_sweep(
+            client=qc, sink=sink, coordinator=cast(Any, object()), config=_mat_config()
+        )
         _assert_pending_deferred(report, spy, "concept_demotion_sweep")
     finally:
         sink.close()
@@ -8773,16 +8733,6 @@ def _pending_arm_ok_for_callsite(
     )
 
 
-@pytest.mark.xfail(
-    raises=DefectStillPresent,
-    strict=True,
-    reason="none of the six maturation transition() callsites (maturation.py 458/479/571/634/698/740) is "
-    "consumed by a per-result Pending arm before its success/dependent-work path — each result is fed only "
-    "to a two-way isinstance(result, Ok) branch (transitioned++/failed++), with no explicit "
-    "isinstance(result.value, TransitionPending) / kind=='pending' arm on THAT callsite's result. Flips "
-    "XPASS when every callsite's result gains an explicit three-way Pending consumer branch before the "
-    "success/dependent-work path.",
-)
 def test_r21_maturation_callsite_pending_arm_inventory() -> None:
     tree = ast.parse((_SRC / _MATURATION_REL).read_text())
     parent = _parent_map(tree)
@@ -9129,7 +9079,6 @@ _P0C_T1C_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T1A_REASON)
 def test_p0c_bootstrap_injects_app_lifetime_coordinator() -> None:
     if not _bootstrap_injects_coordinator(_parse_src("api/bootstrap.py")):
         raise DefectStillPresent(
@@ -9139,7 +9088,6 @@ def test_p0c_bootstrap_injects_app_lifetime_coordinator() -> None:
         )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T1B_REASON)
 def test_p0c_worker_builds_coordinator_and_wires_reconcile() -> None:
     has_coord, has_reconcile = _worker_builds_coordinator_and_reconcile(
         _parse_src("lifecycle/runner.py")
@@ -9156,7 +9104,6 @@ def test_p0c_worker_builds_coordinator_and_wires_reconcile() -> None:
         )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T1C_REASON)
 def test_p0c_reconcile_is_worker_only() -> None:
     worker, api = _reconcile_worker_only()
     if not (worker and not api):
@@ -9273,7 +9220,6 @@ _P0C_T2_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T2_REASON)
 def test_p0c_worker_healthcheck_consumes_readiness_signal() -> None:
     template = (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
     test_cmd = _worker_healthcheck_test(template)
@@ -9316,7 +9262,7 @@ def test_p0c_readiness_probe_rule_discriminates() -> None:
     real = _worker_healthcheck_test(
         (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
     )
-    assert not _healthcheck_consumes_readiness(real)
+    assert _healthcheck_consumes_readiness(real)
 
 
 # ---- TASK 3: concurrent shared-file test (§D — WAL + busy_timeout + cross-process schema init) ----- #
@@ -9505,6 +9451,9 @@ _P0C_T4_REASON = (
                 "lifecycle_reconcile_interval_s",
                 "lifecycle_backoff_base_s",
                 "lifecycle_backoff_max_s",
+                "lifecycle_cleanup_retention_s",
+                "lifecycle_cleanup_batch",
+                "lifecycle_readiness_max_reconcile_failures",
             )
             else (
                 pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T4_REASON),
@@ -9542,7 +9491,6 @@ _P0C_T4PATH_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T4PATH_REASON)
 def test_p0c_api_and_worker_resolve_same_active_storage_path() -> None:
     api, worker = _p0c_same_active_storage_path()
     if api is None or worker is None or api != worker:

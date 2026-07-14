@@ -9,11 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from qdrant_client import QdrantClient, models
 
 from musubi.api.auth import authorize_namespace, require_auth
-from musubi.api.dependencies import get_episodic_plane, get_qdrant_client, get_settings_dep
+from musubi.api.dependencies import (
+    get_episodic_plane,
+    get_lifecycle_service,
+    get_qdrant_client,
+    get_settings_dep,
+)
 from musubi.api.errors import APIError
 from musubi.api.idempotency_dependency import IdempotentContext, make_idempotency_dependency
+from musubi.api.lifecycle_responses import TransitionPendingBody, pending_response
 from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
 from musubi.api.write_auth import AuthorizedWrite
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, is_transition_pending
 from musubi.lifecycle.transitions import transition
 from musubi.planes.episodic import EpisodicPlane
 from musubi.retrieve.context_pack import VALID_KINDS, VALID_STALENESS
@@ -440,6 +447,7 @@ async def patch_episodic(
     "/{object_id}",
     operation_id="delete_episodic.bucket=default",
     dependencies=[Depends(require_auth(access="w"))],
+    responses={202: {"model": TransitionPendingBody, "description": "Transition durably pending."}},
 )
 async def delete_episodic(
     request: Request,
@@ -448,6 +456,7 @@ async def delete_episodic(
     hard: bool = Query(False),
     qdrant: QdrantClient = Depends(get_qdrant_client),
     plane: EpisodicPlane = Depends(get_episodic_plane),
+    coordinator: LifecycleTransitionCoordinator = Depends(get_lifecycle_service),
 ) -> Response:
     """Soft-delete by default (state → archived via the canonical
     ``transition()`` primitive). ``?hard=true`` requires operator
@@ -508,6 +517,7 @@ async def delete_episodic(
         )
     result = transition(
         qdrant,
+        coordinator=coordinator,
         object_id=object_id,
         target_state="archived",
         actor="api-delete",
@@ -519,6 +529,8 @@ async def delete_episodic(
             code="BAD_REQUEST",
             detail=f"delete transition rejected: {result.error.message}",
         )
+    if is_transition_pending(result.value):
+        return pending_response(result.value)
     return Response(
         status_code=200, content=b'{"status":"archived"}', media_type="application/json"
     )

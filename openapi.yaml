@@ -209,6 +209,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -375,6 +381,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -1209,6 +1221,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -1321,6 +1339,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransitionResponseBody'
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -3305,6 +3329,28 @@ components:
       - object_id
       - state
       title: ThoughtSendResponse
+    TransitionPendingBody:
+      properties:
+        status:
+          type: string
+          const: pending
+          title: Status
+          default: pending
+        operation_key:
+          type: string
+          minLength: 1
+          title: Operation Key
+        event_id:
+          type: string
+          minLength: 1
+          title: Event Id
+      additionalProperties: false
+      type: object
+      required:
+      - operation_key
+      - event_id
+      title: TransitionPendingBody
+      description: A transition accepted for reconciler completion, never fabricated as final.
     TransitionRequest:
       properties:
         object_id:

@@ -44,7 +44,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from pydantic import ValidationError
 from qdrant_client import models
@@ -107,6 +107,9 @@ class TransitionIntent:
     updated_at: str = _FIXED_UPDATED_AT
     updated_epoch: float = _FIXED_UPDATED_EPOCH
     superseded_by: str | None = None
+    supersedes: tuple[str, ...] = ()
+    merged_from: tuple[str, ...] = ()
+    contradicts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -116,6 +119,17 @@ class TransitionPending:
     operation_key: str
     event_id: str
     kind: str = "pending"
+
+
+def is_transition_pending(value: object) -> TypeGuard[TransitionPending]:
+    """Recognize the public Pending variant by its stable discriminator and identifiers."""
+    return isinstance(value, TransitionPending) or (
+        getattr(value, "kind", None) == "pending"
+        and isinstance(getattr(value, "operation_key", None), str)
+        and bool(getattr(value, "operation_key", ""))
+        and isinstance(getattr(value, "event_id", None), str)
+        and bool(getattr(value, "event_id", ""))
+    )
 
 
 @dataclass(frozen=True)
@@ -230,6 +244,12 @@ def _intended_patch(intent: TransitionIntent) -> dict[str, object]:
     }
     if intent.superseded_by is not None:
         patch["superseded_by"] = intent.superseded_by
+    if intent.supersedes:
+        patch["supersedes"] = list(intent.supersedes)
+    if intent.merged_from:
+        patch["merged_from"] = list(intent.merged_from)
+    if intent.contradicts:
+        patch["contradicts"] = list(intent.contradicts)
     return patch
 
 
@@ -280,6 +300,7 @@ class LifecycleTransitionCoordinator:
         lease_ttl: float = DEFAULT_LEASE_TTL,
         backoff_base_s: float = DEFAULT_BACKOFF_BASE,
         backoff_max_s: float = DEFAULT_BACKOFF_MAX,
+        busy_timeout_ms: int = store.DEFAULT_BUSY_TIMEOUT_MS,
     ) -> None:
         self._pending_cap = _validate_pending_cap(pending_cap)
         self._lease_ttl = _validate_lease_ttl(lease_ttl)
@@ -289,6 +310,15 @@ class LifecycleTransitionCoordinator:
             raise ValueError(
                 f"backoff_max_s ({self._backoff_max}) must be >= backoff_base_s ({self._backoff_base})"
             )
+        if (
+            isinstance(busy_timeout_ms, bool)
+            or not isinstance(busy_timeout_ms, int)
+            or busy_timeout_ms < 0
+        ):
+            raise ValueError(
+                f"busy_timeout_ms must be a non-negative int (not bool), got {busy_timeout_ms!r}"
+            )
+        self._busy_timeout_ms = busy_timeout_ms
         self._client = client
         self._db = Path(db_path)
         # S6 rollback barrier: one stable inode beside the lifecycle DB. Every transition and
@@ -298,7 +328,7 @@ class LifecycleTransitionCoordinator:
         #: Private fault-injection seam (default no-op); tests set it to raise/crash at
         #: a named boundary. Not a public switch.
         self._checkpoint: Callable[[str], None] = lambda _name: None
-        conn = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        conn = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             store.ensure_schema(conn)
         finally:
@@ -306,7 +336,7 @@ class LifecycleTransitionCoordinator:
 
     def _maintenance_active(self) -> bool:
         """Read the durable cross-process maintenance flag."""
-        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             row = con.execute(
                 "SELECT maintenance_active FROM lifecycle_control WHERE id=1"
@@ -315,11 +345,21 @@ class LifecycleTransitionCoordinator:
         finally:
             con.close()
 
+    def readiness_check(self) -> bool:
+        """Prove shared storage/schema is open and reconciliation may participate."""
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
+        try:
+            store.ensure_schema(con)
+            row = con.execute(
+                "SELECT maintenance_active FROM lifecycle_control WHERE id=1"
+            ).fetchone()
+            return row is not None and not bool(row[0])
+        finally:
+            con.close()
+
     def _set_maintenance(self, active: bool, *, bump_generation: bool) -> int:
         """Durably set maintenance state and return its current generation."""
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
             if bump_generation:
@@ -377,7 +417,7 @@ class LifecycleTransitionCoordinator:
         """Count PENDING/APPLIED rows, optionally inside a caller's write transaction."""
         owned = con is None
         if con is None:
-            con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+            con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             row = con.execute(
                 "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED')"
@@ -400,7 +440,7 @@ class LifecycleTransitionCoordinator:
             fcntl.flock(fd, fcntl.LOCK_EX)
             self._checkpoint("ex_acquired")
             con = store.connect(
-                self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+                self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None
             )
             try:
                 con.execute("BEGIN IMMEDIATE")
@@ -436,7 +476,7 @@ class LifecycleTransitionCoordinator:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
             con = store.connect(
-                self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+                self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None
             )
             try:
                 con.execute("BEGIN IMMEDIATE")
@@ -459,7 +499,7 @@ class LifecycleTransitionCoordinator:
 
     def backfill_terminal_epoch(self) -> int:
         """Backfill known terminal ages from persisted patch JSON; preserve unknown ages as NULL."""
-        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         updated = 0
         try:
             rows = con.execute(
@@ -507,9 +547,7 @@ class LifecycleTransitionCoordinator:
             "(SELECT operation_key FROM sel) AND state IN ('FINAL','ABANDONED') AND "
             "terminal_epoch IS NOT NULL AND terminal_epoch < :cutoff RETURNING operation_key"
         )
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
             deleted = len(
@@ -673,6 +711,10 @@ class LifecycleTransitionCoordinator:
             "target_state": intent.target_state,
             "actor": intent.actor,
             "reason": intent.reason,
+            "superseded_by": intent.superseded_by,
+            "supersedes": list(intent.supersedes),
+            "merged_from": list(intent.merged_from),
+            "contradicts": list(intent.contradicts),
         }
         canon = json.dumps(fields, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canon.encode()).hexdigest()
@@ -716,9 +758,7 @@ class LifecycleTransitionCoordinator:
             "expected_version,namespace,actor,reason,patch_sha,patch_json,intent_digest,state,"
             "event_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
         )
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
             try:
@@ -751,7 +791,7 @@ class LifecycleTransitionCoordinator:
 
     def _row_for_key(self, opk: str) -> tuple[str, str, str] | None:
         """``(state, event_id, intent_digest)`` for an existing outbox row, or ``None``."""
-        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             row = con.execute(
                 "SELECT state, event_id, intent_digest FROM lifecycle_outbox WHERE operation_key=?",
@@ -833,6 +873,11 @@ class LifecycleTransitionCoordinator:
         if not isinstance(from_state, str):
             raise _TerminalValidation(f"object {intent.object_id} has no readable lifecycle state")
         try:
+            lineage_changes = {
+                key: value
+                for key, value in _intended_patch(intent).items()
+                if key in {"superseded_by", "supersedes", "merged_from", "contradicts"}
+            }
             # model_validate over a dict: the object_type/from_state/to_state come from runtime
             # data (mapping + readback + intent) as plain strings; pydantic validates them against
             # the ObjectType/LifecycleState literals at runtime and the legal-transition rule.
@@ -846,15 +891,14 @@ class LifecycleTransitionCoordinator:
                     "to_state": intent.target_state,
                     "actor": intent.actor,
                     "reason": intent.reason,
+                    "lineage_changes": lineage_changes,
                 }
             )
         except (ValidationError, ValueError) as exc:
             # illegal transition / invalid field — a pre-mutation invariant failure -> terminal.
             raise _TerminalValidation(str(exc)) from exc
         payload_json = event.model_dump_json()
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             cur = con.execute(
                 "UPDATE lifecycle_outbox SET event_payload=? "
@@ -876,7 +920,7 @@ class LifecycleTransitionCoordinator:
     def _namespace_for(self, opk: str) -> str:
         """The object's namespace from the admission-truth outbox column (Option A), so a fenced
         reapply resolves namespace WITHOUT a live intent (S4 reconcile / white-box callers)."""
-        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             row = con.execute(
                 "SELECT namespace FROM lifecycle_outbox WHERE operation_key=?", (opk,)
@@ -962,9 +1006,7 @@ class LifecycleTransitionCoordinator:
         hide a mismatch. When ``owner`` is given (S4 reconcile), the APPLIED move is owner-guarded so
         only the current lease holder advances the row."""
         guard, gparams = self._owner_guard(owner)
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
             try:
@@ -1026,9 +1068,7 @@ class LifecycleTransitionCoordinator:
         (namespace/actor/reason/from_state) is authoritative."""
         guard, gparams = self._owner_guard(owner)
         release = ", lease_owner=NULL, lease_expires_epoch=NULL" if owner is not None else ""
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
             try:
@@ -1101,9 +1141,7 @@ class LifecycleTransitionCoordinator:
 
     def _mark_terminal(self, opk: str) -> None:
         """Move a non-terminal row to ABANDONED, stamping ``terminal_epoch`` atomically."""
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute(
                 "UPDATE lifecycle_outbox SET state='ABANDONED', terminal_epoch=? "
@@ -1170,7 +1208,7 @@ class LifecycleTransitionCoordinator:
         """R19 (S5): set the UNLABELED pending-depth gauge to the current non-terminal
         (PENDING/APPLIED) outbox depth — a bounded cap-backstop signal emitted once per reconcile
         pass. No identifier ever enters the gauge."""
-        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             depth = con.execute(
                 "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED')"
@@ -1221,9 +1259,7 @@ class LifecycleTransitionCoordinator:
         A durably classified ``unknown`` is rescheduled forever, never abandoned by count."""
         now = self._now()
         guard, gparams = self._owner_guard(owner)
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             row = con.execute(
                 "SELECT attempts FROM lifecycle_outbox WHERE operation_key=?", (opk,)
@@ -1278,9 +1314,7 @@ class LifecycleTransitionCoordinator:
             vals.append(self._now())
         if release:
             sets += ", lease_owner=NULL, lease_expires_epoch=NULL"
-        con = store.connect(
-            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
-        )
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute(
                 f"UPDATE lifecycle_outbox SET {sets} WHERE operation_key=?{guard}",
@@ -1291,7 +1325,7 @@ class LifecycleTransitionCoordinator:
             con.close()
 
     def _has_event_payload(self, opk: str) -> bool:
-        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             row = con.execute(
                 "SELECT event_payload FROM lifecycle_outbox WHERE operation_key=?", (opk,)
@@ -1324,7 +1358,7 @@ class LifecycleTransitionCoordinator:
           terminal/pending disposition; every post-claim write is owner-guarded."""
         self._checkpoint("reconcile_entered")
         now = self._now()
-        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             rows = con.execute(
                 "SELECT operation_key,object_id,collection,target_state,expected_version,namespace,"
@@ -1342,7 +1376,7 @@ class LifecycleTransitionCoordinator:
                 "before_claim"
             )  # two-process claim-race barrier (both reach the claim)
             cc = store.connect(
-                self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+                self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None
             )
             try:
                 got = self._claim(cc, opk, now, token)

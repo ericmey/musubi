@@ -35,6 +35,7 @@ with warnings.catch_warnings():
     from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import (
     Job,
@@ -103,6 +104,10 @@ def sink(events_db: Path) -> Iterator[LifecycleEventSink]:
         s.close()
 
 
+def _coordinator(qdrant: QdrantClient, sink: LifecycleEventSink) -> LifecycleTransitionCoordinator:
+    return LifecycleTransitionCoordinator(client=qdrant, db_path=sink._db_path)
+
+
 async def _seed_matured(plane: EpisodicPlane, ns: str, content: str = "seeded") -> EpisodicMemory:
     """Helper: create + mature an episodic so it is eligible for demote/supersede."""
     saved = await plane.create(EpisodicMemory(namespace=ns, content=content))
@@ -131,6 +136,7 @@ async def test_valid_transition_succeeds_and_emits_event(
     saved = await plane.create(EpisodicMemory(namespace=ns, content="valid-transition"))
     result = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
         target_state="matured",
         actor="test-suite",
@@ -139,6 +145,7 @@ async def test_valid_transition_succeeds_and_emits_event(
     )
     assert isinstance(result, Ok), result
     tr = result.value
+    assert isinstance(tr, TransitionResult)
     assert tr.from_state == "provisional"
     assert tr.to_state == "matured"
     assert isinstance(tr.event, LifecycleEvent)
@@ -160,6 +167,7 @@ async def test_invalid_transition_returns_typed_error(
     saved = await plane.create(EpisodicMemory(namespace=ns, content="illegal-hop"))
     result = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
         target_state="demoted",
         actor="test-suite",
@@ -190,6 +198,7 @@ async def test_transition_bumps_version_and_updated_epoch(
     assert before_epoch is not None
     result = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
         target_state="matured",
         actor="t",
@@ -197,6 +206,7 @@ async def test_transition_bumps_version_and_updated_epoch(
         sink=sink,
     )
     assert isinstance(result, Ok)
+    assert isinstance(result.value, TransitionResult)
     assert result.value.version == before_version + 1
     fetched = await plane.get(namespace=ns, object_id=saved.object_id)
     assert fetched is not None
@@ -216,6 +226,7 @@ async def test_transition_preserves_lineage_through_supersession(
     new = await _seed_matured(plane, ns, content="new-version")
     result = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=old.object_id,
         target_state="superseded",
         actor="rewrite",
@@ -224,6 +235,7 @@ async def test_transition_preserves_lineage_through_supersession(
         sink=sink,
     )
     assert isinstance(result, Ok), result
+    assert isinstance(result.value, TransitionResult)
     refreshed = await plane.get(namespace=ns, object_id=old.object_id)
     assert refreshed is not None
     assert refreshed.state == "superseded"
@@ -244,6 +256,7 @@ async def test_circular_supersession_rejected(
     # A superseded by B — legal.
     ok_first = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=a.object_id,
         target_state="superseded",
         actor="t",
@@ -255,6 +268,7 @@ async def test_circular_supersession_rejected(
     # Now try B superseded by A — forms a cycle, must be rejected.
     cycle = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=b.object_id,
         target_state="superseded",
         actor="t",
@@ -276,6 +290,7 @@ async def test_demotion_requires_reason(
     matured = await _seed_matured(plane, ns, content="demote-me")
     result = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=matured.object_id,
         target_state="demoted",
         actor="t",
@@ -338,6 +353,7 @@ async def test_event_written_for_every_transition(
     for target in ("matured", "demoted", "matured"):
         result = transition(
             qdrant,
+            coordinator=_coordinator(qdrant, sink),
             object_id=saved.object_id,
             target_state=target,
             actor="t",
@@ -367,6 +383,7 @@ async def test_concurrent_transitions_last_writer_wins_with_logged_warning(
     # version bumped by the first and log a concurrent-modification warning.
     first = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
         target_state="demoted",
         actor="worker-a",
@@ -376,6 +393,7 @@ async def test_concurrent_transitions_last_writer_wins_with_logged_warning(
     )
     second = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
         target_state="superseded",
         actor="worker-b",
@@ -408,6 +426,7 @@ async def test_event_batch_flushed_within_5s_under_load(
         started = time.monotonic()
         result = transition(
             qdrant,
+            coordinator=_coordinator(qdrant, short_sink),
             object_id=seeded.object_id,
             target_state="demoted",
             actor="t",
@@ -441,6 +460,7 @@ async def test_sqlite_event_db_survives_worker_restart(
     try:
         result = transition(
             qdrant,
+            coordinator=_coordinator(qdrant, first),
             object_id=seeded.object_id,
             target_state="demoted",
             actor="worker-1",
@@ -766,6 +786,7 @@ async def test_lifecycle_events_batched_and_flushed(
             saved = await plane.create(EpisodicMemory(namespace=ns, content=f"batch-{i}-unique"))
             result = transition(
                 qdrant,
+                coordinator=_coordinator(qdrant, batch_sink),
                 object_id=saved.object_id,
                 target_state="matured",
                 actor="t",
@@ -797,6 +818,7 @@ async def test_events_survive_worker_restart(
     try:
         result = transition(
             qdrant,
+            coordinator=_coordinator(qdrant, s1),
             object_id=seeded.object_id,
             target_state="demoted",
             actor="worker-1",
@@ -1011,10 +1033,13 @@ def test_lineage_updates_serialises_all_fields() -> None:
     assert LineageUpdates().to_event_changes() == {}
 
 
-def test_transition_not_found_returns_typed_error(qdrant: QdrantClient) -> None:
+def test_transition_not_found_returns_typed_error(qdrant: QdrantClient, tmp_path: Path) -> None:
     """Missing object_id yields code='not_found' without mutating any plane."""
     result = transition(
         qdrant,
+        coordinator=LifecycleTransitionCoordinator(
+            client=qdrant, db_path=tmp_path / "not-found.db"
+        ),
         object_id="z" * 27,
         target_state="matured",
         actor="t",
@@ -1068,11 +1093,19 @@ async def test_transition_records_supersession_lineage(
     b = await plane.create(EpisodicMemory(namespace=ns, content="b"))
     # Transition a to matured first so superseded is a legal next state.
     assert isinstance(
-        transition(qdrant, object_id=a.object_id, target_state="matured", actor="t", reason="warm"),
+        transition(
+            qdrant,
+            coordinator=_coordinator(qdrant, sink),
+            object_id=a.object_id,
+            target_state="matured",
+            actor="t",
+            reason="warm",
+        ),
         Ok,
     )
     r = transition(
         qdrant,
+        coordinator=_coordinator(qdrant, sink),
         object_id=a.object_id,
         target_state="superseded",
         actor="t",
@@ -1081,4 +1114,5 @@ async def test_transition_records_supersession_lineage(
         sink=sink,
     )
     assert isinstance(r, Ok)
+    assert isinstance(r.value, TransitionResult)
     assert r.value.event.lineage_changes["superseded_by"] == b.object_id
