@@ -91,13 +91,14 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from types import SimpleNamespace
+from typing import Any, Literal, cast
 
 import jwt
 import pytest
 import yaml
 from fastapi.testclient import TestClient
-from pydantic import AnyHttpUrl, SecretStr
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, SecretStr, ValidationError, field_validator
 from qdrant_client import QdrantClient, models
 
 from musubi.api.app import create_app
@@ -7674,16 +7675,29 @@ def _drive_route(
     raise AssertionError(f"unknown route {route!r}")
 
 
+#: Fields that belong to a Final (applied) outcome ONLY. A Pending 202 body carrying any of these is
+#: fabricating a success payload the coordinator does not have yet (Yua ruling 3). The route must NOT
+#: widen the Final shape onto a Pending.
+_FINAL_ONLY_BODY_FIELDS = ("object_id", "from_state", "to_state", "version")
+
+
 def _pending_response_ok(status: int, body: Any) -> bool:
-    """The acceptance check for the Pending->202 contract: HTTP 202 + a typed body carrying at least
-    ``status="pending"`` and BOTH identifiers, with no fabricated success fields required."""
-    return (
-        status == 202
-        and isinstance(body, dict)
-        and body.get("status") == "pending"
-        and "operation_key" in body
-        and "event_id" in body
-    )
+    """The acceptance check for the Pending->202 contract (Yua ruling 3 — corrected): HTTP 202 + a typed
+    body with ``status="pending"`` AND both identifiers present as NON-EMPTY ``str`` values, AND carrying
+    NONE of the Final-only fields (no fabricated applied payload). Presence of an id key alone is not
+    enough — a route that emits ``operation_key=None``/``""`` or a Final field has not honored the
+    contract."""
+    if status != 202 or not isinstance(body, dict):
+        return False
+    if body.get("status") != "pending":
+        return False
+    opk = body.get("operation_key")
+    ev = body.get("event_id")
+    if not (isinstance(opk, str) and opk != ""):
+        return False
+    if not (isinstance(ev, str) and ev != ""):
+        return False
+    return not any(field in body for field in _FINAL_ONLY_BODY_FIELDS)
 
 
 # ---- TASK 1 reds: one strict-xfail per REAL transition route (Pending -> 202 typed body) ----------- #
@@ -7800,8 +7814,9 @@ def _correct_route_map(kind: str) -> tuple[int, dict[str, Any]]:
 
 def test_r21_route_pending_check_discriminates_each_failure_mode() -> None:
     """GREEN mechanism proof (unmarked): the ``_pending_response_ok`` acceptance check passes the correct
-    (202 + status=pending + both ids) shape and independently REJECTS each wrong shape — wrong-status,
-    pending-as-final, pending-as-error, and a dropped identifier (operation_key OR event_id)."""
+    (202 + status=pending + both NON-EMPTY str ids + no Final fields) shape and independently REJECTS each
+    wrong shape — wrong-status, pending-as-final, pending-as-error, a dropped identifier, an id that is
+    None/empty/wrong-type (Yua ruling 3), and a 202 body that fabricates a Final field."""
     # the correct Pending mapping passes
     assert _pending_response_ok(*_correct_route_map("pending"))
     # wrong-status: right body, wrong code
@@ -7818,6 +7833,119 @@ def test_r21_route_pending_check_discriminates_each_failure_mode() -> None:
     # dropped-identifier: 202 + status=pending but one id missing
     assert not _pending_response_ok(202, {"status": "pending", "event_id": _R21_EVENT_ID})
     assert not _pending_response_ok(202, {"status": "pending", "operation_key": _R21_OPK})
+    # id present but None / empty / wrong-type — presence is not enough (Yua ruling 3)
+    assert not _pending_response_ok(
+        202, {"status": "pending", "operation_key": None, "event_id": _R21_EVENT_ID}
+    )
+    assert not _pending_response_ok(
+        202, {"status": "pending", "operation_key": "", "event_id": _R21_EVENT_ID}
+    )
+    assert not _pending_response_ok(
+        202, {"status": "pending", "operation_key": 123, "event_id": _R21_EVENT_ID}
+    )
+    assert not _pending_response_ok(
+        202, {"status": "pending", "operation_key": _R21_OPK, "event_id": None}
+    )
+    assert not _pending_response_ok(
+        202, {"status": "pending", "operation_key": _R21_OPK, "event_id": ""}
+    )
+    # a 202 pending body that fabricates a Final-only field (each rejected independently)
+    for _final_field in _FINAL_ONLY_BODY_FIELDS:
+        assert not _pending_response_ok(
+            202,
+            {
+                "status": "pending",
+                "operation_key": _R21_OPK,
+                "event_id": _R21_EVENT_ID,
+                _final_field: "fabricated",
+            },
+        ), f"a Pending 202 body carrying the Final-only field {_final_field!r} must be rejected"
+
+
+# ---- TASK 1 (Yua ruling 4): a REAL typed Pending body schema + a per-route red validating against it -- #
+
+
+class _PendingBodySchema(BaseModel):
+    """The typed Pending HTTP body the four transition routes must return on ``Ok(Pending)`` (Yua ruling
+    4). ``extra="forbid"`` rejects any fabricated Final field (``object_id``/``from_state``/``to_state``/
+    ``version``) or any other widening; the validator rejects empty identifiers. This is the schema the
+    source's Pydantic response model must be assignable to WITHOUT widening the existing Final/Err shapes."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["pending"]
+    operation_key: str
+    event_id: str
+
+    @field_validator("operation_key", "event_id")
+    @classmethod
+    def _non_empty(cls, value: str) -> str:
+        if not value:
+            raise ValueError("identifier must be a non-empty string")
+        return value
+
+
+def _pending_body_validates(status: int, body: Any) -> bool:
+    """True iff ``body`` is a 202 payload that VALIDATES against the typed Pending schema (extra=forbid,
+    non-empty ids). Never raises — a ValidationError (missing/empty/extra-Final/wrong-status) or a
+    non-dict body simply fails the check, so the red raises a DEDICATED DefectStillPresent, not a leaked
+    ValidationError."""
+    if status != 202 or not isinstance(body, dict):
+        return False
+    try:
+        _PendingBodySchema.model_validate(body)
+    except ValidationError:
+        return False
+    return True
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="no transition route DECLARES/RETURNS a typed Pending variant (Yua ruling 4): writes_lifecycle "
+    "reads Final attributes off any Ok -> 500 on Pending; the archive/curated/episodic soft paths map any "
+    "Ok to a hardcoded 200 'archived' body. None returns a 202 body that validates against the typed "
+    "Pending schema (status=pending + non-empty operation_key/event_id, no Final fields). Flips XPASS when "
+    "S7 wires the typed 202 Pending response model at all four routes without widening the Final/Err shape.",
+)
+@pytest.mark.parametrize("route", ["lifecycle", "artifact", "curated", "episodic"])
+def test_r21_route_pending_body_matches_typed_schema(
+    route: str, route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status, body = _drive_route(route_env, monkeypatch, route, _pending_outcome())
+    if not _pending_body_validates(status, body):
+        raise DefectStillPresent(
+            f"route {route} does not return a 202 body validating against the typed Pending schema "
+            f"(status=pending + non-empty str operation_key/event_id + no Final fields); got {status}/{body!r}"
+        )
+
+
+def test_r21_pending_body_schema_discriminates() -> None:
+    """GREEN mechanism proof (unmarked): the typed Pending schema ACCEPTS the correct pending body and
+    REJECTS each wrong dict independently — a missing field, an empty-string id, an extra Final field
+    (``extra='forbid'``), and a wrong ``status`` literal."""
+    correct = {"status": "pending", "operation_key": _R21_OPK, "event_id": _R21_EVENT_ID}
+    assert _PendingBodySchema.model_validate(correct).status == "pending"
+    assert _pending_body_validates(202, correct)
+    # a 200 (right body, wrong status code) is not a valid Pending response
+    assert not _pending_body_validates(200, correct)
+    # missing event_id
+    with pytest.raises(ValidationError):
+        _PendingBodySchema.model_validate({"status": "pending", "operation_key": _R21_OPK})
+    # empty-string identifier
+    with pytest.raises(ValidationError):
+        _PendingBodySchema.model_validate(
+            {"status": "pending", "operation_key": "", "event_id": _R21_EVENT_ID}
+        )
+    # extra Final field rejected by extra="forbid"
+    for _final_field in _FINAL_ONLY_BODY_FIELDS:
+        with pytest.raises(ValidationError):
+            _PendingBodySchema.model_validate({**correct, _final_field: "fabricated"})
+    # wrong status literal
+    with pytest.raises(ValidationError):
+        _PendingBodySchema.model_validate(
+            {"status": "final", "operation_key": _R21_OPK, "event_id": _R21_EVENT_ID}
+        )
 
 
 # ============================================================================
@@ -7985,13 +8113,61 @@ def _mat_env(tmp_path: Path) -> tuple[QdrantClient, LifecycleEventSink, Maturati
     return qc, sink, cursor
 
 
-def _assert_pending_not_counted(report: Any, sweep: str) -> None:
-    """DEDICATED red assertion: a Pending forward transition must be DEFERRED, not counted as a completed
-    transition. Raised today because the callsite does isinstance(result, Ok) -> transitioned++."""
-    if report.transitioned != 0:
+def _deferred_entry_ids_ok(entry: Any) -> bool:
+    """Normalize ONE ``report.deferred`` entry defensively — a mapping (``.get``), a 2-tuple/list, or an
+    object (``getattr``) — and return True iff it carries a NON-EMPTY ``operation_key`` AND ``event_id``
+    (str). Never raises on an unexpected shape (returns False), so the red stays a DEDICATED
+    DefectStillPresent rather than leaking an AttributeError."""
+    if isinstance(entry, Mapping):
+        opk, ev = entry.get("operation_key"), entry.get("event_id")
+    elif isinstance(entry, tuple | list) and len(entry) >= 2:
+        opk, ev = entry[0], entry[1]
+    else:
+        opk, ev = getattr(entry, "operation_key", None), getattr(entry, "event_id", None)
+    return isinstance(opk, str) and opk != "" and isinstance(ev, str) and ev != ""
+
+
+def _assert_pending_deferred(
+    report: Any, spy: "_TransitionSpy", sweep: str, *, forward_calls: int = 1
+) -> None:
+    """DEDICATED red assertion covering the FULL internal-DEFERRED contract (docs §A, Yua ruling 1) for a
+    single seeded Pending forward transition. Raises a ``DefectStillPresent`` naming WHICH sub-condition
+    failed unless ALL hold:
+
+    (c) EXACTLY ``forward_calls`` transition call happened for the row — no immediate direct retry and no
+        post-transition dependent work (e.g. the supersession back-link) on a Pending forward;
+    (b) ``report.transitioned == 0`` — a deferral is NOT counted as a completed transition;
+    (a) ``getattr(report, "deferred", [])`` retains one PII-free entry with a NON-EMPTY ``operation_key``
+        AND ``event_id`` for the reconciler.
+
+    ``report.deferred`` is read via ``getattr`` (absent field -> ``[]``, never an AttributeError). Order is
+    (c)->(b)->(a) so each of today's six reds fails at the sub-condition its decorator names."""
+    # (c) exactly one transition call — no immediate retry, no dependent back-link on a Pending forward
+    n_calls = len(getattr(spy, "calls", []))
+    if n_calls != forward_calls:
         raise DefectStillPresent(
-            f"{sweep} counts a Pending forward transition as a completed transition "
-            f"(expected DEFERRED, transitioned==0); got transitioned={report.transitioned}"
+            f"{sweep}: a Pending forward transition triggered {n_calls} transition call(s), expected "
+            f"exactly {forward_calls} — an immediate retry or post-transition dependent work (e.g. the "
+            f"supersession back-link) ran on a Pending forward instead of deferring it to the reconciler"
+        )
+    # (b) not counted as a completed transition
+    transitioned = getattr(report, "transitioned", -1)
+    if transitioned != 0:
+        raise DefectStillPresent(
+            f"{sweep}: counts a Pending forward transition as a completed transition "
+            f"(expected DEFERRED, transitioned==0); got transitioned={transitioned}"
+        )
+    # (a) retained in observable deferred accounting with non-empty ids
+    deferred = getattr(report, "deferred", [])
+    if not (isinstance(deferred, list | tuple) and len(deferred) >= 1):
+        raise DefectStillPresent(
+            f"{sweep}: a Pending forward transition is not retained in report.deferred "
+            f"(expected one PII-free entry with operation_key + event_id for the reconciler); got {deferred!r}"
+        )
+    if not any(_deferred_entry_ids_ok(entry) for entry in deferred):
+        raise DefectStillPresent(
+            f"{sweep}: report.deferred has no entry carrying a NON-EMPTY operation_key AND event_id "
+            f"(the ids the reconciler needs to finalize the deferred transition); got {deferred!r}"
         )
 
 
@@ -8002,8 +8178,10 @@ def _assert_pending_not_counted(report: Any, sweep: str) -> None:
     raises=DefectStillPresent,
     strict=True,
     reason="episodic_maturation_sweep forward callsite (maturation.py:458) does isinstance(result, Ok) "
-    "-> transitioned++, so an Ok(Pending) is counted as a completed maturation instead of DEFERRED "
-    "(not counted, ids retained for the reconciler). Flips XPASS when the callsite gains a Pending arm.",
+    "-> transitioned++, so an Ok(Pending) is counted as a completed maturation instead of DEFERRED. The "
+    "red asserts the FULL contract (exactly one transition call AND transitioned==0 AND report.deferred "
+    "retains the operation_key+event_id); today it fails at transitioned==0. Flips XPASS when the callsite "
+    "gains a Pending arm that defers (not counted, no dependent work, ids retained for the reconciler).",
 )
 async def test_r21_maturation_episodic_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -8013,13 +8191,12 @@ async def test_r21_maturation_episodic_defers_pending(
         plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
         ns = "eric/claude-code/episodic"
         await _seed_provisional_episodic(plane, qc, ns, "plain provisional row", age_seconds=7200)
-        monkeypatch.setattr(
-            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
-        )
+        spy = _TransitionSpy(_pending_outcome())
+        monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await episodic_maturation_sweep(
             client=qc, sink=sink, ollama=_FakeOllama(), cursor=cursor, config=_mat_config()
         )
-        _assert_pending_not_counted(report, "episodic_maturation_sweep")
+        _assert_pending_deferred(report, spy, "episodic_maturation_sweep")
     finally:
         sink.close()
         qc.close()
@@ -8031,7 +8208,8 @@ async def test_r21_maturation_episodic_defers_pending(
     reason="episodic_maturation_sweep runs the supersession back-link (maturation.py:479) whenever the "
     "forward result isinstance Ok — so on an Ok(Pending) forward transition it runs post-transition "
     "dependent work (a SECOND transition on the predecessor) that must be deferred until the forward "
-    "finalizes. Flips XPASS when the forward Pending arm skips the back-link.",
+    "finalizes. The red asserts the FULL contract (forward_calls==1); today it fails at the call-count "
+    "sub-condition (two transition calls). Flips XPASS when the forward Pending arm skips the back-link.",
 )
 async def test_r21_maturation_supersession_backlink_not_run_on_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -8048,14 +8226,14 @@ async def test_r21_maturation_supersession_backlink_not_run_on_pending(
         )
         spy = _TransitionSpy(_pending_outcome())
         monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
-        await episodic_maturation_sweep(
+        report = await episodic_maturation_sweep(
             client=qc, sink=sink, ollama=_FakeOllama(), cursor=cursor, config=_mat_config()
         )
-        if len(spy.calls) > 1:
-            raise DefectStillPresent(
-                "episodic_maturation_sweep runs the supersession back-link (dependent work) on a Pending "
-                f"forward transition; expected the forward call only, saw {len(spy.calls)} transition calls"
-            )
+        # forward_calls=1 pins the (d) sub-condition: the supersession back-link (a SECOND transition on
+        # the predecessor) is post-transition dependent work that must NOT fire on a Pending forward.
+        _assert_pending_deferred(
+            report, spy, "episodic_maturation_sweep supersession", forward_calls=1
+        )
     finally:
         sink.close()
         qc.close()
@@ -8065,8 +8243,9 @@ async def test_r21_maturation_supersession_backlink_not_run_on_pending(
     raises=DefectStillPresent,
     strict=True,
     reason="provisional_ttl_sweep callsite (maturation.py:571) does isinstance(result, Ok) -> "
-    "transitioned++, so an Ok(Pending) TTL archival is counted as completed instead of DEFERRED. "
-    "Flips XPASS when the callsite gains a Pending arm.",
+    "transitioned++, so an Ok(Pending) TTL archival is counted as completed instead of DEFERRED. The red "
+    "asserts the FULL contract (one call AND transitioned==0 AND report.deferred retains the ids); today "
+    "it fails at transitioned==0. Flips XPASS when the callsite gains a deferring Pending arm.",
 )
 async def test_r21_maturation_provisional_ttl_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -8076,11 +8255,10 @@ async def test_r21_maturation_provisional_ttl_defers_pending(
         plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
         ns = "eric/claude-code/episodic"
         await _seed_provisional_episodic(plane, qc, ns, "ttl row", age_seconds=8 * 86400)
-        monkeypatch.setattr(
-            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
-        )
+        spy = _TransitionSpy(_pending_outcome())
+        monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await provisional_ttl_sweep(client=qc, sink=sink, config=_mat_config())
-        _assert_pending_not_counted(report, "provisional_ttl_sweep")
+        _assert_pending_deferred(report, spy, "provisional_ttl_sweep")
     finally:
         sink.close()
         qc.close()
@@ -8090,8 +8268,9 @@ async def test_r21_maturation_provisional_ttl_defers_pending(
     raises=DefectStillPresent,
     strict=True,
     reason="episodic_demotion_sweep callsite (maturation.py:634) does isinstance(result, Ok) -> "
-    "transitioned++, so an Ok(Pending) demotion is counted as completed instead of DEFERRED. "
-    "Flips XPASS when the callsite gains a Pending arm.",
+    "transitioned++, so an Ok(Pending) demotion is counted as completed instead of DEFERRED. The red "
+    "asserts the FULL contract (one call AND transitioned==0 AND report.deferred retains the ids); today "
+    "it fails at transitioned==0. Flips XPASS when the callsite gains a deferring Pending arm.",
 )
 async def test_r21_maturation_episodic_demotion_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -8101,11 +8280,10 @@ async def test_r21_maturation_episodic_demotion_defers_pending(
         plane = EpisodicPlane(client=qc, embedder=FakeEmbedder())
         ns = "eric/claude-code/episodic"
         await _seed_matured_episodic(plane, qc, ns, "demote row", age_seconds=31 * 86400)
-        monkeypatch.setattr(
-            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
-        )
+        spy = _TransitionSpy(_pending_outcome())
+        monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await episodic_demotion_sweep(client=qc, sink=sink, config=_mat_config())
-        _assert_pending_not_counted(report, "episodic_demotion_sweep")
+        _assert_pending_deferred(report, spy, "episodic_demotion_sweep")
     finally:
         sink.close()
         qc.close()
@@ -8116,7 +8294,8 @@ async def test_r21_maturation_episodic_demotion_defers_pending(
     strict=True,
     reason="concept_maturation_sweep callsite (maturation.py:698) does isinstance(result, Ok) -> "
     "transitioned++, so an Ok(Pending) concept maturation is counted as completed instead of DEFERRED. "
-    "Flips XPASS when the callsite gains a Pending arm.",
+    "The red asserts the FULL contract (one call AND transitioned==0 AND report.deferred retains the ids); "
+    "today it fails at transitioned==0. Flips XPASS when the callsite gains a deferring Pending arm.",
 )
 async def test_r21_maturation_concept_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -8126,11 +8305,10 @@ async def test_r21_maturation_concept_defers_pending(
         plane = ConceptPlane(client=qc, embedder=FakeEmbedder())
         ns = "eric/claude-code/concept"
         await _seed_synthesized_concept(plane, qc, ns, reinforce=3, age_seconds=2 * 86400)
-        monkeypatch.setattr(
-            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
-        )
+        spy = _TransitionSpy(_pending_outcome())
+        monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await concept_maturation_sweep(client=qc, sink=sink, config=_mat_config())
-        _assert_pending_not_counted(report, "concept_maturation_sweep")
+        _assert_pending_deferred(report, spy, "concept_maturation_sweep")
     finally:
         sink.close()
         qc.close()
@@ -8140,8 +8318,9 @@ async def test_r21_maturation_concept_defers_pending(
     raises=DefectStillPresent,
     strict=True,
     reason="concept_demotion_sweep callsite (maturation.py:740) does isinstance(result, Ok) -> "
-    "transitioned++, so an Ok(Pending) concept demotion is counted as completed instead of DEFERRED. "
-    "Flips XPASS when the callsite gains a Pending arm.",
+    "transitioned++, so an Ok(Pending) concept demotion is counted as completed instead of DEFERRED. The "
+    "red asserts the FULL contract (one call AND transitioned==0 AND report.deferred retains the ids); "
+    "today it fails at transitioned==0. Flips XPASS when the callsite gains a deferring Pending arm.",
 )
 async def test_r21_maturation_concept_demotion_defers_pending(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -8151,14 +8330,76 @@ async def test_r21_maturation_concept_demotion_defers_pending(
         plane = ConceptPlane(client=qc, embedder=FakeEmbedder())
         ns = "eric/claude-code/concept"
         await _seed_matured_concept(plane, qc, ns, age_seconds=40 * 86400)
-        monkeypatch.setattr(
-            "musubi.lifecycle.maturation.transition", _TransitionSpy(_pending_outcome())
-        )
+        spy = _TransitionSpy(_pending_outcome())
+        monkeypatch.setattr("musubi.lifecycle.maturation.transition", spy)
         report = await concept_demotion_sweep(client=qc, sink=sink, config=_mat_config())
-        _assert_pending_not_counted(report, "concept_demotion_sweep")
+        _assert_pending_deferred(report, spy, "concept_demotion_sweep")
     finally:
         sink.close()
         qc.close()
+
+
+# ---- TASK 2 discriminator: the FULL-contract acceptance catches each new false candidate ------------ #
+
+
+class _OracleSweepReport:
+    """A reference SweepReport-shaped oracle (no src) carrying just the two fields the full-defer
+    acceptance reads. Used to red-proof each NEW false candidate against ``_assert_pending_deferred``."""
+
+    def __init__(self, transitioned: int, deferred: list[Any]) -> None:
+        self.transitioned = transitioned
+        self.deferred = deferred
+
+
+def _fake_spy(n_calls: int) -> _TransitionSpy:
+    """A ``_TransitionSpy`` pre-loaded with ``n_calls`` recorded calls (the call count is the observable
+    the acceptance reads for immediate-retry / dependent-work)."""
+    spy = _TransitionSpy(_pending_outcome())
+    spy.calls = [((), {}) for _ in range(n_calls)]
+    return spy
+
+
+def test_r21_full_defer_acceptance_discriminates() -> None:
+    """GREEN mechanism proof (unmarked): ``_assert_pending_deferred`` ACCEPTS the correct full-defer shape
+    (dict-entry AND object-entry, proving getattr/.get normalization) and raises a DEDICATED
+    DefectStillPresent naming the failing sub-condition for each NEW false candidate — stops-incrementing-
+    but-drops-ids, stops-but-immediately-retries, stops-but-runs-dependent-work, counts-pending-as-
+    completed, and drops-the-deferred-row entirely."""
+    entry = {"operation_key": _R21_OPK, "event_id": _R21_EVENT_ID}
+
+    # correct full-defer shape passes — dict entry (via .get)
+    _assert_pending_deferred(_OracleSweepReport(0, [entry]), _fake_spy(1), "correct-dict")
+    # correct full-defer shape passes — OBJECT entry (via getattr), proving defensive normalization
+    _assert_pending_deferred(
+        _OracleSweepReport(0, [_RefPending(operation_key=_R21_OPK, event_id=_R21_EVENT_ID)]),
+        _fake_spy(1),
+        "correct-obj",
+    )
+
+    # stops-incrementing-but-drops-ids: deferred row present, transitioned==0, one call, but event_id ""
+    with pytest.raises(DefectStillPresent, match="NON-EMPTY operation_key AND event_id"):
+        _assert_pending_deferred(
+            _OracleSweepReport(0, [{"operation_key": _R21_OPK, "event_id": ""}]),
+            _fake_spy(1),
+            "drops-ids",
+        )
+    # stops-but-immediately-retries: a SECOND transition call (retry) on the Pending forward
+    with pytest.raises(DefectStillPresent, match="expected exactly 1"):
+        _assert_pending_deferred(_OracleSweepReport(0, [entry]), _fake_spy(2), "retries")
+    # stops-but-runs-dependent-work: a SECOND transition call (the back-link) on the Pending forward
+    with pytest.raises(DefectStillPresent, match="dependent work"):
+        _assert_pending_deferred(_OracleSweepReport(0, [entry]), _fake_spy(2), "dependent-work")
+    # counts-pending-as-completed: transitioned incremented for a deferral
+    with pytest.raises(DefectStillPresent, match="completed transition"):
+        _assert_pending_deferred(_OracleSweepReport(1, [entry]), _fake_spy(1), "counts-pending")
+    # drops-the-deferred-row entirely: nothing retained for the reconciler
+    with pytest.raises(DefectStillPresent, match="not retained"):
+        _assert_pending_deferred(_OracleSweepReport(0, []), _fake_spy(1), "drops-row")
+    # a report with NO `deferred` field at all (today's SweepReport): getattr -> [] is treated as "not
+    # retained", never an AttributeError — proving the shape-normalization guard
+    no_deferred = SimpleNamespace(transitioned=0)
+    with pytest.raises(DefectStillPresent, match="not retained"):
+        _assert_pending_deferred(no_deferred, _fake_spy(1), "no-deferred-field")
 
 
 # ---- TASK 2: static callsite/branch inventory over maturation.py ----------------------------------- #
@@ -8194,12 +8435,32 @@ def _maturation_transition_callsites() -> list[tuple[str, ast.AST]]:
     return out
 
 
-def _branches_on_pending(func: ast.AST) -> bool:
-    """Heuristic (function-scoped, mirroring G2/G3's coarse AST granularity): does the enclosing sweep
-    reference a Pending/deferred discriminator anywhere — a name/attr containing 'pending'/'deferred'
-    (e.g. TransitionPending, is_pending, n_deferred) or a 'pending'/'deferred' string literal? Today no
-    sweep does; a three-way Ok(Final)/Ok(Pending)/Err handler will."""
-    for n in ast.walk(func):
+def _maturation_transition_call_nodes(
+    tree: ast.AST, parent: dict[ast.AST, ast.AST]
+) -> list[tuple[str, ast.AST, ast.Call]]:
+    """(enclosing-sweep-name, enclosing-func-node, call-node) for every bare ``transition(...)`` call."""
+    out: list[tuple[str, ast.AST, ast.Call]] = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "transition":
+            cur = parent.get(n)
+            while cur is not None and not isinstance(cur, ast.FunctionDef | ast.AsyncFunctionDef):
+                cur = parent.get(cur)
+            if cur is not None:
+                out.append((getattr(cur, "name", "<module>"), cur, n))
+    return out
+
+
+def _refs_name(node: ast.AST, name: str) -> bool:
+    """True iff ``node`` (recursively) references a simple ``Name`` equal to ``name`` — e.g. ``result`` is
+    referenced by ``result``, ``result.value``, ``isinstance(result.value, X)``."""
+    return any(isinstance(n, ast.Name) and n.id == name for n in ast.walk(node))
+
+
+def _test_is_pending_discriminator(test: ast.AST) -> bool:
+    """True iff a boolean ``test`` looks like a Pending/deferred discriminator — an
+    ``isinstance(..., TransitionPending)`` / a Name or Attribute containing 'pending'/'deferred' / a
+    'pending'/'deferred' string literal (mirrors the coarse AST vocabulary used elsewhere)."""
+    for n in ast.walk(test):
         if isinstance(n, ast.Name) and ("pending" in n.id.lower() or "deferred" in n.id.lower()):
             return True
         if isinstance(n, ast.Attribute) and (
@@ -8215,21 +8476,91 @@ def _branches_on_pending(func: ast.AST) -> bool:
     return False
 
 
+def _pending_arm_ok_for_callsite(
+    func: ast.AST, call: ast.Call, parent: dict[ast.AST, ast.AST]
+) -> tuple[bool, str]:
+    """Per-CALLSITE structural check (Yua ruling 2 — corrected from the function-scoped heuristic):
+    resolve the result variable ``call`` is assigned to, then prove the enclosing sweep consumes THAT SAME
+    result with an EXPLICIT Pending arm — an ``if`` whose test references the result AND is a Pending
+    discriminator — placed AFTER the callsite and BEFORE the callsite's success/dependent-work path (the
+    earliest of a ``transitioned += ...`` or a subsequent dependent ``transition(...)`` call). Returns
+    ``(ok, detail)``."""
+    # 1. resolve the assigned result name (a callsite whose result is not bound to a simple name fails)
+    owner = parent.get(call)
+    if isinstance(owner, ast.Await):
+        owner = parent.get(owner)
+    if not (
+        isinstance(owner, ast.Assign)
+        and len(owner.targets) == 1
+        and isinstance(owner.targets[0], ast.Name)
+    ):
+        return (
+            False,
+            "transition() result is not bound to a single simple name (cannot trace a consumer)",
+        )
+    result_name = owner.targets[0].id
+    call_line = call.lineno
+
+    # 2. the success/dependent-work marker: the earliest line AFTER the callsite that either increments
+    #    `transitioned` or issues another dependent `transition(...)` (e.g. the supersession back-link).
+    marker_line: float = math.inf
+    for n in ast.walk(func):
+        line = getattr(n, "lineno", None)
+        if line is None or line <= call_line:
+            continue
+        counts_transition = (
+            isinstance(n, ast.AugAssign)
+            and isinstance(n.target, ast.Name)
+            and n.target.id == "transitioned"
+        )
+        dependent_call = (
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Name)
+            and n.func.id == "transition"
+            and n is not call
+        )
+        if counts_transition or dependent_call:
+            marker_line = min(marker_line, line)
+
+    # 3. a valid Pending arm: an `if` on THIS result, a Pending discriminator, after the callsite and
+    #    before the success/dependent-work marker.
+    for n in ast.walk(func):
+        if not isinstance(n, ast.If):
+            continue
+        if n.lineno <= call_line or n.lineno >= marker_line:
+            continue
+        if _refs_name(n.test, result_name) and _test_is_pending_discriminator(n.test):
+            return True, "ok"
+    return (
+        False,
+        f"no explicit Pending arm on result {result_name!r} before the success/dependent-work path "
+        f"(callsite line {call_line}, success/dependent path at line "
+        f"{'none' if marker_line == math.inf else int(marker_line)})",
+    )
+
+
 @pytest.mark.xfail(
     raises=DefectStillPresent,
     strict=True,
-    reason="none of the six maturation transition() callsites (maturation.py 458/479/571/634/698/740) "
-    "branch on a Pending/deferred outcome — each enclosing sweep does only isinstance(result, Ok) -> "
-    "transitioned++, a two-way Ok/not-Ok branch. Flips XPASS when every callsite gains an explicit "
-    "three-way branch handling Pending distinctly from Ok-success.",
+    reason="none of the six maturation transition() callsites (maturation.py 458/479/571/634/698/740) is "
+    "consumed by a per-result Pending arm before its success/dependent-work path — each result is fed only "
+    "to a two-way isinstance(result, Ok) branch (transitioned++/failed++), with no explicit "
+    "isinstance(result.value, TransitionPending) / kind=='pending' arm on THAT callsite's result. Flips "
+    "XPASS when every callsite's result gains an explicit three-way Pending consumer branch before the "
+    "success/dependent-work path.",
 )
-def test_r21_maturation_callsite_inventory_branches_on_pending() -> None:
-    sites = _maturation_transition_callsites()
-    without_branch = sorted({fn for fn, node in sites if not _branches_on_pending(node)})
-    if without_branch:
+def test_r21_maturation_callsite_pending_arm_inventory() -> None:
+    tree = ast.parse((_SRC / _MATURATION_REL).read_text())
+    parent = _parent_map(tree)
+    unhandled: list[str] = []
+    for fn, func, call in _maturation_transition_call_nodes(tree, parent):
+        ok, detail = _pending_arm_ok_for_callsite(func, call, parent)
+        if not ok:
+            unhandled.append(f"{fn}@{call.lineno}: {detail}")
+    if unhandled:
         raise DefectStillPresent(
-            "maturation transition() callsite(s) whose enclosing sweep does not branch on a "
-            f"Pending/deferred outcome: {without_branch}"
+            "maturation transition() callsite(s) not consumed by a per-result Pending arm before the "
+            f"success/dependent-work path: {sorted(unhandled)}"
         )
 
 
@@ -8243,55 +8574,100 @@ def test_r21_maturation_callsite_inventory_control_sees_exact_six() -> None:
     )
 
 
-def test_r21_branches_on_pending_rule_discriminates() -> None:
-    """GREEN mechanism proof (unmarked): the branch detector clears a two-way Ok/not-Ok sweep (today's
-    shape) and flags each three-way form — an isinstance(TransitionPending) arm, a kind=='pending'
-    literal, and an is_pending()/n_deferred deferred-accounting shape."""
-    two_way = cast(
-        ast.AST,
-        ast.parse(
-            "def s():\n"
-            "    r = transition()\n"
-            "    if isinstance(r, Ok):\n"
-            "        transitioned += 1\n"
-            "    else:\n"
-            "        failed += 1\n"
-        ).body[0],
+def _first_callsite(src: str, which: int = 0) -> tuple[ast.AST, ast.Call, dict[ast.AST, ast.AST]]:
+    """Parse a one-function snippet and return (func-node, the ``which``-th ``transition(...)`` call node,
+    parent-map) for the per-callsite analyzer discriminator."""
+    tree = ast.parse(src)
+    parent = _parent_map(tree)
+    func = cast(ast.AST, tree.body[0])
+    calls = [
+        n
+        for n in ast.walk(func)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "transition"
+    ]
+    return func, calls[which], parent
+
+
+def test_r21_callsite_pending_arm_rule_discriminates() -> None:
+    """GREEN mechanism proof (unmarked): the per-callsite analyzer ACCEPTS the correct three-way form and
+    independently REJECTS each wrong shape — a pending branch on a DIFFERENT value, an unrelated
+    pending_count that is not a branch on the result, a Pending check placed AFTER the success path, and
+    (for a two-callsite sweep) proves handling ONE callsite leaves the OTHER independently failing."""
+    # (v) the correct per-callsite three-way form -> accepted
+    correct = (
+        "def s():\n"
+        "    result = transition()\n"
+        "    if isinstance(result.value, TransitionPending):\n"
+        "        deferred.append(result)\n"
+        "        continue\n"
+        "    if not isinstance(result, Ok):\n"
+        "        failed += 1\n"
+        "        continue\n"
+        "    transitioned += 1\n"
     )
-    three_way_isinstance = cast(
-        ast.AST,
-        ast.parse(
-            "def s():\n"
-            "    r = transition()\n"
-            "    if isinstance(r.value, TransitionPending):\n"
-            "        deferred.append(r)\n"
-            "    elif isinstance(r, Ok):\n"
-            "        transitioned += 1\n"
-            "    else:\n"
-            "        failed += 1\n"
-        ).body[0],
+    func, call, parent = _first_callsite(correct)
+    ok, _detail = _pending_arm_ok_for_callsite(func, call, parent)
+    assert ok, "the correct per-callsite three-way form must be accepted"
+
+    # (ii) an unrelated `pending_count` that is not a branch on the result -> not accepted
+    unrelated = (
+        "def s():\n"
+        "    result = transition()\n"
+        "    if pending_count > 0:\n"
+        "        note()\n"
+        "    if isinstance(result, Ok):\n"
+        "        transitioned += 1\n"
     )
-    three_way_kind = cast(
-        ast.AST,
-        ast.parse(
-            "def s():\n"
-            "    r = transition()\n"
-            "    if r.value.kind == 'pending':\n"
-            "        defer(r)\n"
-            "    else:\n"
-            "        transitioned += 1\n"
-        ).body[0],
+    func, call, parent = _first_callsite(unrelated)
+    ok, _detail = _pending_arm_ok_for_callsite(func, call, parent)
+    assert not ok, "an unrelated pending_count (not a branch on the result) must not be accepted"
+
+    # (iii) a Pending branch on a DIFFERENT value (not this callsite's result) -> not accepted
+    different = (
+        "def s():\n"
+        "    result = transition()\n"
+        "    other = transition()\n"
+        "    if isinstance(other.value, TransitionPending):\n"
+        "        deferred.append(other)\n"
+        "        continue\n"
+        "    transitioned += 1\n"
     )
-    deferred_counter = cast(
-        ast.AST,
-        ast.parse(
-            "def s():\n    r = transition()\n    if is_pending(r):\n        n_deferred += 1\n"
-        ).body[0],
+    func, call, parent = _first_callsite(different, which=0)  # the `result` callsite
+    ok, _detail = _pending_arm_ok_for_callsite(func, call, parent)
+    assert not ok, "a Pending branch on a different value must not be accepted for this callsite"
+
+    # (iv) a Pending check placed AFTER the completed/dependent-work path -> not accepted
+    after = (
+        "def s():\n"
+        "    result = transition()\n"
+        "    if isinstance(result, Ok):\n"
+        "        transitioned += 1\n"
+        "    if isinstance(result.value, TransitionPending):\n"
+        "        deferred.append(result)\n"
     )
-    assert not _branches_on_pending(two_way)
-    assert _branches_on_pending(three_way_isinstance)
-    assert _branches_on_pending(three_way_kind)
-    assert _branches_on_pending(deferred_counter)
+    func, call, parent = _first_callsite(after)
+    ok, _detail = _pending_arm_ok_for_callsite(func, call, parent)
+    assert not ok, "a Pending check placed after the success path must not be accepted"
+
+    # (i) one of two episodic callsites handled but the OTHER not -> the unhandled one still fails
+    one_of_two = (
+        "def s():\n"
+        "    result = transition()\n"
+        "    if isinstance(result.value, TransitionPending):\n"
+        "        deferred.append(result)\n"
+        "        continue\n"
+        "    if superseded:\n"
+        "        back_result = transition()\n"
+        "        if not isinstance(back_result, Ok):\n"
+        "            log()\n"
+        "    transitioned += 1\n"
+    )
+    func, fwd_call, parent = _first_callsite(one_of_two, which=0)
+    ok_fwd, _detail = _pending_arm_ok_for_callsite(func, fwd_call, parent)
+    assert ok_fwd, "the handled forward callsite must be accepted"
+    func2, back_call, parent2 = _first_callsite(one_of_two, which=1)
+    ok_back, _detail = _pending_arm_ok_for_callsite(func2, back_call, parent2)
+    assert not ok_back, "the unhandled back-link callsite must still fail (independently caught)"
 
 
 # ---- TASK 2 discriminator: the deferred-accounting acceptance check catches each failure mode ------- #

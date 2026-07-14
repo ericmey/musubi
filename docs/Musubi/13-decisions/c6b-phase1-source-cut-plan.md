@@ -27,21 +27,32 @@ carries `operation_key` + `event_id` (durable intent committed; Qdrant mutation 
 
 **HTTP wire contract (all four transition routes):**
 - **`Ok(Final)`** → HTTP **200**, existing typed success body (unchanged).
-- **`Ok(Pending)`** → HTTP **202**, a TYPED body containing at least `status="pending"`, `operation_key`,
-  `event_id`. No fabricated success payload; no result fields the Pending does not have.
+- **`Ok(Pending)`** → HTTP **202**, a TYPED Pydantic body with EXACTLY `status="pending"`, `operation_key`
+  (non-empty `str`), and `event_id` (non-empty `str`) — and NONE of the Final-only fields (`object_id`,
+  `from_state`, `to_state`, `version`). The Pending response model does NOT widen the existing Final/Err
+  shapes and carries no fabricated success payload; a body validated with `extra="forbid"` rejects any
+  Final field, and empty identifiers are rejected by validation.
 - **`Err(TransitionError)`** → existing typed error mapping (terminal only): `not_found`→404,
   `illegal_transition`→400, others→400/4xx per current policy. Err is terminal — never a transient window.
 
 A Pending result MUST NOT: fall through as Final, be mapped to Err, lose either identifier, or return
 200/400/500.
 
-**Internal (maturation / non-HTTP caller) contract — Pending means DEFERRED:**
-- NOT counted or treated as a completed transition (does not increment `transitioned`).
-- Does NOT execute post-transition dependent work (e.g. the supersession back-link at maturation `:479`
-  must not run on a Pending forward transition).
-- Does NOT issue an immediate direct retry — the reconciler owns eventual completion.
-- RETAINS `operation_key` + `event_id` in observable deferred accounting (a `deferred` counter/log, PII-free).
-- `Final` follows the existing success path; `Err` follows the existing error policy.
+**Internal (maturation / non-HTTP caller) contract — Pending means DEFERRED.** The source must emit ONE
+exact observable shape and the reds assert it (read via `getattr(report, "deferred", [])`, so an
+absent field normalizes to `[]` rather than raising):
+- **`SweepReport` gains a `deferred` field** — a bounded list with ONE entry per Pending forward
+  transition, each entry carrying a NON-EMPTY `operation_key` AND `event_id` (identifiers only, PII-free;
+  no content). For a single seeded Pending row the list has exactly one such entry.
+- **`transitioned` EXCLUDES deferred rows** — a Pending forward does NOT increment `transitioned`
+  (`transitioned == 0` for a lone Pending); a deferral is never counted as a completed transition.
+- **Exactly ONE transition call per row** — the sweep issues a single `transition(...)` for the Pending
+  row and does NOT issue an immediate direct retry (the reconciler owns eventual completion).
+- **No post-transition dependent work on a Pending forward** — e.g. the supersession back-link at
+  maturation `:479` (a SECOND transition on the predecessor) must NOT run when the forward is Pending; it
+  is deferred until the forward finalizes.
+- `Final` follows the existing success path (counted, dependent work runs); `Err` follows the existing
+  error policy.
 
 ## B. Ownership & validation ruling (REV2 ruling 4 — corrected from REV1)
 
