@@ -1,14 +1,14 @@
 {
   "agent": "tama",
   "branch": "slice/release-automation-issue449",
-  "timestamp": "2026-07-13T21:30:00Z",
-  "reason": "Issue #449 release-automation architecture-contract hardening. Tests/docs/design only per Yua 2026-07-13 19:11:24, 6e07c56, 20:25:31, 20:48:34, 20:57:08, 21:05:45, 21:21:24. The contract is Option C (intentionally separate main/release builds with explicit expected digest divergence). 6 architecture-contract invariants + 1 strict red + ~50 wrong-fixture mutation tests + 9 legitimate controls. Per Yua 21:21:24: bounded SemVer grammar (no leading zeros, no empty/dot-only prerelease, no build metadata); pin exact key sets and values for all 3 metadata rules; semver guard uses bounded grammar. No source/workflow/deploy changes. No live GH. No host. No merge.",
+  "timestamp": "2026-07-13T21:40:00Z",
+  "reason": "Issue #449 release-automation architecture-contract hardening. Tests/docs/design only per Yua 2026-07-13 19:11:24, 6e07c56, 20:25:31, 20:48:34, 20:57:08, 21:05:45, 21:21:24, 21:27:31. The contract is Option C (intentionally separate main/release builds with explicit expected digest divergence). EXACT TEST ACCOUNTING: 73 tests = 6 architecture-contract invariants + 1 strict red + 56 wrong-fixture mutation tests + 10 legitimate controls; 71 pass + 2 strict xfail. Per Yua 21:27:31: detect duplicate keys before dict collapse; one bounded SemVer grammar source driving Python resolver AND executable Bash proof (parity test); semver guard uses bounded grammar; no build metadata. No source/workflow/deploy changes. No live GH. No host. No merge.",
   "owns_paths": [
     "docs/Musubi/_slices/slice-release-automation-issue449.md",
     "docs/Musubi/_inbox/locks/slice-release-automation-issue449.lock",
     "tests/release/test_release_automation_issue449.py"
   ],
   "sid": "slice-release-automation-issue449",
-  "scope": "Release-automation architecture-contract hardening tests/docs/design only. 6 architecture-contract invariants + 1 strict red + ~50 wrong-fixture mutation tests + 9 legitimate controls. No source/workflow/deploy changes. No live GH. No host. No merge. Aoi R20 separate second read when it lands. Spec-Update trailer: bounded SemVer grammar + exact key sets per Yua 21:21:24.",
-  "spec-update": "c6f78e2-to-following-commit per Yua 21:21:24 #3 (slice doc must match test file; bounded SemVer grammar; semver guard)"
+  "scope": "Release-automation architecture-contract hardening tests/docs/design only. 73 tests = 6 invariants + 1 strict red + 56 wrong-fixture + 10 controls; 71 pass + 2 strict xfail. No source/workflow/deploy changes. No live GH. No host. No merge. Aoi R20 separate second read when it lands. Spec-Update trailer: duplicate detection + Python/Bash parity per Yua 21:27:31.",
+  "spec-update": "a5d95a7-to-following-commit per Yua 21:27:31 #3 (slice doc must match test file; bounded SemVer grammar + bash parity; semver guard)"
 }

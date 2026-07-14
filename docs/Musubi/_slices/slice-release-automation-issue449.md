@@ -9,7 +9,7 @@ owner: tama
 phase: "8 Ops"
 tags: [section/slices, status/in-progress, type/slice, release-automation, v1.13.0-followup]
 updated: 2026-07-13
-spec-update: c6f78e2-to-following-commit per Yua 21:21:24 #3 (slice doc must match test file; bounded SemVer grammar; semver guard)
+spec-update: a5d95a7-to-following-commit per Yua 21:27:31 #3 (slice doc must match test file; bounded SemVer grammar + bash parity; semver guard)
 reviewed: true
 depends-on: []
 blocks: []
@@ -77,7 +77,7 @@ The test `test_red_hardening_defect_manual_dispatch_main` reproduces this defect
 2. **main tag surface vs release v+latest surface:** main → `:main`; v* → `:v<version> + :latest`. Mutually exclusive meta-step guards: `type=ref,event=branch` with `github.ref == 'refs/heads/main'` for main; `type=semver,pattern={{version}}` with `startsWith(github.ref, 'refs/tags/v')` for v*. Production helper: `assert_distinct_mutex_tags(path)`.
 3. **all supply-chain steps shared:** `cosign sign`, `anchore/sbom-action@v0` (CycloneDX SBOM), `cosign attest`, `aquasecurity/trivy-action` (Trivy table + SARIF). None conditional on the trigger type. Production helper: `assert_all_required_steps_present(path)` + `assert_no_if_key_in_publish_step(name, path)`.
 4. **auto-pin accepts only successful v-tag publish:** gates on `workflow_run` with `conclusion == 'success'` AND `startsWith(head_branch, 'v')`. The gate is at `jobs.bump.if`, NOT at `workflow_run.branches`. Production helper: `assert_workflow_run_v_gate(path)`.
-5. **main digest can never feed pin:** the Resolve tag + digest step must have a valid bash guard `if ! [[ "$TAG" == v* ]]; then ... exit N; fi` that runs BEFORE tag is emitted and inside the matched if block. Production helper: `assert_release_only_manual_dispatch_guard(path)` (executable bash proof).
+5. **main digest can never feed pin:** the Resolve tag + digest step must have a valid bash guard using the bounded SemVer 2.0.0 grammar: `if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9a-zA-Z]+(\.[0-9a-zA-Z]+)*)?$ ]]; then ... exit N; fi` that runs BEFORE tag is emitted and inside the matched if block. The Python resolver and the executable Bash proof share one bounded grammar source. Production helper: `assert_release_only_manual_dispatch_guard(path)` (executable bash proof).
 6. **channel-metadata rule / allowed-divergence contract:** the publish workflow's with.tags has mutually exclusive main ref and release semver guards. Divergence between main and v* digests is ALLOWED, not GUARANTEED. Production helper: `assert_release_channel_consumption(path)`.
 
 ## 1 Strict red (reproduces the hardening defect)

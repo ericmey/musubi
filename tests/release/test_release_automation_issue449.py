@@ -70,16 +70,77 @@ AUTO_PIN_WF = WORKFLOWS / "auto-digest-bump.yml"
 #   - Build metadata: intentionally UNSUPPORTED
 # Rejects: leading zeros, empty/dot-only prerelease, trailing
 # hyphen/dot, junk suffixes, build metadata.
-RELEASE_TAG_GRAMMAR = re.compile(
+#
+# Per Yua 21:27:31 #2: one bounded SemVer grammar source
+# that drives BOTH the Python resolver and the executable
+# Bash proof. The Python form uses (?:...) non-capturing
+# groups; the Bash form uses (...) capturing groups. Both
+# are functionally equivalent; the parity test verifies
+# cross-product agreement on a fixed corpus.
+RELEASE_TAG_GRAMMAR_PYTHON = re.compile(
     r"^v"
     r"(?:0|[1-9]\d*)"
     r"\.(?:0|[1-9]\d*)"
     r"\.(?:0|[1-9]\d*)"
     r"(?:-"
-    r"(?:[0-9a-zA-Z]+(?:\.[0-9a-zA-Z]+)*)"
+    # Per SemVer 2.0.0: identifiers may include hyphens
+    # but cannot start or end with one. An identifier
+    # is one or more alphanumerics optionally followed
+    # by hyphen-separated alphanumerics. Multiple
+    # identifiers are dot-separated.
+    r"(?:[0-9a-zA-Z]+(?:-[0-9a-zA-Z]+)*"
+    r"(?:\.[0-9a-zA-Z]+(?:-[0-9a-zA-Z]+)*)*)"
     r")?"
     r"$"
 )
+# Bash POSIX ERE equivalent (used in the executable proof).
+# bash regex `=~` does not support (?:...) non-capturing
+# groups; use (...) capturing groups instead.
+RELEASE_TAG_GRAMMAR_BASH = (
+    r"^v"
+    r"(0|[1-9][0-9]*)"
+    r"\.(0|[1-9][0-9]*)"
+    r"\.(0|[1-9][0-9]*)"
+    r"(-[0-9a-zA-Z]+(-[0-9a-zA-Z]+)*"
+    r"(\.[0-9a-zA-Z]+(-[0-9a-zA-Z]+)*)*)?"
+    r"$"
+)
+RELEASE_TAG_GRAMMAR = RELEASE_TAG_GRAMMAR_PYTHON
+# The cross-product parity corpus: every value here MUST
+# have the same Python and Bash verdict.
+RELEASE_TAG_CORPUS: list[tuple[str, bool]] = [
+    # Valid
+    ("v0.0.0", True),
+    ("v1.13.0", True),
+    ("v0.7.0", True),
+    ("v2.0.0-rc.1", True),
+    ("v1.0.0-alpha", True),
+    ("v1.0.0-alpha.1", True),
+    ("v1.0.0-0.3.7", True),
+    ("v1.0.0-x.7.z.92", True),
+    ("v10.20.30", True),
+    ("v1.0.0-alpha-a.b-c-somethinglong", True),
+    # Invalid
+    ("main", False),
+    ("", False),
+    ("v", False),
+    ("v1", False),
+    ("v1.2", False),
+    ("v1.2.3.4", False),
+    ("1.13.0", False),
+    ("v01.02.003", False),  # leading zeros
+    ("v01.0.0", False),
+    ("v1.02.0", False),
+    ("v1.0.03", False),
+    ("v1.0.0-", False),  # trailing hyphen
+    ("v1.0.0-.", False),  # dot-only prerelease
+    ("v1.0.0-..", False),  # empty dot-only
+    ("v1.0.0-!", False),  # junk suffix
+    ("v1.0.0+build", False),  # build metadata (unsupported)
+    ("v1.0.0-rc.1+build", False),  # build metadata (unsupported)
+    ("v1.2.3-alpha..1", False),  # empty identifier in prerelease
+    ("vgarbage", False),
+]
 
 
 # =============================================================
@@ -258,6 +319,10 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
     function calls like `startsWith(github.ref, 'refs/tags/v')`.
     We treat `enable=...` as a single field regardless of
     internal commas.
+
+    Per Yua 21:27:31 #1: detect duplicate keys BEFORE dict
+    collapse. Reject a repeated key even when both values
+    are identical.
     """
     config = _load_workflow_yaml(path)
     job = config.get("jobs", {}).get("publish-core-image", {})
@@ -286,6 +351,7 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
         # inside function calls; we treat it as a single
         # field that consumes the rest of the line.
         rule: dict[str, str] = {}
+        seen_keys: set[str] = set()
         parts: list[str] = []
         i = 0
         while i < len(stripped):
@@ -298,6 +364,10 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
                     enable_value.startswith("'") and enable_value.endswith("'")
                 ):
                     enable_value = enable_value[1:-1]
+                # Per Yua 21:27:31 #1: detect duplicate keys
+                if "enable" in seen_keys:
+                    raise MutexChannelMissingError(f"Duplicate key 'enable' in rule line: {line!r}")
+                seen_keys.add("enable")
                 rule["enable"] = enable_value
                 break
             # Find the next comma at the top level
@@ -311,7 +381,13 @@ def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
             part = part.strip()
             if "=" in part:
                 k, v = part.split("=", 1)
-                rule[k.strip()] = v.strip()
+                k = k.strip()
+                # Per Yua 21:27:31 #1: detect duplicate keys
+                # even when both values are identical.
+                if k in seen_keys:
+                    raise MutexChannelMissingError(f"Duplicate key {k!r} in rule line: {line!r}")
+                seen_keys.add(k)
+                rule[k] = v.strip()
         if rule:
             rules.append(rule)
     return rules
@@ -676,13 +752,14 @@ def _extract_guard_block(run_script: str) -> str | None:
 
     Per Yua 20:57:08 #1: require the nonzero exit INSIDE the
     matched if block before its fi, not merely any later exit.
-    Per Yua 21:05:45 #4: the guard uses the bounded release
-    grammar (semver regex) to align with the decision model.
+    Per Yua 21:21:24 #4 + 21:27:31 #2: the guard uses the
+    bounded SemVer 2.0.0 grammar (Bash POSIX ERE: capturing
+    groups) to align with the decision model.
     """
     # Find the if block: if ! [[ "$TAG" =~ semver ]]; then
     # ... exit N; fi
     pattern = (
-        r"if\s+!\s*\[\[\s*\"?\$TAG\"?\s*=~\s*\^v\[0-9\]"
+        r"if\s+!\s*\[\[\s*\"?\$TAG\"?\s*=~\s*\^v"
         r"[^;]*;"
         r"(.*?)"
         r"^\s*fi\b"
@@ -751,7 +828,17 @@ def assert_release_only_manual_dispatch_guard(path: Path) -> None:
     # release grammar as the resolver. Valid: semver tags.
     # Invalid: anything else (including v* glob matches like
     # vgarbage).
-    valid_tags = ["v1.13.0", "v0.7.0", "v2.0.0-rc.1"]
+    valid_tags = [
+        "v1.13.0",
+        "v0.7.0",
+        "v2.0.0-rc.1",
+        "v1.0.0-alpha",
+        "v1.0.0-alpha.1",
+        "v1.0.0-0.3.7",
+        "v1.0.0-x.7.z.92",
+        "v10.20.30",
+        "v0.0.0",
+    ]
     invalid_tags = [
         "main",
         "",
@@ -759,8 +846,20 @@ def assert_release_only_manual_dispatch_guard(path: Path) -> None:
         "1.13.0",
         "vgarbage",
         "v",
+        "v1",
         "v1.2",
         "v1.2.3.4",
+        "v01.02.003",
+        "v01.0.0",
+        "v1.02.0",
+        "v1.0.03",
+        "v1.0.0-",
+        "v1.0.0-.",
+        "v1.0.0-..",
+        "v1.0.0-!",
+        "v1.0.0+build",
+        "v1.0.0-rc.1+build",
+        "v1.2.3-alpha..1",
     ]
     for tag in valid_tags:
         rc = _run_bash_harness(guard_block, tag)
@@ -1575,6 +1674,56 @@ def test_control_leading_zero_core_rejected() -> None:
             _resolve_release_tag("", bad)
 
 
+def test_control_python_bash_grammar_parity() -> None:
+    """Control 10: Python and Bash grammars agree on every
+    value in the cross-product corpus.
+
+    Per Yua 21:27:31 #2: the Python resolver and the
+    executable Bash proof must share one bounded SemVer
+    grammar source. The cross-product parity test verifies
+    that for every value in RELEASE_TAG_CORPUS, the Python
+    regex and the Bash regex return the same verdict.
+    """
+    for value, expected in RELEASE_TAG_CORPUS:
+        python_match = bool(RELEASE_TAG_GRAMMAR_PYTHON.match(value))
+        # Run the bash regex via subprocess. Use distinct
+        # success/failure markers to avoid substring overlap.
+        bash_script = (
+            "#!/bin/bash\n"
+            "TAG=" + "'" + value + "'" + "\n"
+            'if [[ "$TAG" =~ ' + RELEASE_TAG_GRAMMAR_BASH + " ]]; then\n"
+            '  echo "BASH_MATCH=1"\n'
+            "else\n"
+            '  echo "BASH_MATCH=0"\n'
+            "fi\n"
+        )
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
+            f.write(bash_script)
+            path = f.name
+        try:
+            result = subprocess.run(
+                ["bash", path],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            bash_match = "BASH_MATCH=1" in result.stdout
+        finally:
+            Path(path).unlink(missing_ok=True)
+        if python_match != expected or bash_match != expected:
+            raise AssertionError(
+                f"Grammar parity failed for {value!r}: "
+                f"expected {expected}, python={python_match}, "
+                f"bash={bash_match}"
+            )
+        if python_match != bash_match:
+            raise AssertionError(
+                f"Python and Bash verdicts disagree for {value!r}: "
+                f"python={python_match}, bash={bash_match}"
+            )
+
+
 def _mutate_yaml_add_if_to_step(src: Path, dst: Path, exact_name: str, if_condition: str) -> None:
     """Add an 'if' key to the named step."""
     config = _load_workflow_yaml(src)
@@ -1818,7 +1967,13 @@ def test_wrong_fixture_inv4_remove_v_gate_in_autopin(
 
 
 # Synthetic corrected guard block (the parent artifact)
-CORRECTED_GUARD = """          if ! [[ "$TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+# Synthetic corrected guard block (the parent artifact)
+# Per Yua 21:21:24 #4 + 21:27:31 #2: align with the
+# release-tag decision model. The corrected guard uses
+# the same bounded SemVer 2.0.0 grammar as the Python
+# resolver (Bash POSIX ERE equivalent: capturing groups
+# instead of non-capturing groups).
+CORRECTED_GUARD = """          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9a-zA-Z]+(\\.[0-9a-zA-Z]+)*)?$ ]]; then
             echo "::error::Manual-dispatch tag must be a release tag (semver)"
             exit 1
           fi
@@ -2072,6 +2227,77 @@ def test_wrong_fixture_inv6_overlap_enables(fixture_dir: Any) -> None:
         return
     raise InvariantError(
         "Wrong-fixture FAIL: overlapping enables did NOT cause the production helper to raise."
+    )
+
+
+def _mutate_yaml_duplicate_prefix(src: Path, dst: Path) -> None:
+    """Add a duplicate `prefix=v,prefix=v` to the semver rule."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "prefix=v",
+                    "prefix=v,prefix=v",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_duplicate_prefix(fixture_dir: Any) -> None:
+    """Wrong-fixture: duplicate `prefix=v` is rejected.
+
+    Per Yua 21:27:31 #1: detect duplicate keys BEFORE dict
+    collapse. Reject a repeated key even when both values
+    are identical.
+    """
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_duplicate_prefix(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: duplicate prefix did NOT cause the production helper to raise."
+    )
+
+
+def _mutate_yaml_duplicate_enable(src: Path, dst: Path) -> None:
+    """Add a duplicate enable to the raw rule."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                # Add a duplicate enable to the raw rule
+                tags_value = tags_value.replace(
+                    "enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}",
+                    "enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }},enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '' }}",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv2_duplicate_enable(fixture_dir: Any) -> None:
+    """Wrong-fixture: duplicate `enable=` is rejected.
+
+    Per Yua 21:27:31 #1: detect duplicate keys BEFORE dict
+    collapse. Reject a repeated key even when both values
+    are identical.
+    """
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_duplicate_enable(PUBLISH_WF, dst)
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: duplicate enable did NOT cause the production helper to raise."
     )
 
 
