@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.1](https://github.com/ericmey/musubi/compare/v1.13.0...v1.13.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **tc-coverage:** resolve module variable xfail reasons ([#458](https://github.com/ericmey/musubi/issues/458)) ([b29f99b](https://github.com/ericmey/musubi/commit/b29f99b37e52c94c4fd555dd03f0c2dbf8dbdff6))
+
 ## [1.13.0](https://github.com/ericmey/musubi/compare/v1.12.0...v1.13.0) (2026-07-13)
 
 
