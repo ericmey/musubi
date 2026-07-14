@@ -347,6 +347,382 @@ def test_g1_rule_discriminates_state_dataflow_from_unrelated_payloads() -> None:
 
 
 # ============================================================================
+# G2 - Phase-1 acceptance guards (static AST over src): coordinator callsite inventory + cleanup SQL shape
+#
+# Two DEDICATED strict-xfail checkers (do NOT let one strict-xfail mask two failures). Both are RED today
+# because the LifecycleTransitionCoordinator source is ABSENT (Phase 1 unbuilt); each flips to XPASS(strict)
+# only when the coordinator lands with the reviewed shape. Each has its OWN DefectStillPresent reason and a
+# GREEN rule-discrimination proof over temporary in-test scoped source stubs (mirroring G1's template).
+# ============================================================================
+
+_COORDINATOR_CLASS = "LifecycleTransitionCoordinator"
+_COORDINATOR_METHOD = "transition"
+_CLEANUP_METHOD = "cleanup_terminal"
+
+#: The EXPLICIT Phase-1 reviewed set (a PIN, not inferred from whatever source exists): exactly ONE
+#: LifecycleTransitionCoordinator.transition call, in the canonical top-level transition wrapper of
+#: lifecycle/transitions.py. PATH + enclosing FUNCTION identity - NEVER a line number. H5 UPDATES this set
+#: as it migrates other state-mutating paths onto the coordinator (slice-h5-unify-state-mutation).
+_REVIEWED_COORDINATOR_CALLSITES: list[tuple[str, str]] = [
+    ("lifecycle/transitions.py", "transition")
+]
+
+
+def _parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parent: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+    return parent
+
+
+def _enclosing_func_name(parent: dict[ast.AST, ast.AST], node: ast.AST) -> str:
+    cur = parent.get(node)
+    while cur is not None and not isinstance(cur, ast.FunctionDef | ast.AsyncFunctionDef):
+        cur = parent.get(cur)
+    return getattr(cur, "name", "<module>") if cur is not None else "<module>"
+
+
+def _is_coordinator_ctor(expr: ast.AST) -> bool:
+    """A construction of LifecycleTransitionCoordinator (by name or module.LifecycleTransitionCoordinator).
+    STRUCTURAL provenance only - recognizes the coordinator by its class name AT CONSTRUCTION; there is no
+    type inference here. Cross-module provenance (a coordinator received as a param from elsewhere) is out
+    of scope; the reviewed set is an explicit pin (H5 updates it) rather than a full type resolution."""
+    if not isinstance(expr, ast.Call):
+        return False
+    f = expr.func
+    return (isinstance(f, ast.Name) and f.id == _COORDINATOR_CLASS) or (
+        isinstance(f, ast.Attribute) and f.attr == _COORDINATOR_CLASS
+    )
+
+
+def _coordinator_bound_targets(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """Local names and self.<attr> targets bound to a LifecycleTransitionCoordinator(...) construction
+    (module-scoped, so a construct-in-__init__ + call-in-method shape resolves)."""
+    names: set[str] = set()
+    attrs: set[str] = set()
+
+    def _record(tgt: ast.AST) -> None:
+        if isinstance(tgt, ast.Name):
+            names.add(tgt.id)
+        elif (
+            isinstance(tgt, ast.Attribute)
+            and isinstance(tgt.value, ast.Name)
+            and tgt.value.id == "self"
+        ):
+            attrs.add(tgt.attr)
+
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Assign) and _is_coordinator_ctor(n.value):
+            for tgt in n.targets:
+                _record(tgt)
+        elif isinstance(n, ast.AnnAssign) and n.value is not None and _is_coordinator_ctor(n.value):
+            _record(n.target)
+    return names, attrs
+
+
+def _receiver_is_coordinator(recv: ast.AST, names: set[str], attrs: set[str]) -> bool:
+    """The receiver of a `.transition` call resolves to a LifecycleTransitionCoordinator instance - so a
+    same-named `.transition` on an UNRELATED object (e.g. self._plane.transition) does NOT count."""
+    if isinstance(recv, ast.Name):
+        return recv.id in names
+    if (
+        isinstance(recv, ast.Attribute)
+        and isinstance(recv.value, ast.Name)
+        and recv.value.id == "self"
+    ):
+        return recv.attr in attrs
+    return _is_coordinator_ctor(recv)  # LifecycleTransitionCoordinator(...).transition(...) chain
+
+
+def _coordinator_transition_calls(tree: ast.AST) -> list[ast.Call]:
+    """Every `.transition(...)` Call whose receiver resolves (structurally) to the coordinator."""
+    names, attrs = _coordinator_bound_targets(tree)
+    out: list[ast.Call] = []
+    for n in ast.walk(tree):
+        if (
+            isinstance(n, ast.Call)
+            and isinstance(n.func, ast.Attribute)
+            and n.func.attr == _COORDINATOR_METHOD
+            and _receiver_is_coordinator(n.func.value, names, attrs)
+        ):
+            out.append(n)
+    return out
+
+
+def _resolve_callsites(tree: ast.AST, relpath: str) -> list[tuple[str, str]]:
+    """(relpath, enclosing-function) for each resolved coordinator.transition call in one tree."""
+    parent = _parent_map(tree)
+    return [(relpath, _enclosing_func_name(parent, c)) for c in _coordinator_transition_calls(tree)]
+
+
+def _scan_coordinator_transition_callsites() -> list[tuple[str, str]]:
+    out: list[tuple[str, str]] = []
+    for p in sorted(_SRC.rglob("*.py")):
+        try:
+            tree = ast.parse(p.read_text())
+        except SyntaxError:
+            continue
+        out.extend(_resolve_callsites(tree, str(p.relative_to(_SRC))))
+    return out
+
+
+# G2a - coordinator.transition CALLSITE INVENTORY (Phase-1 acceptance) --------------------------------- #
+
+_G2A_REASON = (
+    "the reviewed LifecycleTransitionCoordinator.transition callsite (exactly one, in the canonical "
+    "transition wrapper of lifecycle/transitions.py) does not yet exist - the Phase-1 coordinator is "
+    "unbuilt, so the resolved inventory is empty and cannot equal the reviewed set. Flips to XPASS(strict) "
+    "when the coordinator lands and the single reviewed callsite is present (zero/missing/duplicate/extra "
+    "all fail). H5 updates the reviewed set as it migrates other state-mutating paths."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_G2A_REASON)
+def test_g2a_coordinator_transition_callsite_inventory() -> None:
+    """Phase-1 acceptance: the resolved set of LifecycleTransitionCoordinator.transition callsites in src
+    must equal the EXPLICIT reviewed set - fails on zero, missing, duplicate, or extra."""
+    found = sorted(_scan_coordinator_transition_callsites())
+    reviewed = sorted(_REVIEWED_COORDINATOR_CALLSITES)
+    if found != reviewed:
+        raise DefectStillPresent(
+            f"coordinator.transition callsite inventory {found} != reviewed set {reviewed} "
+            "(zero/missing/duplicate/extra)"
+        )
+
+
+def test_g2a_rule_discriminates_coordinator_callsites() -> None:
+    """GREEN mechanism proof: receiver-provenance resolution distinguishes the coordinator from unrelated
+    same-named .transition methods, and the inventory comparison fails on missing/duplicate/extra."""
+    reviewed = [("m", "transition")]
+    ctor = "def build(self):\n    self._c = LifecycleTransitionCoordinator(client=a, db_path=b)\n"
+    unrelated = ast.parse("def transition(self, i):\n    return self._plane.transition(i)\n")
+    exact = ast.parse(ctor + "def transition(self, i):\n    return self._c.transition(i)\n")
+    missing = ast.parse(ctor + "def transition(self, i):\n    return None\n")
+    extra = ast.parse(
+        ctor
+        + "def transition(self, i):\n    return self._c.transition(i)\n"
+        + "def sneak(self, i):\n    return self._c.transition(i)\n"
+    )
+    duplicate = ast.parse(
+        ctor
+        + "def transition(self, i):\n    self._c.transition(i)\n    return self._c.transition(i)\n"
+    )
+    chained = ast.parse(
+        "def transition(self, i):\n    return LifecycleTransitionCoordinator(client=a).transition(i)\n"
+    )
+    # a same-named UNRELATED transition does not count
+    assert _resolve_callsites(unrelated, "m") == []
+    # the EXACT reviewed set passes; a direct constructor-chain also resolves
+    assert sorted(_resolve_callsites(exact, "m")) == reviewed
+    assert sorted(_resolve_callsites(chained, "m")) == reviewed
+    # a MISSING real callsite fails (inventory != reviewed)
+    assert sorted(_resolve_callsites(missing, "m")) != reviewed
+    # an EXTRA real callsite fails
+    assert sorted(_resolve_callsites(extra, "m")) != reviewed
+    # a DUPLICATE (two coordinator calls in the reviewed function) fails on multiplicity
+    assert sorted(_resolve_callsites(duplicate, "m")) != reviewed
+    assert len(_resolve_callsites(duplicate, "m")) == 2
+
+
+# G2b - cleanup_terminal SQL SHAPE (Phase-1 source-shape acceptance) ----------------------------------- #
+#
+# TOKEN-AWARE inspection of the ACTUAL SQL string argument passed to the DB call inside cleanup_terminal -
+# NOT a full SQL parse and NOT a global source substring scan. It NORMALIZES the string (uppercase +
+# whitespace-collapsed, plus a whitespace-stripped form for operator-adjacent tokens) and checks for the
+# pinned shape. This is honest token matching, not a SQL grammar; exact grammar validation is out of scope.
+
+_ELIG = "TERMINAL_EPOCH<"  #: the age-eligibility token (normalized, whitespace-stripped)
+
+
+def _static_str(node: ast.AST) -> str | None:
+    """The static string value of a literal / `+`-concatenation / f-string constant parts (None if it is
+    a non-static dynamic expression)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _static_str(node.left), _static_str(node.right)
+        return None if left is None or right is None else left + right
+    if isinstance(node, ast.JoinedStr):
+        return "".join(
+            v.value if isinstance(v, ast.Constant) and isinstance(v.value, str) else " "
+            for v in node.values
+        )
+    return None
+
+
+def _method_sql_args(tree: ast.AST, method: str) -> list[str]:
+    """Every SQL string argument passed to a `.execute`/`.executemany` call INSIDE the named method (a
+    dynamic non-static SQL is captured as a sentinel so it fails the shape check rather than vanishing)."""
+    out: list[str] = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == method:
+            for c in ast.walk(n):
+                if (
+                    isinstance(c, ast.Call)
+                    and isinstance(c.func, ast.Attribute)
+                    and c.func.attr in ("execute", "executemany")
+                    and c.args
+                ):
+                    s = _static_str(c.args[0])
+                    out.append(s if s is not None else "<DYNAMIC>")
+    return out
+
+
+def _scan_cleanup_terminal_sql() -> tuple[bool, list[str]]:
+    """(present, sql_args) for the cleanup_terminal method in src (present=False when it is unbuilt)."""
+    for p in sorted(_SRC.rglob("*.py")):
+        try:
+            tree = ast.parse(p.read_text())
+        except SyntaxError:
+            continue
+        for n in ast.walk(tree):
+            if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name == _CLEANUP_METHOD:
+                return True, _method_sql_args(tree, _CLEANUP_METHOD)
+    return False, []
+
+
+def _split_cte(flat: str) -> tuple[str | None, str | None]:
+    """Split a whitespace-stripped SQL into (inner CTE body, outer DELETE) at the first `AS(...)`, matching
+    balanced parens so nested `(...)` inside the CTE stays with the inner."""
+    i = flat.find("AS(")
+    if i < 0:
+        return None, None
+    open_idx = i + 2  # the '('
+    depth = 0
+    for k in range(open_idx, len(flat)):
+        if flat[k] == "(":
+            depth += 1
+        elif flat[k] == ")":
+            depth -= 1
+            if depth == 0:
+                return flat[open_idx + 1 : k], flat[k + 1 :]
+    return None, None
+
+
+def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
+    """Token-aware shape violations of the cleanup DELETE. [] = the pinned atomic shape (a `WITH <sel>`
+    CTE ordered by terminal_epoch THEN operation_key with a bounded LIMIT; a DELETE restricted to the
+    selected operation keys; the eligibility predicate repeated in BOTH the inner selector and the outer
+    DELETE WHERE; RETURNING). The count SELECTs (no operation_key + no LIMIT) are ignored."""
+    v: list[str] = []
+    deletes = [s for s in sql_args if "DELETE" in s.upper()]
+    batch_selectors = [
+        s
+        for s in sql_args
+        if "DELETE" not in s.upper() and "OPERATION_KEY" in s.upper() and "LIMIT" in s.upper()
+    ]
+    if batch_selectors and deletes:
+        v.append(
+            "split_select_delete"
+        )  # a standalone batch SELECT + a separate DELETE (two statements)
+    if len(deletes) != 1:
+        v.append("not_single_delete")
+        return v  # cannot shape-check the delete without exactly one
+    norm = " ".join(deletes[0].upper().split())
+    flat = norm.replace(" ", "")
+    if "WITH" not in norm or "AS(" not in flat:
+        v.append("missing_cte")
+    if "RETURNING" not in norm:
+        v.append("missing_returning")
+    if "LIMIT" not in norm:
+        v.append("missing_bound")
+    if "ORDERBYTERMINAL_EPOCH,OPERATION_KEY" not in flat:
+        v.append("nondeterministic_tie")  # ORDER BY missing the operation_key tiebreak
+    if "IN(SELECTOPERATION_KEYFROM" not in flat:
+        v.append("delete_not_restricted")  # DELETE not restricted to the selected operation keys
+    inner, outer = _split_cte(flat)
+    if inner is None or outer is None:
+        if "missing_cte" not in v:
+            v.append("missing_cte")
+    else:
+        if _ELIG not in inner:
+            v.append("missing_inner_predicate")
+        if _ELIG not in outer:
+            v.append("missing_outer_predicate")
+    return v
+
+
+_G2B_CORRECT = (
+    "WITH sel AS (SELECT operation_key FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED') AND "
+    "terminal_epoch IS NOT NULL AND terminal_epoch < :cutoff ORDER BY terminal_epoch, operation_key "
+    "LIMIT :batch) DELETE FROM lifecycle_outbox WHERE operation_key IN (SELECT operation_key FROM sel) "
+    "AND state IN ('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND terminal_epoch < :cutoff "
+    "RETURNING operation_key"
+)
+
+_G2B_REASON = (
+    "cleanup_terminal is not implemented in src (Phase-1 coordinator unbuilt), so its SQL shape cannot be "
+    "accepted. When it lands it must be ONE atomic statement: a WITH <sel> CTE ordered by terminal_epoch "
+    "THEN operation_key with a bounded LIMIT, a DELETE restricted to the selected operation keys, the "
+    "eligibility predicate repeated in BOTH the inner selector AND the outer DELETE WHERE, and RETURNING. "
+    "Split select/delete, a missing inner or outer predicate, a missing tiebreak/LIMIT/RETURNING each fail."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_G2B_REASON)
+def test_g2b_cleanup_terminal_sql_shape() -> None:
+    """Phase-1 source-shape acceptance: the cleanup_terminal method's actual SQL argument must be the
+    pinned atomic CTE-DELETE shape (token-aware inspection, not a full SQL parse)."""
+    present, sql_args = _scan_cleanup_terminal_sql()
+    if not present:
+        raise DefectStillPresent(
+            "cleanup_terminal is not implemented in src (the Phase-1 coordinator is unbuilt)"
+        )
+    violations = _cleanup_sql_violations(sql_args)
+    if violations:
+        raise DefectStillPresent(f"cleanup_terminal SQL shape violations: {sorted(violations)}")
+
+
+def test_g2b_rule_discriminates_cleanup_sql_shape() -> None:
+    """GREEN mechanism proof: the pinned shape passes; split-select/delete, a missing inner predicate, a
+    missing outer predicate, a nondeterministic tie, a missing LIMIT, and a missing RETURNING each fail
+    INDEPENDENTLY. Token-aware inspection of the SQL argument - honest matching, not a SQL grammar."""
+    inner_sel = (
+        "SELECT operation_key FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED') AND "
+        "terminal_epoch IS NOT NULL AND terminal_epoch < :cutoff ORDER BY terminal_epoch, operation_key "
+        "LIMIT :batch"
+    )
+    split_delete = (
+        "DELETE FROM lifecycle_outbox WHERE operation_key IN (:keys) AND state IN ('FINAL','ABANDONED') "
+        "AND terminal_epoch IS NOT NULL AND terminal_epoch < :cutoff RETURNING operation_key"
+    )
+    missing_inner = _G2B_CORRECT.replace(
+        "WHERE state IN ('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND terminal_epoch < "
+        ":cutoff ORDER BY",
+        "ORDER BY",
+    )
+    missing_outer = _G2B_CORRECT.replace(
+        "FROM sel) AND state IN ('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND "
+        "terminal_epoch < :cutoff RETURNING",
+        "FROM sel) RETURNING",
+    )
+    nondeterministic = _G2B_CORRECT.replace(
+        "ORDER BY terminal_epoch, operation_key", "ORDER BY terminal_epoch"
+    )
+    missing_bound = _G2B_CORRECT.replace(" LIMIT :batch", "")
+    missing_returning = _G2B_CORRECT.replace(" RETURNING operation_key", "")
+
+    assert _cleanup_sql_violations([_G2B_CORRECT]) == []
+    # the count SELECTs must not be mistaken for a split (no operation_key + no LIMIT)
+    assert (
+        _cleanup_sql_violations(
+            [
+                _G2B_CORRECT,
+                "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('FINAL','ABANDONED')",
+            ]
+        )
+        == []
+    )
+    assert "split_select_delete" in _cleanup_sql_violations([inner_sel, split_delete])
+    assert _cleanup_sql_violations([missing_inner]) == ["missing_inner_predicate"]
+    assert _cleanup_sql_violations([missing_outer]) == ["missing_outer_predicate"]
+    assert _cleanup_sql_violations([nondeterministic]) == ["nondeterministic_tie"]
+    assert _cleanup_sql_violations([missing_bound]) == ["missing_bound"]
+    assert _cleanup_sql_violations([missing_returning]) == ["missing_returning"]
+
+
+# ============================================================================
 # TRANCHE 2 - Phase-1 behavior harness + reds (drive the LOCKED coordinator API)
 #
 # Evidence model (Yua 2026-07-13): the red-proof must be RERUNNABLE, not commit prose. So this file
