@@ -9548,15 +9548,17 @@ def _resolves_canonical_dir_db(path: str | None) -> bool:
     ``/var/lib/musubi/lifecycle/work.sqlite`` — NOT merely some path under ``/var/lib/musubi/lifecycle``.
     A wrong child (e.g. ``…/lifecycle/wrong.sqlite``) is a DIFFERENT database and MUST be rejected: a
     surface that named it would silently point the coordinator, backup, or restore at the wrong file while
-    a family-membership check waved it through."""
-    return path is not None and path.rstrip("/") == _CANONICAL_DIR_DB
+    a family-membership check waved it through. LITERAL equality (Yua ruling): a trailing slash makes the
+    string an invalid DB filename, so `.../work.sqlite/` is NOT canonical (no rstrip normalization)."""
+    return path == _CANONICAL_DIR_DB
 
 
 def _resolves_canonical_mount(path: str | None) -> bool:
     """True iff a compose host MOUNT names EXACTLY the canonical DIRECTORY ``/var/lib/musubi/lifecycle`` —
     NOT a wrong child (e.g. ``…/lifecycle/sub``), which would bind-mount a different subtree and break the
-    shared-unit invariant while a family-membership check waved it through."""
-    return path is not None and path.rstrip("/") == _CANONICAL_DIR_MOUNT
+    shared-unit invariant while a family-membership check waved it through. LITERAL equality (Yua ruling):
+    the mount must be EXACTLY `/var/lib/musubi/lifecycle` with no trailing slash (no rstrip)."""
+    return path == _CANONICAL_DIR_MOUNT
 
 
 def _has_lifecycle_worker_service(text: str) -> bool:
@@ -9576,32 +9578,58 @@ def _runbook_restore_dest(text: str) -> str | None:
     return m.group(1) if m else None
 
 
+_LIFECYCLE_BACKUP_TASK_NAME = "Back up sqlite lifecycle ledger"
+
+
 def _sqlite_backup_command_src(playbook_text: str) -> str | None:
-    """The SOURCE DB path of the NAMED sqlite ``.backup`` command in a backup playbook — the
-    ``sqlite3 <SRC> ".backup <DEST>"`` task that performs the lifecycle-ledger backup. Parsed from the
-    ACTUAL command (via the YAML task structure, so comments and other lifecycle-path mentions elsewhere in
-    the file are ignored). This is why a backup.yml whose *comment* mentions the DIR while its *command*
-    still reads the FILE does NOT mask the drift — the check binds to the command that actually runs, not
-    the first lifecycle path anywhere in the file."""
-    for task in _yaml_tasks(playbook_text):
-        cmd = task.get("ansible.builtin.command") or task.get("command")
-        cmd_str = cmd.get("cmd") if isinstance(cmd, dict) else cmd
-        if not isinstance(cmd_str, str):
+    """The SOURCE DB path of the sqlite ``.backup`` command in the task NAMED EXACTLY
+    ``Back up sqlite lifecycle ledger`` (Yua ruling) — bound to THAT task's name, NOT the first ``.backup``
+    anywhere. An unrelated canonical ``.backup`` earlier in the file must not mask this task reading the
+    retired FILE. Parsed from the actual command via the YAML task structure. Fails CLOSED (None) on zero,
+    duplicate, or malformed named lifecycle-backup tasks (each → not-canonical → the drift red stays RED)."""
+    named = [t for t in _yaml_tasks(playbook_text) if t.get("name") == _LIFECYCLE_BACKUP_TASK_NAME]
+    if len(named) != 1:
+        return None  # zero or duplicate named lifecycle-backup task -> fail closed
+    cmd = named[0].get("ansible.builtin.command") or named[0].get("command")
+    cmd_str = cmd.get("cmd") if isinstance(cmd, dict) else cmd
+    if not isinstance(cmd_str, str):
+        return None  # malformed named task -> fail closed
+    m = re.search(r'sqlite3\s+(\S+)\s+"?\.backup\b', cmd_str)
+    return m.group(1) if m else None
+
+
+def _readme_stores_section_lines(text: str) -> list[str]:
+    """The lines under the README's ``## Stores`` heading, up to the next heading (any level). Code fences
+    are tracked so a ``#`` inside a fenced block cannot be misread as a heading and prematurely end it."""
+    out: list[str] = []
+    in_section = False
+    in_fence = False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            if in_section:
+                out.append(line)
             continue
-        m = re.search(r'sqlite3\s+(\S+)\s+"?\.backup\b', cmd_str)
-        if m:
-            return m.group(1)
-    return None
+        if not in_fence and re.match(r"^#{1,6}\s", line):
+            in_section = re.match(r"^#{1,6}\s+Stores\b", line.strip(), re.IGNORECASE) is not None
+            continue
+        if in_section:
+            out.append(line)
+    return out
 
 
 def _readme_operational_storage_line(text: str) -> str | None:
-    """The OPERATIONAL current-storage statement in the backup README — the 'Stores' bullet describing the
-    hourly SQLite copy (``… work.sqlite … copy hourly …``). Only THIS line binds the active-storage unit;
-    historical/migration prose elsewhere in the README is intentionally NOT inspected."""
-    for line in text.splitlines():
-        if "hourly" in line and "work.sqlite" in line:
-            return line
-    return None
+    """The SINGLE operational lifecycle-storage bullet in the README's ``## Stores`` section (Yua ruling):
+    a bullet naming the lifecycle sqlite copy. ONLY the Stores section binds the active-storage unit —
+    historical/migration prose or any other section is NOT inspected, so a History line naming the DIR
+    elsewhere cannot green a Stores bullet that still names the retired FILE. Fails CLOSED (None) on zero,
+    duplicate, or ambiguous Stores bullets naming a lifecycle db."""
+    bullets = [
+        ln
+        for ln in _readme_stores_section_lines(text)
+        if re.match(r"^\s*[-*]\s", ln) and "work.sqlite" in ln
+    ]
+    return bullets[0] if len(bullets) == 1 else None
 
 
 def _readme_resolves_dir(text: str) -> bool:
@@ -9852,6 +9880,51 @@ def test_p0c_drift_parsers_discriminate() -> None:
         "## Stores\n- `lifecycle-work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
     )
     assert _readme_operational_storage_line("no operational storage statement here") is None
+
+    # ---- Yua exact-review near-misses (round 2): LITERAL equality, NAMED task, Stores section ----
+    # (1) a TRAILING SLASH is NOT canonical — rstrip normalization would false-green an invalid filename
+    assert not _resolves_canonical_dir_db("/var/lib/musubi/lifecycle/work.sqlite/")
+    assert not _resolves_canonical_mount("/var/lib/musubi/lifecycle/")
+    assert _resolves_canonical_dir_db("/var/lib/musubi/lifecycle/work.sqlite")  # exact still passes
+    assert _resolves_canonical_mount("/var/lib/musubi/lifecycle")
+    # (2) an UNRELATED canonical `.backup` FIRST must not mask the NAMED task reading the retired FILE
+    unrelated_first = (
+        "- hosts: all\n  tasks:\n"
+        "    - name: Unrelated pre-backup\n      ansible.builtin.command:\n"
+        '        cmd: sqlite3 /var/lib/musubi/lifecycle/work.sqlite ".backup /tmp/x.sqlite"\n'
+        "    - name: Back up sqlite lifecycle ledger\n      ansible.builtin.command:\n"
+        '        cmd: sqlite3 /var/lib/musubi/lifecycle-work.sqlite ".backup /mnt/x.sqlite"\n'
+    )
+    assert (
+        _sqlite_backup_command_src(unrelated_first) == _RETIRED_FILE_DB
+    )  # the NAMED task, not the first
+    assert not _resolves_canonical_dir_db(_sqlite_backup_command_src(unrelated_first))
+    # zero/duplicate named lifecycle-backup tasks fail CLOSED (None -> not canonical)
+    assert (
+        _sqlite_backup_command_src(
+            "- hosts: all\n  tasks:\n    - name: other\n      command: echo x\n"
+        )
+        is None
+    )
+    assert (
+        _sqlite_backup_command_src(
+            unrelated_first + unrelated_first.split("- hosts: all\n  tasks:\n")[1]
+        )
+        is None
+    )
+    # (3) a History line naming the DIR *with hourly* BEFORE a Stores bullet naming the FILE is still RED
+    assert not _readme_resolves_dir(
+        "## History\n- previously `lifecycle/work.sqlite` copied hourly (pre-cutover)\n\n"
+        "## Stores\n- `lifecycle-work.sqlite` and cursor files copy hourly into /mnt/snapshots/sqlite/."
+    )
+    # zero / duplicate Stores lifecycle bullets fail CLOSED (None)
+    assert _readme_operational_storage_line("## Stores\n- artifact blobs rsync hourly") is None
+    assert (
+        _readme_operational_storage_line(
+            "## Stores\n- `lifecycle/work.sqlite` copy hourly\n- `lifecycle-work.sqlite` copy hourly"
+        )
+        is None
+    )
 
 
 # ---- TASK 2: preserve-green anchor CONTROLS (UNMARKED — pass today, fail loudly on a FILE regress) -- #
@@ -10252,6 +10325,15 @@ _MIGRATION_OPERATION_TOKENS = (
 )
 
 
+def _strip_hash_line_comments(text: str) -> str:
+    """Remove ``#``-to-EOL line comments (the comment syntax shared by the supported executable formats
+    .sh/.py/.yml/.yaml) so migration EVIDENCE that appears ONLY inside a comment does not count. A bounded
+    line-based strip: everything from the first ``#`` on a line to EOL is dropped. This deliberately narrows
+    the accepted format to comment-stripped executable content rather than heuristic whole-text co-occurrence
+    (Yua ruling); the migration is downstream + narrow, not arbitrary multi-language source."""
+    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
+
 def _is_lifecycle_migration_artifact(suffix: str, text: str) -> bool:
     """True iff a deploy artifact actually BUILDS the FILE->DIR lifecycle storage migration, rather than
     merely co-mentioning the two paths. It must be:
@@ -10261,16 +10343,19 @@ def _is_lifecycle_migration_artifact(suffix: str, text: str) -> bool:
     - carry the §E fail-closed CONTRACT markers — verify-before-cutover (``integrity_check``) + the
       checkpoint used by the rollback rule (``wal_checkpoint``).
     Co-occurrence of both paths in prose, or an unrelated script that names them without the migration
-    operation + contract markers, is NOT a built migration."""
+    operation + contract markers, is NOT a built migration. All EVIDENCE (paths, operation, contract
+    markers) must appear in REAL (non-comment) content — a marker that appears only inside a ``#`` comment
+    does NOT count (Yua ruling)."""
     if suffix not in _MIGRATION_TASK_SUFFIXES:
         return False
-    names_file = re.search(r"/var/lib/musubi/lifecycle-work\.sqlite", text) is not None
-    names_dir = re.search(r"/var/lib/musubi/lifecycle/work\.sqlite", text) is not None
+    code = _strip_hash_line_comments(text)  # evidence must be in real command content, not comments
+    names_file = re.search(r"/var/lib/musubi/lifecycle-work\.sqlite", code) is not None
+    names_dir = re.search(r"/var/lib/musubi/lifecycle/work\.sqlite", code) is not None
     if not (names_file and names_dir):
         return False
-    has_operation = any(tok in text for tok in _MIGRATION_OPERATION_TOKENS)
-    verifies_before_cutover = "integrity_check" in text
-    checkpoints_for_rollback = "wal_checkpoint" in text
+    has_operation = any(tok in code for tok in _MIGRATION_OPERATION_TOKENS)
+    verifies_before_cutover = "integrity_check" in code
+    checkpoints_for_rollback = "wal_checkpoint" in code
     return has_operation and verifies_before_cutover and checkpoints_for_rollback
 
 
@@ -10348,6 +10433,28 @@ def test_p0c_storage_migration_task_detection_discriminates() -> None:
     assert not _is_lifecycle_migration_artifact(
         ".sh", _MIG_REAL_TASK_SH.replace("wal_checkpoint", "noop")
     )
+    # Yua exact-review (round 2): EVIDENCE only inside `#` comments does NOT count — a script whose ONLY
+    # non-comment statement is `true` is not a migration even if every path/operation/marker is in comments.
+    comment_only_sh = (
+        "#!/bin/sh\n"
+        "# migrate /var/lib/musubi/lifecycle-work.sqlite -> /var/lib/musubi/lifecycle/work.sqlite\n"
+        "# cp -a old new; sqlite3 integrity_check; wal_checkpoint(TRUNCATE)\n"
+        "true\n"
+    )
+    assert not _is_lifecycle_migration_artifact(".sh", comment_only_sh)
+    # each evidence class independently: moving ONE marker out of a comment is still insufficient alone
+    for marker in (
+        "/var/lib/musubi/lifecycle/work.sqlite",
+        "cp -a",
+        "integrity_check",
+        "wal_checkpoint",
+    ):
+        one_uncommented = (
+            comment_only_sh.replace(f"# {marker}", marker, 1)
+            if f"# {marker}" in comment_only_sh
+            else comment_only_sh + marker + "\n"
+        )
+        assert not _is_lifecycle_migration_artifact(".sh", one_uncommented)
     # today the REAL deploy tree builds no such task -> the UNBUILT red stays RED
     assert _lifecycle_storage_migration_task_files() == []
 
