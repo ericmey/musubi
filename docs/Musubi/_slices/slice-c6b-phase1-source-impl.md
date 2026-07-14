@@ -126,17 +126,19 @@ Yua-authorized narrow).
 
 > Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **127** functions in this
 > slice's own contract below + **8** from `08-deployment/compose-stack` = **135** `tc-coverage` bullets,
-> 0 missing. Status from runtime collection across the self files (atomicity file **100 passed / 33
-> xfailed / 0 failed / 0 XPASS** after the S2+S3+S4 flips + stage guards), NOT from tc-coverage's
+> 0 missing. Status from runtime collection across the self files (atomicity file **101 passed / 32
+> xfailed / 0 failed / 0 XPASS** after the S2+S3+S4+S5 flips + stage guards), NOT from tc-coverage's
 > classifier — which mislabels variable-reason strict-xfail reds as "passing". **S2 flipped R2, R11, R14
 > two-process race, `lifecycle_pending_cap`; S3 flips R1, R10, R12, R13, R14-single, R22; S4 flips R3, R4,
 > R5, R6, R7, R8, R9, R15, R16 (valid + two-process claim), R17, R18 + the 4 reconciler settings
-> (`lifecycle_lease_ttl_s`/`reconcile_interval_s`/`backoff_base_s`/`backoff_max_s`)** — all EMPIRICALLY
-> re-derived (not the §F paper matrix). Every other acceptance red stays strict-xfail: a
+> (`lifecycle_lease_ttl_s`/`reconcile_interval_s`/`backoff_base_s`/`backoff_max_s`); S5 flips R19
+> (PII-free bounded observability)** — all EMPIRICALLY re-derived (not the §F paper matrix). Every other
+> acceptance red stays strict-xfail: a
 > NO-OP-under-candidate stage guard (`_require_real_stage`) keeps each owed red raising its OWN
 > DefectStillPresent — not the AttributeError/OperationalError a partially-built coordinator would surface
-> (`_observe_pending`=S5 for R19; `rollback`=S6 for R20; `test_r17_reclaim` stays owed its S4+ crash
-> matrix). **G1 is closure-only and flips ONLY under H5** ([[_slices/slice-h5-unify-state-mutation]]).
+> (`rollback`=S6 for R20; `test_r17_reclaim` stays owed its S4+ crash matrix; R19's `_observe_pending`
+> guard was REMOVED at S5). **G1 is closure-only and flips ONLY under H5**
+> ([[_slices/slice-h5-unify-state-mutation]]).
 > Direct real-source proofs: `test_s2_coordinator_admission.py` (admission, client-free) +
 > `test_s3_coordinator_apply.py` (apply/finalize + wrong-shape + parity) + `test_s4_reconcile.py`
 > (reconcile: leases, backoff, crash matrix, exact-owner no-op). See the **Guard-removal checklist** below.
@@ -163,7 +165,7 @@ Yua-authorized narrow).
 19. `test_r17_crash_reclaim_readback_confirms_no_reapply` — strict-xfail — owed (S4+ reclaim CRASH matrix; no guard, its own DefectStillPresent)
 20. `test_r17_expired_owner_reclaim_safe` — GREEN — S4 flip (expired reclaim safe; fresh-token ABA fence)
 21. `test_r18_no_poison_row_starvation` — GREEN — S4 flip (fair due-time advancement; no head-of-line starvation)
-22. `test_r19_pii_free_content_and_bounded_observability` — strict-xfail — owed S5 (durable failure_class GREEN; emission/metrics/logs owed S5, `_observe_pending` guard)
+22. `test_r19_pii_free_content_and_bounded_observability` — GREEN — S5 flip (PII-free content + bounded observability: `default_registry()`-only emission, snapshot-delta on the real path, non-vacuity log + metric-class repairs)
 23. `test_r20_rollback_refuses_nonterminal_maintenance_lifecycle_and_cleanup` — strict-xfail — acceptance red (owed S2-S7)
 24. `test_r20_two_process_admission_drain_barrier_no_overlap` — strict-xfail — acceptance red (owed S2-S7)
 25. `test_r20_two_process_reconciler_drain_barrier_no_overlap` — strict-xfail — acceptance red (owed S2-S7)

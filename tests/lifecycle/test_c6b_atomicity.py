@@ -128,6 +128,7 @@ from musubi.lifecycle.maturation import (
     provisional_ttl_sweep,
 )
 from musubi.lifecycle.transitions import TransitionError
+from musubi.observability.registry import default_registry, render_text_format
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
 from musubi.planes.curated import CuratedPlane
@@ -2730,12 +2731,19 @@ class _RefCoordinator:
             self._mode == "raw_exception_reason"
         ):  # WRONG: the raw exception message may carry PII/content
             extra["reason"] = str(exc)
-        _LIFECYCLE_LOGGER.warning("lifecycle_mutation_failed", extra={"c6b": extra})
+        if (
+            self._mode != "omit_log"
+        ):  # WRONG (omit_log): drop the required static failure log entirely
+            _LIFECYCLE_LOGGER.warning("lifecycle_mutation_failed", extra={"c6b": extra})
         if self._mode == "omit_metrics":  # WRONG: emit NO metric (no observability at all)
             return
         metric_class = (
             "terminal" if cls == "terminal" else "transient"
         )  # unknown -> transient (bounded)
+        if (
+            self._mode == "unknown_class_terminal"
+        ):  # WRONG: mislabel an unknown failure's external class as terminal (not transient)
+            metric_class = "terminal"
         labels: dict[str, str] = {"class": metric_class}
         if (
             self._mode == "high_cardinality_unknown_class"
@@ -3447,18 +3455,20 @@ def _require_real_stage(method: str, reason: str) -> None:
 # ---- fixtures + shared helpers --------------------------------------------------------------------- #
 
 
-def _make_env(base: Path) -> tuple[QdrantClient, _Seed, Path]:
+def _make_env(base: Path, namespace: str = _NS) -> tuple[QdrantClient, _Seed, Path]:
+    # namespace defaults to _NS, preserving every existing caller behavior. R19 (S5) passes the PII
+    # sentinel namespace so the REAL namespace-fenced coordinator finds/applies the actual seeded object.
     base.mkdir(parents=True, exist_ok=True)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         client = QdrantClient(":memory:")
     bootstrap(client)
     plane = EpisodicPlane(client=client, embedder=FakeEmbedder())
-    obj = asyncio.run(plane.create(EpisodicMemory(namespace=_NS, content="c6b-seed")))
+    obj = asyncio.run(plane.create(EpisodicMemory(namespace=namespace, content="c6b-seed")))
     seed = _Seed(
         collection=str(collection_for_plane("episodic")),
         object_id=str(obj.object_id),
-        namespace=_NS,
+        namespace=namespace,
         version=int(obj.version),
     )
     return client, seed, base / "lifecycle.db"
@@ -5383,27 +5393,63 @@ def _check_r18(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         c.close()
 
 
+# R19 (S5) real-path helpers. The REAL coordinator emits ONLY through the process-wide default_registry
+# (no `_metrics`/`_prometheus_exposition` test mirror, per Yua R-14:23), so the real path reads the shared
+# exposition and asserts selected-series DELTAS (the counter is monotonic + process-wide) and absolute
+# values (the gauge is a SET). A wrong candidate NEVER writes the default_registry (it is a test-local
+# _RefCoordinator whose evidence stays on `_metrics`), so the real snapshot below is only exercised by the
+# real coordinator and never polluted by the discrimination matrix (Yua R-14:28).
+#: Standard LogRecord attributes plus the formatting artifacts a handler adds when it renders the record
+#: (`message` = getMessage(), `asctime`) - none of which are coordinator-supplied PII/prohibited fields.
+_R19_BASELINE_LOGRECORD_KEYS = frozenset(
+    logging.LogRecord(
+        name="x", level=logging.WARNING, pathname="p", lineno=1, msg="m", args=None, exc_info=None
+    ).__dict__
+) | {"message", "asctime"}
+
+
+def _r19_series_value(text: str, name: str, labels: dict[str, str]) -> float:
+    """The value of EXACTLY one Prometheus series (`name{sorted labels} value`) in an exposition text,
+    or 0.0 if absent. Used to diff before/after snapshots of the shared registry for the real path."""
+    if labels:
+        target = name + "{" + ",".join(f'{k}="{v}"' for k, v in labels.items()) + "} "
+    else:
+        target = name + " "
+    for line in text.splitlines():
+        if line.startswith("#"):
+            continue
+        if line.startswith(target):
+            return float(line[len(target) :].strip())
+    return 0.0
+
+
 def _check_r19(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """PII-free content + bounded observability (Yua R19): the outbox persists ONLY the canonical minimal
     target patch (state/version/lineage) + matching SHA - no arbitrary payload/unknown keys; and the
     coordinator NEVER emits operation/object/namespace/content/patch/reason/token into logs or metric
     labels. Metrics are a no-label pending gauge + a failures counter whose only label is class in
-    {terminal, transient}. Adversarial PII sentinels are injected into the operation_key, the intent
+    {terminal, transient} (a durable ``unknown`` maps to the external ``transient`` class - never an
+    ``unknown`` label). Adversarial PII sentinels are injected into the operation_key, the intent
     namespace/reason, and the exception message, then checked across the row, the captured log, and the
-    Prometheus exposition. R13 full-readback SHA and R15 unknown classification (without leaking reason)
-    are preserved."""
-    _require_real_stage("_observe_pending", _R19_REASON)
+    metric exposition. The REAL coordinator emits through the shared default_registry (snapshot
+    before/after + selected-series delta), a wrong candidate through its test-local `_metrics` surface.
+    Two non-vacuity holes are closed: the metric class of an unknown failure MUST be ``transient`` (+1,
+    with no ``terminal``/``unknown`` pollution), and the static ``lifecycle_mutation_failed`` log MUST
+    exist carrying failure_class=unknown and no PII/prohibited fields. R13 full-readback SHA and R15
+    unknown classification (without leaking reason) are preserved."""
+    real = _ACTIVE_CANDIDATE is None
     base = Path(db_path).parent
-    c, s, d = _make_env(base / "r19")
+    # Yua R-14:34: `PIISENTINEL-ns` is INVALID under Namespace validation; use a VALID dedicated namespace
+    # that still carries the sentinel, seed the REAL object there (via _make_env), and use the RETURNED
+    # seed so the namespace-fenced coordinator finds/applies the actual row. BOTH the sentinel AND the
+    # exact namespace string are prohibited leak needles.
+    pii_namespace = f"{_PII_SENTINEL.lower()}-ns/presence/episodic"
+    c, s, d = _make_env(base / "r19", namespace=pii_namespace)
+    poison = s
     op = f"{_PII_SENTINEL}-op"
     reason = f"{_PII_SENTINEL}-reason"
-    # a seed carrying a PII namespace (points at the real object; apply keys on object_id+version).
-    poison = _Seed(
-        collection=s.collection,
-        object_id=s.object_id,
-        namespace=f"{_PII_SENTINEL}-ns",
-        version=s.version,
-    )
+    needles = (_PII_SENTINEL, pii_namespace)
+    before = render_text_format(default_registry()) if real else ""
     cap = _LogCapture()
     _LIFECYCLE_LOGGER.addHandler(cap)
     old_level = _LIFECYCLE_LOGGER.level
@@ -5440,57 +5486,149 @@ def _check_r19(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
         raise DefectStillPresent(
             "R19 the stored patch_sha must be the canonical SHA of the intended patch (R13 preserved)"
         )
-    if _PII_SENTINEL in str(row["patch_json"]):
+    if any(n in str(row["patch_json"]) for n in needles):
         raise DefectStillPresent("R19 no PII may appear in the persisted patch")
 
-    # LOG: no captured record may carry any PII (message OR structured fields).
+    # ROW (durable classification, real path): the injected unknown apply failure must be recorded
+    # DURABLY on the outbox row as failure_class='unknown' - queried directly from the store DB, since
+    # the external metric alone is insufficient (a candidate could emit a metric without persisting).
+    if real:
+        durable_class = _outbox_field(d, op, "failure_class")
+        if durable_class != "unknown":
+            raise DefectStillPresent(
+                "R19 the outbox row must durably record failure_class='unknown' for the injected "
+                f"unknown apply failure; got {durable_class!r}"
+            )
+
+    # LOG (PII): no captured record may carry any leak needle (message OR structured fields).
     for r in cap.records:
         blob = f"{r.getMessage()} {r.__dict__}"
-        if _PII_SENTINEL in blob:
+        if any(n in blob for n in needles):
             raise DefectStillPresent(f"R19 no PII may appear in a log record: {blob[:120]}")
 
-    # METRICS: emission is REQUIRED (exactly one pending gauge + one failure delta, correct values), every
-    # NAME is whitelisted and PII-free, the pending gauge is UNLABELED, and the failures counter has
-    # EXACTLY class in {terminal, transient}. Same for the rendered Prometheus exposition.
-    for name, labels, _value in coord._metrics:
-        if name not in _ALLOWED_METRIC_NAMES or _PII_SENTINEL in name:
+    # LOG (non-vacuity): the static failure event MUST exist carrying failure_class=unknown - a candidate
+    # that omits the log cannot vacuously pass. The REAL coordinator carries a DIRECT failure_class
+    # attribute and NO prohibited extra fields; a test-local reference nests it under `c6b`.
+    if real:
+        direct = [
+            r
+            for r in cap.records
+            if r.getMessage() == "lifecycle_mutation_failed"
+            and getattr(r, "failure_class", None) == "unknown"
+        ]
+        if len(direct) != 1:
             raise DefectStillPresent(
-                f"R19 metric name must be in the whitelist {sorted(_ALLOWED_METRIC_NAMES)}, PII-free; got {name!r}"
+                "R19 exactly ONE 'lifecycle_mutation_failed' log with a DIRECT failure_class=unknown "
+                f"attribute is required, got {len(direct)}"
             )
-        if name == "musubi_lifecycle_outbox_pending":
-            if labels:
-                raise DefectStillPresent(f"R19 the pending gauge must be UNLABELED, got {labels}")
-        elif set(labels.keys()) != {"class"}:
+        extra_keys = set(direct[0].__dict__) - _R19_BASELINE_LOGRECORD_KEYS
+        if extra_keys != {"failure_class"}:
             raise DefectStillPresent(
-                f"R19 the failures metric must have EXACTLY a 'class' label (no object/namespace); "
-                f"got {set(labels.keys())}"
+                "R19 the failure log must carry ONLY failure_class (no PII/prohibited fields); "
+                f"unexpected extra fields: {sorted(extra_keys - {'failure_class'})}"
             )
-        elif labels["class"] not in ("terminal", "transient"):
+        # LOG (no traceback): discriminate the no-traceback requirement EXPLICITLY - the record must carry
+        # no exception/stack payload (which could embed the PII exc message or a traceback), not merely
+        # infer it from the extra-key shape.
+        rec = direct[0]
+        if not (rec.exc_info is None and rec.exc_text is None and rec.stack_info is None):
             raise DefectStillPresent(
-                f"R19 the metric class label must be bounded to terminal|transient; got {labels['class']!r}"
+                "R19 the failure log must carry NO traceback: exc_info/exc_text/stack_info must all be "
+                f"None; got exc_info={rec.exc_info!r} exc_text={rec.exc_text!r} stack_info={rec.stack_info!r}"
             )
-        if any(_PII_SENTINEL in str(v) for v in labels.values()):
-            raise DefectStillPresent("R19 no PII may appear in a metric label")
-    pending = [m for m in coord._metrics if m[0] == "musubi_lifecycle_outbox_pending"]
-    failures = [
-        m for m in coord._metrics if m[0] == "musubi_lifecycle_outbox_mutation_failures_total"
-    ]
-    if len(pending) != 1:
-        raise DefectStillPresent(
-            f"R19 exactly ONE pending gauge sample expected, got {len(pending)}"
+    else:
+        logged = [
+            r
+            for r in cap.records
+            if r.getMessage() == "lifecycle_mutation_failed"
+            and (getattr(r, "c6b", None) or {}).get("failure_class") == "unknown"
+        ]
+        if len(logged) != 1:
+            raise DefectStillPresent(
+                "R19 exactly ONE 'lifecycle_mutation_failed' log carrying failure_class=unknown is "
+                f"required, got {len(logged)}"
+            )
+
+    # METRICS: emission is REQUIRED. The unknown failure must be exactly ONE external `class=transient`
+    # delta (+1), NO `class=terminal` delta, and NO `unknown` class anywhere; the pending gauge is
+    # exactly 1 and UNLABELED. Names are whitelisted + PII-free.
+    if real:
+        after = render_text_format(default_registry())
+        fname = "musubi_lifecycle_outbox_mutation_failures_total"
+        d_transient = _r19_series_value(after, fname, {"class": "transient"}) - _r19_series_value(
+            before, fname, {"class": "transient"}
         )
-    if len(failures) != 1:
-        raise DefectStillPresent(
-            f"R19 exactly ONE failure counter delta expected, got {len(failures)}"
+        d_terminal = _r19_series_value(after, fname, {"class": "terminal"}) - _r19_series_value(
+            before, fname, {"class": "terminal"}
         )
-    if pending[0][2] != 1.0:
-        raise DefectStillPresent(
-            f"R19 the pending gauge must be 1 (the poison row), got {pending[0][2]}"
-        )
-    if failures[0][2] != 1.0:
-        raise DefectStillPresent(f"R19 the failure counter delta must be 1, got {failures[0][2]}")
-    if _PII_SENTINEL in coord._prometheus_exposition():
-        raise DefectStillPresent("R19 no PII may appear in the Prometheus exposition")
+        if d_transient != 1.0:
+            raise DefectStillPresent(
+                f"R19 the unknown failure must map to EXACTLY one class=transient delta (+1), got {d_transient}"
+            )
+        if d_terminal != 0.0:
+            raise DefectStillPresent(
+                f"R19 no class=terminal failure delta is expected for an unknown failure, got {d_terminal}"
+            )
+        if 'class="unknown"' in after:
+            raise DefectStillPresent("R19 no 'unknown' metric class may ever be emitted")
+        if "musubi_lifecycle_outbox_pending{" in after:
+            raise DefectStillPresent("R19 the pending gauge must be UNLABELED")
+        pend = _r19_series_value(after, "musubi_lifecycle_outbox_pending", {})
+        if pend != 1.0:
+            raise DefectStillPresent(
+                f"R19 the pending gauge must be exactly 1 (the poison row), got {pend}"
+            )
+        if any(n in after for n in needles):
+            raise DefectStillPresent("R19 no PII may appear in the metric exposition")
+    else:
+        for name, labels, _value in coord._metrics:
+            if name not in _ALLOWED_METRIC_NAMES or any(n in name for n in needles):
+                raise DefectStillPresent(
+                    f"R19 metric name must be in the whitelist {sorted(_ALLOWED_METRIC_NAMES)}, PII-free; got {name!r}"
+                )
+            if name == "musubi_lifecycle_outbox_pending":
+                if labels:
+                    raise DefectStillPresent(
+                        f"R19 the pending gauge must be UNLABELED, got {labels}"
+                    )
+            elif set(labels.keys()) != {"class"}:
+                raise DefectStillPresent(
+                    f"R19 the failures metric must have EXACTLY a 'class' label (no object/namespace); "
+                    f"got {set(labels.keys())}"
+                )
+            elif labels["class"] not in ("terminal", "transient"):
+                raise DefectStillPresent(
+                    f"R19 the metric class label must be bounded to terminal|transient; got {labels['class']!r}"
+                )
+            if any(any(n in str(v) for n in needles) for v in labels.values()):
+                raise DefectStillPresent("R19 no PII may appear in a metric label")
+        pending = [m for m in coord._metrics if m[0] == "musubi_lifecycle_outbox_pending"]
+        failures = [
+            m for m in coord._metrics if m[0] == "musubi_lifecycle_outbox_mutation_failures_total"
+        ]
+        if len(pending) != 1:
+            raise DefectStillPresent(
+                f"R19 exactly ONE pending gauge sample expected, got {len(pending)}"
+            )
+        if len(failures) != 1:
+            raise DefectStillPresent(
+                f"R19 exactly ONE failure counter delta expected, got {len(failures)}"
+            )
+        if pending[0][2] != 1.0:
+            raise DefectStillPresent(
+                f"R19 the pending gauge must be 1 (the poison row), got {pending[0][2]}"
+            )
+        if failures[0][2] != 1.0:
+            raise DefectStillPresent(
+                f"R19 the failure counter delta must be 1, got {failures[0][2]}"
+            )
+        if failures[0][1].get("class") != "transient":
+            raise DefectStillPresent(
+                "R19 the unknown failure must map to the external class=transient (not terminal/unknown); "
+                f"got {failures[0][1].get('class')!r}"
+            )
+        if any(n in coord._prometheus_exposition() for n in needles):
+            raise DefectStillPresent("R19 no PII may appear in the Prometheus exposition")
     c.close()
 
 
@@ -6009,7 +6147,6 @@ def test_r18_no_poison_row_starvation(
     _check_r18(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R19_REASON)
 def test_r19_pii_free_content_and_bounded_observability(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
@@ -7394,6 +7531,8 @@ _RED_PROOF: dict[str, tuple[Any, list[str]]] = {
             "omit_metrics",
             "double_count_metrics",
             "dynamic_metric_name",
+            "unknown_class_terminal",  # non-vacuity: maps unknown->terminal metric class (must be transient)
+            "omit_log",  # non-vacuity: drops the required static failure log
         ],
     ),
     "r15": (

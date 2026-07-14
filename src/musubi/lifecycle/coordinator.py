@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import secrets
 import sqlite3
@@ -46,8 +47,11 @@ from pydantic import ValidationError
 from qdrant_client import models
 
 from musubi.lifecycle import store
+from musubi.observability.registry import Counter, Gauge, default_registry
 from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
+
+log = logging.getLogger(__name__)
 
 #: Default global cap on non-terminal (PENDING/APPLIED) outbox rows. A positive int;
 #: there is no unbounded/None option (admission must always have a bound).
@@ -65,6 +69,22 @@ DEFAULT_BACKOFF_MAX = 300.0
 #: values). Matches the accepted contract's fixed patch epoch.
 _FIXED_UPDATED_AT = "2026-07-13T00:00:00+00:00"
 _FIXED_UPDATED_EPOCH = datetime.fromisoformat(_FIXED_UPDATED_AT).timestamp()
+
+#: R19 bounded observability (S5) — registered on the process-wide default registry so the worker
+#: ``/metrics`` scrape and the contract tests see the SAME instruments. The gauge is UNLABELED
+#: (a cap-backstop depth signal); the failures counter's ONLY label is the bounded external
+#: ``class`` in ``{terminal, transient}`` — a runtime ``unknown`` classification stays durably
+#: ``unknown`` in the row but maps to the external ``transient`` class (never an ``unknown`` label).
+#: No object/namespace/operation identifier ever enters a metric name or label.
+_OUTBOX_PENDING: Gauge = default_registry().gauge(
+    "musubi_lifecycle_outbox_pending",
+    "Current non-terminal (PENDING/APPLIED) lifecycle outbox depth.",
+)
+_OUTBOX_MUTATION_FAILURES: Counter = default_registry().counter(
+    "musubi_lifecycle_outbox_mutation_failures_total",
+    "Lifecycle outbox mutation failures, by bounded external class {terminal, transient}.",
+    ("class",),
+)
 
 
 @dataclass(frozen=True)
@@ -865,6 +885,29 @@ class LifecycleTransitionCoordinator:
             return "transient"
         return "unknown"
 
+    def _observe_failure(self, failure_class: str) -> None:
+        """R19 (S5): PII-free failure observability from the reconcile apply-except. Emits a static
+        event code + the bounded durable ``failure_class`` ONLY into the log (never operation_key,
+        object_id, namespace, content, patch, reason, token, exception message, or traceback), and
+        increments the mutation-failures counter under the bounded external ``class`` label. A durable
+        ``unknown`` maps to the external ``transient`` class (there is no ``unknown`` metric label)."""
+        log.warning("lifecycle_mutation_failed", extra={"failure_class": failure_class})
+        metric_class = "terminal" if failure_class == "terminal" else "transient"
+        _OUTBOX_MUTATION_FAILURES.labels(**{"class": metric_class}).inc()
+
+    def _observe_pending(self) -> None:
+        """R19 (S5): set the UNLABELED pending-depth gauge to the current non-terminal
+        (PENDING/APPLIED) outbox depth — a bounded cap-backstop signal emitted once per reconcile
+        pass. No identifier ever enters the gauge."""
+        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        try:
+            depth = con.execute(
+                "SELECT COUNT(*) FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED')"
+            ).fetchone()[0]
+        finally:
+            con.close()
+        _OUTBOX_PENDING.set(float(depth))
+
     def _cur(self, collection: str, object_id: str, namespace: str) -> tuple[object, object]:
         """The object's CURRENT ``(version, state)`` from Qdrant (readback-recovery); ``(None, None)``
         if absent/ambiguous."""
@@ -1034,6 +1077,8 @@ class LifecycleTransitionCoordinator:
             self._reconcile_claimed(
                 opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state, token, counts
             )
+        # R19 (S5): emit the UNLABELED pending-depth gauge exactly ONCE per reconcile pass.
+        self._observe_pending()
         return ReconcileReport(**counts)
 
     def _reconcile_claimed(
@@ -1093,6 +1138,9 @@ class LifecycleTransitionCoordinator:
             status = self._apply_conditional(opk, coll, oid, _intended_patch(intent))
         except Exception as exc:  # classified terminal vs retryable
             cls = self._classify(exc)
+            # R19 (S5): PII-free failure observability on the durable classification (unknown→transient
+            # at the external metric label; the log carries the durable class only).
+            self._observe_failure(cls)
             if cls == "terminal":
                 self._persist_attempt(
                     opk,
