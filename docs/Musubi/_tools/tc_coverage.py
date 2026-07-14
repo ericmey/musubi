@@ -160,32 +160,71 @@ def _extract_skip_reason(
     return None
 
 
-def _module_string_constants(tree: ast.Module) -> dict[str, str]:
-    """Build a name -> string map for module-level str assignments.
+def _assignment_target_value(node: ast.stmt) -> tuple[ast.expr | None, ast.expr | None]:
+    """Return (target, value) for simple ``Name = ...`` / ``Name: T = ...`` statements.
 
-    Only the first matching assignment per name is kept; later reassignments
-    are ignored to keep the map predictable. Used by ``_find_test_definition``
-    to feed ``_extract_skip_reason`` for variable reasons (Issue #457).
+    Returns (None, None) for any other statement shape (multi-target assign,
+    tuple unpacking, function/class def, import, augmented assign, etc.).
+    Used by the positional resolver so we only follow the single-target
+    simple-name patterns Python can actually evaluate at module scope.
     """
-    out: dict[str, str] = {}
+    if isinstance(node, ast.Assign):
+        if len(node.targets) != 1:
+            return None, None
+        return node.targets[0], node.value
+    if isinstance(node, ast.AnnAssign) and node.value is not None:
+        return node.target, node.value
+    return None, None
+
+
+def _positional_module_string_bindings(
+    tree: ast.Module, target_node: ast.FunctionDef | ast.AsyncFunctionDef
+) -> dict[str, str]:
+    """Resolve module-level ``Name = "literal"`` / ``Name: str = "literal"`` bindings
+    AT THE POSITION of ``target_node`` (Issue #457 positional repair, chair-20260714-
+    094556-c88885cb).
+
+    Walks ``tree.body`` IN ORDER, tracking each simple-name binding as Python
+    would at module-evaluation time:
+
+      - simple-name string Assign/AnnAssign -> update the binding to that string
+      - simple-name non-string Assign/AnnAssign -> mark the name as unresolved
+        (it was bound, just not to a string; Python would raise TypeError at
+        decorator eval if the name is used as a ``reason=`` kwarg)
+      - any other statement shape (multi-target, tuple unpacking, function
+        def, import, augmented assign, etc.) -> ignored; the binding is
+        left as-is (Python may or may not bind a name; we cannot tell from
+        the AST alone, so the conservative choice is to leave the prior
+        binding intact — which matches what a real Python interpreter
+        would observe for the simple cases we care about)
+      - any node AFTER ``target_node`` is NOT visited (Python has not
+        evaluated it yet when the decorator runs; the binding is not
+        visible at decorator time)
+
+    Returns a dict of name -> resolved-string for names currently bound
+    to a string at the position of ``target_node``. Names marked unresolved
+    are excluded from the result; names not yet bound are also excluded.
+    """
+    bindings: dict[str, str | None] = {}
     for node in tree.body:
-        target: ast.expr | None = None
-        value: ast.expr | None = None
-        if isinstance(node, ast.Assign):
-            if len(node.targets) != 1:
-                continue
-            target = node.targets[0]
-            value = node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            target = node.target
-            value = node.value
-        else:
+        if node is target_node:
+            break
+        target, value = _assignment_target_value(node)
+        if target is None or value is None:
             continue
-        if not isinstance(target, ast.Name) or target.id in out:
+        if not isinstance(target, ast.Name):
             continue
         if isinstance(value, ast.Constant) and isinstance(value.value, str):
-            out[target.id] = value.value
-    return out
+            bindings[target.id] = value.value
+        else:
+            # Non-string rebind: the name is bound at this position, just
+            # not to a string. Mark unresolved so a later lookup returns None
+            # (matching the bounded semantic: if Python tried to use the
+            # name as a string reason, it would raise TypeError, which is
+            # not the ``str | None`` shape we return; we report None
+            # instead of fabricating a string).
+            bindings[target.id] = None
+    return {k: v for k, v in bindings.items() if v is not None}
 
 
 def _find_test_definition(func_name: str) -> tuple[Path, int, str | None] | None:
@@ -193,7 +232,9 @@ def _find_test_definition(func_name: str) -> tuple[Path, int, str | None] | None
 
     The ``reason-if-any`` is sourced from the matching decorator's ``reason=``
     kwarg; it may be a string literal or a module-level name resolved to a
-    string constant (Issue #457).
+    string constant AT THE POSITION OF THE FUNCTION (Issue #457 positional
+    repair, chair-20260714-094556-c88885cb). The positional snapshot stops
+    AT (not past) the function node so later rebinds are not visible.
     """
     if not TESTS_DIR.exists():
         return None
@@ -209,9 +250,9 @@ def _find_test_definition(func_name: str) -> tuple[Path, int, str | None] | None
         except SyntaxError:
             continue
 
-        module_names = _module_string_constants(tree)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
+                module_names = _positional_module_string_bindings(tree, node)
                 reason = None
                 for decorator in node.decorator_list:
                     r = _extract_skip_reason(decorator, module_names=module_names)
