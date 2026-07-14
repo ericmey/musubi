@@ -87,18 +87,39 @@ import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+import jwt
 import pytest
+from fastapi.testclient import TestClient
+from pydantic import AnyHttpUrl, SecretStr
 from qdrant_client import QdrantClient, models
 
+from musubi.api.app import create_app
+from musubi.api.dependencies import (
+    get_artifact_plane,
+    get_concept_plane,
+    get_curated_plane,
+    get_embedder,
+    get_episodic_plane,
+    get_qdrant_client,
+    get_reranker,
+    get_settings_dep,
+)
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.transitions import TransitionError
+from musubi.planes.artifact import ArtifactPlane
+from musubi.planes.concept import ConceptPlane
+from musubi.planes.curated import CuratedPlane
 from musubi.planes.episodic import EpisodicPlane
+from musubi.settings import Settings
 from musubi.store import bootstrap
 from musubi.store.names import collection_for_plane
+from musubi.types.artifact import SourceArtifact
 from musubi.types.common import Err, Ok, generate_ksuid
+from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
 
 _SRC = Path(__file__).resolve().parents[2] / "src" / "musubi"
@@ -7387,3 +7408,396 @@ def test_crash_red_proof_correct_passes_and_wrong_fails(red: str, tmp_path: Path
     for mode in wrongs:
         with _candidate(mode), pytest.raises(DefectStillPresent):
             check(tmp_path / f"{red}-{mode}")
+
+
+# ============================================================================
+# R21 RUNTIME REDS (P0b) — the three-way TransitionOutcome as it is actually
+# EXERCISED, not just modelled (Yua: the reference adapter CANNOT be the acceptance
+# surface). These reds drive the REAL routes/sweeps and monkeypatch only the
+# `transition` seam each module imported, so the observed behaviour is the real
+# handler's, while `src/musubi` stays absent.
+#
+#   TASK 1 — the four HTTP transition routes must map Ok(Pending) -> 202 typed body.
+#   TASK 2 — the six maturation sweep callsites must DEFER a Pending (not count it,
+#            not run dependent work, not retry, retain the ids).
+#
+# Every strict-xfail raises a DEDICATED DefectStillPresent for its own named missing
+# behaviour ONLY; the unmarked discriminators prove each acceptance check catches the
+# wrong shape AND passes the right one.
+# ============================================================================
+
+
+_R21_OPK = "opk-r21-pending"
+_R21_EVENT_ID = "ev-r21-pending"
+
+
+def _pending_outcome() -> Any:
+    """An ``Ok(<pending>)`` shaped like the LOCKED ``TransitionPending`` (operation_key + event_id)."""
+    return Ok(value=_RefPending(operation_key=_R21_OPK, event_id=_R21_EVENT_ID))
+
+
+@dataclass(frozen=True)
+class _RouteFinalLike:
+    """Minimal ``TransitionResult``-shaped value the lifecycle handler reads attributes off. The
+    archive/delete handlers ignore the value and return a hardcoded body, so any ``Ok`` maps 200 there."""
+
+    object_id: str = "0" * 27
+    object_type: str = "episodic"
+    from_state: str = "provisional"
+    to_state: str = "matured"
+    version: int = 2
+
+
+def _final_outcome() -> Any:
+    return Ok(value=_RouteFinalLike())
+
+
+def _err_outcome() -> Any:
+    return Err(error=TransitionError(code="illegal_transition", message="r21 control error"))
+
+
+# ---- self-contained FastAPI harness (mirrors tests/api/conftest app_factory) ---------------------- #
+
+_R21_ISSUER = "https://auth.example.test"
+
+
+def _r21_settings(tmp_path: Path) -> Settings:
+    return Settings.model_validate(
+        {
+            "qdrant_host": "qdrant",
+            "qdrant_api_key": SecretStr("test-qdrant-key"),
+            "tei_dense_url": AnyHttpUrl("http://tei-dense"),
+            "tei_sparse_url": AnyHttpUrl("http://tei-sparse"),
+            "tei_reranker_url": AnyHttpUrl("http://tei-reranker"),
+            "ollama_url": AnyHttpUrl("http://ollama:11434"),
+            "embedding_model": "BAAI/bge-m3",
+            "sparse_model": "naver/splade-v3",
+            "reranker_model": "BAAI/bge-reranker-v2-m3",
+            "llm_model": "qwen2.5:7b-instruct-q4_K_M",
+            "vault_path": tmp_path / "vault",
+            "artifact_blob_path": tmp_path / "artifacts",
+            "lifecycle_sqlite_path": tmp_path / "lifecycle.sqlite",
+            "log_dir": tmp_path / "logs",
+            "jwt_signing_key": SecretStr("a-very-long-test-signing-key-for-hs256-tokens-32+bytes"),
+            "oauth_authority": AnyHttpUrl(_R21_ISSUER),
+            "musubi_skip_bootstrap": True,
+        }
+    )
+
+
+def _r21_token(settings: Settings, *, scopes: list[str], presence: str = "eric/claude-code") -> str:
+    now = datetime.now(UTC)
+    payload = {
+        "iss": _R21_ISSUER,
+        "sub": "eric-claude-code",
+        "aud": "musubi",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(hours=1)).timestamp()),
+        "jti": "r21-token",
+        "scope": " ".join(scopes),
+        "presence": presence,
+    }
+    return jwt.encode(payload, settings.jwt_signing_key.get_secret_value(), algorithm="HS256")
+
+
+@dataclass
+class _RouteEnv:
+    client: TestClient
+    settings: Settings
+    qdrant: QdrantClient
+    episodic: EpisodicPlane
+    curated: CuratedPlane
+    concept: ConceptPlane
+    artifact: ArtifactPlane
+
+
+def _reset_api_globals() -> None:
+    from musubi.api.idempotency import _GLOBAL_CACHE, _GLOBAL_LEASE_CACHE
+    from musubi.api.rate_limit import _GLOBAL_LIMITER
+
+    _GLOBAL_LIMITER.reset_for_test()
+    _GLOBAL_CACHE._entries.clear()
+    _GLOBAL_LEASE_CACHE._entries.clear()
+
+
+@pytest.fixture
+def route_env(tmp_path: Path) -> Iterator[_RouteEnv]:
+    """Self-contained FastAPI app + in-memory Qdrant + planes. The TestClient is built with
+    ``raise_server_exceptions=False`` so a handler that mishandles Pending yields a clean non-202
+    Response (e.g. 500) instead of leaking an exception into the red — the red then raises a DEDICATED
+    ``DefectStillPresent`` for "route X does not map Pending -> 202", never an unrelated exception."""
+    settings = _r21_settings(tmp_path)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        qdrant = QdrantClient(":memory:")
+    bootstrap(qdrant)
+    embedder = FakeEmbedder()
+    episodic = EpisodicPlane(client=qdrant, embedder=embedder)
+    curated = CuratedPlane(client=qdrant, embedder=embedder)
+    concept = ConceptPlane(client=qdrant, embedder=embedder)
+    artifact = ArtifactPlane(client=qdrant, embedder=embedder)
+    app = create_app(settings=settings)
+    app.dependency_overrides[get_settings_dep] = lambda: settings
+    app.dependency_overrides[get_qdrant_client] = lambda: qdrant
+    app.dependency_overrides[get_embedder] = lambda: embedder
+    app.dependency_overrides[get_reranker] = lambda: embedder
+    app.dependency_overrides[get_episodic_plane] = lambda: episodic
+    app.dependency_overrides[get_curated_plane] = lambda: curated
+    app.dependency_overrides[get_concept_plane] = lambda: concept
+    app.dependency_overrides[get_artifact_plane] = lambda: artifact
+    _reset_api_globals()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        yield _RouteEnv(client, settings, qdrant, episodic, curated, concept, artifact)
+    _reset_api_globals()
+    qdrant.close()
+
+
+def _patch_transition(monkeypatch: pytest.MonkeyPatch, dotted: str, outcome: Any) -> None:
+    """Replace the ``transition`` name imported into a router module with a stub returning ``outcome``."""
+
+    def _fake(*_args: Any, **_kwargs: Any) -> Any:
+        return outcome
+
+    monkeypatch.setattr(dotted, _fake)
+
+
+def _safe_json(response: Any) -> Any:
+    try:
+        return response.json()
+    except Exception:  # a 500 with a non-JSON body — keep the raw text visible in the red message
+        return {"_raw": response.text}
+
+
+def _seed_episodic_row(env: _RouteEnv, ns: str, content: str) -> str:
+    saved = asyncio.run(env.episodic.create(EpisodicMemory(namespace=ns, content=content)))
+    return str(saved.object_id)
+
+
+def _seed_artifact_row(env: _RouteEnv, ns: str) -> str:
+    saved = asyncio.run(
+        env.artifact.create(
+            SourceArtifact(
+                namespace=ns,
+                title="r21-archive-target",
+                filename="r21.txt",
+                sha256=hashlib.sha256(b"r21").hexdigest(),
+                content_type="text/plain",
+                size_bytes=3,
+                chunker="markdown-headings-v1",
+            )
+        )
+    )
+    return str(saved.object_id)
+
+
+def _seed_curated_row(env: _RouteEnv, ns: str) -> str:
+    saved = asyncio.run(
+        env.curated.create(
+            CuratedKnowledge(
+                namespace=ns,
+                title="r21-delete-target",
+                content="r21 curated body",
+                vault_path="curated/r21.md",
+                body_hash=hashlib.sha256(b"r21-curated").hexdigest(),
+            )
+        )
+    )
+    return str(saved.object_id)
+
+
+def _drive_route(
+    env: _RouteEnv, monkeypatch: pytest.MonkeyPatch, route: str, outcome: Any
+) -> tuple[int, Any]:
+    """Seed a real row, patch the route's ``transition`` seam to return ``outcome``, invoke the REAL
+    authed handler, and return ``(status_code, body)``."""
+    if route == "lifecycle":
+        ns = "eric/claude-code/episodic"
+        oid = _seed_episodic_row(env, ns, "r21-transition-target")
+        _patch_transition(monkeypatch, "musubi.api.routers.writes_lifecycle.transition", outcome)
+        token = _r21_token(env.settings, scopes=["operator"])
+        r = env.client.post(
+            "/v1/lifecycle/transition",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"object_id": oid, "to_state": "matured", "actor": "r21", "reason": "r21-map"},
+        )
+        return r.status_code, _safe_json(r)
+    if route == "artifact":
+        ns = "eric/claude-code/artifact"
+        oid = _seed_artifact_row(env, ns)
+        _patch_transition(monkeypatch, "musubi.api.routers.writes_artifact.transition", outcome)
+        token = _r21_token(env.settings, scopes=[f"{ns}:rw"])
+        r = env.client.post(
+            f"/v1/artifacts/{oid}/archive",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"namespace": ns},
+        )
+        return r.status_code, _safe_json(r)
+    if route == "curated":
+        ns = "eric/claude-code/curated"
+        oid = _seed_curated_row(env, ns)
+        _patch_transition(monkeypatch, "musubi.api.routers.writes_curated.transition", outcome)
+        token = _r21_token(env.settings, scopes=[f"{ns}:rw"])
+        r = env.client.delete(
+            f"/v1/curated/{oid}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"namespace": ns},
+        )
+        return r.status_code, _safe_json(r)
+    if route == "episodic":
+        ns = "eric/claude-code/episodic"
+        oid = _seed_episodic_row(env, ns, "r21-soft-delete-target")
+        _patch_transition(monkeypatch, "musubi.api.routers.writes_episodic.transition", outcome)
+        token = _r21_token(env.settings, scopes=[f"{ns}:rw"])
+        r = env.client.delete(
+            f"/v1/episodic/{oid}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"namespace": ns},
+        )
+        return r.status_code, _safe_json(r)
+    raise AssertionError(f"unknown route {route!r}")
+
+
+def _pending_response_ok(status: int, body: Any) -> bool:
+    """The acceptance check for the Pending->202 contract: HTTP 202 + a typed body carrying at least
+    ``status="pending"`` and BOTH identifiers, with no fabricated success fields required."""
+    return (
+        status == 202
+        and isinstance(body, dict)
+        and body.get("status") == "pending"
+        and "operation_key" in body
+        and "event_id" in body
+    )
+
+
+# ---- TASK 1 reds: one strict-xfail per REAL transition route (Pending -> 202 typed body) ----------- #
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="writes_lifecycle.lifecycle_transition (writes_lifecycle.py:50) treats every Ok as a Final "
+    "and reads TransitionResult attributes off it -> a Pending outcome yields AttributeError -> 500; "
+    "there is no Ok(Pending)->202 typed-body branch. Flips XPASS when S7 wires the 202 pending mapping.",
+)
+def test_r21_route_lifecycle_pending_maps_to_202(
+    route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status, body = _drive_route(route_env, monkeypatch, "lifecycle", _pending_outcome())
+    if not _pending_response_ok(status, body):
+        raise DefectStillPresent(
+            f"route lifecycle does not map Pending to HTTP 202 typed body; got {status}/{body!r}"
+        )
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="writes_artifact.archive_artifact (writes_artifact.py:101) maps any Ok to a hardcoded 200 "
+    "'archived' body -> a Pending outcome is reported as an applied archive (200), never a 202 typed "
+    "pending body. Flips XPASS when S7 wires the 202 pending mapping.",
+)
+def test_r21_route_artifact_pending_maps_to_202(
+    route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status, body = _drive_route(route_env, monkeypatch, "artifact", _pending_outcome())
+    if not _pending_response_ok(status, body):
+        raise DefectStillPresent(
+            f"route artifact does not map Pending to HTTP 202 typed body; got {status}/{body!r}"
+        )
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="writes_curated.delete_curated (writes_curated.py:196) maps any Ok to a hardcoded 200 "
+    "'archived' body -> a Pending outcome is reported as an applied soft-delete (200), never a 202 "
+    "typed pending body. Flips XPASS when S7 wires the 202 pending mapping.",
+)
+def test_r21_route_curated_pending_maps_to_202(
+    route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status, body = _drive_route(route_env, monkeypatch, "curated", _pending_outcome())
+    if not _pending_response_ok(status, body):
+        raise DefectStillPresent(
+            f"route curated does not map Pending to HTTP 202 typed body; got {status}/{body!r}"
+        )
+
+
+@pytest.mark.xfail(
+    raises=DefectStillPresent,
+    strict=True,
+    reason="writes_episodic.delete_episodic soft path (writes_episodic.py:509) maps any Ok to a "
+    "hardcoded 200 'archived' body -> a Pending outcome is reported as an applied soft-delete (200), "
+    "never a 202 typed pending body. Flips XPASS when S7 wires the 202 pending mapping.",
+)
+def test_r21_route_episodic_pending_maps_to_202(
+    route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    status, body = _drive_route(route_env, monkeypatch, "episodic", _pending_outcome())
+    if not _pending_response_ok(status, body):
+        raise DefectStillPresent(
+            f"route episodic does not map Pending to HTTP 202 typed body; got {status}/{body!r}"
+        )
+
+
+# ---- TASK 1 green controls: the harness itself is correct — only the Pending branch is missing ------ #
+
+
+@pytest.mark.parametrize("route", ["lifecycle", "artifact", "curated", "episodic"])
+def test_r21_route_controls_final_200_and_err_typed(
+    route: str, route_env: _RouteEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GREEN control (unmarked): with the SAME harness, a monkeypatched Final maps to the existing 200
+    typed body and a monkeypatched Err maps to the existing typed error (400). This proves the harness
+    drives the real route correctly and isolates the missing behaviour to the Pending branch alone."""
+    status_final, _ = _drive_route(route_env, monkeypatch, route, _final_outcome())
+    assert status_final == 200, (
+        f"{route}: Final must map to the existing 200 success, got {status_final}"
+    )
+
+    status_err, body_err = _drive_route(route_env, monkeypatch, route, _err_outcome())
+    assert status_err == 400, f"{route}: Err must map to the existing typed 400, got {status_err}"
+    assert isinstance(body_err, dict) and body_err.get("error", {}).get("code") == "BAD_REQUEST", (
+        f"{route}: Err body must be the existing typed error, got {body_err!r}"
+    )
+
+
+# ---- TASK 1 discriminator: the Pending acceptance check catches each failure mode SEPARATELY -------- #
+
+
+def _correct_route_map(kind: str) -> tuple[int, dict[str, Any]]:
+    """A reference route-outcome mapper (the CORRECT S7 mapping) used only as a discriminator oracle."""
+    if kind == "final":
+        return 200, {
+            "object_id": "0" * 27,
+            "from_state": "provisional",
+            "to_state": "matured",
+            "version": 2,
+        }
+    if kind == "pending":
+        return 202, {"status": "pending", "operation_key": _R21_OPK, "event_id": _R21_EVENT_ID}
+    if kind == "err":
+        return 400, {"error": {"code": "BAD_REQUEST", "detail": "illegal transition"}}
+    raise AssertionError(f"unknown kind {kind!r}")
+
+
+def test_r21_route_pending_check_discriminates_each_failure_mode() -> None:
+    """GREEN mechanism proof (unmarked): the ``_pending_response_ok`` acceptance check passes the correct
+    (202 + status=pending + both ids) shape and independently REJECTS each wrong shape — wrong-status,
+    pending-as-final, pending-as-error, and a dropped identifier (operation_key OR event_id)."""
+    # the correct Pending mapping passes
+    assert _pending_response_ok(*_correct_route_map("pending"))
+    # wrong-status: right body, wrong code
+    assert not _pending_response_ok(
+        200, {"status": "pending", "operation_key": _R21_OPK, "event_id": _R21_EVENT_ID}
+    )
+    assert not _pending_response_ok(
+        500, {"status": "pending", "operation_key": _R21_OPK, "event_id": _R21_EVENT_ID}
+    )
+    # pending-as-final: mapped like a Final (200, success body, no pending discriminator)
+    assert not _pending_response_ok(*_correct_route_map("final"))
+    # pending-as-error: mapped to an Err status/body
+    assert not _pending_response_ok(*_correct_route_map("err"))
+    # dropped-identifier: 202 + status=pending but one id missing
+    assert not _pending_response_ok(202, {"status": "pending", "event_id": _R21_EVENT_ID})
+    assert not _pending_response_ok(202, {"status": "pending", "operation_key": _R21_OPK})
