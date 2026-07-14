@@ -121,8 +121,18 @@ def _parse_bullets(spec_text: str, spec_rel: str) -> list[Bullet]:
     return out
 
 
-def _extract_skip_reason(decorator: ast.expr) -> str | None:
-    """Extract reason from @pytest.mark.skip(reason=...) or xfail."""
+def _extract_skip_reason(
+    decorator: ast.expr, module_names: dict[str, str] | None = None
+) -> str | None:
+    """Extract reason from @pytest.mark.skip(reason=...) or xfail.
+
+    Recognises a ``reason=`` kwarg whose value is either a string literal
+    (``ast.Constant`` of type ``str``) or a module-level variable that
+    resolves to a string constant via ``module_names`` (Issue #457).
+    Returns ``None`` for unresolved variable names, missing reasons, or
+    non-string values; this preserves the original fallthrough semantics
+    for callers that do not supply ``module_names``.
+    """
     if not isinstance(decorator, ast.Call):
         return None
     func = decorator.func
@@ -138,17 +148,53 @@ def _extract_skip_reason(decorator: ast.expr) -> str | None:
         return None
 
     for kw in decorator.keywords:
-        if (
-            kw.arg == "reason"
-            and isinstance(kw.value, ast.Constant)
-            and isinstance(kw.value.value, str)
-        ):
+        if kw.arg != "reason":
+            continue
+        if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
             return kw.value.value
+        if module_names is not None and isinstance(kw.value, ast.Name):
+            resolved = module_names.get(kw.value.id)
+            if resolved is not None:
+                return resolved
+        # Anything else (f-string, call, attribute, unresolved name) — no reason captured.
     return None
 
 
+def _module_string_constants(tree: ast.Module) -> dict[str, str]:
+    """Build a name -> string map for module-level str assignments.
+
+    Only the first matching assignment per name is kept; later reassignments
+    are ignored to keep the map predictable. Used by ``_find_test_definition``
+    to feed ``_extract_skip_reason`` for variable reasons (Issue #457).
+    """
+    out: dict[str, str] = {}
+    for node in tree.body:
+        target: ast.expr | None = None
+        value: ast.expr | None = None
+        if isinstance(node, ast.Assign):
+            if len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target = node.target
+            value = node.value
+        else:
+            continue
+        if not isinstance(target, ast.Name) or target.id in out:
+            continue
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            out[target.id] = value.value
+    return out
+
+
 def _find_test_definition(func_name: str) -> tuple[Path, int, str | None] | None:
-    """Search tests/ for ``def <func_name>``. Returns (path, lineno, reason-if-any)."""
+    """Search tests/ for ``def <func_name>``. Returns (path, lineno, reason-if-any).
+
+    The ``reason-if-any`` is sourced from the matching decorator's ``reason=``
+    kwarg; it may be a string literal or a module-level name resolved to a
+    string constant (Issue #457).
+    """
     if not TESTS_DIR.exists():
         return None
     needle = re.compile(rf"^(?:async\s+)?def\s+{re.escape(func_name)}\b", re.M)
@@ -163,11 +209,12 @@ def _find_test_definition(func_name: str) -> tuple[Path, int, str | None] | None
         except SyntaxError:
             continue
 
+        module_names = _module_string_constants(tree)
         for node in ast.walk(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == func_name:
                 reason = None
                 for decorator in node.decorator_list:
-                    r = _extract_skip_reason(decorator)
+                    r = _extract_skip_reason(decorator, module_names=module_names)
                     if r is not None:
                         reason = r
                         break
