@@ -78,6 +78,7 @@ import json
 import logging
 import math
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -85,7 +86,7 @@ import sys
 import time
 import warnings
 from collections import Counter
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -94,6 +95,7 @@ from typing import Any, cast
 
 import jwt
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 from pydantic import AnyHttpUrl, SecretStr
 from qdrant_client import QdrantClient, models
@@ -8376,3 +8378,768 @@ def test_r21_deferred_accounting_check_discriminates() -> None:
     facc = _DeferAccount()
     _apply_correct(facc, "final", _R21_OPK, _R21_EVENT_ID, has_dependent=True)
     assert facc.transitioned == 1 and facc.dependent_ran == 1 and facc.deferred == []
+
+
+# ==================================================================================================== #
+# P0c — production-wiring reds (topology / readiness / concurrency / settings / config-drift).          #
+# tests/docs ONLY, ZERO src. Each strict-xfail raises a DEDICATED DefectStillPresent for its named       #
+# missing behavior ONLY; discriminators/controls are UNMARKED and PASS today. Authoritative context:     #
+# docs/Musubi/13-decisions/c6b-phase1-source-cut-plan.md §C (topology), §D (concurrency), §E (config     #
+# drift), §G (settings), §H (readiness). AST/text inspection never imports the (absent) coordinator.     #
+# ==================================================================================================== #
+
+_P0C_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+#: The Phase-1 coordinator type the composition must build in BOTH processes (§C). AST/text only.
+_COORDINATOR_TYPE = "LifecycleTransitionCoordinator"
+#: The single reconciler entrypoint (§C: worker-only).
+_RECONCILE_NAME = "reconcile_once"
+#: The provider the API injects its app-lifetime coordinator through (dependencies.py:116).
+_LIFECYCLE_PROVIDER = "get_lifecycle_service"
+#: The API composition surfaces that MUST NOT compose a reconciler (§C).
+_API_COMPOSITION_SURFACES = ("api/bootstrap.py", "api/app.py", "api/dependencies.py")
+
+
+def _parse_src(relpath: str) -> ast.Module:
+    """Parse a REAL src/musubi module (no import, so the absent coordinator never trips ImportError)."""
+    return ast.parse((_SRC / relpath).read_text())
+
+
+def _func_named(module: ast.AST, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    for node in ast.walk(module):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    return None
+
+
+def _constructs_type(scope: ast.AST, type_name: str) -> bool:
+    """A Call whose callee is ``type_name`` (bare ``Name`` or ``<mod>.type_name``) in this subtree."""
+    for n in ast.walk(scope):
+        if isinstance(n, ast.Call):
+            f = n.func
+            if isinstance(f, ast.Name) and f.id == type_name:
+                return True
+            if isinstance(f, ast.Attribute) and f.attr == type_name:
+                return True
+    return False
+
+
+def _refs_call(scope: ast.AST, name: str) -> bool:
+    """A reference to ``name`` anywhere in this subtree — called (``name(...)`` / ``x.name(...)``) OR
+    passed as a value (``jobs=[..., x.name]``), so a reconcile loop wired as an interval-job callable
+    still counts as composed."""
+    for n in ast.walk(scope):
+        if isinstance(n, ast.Attribute) and n.attr == name:
+            return True
+        if isinstance(n, ast.Name) and n.id == name:
+            return True
+    return False
+
+
+# ---- TASK 1: topology reds (§C — one coordinator PER PROCESS, reconcile worker-only) --------------- #
+
+
+def _dep_override_value(func: ast.AST, provider: str) -> ast.AST | None:
+    """The RHS assigned to ``<app>.dependency_overrides[<provider>] = RHS`` within ``func``, else None."""
+    for n in ast.walk(func):
+        if isinstance(n, ast.Assign):
+            for tgt in n.targets:
+                if (
+                    isinstance(tgt, ast.Subscript)
+                    and isinstance(tgt.value, ast.Attribute)
+                    and tgt.value.attr == "dependency_overrides"
+                    and isinstance(tgt.slice, ast.Name)
+                    and tgt.slice.id == provider
+                ):
+                    return n.value
+    return None
+
+
+def _names_from_ctor(func: ast.AST, type_name: str) -> set[str]:
+    """Local names bound (``name = Type(...)``) to a construction of ``type_name`` within ``func``."""
+    out: set[str] = set()
+    for n in ast.walk(func):
+        if isinstance(n, ast.Assign) and _constructs_type(n.value, type_name):
+            for tgt in n.targets:
+                if isinstance(tgt, ast.Name):
+                    out.add(tgt.id)
+    return out
+
+
+def _value_is_coordinator(func: ast.AST, rhs: ast.AST, type_name: str) -> bool:
+    """Does the injected provider value resolve to a coordinator? True iff the RHS constructs it inline,
+    OR references (e.g. ``lambda: coord``) a local bound to a coordinator ctor in the same function."""
+    if _constructs_type(rhs, type_name):
+        return True
+    bound = _names_from_ctor(func, type_name)
+    if not bound:
+        return False
+    return any(isinstance(x, ast.Name) and x.id in bound for x in ast.walk(rhs))
+
+
+def _bootstrap_injects_coordinator(module: ast.AST) -> bool:
+    func = _func_named(module, "bootstrap_production_app")
+    if func is None:
+        return False
+    rhs = _dep_override_value(func, _LIFECYCLE_PROVIDER)
+    if rhs is None:
+        return False
+    return _value_is_coordinator(func, rhs, _COORDINATOR_TYPE)
+
+
+def _worker_builds_coordinator_and_reconcile(module: ast.AST) -> tuple[bool, bool]:
+    func = _func_named(module, "_main_async")
+    has_coord = func is not None and _constructs_type(func, _COORDINATOR_TYPE)
+    has_reconcile = _refs_call(module, _RECONCILE_NAME)
+    return (has_coord, has_reconcile)
+
+
+def _reconcile_worker_only() -> tuple[bool, bool]:
+    """(worker_composes_reconcile, api_composes_reconcile) across the REAL composition surfaces."""
+    worker = _refs_call(_parse_src("lifecycle/runner.py"), _RECONCILE_NAME)
+    api = any(_refs_call(_parse_src(s), _RECONCILE_NAME) for s in _API_COMPOSITION_SURFACES)
+    return (worker, api)
+
+
+_P0C_T1A_REASON = (
+    "today bootstrap_production_app injects a bare {qdrant, embedder} dict for get_lifecycle_service "
+    "(bootstrap.py:249-252) and dependencies.py:116 still raises NotImplementedError, so NO app-lifetime "
+    "LifecycleTransitionCoordinator is constructed or injected; §C requires the API to build ONE "
+    "coordinator and inject it via app.dependency_overrides[get_lifecycle_service]."
+)
+_P0C_T1B_REASON = (
+    "today runner._main_async builds sink+cursors (runner.py:365-367) but constructs NO process-lifetime "
+    "LifecycleTransitionCoordinator and wires NO reconcile_once loop; §C requires the worker to build ONE "
+    "coordinator and run the ONLY reconcile_once (startup pass + a build_lifecycle_jobs interval job)."
+)
+_P0C_T1C_REASON = (
+    "today reconcile_once is composed in NO process (absent from lifecycle/runner.py AND from every API "
+    "composition surface), so the §C worker-ONLY-reconciler split (reconcile_once present in the worker, "
+    "absent in the API) cannot yet hold; the API path must never compose a reconciler."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T1A_REASON)
+def test_p0c_bootstrap_injects_app_lifetime_coordinator() -> None:
+    if not _bootstrap_injects_coordinator(_parse_src("api/bootstrap.py")):
+        raise DefectStillPresent(
+            f"bootstrap_production_app injects no app-lifetime {_COORDINATOR_TYPE} via "
+            f"app.dependency_overrides[{_LIFECYCLE_PROVIDER}] (the injected value is a bare dict; "
+            "dependencies.py:116 still raises NotImplementedError)"
+        )
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T1B_REASON)
+def test_p0c_worker_builds_coordinator_and_wires_reconcile() -> None:
+    has_coord, has_reconcile = _worker_builds_coordinator_and_reconcile(
+        _parse_src("lifecycle/runner.py")
+    )
+    if not (has_coord and has_reconcile):
+        missing = []
+        if not has_coord:
+            missing.append(f"no {_COORDINATOR_TYPE} constructed in _main_async")
+        if not has_reconcile:
+            missing.append(f"no {_RECONCILE_NAME} wired in the runner")
+        raise DefectStillPresent(
+            "lifecycle/runner.py does not build the process-lifetime coordinator + reconcile loop: "
+            + "; ".join(missing)
+        )
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T1C_REASON)
+def test_p0c_reconcile_is_worker_only() -> None:
+    worker, api = _reconcile_worker_only()
+    if not (worker and not api):
+        raise DefectStillPresent(
+            f"{_RECONCILE_NAME} worker-only split does not hold: composed in worker={worker}, composed "
+            f"in API surfaces {list(_API_COMPOSITION_SURFACES)}={api}; §C requires reconcile present in "
+            "the worker and ABSENT from the API composition"
+        )
+
+
+def test_p0c_bootstrap_injection_rule_discriminates() -> None:
+    """GREEN mechanism proof: the injection check accepts a coordinator injected through
+    get_lifecycle_service (bound-name OR inline) and REJECTS the current dict, a coordinator injected
+    under the WRONG provider, and no injection at all."""
+    correct = ast.parse(
+        "def bootstrap_production_app(app, settings):\n"
+        "    coord = LifecycleTransitionCoordinator(client=q, db_path=settings.lifecycle_sqlite_path)\n"
+        "    app.dependency_overrides[get_lifecycle_service] = lambda: coord\n"
+    )
+    inline = ast.parse(
+        "def bootstrap_production_app(app, settings):\n"
+        "    app.dependency_overrides[get_lifecycle_service] = lambda: "
+        "LifecycleTransitionCoordinator(client=q, db_path=settings.lifecycle_sqlite_path)\n"
+    )
+    dict_today = ast.parse(
+        "def bootstrap_production_app(app, settings):\n"
+        "    app.dependency_overrides[get_lifecycle_service] = lambda: {'qdrant': q}\n"
+    )
+    wrong_key = ast.parse(
+        "def bootstrap_production_app(app, settings):\n"
+        "    coord = LifecycleTransitionCoordinator(client=q, db_path=settings.lifecycle_sqlite_path)\n"
+        "    app.dependency_overrides[get_qdrant_client] = lambda: coord\n"
+        "    app.dependency_overrides[get_lifecycle_service] = lambda: {'qdrant': q}\n"
+    )
+    assert _bootstrap_injects_coordinator(correct)
+    assert _bootstrap_injects_coordinator(inline)
+    assert not _bootstrap_injects_coordinator(dict_today)
+    assert not _bootstrap_injects_coordinator(wrong_key)
+
+
+def test_p0c_worker_reconcile_rule_discriminates() -> None:
+    """GREEN mechanism proof: the worker check distinguishes coordinator+reconcile from each partial and
+    from the current absence."""
+    correct = ast.parse(
+        "async def _main_async():\n"
+        "    coord = LifecycleTransitionCoordinator(client=q, db_path=settings.lifecycle_sqlite_path)\n"
+        "    await coord.reconcile_once(limit=100)\n"
+    )
+    coord_only = ast.parse(
+        "async def _main_async():\n    coord = LifecycleTransitionCoordinator(client=q, db_path=p)\n"
+    )
+    reconcile_only = ast.parse("async def _main_async():\n    await reconcile_once(limit=100)\n")
+    today = ast.parse(
+        "async def _main_async():\n    sink = LifecycleEventSink(db_path=settings.lifecycle_sqlite_path)\n"
+    )
+    assert _worker_builds_coordinator_and_reconcile(correct) == (True, True)
+    assert _worker_builds_coordinator_and_reconcile(coord_only) == (True, False)
+    assert _worker_builds_coordinator_and_reconcile(reconcile_only) == (False, True)
+    assert _worker_builds_coordinator_and_reconcile(today) == (False, False)
+
+
+def test_p0c_worker_only_reconcile_rule_discriminates() -> None:
+    """GREEN mechanism proof: the worker-only invariant accepts reconcile-in-worker/absent-in-API and
+    REJECTS both the current absence and a reconciler leaked into the API composition."""
+    worker_mod = ast.parse("async def _main_async():\n    await coord.reconcile_once()\n")
+    worker_absent = ast.parse(
+        "async def _main_async():\n    sink = LifecycleEventSink(db_path=p)\n"
+    )
+    api_clean = ast.parse(
+        "def bootstrap_production_app(app, s):\n    app.dependency_overrides[x] = 1\n"
+    )
+    api_dirty = ast.parse("def bootstrap_production_app(app, s):\n    coord.reconcile_once()\n")
+
+    def holds(worker: ast.AST, api: ast.AST) -> bool:
+        return _refs_call(worker, _RECONCILE_NAME) and not _refs_call(api, _RECONCILE_NAME)
+
+    assert holds(worker_mod, api_clean)
+    assert not holds(worker_absent, api_clean)
+    assert not holds(worker_mod, api_dirty)
+
+
+# ---- TASK 2: readiness red (§H — worker healthcheck must consume a readiness signal, not /metrics) - #
+
+#: Pinned FUTURE readiness signal (§H). A gauge on the worker metrics port set to 1 ONLY when the
+#: coordinator's shared SQLite/outbox schema is open AND reconcile_once can safely participate. The
+#: deploy healthcheck must CONSUME this (or a dedicated readiness endpoint) — not merely probe /metrics
+#: for HTTP 200 (liveness). "A gauge is not a readiness gate until deployment consumes it."
+_READINESS_GAUGE = "musubi_lifecycle_coordinator_ready"
+_READINESS_PATHS = ("/readyz", "/healthz", "/readiness")
+
+
+def _worker_healthcheck_test(compose_text: str) -> object:
+    """The lifecycle-worker healthcheck ``test:`` from the REAL ansible compose template. Jinja
+    expressions are neutralized so PyYAML can load; the worker healthcheck itself is jinja-free."""
+    doc = yaml.safe_load(re.sub(r"{{.*?}}", "JINJA", compose_text))
+    return doc["services"]["lifecycle-worker"]["healthcheck"]["test"]
+
+
+def _healthcheck_consumes_readiness(test_cmd: object) -> bool:
+    """Does the healthcheck consume a READINESS signal (the pinned gauge OR a dedicated readiness
+    endpoint) rather than only probing /metrics for liveness?"""
+    text = " ".join(str(x) for x in test_cmd) if isinstance(test_cmd, list) else str(test_cmd)
+    if _READINESS_GAUGE in text:
+        return True
+    return any(p in text for p in _READINESS_PATHS)
+
+
+_P0C_T2_REASON = (
+    "today the lifecycle-worker healthcheck (docker-compose.yml.j2:57-62) probes only "
+    "http://localhost:8101/metrics for HTTP 200 (Prometheus liveness) and consumes NO readiness signal "
+    "(the pinned musubi_lifecycle_coordinator_ready gauge or a /readyz-style endpoint) proving the "
+    "coordinator's storage/schema is open + reconcile can safely participate; §H holds the release until "
+    "the production healthcheck consumes readiness."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T2_REASON)
+def test_p0c_worker_healthcheck_consumes_readiness_signal() -> None:
+    template = (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
+    test_cmd = _worker_healthcheck_test(template)
+    if not _healthcheck_consumes_readiness(test_cmd):
+        raise DefectStillPresent(
+            "the lifecycle-worker healthcheck consumes no readiness signal "
+            f"({_READINESS_GAUGE} gauge or a {list(_READINESS_PATHS)} endpoint); it only probes "
+            f"/metrics for HTTP 200. test={test_cmd!r}"
+        )
+
+
+def test_p0c_readiness_probe_rule_discriminates() -> None:
+    """GREEN mechanism proof: the readiness rule rejects the current /metrics-200 liveness probe and
+    accepts a probe that consumes the pinned readiness gauge OR a readiness endpoint — and it classifies
+    the REAL template's current healthcheck as the liveness-only case."""
+    metrics_only = [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("
+        "'http://localhost:8101/metrics', timeout=2).status == 200 else 1)",
+    ]
+    gauge_probe = [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request,sys; b=urllib.request.urlopen('http://localhost:8101/metrics')"
+        f".read().decode(); sys.exit(0 if '{_READINESS_GAUGE} 1' in b else 1)",
+    ]
+    readyz_probe = [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen("
+        "'http://localhost:8101/readyz', timeout=2).status == 200 else 1)",
+    ]
+    assert not _healthcheck_consumes_readiness(metrics_only)
+    assert _healthcheck_consumes_readiness(gauge_probe)
+    assert _healthcheck_consumes_readiness(readyz_probe)
+    real = _worker_healthcheck_test(
+        (_P0C_REPO_ROOT / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
+    )
+    assert not _healthcheck_consumes_readiness(real)
+
+
+# ---- TASK 3: concurrent shared-file test (§D — WAL + busy_timeout + cross-process schema init) ----- #
+
+_T3_PROCS = 4
+_T3_WRITES = 25
+
+
+def _connection_policy_ok(journal_mode: str, busy_timeout: int) -> bool:
+    """The shared-file connection policy the shared file REQUIRES (§D): WAL + a positive busy_timeout."""
+    return journal_mode.lower() == "wal" and busy_timeout > 0
+
+
+def _t3_child_source(*, db_path: Path, barrier_dir: Path, tag: str, n_writes: int) -> str:
+    """A child that opens the REAL sink + BOTH cursors on ONE shared file (concurrent CREATE TABLE IF NOT
+    EXISTS), rendezvous-waits so every child writes at once, then does n_writes real cursor writes.
+    ``sqlite3.OperationalError`` ('database is locked' — the busy_timeout==0 symptom) is caught and
+    recorded via a marker file; the child STILL exits 0 so the PARENT owns the one dedicated policy
+    assertion and no unrelated exception can leak into the test process."""
+    return (
+        "import os, sys, time, warnings, sqlite3\n"
+        "from pathlib import Path\n"
+        "from musubi.lifecycle.events import LifecycleEventSink\n"
+        "from musubi.lifecycle.maturation import MaturationCursor\n"
+        "from musubi.lifecycle.synthesis import SynthesisCursor\n"
+        f"_bd = {str(barrier_dir)!r}\n"
+        f"_db = Path({str(db_path)!r})\n"
+        f"_tag = {tag!r}\n"
+        f"_n = {n_writes}\n"
+        "with warnings.catch_warnings():\n"
+        "    warnings.simplefilter('ignore')\n"
+        "    sink = LifecycleEventSink(db_path=_db)\n"
+        "    mat = MaturationCursor(db_path=_db)\n"
+        "    syn = SynthesisCursor(db_path=_db)\n"
+        "open(os.path.join(_bd, 'ready.' + str(os.getpid())), 'w').close()\n"
+        "for _ in range(1000):\n"
+        f"    if len([f for f in os.listdir(_bd) if f.startswith('ready.')]) >= {_T3_PROCS}: break\n"
+        "    time.sleep(0.01)\n"
+        "try:\n"
+        "    for i in range(_n):\n"
+        "        mat.set(_tag + '-' + str(i), float(i))\n"
+        "        syn.set(_tag, float(i))\n"
+        "except sqlite3.OperationalError:\n"
+        "    open(os.path.join(_bd, 'locked.' + str(os.getpid())), 'w').close()\n"
+        "sink.close()\n"
+        "sys.exit(0)\n"
+    )
+
+
+_P0C_T3_REASON = (
+    "today the shared lifecycle file is opened with a bare connection: events.py:79-84 sets neither "
+    "journal_mode=WAL nor a busy_timeout (its docstring:19 only CLAIMS WAL), and MaturationCursor/"
+    "SynthesisCursor open plain connections too — so the connection policy the shared file REQUIRES for "
+    "cross-process writer contention (§D: WAL + busy_timeout) is absent and observable on the real sink "
+    "connection across multiple processes."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T3_REASON)
+def test_p0c_shared_file_requires_wal_and_busy_timeout(tmp_path: Path) -> None:
+    base = tmp_path / "t3"
+    base.mkdir()
+    db_path = base / "lifecycle.sqlite"
+    barrier = base / "barrier"
+    barrier.mkdir()
+    procs = [
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _t3_child_source(
+                    db_path=db_path, barrier_dir=barrier, tag=f"p0c{i}", n_writes=_T3_WRITES
+                ),
+            ]
+        )
+        for i in range(_T3_PROCS)
+    ]
+    codes = [p.wait(timeout=90) for p in procs]
+    # Cross-process CREATE TABLE IF NOT EXISTS must not corrupt/deadlock: every child exits cleanly and
+    # the shared schema is intact afterward (GREEN baseline — the DEFECT is the missing policy, below).
+    if any(c != 0 for c in codes):
+        raise DefectStillPresent(
+            "concurrent cross-process openers of the shared lifecycle file did not all exit cleanly: "
+            f"exit codes {codes} (schema init / write under the bare connection is not cross-process safe)"
+        )
+    for table in ("lifecycle_events", "maturation_cursor", "synthesis_family_cursor"):
+        if not _table_exists(db_path, table):
+            raise DefectStillPresent(
+                f"shared schema missing table {table!r} after concurrent multi-process init"
+            )
+    # DEDICATED policy probe on the REAL sink (the worker's connection owner). WAL is a persistent
+    # database-level mode; the bare connection reports the default rollback journal ('delete'). NOTE: the
+    # sink's busy_timeout is 5000ms today — NOT via PRAGMA (events.py sets none) but via CPython's
+    # sqlite3.connect default timeout=5.0s; the observable gap the shared file still fails on is WAL.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sink = LifecycleEventSink(db_path=db_path)
+    try:
+        journal_mode = str(sink._conn.execute("PRAGMA journal_mode").fetchone()[0])
+        busy_timeout = int(sink._conn.execute("PRAGMA busy_timeout").fetchone()[0])
+    finally:
+        sink.close()
+    if not _connection_policy_ok(journal_mode, busy_timeout):
+        violations = []
+        if journal_mode.lower() != "wal":
+            violations.append(f"journal_mode={journal_mode!r} (need 'wal')")
+        if busy_timeout <= 0:
+            violations.append(f"busy_timeout={busy_timeout} (need > 0)")
+        raise DefectStillPresent(
+            "the shared-file LifecycleEventSink connection lacks the cross-process write policy the shared "
+            f"file requires ({', '.join(violations)}); {_T3_PROCS} real processes shared {db_path.name}. "
+            "events.py:19 claims WAL but :79-84 sets no PRAGMA journal_mode=WAL."
+        )
+
+
+def test_p0c_connection_policy_rule_discriminates() -> None:
+    """GREEN mechanism proof: the policy check accepts WAL+busy_timeout and REJECTS each partial and the
+    current bare-connection shape."""
+    assert _connection_policy_ok("wal", 5000)
+    assert _connection_policy_ok("WAL", 1)
+    assert not _connection_policy_ok("delete", 0)  # today's bare connection
+    assert not _connection_policy_ok("wal", 0)  # WAL but no busy_timeout
+    assert not _connection_policy_ok("delete", 5000)  # busy_timeout but no WAL
+    assert not _connection_policy_ok("memory", 5000)
+
+
+# ---- TASK 4: settings-validation reds (§G — validate finite/positive/bounded) --------------------- #
+
+
+def _validate_positive_float(name: str, v: object) -> float:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise TypeError(f"{name} must be a real number (not bool), got {type(v).__name__}")
+    if not math.isfinite(v) or v <= 0:
+        raise ValueError(f"{name} must be positive and finite, got {v}")
+    return float(v)
+
+
+def _validate_positive_int(name: str, v: object) -> int:
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise TypeError(f"{name} must be an int (not bool), got {type(v).__name__}")
+    if v <= 0:
+        raise ValueError(f"{name} must be a positive int, got {v}")
+    return v
+
+
+def _validate_nonneg_int(name: str, v: object) -> int:
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise TypeError(f"{name} must be an int (not bool), got {type(v).__name__}")
+    if v < 0:
+        raise ValueError(f"{name} must be a non-negative int, got {v}")
+    return v
+
+
+def _validate_backoff_pair(base: object, mx: object) -> tuple[float, float]:
+    b = _validate_positive_float("backoff_base_s", base)
+    m = _validate_positive_float("backoff_max_s", mx)
+    if m < b:
+        raise ValueError(f"backoff_max_s ({m}) must be >= backoff_base_s ({b})")
+    return b, m
+
+
+#: Every NEW setting the composition will consume (§G). Names are the fields the reds require on
+#: ``Settings``; the constraint column is the finite/positive/bounded rule each must validate.
+_P0C_NEW_SETTINGS: list[tuple[str, str]] = [
+    ("lifecycle_pending_cap", "int>0"),
+    ("lifecycle_lease_ttl_s", "float>0"),
+    ("lifecycle_reconcile_interval_s", "int>0"),
+    ("lifecycle_backoff_base_s", "float>0"),
+    ("lifecycle_backoff_max_s", "float>0,>=base"),
+    ("lifecycle_sqlite_busy_timeout_ms", "int>=0"),
+    ("lifecycle_cleanup_retention_s", "int>0"),
+    ("lifecycle_cleanup_batch", "int>0"),
+    ("lifecycle_readiness_max_reconcile_failures", "int>0"),
+]
+
+_P0C_T4_REASON = (
+    "today Settings carries only lifecycle_sqlite_path (:102) + lifecycle_metrics_port (:116); NONE of "
+    "the composition-consumed lifecycle settings (pending cap, lease TTL, reconcile cadence, backoff "
+    "base/max, sqlite busy_timeout, cleanup retention/batch, readiness/reconcile-failure thresholds) "
+    "exist, so none can be resolved OR validated finite/positive/bounded (§G)."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T4_REASON)
+@pytest.mark.parametrize(
+    ("field", "constraint"), _P0C_NEW_SETTINGS, ids=[f for f, _ in _P0C_NEW_SETTINGS]
+)
+def test_p0c_new_lifecycle_setting_exists_and_validates(field: str, constraint: str) -> None:
+    if field not in Settings.model_fields:
+        raise DefectStillPresent(
+            f"Settings has no {field!r} field (constraint {constraint}); §G requires the composition-"
+            "consumed lifecycle settings to exist on Settings and validate finite/positive/bounded."
+        )
+
+
+def _p0c_same_active_storage_path() -> tuple[str | None, str | None]:
+    """(api coordinator db_path expr, worker coordinator db_path expr) from the REAL composition."""
+
+    def db_path_in(relpath: str, func_name: str) -> str | None:
+        func = _func_named(_parse_src(relpath), func_name)
+        return _coordinator_db_path_expr(func, _COORDINATOR_TYPE) if func is not None else None
+
+    return (
+        db_path_in("api/bootstrap.py", "bootstrap_production_app"),
+        db_path_in("lifecycle/runner.py", "_main_async"),
+    )
+
+
+_P0C_T4PATH_REASON = (
+    "today the API composition builds no coordinator at all (bootstrap injects a bare dict), so API and "
+    "worker cannot be proven to resolve the SAME active-storage path; §G requires both to build the "
+    "coordinator from settings.lifecycle_sqlite_path."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T4PATH_REASON)
+def test_p0c_api_and_worker_resolve_same_active_storage_path() -> None:
+    api, worker = _p0c_same_active_storage_path()
+    if api is None or worker is None or api != worker:
+        raise DefectStillPresent(
+            "API and worker do not resolve the SAME active-storage path from one setting: "
+            f"api coordinator db_path={api!r}, worker coordinator db_path={worker!r} "
+            "(§G: both must build the coordinator from settings.lifecycle_sqlite_path)"
+        )
+
+
+def test_p0c_settings_validators_discriminate() -> None:
+    """GREEN mechanism proof: each reference validator accepts a good value and REJECTS <=0 / non-finite /
+    bool / wrong-type / max<base — the finite/positive/bounded shape the settings must enforce."""
+    assert _validate_positive_int("cap", 5) == 5
+    for bad_i in (0, -1, True, 1.5, "x"):
+        with pytest.raises((TypeError, ValueError)):
+            _validate_positive_int("cap", bad_i)
+    assert _validate_positive_float("ttl", 2.5) == 2.5
+    for bad_f in (0, -1.0, True, math.inf, math.nan, "x"):
+        with pytest.raises((TypeError, ValueError)):
+            _validate_positive_float("ttl", bad_f)
+    assert _validate_nonneg_int("busy_timeout", 0) == 0
+    for bad_n in (-1, True, 2.0, "x"):
+        with pytest.raises((TypeError, ValueError)):
+            _validate_nonneg_int("busy_timeout", bad_n)
+    assert _validate_backoff_pair(0.5, 30.0) == (0.5, 30.0)
+    with pytest.raises(ValueError):
+        _validate_backoff_pair(30.0, 0.5)  # max < base
+    with pytest.raises((TypeError, ValueError)):
+        _validate_backoff_pair(0.0, 30.0)  # base <= 0
+    # parity with the already-committed R14/R16 config validators
+    assert _validate_pending_cap(3) == 3
+    assert _validate_lease_ttl(1.0) == 1.0
+
+
+def test_p0c_same_active_storage_rule_discriminates() -> None:
+    """GREEN mechanism proof: the same-path check accepts two coordinators built from the same setting and
+    REJECTS a different setting or an absent API coordinator."""
+    same_a = cast(
+        ast.AST,
+        ast.parse(
+            "def f():\n    c = LifecycleTransitionCoordinator(client=q, "
+            "db_path=settings.lifecycle_sqlite_path)\n"
+        ).body[0],
+    )
+    same_b = cast(
+        ast.AST,
+        ast.parse(
+            "def g():\n    c = LifecycleTransitionCoordinator(client=q, "
+            "db_path=settings.lifecycle_sqlite_path)\n"
+        ).body[0],
+    )
+    diff_b = cast(
+        ast.AST,
+        ast.parse(
+            "def g():\n    c = LifecycleTransitionCoordinator(client=q, db_path=settings.other_path)\n"
+        ).body[0],
+    )
+    none_a = cast(
+        ast.AST,
+        ast.parse("def f():\n    app.overrides[x] = lambda: {'qdrant': q}\n").body[0],
+    )
+
+    def same(a: ast.AST, b: ast.AST) -> bool:
+        pa = _coordinator_db_path_expr(a, _COORDINATOR_TYPE)
+        pb = _coordinator_db_path_expr(b, _COORDINATOR_TYPE)
+        return pa is not None and pb is not None and pa == pb
+
+    assert same(same_a, same_b)
+    assert not same(same_a, diff_b)
+    assert not same(none_a, same_b)
+    assert _coordinator_db_path_expr(same_a, _COORDINATOR_TYPE) == "settings.lifecycle_sqlite_path"
+
+
+def _dotted(expr: ast.AST) -> str | None:
+    if isinstance(expr, ast.Name):
+        return expr.id
+    if isinstance(expr, ast.Attribute):
+        base = _dotted(expr.value)
+        return f"{base}.{expr.attr}" if base else expr.attr
+    return None
+
+
+def _coordinator_db_path_expr(func: ast.AST, type_name: str) -> str | None:
+    """The dotted source of the ``db_path=`` kwarg on a ``type_name(...)`` construction in ``func`` (e.g.
+    'settings.lifecycle_sqlite_path'); None if no such coordinator is constructed."""
+    for n in ast.walk(func):
+        if isinstance(n, ast.Call) and (
+            (isinstance(n.func, ast.Name) and n.func.id == type_name)
+            or (isinstance(n.func, ast.Attribute) and n.func.attr == type_name)
+        ):
+            for kw in n.keywords:
+                if kw.arg == "db_path":
+                    return _dotted(kw.value)
+    return None
+
+
+# ---- TASK 5: config-drift NAMED BLOCKER (§E — ansible-dir vs root-compose-file) ------------------- #
+
+#: Documented FLIP mechanism (§E): a deployment surface may be excluded from the parity set ONLY by
+#: naming it here (with a rationale + this appendix pointer, e.g. proven non-production / out-of-scope).
+#: Reconciling the surfaces to ONE family, OR marking every dissenter out-of-scope, flips the red green.
+_OUT_OF_SCOPE_STORAGE_SURFACES: frozenset[str] = frozenset()
+
+
+def _env_lifecycle_path(text: str) -> str | None:
+    m = re.search(r"^LIFECYCLE_SQLITE_PATH=(.+)$", text, re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def _compose_lifecycle_host_path(text: str) -> str | None:
+    """The host side of the lifecycle bind mount (``<host>:<container>``) in a compose/j2 file."""
+    m = re.search(r"(/var/lib/musubi/lifecycle[\w./-]*)\s*:", text)
+    return m.group(1) if m else None
+
+
+def _first_lifecycle_sqlite(text: str) -> str | None:
+    m = re.search(r"(/var/lib/musubi/lifecycle[\w./-]*\.sqlite)", text)
+    return m.group(1) if m else None
+
+
+def _lifecycle_storage_surfaces() -> dict[str, str | None]:
+    r = _P0C_REPO_ROOT
+    return {
+        "ansible-compose": _compose_lifecycle_host_path(
+            (r / "deploy/ansible/templates/docker-compose.yml.j2").read_text()
+        ),
+        "ansible-env-production": _env_lifecycle_path(
+            (r / "deploy/ansible/templates/env.production.j2").read_text()
+        ),
+        "ansible-restore": _first_lifecycle_sqlite((r / "deploy/backup/restore.yml").read_text()),
+        "root-compose": _compose_lifecycle_host_path((r / "docker-compose.yml").read_text()),
+        "env-example": _env_lifecycle_path((r / ".env.example").read_text()),
+        "docker-env-production-example": _env_lifecycle_path(
+            (r / "deploy/docker/.env.production.example").read_text()
+        ),
+        "backup": _first_lifecycle_sqlite((r / "deploy/backup/backup.yml").read_text()),
+    }
+
+
+def _storage_family(path: str) -> str:
+    """Classify a lifecycle storage path into its active-storage FAMILY (directory-variant vs file-
+    variant). The two families are what the deployment surfaces disagree on today (§E)."""
+    p = path.rstrip("/")
+    if p == "/var/lib/musubi/lifecycle" or p.startswith("/var/lib/musubi/lifecycle/"):
+        return "DIR:/var/lib/musubi/lifecycle/work.sqlite"
+    if p == "/var/lib/musubi/lifecycle-work.sqlite":
+        return "FILE:/var/lib/musubi/lifecycle-work.sqlite"
+    return "OTHER:" + p
+
+
+def _storage_families(
+    surfaces: Mapping[str, str | None],
+    out_of_scope: frozenset[str] = _OUT_OF_SCOPE_STORAGE_SURFACES,
+) -> dict[str, str]:
+    return {
+        name: _storage_family(path)
+        for name, path in surfaces.items()
+        if path is not None and name not in out_of_scope
+    }
+
+
+_P0C_T5_REASON = (
+    "today the supported deployment surfaces DISAGREE on the lifecycle active-storage unit: production "
+    "ansible (docker-compose.yml.j2:16,52 + env.production.j2:13 + restore.yml:176) uses the DIRECTORY "
+    "/var/lib/musubi/lifecycle with DB work.sqlite, while root compose (docker-compose.yml:123), "
+    ".env.example:38, deploy/docker/.env.production.example:17, and backup.yml:87-88 use the FILE "
+    "/var/lib/musubi/lifecycle-work.sqlite; §E BLOCKER — coordinator source must not land on ambiguous "
+    "active storage. Flips green ONLY when the surfaces are reconciled to one family OR every dissenter "
+    "is marked out-of-scope via _OUT_OF_SCOPE_STORAGE_SURFACES."
+)
+
+
+@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T5_REASON)
+def test_p0c_deployment_active_storage_parity() -> None:
+    families = _storage_families(_lifecycle_storage_surfaces())
+    distinct = set(families.values())
+    if len(distinct) > 1:
+        by_family: dict[str, list[str]] = {}
+        for name, fam in families.items():
+            by_family.setdefault(fam, []).append(name)
+        raise DefectStillPresent(
+            f"deployment surfaces DISAGREE on the lifecycle active-storage unit ({len(distinct)} "
+            "families): "
+            + "; ".join(f"{fam} <- {sorted(names)}" for fam, names in sorted(by_family.items()))
+            + ". §E BLOCKER: reconcile the surfaces OR mark dissenters out-of-scope "
+            "(_OUT_OF_SCOPE_STORAGE_SURFACES) before coordinator source lands."
+        )
+
+
+def test_p0c_config_surfaces_all_resolve() -> None:
+    """CONTROL (unmarked): every expected deployment surface resolves to a lifecycle storage path (so a
+    broken extractor fails loudly GREEN-side, not as a mysterious xfail error), and today exactly the two
+    known-disagreeing families are present."""
+    surfaces = _lifecycle_storage_surfaces()
+    unresolved = sorted(n for n, p in surfaces.items() if p is None)
+    assert not unresolved, f"config-drift extractor failed to resolve surfaces: {unresolved}"
+    assert set(_storage_families(surfaces).values()) == {
+        "DIR:/var/lib/musubi/lifecycle/work.sqlite",
+        "FILE:/var/lib/musubi/lifecycle-work.sqlite",
+    }
+
+
+def test_p0c_active_storage_parity_rule_discriminates() -> None:
+    """GREEN mechanism proof: the parity check passes agreeing surfaces, CATCHES a directory-vs-file
+    mismatch, and honors both flip levers — marking a dissenter out-of-scope, and reconciling to one
+    family — collapse the parity set to a single family."""
+    agree = {"a": "/var/lib/musubi/lifecycle", "b": "/var/lib/musubi/lifecycle/work.sqlite"}
+    disagree = {
+        "a": "/var/lib/musubi/lifecycle/work.sqlite",
+        "b": "/var/lib/musubi/lifecycle-work.sqlite",
+    }
+    assert len(set(_storage_families(agree).values())) == 1
+    assert len(set(_storage_families(disagree).values())) == 2
+    assert len(set(_storage_families(disagree, out_of_scope=frozenset({"b"})).values())) == 1
+    reconciled = {
+        "a": "/var/lib/musubi/lifecycle-work.sqlite",
+        "b": "/var/lib/musubi/lifecycle-work.sqlite",
+    }
+    assert len(set(_storage_families(reconciled).values())) == 1

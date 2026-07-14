@@ -92,6 +92,17 @@ Three sources disagree on the shared active-storage unit:
 deployment surface is explicitly non-production / out of scope, OR encode parity reds across every
 supported core/worker/backup/restore surface. Resolve before S1.
 
+**P0c encoding + flip mechanism (landed):** `test_p0c_deployment_active_storage_parity` (strict-xfail)
+classifies each surface — ansible compose mount, `env.production.j2`, `restore.yml`, root compose,
+`.env.example`, `deploy/docker/.env.production.example`, `backup.yml` — into its active-storage FAMILY
+(directory `/var/lib/musubi/lifecycle` → `work.sqlite` vs the file `/var/lib/musubi/lifecycle-work.sqlite`)
+and asserts a single family. It flips green ONLY when (a) the surfaces are reconciled to one family, OR
+(b) every dissenting surface is named in `_OUT_OF_SCOPE_STORAGE_SURFACES` (the test-local out-of-scope
+registry, each entry carrying a rationale + this pointer). The `test_p0c_config_surfaces_all_resolve`
+control asserts every surface still resolves so a silently-broken extractor can't fake parity. **Backup
+and restore currently disagree with each other** (backup reads the FILE variant, restore writes the DIR
+variant) — reconcile before S1.
+
 ## F. Corrected source-commit series + flip matrix (rulings 3, 10, 11, S1 active-storage)
 
 Each source commit = source + ATOMIC decorator flip in `test_c6b_atomicity.py` (no strict XPASS left) +
@@ -142,6 +153,13 @@ active** (canonical rewire = production behavior). **Worker readiness:** the dep
 `/metrics` liveness (`docker-compose.yml.j2:57-62`) — an executable strict red pins a FUTURE readiness
 signal proving coordinator storage/schema is open + reconcile can safely participate; release stays blocked
 until the production healthcheck consumes it. A gauge is not a readiness gate until deployment consumes it.
+
+**Pinned readiness signal (P0c):** `musubi_lifecycle_coordinator_ready` — a gauge on the worker metrics
+port set to 1 ONLY when the coordinator's shared SQLite/outbox schema is open AND `reconcile_once` can
+safely participate (equivalently, a dedicated `/readyz`-style readiness endpoint). The executable
+`test_p0c_worker_healthcheck_consumes_readiness_signal` (strict-xfail) parses the REAL ansible template
+and asserts the lifecycle-worker healthcheck CONSUMES this signal rather than probing `/metrics` for HTTP
+200; it flips green only when the deploy healthcheck reads the pinned gauge (or endpoint).
 Deploy is out of scope; live is v1.11.7 vs pinned v1.13.0, not converged.
 
 ## I. The twelve REV2 rulings — disposition
