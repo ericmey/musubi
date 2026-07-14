@@ -34,10 +34,13 @@ blocking; it is a deliberate operator override, not a fail-closed guard.
 
 This module owns the shared lifecycle tables: lifecycle events, the maturation and
 synthesis cursors, the ``lifecycle_outbox`` admission table (S2) with its ``ux_active_intent``
-partial-unique index, and — as of S3 — the outbox's ``event_payload``/``terminal_epoch``
-columns plus the ``lifecycle_apply_markers`` table. The reconcile/lease/attempt columns and
-the ``lifecycle_control`` table are owned by later slices (S4/S6) and are intentionally NOT
-declared here yet; S6 owns cleanup/backfill/control (not the ``terminal_epoch`` column, S3).
+partial-unique index, the S3 ``event_payload``/``terminal_epoch`` columns + the
+``lifecycle_apply_markers`` table, and — as of S4 — the outbox's
+``lease_owner``/``lease_expires_epoch``/``attempts``/``next_attempt_epoch``/``failure_class``
+reconciliation columns. The ``lifecycle_control`` table and the cleanup/backfill logic are
+owned by S6 and are intentionally NOT declared here yet; S6 owns cleanup/backfill/control (not
+the S3 ``terminal_epoch`` nor the S4 lease/attempt/``failure_class`` columns). S5 owns the
+emission/metrics/logs of ``failure_class`` — not the column, which S4 persists for R15.
 
 S3 note: the coordinator's ``_finalize`` writes the C6-owned ``lifecycle_events`` table
 DIRECTLY (all 8 columns, in the same txn as the outbox APPLIED→FINAL move) rather than
@@ -59,12 +62,18 @@ from typing import Literal
 DEFAULT_BUSY_TIMEOUT_MS = 5000
 
 #: The union schema of every component that shares the lifecycle SQLite file. The
-#: sink/cursor tables plus the C6b ``lifecycle_outbox`` (admission S2 + apply/finalize S3:
-#: ``event_payload`` persisted pre-mutation so a post-crash finalize needs no fabricated
-#: fields, ``terminal_epoch`` stamped atomically on FINAL/ABANDONED) and the S3
-#: ``lifecycle_apply_markers`` effective-apply table. The reconcile/lease columns, the
-#: cleanup/backfill logic, and ``lifecycle_control`` are added by later slices (S4/S6) —
-#: S6 owns cleanup/backfill/control, NOT the ``terminal_epoch`` column introduction (S3).
+#: sink/cursor tables plus the C6b ``lifecycle_outbox`` (admission S2 + apply/finalize S3
+#: [``event_payload`` persisted pre-mutation, ``terminal_epoch`` on FINAL/ABANDONED] +
+#: reconciliation S4 [``lease_owner``/``lease_expires_epoch`` for atomic guarded leases,
+#: ``attempts``/``next_attempt_epoch`` for durable retry backoff, ``failure_class`` for the
+#: durable terminal/transient/unknown classification R15 requires, and ``namespace``/``actor``/
+#: ``reason`` — the admission-truth reconstruct columns so a PENDING row is self-sufficient for the
+#: server-fenced reapply + event rebuild even before ``event_payload`` exists, e.g. an R5 crash])
+#: and the S3
+#: ``lifecycle_apply_markers`` effective-apply table. The cleanup/backfill logic and
+#: ``lifecycle_control`` are added by S6 (cleanup/backfill/control), which does NOT own the
+#: ``terminal_epoch`` [S3] or the lease/attempt/``failure_class`` columns [S4]. S5 owns the
+#: emission/metrics/logs OF ``failure_class`` — not the column itself.
 _LIFECYCLE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS lifecycle_events (
     event_id TEXT PRIMARY KEY,
@@ -111,13 +120,21 @@ CREATE TABLE IF NOT EXISTS lifecycle_outbox (
     collection TEXT,
     target_state TEXT,
     expected_version INTEGER,
+    namespace TEXT,
+    actor TEXT,
+    reason TEXT,
     patch_sha TEXT,
     patch_json TEXT,
     intent_digest TEXT,
     state TEXT,
     event_id TEXT,
     event_payload TEXT,
-    terminal_epoch REAL
+    terminal_epoch REAL,
+    lease_owner TEXT,
+    lease_expires_epoch REAL,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_epoch REAL,
+    failure_class TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_active_intent
     ON lifecycle_outbox (collection, object_id) WHERE state IN ('PENDING','APPLIED');

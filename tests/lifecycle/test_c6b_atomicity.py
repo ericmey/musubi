@@ -4067,7 +4067,6 @@ def _check_r2(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
 
 
 def _check_r3(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
-    _require_real_stage("reconcile_once", _R3_REASON)
     coord = _coordinator(client, db_path)
     _fail_set_payload(client, _TransientQdrantError("injected transient during apply"))
     res = coord.transition(_intent(seed, to_state="matured", operation_key="op-r3"))
@@ -4129,7 +4128,6 @@ def _check_r3(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
 
 
 def _check_r4(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
-    _require_real_stage("reconcile_once", _R4_REASON)
     coord = _coordinator(client, db_path)
     before = _qdrant_state(client, seed.collection, seed.object_id)
     _fail_set_payload(client, _TerminalQdrantError("injected terminal (proven)"))
@@ -4201,14 +4199,12 @@ def test_r2_durable_begin_failure_blocks_qdrant_mutation(
     _check_r2(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R3_REASON)
 def test_r3_transient_failure_is_ok_pending_then_reconciles(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r3(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R4_REASON)
 def test_r4_terminal_failure_is_err_abandoned_no_final(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
@@ -4554,7 +4550,6 @@ def _check_r15(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     attempts is observability only (increments once per DUE, CLAIMED, ACTUAL Qdrant attempt), bounded
     overflow-safe backoff, atomic (attempts+schedule) persistence. Termination boundary is EXACTLY
     {success -> FINAL, proven-terminal -> ABANDONED} - never attempt count. Each scenario is a fresh env."""
-    _require_real_stage("reconcile_once", _R15_REASON)
     base = Path(db_path).parent
     op = _R15_OP
 
@@ -4852,7 +4847,6 @@ def _check_r17(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     ABA-match; and a stale/expired owner can neither finalize a row the current owner holds nor apply
     effectively (the R13/R22 version fence makes its late attempt a zero-match no-op). Each scenario is a
     fresh env with an injected clock. The reclaim CRASH matrix (real process death) is _check_r17_reclaim."""
-    _require_real_stage("reconcile_once", _R17_REASON)
     base = Path(db_path).parent
     E = 5_000.0  # a lease's expiry epoch
 
@@ -4960,7 +4954,6 @@ def _check_r16(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     guarded UPDATE, rowcount==1 IS ownership); an unexpired owner is exclusive; every post-claim
     disposition is owner-guarded and clears the lease atomically; `claimed` counts successful claims, not
     scanned rows; lease_ttl is positive-finite. Each scenario is a fresh env with an injected clock."""
-    _require_real_stage("reconcile_once", _R16_REASON)
     base = Path(db_path).parent
     T = 5_000.0
 
@@ -5227,7 +5220,6 @@ def _check_r16_race(base: Path) -> None:
     due, unleased row. Exactly ONE claims (WIN) and one loses (LOSE); the durable claim is observed by the
     loser (its rowcount is 0). The row's exact snapshot shows only the winner's claim - one owner, PENDING,
     attempts 0, next_attempt NULL, no event/marker. select_then_update admits BOTH (two WINs)."""
-    _require_real_stage("reconcile_once", _R16_RACE_REASON)
     _api()  # xfail today
     mode = _ACTIVE_CANDIDATE._mode if _ACTIVE_CANDIDATE is not None else "correct"
     base.mkdir(parents=True, exist_ok=True)
@@ -5319,7 +5311,6 @@ def _check_r18(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     lets other rows through under both limit=1 (repeated calls) and limit>1 (one batch). The poison stays
     PENDING forever (R15 no-abandon), never dropped, and is processed through the normal claim/apply/fence
     (no lease/cap/version bypass). Each scenario is a fresh env with an injected clock."""
-    _require_real_stage("reconcile_once", _R18_REASON)
     base = Path(db_path).parent
     T = 5_000.0
 
@@ -5401,7 +5392,7 @@ def _check_r19(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     namespace/reason, and the exception message, then checked across the row, the captured log, and the
     Prometheus exposition. R13 full-readback SHA and R15 unknown classification (without leaking reason)
     are preserved."""
-    _require_real_stage("reconcile_once", _R19_REASON)
+    _require_real_stage("_observe_pending", _R19_REASON)
     base = Path(db_path).parent
     c, s, d = _make_env(base / "r19")
     op = f"{_PII_SENTINEL}-op"
@@ -5507,7 +5498,6 @@ def _check_r9(client: QdrantClient, seed: _Seed, db_path: Path) -> None:
     """Idempotent replay: a PENDING op processed, then REPLAYED (duplicate delivery), yields EXACTLY ONE
     FINAL, ONE audit event, and ONE EFFECTIVE apply (measured by set_payload calls, not readback), leaving
     the object at target/v+1 - never a second event or a second mutation."""
-    _require_real_stage("reconcile_once", _R9_REASON)
     coord = _coordinator(client, db_path)
     _fail_set_payload(client, _TransientQdrantError("hold op-r9 PENDING"))
     r1 = coord.transition(_intent(seed, to_state="matured", operation_key="op-r9"))
@@ -5979,7 +5969,6 @@ _R12_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R9_REASON)
 def test_r9_idempotent_replay(env: tuple[QdrantClient, _Seed, Path]) -> None:
     _check_r9(*env)
 
@@ -5996,28 +5985,24 @@ def test_r14_hard_pending_cap_admission_backpressure(
     _check_r14(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R15_REASON)
 def test_r15_transient_never_abandoned_by_attempt_count(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r15(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R16_REASON)
 def test_r16_valid_lease_exclusive_processing(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r16(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R17_REASON)
 def test_r17_expired_owner_reclaim_safe(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
     _check_r17(*env)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R18_REASON)
 def test_r18_no_poison_row_starvation(
     env: tuple[QdrantClient, _Seed, Path],
 ) -> None:
@@ -6059,7 +6044,6 @@ _R16_RACE_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R16_RACE_REASON)
 def test_r16_two_process_claim_race_one_owner(tmp_path: Path) -> None:
     _check_r16_race(tmp_path)
 
@@ -6197,7 +6181,6 @@ def _drive_crash(
 
 
 def _check_r5(base: Path) -> None:  # C1: crash after PENDING, before Qdrant
-    _require_real_stage("reconcile_once", _R5_REASON)
     seed, db_path, qdrant_path = _drive_crash(base, "after_pending_commit", _C1_CODE, "op-r5")
     rows = _outbox_rows(db_path, "op-r5")
     if len(rows) != 1 or rows[0]["state"] != "PENDING":
@@ -6278,7 +6261,6 @@ def _check_r6(base: Path) -> None:  # C2: crash after Qdrant apply, before APPLI
 
 
 def _check_r7(base: Path) -> None:  # C3: crash after APPLIED commit, before finalize
-    _require_real_stage("reconcile_once", _R7_REASON)
     seed, db_path, qdrant_path = _drive_crash(
         base, "after_applied_commit_before_finalize", _C3_CODE, "op-r7"
     )
@@ -6437,7 +6419,6 @@ def _check_r17_reclaim(base: Path) -> None:
 
 
 def _check_r8(client: QdrantClient, seed: _Seed, db_path: Path) -> None:  # finalize-txn atomicity
-    _require_real_stage("reconcile_once", _R8_REASON)
     coord = _coordinator(client, db_path)
 
     def _fault(name: str) -> None:
@@ -6497,22 +6478,18 @@ _R8_REASON = (
 )
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R5_REASON)
 def test_r5_crash_after_pending_before_qdrant(tmp_path: Path) -> None:
     _check_r5(tmp_path)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R6_REASON)
 def test_r6_crash_after_qdrant_before_applied(tmp_path: Path) -> None:
     _check_r6(tmp_path)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R7_REASON)
 def test_r7_crash_after_applied_before_finalize(tmp_path: Path) -> None:
     _check_r7(tmp_path)
 
 
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_R8_REASON)
 def test_r8_finalize_transaction_is_atomic(env: tuple[QdrantClient, _Seed, Path]) -> None:
     _check_r8(*env)
 
@@ -9388,7 +9365,15 @@ _P0C_T4_REASON = (
             _field,
             _constraint,
             marks=()
-            if _field in ("lifecycle_sqlite_busy_timeout_ms", "lifecycle_pending_cap")
+            if _field
+            in (
+                "lifecycle_sqlite_busy_timeout_ms",
+                "lifecycle_pending_cap",
+                "lifecycle_lease_ttl_s",
+                "lifecycle_reconcile_interval_s",
+                "lifecycle_backoff_base_s",
+                "lifecycle_backoff_max_s",
+            )
             else (
                 pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T4_REASON),
             ),

@@ -81,6 +81,7 @@ review.
 - `tests/lifecycle/test_s1_store_policy.py`
 - `tests/lifecycle/test_s2_coordinator_admission.py`
 - `tests/lifecycle/test_s3_coordinator_apply.py`
+- `tests/lifecycle/test_s4_reconcile.py`
 - `tests/ops/test_lifecycle_storage_doc_drift.py`
 - `docs/Musubi/08-deployment/compose-stack.md`
 - `docs/Musubi/08-deployment/host-profile.md`
@@ -123,44 +124,46 @@ Yua-authorized narrow).
 
 ## Test Contract
 
-> Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **118** functions in this
-> slice's own contract below + **8** from `08-deployment/compose-stack` = **126** `tc-coverage` bullets,
-> 0 missing. Status from runtime collection across the self files (atomicity file **84 passed / 49
-> xfailed / 0 failed / 0 XPASS** after the S2+S3 flips + stage guards), NOT from tc-coverage's classifier
-> — which mislabels variable-reason strict-xfail reds as "passing". **S2 flipped R2, R11, R14 two-process
-> race, `lifecycle_pending_cap`; S3 flips R1, R10, R12, R13, R14-single, R22** — EMPIRICALLY re-derived
-> (not the §F paper matrix): R4/R7/R8 reach `reconcile_once` for their crash-recovery/no-resurrection
-> halves and stay owed S4. Every other acceptance red stays strict-xfail: a NO-OP-under-candidate stage
-> guard (`_require_real_stage`) keeps each owed red raising its OWN DefectStillPresent — not the
-> AttributeError/OperationalError a partially-built coordinator would surface (`reconcile_once`=S4,
-> `rollback`=S6). **G1 is closure-only and flips ONLY under H5** ([[_slices/slice-h5-unify-state-mutation]]).
-> Direct real-source proofs: `tests/lifecycle/test_s2_coordinator_admission.py` (admission layer,
-> client-free) + `tests/lifecycle/test_s3_coordinator_apply.py` (full apply/finalize contract, wrong-shape
-> discriminators, and the collection->object_type parity). See the **Guard-removal checklist** below.
+> Full executable denominator (AST-enumerated, incl. `AsyncFunctionDef`). **127** functions in this
+> slice's own contract below + **8** from `08-deployment/compose-stack` = **135** `tc-coverage` bullets,
+> 0 missing. Status from runtime collection across the self files (atomicity file **100 passed / 33
+> xfailed / 0 failed / 0 XPASS** after the S2+S3+S4 flips + stage guards), NOT from tc-coverage's
+> classifier — which mislabels variable-reason strict-xfail reds as "passing". **S2 flipped R2, R11, R14
+> two-process race, `lifecycle_pending_cap`; S3 flips R1, R10, R12, R13, R14-single, R22; S4 flips R3, R4,
+> R5, R6, R7, R8, R9, R15, R16 (valid + two-process claim), R17, R18 + the 4 reconciler settings
+> (`lifecycle_lease_ttl_s`/`reconcile_interval_s`/`backoff_base_s`/`backoff_max_s`)** — all EMPIRICALLY
+> re-derived (not the §F paper matrix). Every other acceptance red stays strict-xfail: a
+> NO-OP-under-candidate stage guard (`_require_real_stage`) keeps each owed red raising its OWN
+> DefectStillPresent — not the AttributeError/OperationalError a partially-built coordinator would surface
+> (`_observe_pending`=S5 for R19; `rollback`=S6 for R20; `test_r17_reclaim` stays owed its S4+ crash
+> matrix). **G1 is closure-only and flips ONLY under H5** ([[_slices/slice-h5-unify-state-mutation]]).
+> Direct real-source proofs: `test_s2_coordinator_admission.py` (admission, client-free) +
+> `test_s3_coordinator_apply.py` (apply/finalize + wrong-shape + parity) + `test_s4_reconcile.py`
+> (reconcile: leases, backoff, crash matrix, exact-owner no-op). See the **Guard-removal checklist** below.
 
 ### Accepted atomicity — R acceptance reds & controls (`test_c6b_atomicity.py`) (46)
 1. `test_r1_durable_intent_persisted_before_qdrant_mutation` — GREEN — S3 flip (non-vacuity: requires a real attempted apply)
 2. `test_r2_durable_begin_failure_blocks_qdrant_mutation` — GREEN — S2 flip (load-bearing; direct proof in test_s2)
-3. `test_r3_transient_failure_is_ok_pending_then_reconciles` — strict-xfail — acceptance red (owed S2-S7)
-4. `test_r4_terminal_failure_is_err_abandoned_no_final` — strict-xfail — owed S4 (ABANDONED works; the no-resurrection half calls reconcile_once; reconcile_once guard)
-5. `test_r5_crash_after_pending_before_qdrant` — strict-xfail — acceptance red (owed S2-S7)
-6. `test_r6_crash_after_qdrant_before_applied` — strict-xfail — acceptance red (owed S2-S7)
-7. `test_r7_crash_after_applied_before_finalize` — strict-xfail — owed S4 (crash-after-applied recovery needs reconcile_once; guard)
-8. `test_r8_finalize_transaction_is_atomic` — strict-xfail — owed S4 (finalize atomicity works; the reconcile-completes-finalize half needs reconcile_once; guard)
-9. `test_r9_idempotent_replay` — strict-xfail — acceptance red (owed S2-S7)
+3. `test_r3_transient_failure_is_ok_pending_then_reconciles` — GREEN — S4 flip (transient → Pending → reconcile finalizes)
+4. `test_r4_terminal_failure_is_err_abandoned_no_final` — GREEN — S4 flip (terminal → ABANDONED, no FINAL; reconcile no-resurrection)
+5. `test_r5_crash_after_pending_before_qdrant` — GREEN — S4 flip (pre-persist crash re-driven by reconcile)
+6. `test_r6_crash_after_qdrant_before_applied` — GREEN — S4 flip (readback recognizes the applied mutation, no re-apply)
+7. `test_r7_crash_after_applied_before_finalize` — GREEN — S4 flip (APPLIED → reconcile finalizes)
+8. `test_r8_finalize_transaction_is_atomic` — GREEN — S4 flip (finalize atomic; reconcile completes a faulted finalize)
+9. `test_r9_idempotent_replay` — GREEN — S4 flip (idempotent replay: one FINAL/event/apply)
 10. `test_r10_operation_key_idempotent_across_caller_retries` — GREEN — S3 flip (idempotency + digest conflict; delimiter fixture repaired to legal matured→demoted)
 11. `test_r11_single_active_intent_per_object` — GREEN — S2 flip (import-gate mechanical; behavioral proof in test_s2)
 12. `test_r12_hard_version_fence_refuses_stale` — GREEN — S3 flip (server-side version fence)
 13. `test_r13_conditional_apply_full_readback_patch_sha` — GREEN — S3 flip (full-readback identity + patch-SHA)
 14. `test_r14_hard_pending_cap_admission_backpressure` — GREEN — S3 flip (cap backpressure via full transition)
 15. `test_r14_two_process_admission_race_holds_cap` — GREEN — S2 flip (import-gate mechanical; behavioral proof in test_s2)
-16. `test_r15_transient_never_abandoned_by_attempt_count` — strict-xfail — acceptance red (owed S2-S7)
-17. `test_r16_two_process_claim_race_one_owner` — strict-xfail — acceptance red (owed S2-S7)
-18. `test_r16_valid_lease_exclusive_processing` — strict-xfail — acceptance red (owed S2-S7)
-19. `test_r17_crash_reclaim_readback_confirms_no_reapply` — strict-xfail — acceptance red (owed S2-S7)
-20. `test_r17_expired_owner_reclaim_safe` — strict-xfail — acceptance red (owed S2-S7)
-21. `test_r18_no_poison_row_starvation` — strict-xfail — acceptance red (owed S2-S7)
-22. `test_r19_pii_free_content_and_bounded_observability` — strict-xfail — acceptance red (owed S2-S7)
+16. `test_r15_transient_never_abandoned_by_attempt_count` — GREEN — S4 flip (attempts/backoff atomic; never abandoned by count)
+17. `test_r16_two_process_claim_race_one_owner` — GREEN — S4 flip (atomic guarded claim, one owner)
+18. `test_r16_valid_lease_exclusive_processing` — GREEN — S4 flip (valid lease exclusive; owner-guarded disposition)
+19. `test_r17_crash_reclaim_readback_confirms_no_reapply` — strict-xfail — owed (S4+ reclaim CRASH matrix; no guard, its own DefectStillPresent)
+20. `test_r17_expired_owner_reclaim_safe` — GREEN — S4 flip (expired reclaim safe; fresh-token ABA fence)
+21. `test_r18_no_poison_row_starvation` — GREEN — S4 flip (fair due-time advancement; no head-of-line starvation)
+22. `test_r19_pii_free_content_and_bounded_observability` — strict-xfail — owed S5 (durable failure_class GREEN; emission/metrics/logs owed S5, `_observe_pending` guard)
 23. `test_r20_rollback_refuses_nonterminal_maintenance_lifecycle_and_cleanup` — strict-xfail — acceptance red (owed S2-S7)
 24. `test_r20_two_process_admission_drain_barrier_no_overlap` — strict-xfail — acceptance red (owed S2-S7)
 25. `test_r20_two_process_reconciler_drain_barrier_no_overlap` — strict-xfail — acceptance red (owed S2-S7)
@@ -272,6 +275,17 @@ Yua-authorized narrow).
 117. `test_same_key_full_cap_toctou_replays_before_cap` — GREEN — deterministic no-sleep: an identical loser that passed `_replay(None)` under a FULL cap resolves via the SERIALIZED in-txn re-check to a replay (Pending/Final), never `cap_exceeded`; one event/marker (TOCTOU regression)
 118. `test_conflicting_key_full_cap_toctou_returns_conflict` — GREEN — deterministic no-sleep: a different-intent loser through the same in-txn path discriminates the stored digest → `operation_key_conflict` (not `cap_exceeded`), zero Qdrant, one event/marker
 
+### S4 direct real-source RECONCILE proofs (`test_s4_reconcile.py`) (9)
+119. `test_reconcile_redrives_pre_persist_crash` — GREEN — a pre-persist PENDING row (crash at after_pending_commit, no event_payload) is re-driven: event rebuilt from stored namespace/actor/reason → apply → FINAL, one event/marker
+120. `test_reconcile_readback_recognizes_applied_no_second_apply` — GREEN — a crash after apply / before APPLIED is recognized by readback and finalized with ZERO further `set_payload` (no second effective apply)
+121. `test_valid_lease_is_exclusive_and_expired_is_reclaimable` — GREEN — a valid lease is exclusive (second claim fails); an expired lease is reclaimable with a FRESH token (ABA fence)
+122. `test_transient_increments_and_reschedules_never_abandoned` — GREEN — a transient apply keeps PENDING, increments `attempts`, persists `failure_class`, reschedules; never abandoned across passes (R15)
+123. `test_terminal_apply_abandons` — GREEN — a known-terminal apply → ABANDONED + `failure_class='terminal'`, no event/marker
+124. `test_backoff_is_monotonic_and_bounded` — GREEN — `_backoff` is base·2^(n-1), monotonic non-decreasing, saturates to max, overflow-safe at a huge attempts count
+125. `test_not_due_row_is_a_true_noop` — GREEN — a not-due row is a true no-op: no claim, no attempt increment, no lease side effect
+126. `test_nonowner_finalize_is_a_silent_noop` — GREEN — exact-owner semantics: a non-owner finalize matches zero rows and is a silent no-op (no raise, no event, no state change)
+127. `test_default_backoff_constants_are_bounded` — GREEN — `0 < DEFAULT_BACKOFF_BASE <= DEFAULT_BACKOFF_MAX`
+
 **Cross-slice regression gate (NOT part of this parsed Test Contract):**
 `tests/lifecycle/test_c6_event_loss.py` (1 passed / 8 xfailed, frozen) is owned by the active C6 slice
 [[_slices/slice-c6-lifecycle-event-loss]]. This source cut keeps its disposition byte-for-byte unchanged
@@ -285,13 +299,13 @@ OWN `DefectStillPresent` until the named capability lands. **When a future slice
 MUST delete the matching guard(s) and re-derive the flip empirically (`--runxfail`), flipping only the reds
 whose real semantics are now load-bearing — never leave a guard on a red that would otherwise pass.**
 
-- **S3 `_apply_conditional` — DONE this slice.** The R22 guard was removed and R22 flipped once the real
-  `transition()` gained conditional apply. No `_apply_conditional` guard remains.
-- **S4 `reconcile_once`** (remove when S4 lands `reconcile_once`; then re-derive): `_R3_REASON`,
-  `_R4_REASON`, `_R5_REASON`, `_R7_REASON`, `_R8_REASON`, `_R9_REASON`, `_R15_REASON`, `_R16_REASON`,
-  `_R16_RACE_REASON`, `_R17_REASON`, `_R18_REASON`, `_R19_REASON` (12 guards). NOTE: R4/R7/R8 already have
-  their S3 halves working (terminal-abandon / crash-after-applied / finalize atomicity) and only their
-  reconcile-recovery halves remain owed — expect them to flip at S4.
+- **S3 `_apply_conditional` — DONE (S3).** R22 flipped once `transition()` gained conditional apply.
+- **S4 `reconcile_once` — DONE (S4).** All 11 `reconcile_once` guards were removed and R3, R4, R5, R6, R7,
+  R8, R9, R15, R16 (valid + two-process claim), R17, R18 flipped once `reconcile_once` landed. `test_r17_reclaim`
+  stays owed its remaining crash matrix (still strict-xfail, no guard). No `reconcile_once` guard remains.
+- **S5 `_observe_pending`** (remove when S5 lands observability emission; then re-derive): `_R19_REASON`
+  (1 guard). R19's durable `failure_class` field is GREEN (persisted by S4), but its PII-free
+  emission/metrics/logs are S5 — the guard is re-pointed from `reconcile_once` to `_observe_pending`.
 - **S6 `rollback`** (remove when S6 lands rollback/maintenance): `_R20_REASON`, `_R20_DRAIN_REASON`,
   `_R20_RECONCILER_DRAIN_REASON` (3 guards).
 - **R1** carries no `_require_real_stage` guard — its non-vacuity is a body assertion (it requires a real

@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import secrets
 import sqlite3
 import time
 from collections.abc import Callable
@@ -51,9 +53,12 @@ from musubi.types.lifecycle_event import LifecycleEvent
 #: there is no unbounded/None option (admission must always have a bound).
 DEFAULT_PENDING_CAP = 10_000
 
-#: Default lease TTL (seconds) — consumed by the S4 reconciler; validated here so an
-#: invalid value fails at construction, but unused in the S2 admission-only path.
+#: Default lease TTL (seconds) — a reconciler claim stamps ``lease_expires_epoch = now + ttl``.
 DEFAULT_LEASE_TTL = 30.0
+
+#: Default reconciler retry backoff (seconds): ``min(base * 2**(attempts-1), max)``.
+DEFAULT_BACKOFF_BASE = 1.0
+DEFAULT_BACKOFF_MAX = 300.0
 
 #: Deterministic default patch timestamps so an intent constructed without explicit
 #: ``updated_at`` yields a reproducible minimal patch (production callers pass real
@@ -109,6 +114,19 @@ class TransitionError:
 TransitionOutcome = TransitionFinal | TransitionPending
 
 
+@dataclass(frozen=True)
+class ReconcileReport:
+    """The outcome of one ``reconcile_once`` pass — how many due rows were claimed and how each
+    claimed row was disposed (a claimed row is counted in exactly one of the disposition fields, or
+    stays counted only in ``claimed`` if it is still mid-flight after a crash within the pass)."""
+
+    claimed: int = 0
+    finalized: int = 0
+    pending: int = 0
+    abandoned: int = 0
+    failed: int = 0
+
+
 def _validate_pending_cap(cap: object) -> int:
     """The cap must be a positive int. ``bool`` is a subclass of ``int`` — reject it
     explicitly; reject any non-int type and any value ``<= 0``. No None/unbounded."""
@@ -127,6 +145,16 @@ def _validate_lease_ttl(ttl: object) -> float:
     if not (ttl > 0 and ttl < float("inf")):
         raise ValueError(f"lease_ttl must be a positive finite float, got {ttl}")
     return ttl
+
+
+def _validate_positive_float(name: str, value: object) -> float:
+    """A positive, finite float (not bool) — for the reconciler backoff base/max."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{name} must be a number (not bool), got {type(value).__name__}")
+    v = float(value)
+    if not (v > 0 and v < float("inf")):
+        raise ValueError(f"{name} must be a positive finite float, got {v}")
+    return v
 
 
 class _CapExceeded(Exception):
@@ -206,9 +234,17 @@ class LifecycleTransitionCoordinator:
         db_path: Path,
         pending_cap: int = DEFAULT_PENDING_CAP,
         lease_ttl: float = DEFAULT_LEASE_TTL,
+        backoff_base_s: float = DEFAULT_BACKOFF_BASE,
+        backoff_max_s: float = DEFAULT_BACKOFF_MAX,
     ) -> None:
         self._pending_cap = _validate_pending_cap(pending_cap)
         self._lease_ttl = _validate_lease_ttl(lease_ttl)
+        self._backoff_base = _validate_positive_float("backoff_base_s", backoff_base_s)
+        self._backoff_max = _validate_positive_float("backoff_max_s", backoff_max_s)
+        if self._backoff_max < self._backoff_base:
+            raise ValueError(
+                f"backoff_max_s ({self._backoff_max}) must be >= backoff_base_s ({self._backoff_base})"
+            )
         self._client = client
         self._db = Path(db_path)
         #: Private fault-injection seam (default no-op); tests set it to raise/crash at
@@ -230,6 +266,12 @@ class LifecycleTransitionCoordinator:
         the S4 reconciler; or a bounded ``Err`` — ``cap_exceeded`` / ``active_intent_exists`` /
         ``durable_begin_failed`` / ``operation_key_conflict`` / ``version_fence_violation`` /
         ``terminal_apply_failure``."""
+        # namespace/actor/reason are required admission truth (Yua S4): a PENDING row must be
+        # self-sufficient for reconcile's server-fenced reapply + event rebuild even before its
+        # event_payload exists. Reject a degenerate intent BEFORE any durable work — a bounded
+        # terminal validation, no row, no mutation. (The digest already binds all three.)
+        if not (intent.namespace and intent.actor and intent.reason):
+            return Err(error=TransitionError(code="terminal_apply_failure"))
         opk = self._key(intent)
         digest = self._intent_digest(intent)
         event_id = generate_ksuid()
@@ -287,7 +329,9 @@ class LifecycleTransitionCoordinator:
             return Err(error=TransitionError(code="terminal_apply_failure"))
         # (4) conditional apply: server-side fenced mutation + full readback + confirm.
         try:
-            status = self._apply_conditional(intent, opk)
+            status = self._apply_conditional(
+                opk, intent.collection, intent.object_id, _intended_patch(intent)
+            )
         except Exception as exc:  # classified into terminal vs recoverable next
             if self._classify_terminal(exc):
                 self._mark_terminal(opk)
@@ -301,9 +345,12 @@ class LifecycleTransitionCoordinator:
         if status == "corrupt":
             # the version landed but a deeper patch key mismatched — recoverable; S4 reconciles.
             return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
-        # (5) confirmed: the effective-apply marker + PENDING->APPLIED commit TOGETHER (correction
-        # 3), so a crash can never leave an APPLIED row without its marker (or vice versa).
-        self._mark_applied(intent, opk)
+        # (5) confirmed: the Qdrant mutation is durable but the row is still PENDING here — the
+        # crash seam a reconcile recovers by readback (R6/R17). The effective-apply marker +
+        # PENDING->APPLIED then commit TOGETHER (correction 3), so a crash can never leave an APPLIED
+        # row without its marker (or vice versa).
+        self._checkpoint("after_qdrant_readback_before_applied_commit")
+        self._mark_applied(opk, intent.object_id, intent.target_state)
         self._checkpoint("after_applied_commit_before_finalize")
         # (6) atomic finalize: the 8-column FINAL lifecycle_events row (from the persisted payload)
         # AND the APPLIED->FINAL move in ONE transaction, guarded on state='APPLIED' (R8). A fault
@@ -364,6 +411,9 @@ class LifecycleTransitionCoordinator:
             intent.collection,
             intent.target_state,
             intent.expected_version,
+            intent.namespace,
+            intent.actor,
+            intent.reason,
             patch_sha,
             patch_json,
             self._intent_digest(intent),
@@ -372,8 +422,8 @@ class LifecycleTransitionCoordinator:
         )
         insert = (
             "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
-            "expected_version,patch_sha,patch_json,intent_digest,state,event_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)"
+            "expected_version,namespace,actor,reason,patch_sha,patch_json,intent_digest,state,"
+            "event_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
         )
         con = store.connect(
             self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
@@ -532,36 +582,57 @@ class LifecycleTransitionCoordinator:
 
     # -- S3: conditional apply + full readback confirm ------------------------------- #
 
-    def _apply_conditional(self, intent: TransitionIntent, opk: str) -> str:
+    def _namespace_for(self, opk: str) -> str:
+        """The object's namespace from the admission-truth outbox column (Option A), so a fenced
+        reapply resolves namespace WITHOUT a live intent (S4 reconcile / white-box callers)."""
+        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        try:
+            row = con.execute(
+                "SELECT namespace FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+            ).fetchone()
+        finally:
+            con.close()
+        return str(row[0]) if row and row[0] else ""
+
+    def _apply_conditional(
+        self, opk: str, collection: str, object_id: str, patch: dict[str, object]
+    ) -> str:
         """Send the EXACT patch fenced server-side (collection + object_id + namespace +
-        expected_version), then FULL-readback and confirm (S3 correction 4). Returns
-        ``'confirmed'`` | ``'fence'`` | ``'corrupt'``. The fenced ``set_payload`` matches zero
-        points when the object is not at ``expected_version`` (a stale intent) -> the readback
-        proves a fence."""
-        patch = _intended_patch(intent)
+        expected_version), then FULL-readback and confirm (S3 correction 4). ``namespace`` is
+        resolved from the stored admission truth (Option A) so this works for a live transition AND a
+        reconcile with no live intent. Returns ``'confirmed'`` | ``'fence'`` | ``'corrupt'``; the
+        fenced ``set_payload`` matches zero points when the object is not at ``expected_version`` (a
+        stale intent) -> the readback proves a fence."""
+        namespace = self._namespace_for(opk)
+        expected_version = int(str(patch["version"])) - 1
         client = self._require_client()
         client.set_payload(
-            collection_name=intent.collection,
+            collection_name=collection,
             payload=dict(patch),
             points=models.Filter(
                 must=[
                     models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=intent.object_id)
+                        key="object_id", match=models.MatchValue(value=object_id)
                     ),
                     models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=intent.namespace)
+                        key="namespace", match=models.MatchValue(value=namespace)
                     ),
                     models.FieldCondition(
-                        key="version", match=models.MatchValue(value=intent.expected_version)
+                        key="version", match=models.MatchValue(value=expected_version)
                     ),
                 ]
             ),
         )
-        actual, count = self._read_object(intent.collection, intent.object_id, intent.namespace)
-        return self._confirm(patch, intent, actual, count)
+        actual, count = self._read_object(collection, object_id, namespace)
+        return self._confirm(patch, object_id, namespace, actual, count)
 
     def _confirm(
-        self, patch: dict[str, object], intent: TransitionIntent, actual: dict[str, Any], count: int
+        self,
+        patch: dict[str, object],
+        object_id: str,
+        namespace: str,
+        actual: dict[str, Any],
+        count: int,
     ) -> str:
         """Confirm an apply from the ACTUAL readback (S3 correction 4). ``'fence'`` = stale /
         not-exactly-one / wrong identity-version-state (the fenced write matched zero points);
@@ -569,16 +640,18 @@ class LifecycleTransitionCoordinator:
         (recoverable); ``'confirmed'`` = exactly one point, identity + namespace + version + state
         all correct, every intended key present, and the SHA over the ACTUAL-projected patch equals
         the intended SHA."""
+        target_state = patch["state"]
+        expected_version = int(str(patch["version"])) - 1
         if count != 1:
             return "fence"
-        if str(actual.get("namespace", "")) != intent.namespace:
+        if str(actual.get("namespace", "")) != namespace:
             return "fence"
-        object_id = actual.get("object_id")
-        if object_id is not None and str(object_id) != intent.object_id:
+        actual_object_id = actual.get("object_id")
+        if actual_object_id is not None and str(actual_object_id) != object_id:
             return "fence"
-        if actual.get("version") != intent.expected_version + 1:
+        if actual.get("version") != expected_version + 1:
             return "fence"
-        if actual.get("state") != intent.target_state:
+        if actual.get("state") != target_state:
             return "fence"
         for key in patch:
             if key not in actual:
@@ -590,10 +663,14 @@ class LifecycleTransitionCoordinator:
 
     # -- S3: marker + APPLIED (one txn) and atomic finalize -------------------------- #
 
-    def _mark_applied(self, intent: TransitionIntent, opk: str) -> None:
+    def _mark_applied(
+        self, opk: str, object_id: str, target_state: str, owner: str | None = None
+    ) -> None:
         """The confirmed effective-apply marker AND the PENDING->APPLIED move commit TOGETHER (S3
         correction 3). A marker key collision must verify identical object/target — never silently
-        hide a mismatch."""
+        hide a mismatch. When ``owner`` is given (S4 reconcile), the APPLIED move is owner-guarded so
+        only the current lease holder advances the row."""
+        guard, gparams = self._owner_guard(owner)
         con = store.connect(
             self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
         )
@@ -603,7 +680,7 @@ class LifecycleTransitionCoordinator:
                 con.execute(
                     "INSERT INTO lifecycle_apply_markers "
                     "(operation_key, object_id, target_state) VALUES (?,?,?)",
-                    (opk, intent.object_id, intent.target_state),
+                    (opk, object_id, target_state),
                 )
             except sqlite3.IntegrityError:
                 existing = con.execute(
@@ -611,18 +688,14 @@ class LifecycleTransitionCoordinator:
                     "WHERE operation_key=?",
                     (opk,),
                 ).fetchone()
-                if (
-                    existing is None
-                    or existing[0] != intent.object_id
-                    or existing[1] != intent.target_state
-                ):
+                if existing is None or existing[0] != object_id or existing[1] != target_state:
                     # a genuine marker mismatch — surfaced (the single outer handler rolls back).
                     raise
                 # identical marker (idempotent re-apply) — fall through to the APPLIED move.
             cur = con.execute(
-                "UPDATE lifecycle_outbox SET state='APPLIED' "
-                "WHERE operation_key=? AND state='PENDING'",
-                (opk,),
+                f"UPDATE lifecycle_outbox SET state='APPLIED' "
+                f"WHERE operation_key=? AND state='PENDING'{guard}",
+                (opk, *gparams),
             )
             if cur.rowcount != 1:
                 # the marker + APPLIED must move EXACTLY one PENDING row in this txn, else an apply
@@ -640,25 +713,57 @@ class LifecycleTransitionCoordinator:
         finally:
             con.close()
 
-    def _finalize(self, opk: str) -> None:
-        """Atomic FINAL (S3 correction 1, R8 forward guard): insert the 8-column FINAL
-        ``lifecycle_events`` row FROM the persisted event payload AND move APPLIED->FINAL (stamping
-        ``terminal_epoch``) in ONE transaction, guarded on ``state='APPLIED'`` (exactly one row).
-        A replayed ``event_id`` must be byte-identical to the stored payload — a conflicting
-        collision is surfaced, never silently accepted."""
+    def _finalize(
+        self,
+        opk: str,
+        event_id: str | None = None,
+        object_id: str | None = None,
+        namespace: str | None = None,
+        target_state: str | None = None,
+        *,
+        owner: str | None = None,
+    ) -> None:
+        """Atomic FINAL (S3 correction 1, R8 forward guard): move APPLIED->FINAL (stamping
+        ``terminal_epoch``) AND insert the 8-column FINAL ``lifecycle_events`` row FROM the persisted
+        event payload in ONE transaction. When ``owner`` is given (S4 reconcile) the FINAL move is
+        owner-guarded and clears the lease atomically; a NON-owner (or non-APPLIED) finalize matches
+        zero rows and is a SILENT NO-OP — exact-owner semantics (R16): never a raise, never an event,
+        no second effective apply. The ``owner=None`` path keeps the strict R8 forward guard (raise on
+        rowcount != 1). A replayed ``event_id`` must be byte-identical to the stored payload — a
+        conflicting collision is surfaced. The ``event_id``/``object_id``/``namespace``/
+        ``target_state`` params exist for the accepted white-box callers; the persisted payload
+        (namespace/actor/reason/from_state) is authoritative."""
+        guard, gparams = self._owner_guard(owner)
+        release = ", lease_owner=NULL, lease_expires_epoch=NULL" if owner is not None else ""
         con = store.connect(
             self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
         )
         try:
-            row = con.execute(
-                "SELECT event_payload FROM lifecycle_outbox WHERE operation_key=?", (opk,)
-            ).fetchone()
-            if row is None or not row[0]:
-                raise RuntimeError(f"finalize: no persisted event payload for {opk}")
-            payload_json = str(row[0])
-            event = LifecycleEvent.model_validate_json(payload_json)
             con.execute("BEGIN IMMEDIATE")
             try:
+                # The owner-guarded FINAL move FIRST: a non-owner / non-APPLIED row matches zero and
+                # returns without touching Qdrant or the event (exact-owner no-op).
+                cur = con.execute(
+                    f"UPDATE lifecycle_outbox SET state='FINAL', terminal_epoch=?{release} "
+                    f"WHERE operation_key=? AND state='APPLIED'{guard}",
+                    (self._now(), opk, *gparams),
+                )
+                if cur.rowcount != 1:
+                    con.execute("ROLLBACK")
+                    if owner is None:
+                        raise RuntimeError(
+                            f"finalize guard: expected exactly one APPLIED row for {opk}, "
+                            f"updated {cur.rowcount}"
+                        )
+                    return  # exact-owner: a non-owner / non-APPLIED FINAL is a silent no-op
+                # The row is FINAL in-txn; write the audit event from the persisted payload.
+                row = con.execute(
+                    "SELECT event_payload FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+                ).fetchone()
+                if row is None or not row[0]:
+                    raise RuntimeError(f"finalize: no persisted event payload for {opk}")
+                payload_json = str(row[0])
+                event = LifecycleEvent.model_validate_json(payload_json)
                 try:
                     con.execute(
                         "INSERT INTO lifecycle_events (event_id, object_id, namespace, object_type,"
@@ -679,24 +784,12 @@ class LifecycleTransitionCoordinator:
                         "SELECT payload FROM lifecycle_events WHERE event_id=?", (event.event_id,)
                     ).fetchone()
                     if existing is None or existing[0] != payload_json:
-                        # a conflicting event collision — surfaced (the single outer handler rolls
-                        # back), never silently accepted.
+                        # a conflicting event collision — surfaced, never silently accepted.
                         raise
-                    # identical event (idempotent re-finalize) — proceed to the FINAL move.
-                # Crash/fault seam INSIDE the finalize txn (R8): a fault here must roll back the
-                # event insert too, leaving the row EXACTLY APPLIED (never a half-finalized FINAL
-                # with no event, nor an orphaned event).
+                    # identical event (idempotent re-finalize) — proceed.
+                # R8 crash seam: a fault here rolls back BOTH the FINAL move and the event insert,
+                # leaving the row EXACTLY APPLIED (never a half-finalized FINAL with no event).
                 self._checkpoint("inside_finalize_after_event_insert")
-                cur = con.execute(
-                    "UPDATE lifecycle_outbox SET state='FINAL', terminal_epoch=? "
-                    "WHERE operation_key=? AND state='APPLIED'",
-                    (self._now(), opk),
-                )
-                if cur.rowcount != 1:
-                    raise RuntimeError(
-                        f"finalize guard: expected exactly one APPLIED row for {opk}, "
-                        f"updated {cur.rowcount}"
-                    )
                 con.execute("COMMIT")
             except Exception:
                 # ONE rollback owner (S3 integrity hole 3): guard on in_transaction so the original
@@ -712,10 +805,8 @@ class LifecycleTransitionCoordinator:
     def _classify_terminal(self, exc: Exception) -> bool:
         """A KNOWN-terminal apply failure -> abandon; transport/unknown -> transient (keep PENDING,
         never abandoned by uncertainty); a pre-mutation invariant failure is terminal (S3
-        correction 6)."""
-        if isinstance(exc, _TerminalValidation):
-            return True
-        return bool(getattr(exc, "terminal", False))
+        correction 6). Delegates to the 3-way :meth:`_classify`."""
+        return self._classify(exc) == "terminal"
 
     def _mark_terminal(self, opk: str) -> None:
         """Move a non-terminal row to ABANDONED, stamping ``terminal_epoch`` atomically."""
@@ -735,11 +826,321 @@ class LifecycleTransitionCoordinator:
     def _now(self) -> float:
         return time.time()
 
+    # -- S4: reconciliation — leases, attempts/backoff, crash recovery -------------- #
+
+    def _owner_guard(self, owner: str | None) -> tuple[str, list[object]]:
+        """The WHERE fragment restricting a post-claim disposition to the CURRENT lease owner (S4
+        R16). ``owner=None`` (the S3 transition path) is unguarded."""
+        if owner is None:
+            return "", []
+        return " AND lease_owner=?", [owner]
+
+    def _new_token(self) -> str:
+        """A FRESH cryptographically-strong per-claim owner token — the generation/ABA fence (R16/
+        R17). Never derived from operation data, never reused: a stale owner's old token can never
+        re-match a row reclaimed under a new token."""
+        return secrets.token_hex(16)
+
+    def _backoff(self, attempts: int) -> float:
+        """Bounded exponential retry backoff (R15): ``min(base * 2**(attempts-1), max)``. Overflow-
+        safe — the saturating exponent is derived from ``log2(max/base)`` and returned as ``max``
+        beyond it, so a huge durable attempts count never evaluates an enormous ``2**n``."""
+        exp = max(0, attempts - 1)
+        saturating = (
+            math.ceil(math.log2(self._backoff_max / self._backoff_base))
+            if self._backoff_max > self._backoff_base
+            else 0
+        )
+        if exp >= saturating:
+            return self._backoff_max
+        return float(min(self._backoff_base * (2**exp), self._backoff_max))
+
+    def _classify(self, exc: Exception) -> str:
+        """3-way apply-failure classification (R15): ``terminal`` (proven — abandon), ``transient``
+        (known-retryable), or ``unknown`` (unclassified). An unknown is NEVER terminal — it keeps
+        retrying, never abandoned by attempt count."""
+        if isinstance(exc, _TerminalValidation) or getattr(exc, "terminal", False):
+            return "terminal"
+        if getattr(exc, "transient", False):
+            return "transient"
+        return "unknown"
+
+    def _cur(self, collection: str, object_id: str, namespace: str) -> tuple[object, object]:
+        """The object's CURRENT ``(version, state)`` from Qdrant (readback-recovery); ``(None, None)``
+        if absent/ambiguous."""
+        payload, count = self._read_object(collection, object_id, namespace)
+        if count != 1:
+            return (None, None)
+        return payload.get("version"), payload.get("state")
+
+    def _claim(self, con: Any, opk: str, now: float, token: str) -> bool:
+        """Atomic guarded lease claim (R16): ONE UPDATE (on the caller's ``con``) stamping a fresh
+        token on a DUE, unleased-or-expired row. ``rowcount == 1`` IS ownership — a NON-atomic
+        check-then-update would race. The FULL due predicate is re-applied at the claim (not only at
+        SELECT); an expired lease (``<= now``) is reclaimable while a valid one is exclusive (R17).
+        The caller commits."""
+        expiry = now + self._lease_ttl
+        cur = con.execute(
+            "UPDATE lifecycle_outbox SET lease_owner=?, lease_expires_epoch=? "
+            "WHERE operation_key=? AND state IN ('PENDING','APPLIED') "
+            "AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
+            "AND (lease_owner IS NULL OR lease_expires_epoch <= ?)",
+            (token, expiry, opk, now, now),
+        )
+        return bool(cur.rowcount == 1)
+
+    def _persist_attempt(
+        self,
+        opk: str,
+        *,
+        reschedule: bool,
+        failure_class: str | None = None,
+        state: str | None = None,
+        owner: str | None = None,
+        release: bool = False,
+    ) -> None:
+        """Increment ``attempts`` and (re)schedule ``next_attempt_epoch`` — plus an optional
+        ``failure_class`` / terminal ``state`` (stamping ``terminal_epoch``) — in ONE owner-guarded
+        transaction (R15/R16), releasing the lease atomically when ``release``. The caller invokes
+        this ONLY on a claimed ACTUAL apply outcome, so ``attempts`` always advances by one; a
+        success/ABANDON passes ``reschedule=False`` (clears the schedule) and PRESERVES ``attempts``.
+        A durably classified ``unknown`` is rescheduled forever, never abandoned by count."""
+        now = self._now()
+        guard, gparams = self._owner_guard(owner)
+        con = store.connect(
+            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+        )
+        try:
+            row = con.execute(
+                "SELECT attempts FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+            ).fetchone()
+            attempts = ((row[0] or 0) if row else 0) + 1
+            next_epoch = (now + self._backoff(attempts)) if reschedule else None
+            schedule_cols = "next_attempt_epoch=?"
+            schedule_vals: list[object] = [next_epoch]
+            if failure_class is not None:
+                schedule_cols += ", failure_class=?"
+                schedule_vals.append(failure_class)
+            if state is not None:
+                schedule_cols += ", state=?"
+                schedule_vals.append(state)
+                if state in ("FINAL", "ABANDONED"):
+                    schedule_cols += ", terminal_epoch=?"
+                    schedule_vals.append(now)
+            if release:
+                schedule_cols += ", lease_owner=NULL, lease_expires_epoch=NULL"
+            # ONE transaction so a fault mid-persist (R15) rolls BOTH the attempts increment AND the
+            # schedule/class/disposition write back — attempts is NEVER advanced with a stale/missing
+            # next_attempt_epoch. The seam between them is inside the txn.
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                con.execute(
+                    f"UPDATE lifecycle_outbox SET attempts=? WHERE operation_key=?{guard}",
+                    (attempts, opk, *gparams),
+                )
+                self._checkpoint("after_attempts_before_schedule")
+                con.execute(
+                    f"UPDATE lifecycle_outbox SET {schedule_cols} WHERE operation_key=?{guard}",
+                    (*schedule_vals, opk, *gparams),
+                )
+                con.execute("COMMIT")
+            except Exception:
+                if con.in_transaction:
+                    con.execute("ROLLBACK")
+                raise
+        finally:
+            con.close()
+
+    def _mark(
+        self, opk: str, state: str, *, owner: str | None = None, release: bool = False
+    ) -> None:
+        """Set a row's state (stamping ``terminal_epoch`` on FINAL/ABANDONED), owner-guarded, and —
+        when ``release`` — clearing the lease atomically in the SAME write (S4 R16)."""
+        guard, gparams = self._owner_guard(owner)
+        sets = "state=?"
+        vals: list[object] = [state]
+        if state in ("FINAL", "ABANDONED"):
+            sets += ", terminal_epoch=?"
+            vals.append(self._now())
+        if release:
+            sets += ", lease_owner=NULL, lease_expires_epoch=NULL"
+        con = store.connect(
+            self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+        )
+        try:
+            con.execute(
+                f"UPDATE lifecycle_outbox SET {sets} WHERE operation_key=?{guard}",
+                (*vals, opk, *gparams),
+            )
+            con.commit()
+        finally:
+            con.close()
+
+    def _has_event_payload(self, opk: str) -> bool:
+        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        try:
+            row = con.execute(
+                "SELECT event_payload FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+            ).fetchone()
+        finally:
+            con.close()
+        return bool(row and row[0])
+
+    def reconcile_once(self, *, limit: int = 100) -> ReconcileReport:
+        """One reconcile pass (S4). Select DUE non-terminal rows (fair, oldest-first: never-scheduled
+        first, then earliest ``next_attempt_epoch``, then insertion order), atomically CLAIM each,
+        then drive it toward a terminal outcome:
+
+        - APPLIED (crash before FINAL) → finalize (readback-only, NO attempt increment).
+        - PENDING whose Qdrant target/version is already visible (crash after apply, before APPLIED)
+          → readback-confirm then mark APPLIED + finalize, WITHOUT a second effective apply.
+        - otherwise an ACTUAL apply (the ONLY attempts-incrementing site; the event is rebuilt from
+          the stored namespace/actor/reason + preserved event_id if the row is pre-persist):
+          confirmed → APPLIED → FINAL; fence → ABANDONED (terminal); corrupt → keep PENDING +
+          reschedule (transient-like, never abandoned); an exception classified terminal → ABANDONED,
+          transient/unknown → keep PENDING + increment + bounded backoff (an unknown is never
+          abandoned by count). The lease is held through APPLIED and released atomically at the
+          terminal/pending disposition; every post-claim write is owner-guarded."""
+        now = self._now()
+        con = store.connect(self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS)
+        try:
+            rows = con.execute(
+                "SELECT operation_key,object_id,collection,target_state,expected_version,namespace,"
+                "actor,reason,event_id,state FROM lifecycle_outbox WHERE state IN ('PENDING','APPLIED') "
+                "AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
+                "ORDER BY (next_attempt_epoch IS NOT NULL), next_attempt_epoch, rowid LIMIT ?",
+                (now, limit),
+            ).fetchall()
+        finally:
+            con.close()
+        counts = {"claimed": 0, "finalized": 0, "pending": 0, "abandoned": 0}
+        for opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state in rows:
+            token = self._new_token()
+            self._checkpoint(
+                "before_claim"
+            )  # two-process claim-race barrier (both reach the claim)
+            cc = store.connect(
+                self._db, busy_timeout_ms=store.DEFAULT_BUSY_TIMEOUT_MS, isolation_level=None
+            )
+            try:
+                got = self._claim(cc, opk, now, token)
+                cc.commit()
+            finally:
+                cc.close()
+            if not got:
+                continue  # not due-and-claimable now, or lost the claim race (a valid owner holds it)
+            counts["claimed"] += 1
+            self._checkpoint("after_claim_before_qdrant")  # durable-claim barrier / crash point
+            self._reconcile_claimed(
+                opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state, token, counts
+            )
+        return ReconcileReport(**counts)
+
+    def _reconcile_claimed(
+        self,
+        opk: str,
+        oid: str,
+        coll: str,
+        tstate: str,
+        ver: int,
+        ns: str,
+        actor: str,
+        reason: str,
+        event_id: str,
+        state: str,
+        token: str,
+        counts: dict[str, int],
+    ) -> None:
+        if state == "APPLIED":
+            # crash after APPLIED, before FINAL: finalize (readback-only, no attempt increment).
+            self._finalize(opk, owner=token)
+            counts["finalized"] += 1
+            return
+        # PENDING: readback FIRST — a crash after the Qdrant apply, before APPLIED, is recognized and
+        # finalized WITHOUT a second effective apply (Yua S4: already-visible target/version).
+        if self._cur(coll, oid, ns) == (ver + 1, tstate):
+            self._mark_applied(opk, oid, tstate, owner=token)
+            self._finalize(opk, owner=token)
+            counts["finalized"] += 1
+            return
+        # ACTUAL apply. Reconstruct the intent from stored admission truth (self-sufficient) and
+        # rebuild the persisted event with the PRESERVED event_id if the row is pre-persist.
+        intent = TransitionIntent(
+            collection=coll,
+            object_id=oid,
+            namespace=ns,
+            expected_version=ver,
+            target_state=tstate,
+            actor=actor,
+            reason=reason,
+            operation_key=opk,
+        )
+        if not self._has_event_payload(opk):
+            try:
+                self._persist_event(intent, opk, event_id)
+            except _TerminalValidation:
+                self._persist_attempt(
+                    opk,
+                    reschedule=False,
+                    state="ABANDONED",
+                    failure_class="terminal",
+                    owner=token,
+                    release=True,
+                )
+                counts["abandoned"] += 1
+                return
+        try:
+            status = self._apply_conditional(opk, coll, oid, _intended_patch(intent))
+        except Exception as exc:  # classified terminal vs retryable
+            cls = self._classify(exc)
+            if cls == "terminal":
+                self._persist_attempt(
+                    opk,
+                    reschedule=False,
+                    state="ABANDONED",
+                    failure_class="terminal",
+                    owner=token,
+                    release=True,
+                )
+                counts["abandoned"] += 1
+            else:
+                self._persist_attempt(
+                    opk, reschedule=True, failure_class=cls, owner=token, release=True
+                )
+                counts["pending"] += 1
+            return
+        if status == "fence":
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
+            return
+        if status == "corrupt":
+            self._persist_attempt(
+                opk, reschedule=True, failure_class="transient", owner=token, release=True
+            )
+            counts["pending"] += 1
+            return
+        # confirmed: the attempt happened (increment, no reschedule); hold the lease through APPLIED,
+        # release it in the FINAL move.
+        self._persist_attempt(opk, reschedule=False, owner=token)
+        self._mark_applied(opk, oid, tstate, owner=token)
+        self._finalize(opk, owner=token)
+        counts["finalized"] += 1
+
 
 __all__ = [
+    "DEFAULT_BACKOFF_BASE",
+    "DEFAULT_BACKOFF_MAX",
     "DEFAULT_LEASE_TTL",
     "DEFAULT_PENDING_CAP",
     "LifecycleTransitionCoordinator",
+    "ReconcileReport",
     "TransitionError",
     "TransitionFinal",
     "TransitionIntent",

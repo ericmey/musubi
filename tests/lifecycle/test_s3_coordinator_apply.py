@@ -335,22 +335,40 @@ def test_confirm_discriminates_wrong_readbacks(env: tuple[QdrantClient, _Seed, P
     intent = _intent(seed, "matured", expected=1)
     patch = _intended_patch(intent)
     good = {**patch, "namespace": seed.namespace, "object_id": seed.object_id}
-    assert c._confirm(patch, intent, good, 1) == "confirmed"
+    assert c._confirm(patch, seed.object_id, seed.namespace, good, 1) == "confirmed"
     # server filter proof: a readback that is not EXACTLY one point is a fence (a client-side
     # read-then-write cannot prove exactly-one under the server fence).
-    assert c._confirm(patch, intent, good, 0) == "fence"
-    assert c._confirm(patch, intent, good, 2) == "fence"
+    assert c._confirm(patch, seed.object_id, seed.namespace, good, 0) == "fence"
+    assert c._confirm(patch, seed.object_id, seed.namespace, good, 2) == "fence"
     # version-only: version right but STATE wrong -> fence (never confirmed on version alone).
-    assert c._confirm(patch, intent, {**good, "state": "provisional"}, 1) == "fence"
+    assert (
+        c._confirm(patch, seed.object_id, seed.namespace, {**good, "state": "provisional"}, 1)
+        == "fence"
+    )
     # wrong namespace / wrong object -> fence.
-    assert c._confirm(patch, intent, {**good, "namespace": "other/ns"}, 1) == "fence"
-    assert c._confirm(patch, intent, {**good, "object_id": "other-object"}, 1) == "fence"
+    assert (
+        c._confirm(patch, seed.object_id, seed.namespace, {**good, "namespace": "other/ns"}, 1)
+        == "fence"
+    )
+    assert (
+        c._confirm(patch, seed.object_id, seed.namespace, {**good, "object_id": "other-object"}, 1)
+        == "fence"
+    )
     # partial patch hash: an intended key missing, or present-but-mismatched -> corrupt.
     assert (
-        c._confirm(patch, intent, {k: v for k, v in good.items() if k != "updated_at"}, 1)
+        c._confirm(
+            patch,
+            seed.object_id,
+            seed.namespace,
+            {k: v for k, v in good.items() if k != "updated_at"},
+            1,
+        )
         == "corrupt"
     )
-    assert c._confirm(patch, intent, {**good, "updated_epoch": -1.0}, 1) == "corrupt"
+    assert (
+        c._confirm(patch, seed.object_id, seed.namespace, {**good, "updated_epoch": -1.0}, 1)
+        == "corrupt"
+    )
     # sanity: the projected SHA over the correct actual equals the intended SHA.
     assert _canonical_patch_sha({k: good[k] for k in patch}) == _canonical_patch_sha(patch)
 
