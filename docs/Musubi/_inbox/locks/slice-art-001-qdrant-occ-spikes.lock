@@ -1,0 +1,15 @@
+{
+  "agent": "tama",
+  "branch": "slice/art-001-qdrant-occ-spikes",
+  "timestamp": "2026-07-14T03:00:00-04:00",
+  "reason": "Issue #451 bounded tests/docs-only Qdrant v1.17.1 OCC discriminator; separate successor to frozen PR #452",
+  "owns_paths": [
+    "docs/Musubi/_slices/slice-art-001-qdrant-occ-spikes.md",
+    "docs/Musubi/_inbox/locks/slice-art-001-qdrant-occ-spikes.lock",
+    "spike-notes/art-001-qdrant-occ.md",
+    "tests/planes/artifact/test_artifact_qdrant_occ_spikes.py"
+  ],
+  "sid": "slice-art-001-qdrant-occ-spikes",
+  "scope": "Real-Qdrant operation-record/head contention and crash discriminator only. No source, PR452, ledger, deploy, host, merge, or architecture recommendation."
+}
+
