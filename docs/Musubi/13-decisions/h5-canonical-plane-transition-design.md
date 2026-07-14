@@ -2,10 +2,10 @@
 title: "H5 canonical plane transition boundary"
 section: 13-decisions
 type: adr
-status: proposed
+status: accepted
 owner: codex-gpt5
 phase: "Lifecycle-audit 2026-07-14 — H5 mutation-path unification"
-tags: [type/adr, status/proposed, lifecycle, atomicity]
+tags: [type/adr, status/accepted, lifecycle, atomicity]
 updated: 2026-07-14
 supersedes: []
 ---

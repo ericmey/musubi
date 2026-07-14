@@ -3,12 +3,12 @@ title: "Slice: H5 — unify all lifecycle state mutation behind LifecycleTransit
 slice_id: slice-h5-unify-state-mutation
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "Lifecycle-audit 2026-07-13 — H5 mutation-path unification (C6b dependency)"
-tags: [section/slices, status/in-progress, type/slice, lifecycle, atomicity, refactor]
+tags: [section/slices, status/done, type/slice, lifecycle, atomicity, refactor]
 updated: 2026-07-14
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
 blocks: []
 issue: 439
@@ -134,10 +134,11 @@ The migration is a three-way outcome migration, not merely a syntactic delegatio
 
 ## Status
 
-**`in-progress`** (2026-07-14) — C6b source phases S1-S7 merged on main at `dd0f971`; the dependency is
-now satisfied. Tracking **Issue #439** (`status:in-progress`). The first H5 commit is contract/tests-only;
-source follows only after the five-plane, caller-outcome, concept-receipt, and HTTP-202 reds discriminate
-the unsafe alternatives.
+**`done`** (2026-07-14) — Exact source head `08ee8c4971e16a6912b8482f9c3b71da5e6c0da8`
+routes all five plane transition methods through the coordinator, consumes Final/Pending/Err at every
+migrated caller, carries concept promotion receipt fields through the atomic patch/replay/readback path,
+and declares the typed concept HTTP 202 responses. H5 closes only the mutation-path gate; the C6b
+FILE-to-DIR migration, rollback/readiness, release, and deployment proof remain downstream holds.
 
 ## Work log
 
@@ -152,3 +153,7 @@ the unsafe alternatives.
   Full `make check` passed with 1,927 passed, 197 skipped, 17 deselected, and three expected xfails at
   89.01% coverage; `make agent-check` completed with warnings only. Linked the H5 decision's identical
   12-bullet Test Contract so the mechanical closure audit evaluates this slice's actual acceptance surface.
+- 2026-07-14 — Exact-head CI run `29372253658` and Vault run `29372253639` passed. Tama independently
+  inspected the clean exact-head bytes and returned APPROVE after retracting non-authoritative piped rerun
+  claims. The branch diff from main is 35 files across five commits, including the five plane compatibility
+  suites omitted from the reviewer's first narrative count; Yua independently enumerated the exact scope.
