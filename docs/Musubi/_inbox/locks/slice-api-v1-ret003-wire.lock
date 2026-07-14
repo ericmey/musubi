@@ -1,0 +1,31 @@
+owner: tama
+branch: slice-api-v1-ret003-wire
+claimed: 2026-07-13
+scope: RET-003 ranked vs recent wire contract — tests-first slice (zero src in this
+  commit). 18 acceptance tests (15 strict reds + 3 guards) added in
+  tests/api/test_retrieve_ret003_wire.py. Implementation (Pydantic models,
+  orchestration, snapshot regen) lands in a follow-up slice after the test
+  contract is accepted.
+authorization: Yua (lane assignment 2026-07-13T10:08:41, RET-003 tests-first lane is
+  Tama's; Aoi remains exclusively on C6; Shiori's RET-004 is in flight and not to be
+  touched). Spec source-of-truth: harem-ops commit e8c116c2 (merging d05e0a6)
+  on branch chore/tama-ret003-spec via PR3, file
+  projects/active/hermes-musubi-provider/specs/spec-ret003-ranked-recent-wire-contract.md.
+open-defects: none (this slice is purely additive; existing defs RET-002, RET-003 in
+  defect ledger, RET-004, RET-005, RET-006, RET-007 (fixed), RET-008, RET-009 are
+  tracked elsewhere).
+second-reader: yua; acceptance: yua.
+forbidden: any src/musubi/** change in this commit; any implementation of the
+  contract's runtime behavior. The 18 tests are RED (will fail against the current
+  main) and that is expected; the implementation lands in a follow-up slice after
+  the test contract is accepted. NO deployment, NO merge to main yet, NO host
+  action. No touch of Aoi's C6 (Issue 433) or Shiori's RET-004 (Issue 430).
+# Hermes adapter follow-up: see ADR 0035 (closeout gate). Separate slice; depends on this slice's wire contract.
+# Per Yua 2026-07-13 11:19:50 + 11:57:59 #7: the current user plugin is
+# /Users/ericmey/Vaults/fleet-tools/hermes-plugins/musubi/__init__.py (NOT core/MCP).
+# Today it emits Musubi's LOGICAL object_id (the stored KSUID), NOT the physical
+# Qdrant point id. episodic_point_id(object_id) is a distinct UUID translation
+# used internally; the plugin emits the KSUID. It discards extra entirely, and
+# musubi_recall is pinned to blended ranked. The follow-up must surface
+# state+importance and pass the 5-key score_components through without fabrication.
+# Recent passthrough is only relevant if a future Hermes surface requests recent.
