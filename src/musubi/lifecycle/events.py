@@ -49,6 +49,7 @@ class LifecycleEventWriteError:
 
     code: str = "lifecycle_event_write_failed"
 
+
 class LifecycleEventSink:
     """Thread-safe synchronous sqlite writer for :class:`LifecycleEvent`.
 
