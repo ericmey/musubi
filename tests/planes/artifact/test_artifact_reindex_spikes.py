@@ -41,9 +41,7 @@ from musubi.types.common import epoch_of, generate_ksuid, utc_now
 
 # Resolved from the OCI image index for qdrant/qdrant:v1.17.1
 # (host is aarch64 / arm64 per `uname -m`).
-DIGEST_ARM64 = (
-    "3fd57e61606ed61c48c91c4131cba6808f01b0879f5478fd011573189855bba1"
-)
+DIGEST_ARM64 = "3fd57e61606ed61c48c91c4131cba6808f01b0879f5478fd011573189855bba1"
 # qdrant/qdrant@<digest>; the image-internal "sha256:" prefix lives
 # inside DIGEST_ARM64 itself. (See spike-notes/qdrant-digest-record.txt.)
 IMAGE = f"qdrant/qdrant@sha256:{DIGEST_ARM64}"  # Docker ref needs the sha256: prefix
@@ -106,12 +104,16 @@ def qdrant_server() -> Iterator[tuple[str, str]]:
     # Create a dedicated user-defined bridge network for the spike.
     subprocess.run(
         ["docker", "network", "create", "--driver", "bridge", network_name],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     # Create a dedicated volume for the spike.
     subprocess.run(
         ["docker", "volume", "create", volume_name],
-        check=True, capture_output=True, text=True,
+        check=True,
+        capture_output=True,
+        text=True,
     )
     container_id: str | None = None
     try:
@@ -119,22 +121,30 @@ def qdrant_server() -> Iterator[tuple[str, str]]:
         # port; do NOT expose to all interfaces.
         proc = subprocess.run(
             [
-                "docker", "run", "-d", "--rm",
-                "--name", container_name,
-                "--network", network_name,
-                "-v", f"{volume_name}:/qdrant/storage",
-                "-p", f"127.0.0.1:{port_http}:6333",
-                "-p", f"127.0.0.1:{port_grpc}:6334",
+                "docker",
+                "run",
+                "-d",
+                "--rm",
+                "--name",
+                container_name,
+                "--network",
+                network_name,
+                "-v",
+                f"{volume_name}:/qdrant/storage",
+                "-p",
+                f"127.0.0.1:{port_http}:6333",
+                "-p",
+                f"127.0.0.1:{port_grpc}:6334",
                 IMAGE,
             ],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         container_id = proc.stdout.strip()
         base_url = f"http://127.0.0.1:{port_http}"
         if not _wait_for_qdrant_health(base_url, deadline_s=30.0):
-            raise RuntimeError(
-                f"Qdrant did not become ready on {base_url} within 30s"
-            )
+            raise RuntimeError(f"Qdrant did not become ready on {base_url} within 30s")
         # Probe the server root for the spike record.
         try:
             _status, body, server_header = _http_get(f"{base_url}/")
@@ -158,15 +168,18 @@ def qdrant_server() -> Iterator[tuple[str, str]]:
         if container_id is not None:
             subprocess.run(
                 ["docker", "rm", "-f", container_name],
-                capture_output=True, text=True,
+                capture_output=True,
+                text=True,
             )
         subprocess.run(
             ["docker", "volume", "rm", "-f", volume_name],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         subprocess.run(
             ["docker", "network", "rm", network_name],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
 
 
@@ -196,14 +209,13 @@ def _ensure_collection(client: QdrantClient, name: str, dim: int) -> None:
     to avoid drift. We use 2 collections: the metadata collection
     and the chunks collection (per the existing plane.py layout)."""
     from qdrant_client.http import models as http_models
+
     if client.collection_exists(name):
         # Recreate to a known shape to avoid drift.
         client.delete_collection(name)
     client.create_collection(
         collection_name=name,
-        vectors_config=http_models.VectorParams(
-            size=dim, distance=http_models.Distance.COSINE
-        ),
+        vectors_config=http_models.VectorParams(size=dim, distance=http_models.Distance.COSINE),
     )
 
 
@@ -214,6 +226,7 @@ def plane(qdrant_server: tuple[str, str]) -> Iterator[ArtifactPlane]:
     fixture) to avoid the embedding dependency. The plane is
     configured with the same 2-collection layout as the source."""
     from qdrant_client import QdrantClient
+
     base_url, _ = qdrant_server
     # Bootstrap the collections to match the plane's layout.
     client = QdrantClient(url=base_url, timeout=30)
@@ -242,14 +255,10 @@ def test_spike_setup_health(qdrant_server: tuple[str, str]) -> None:
     """
     base_url, _ = qdrant_server
     status, _, _ = _http_get(f"{base_url}/readyz")
-    assert status in (200, 204), (
-        f"real Qdrant not ready at {base_url}/readyz "
-        f"(status={status})"
-    )
+    assert status in (200, 204), f"real Qdrant not ready at {base_url}/readyz (status={status})"
     root_status, _, _ = _http_get(f"{base_url}/")
     assert root_status == 200, (
-        f"real Qdrant root not reachable at {base_url}/ "
-        f"(status={root_status})"
+        f"real Qdrant root not reachable at {base_url}/ (status={root_status})"
     )
 
 
