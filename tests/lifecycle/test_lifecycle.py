@@ -909,8 +909,8 @@ def test_sink_rejects_invalid_flush_parameters(tmp_path: Path) -> None:
         LifecycleEventSink(db_path=tmp_path / "e2.db", flush_every_s=0.0)
 
 
-def test_sink_record_after_close_raises(tmp_path: Path) -> None:
-    """Recording into a closed sink raises RuntimeError."""
+def test_sink_record_after_close_returns_typed_err(tmp_path: Path) -> None:
+    """A closed sink refuses the mutation through the Result boundary."""
     sink = LifecycleEventSink(db_path=tmp_path / "e.db")
     sink.close()
     ev = LifecycleEvent(
@@ -922,8 +922,9 @@ def test_sink_record_after_close_raises(tmp_path: Path) -> None:
         actor="t",
         reason="r",
     )
-    with pytest.raises(RuntimeError, match="closed"):
-        sink.record(ev)
+    result = sink.record(ev)
+    assert isinstance(result, Err)
+    assert result.error.code == "lifecycle_event_write_failed"
 
 
 def test_sink_close_is_idempotent(tmp_path: Path) -> None:
