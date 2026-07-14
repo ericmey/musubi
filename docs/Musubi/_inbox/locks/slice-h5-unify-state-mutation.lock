@@ -1,0 +1,8 @@
+owner: codex-gpt5
+branch: slice/h5-unify-state-mutation
+worktree: /Users/ericmey/Projects/musubi-worktrees/yua-h5
+claimed: 2026-07-14
+scope: H5 — migrate the five remaining plane lifecycle transition bypasses to the C6b coordinator and preserve Final/Pending/Err at every caller.
+issue: 439
+pr: 473
+release-hold: FILE-to-DIR migration authoring/execution and rollback/readiness proof remain downstream.

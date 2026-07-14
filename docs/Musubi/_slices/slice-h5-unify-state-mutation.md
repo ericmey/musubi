@@ -59,6 +59,9 @@ The migration is a three-way outcome migration, not merely a syntactic delegatio
 ## Owned paths
 
 - `docs/Musubi/_slices/slice-h5-unify-state-mutation.md`
+- `docs/Musubi/_slices/slice-c6b-phase1-source-impl.md` (closeout metadata only)
+- `docs/Musubi/_inbox/locks/slice-h5-unify-state-mutation.lock`
+- `docs/Musubi/_inbox/locks/slice-c6b-phase1-source-impl.lock` (retire merged predecessor lock only)
 - `docs/Musubi/13-decisions/h5-canonical-plane-transition-design.md`
 - `src/musubi/planes/episodic/plane.py`
 - `src/musubi/planes/concept/plane.py`
