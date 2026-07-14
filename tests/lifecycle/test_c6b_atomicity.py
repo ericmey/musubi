@@ -9550,18 +9550,6 @@ def _storage_families(
     }
 
 
-_P0C_T5_REASON = (
-    "today the supported deployment surfaces DISAGREE on the lifecycle active-storage unit: production "
-    "ansible (docker-compose.yml.j2:16,52 + env.production.j2:13 + restore.yml:176) uses the DIRECTORY "
-    "/var/lib/musubi/lifecycle with DB work.sqlite, while root compose (docker-compose.yml:123), "
-    ".env.example:38, deploy/docker/.env.production.example:17, and backup.yml:87-88 use the FILE "
-    "/var/lib/musubi/lifecycle-work.sqlite; §E BLOCKER — coordinator source must not land on ambiguous "
-    "active storage. Flips green ONLY when the surfaces are reconciled to one family OR every dissenter "
-    "is marked out-of-scope via _OUT_OF_SCOPE_STORAGE_SURFACES."
-)
-
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_T5_REASON)
 def test_p0c_deployment_active_storage_parity() -> None:
     families = _storage_families(_lifecycle_storage_surfaces())
     distinct = set(families.values())
@@ -9580,14 +9568,14 @@ def test_p0c_deployment_active_storage_parity() -> None:
 
 def test_p0c_config_surfaces_all_resolve() -> None:
     """CONTROL (unmarked): every expected deployment surface resolves to a lifecycle storage path (so a
-    broken extractor fails loudly GREEN-side, not as a mysterious xfail error), and today exactly the two
-    known-disagreeing families are present."""
+    broken extractor fails loudly GREEN-side, not as a mysterious xfail error). After the §E config-drift
+    resolution every supported surface is reconciled to the single LOCKED DIR family; a surface regressing
+    to the retired FILE re-introduces a second family and fails this control loudly."""
     surfaces = _lifecycle_storage_surfaces()
     unresolved = sorted(n for n, p in surfaces.items() if p is None)
     assert not unresolved, f"config-drift extractor failed to resolve surfaces: {unresolved}"
     assert set(_storage_families(surfaces).values()) == {
         "DIR:/var/lib/musubi/lifecycle/work.sqlite",
-        "FILE:/var/lib/musubi/lifecycle-work.sqlite",
     }
 
 
@@ -9741,16 +9729,7 @@ def _readme_resolves_dir(text: str) -> bool:
 
 # ---- TASK 1: drift reds (one strict-xfail per drift surface; DEDICATED DefectStillPresent each) ----- #
 
-_P0C_DRIFT_ROOT_COMPOSE_REASON = (
-    "root compose docker-compose.yml still drifts from the LOCKED DIR storage family: it bind-mounts the "
-    "bare FILE /var/lib/musubi/lifecycle-work.sqlite (docker-compose.yml:123) instead of the DIRECTORY "
-    "/var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle, AND it declares no lifecycle-worker service "
-    "(services end at the core service ~:115). Flips green ONLY when root compose mounts the canonical DIR "
-    "/var/lib/musubi/lifecycle AND declares a lifecycle-worker service (parity with the ansible template)."
-)
 
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_DRIFT_ROOT_COMPOSE_REASON)
 def test_p0c_drift_root_compose_dir_mount_and_worker() -> None:
     text = (_P0C_REPO_ROOT / "docker-compose.yml").read_text()
     mount = _compose_lifecycle_host_path(text)
@@ -9764,14 +9743,6 @@ def test_p0c_drift_root_compose_dir_mount_and_worker() -> None:
         )
 
 
-_P0C_DRIFT_ENV_EXAMPLE_REASON = (
-    "the .env.example template still drifts from the LOCKED DIR storage family: LIFECYCLE_SQLITE_PATH points "
-    "at the bare FILE /var/lib/musubi/lifecycle-work.sqlite (.env.example:38). Flips green ONLY when it is "
-    "LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite."
-)
-
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_DRIFT_ENV_EXAMPLE_REASON)
 def test_p0c_drift_env_example() -> None:
     path = _env_lifecycle_path((_P0C_REPO_ROOT / ".env.example").read_text())
     if not _resolves_canonical_dir_db(path):
@@ -9781,15 +9752,6 @@ def test_p0c_drift_env_example() -> None:
         )
 
 
-_P0C_DRIFT_DOCKER_ENV_PROD_REASON = (
-    "the deploy/docker/.env.production.example template still drifts from the LOCKED DIR storage family: "
-    "LIFECYCLE_SQLITE_PATH points at the bare FILE /var/lib/musubi/lifecycle-work.sqlite "
-    "(deploy/docker/.env.production.example:17). Flips green ONLY when it is "
-    "LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite."
-)
-
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_DRIFT_DOCKER_ENV_PROD_REASON)
 def test_p0c_drift_docker_env_production_example() -> None:
     path = _env_lifecycle_path(
         (_P0C_REPO_ROOT / "deploy/docker/.env.production.example").read_text()
@@ -9801,16 +9763,6 @@ def test_p0c_drift_docker_env_production_example() -> None:
         )
 
 
-_P0C_DRIFT_BACKUP_YML_REASON = (
-    "the legacy offsite playbook deploy/backup/backup.yml still drifts from the LOCKED DIR storage family: "
-    "its NAMED 'Back up sqlite lifecycle ledger' sqlite `.backup` COMMAND reads the bare FILE "
-    "/var/lib/musubi/lifecycle-work.sqlite (backup.yml:87-88), not the live scheduler's DIR DB. Flips green "
-    "ONLY when that command's source is /var/lib/musubi/lifecycle/work.sqlite (parity with "
-    "musubi-backup.sh + restore.yml)."
-)
-
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_DRIFT_BACKUP_YML_REASON)
 def test_p0c_drift_backup_yml() -> None:
     # Bind to the SOURCE of the actual sqlite `.backup` command, not the first lifecycle path anywhere in
     # the file, so a comment/migration reference to the DIR cannot mask a command that still reads the FILE.
@@ -9823,15 +9775,6 @@ def test_p0c_drift_backup_yml() -> None:
         )
 
 
-_P0C_DRIFT_RUNBOOK_REASON = (
-    "the manual-recovery runbook still drifts from the LOCKED DIR storage family: it snapshots/rolls back "
-    "the bare FILE /var/lib/musubi/lifecycle-work.sqlite and restores the DIR backup $SNAP/sqlite/work.sqlite "
-    "INTO that bare FILE path (manual-recovery.md:118-131) — a restore into the wrong unit. Flips green ONLY "
-    "when it restores into /var/lib/musubi/lifecycle/work.sqlite."
-)
-
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_DRIFT_RUNBOOK_REASON)
 def test_p0c_drift_manual_recovery_runbook() -> None:
     dest = _runbook_restore_dest(
         (_P0C_REPO_ROOT / "deploy/runbooks/manual-recovery.md").read_text()
@@ -9844,14 +9787,6 @@ def test_p0c_drift_manual_recovery_runbook() -> None:
         )
 
 
-_P0C_DRIFT_BACKUP_README_REASON = (
-    "the backup README still drifts from the LOCKED DIR storage family: its 'Stores' section names the bare "
-    "FILE lifecycle-work.sqlite for the hourly SQLite copy (deploy/backup/README.md:62), stale FILE wording "
-    "that contradicts the live DIR scheduler. Flips green ONLY when it names lifecycle/work.sqlite."
-)
-
-
-@pytest.mark.xfail(raises=DefectStillPresent, strict=True, reason=_P0C_DRIFT_BACKUP_README_REASON)
 def test_p0c_drift_backup_readme() -> None:
     text = (_P0C_REPO_ROOT / "deploy/backup/README.md").read_text()
     if not _readme_resolves_dir(text):

@@ -88,7 +88,7 @@ instructions are present for every destructive step.
 This means Core is writing to the vault AND the watcher is re-reading those writes as if human-authored.
 
 1. Pause the Vault Watcher: `musubi-cli vault pause-watcher --duration=15m`.
-2. Inspect the write-log: `sqlite3 /var/lib/musubi/lifecycle-work.sqlite "select count(*) from write_log where consumed_at is null"`.
+2. Inspect the write-log: `sqlite3 /var/lib/musubi/lifecycle/work.sqlite "select count(*) from write_log where consumed_at is null"`.
 3. If count grows unbounded → watcher isn't marking entries consumed; file a bug, reset: `sqlite3 ... "update write_log set consumed_at=unixepoch() where consumed_at is null"`.
 4. Review recent promotions — did we write with wrong file path, causing an inotify miss?
 5. Resume watcher: `musubi-cli vault resume-watcher`.

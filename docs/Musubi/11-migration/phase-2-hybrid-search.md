@@ -57,7 +57,7 @@ Background job encodes every historical memory into the new collection:
 musubi-cli backfill --collection musubi_episodic_v2 --batch-size 64
 ```
 
-Processes in batches. Skips points already backfilled (tracked via a `backfill_cursor` in `lifecycle-work.sqlite`).
+Processes in batches. Skips points already backfilled (tracked via a `backfill_cursor` in `lifecycle/work.sqlite`).
 
 At POC-era scale (few thousand memories), backfill completes in < 1 hour.
 
