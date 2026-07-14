@@ -102,11 +102,76 @@ def test_eval_cli_seam_fixed_embeddings_red(
     }
     _write_fixture(data_dir, fixture)
     runner_calls = _run_cli_and_catch_legacy_defect(monkeypatch, capsys, data_dir)
-    # If the code was fixed to not exit, it might strip embeddings
-    # which would cause _assert_verbatim_projection to raise AssertionError, failing the strict xfail!
-    # Wait, if we are at an intermediate state where it invokes the runner but strips embeddings, we still want it to fail the test.
-    # The prompt says: "an unrelated JSON/IO exception is NOT swallowed as the expected defect"
     _assert_verbatim_projection(runner_calls, fixture)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: CLI schema validation drops unlisted fields",
+)
+def test_eval_cli_seam_invalid_dimension_mismatch_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data_dir = tmp_path / "data"
+    fixture = {
+        "query_embedding": [0.1, 0.2],
+        "corpus": [
+            {"id": "d1", "text": "A", "relevance": 1, "embedding": [0.1, 0.2, 0.3]},  # Mismatch
+            {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
+        ],
+    }
+    _write_fixture(data_dir, fixture)
+
+    # Touch corpus.yaml so it bypasses the legacy existence check
+    (data_dir / "corpus.yaml").touch()
+
+    # This must fail closed due to schema validation BEFORE invoking the runner
+    monkeypatch.setattr(sys, "argv", ["musubi-evals", "smoke", "--data-dir", str(data_dir)])
+    try:
+        cli.main()
+    except SystemExit as exc:
+        if exc.code == 0:
+            raise DefectStillPresent("CLI schema validation allows dimension mismatch")
+        out, err = capsys.readouterr()
+        # Ensure it failed for the *expected validation* reason
+        if "Schema validation failed" not in out:
+            raise AssertionError(f"CLI exited with {exc.code} for unrelated reason: {out} {err}")
+    except Exception as e:
+        raise AssertionError(f"CLI raised unexpected exception: {e}")
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: CLI schema validation ignores unknown nested fields",
+)
+def test_eval_cli_seam_invalid_unknown_field_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data_dir = tmp_path / "data"
+    fixture = {
+        "query_embedding": [0.1, 0.2],
+        "corpus": [
+            {"id": "d1", "text": "A", "relevance": 1, "embedding": [0.1, 0.2], "unknown": 42},
+            {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
+        ],
+    }
+    _write_fixture(data_dir, fixture)
+
+    (data_dir / "corpus.yaml").touch()
+
+    monkeypatch.setattr(sys, "argv", ["musubi-evals", "smoke", "--data-dir", str(data_dir)])
+    try:
+        cli.main()
+    except SystemExit as exc:
+        if exc.code == 0:
+            raise DefectStillPresent("CLI schema validation allows unknown nested document fields")
+        out, err = capsys.readouterr()
+        if "Schema validation failed" not in out:
+            raise AssertionError(f"CLI exited with {exc.code} for unrelated reason: {out} {err}")
+    except Exception as e:
+        raise AssertionError(f"CLI raised unexpected exception: {e}")
 
 
 # --- Red Proofs / Discriminators for the Projection ---
@@ -212,7 +277,7 @@ def test_schema_valid_fixture() -> None:
         ],
     }
     obj = SmokeFixture.model_validate(payload)
-    assert len(obj.corpus) == 2
+    assert obj.model_dump(mode="json") == payload
 
 
 @pytest.mark.xfail(
@@ -234,12 +299,12 @@ def test_schema_invalid_dimension_mismatch() -> None:
 @pytest.mark.xfail(
     strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
 )
-def test_schema_invalid_non_finite_query_vector() -> None:
+@pytest.mark.parametrize("bad_val", [float("inf"), float("-inf"), float("nan"), "0.1"])
+def test_schema_invalid_non_finite_query_vector(bad_val: Any) -> None:
     SmokeFixture = _get_smoke_fixture_schema()
-    import math
 
     payload = {
-        "query_embedding": [math.inf, 0.2],
+        "query_embedding": [bad_val, 0.2],
         "corpus": [
             {"id": "d1", "text": "A", "relevance": 1, "embedding": [0.1, 0.2]},
             {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
@@ -252,14 +317,14 @@ def test_schema_invalid_non_finite_query_vector() -> None:
 @pytest.mark.xfail(
     strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
 )
-def test_schema_invalid_non_finite_doc_vector() -> None:
+@pytest.mark.parametrize("bad_val", [float("inf"), float("-inf"), float("nan"), "0.1"])
+def test_schema_invalid_non_finite_doc_vector(bad_val: Any) -> None:
     SmokeFixture = _get_smoke_fixture_schema()
-    import math
 
     payload = {
         "query_embedding": [0.1, 0.2],
         "corpus": [
-            {"id": "d1", "text": "A", "relevance": 1, "embedding": [math.inf, 0.2]},
+            {"id": "d1", "text": "A", "relevance": 1, "embedding": [bad_val, 0.2]},
             {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
         ],
     }
@@ -348,12 +413,13 @@ def test_schema_invalid_empty_id() -> None:
 @pytest.mark.xfail(
     strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
 )
-def test_schema_invalid_non_integer_relevance() -> None:
+@pytest.mark.parametrize("bad_relevance", [1.5, True, "1"])
+def test_schema_invalid_non_integer_relevance(bad_relevance: Any) -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
         "query_embedding": [0.1, 0.2],
         "corpus": [
-            {"id": "d1", "text": "A", "relevance": 1.5, "embedding": [0.1, 0.2]},
+            {"id": "d1", "text": "A", "relevance": bad_relevance, "embedding": [0.1, 0.2]},
             {"id": "d2", "text": "B", "relevance": 0, "embedding": [0.3, 0.4]},
         ],
     }
