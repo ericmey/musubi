@@ -963,6 +963,35 @@ def _has_terminal_state(toks: list[_Tok]) -> bool:
     return False
 
 
+def _starts_select_from(body: list[_Tok]) -> bool:
+    """The inner CTE body BEGINS with `SELECT operation_key FROM <target>` (target a bare/quoted ident)."""
+    return (
+        len(body) >= 4
+        and body[0] == ("WORD", "SELECT")
+        and body[1] == ("WORD", "OPERATION_KEY")
+        and body[2] == ("WORD", "FROM")
+        and body[3][0] in ("WORD", "QID")
+    )
+
+
+def _starts_delete_from(body: list[_Tok]) -> bool:
+    """The outer statement BEGINS with `DELETE FROM <target>` (target a bare/quoted ident)."""
+    return (
+        len(body) >= 3
+        and body[0] == ("WORD", "DELETE")
+        and body[1] == ("WORD", "FROM")
+        and body[2][0] in ("WORD", "QID")
+    )
+
+
+def _followed_by_param(body: list[_Tok], head: list[_Tok]) -> bool:
+    """`head` (an exact token run) occurs immediately followed by a bound-parameter token - so `LIMIT :batch`
+    and `terminal_epoch < :cutoff` pass while `LIMIT NULL` / `terminal_epoch << :cutoff` (the operand is not
+    a single-`<` parameter) fail closed."""
+    m = len(head)
+    return any(body[i : i + m] == head and body[i + m][0] == "PARAM" for i in range(len(body) - m))
+
+
 def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
     """Bounded-PARSER shape violations of the cleanup DELETE (a real tokenizer + token-SEQUENCE matching,
     NOT substring matching and NOT a full SQL parser; fails closed when the supported shape cannot be
@@ -1011,10 +1040,14 @@ def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
     if name is None or inner is None or outer is None:
         v.append("missing_cte")
         return v
-    if ("WORD", "RETURNING") not in outer:
-        v.append("missing_returning")
-    if ("WORD", "LIMIT") not in inner:
-        v.append("missing_bound")
+    if not _starts_select_from(inner):
+        v.append("inner_not_select")  # the CTE body must be a SELECT operation_key FROM <target>
+    if not _starts_delete_from(outer):
+        v.append("outer_not_delete")  # the outer statement must be a DELETE FROM <target>
+    if not _has_seq(outer, [("WORD", "RETURNING"), ("WORD", "OPERATION_KEY")]):
+        v.append("missing_returning")  # RETURNING must return operation_key, not a bare RETURNING
+    if not _followed_by_param(inner, [("WORD", "LIMIT")]):
+        v.append("missing_bound")  # LIMIT must be a bound parameter, not NULL/a literal
     tie = [
         ("WORD", "ORDER"),
         ("WORD", "BY"),
@@ -1037,14 +1070,15 @@ def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
     if not _has_seq(outer, restrict):
         v.append("delete_not_restricted")  # DELETE not restricted to the selected operation keys
     notnull = [("WORD", "TERMINAL_EPOCH"), ("WORD", "IS"), ("WORD", "NOT"), ("WORD", "NULL")]
-    age = [("WORD", "TERMINAL_EPOCH"), ("PUNCT", "<")]
     for half, body in (("inner", inner), ("outer", outer)):
         if not _has_terminal_state(body):
             v.append(f"missing_{half}_state")
         if not _has_seq(body, notnull):
             v.append(f"missing_{half}_notnull")
-        if not _has_seq(body, age):
-            v.append(f"missing_{half}_age")
+        if not _followed_by_param(body, [("WORD", "TERMINAL_EPOCH"), ("PUNCT", "<")]):
+            v.append(
+                f"missing_{half}_age"
+            )  # exact `terminal_epoch < <param>`, not `<<` or a literal
     return v
 
 
@@ -1209,6 +1243,45 @@ def test_g2b_rule_discriminates_cleanup_sql_shape() -> None:
     ) == ["nondeterministic_tie"]
     # an unmatched ')' after the CTE is malformed structure -> fail closed
     assert _cleanup_sql_violations([_G2B_CORRECT + ")"]) == ["unbalanced_parens"]
+
+    # ---- token POSITION: a present keyword in the WRONG structural slot is not the contract shape ----
+    # the outer statement must START with DELETE FROM, not SELECT DELETE / UPDATE DELETE
+    assert "outer_not_delete" in _cleanup_sql_violations(
+        [
+            _G2B_CORRECT.replace(
+                "DELETE FROM lifecycle_outbox", "SELECT DELETE FROM lifecycle_outbox"
+            )
+        ]
+    )
+    assert "outer_not_delete" in _cleanup_sql_violations(
+        [
+            _G2B_CORRECT.replace(
+                ") DELETE FROM lifecycle_outbox", ") UPDATE DELETE FROM lifecycle_outbox"
+            )
+        ]
+    )
+    # the inner CTE body must START with SELECT operation_key FROM, not UPDATE ...
+    assert "inner_not_select" in _cleanup_sql_violations(
+        [
+            _G2B_CORRECT.replace(
+                "SELECT operation_key FROM lifecycle_outbox",
+                "UPDATE operation_key FROM lifecycle_outbox",
+            )
+        ]
+    )
+    # RETURNING must return operation_key, not a bare RETURNING
+    assert _cleanup_sql_violations(
+        [_G2B_CORRECT.replace("RETURNING operation_key", "RETURNING")]
+    ) == ["missing_returning"]
+    # LIMIT must be a bound parameter, not NULL/a literal
+    assert _cleanup_sql_violations([_G2B_CORRECT.replace("LIMIT :batch", "LIMIT NULL")]) == [
+        "missing_bound"
+    ]
+    # the age comparator must be a single `<` with a bound parameter, not `<<` (both halves here)
+    double_lt = _cleanup_sql_violations(
+        [_G2B_CORRECT.replace("terminal_epoch < :cutoff", "terminal_epoch << :cutoff")]
+    )
+    assert "missing_inner_age" in double_lt and "missing_outer_age" in double_lt
 
     # CONTROLS: harmless comments, a bare `;` terminator, and a LEGALLY quoted non-structural identifier
     # (the table name) with correct balanced nesting all keep the correct shape green
