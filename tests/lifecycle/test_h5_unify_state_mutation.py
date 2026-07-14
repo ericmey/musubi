@@ -8,7 +8,7 @@ from dataclasses import fields
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -24,7 +24,7 @@ from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.planes.thoughts.plane import ThoughtsPlane
-from musubi.types.common import Ok, generate_ksuid, utc_now
+from musubi.types.common import LifecycleState, Ok, generate_ksuid, utc_now
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.lifecycle_event import LifecycleEvent
 
@@ -104,8 +104,9 @@ def test_h5_concept_promotion_receipt_participates_in_replay_and_full_readback()
         "actor": "test",
         "reason": "h5-receipt",
     }
-    intent = TransitionIntent(**base, promoted_to=promoted_to, promoted_at=promoted_at)
-    other = TransitionIntent(**base, promoted_to=generate_ksuid(), promoted_at=promoted_at)
+    future_intent = cast(Any, TransitionIntent)
+    intent = future_intent(**base, promoted_to=promoted_to, promoted_at=promoted_at)
+    other = future_intent(**base, promoted_to=generate_ksuid(), promoted_at=promoted_at)
     patch = _intended_patch(intent)
     assert patch["promoted_to"] == promoted_to
     assert patch["promoted_at"] == promoted_at
@@ -143,7 +144,9 @@ class _ResultProbe:
         return self._value
 
 
-def _transition_result(*, object_id: str, namespace: str, to_state: str) -> TransitionResult:
+def _transition_result(
+    *, object_id: str, namespace: str, to_state: LifecycleState
+) -> TransitionResult:
     event = LifecycleEvent(
         object_id=object_id,
         object_type="concept",
