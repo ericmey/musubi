@@ -963,24 +963,29 @@ def _has_terminal_state(toks: list[_Tok]) -> bool:
     return False
 
 
+def _is_outbox_ref(tok: _Tok) -> bool:
+    """The lifecycle_outbox table reference, bare or as a quoted identifier of the same value."""
+    return tok in (("WORD", "LIFECYCLE_OUTBOX"), ("QID", "LIFECYCLE_OUTBOX"))
+
+
 def _starts_select_from(body: list[_Tok]) -> bool:
-    """The inner CTE body BEGINS with `SELECT operation_key FROM <target>` (target a bare/quoted ident)."""
+    """The inner CTE body BEGINS with exactly `SELECT operation_key FROM lifecycle_outbox`."""
     return (
         len(body) >= 4
         and body[0] == ("WORD", "SELECT")
         and body[1] == ("WORD", "OPERATION_KEY")
         and body[2] == ("WORD", "FROM")
-        and body[3][0] in ("WORD", "QID")
+        and _is_outbox_ref(body[3])
     )
 
 
 def _starts_delete_from(body: list[_Tok]) -> bool:
-    """The outer statement BEGINS with `DELETE FROM <target>` (target a bare/quoted ident)."""
+    """The outer statement BEGINS with exactly `DELETE FROM lifecycle_outbox`."""
     return (
         len(body) >= 3
         and body[0] == ("WORD", "DELETE")
         and body[1] == ("WORD", "FROM")
-        and body[2][0] in ("WORD", "QID")
+        and _is_outbox_ref(body[2])
     )
 
 
@@ -996,12 +1001,15 @@ def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
     """Bounded-PARSER shape violations of the cleanup DELETE (a real tokenizer + token-SEQUENCE matching,
     NOT substring matching and NOT a full SQL parser; fails closed when the supported shape cannot be
     recognized unambiguously). [] = the pinned atomic shape: ONE executable statement whose parentheses are
-    balanced; a `WITH <sel>` CTE whose inner selector is ORDER BY terminal_epoch THEN operation_key with a
-    bounded LIMIT; an outer DELETE restricted to `operation_key IN (SELECT operation_key FROM <sel>)`; the
-    FULL terminal-eligibility predicate - state IN ('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND
-    terminal_epoch < <cutoff> - as exact token runs in BOTH halves; RETURNING; and NO other statement after
-    it. Comments, string contents, and quoted identifiers never satisfy a keyword; a string literal other
-    than the terminal state values, or unbalanced parens, fail closed. Count SELECTs are ignored."""
+    balanced; a `WITH <sel>` CTE whose inner body BEGINS `SELECT operation_key FROM lifecycle_outbox` and
+    whose tiebreak ends `ORDER BY terminal_epoch, operation_key LIMIT <param>` (bounded LIMIT immediately
+    after the tiebreak); an outer statement that BEGINS `DELETE FROM lifecycle_outbox`, is restricted to
+    `operation_key IN (SELECT operation_key FROM <sel>)`, and ENDS at the terminal `RETURNING operation_key`
+    with nothing after; the FULL terminal-eligibility predicate - state IN ('FINAL','ABANDONED') AND
+    terminal_epoch IS NOT NULL AND terminal_epoch < <param> - as exact token runs in BOTH halves. Comments,
+    string contents, and quoted identifiers never satisfy a keyword; a non-terminal string literal, an
+    unrelated table, a mis-ordered/unbounded LIMIT, a non-terminal RETURNING, or unbalanced parens each fail
+    closed. Count SELECTs are ignored."""
     v: list[str] = []
     tokenized = [_sql_tokens(raw) for raw in sql_args]
     if any(t is None for t in tokenized):
@@ -1041,13 +1049,18 @@ def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
         v.append("missing_cte")
         return v
     if not _starts_select_from(inner):
-        v.append("inner_not_select")  # the CTE body must be a SELECT operation_key FROM <target>
+        v.append(
+            "inner_not_select"
+        )  # inner prefix must be SELECT operation_key FROM lifecycle_outbox
     if not _starts_delete_from(outer):
-        v.append("outer_not_delete")  # the outer statement must be a DELETE FROM <target>
-    if not _has_seq(outer, [("WORD", "RETURNING"), ("WORD", "OPERATION_KEY")]):
+        v.append("outer_not_delete")  # outer prefix must be DELETE FROM lifecycle_outbox
+    ret = [("WORD", "RETURNING"), ("WORD", "OPERATION_KEY")]
+    if not _has_seq(outer, ret):
         v.append("missing_returning")  # RETURNING must return operation_key, not a bare RETURNING
-    if not _followed_by_param(inner, [("WORD", "LIMIT")]):
-        v.append("missing_bound")  # LIMIT must be a bound parameter, not NULL/a literal
+    elif outer[-2:] != ret:
+        v.append(
+            "returning_not_terminal"
+        )  # nothing may follow the terminal RETURNING operation_key
     tie = [
         ("WORD", "ORDER"),
         ("WORD", "BY"),
@@ -1055,8 +1068,16 @@ def _cleanup_sql_violations(sql_args: list[str]) -> list[str]:
         ("PUNCT", ","),
         ("WORD", "OPERATION_KEY"),
     ]
-    if not _has_seq(inner, tie):
+    tie_present = _has_seq(inner, tie)
+    limit_bound = _followed_by_param(inner, [("WORD", "LIMIT")])
+    if not tie_present:
         v.append("nondeterministic_tie")  # ORDER BY missing the operation_key tiebreak
+    if not limit_bound:
+        v.append("missing_bound")  # LIMIT must be a bound parameter, not NULL/a literal
+    if tie_present and limit_bound and not _followed_by_param(inner, [*tie, ("WORD", "LIMIT")]):
+        v.append(
+            "limit_not_after_order"
+        )  # the bounded LIMIT must immediately follow the ORDER BY tiebreak
     restrict = [
         ("WORD", "OPERATION_KEY"),
         ("WORD", "IN"),
@@ -1097,12 +1118,13 @@ _G2B_REASON = (
     "DELETE restricted to the selected operation keys, the FULL terminal-eligibility predicate (state IN "
     "('FINAL','ABANDONED') AND terminal_epoch IS NOT NULL AND terminal_epoch < cutoff) repeated in BOTH the "
     "inner selector AND the outer DELETE WHERE, RETURNING, and NO other statement after it. Recognition is "
-    "via a bounded tokenizer with real identifier boundaries + exact token-SEQUENCE matching (comments, "
-    "string contents, and quoted identifiers never satisfy a keyword; parentheses must balance; a "
-    "non-terminal string literal fails closed), not substring matching. Zero or multiple coordinator cleanup "
-    "methods, a split select/delete, a trailing statement, unbalanced parens, any missing inner/outer "
-    "state/non-null/age component, a missing tiebreak/LIMIT/RETURNING, or a dynamic/unresolvable SQL "
-    "argument each fail."
+    "via a bounded tokenizer with real identifier boundaries + exact token-SEQUENCE and POSITION matching "
+    "(comments, string contents, and quoted identifiers never satisfy a keyword; parentheses must balance; "
+    "the table is pinned to lifecycle_outbox; the bounded LIMIT must follow the tiebreak; RETURNING "
+    "operation_key must be terminal), not substring matching. Zero or multiple coordinator cleanup methods, "
+    "a split select/delete, a trailing statement, unbalanced parens, an unrelated table, a "
+    "mis-ordered/unbounded LIMIT, a non-terminal RETURNING, any missing inner/outer state/non-null/age "
+    "component, a missing tiebreak/RETURNING, or a dynamic/unresolvable SQL argument each fail."
 )
 
 
@@ -1282,6 +1304,26 @@ def test_g2b_rule_discriminates_cleanup_sql_shape() -> None:
         [_G2B_CORRECT.replace("terminal_epoch < :cutoff", "terminal_epoch << :cutoff")]
     )
     assert "missing_inner_age" in double_lt and "missing_outer_age" in double_lt
+
+    # ---- table + prefix/suffix EXACTNESS: a present-but-misplaced token is not the pinned shape ----
+    # the pinned table is lifecycle_outbox; an unrelated table fails BOTH prefixes
+    unrelated_table = _cleanup_sql_violations(
+        [_G2B_CORRECT.replace("lifecycle_outbox", "unrelated_table")]
+    )
+    assert "inner_not_select" in unrelated_table and "outer_not_delete" in unrelated_table
+    # the bounded LIMIT must IMMEDIATELY FOLLOW the ORDER BY tiebreak (both tokens present, wrong order)
+    assert "limit_not_after_order" in _cleanup_sql_violations(
+        [
+            _G2B_CORRECT.replace(
+                "ORDER BY terminal_epoch, operation_key LIMIT :batch",
+                "LIMIT :batch ORDER BY terminal_epoch, operation_key",
+            )
+        ]
+    )
+    # nothing may follow the terminal RETURNING operation_key (tokens appended in the same statement)
+    assert "returning_not_terminal" in _cleanup_sql_violations(
+        [_G2B_CORRECT.replace("RETURNING operation_key", "RETURNING operation_key, note")]
+    )
 
     # CONTROLS: harmless comments, a bare `;` terminator, and a LEGALLY quoted non-structural identifier
     # (the table name) with correct balanced nesting all keep the correct shape green
