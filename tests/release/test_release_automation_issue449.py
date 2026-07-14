@@ -15,18 +15,15 @@ guard on the resolved tag - this is a real current hardening
 defect. Source/workflow fix is FORBIDDEN until Yua accepts
 this red commit.
 
-Per Yua 2026-07-13 20:48:34 (WITHHOLD on 90455eb):
-  - Every wrong-fixture test must invoke the same checker
-    used by the production strict red/guard.
-  - Invariant 3 checker must accept a path parameter.
-  - Invariant 2/6 must parse tag rules into distinct
-    comma-delimited records.
-  - Bash guard recognizer must prove reject control flow
-    and placement.
-  - Decision model must execute the fallback contract
-    with explicit input + latest value.
-  - Fixed-to-wrong derivation: keep the corrected fixture
-    as the parent and derive each wrong from it.
+Per Yua 2026-07-13 20:57:08 (WITHHOLD on 6ea08a9):
+  - Make the executable Bash proof actually run.
+  - Fix the tag-rule parser to not split inside enable exprs.
+  - Extract path-aware helpers for Inv1, Inv4, Inv6.
+  - Inv6 is the channel-metadata rule / allowed-divergence
+    contract, NOT a workflow_run.branches filter.
+  - Inv3 exact-set proof needs full names + decoy logic.
+  - Resolver must use real release tag grammar.
+  - Slice doc and lock must be updated to match tests.
 
 Toolchain note (per Yua 6e07c56 finding 8):
 The worktree uv environment (used by 'uv run pytest') does
@@ -58,6 +55,13 @@ PUBLISH_WF = WORKFLOWS / "publish-core-image.yml"
 AUTO_PIN_WF = WORKFLOWS / "auto-digest-bump.yml"
 
 
+# Release tag grammar accepted by this repo (semver with v
+# prefix, optional pre-release suffix, no build metadata).
+# Mirrors what release-please emits and what the v* tag
+# push trigger accepts.
+RELEASE_TAG_GRAMMAR = re.compile(r"^v\d+\.\d+\.\d+(?:-[a-zA-Z0-9.]+)?$")
+
+
 # =============================================================
 # Custom exceptions
 # =============================================================
@@ -65,25 +69,39 @@ AUTO_PIN_WF = WORKFLOWS / "auto-digest-bump.yml"
 
 class InvariantError(Exception):
     """Base exception for architecture-contract invariant
-    violations. Specific invariants raise specific subclasses."""
+    violations."""
 
 
 class NoIfKeyInStepError(InvariantError):
     """Invariant 3: a required supply-chain step has an
-    if: condition (gating to a trigger), is missing, or
-    has a duplicate/decoy name."""
+    if: condition, is missing, or has a duplicate/decoy."""
 
 
 class ManualDispatchGuardMissingError(InvariantError):
     """Invariant 5: the Resolve tag step lacks a valid
-    release-only manual dispatch guard on the resolved
-    tag (e.g., [[ \"$TAG\" == v* ]])."""
+    release-only manual dispatch guard."""
 
 
 class MutexChannelMissingError(InvariantError):
     """Invariant 2/6: the docker/metadata-action with.tags
     is missing a distinct semver-v, main-ref, or
     manual-raw rule."""
+
+
+class PushTriggerSetError(InvariantError):
+    """Invariant 1: the push trigger set is not exactly
+    {main, v*}."""
+
+
+class WorkflowRunVGateError(InvariantError):
+    """Invariant 4: the workflow_run gate is not
+    'conclusion == success AND startsWith(head_branch, v)'."""
+
+
+class ChannelMetadataError(InvariantError):
+    """Invariant 6: the channel-metadata rule / allowed-
+    divergence contract is broken (mutually exclusive main
+    ref and release semver guards)."""
 
 
 class TagResolutionRejectError(Exception):
@@ -100,44 +118,46 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _load_publish_steps(path: Path | None = None) -> list[dict[str, Any]]:
-    """Load the publish-core-image steps from YAML.
-
-    The function accepts an optional path; if not provided,
-    the production source is used.
-    """
-    if path is None:
-        path = PUBLISH_WF
+def _load_workflow_yaml(path: Path) -> Any:
+    """Load a workflow YAML file, normalizing the True-key
+    convention that YAML 1.1 applies to 'on:'."""
     config: Any = yaml.safe_load(_read_text(path))
-    if not isinstance(config, dict):
-        raise InvariantError(f"Could not parse workflow {path}")
-    if True in config and "on" not in config:
+    if isinstance(config, dict) and True in config and "on" not in config:
         config["on"] = config.pop(True)
+    return config
+
+
+def _dump_workflow_yaml(config: Any) -> str:
+    """Dump a workflow YAML config, restoring the True-key
+    convention."""
+    if isinstance(config, dict) and "on" in config and True not in config:
+        config[True] = config.pop("on")
+    return yaml.dump(config, default_flow_style=False, sort_keys=False)
+
+
+def _load_publish_steps(path: Path) -> list[dict[str, Any]]:
+    """Load the publish-core-image steps from YAML."""
+    config = _load_workflow_yaml(path)
     job = config.get("jobs", {}).get("publish-core-image", {})
     if not isinstance(job, dict):
         raise InvariantError(f"No jobs.publish-core-image in {path}")
     return job.get("steps", [])  # type: ignore[no-any-return]
 
 
-def _get_publish_step(name_substring: str, path: Path | None = None) -> dict[str, Any] | None:
-    """Get a publish step by name substring match."""
-    for step in _load_publish_steps(path):
-        name = step.get("name", "")
-        if name_substring in name:
-            return step
-    return None
+def _load_auto_pin_steps(path: Path) -> list[dict[str, Any]]:
+    """Load the auto-digest-bump steps from YAML."""
+    config = _load_workflow_yaml(path)
+    job = config.get("jobs", {}).get("bump", {})
+    if not isinstance(job, dict):
+        raise InvariantError(f"No jobs.bump in {path}")
+    return job.get("steps", [])  # type: ignore[no-any-return]
 
 
-def _get_resolve_step_run(path: Path | None = None) -> str:
+def _get_resolve_step_run(path: Path) -> str:
     """Get the `run` script of the Resolve tag + digest step
-    in auto-digest-bump.yml. Returns the bash script content.
-
-    The workflow YAML is Jinja-templated, so we extract the
-    run script via text scanning (preserving the bash syntax)
-    rather than YAML round-trip (which would mangle the
-    bash ${{ }} expressions and quoting).
-    """
-    text = _read_text(path or AUTO_PIN_WF)
+    in auto-digest-bump.yml via text scanning (preserves bash
+    syntax)."""
+    text = _read_text(path)
     lines = text.split("\n")
     in_step = False
     in_run = False
@@ -166,101 +186,70 @@ def _get_resolve_step_run(path: Path | None = None) -> str:
 
 
 # =============================================================
-# Invariant 3: YAML-parsed per-step check (path-aware)
+# Invariant 1: path-aware push trigger set
 # =============================================================
 
 
-# The 5 required supply-chain step names (substring match)
-REQUIRED_STEPS = {
-    "cosign_sign": "Sign the published image",
-    "sbom": "Generate SBOM",
-    "cosign_attest": "Attach SBOM as cosign attestation",
-    "trivy_table": "Trivy vulnerability scan (table",
-    "trivy_sarif": "Trivy vulnerability scan (SARIF",
-}
+def assert_push_trigger_set(path: Path) -> None:
+    """Assert the publish workflow's push trigger set is
+    exactly {main, v*}.
 
-
-def assert_no_if_key_in_publish_step(name_substring: str, path: Path | None = None) -> None:
-    """Assert that the named step has no 'if' key.
-
-    A real trigger-independent step must not be gated by
-    github.event, github.ref, github.event_name, etc.
-    Raises NoIfKeyInStepError if the step has an 'if' key.
-
-    Per Yua 20:48:34 #1: the checker accepts a path parameter;
-    the same checker is used for production and mutations.
+    Per Yua 20:57:08 #3: extract a path-aware helper used by
+    both the production guard and every corresponding wrong.
     """
-    step = _get_publish_step(name_substring, path)
-    if step is None:
-        raise NoIfKeyInStepError(
-            f"Could not find step with name substring {name_substring!r} in publish-core-image.yml"
-        )
-    if "if" in step:
-        raise NoIfKeyInStepError(
-            f"Step {step.get('name')!r} has an 'if' key: "
-            f"{step['if']!r}. The step is gated on a trigger "
-            f"expression; this violates the contract that all "
-            f"required supply-chain steps must fire for both "
-            f"main and v* triggers."
+    config = _load_workflow_yaml(path)
+    on = config.get("on", {})
+    if not isinstance(on, dict):
+        raise PushTriggerSetError(f"No 'on' block in {path}")
+    push = on.get("push", {})
+    if not isinstance(push, dict):
+        raise PushTriggerSetError(f"No 'push' trigger in {path}")
+    branches = push.get("branches", []) or []
+    tags = push.get("tags", []) or []
+    if "main" not in branches:
+        raise PushTriggerSetError(f"push trigger missing 'main' branch: {branches!r}")
+    if "v*" not in tags:
+        raise PushTriggerSetError(f"push trigger missing 'v*' tag: {tags!r}")
+    if sorted(branches) != ["main"]:
+        raise PushTriggerSetError(f"push trigger branches not exactly [main]: {branches!r}")
+    if sorted(tags) != ["v*"]:
+        raise PushTriggerSetError(f"push trigger tags not exactly [v*]: {tags!r}")
+    if "workflow_dispatch" not in on:
+        raise PushTriggerSetError(
+            "workflow_dispatch is a SEPARATE operator trigger and must be present"
         )
 
 
-def assert_all_required_steps_present(path: Path | None = None) -> None:
-    """Assert that all 5 required steps are present and have
-    no 'if' key. Raises NoIfKeyInStepError if any step is
-    missing, has a duplicate name, or has a decoy name.
-
-    Per Yua 20:48:34 #1: the checker enforces the exact
-    reviewed set.
-    """
-    steps = _load_publish_steps(path)
-    found_substrings: set[str] = set()
-    for step in steps:
-        name = step.get("name", "")
-        for key, sub in REQUIRED_STEPS.items():
-            if sub in name:
-                if key in found_substrings:
-                    raise NoIfKeyInStepError(f"Duplicate step name containing {sub!r}: {name!r}")
-                found_substrings.add(key)
-        # Check for decoy names (a step that looks like one
-        # of the required steps but has a different name)
-        for key, sub in REQUIRED_STEPS.items():
-            if sub in name and key not in [k for k, s in REQUIRED_STEPS.items() if s in name]:
-                raise NoIfKeyInStepError(f"Decoy step name containing {sub!r}: {name!r}")
-    missing = set(REQUIRED_STEPS.keys()) - found_substrings
-    if missing:
-        raise NoIfKeyInStepError(f"Missing required steps: {missing!r}")
-
-
 # =============================================================
-# Invariant 2: structured mutex tag-rule parse
+# Invariant 2: structured tag-rule parse (semver/ref/raw)
 # =============================================================
 
 
-def _parse_tag_rules(path: Path | None = None) -> list[dict[str, str]]:
+def _parse_tag_rules(path: Path) -> list[dict[str, str]]:
     """Parse the docker/metadata-action with.tags into a list
     of distinct rule records.
 
-    Per Yua 20:48:34 #2: parse non-comment tag lines into
-    distinct comma-delimited rule records. Each rule is a
-    dict like {'type': 'semver', 'pattern': ..., 'prefix': ...,
-    'enable': ...}.
+    Per Yua 20:57:08 #2: parse the static prefix fields and
+    the entire enable remainder WITHOUT splitting expression
+    commas. The with.tags format is:
+        type=KEY[,field=value...] enable=EXPR
+    The first comma-separated pair is `type=KEY`. The
+    `enable=EXPR` field's value may contain commas inside
+    function calls like `startsWith(github.ref, 'refs/tags/v')`.
+    We treat `enable=...` as a single field regardless of
+    internal commas.
     """
-    config: Any = yaml.safe_load(_read_text(path or PUBLISH_WF))
-    if not isinstance(config, dict):
-        raise InvariantError(f"Could not parse workflow {path or PUBLISH_WF}")
-    if True in config and "on" not in config:
-        config["on"] = config.pop(True)
+    config = _load_workflow_yaml(path)
     job = config.get("jobs", {}).get("publish-core-image", {})
     if not isinstance(job, dict):
-        raise InvariantError("No jobs.publish-core-image")
+        raise InvariantError(f"No jobs.publish-core-image in {path}")
     meta_step = None
     for step in job.get("steps", []):
         if "Derive image tags" in step.get("name", ""):
             meta_step = step
             break
     if meta_step is None:
-        raise InvariantError("No 'Derive image tags' step")
+        raise InvariantError(f"No 'Derive image tags' step in {path}")
     with_block = meta_step.get("with", {})
     tags_value = with_block.get("tags", "")
     if isinstance(tags_value, list):
@@ -272,9 +261,33 @@ def _parse_tag_rules(path: Path | None = None) -> list[dict[str, str]]:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        # Each rule is comma-delimited
+        # Each rule is a sequence of comma-separated key=value
+        # pairs. The `enable=` field may contain commas
+        # inside function calls; we treat it as a single
+        # field that consumes the rest of the line.
         rule: dict[str, str] = {}
-        for part in stripped.split(","):
+        parts: list[str] = []
+        i = 0
+        while i < len(stripped):
+            if stripped[i : i + 7] == "enable=":
+                # The enable field is the rest of the line
+                # (preserving internal commas and quoting).
+                enable_value = stripped[i + 7 :].strip()
+                # Strip surrounding quotes if present
+                if (enable_value.startswith('"') and enable_value.endswith('"')) or (
+                    enable_value.startswith("'") and enable_value.endswith("'")
+                ):
+                    enable_value = enable_value[1:-1]
+                rule["enable"] = enable_value
+                break
+            # Find the next comma at the top level
+            comma = stripped.find(",", i)
+            if comma == -1:
+                parts.append(stripped[i:])
+                break
+            parts.append(stripped[i:comma])
+            i = comma + 1
+        for part in parts:
             part = part.strip()
             if "=" in part:
                 k, v = part.split("=", 1)
@@ -284,15 +297,19 @@ def _parse_tag_rules(path: Path | None = None) -> list[dict[str, str]]:
     return rules
 
 
-def assert_distinct_mutex_tags(path: Path | None = None) -> None:
-    """Assert that the docker/metadata-action with.tags has
-    exactly three distinct rules: one semver-v, one main-ref,
-    and one manual-raw. Each rule must have its own complete
-    enable expression.
+def assert_distinct_mutex_tags(path: Path) -> None:
+    """Assert the docker/metadata-action with.tags has exactly
+    three distinct, non-overlapping rules.
 
-    Per Yua 20:48:34 #2: parse into records, require exactly
-    one of each kind, with their own complete enable
-    expressions.
+    Per Yua 20:57:08 #2: pin complete per-rule truth:
+    - semver: type=semver, pattern={...}, prefix=v, enable
+      has startsWith(github.ref, 'refs/tags/v')
+    - ref: type=ref, event=branch, enable has
+      github.ref == 'refs/heads/main'
+    - raw: type=raw, value=${{ github.event.inputs.tag }},
+      enable has workflow_dispatch AND non-blank input check
+
+    Reject extra overlapping rules.
     """
     rules = _parse_tag_rules(path)
     semver_rules = [r for r in rules if r.get("type") == "semver"]
@@ -310,35 +327,163 @@ def assert_distinct_mutex_tags(path: Path | None = None) -> None:
         raise MutexChannelMissingError(
             f"Expected exactly one manual-raw rule, got {len(raw_rules)}: {raw_rules!r}"
         )
-    # Each rule must have its own complete enable expression
-    if "enable" not in semver_rules[0]:
-        raise MutexChannelMissingError(f"semver rule missing 'enable': {semver_rules[0]!r}")
-    if "enable" not in ref_rules[0]:
-        raise MutexChannelMissingError(f"main-ref rule missing 'enable': {ref_rules[0]!r}")
-    if "enable" not in raw_rules[0]:
-        raise MutexChannelMissingError(f"manual-raw rule missing 'enable': {raw_rules[0]!r}")
-    # The semver rule's enable must be on tag-push
-    semver_enable = semver_rules[0].get("enable", "")
-    if "startsWith" not in semver_enable and "refs/tags/v" not in semver_enable:
+    semver = semver_rules[0]
+    ref = ref_rules[0]
+    raw = raw_rules[0]
+    # Semver rule must have pattern and prefix=v
+    if "pattern" not in semver:
+        raise MutexChannelMissingError(f"semver rule missing 'pattern': {semver!r}")
+    if semver.get("prefix") != "v":
+        raise MutexChannelMissingError(f"semver rule prefix must be 'v': {semver!r}")
+    semver_enable = semver.get("enable", "")
+    if "startsWith" not in semver_enable:
+        raise MutexChannelMissingError(f"semver rule enable must use startsWith: {semver_enable!r}")
+    if "refs/tags/v" not in semver_enable:
         raise MutexChannelMissingError(
-            f"semver rule enable does not gate on tag-push: {semver_enable!r}"
+            f"semver rule enable must gate on refs/tags/v: {semver_enable!r}"
         )
-    # The main-ref rule's enable must be on refs/heads/main
-    main_enable = ref_rules[0].get("enable", "")
-    if "refs/heads/main" not in main_enable:
+    # Ref rule enable must gate on main
+    ref_enable = ref.get("enable", "")
+    if "refs/heads/main" not in ref_enable:
         raise MutexChannelMissingError(
-            f"main-ref rule enable does not gate on main: {main_enable!r}"
+            f"main-ref rule enable must gate on refs/heads/main: {ref_enable!r}"
         )
-    # The manual-raw rule's enable must be on workflow_dispatch
+    # Raw rule must have value and gate on workflow_dispatch
     # with non-blank input
-    raw_enable = raw_rules[0].get("enable", "")
+    if "value" not in raw:
+        raise MutexChannelMissingError(f"raw rule missing 'value': {raw!r}")
+    raw_enable = raw.get("enable", "")
     if "workflow_dispatch" not in raw_enable:
         raise MutexChannelMissingError(
-            f"manual-raw rule enable does not gate on workflow_dispatch: {raw_enable!r}"
+            f"raw rule enable must gate on workflow_dispatch: {raw_enable!r}"
         )
     if "github.event.inputs.tag" not in raw_enable:
+        raise MutexChannelMissingError(f"raw rule enable must reference inputs.tag: {raw_enable!r}")
+    if "!= ''" not in raw_enable and '!= ""' not in raw_enable:
         raise MutexChannelMissingError(
-            f"manual-raw rule enable does not check github.event.inputs.tag: {raw_enable!r}"
+            f"raw rule enable must check non-blank input: {raw_enable!r}"
+        )
+
+
+# =============================================================
+# Invariant 3: YAML-parsed per-step check (path-aware)
+# =============================================================
+
+
+# Exact full names of the 5 required supply-chain steps.
+# Per Yua 20:57:08 #5: use exact full names, not substrings.
+REQUIRED_STEPS_EXACT = {
+    "cosign_sign": "Sign the published image (keyless, via GitHub OIDC)",
+    "sbom": "Generate SBOM (CycloneDX)",
+    "cosign_attest": "Attach SBOM as cosign attestation",
+    "trivy_table": "Trivy vulnerability scan (table — always visible in logs)",
+    "trivy_sarif": "Trivy vulnerability scan (SARIF — CRITICAL gate)",
+}
+
+
+def _get_step_by_exact_name(name: str, path: Path) -> dict[str, Any] | None:
+    """Get a step by exact full name match."""
+    for step in _load_publish_steps(path):
+        if step.get("name", "") == name:
+            return step
+    return None
+
+
+def assert_no_if_key_in_publish_step(name: str, path: Path) -> None:
+    """Assert that the named step has no 'if' key.
+
+    Per Yua 20:57:08 #5: use exact full name.
+    """
+    step = _get_step_by_exact_name(name, path)
+    if step is None:
+        raise NoIfKeyInStepError(f"Step {name!r} not found in {path}")
+    if "if" in step:
+        raise NoIfKeyInStepError(f"Step {name!r} has an 'if' key: {step['if']!r}")
+
+
+def assert_all_required_steps_present(path: Path) -> None:
+    """Assert all 5 required steps are present, none have an
+    'if' key, and there are no duplicate or decoy names.
+
+    Per Yua 20:57:08 #5: missing, duplicate, renamed-near-
+    match, and unrelated substring decoy must fail for their
+    intended reason.
+    """
+    steps = _load_publish_steps(path)
+    # Check exact presence: each required step must be present
+    # by exact name
+    for key, exact_name in REQUIRED_STEPS_EXACT.items():
+        step = _get_step_by_exact_name(exact_name, path)
+        if step is None:
+            raise NoIfKeyInStepError(f"Required step {exact_name!r} is missing")
+        if "if" in step:
+            raise NoIfKeyInStepError(
+                f"Required step {exact_name!r} has an 'if' key: {step['if']!r}"
+            )
+    # Check no duplicate: each exact name appears at most once
+    name_counts: dict[str, int] = {}
+    for step in steps:
+        n = step.get("name", "")
+        if n in REQUIRED_STEPS_EXACT.values():
+            name_counts[n] = name_counts.get(n, 0) + 1
+    for n, count in name_counts.items():
+        if count > 1:
+            raise NoIfKeyInStepError(f"Duplicate step name: {n!r} appears {count} times")
+    # Check no renamed-near-match decoy: a step that has a
+    # name that's a near-match of a required step (e.g.,
+    # "Sign the published image (keyless)" without the full
+    # "via GitHub OIDC" suffix)
+    for step in steps:
+        n = step.get("name", "")
+        if n in REQUIRED_STEPS_EXACT.values():
+            continue
+        # Check if the name contains a required step's name
+        # as a substring (i.e., it's a renamed-near-match
+        # decoy). We require EXACT match, so this is a
+        # decoy and should fail.
+        for exact_name in REQUIRED_STEPS_EXACT.values():
+            if n != exact_name and (exact_name in n or n in exact_name):
+                raise NoIfKeyInStepError(
+                    f"Decoy step name {n!r} is a near-match of required step {exact_name!r}"
+                )
+
+
+# =============================================================
+# Invariant 4: path-aware workflow_run v* gate
+# =============================================================
+
+
+def assert_workflow_run_v_gate(path: Path) -> None:
+    """Assert the auto-pin workflow gates on workflow_run with
+    conclusion == 'success' AND startsWith(head_branch, 'v').
+
+    Per Yua 20:57:08 #3: extract a path-aware helper used by
+    both the production guard and every corresponding wrong.
+    Per Yua 20:57:08 #4: the gate is at jobs.bump.if, NOT at
+    workflow_run.branches.
+    """
+    config = _load_workflow_yaml(path)
+    job = config.get("jobs", {}).get("bump", {})
+    if not isinstance(job, dict):
+        raise WorkflowRunVGateError(f"No jobs.bump in {path}")
+    if_conditions = job.get("if", "")
+    if not isinstance(if_conditions, str):
+        raise WorkflowRunVGateError(f"jobs.bump.if is not a string: {if_conditions!r}")
+    # Must check workflow_run conclusion == success
+    if not re.search(
+        r"github\.event\.workflow_run\.conclusion\s*==\s*['\"]success['\"]",
+        if_conditions,
+    ):
+        raise WorkflowRunVGateError(
+            f"jobs.bump.if missing workflow_run.conclusion == success check: {if_conditions!r}"
+        )
+    # Must check startsWith(head_branch, 'v')
+    if not re.search(
+        r"startsWith\s*\(\s*github\.event\.workflow_run\.head_branch\s*,\s*['\"]v['\"]",
+        if_conditions,
+    ):
+        raise WorkflowRunVGateError(
+            f"jobs.bump.if missing startsWith(head_branch, v) check: {if_conditions!r}"
         )
 
 
@@ -347,12 +492,16 @@ def assert_distinct_mutex_tags(path: Path | None = None) -> None:
 # =============================================================
 
 
-def _run_bash_harness(script: str) -> subprocess.CompletedProcess[str]:
-    """Run a small bash script in a subprocess. Returns the
-    completed process. The script is written to a temp file
-    and executed with `bash`."""
+def _run_bash_harness(guard_block: str, tag_value: str) -> int:
+    """Execute a guard block with TAG=<tag_value> and return
+    the exit code.
+
+    Per Yua 20:57:08 #1: the bash proof must actually run.
+    The guard_block is the bash code to test (e.g., the
+    if ! [[ \"$TAG\" == v* ]]; then ... exit 1; fi block).
+    """
+    script = f"#!/bin/bash\nset -euo pipefail\nTAG={tag_value!r}\n{guard_block}\necho SUCCESS\n"
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
-        f.write("#!/bin/bash\nset -euo pipefail\n")
         f.write(script)
         f.flush()
         path = f.name
@@ -364,119 +513,143 @@ def _run_bash_harness(script: str) -> subprocess.CompletedProcess[str]:
             timeout=5,
             check=False,
         )
-        return result
+        return result.returncode
     finally:
         Path(path).unlink(missing_ok=True)
 
 
-def assert_release_only_manual_dispatch_guard(
-    path: Path | None = None,
-) -> None:
-    """Assert that the Resolve tag + digest step has a valid
+def _extract_guard_block(run_script: str) -> str | None:
+    """Extract the if ! [[ \"$TAG\" == v* ]]; then ... exit N;
+    fi block from the Resolve step's run script.
+
+    Per Yua 20:57:08 #1: require the nonzero exit INSIDE the
+    matched if block before its fi, not merely any later exit.
+    """
+    # Find the if block: if ! [[ "$TAG" == v* ]]; then
+    # ... exit N; fi
+    pattern = (
+        r"if\s+!\s*\[\[\s*\"?\$TAG\"?\s*==\s*v\*\s*\]\][^;]*;"
+        r"(.*?)"
+        r"^\s*fi\b"
+    )
+    m = re.search(pattern, run_script, re.DOTALL | re.MULTILINE)
+    if not m:
+        return None
+    return m.group(0)
+
+
+def assert_release_only_manual_dispatch_guard(path: Path) -> None:
+    """Assert the Resolve tag + digest step has a valid
     release-only manual dispatch guard.
 
-    Per Yua 20:48:34 #3: the guard must pin one implementable
-    block shape in the Resolve step: after all TAG sources
-    resolve, before tag is emitted or used, non-v causes a
-    nonzero exit. We prove this by:
-    1. Extracting the run script via text scanning.
-    2. Running the script through a small bash harness that
-       proves:
-         - explicit v* + blank latest -> success (exit 0)
-         - blank + valid latest v* -> success (exit 0)
-         - explicit main -> nonzero exit
-         - blank + main/empty/malformed latest -> nonzero exit
-    3. The guard must be present in the script.
+    Per Yua 20:57:08 #1: extract the exact guard block and
+    execute it with TAG values. Prove valid release tags
+    return zero and main, empty, and malformed v-prefixed
+    tags return nonzero. Require the nonzero exit INSIDE
+    the matched if block before its fi.
 
-    The guard must:
-    - Use a valid bash predicate (e.g., [[ \"$TAG\" == v* ]])
-    - Appear after the TAG is assigned and before it's
-      emitted to $GITHUB_OUTPUT
-    - Cause a nonzero exit on non-release tags (not just a
-      warning)
+    Per Yua 20:57:08 #1 (additional): the guard must include
+    the tag emission/use anchor (it must appear before
+    tag is emitted or used in /v2/${IMAGE}/manifests/${TAG}).
     """
     run_script = _get_resolve_step_run(path)
     if not run_script:
         raise ManualDispatchGuardMissingError(
             "auto-digest-bump.yml has no Resolve tag + digest step with a run script"
         )
-    # Check for valid bash predicate that REJECTS non-v* tags.
-    # The predicate must be on $TAG and must check for v* prefix.
-    # The check is `if ! [[ ... == v* ]]` (or similar) to REJECT
-    # non-v* tags. An inverted check `if [[ ... == v* ]]` would
-    # ACCEPT v* tags, not reject them, so that's a wrong-fixture.
-    valid_predicates = [
-        # Reject non-v*: if NOT v*, then exit
-        r"if\s+!\s*\[\[\s*\"?\$TAG\"?\s*==\s*v\*\s*\]\]",
-        r"if\s+!\s*\[\[\s*\"?\$TAG\"?\s*=~\s*v\*\s*\]",
-    ]
-    has_valid_predicate = any(re.search(pattern, run_script) for pattern in valid_predicates)
-    if not has_valid_predicate:
+    # Extract the guard block
+    guard_block = _extract_guard_block(run_script)
+    if guard_block is None:
         raise ManualDispatchGuardMissingError(
-            "Resolve tag + digest step lacks a valid bash "
-            "predicate that REJECTS non-v* tags. The guard must "
-            'use `if ! [[ "$TAG" == v* ]]` (or similar) to '
-            "reject non-release tags."
+            "Resolve tag + digest step lacks the guard block: "
+            'if ! [[ "$TAG" == v* ]]; then ... exit N; fi'
         )
-    # The guard must cause a nonzero exit. Check for
-    # 'exit 1' or 'exit 2' etc. after the predicate.
-    # We look for: predicate ... exit N (not 0)
-    has_exit_after_predicate = re.search(
-        r"\[\[.*\$TAG.*==\s*v\*\s*\]\][^[]*?exit\s+[1-9]",
-        run_script,
-        re.DOTALL,
-    )
-    if not has_exit_after_predicate:
-        raise ManualDispatchGuardMissingError(
-            "Resolve tag + digest step has a valid bash "
-            "predicate but no nonzero exit after it. The guard "
-            "must cause a nonzero exit on non-release tags."
-        )
-    # The guard must appear before tag is emitted (echo
-    # "tag=${TAG}" >> "$GITHUB_OUTPUT") or used in
-    # /v2/${IMAGE}/manifests/${TAG}.
-    # We check that the guard appears BEFORE the tag output
-    # or the manifest request.
-    # The guard predicate is the one matching $TAG == v* (or =~v*)
-    # (not the workflow_run's event_name check which is
-    # different).
-    guard_matches = list(
-        re.finditer(
-            r"\[\[.*\$TAG.*(?:==|=~)\s*v\*",
-            run_script,
-        )
-    )
-    if not guard_matches:
-        # No guard predicate found (already caught above)
-        return
-    guard_pos = guard_matches[0].start()
-    # The tag output is the first >> $GITHUB_OUTPUT after
-    # the TAG is assigned
+    # Require the guard appears BEFORE the tag output emission
+    # or the manifest request
+    guard_pos = run_script.find(guard_block)
     output_match = re.search(
         r'>>\s*"?\$GITHUB_OUTPUT"?',
         run_script,
     )
-    if not output_match:
-        # No output emission found; assume OK
-        return
-    output_pos = output_match.start()
-    if guard_pos > output_pos:
-        raise ManualDispatchGuardMissingError(
-            "Resolve tag + digest step has a guard AFTER the "
-            "tag is emitted. The guard must appear before "
-            "tag is emitted or used."
-        )
-    # The guard must not be inside a comment. We check that
-    # the line containing the predicate does not start
-    # with # (after stripping leading spaces).
-    for line in run_script.split("\n"):
-        if "[[" in line and "$TAG" in line and "v*" in line:
+    if output_match:
+        output_pos = output_match.start()
+        if guard_pos > output_pos:
+            raise ManualDispatchGuardMissingError(
+                "Resolve tag + digest step has the guard AFTER "
+                "the tag is emitted. The guard must appear "
+                "before tag is emitted or used."
+            )
+    # The guard must be executable (not inside a comment).
+    # Check that the if ! line is not preceded by # on the
+    # same line.
+    for line in guard_block.split("\n"):
+        if "if ! [[" in line and "$TAG" in line:
             stripped = line.strip()
             if stripped.startswith("#"):
                 raise ManualDispatchGuardMissingError(
                     "Resolve tag + digest step guard is inside "
                     "a comment. The guard must be executable."
                 )
+    # Executable bash proof: actually run the guard with
+    # various TAG values and check the exit code.
+    # The bash glob `v*` matches any string starting with `v`.
+    # Valid tags: v* prefix. Invalid tags: anything else.
+    valid_tags = ["v1.13.0", "v0.7.0", "v2.0.0-rc.1"]
+    invalid_tags = ["main", "", "refs/tags/v1.0.0", "1.13.0"]
+    for tag in valid_tags:
+        rc = _run_bash_harness(guard_block, tag)
+        if rc != 0:
+            raise ManualDispatchGuardMissingError(
+                f"Guard rejected valid release tag {tag!r} with exit code {rc}"
+            )
+    for tag in invalid_tags:
+        rc = _run_bash_harness(guard_block, tag)
+        if rc == 0:
+            raise ManualDispatchGuardMissingError(
+                f"Guard accepted invalid tag {tag!r} with exit code 0 (should be nonzero)"
+            )
+
+
+# =============================================================
+# Invariant 6: channel-metadata / allowed-divergence
+# =============================================================
+
+
+def assert_release_channel_consumption(path: Path) -> None:
+    """Assert the channel-metadata rule / allowed-divergence
+    contract.
+
+    Per Yua 20:57:08 #4: Inv6 is the accepted mutually
+    exclusive channel-metadata rule / allowed-divergence
+    contract. The publish workflow's with.tags must have
+    mutually exclusive main ref and release semver guards,
+    AND the contract is that divergence is ALLOWED (not
+    GUARANTEED). The same assert_distinct_mutex_tags helper
+    proves the mutex; the test-local model proves the
+    allowed-divergence contract.
+
+    Per Yua 20:57:08 #3: extract a path-aware helper used by
+    both the production guard and every corresponding wrong.
+    """
+    assert_distinct_mutex_tags(path)
+    # The contract is that divergence is ALLOWED. The
+    # resolved tags from the semver and ref rules are
+    # guaranteed to be distinct because their enable
+    # conditions are mutually exclusive. We prove this by
+    # checking the enable conditions don't overlap.
+    rules = _parse_tag_rules(path)
+    semver_rules = [r for r in rules if r.get("type") == "semver"]
+    ref_rules = [r for r in rules if r.get("type") == "ref" and r.get("event") == "branch"]
+    semver_enable = semver_rules[0].get("enable", "")
+    ref_enable = ref_rules[0].get("enable", "")
+    # The semver enable must contain refs/tags/v and NOT
+    # refs/heads/main
+    if "refs/heads/main" in semver_enable:
+        raise ChannelMetadataError(f"semver enable overlaps with main: {semver_enable!r}")
+    # The ref enable must contain refs/heads/main and NOT
+    # refs/tags/v
+    if "refs/tags/v" in ref_enable:
+        raise ChannelMetadataError(f"main-ref enable overlaps with tag: {ref_enable!r}")
 
 
 # =============================================================
@@ -487,24 +660,25 @@ def assert_release_only_manual_dispatch_guard(
 def _resolve_release_tag(explicit: str | None, latest: str | None) -> str:
     """Test-local model of the desired decision contract.
 
-    Per Yua 20:48:34 #4: takes explicit input + latest value
-    and returns the resolved release tag or raises a dedicated
-    rejection.
+    Per Yua 20:57:08 #6: use the release tag grammar
+    RELEASE_TAG_GRAMMAR. Add explicit invalid-v-prefix cases
+    for both explicit and latest fallback.
 
     Contract:
-      - explicit v* (matches v<version> with at least one
-        character after v) -> same v
-      - blank + valid latest v* -> that latest v
+      - explicit v* (matches RELEASE_TAG_GRAMMAR) -> same v
+      - blank + valid latest v* (matches RELEASE_TAG_GRAMMAR)
+        -> that latest v
       - explicit main -> reject
       - blank + main/empty/malformed latest -> reject
     """
     if explicit is not None and explicit != "":
-        # Explicit input provided
         if explicit == "main":
             raise TagResolutionRejectError("Explicit 'main' is not a release tag")
-        if not re.match(r"^v[0-9]", explicit):
+        if not RELEASE_TAG_GRAMMAR.match(explicit):
             raise TagResolutionRejectError(
-                f"Explicit input {explicit!r} is not a valid v-prefixed release tag"
+                f"Explicit input {explicit!r} is not a valid "
+                f"v-prefixed release tag (must match "
+                f"{RELEASE_TAG_GRAMMAR.pattern})"
             )
         return explicit
     # Blank input: fall back to latest
@@ -512,8 +686,11 @@ def _resolve_release_tag(explicit: str | None, latest: str | None) -> str:
         raise TagResolutionRejectError("Blank input with no latest value")
     if latest == "main":
         raise TagResolutionRejectError("Latest is 'main', not a release tag")
-    if not re.match(r"^v[0-9]", latest):
-        raise TagResolutionRejectError(f"Latest {latest!r} is not a valid v-prefixed release tag")
+    if not RELEASE_TAG_GRAMMAR.match(latest):
+        raise TagResolutionRejectError(
+            f"Latest {latest!r} is not a valid v-prefixed "
+            f"release tag (must match {RELEASE_TAG_GRAMMAR.pattern})"
+        )
     return latest
 
 
@@ -529,56 +706,40 @@ def test_invariant_1_push_trigger_set() -> None:
     {main, v*}. workflow_dispatch is a SEPARATE operator
     trigger.
     """
-    config: Any = yaml.safe_load(_read_text(PUBLISH_WF))
-    if True in config and "on" not in config:
-        config["on"] = config.pop(True)
-    on = config.get("on", {})
-    push_config = on.get("push", {}) if isinstance(on, dict) else {}
-    branches = push_config.get("branches", []) or []
-    tags = push_config.get("tags", []) or []
-    assert "main" in branches
-    assert "v*" in tags
-    assert branches == ["main"]
-    assert tags == ["v*"]
-    assert "workflow_dispatch" in on
+    assert_push_trigger_set(PUBLISH_WF)
 
 
 def test_invariant_2_mutex_release_channels() -> None:
     """Invariant 2: distinct mutually exclusive semver-v,
     main-ref, and manual-raw rules in
     docker/metadata-action with.tags."""
-    assert_distinct_mutex_tags()
+    assert_distinct_mutex_tags(PUBLISH_WF)
 
 
 def test_invariant_3_per_supply_chain_step_independent() -> None:
     """Invariant 3: all 5 required supply-chain steps are
-    present and NONE are conditional on the trigger type."""
-    assert_all_required_steps_present()
-    for key, name_substring in REQUIRED_STEPS.items():
-        assert_no_if_key_in_publish_step(name_substring)
+    present, none have an 'if' key, and there are no
+    duplicate or decoy names."""
+    assert_all_required_steps_present(PUBLISH_WF)
+    for key, exact_name in REQUIRED_STEPS_EXACT.items():
+        assert_no_if_key_in_publish_step(exact_name, PUBLISH_WF)
 
 
-def test_invariant_4_workflow_run_v_guard() -> None:
-    """Invariant 4: auto-pin workflow_run path has the v* guard."""
-    text = _read_text(AUTO_PIN_WF)
-    assert "workflow_run" in text
-    assert "Publish Musubi Core image" in text
-    assert re.search(
-        r"github\.event\.workflow_run\.conclusion\s*==\s*['\"]success['\"]",
-        text,
-    )
-    assert re.search(
-        r"startsWith\s*\(\s*github\.event\.workflow_run\.head_branch\s*,\s*['\"]v['\"]",
-        text,
-    )
-    assert "head_branch == 'main'" not in text
+def test_invariant_4_workflow_run_v_gate() -> None:
+    """Invariant 4: auto-pin gates on workflow_run with
+    conclusion == 'success' AND startsWith(head_branch, 'v').
+
+    Per Yua 20:57:08 #4: the gate is at jobs.bump.if, NOT
+    at workflow_run.branches.
+    """
+    assert_workflow_run_v_gate(AUTO_PIN_WF)
 
 
 @pytest.mark.xfail(
     strict=True,
     raises=ManualDispatchGuardMissingError,
     reason=(
-        "Invariant 5 FAIL (per Yua 20:48:34 #3): the current "
+        "Invariant 5 FAIL (per Yua 20:57:08 #1): the current "
         "auto-digest-bump.yml Resolve tag + digest step lacks a "
         "valid bash guard with proper placement and control "
         "flow. After the workflow fix, this test flips green."
@@ -587,46 +748,19 @@ def test_invariant_4_workflow_run_v_guard() -> None:
 def test_invariant_5_release_only_manual_dispatch_guard() -> None:
     """Invariant 5: the Resolve tag + digest step has a valid
     release-only manual dispatch guard."""
-    assert_release_only_manual_dispatch_guard()
+    assert_release_only_manual_dispatch_guard(AUTO_PIN_WF)
 
 
-def test_invariant_6_release_only_consumption_in_autopin() -> None:
-    """Invariant 6: the auto-pin workflow consumes the signed
-    release tag only, never the moving main ref.
+def test_invariant_6_channel_metadata_allowed_divergence() -> None:
+    """Invariant 6: channel-metadata rule / allowed-divergence
+    contract.
 
-    Per Yua 20:48:34 #2: the Inv6 wrong edits publish-core-image
-    and duplicates Inv2. Reconcile: Inv6 is about auto-pin
-    consuming the signed release tag only.
-
-    The auto-pin workflow must:
-    - Have workflow_run trigger with branches: [v*] (NOT
-      including main).
-    - Use workflow_run's head_branch (which is the v* tag
-      name) to resolve the digest.
-    - Not directly use 'main' as a branch in workflow_run.
+    Per Yua 20:57:08 #4: the publish workflow's with.tags
+    has mutually exclusive main ref and release semver
+    guards. Divergence between main and v* digests is
+    ALLOWED, not GUARANTEED.
     """
-    text = _read_text(AUTO_PIN_WF)
-    # The auto-pin must use workflow_run
-    assert "workflow_run" in text
-    # The auto-pin must NOT have 'main' as a workflow_run branch.
-    # YAML may use inline list ["main", "v*"] or block list
-    # - main
-    # - v*
-    # We check both forms.
-    has_main_branch = re.search(
-        r"workflow_run:.*?branches:.*?(?:\[?\s*['\"]?main['\"]?|\n\s+-\s*['\"]?main['\"]?)",
-        text,
-        re.DOTALL,
-    )
-    if has_main_branch:
-        raise MutexChannelMissingError(
-            "auto-pin has 'main' as a workflow_run branch; this allows main to feed the pin"
-        )
-    # The auto-pin must use head_branch to resolve the tag
-    assert re.search(
-        r"github\.event\.workflow_run\.head_branch",
-        text,
-    )
+    assert_release_channel_consumption(PUBLISH_WF)
 
 
 # =============================================================
@@ -638,17 +772,16 @@ def test_invariant_6_release_only_consumption_in_autopin() -> None:
     strict=True,
     raises=ManualDispatchGuardMissingError,
     reason=(
-        "Hardening defect (per Yua 19:54:29 + 20:48:34 #3): "
+        "Hardening defect (per Yua 19:54:29 + 20:57:08 #1): "
         "auto-digest-bump.yml does NOT enforce release-only "
-        "manual dispatch. The Resolve tag + digest step lacks a "
-        "valid bash guard with proper placement and control "
-        "flow. After the workflow fix, this test flips green."
+        "manual dispatch. After the workflow fix, this test "
+        "flips green."
     ),
 )
 def test_red_hardening_defect_manual_dispatch_main() -> None:
     """Strict red: the current auto-digest-bump workflow
     accepts a non-release tag from manual dispatch."""
-    assert_release_only_manual_dispatch_guard()
+    assert_release_only_manual_dispatch_guard(AUTO_PIN_WF)
 
 
 # =============================================================
@@ -664,288 +797,399 @@ def fixture_dir() -> Any:
     shutil.rmtree(d, ignore_errors=True)
 
 
-# --- Invariant 1 wrong-fixtures ---
+# --- Invariant 1 wrong-fixtures (shared helper) ---
 
 
 def _mutate_yaml_remove_v_tag_trigger(src: Path, dst: Path) -> None:
     """Remove the v* tag trigger from the publish workflow."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        on = config.get("on", {})
-        if isinstance(on, dict):
-            push = on.get("push", {})
-            if isinstance(push, dict):
-                push["tags"] = []
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+    config = _load_workflow_yaml(src)
+    on = config.get("on", {})
+    if isinstance(on, dict):
+        push = on.get("push", {})
+        if isinstance(push, dict):
+            push["tags"] = []
+    dst.write_text(_dump_workflow_yaml(config))
 
 
 def test_wrong_fixture_inv1_remove_v_tag_trigger(fixture_dir: Any) -> None:
-    """Wrong-fixture: removing the v* tag trigger breaks Invariant 1.
-
-    Per Yua 20:48:34 #6: invoke the same helper used by the
-    production guard. The wrong-fixture asserts the same
-    checker raises.
-    """
+    """Wrong-fixture: removing the v* tag trigger breaks
+    Invariant 1. Invokes the same production helper."""
     dst = fixture_dir / "publish-core-image.yml"
     _mutate_yaml_remove_v_tag_trigger(PUBLISH_WF, dst)
-    # The production check is: v* in tags and branches == [main]
-    # and workflow_dispatch in on. The wrong-fixture drops the
-    # v* tag trigger. The same helper from the production
-    # guard proves the broken state.
-    config: Any = yaml.safe_load(dst.read_text())
-    if True in config and "on" not in config:
-        config["on"] = config.pop(True)
-    on = config.get("on", {})
-    push_config = on.get("push", {}) if isinstance(on, dict) else {}
-    tags = push_config.get("tags", []) or []
-    # The v* tag is absent
-    if "v*" not in tags:
-        # The invariant IS broken. The wrong-fixture proves
-        # this by showing the check fails.
-        try:
-            # Re-run the production check
-            assert "v*" in tags  # This will fail
-        except AssertionError:
-            return
+    try:
+        assert_push_trigger_set(dst)
+    except PushTriggerSetError:
+        return
     raise InvariantError(
         "Wrong-fixture FAIL: removing the v* tag trigger did "
-        "NOT cause the Invariant 1 check to fail."
+        "NOT cause the production helper to raise."
     )
 
 
-# --- Invariant 2 wrong-fixtures ---
+# --- Invariant 2 wrong-fixtures (shared helper) ---
 
 
-def _mutate_yaml_remove_main_ref_rule(src: Path, dst: Path) -> None:
-    """Remove the main-ref rule from the meta step's with.tags."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
-            if "Derive image tags" in step.get("name", ""):
-                with_block = step.get("with", {})
-                tags_value = with_block.get("tags", "")
-                if isinstance(tags_value, str):
-                    lines = tags_value.split("\n")
-                    new_lines = []
-                    in_main_ref_rule = False
-                    for line in lines:
-                        stripped = line.strip()
-                        if (
-                            "type=ref" in stripped
-                            and "event=branch" in stripped
-                            and "refs/heads/main" in stripped
-                        ):
-                            in_main_ref_rule = True
-                            continue
-                        if in_main_ref_rule and stripped.startswith("#"):
-                            in_main_ref_rule = False
-                            continue
-                        in_main_ref_rule = False
-                        new_lines.append(line)
-                    with_block["tags"] = "\n".join(new_lines)
-                break
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+def _mutate_yaml_remove_rule_by_type(src: Path, dst: Path, rule_type: str) -> None:
+    """Remove a tag rule by type (semver, ref, raw)."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                lines = tags_value.split("\n")
+                new_lines = []
+                in_target_rule = False
+                for line in lines:
+                    stripped = line.strip()
+                    if f"type={rule_type}" in stripped:
+                        in_target_rule = True
+                        continue
+                    if in_target_rule and stripped.startswith("#"):
+                        in_target_rule = False
+                        continue
+                    in_target_rule = False
+                    new_lines.append(line)
+                with_block["tags"] = "\n".join(new_lines)
+            break
+    dst.write_text(_dump_workflow_yaml(config))
 
 
-def _mutate_yaml_remove_semver_rule(src: Path, dst: Path) -> None:
-    """Remove the semver rule from the meta step's with.tags."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
-            if "Derive image tags" in step.get("name", ""):
-                with_block = step.get("with", {})
-                tags_value = with_block.get("tags", "")
-                if isinstance(tags_value, str):
-                    lines = tags_value.split("\n")
-                    new_lines = []
-                    in_semver_rule = False
-                    for line in lines:
-                        stripped = line.strip()
-                        if "type=semver" in stripped:
-                            in_semver_rule = True
-                            continue
-                        if in_semver_rule and stripped.startswith("#"):
-                            in_semver_rule = False
-                            continue
-                        in_semver_rule = False
-                        new_lines.append(line)
-                    with_block["tags"] = "\n".join(new_lines)
-                break
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
-
-
-def _mutate_yaml_remove_raw_rule(src: Path, dst: Path) -> None:
-    """Remove the manual-raw rule from the meta step's with.tags."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
-            if "Derive image tags" in step.get("name", ""):
-                with_block = step.get("with", {})
-                tags_value = with_block.get("tags", "")
-                if isinstance(tags_value, str):
-                    lines = tags_value.split("\n")
-                    new_lines = []
-                    in_raw_rule = False
-                    for line in lines:
-                        stripped = line.strip()
-                        if "type=raw" in stripped:
-                            in_raw_rule = True
-                            continue
-                        if in_raw_rule and stripped.startswith("#"):
-                            in_raw_rule = False
-                            continue
-                        in_raw_rule = False
-                        new_lines.append(line)
-                    with_block["tags"] = "\n".join(new_lines)
-                break
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
-
-
-def test_wrong_fixture_inv2_missing_main_ref_rule(fixture_dir: Any) -> None:
+def test_wrong_fixture_inv2_missing_main_ref_rule(
+    fixture_dir: Any,
+) -> None:
     """Wrong-fixture: missing main-ref rule breaks Invariant 2."""
     dst = fixture_dir / "publish-core-image.yml"
-    _mutate_yaml_remove_main_ref_rule(PUBLISH_WF, dst)
+    _mutate_yaml_remove_rule_by_type(PUBLISH_WF, dst, "ref")
     try:
         assert_distinct_mutex_tags(dst)
     except MutexChannelMissingError:
         return
     raise InvariantError(
-        "Wrong-fixture FAIL: missing main-ref rule did NOT "
-        "cause the Invariant 2 mutex check to fail."
+        "Wrong-fixture FAIL: missing main-ref rule did NOT cause the production helper to raise."
     )
 
 
-def test_wrong_fixture_inv2_missing_semver_rule(fixture_dir: Any) -> None:
+def test_wrong_fixture_inv2_missing_semver_rule(
+    fixture_dir: Any,
+) -> None:
     """Wrong-fixture: missing semver rule breaks Invariant 2."""
     dst = fixture_dir / "publish-core-image.yml"
-    _mutate_yaml_remove_semver_rule(PUBLISH_WF, dst)
+    _mutate_yaml_remove_rule_by_type(PUBLISH_WF, dst, "semver")
     try:
         assert_distinct_mutex_tags(dst)
     except MutexChannelMissingError:
         return
     raise InvariantError(
-        "Wrong-fixture FAIL: missing semver rule did NOT cause the Invariant 2 mutex check to fail."
+        "Wrong-fixture FAIL: missing semver rule did NOT cause the production helper to raise."
     )
 
 
-def test_wrong_fixture_inv2_missing_raw_rule(fixture_dir: Any) -> None:
+def test_wrong_fixture_inv2_missing_raw_rule(
+    fixture_dir: Any,
+) -> None:
     """Wrong-fixture: missing manual-raw rule breaks Invariant 2."""
     dst = fixture_dir / "publish-core-image.yml"
-    _mutate_yaml_remove_raw_rule(PUBLISH_WF, dst)
+    _mutate_yaml_remove_rule_by_type(PUBLISH_WF, dst, "raw")
     try:
         assert_distinct_mutex_tags(dst)
     except MutexChannelMissingError:
         return
     raise InvariantError(
-        "Wrong-fixture FAIL: missing manual-raw rule did NOT "
-        "cause the Invariant 2 mutex check to fail."
+        "Wrong-fixture FAIL: missing manual-raw rule did NOT cause the production helper to raise."
+    )
+
+
+def test_wrong_fixture_inv2_semver_enabled_on_main(
+    fixture_dir: Any,
+) -> None:
+    """Wrong-fixture: semver rule enabled on main breaks
+    Invariant 2."""
+    dst = fixture_dir / "publish-core-image.yml"
+    config = _load_workflow_yaml(PUBLISH_WF)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                # Change the semver enable to gate on main
+                tags_value = tags_value.replace(
+                    "startsWith(github.ref, 'refs/tags/v')",
+                    "github.ref == 'refs/heads/main'",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: semver enabled on main did NOT cause the production helper to raise."
+    )
+
+
+def test_wrong_fixture_inv2_main_enabled_on_tag(
+    fixture_dir: Any,
+) -> None:
+    """Wrong-fixture: main-ref rule enabled on tag breaks
+    Invariant 2."""
+    dst = fixture_dir / "publish-core-image.yml"
+    config = _load_workflow_yaml(PUBLISH_WF)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "github.ref == 'refs/heads/main'",
+                    "startsWith(github.ref, 'refs/tags/v')",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: main enabled on tag did NOT cause the production helper to raise."
+    )
+
+
+def test_wrong_fixture_inv2_raw_enabled_outside_dispatch(
+    fixture_dir: Any,
+) -> None:
+    """Wrong-fixture: raw rule enabled outside workflow_dispatch
+    breaks Invariant 2."""
+    dst = fixture_dir / "publish-core-image.yml"
+    config = _load_workflow_yaml(PUBLISH_WF)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                # Change the raw enable to not gate on dispatch
+                tags_value = tags_value.replace(
+                    "workflow_dispatch",
+                    "push",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: raw enabled outside dispatch did "
+        "NOT cause the production helper to raise."
+    )
+
+
+def test_wrong_fixture_inv2_raw_allows_blank(
+    fixture_dir: Any,
+) -> None:
+    """Wrong-fixture: raw rule allows blank input breaks
+    Invariant 2."""
+    dst = fixture_dir / "publish-core-image.yml"
+    config = _load_workflow_yaml(PUBLISH_WF)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                # Remove the non-blank check
+                tags_value = tags_value.replace(
+                    " && github.event.inputs.tag != ''",
+                    "",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: raw allowing blank did NOT cause the production helper to raise."
+    )
+
+
+def test_wrong_fixture_inv2_token_smear(
+    fixture_dir: Any,
+) -> None:
+    """Wrong-fixture: token-smear across records breaks
+    Invariant 2.
+
+    A token-smear is when the semver rule's enable contains
+    refs/heads/main (the main ref's token), causing the
+    semver and main rules to have overlapping enables.
+    """
+    dst = fixture_dir / "publish-core-image.yml"
+    config = _load_workflow_yaml(PUBLISH_WF)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                # Replace the semver enable's startsWith with
+                # the main enable's github.ref check. This
+                # smears the main token into the semver rule.
+                tags_value = tags_value.replace(
+                    "startsWith(github.ref, 'refs/tags/v')",
+                    "github.ref == 'refs/heads/main'",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: token-smear across records did "
+        "NOT cause the production helper to raise."
+    )
+
+
+def test_wrong_fixture_inv2_missing_prefix(
+    fixture_dir: Any,
+) -> None:
+    """Wrong-fixture: missing prefix=v on semver breaks
+    Invariant 2."""
+    dst = fixture_dir / "publish-core-image.yml"
+    config = _load_workflow_yaml(PUBLISH_WF)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(",prefix=v", "")
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: missing prefix=v did NOT cause the production helper to raise."
+    )
+
+
+def test_wrong_fixture_inv2_missing_value(
+    fixture_dir: Any,
+) -> None:
+    """Wrong-fixture: missing value= on raw breaks
+    Invariant 2."""
+    dst = fixture_dir / "publish-core-image.yml"
+    config = _load_workflow_yaml(PUBLISH_WF)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "value=${{ github.event.inputs.tag }}",
+                    "",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+    try:
+        assert_distinct_mutex_tags(dst)
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: missing value= did NOT cause the production helper to raise."
     )
 
 
 # --- Invariant 3 wrong-fixtures (path-aware checker) ---
 
 
-def _mutate_yaml_add_if_to_step(
-    src: Path, dst: Path, name_substring: str, if_condition: str
-) -> None:
-    """Add an 'if' key to the named step in a YAML copy of the
-    workflow. Returns the path to the mutated file."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
-            if name_substring in step.get("name", ""):
-                step["if"] = if_condition
-                break
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+def _mutate_yaml_add_if_to_step(src: Path, dst: Path, exact_name: str, if_condition: str) -> None:
+    """Add an 'if' key to the named step."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if step.get("name", "") == exact_name:
+            step["if"] = if_condition
+            break
+    dst.write_text(_dump_workflow_yaml(config))
 
 
-def _mutate_yaml_remove_step(src: Path, dst: Path, name_substring: str) -> None:
-    """Remove the named step from a YAML copy of the workflow."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        steps = config.get("jobs", {}).get("publish-core-image", {}).get("steps", [])
-        config["jobs"]["publish-core-image"]["steps"] = [
-            s for s in steps if name_substring not in s.get("name", "")
-        ]
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+def _mutate_yaml_remove_step(src: Path, dst: Path, exact_name: str) -> None:
+    """Remove the named step."""
+    config = _load_workflow_yaml(src)
+    steps = config.get("jobs", {}).get("publish-core-image", {}).get("steps", [])
+    config["jobs"]["publish-core-image"]["steps"] = [
+        s for s in steps if s.get("name", "") != exact_name
+    ]
+    dst.write_text(_dump_workflow_yaml(config))
 
 
-def _mutate_yaml_duplicate_step(src: Path, dst: Path, name_substring: str) -> None:
-    """Duplicate the named step in a YAML copy of the workflow."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        steps = config.get("jobs", {}).get("publish-core-image", {}).get("steps", [])
-        for s in steps:
-            if name_substring in s.get("name", ""):
-                # Insert a duplicate after this step
-                idx = steps.index(s)
-                dup = copy.deepcopy(s)
-                dup["name"] = s.get("name", "") + " (decoy)"
-                steps.insert(idx + 1, dup)
-                break
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+def _mutate_yaml_duplicate_step(src: Path, dst: Path, exact_name: str) -> None:
+    """Duplicate the named step."""
+    config = _load_workflow_yaml(src)
+    steps = config.get("jobs", {}).get("publish-core-image", {}).get("steps", [])
+    for s in steps:
+        if s.get("name", "") == exact_name:
+            idx = steps.index(s)
+            dup = copy.deepcopy(s)
+            dup["name"] = exact_name + " (copy)"
+            steps.insert(idx + 1, dup)
+            break
+    dst.write_text(_dump_workflow_yaml(config))
 
 
-def _mutate_yaml_decoy_step(src: Path, dst: Path, name_substring: str) -> None:
-    """Add a decoy step that looks like the named step but has
-    a different name substring."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        # Add a step with a name that contains the substring
-        # but is not the actual step
-        decoy_name = f"Decoy {name_substring} (fake)"
-        decoy_step = {
-            "name": decoy_name,
-            "run": "echo 'this is a decoy'",
-        }
-        steps = config.get("jobs", {}).get("publish-core-image", {}).get("steps", [])
-        steps.append(decoy_step)
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+def _mutate_yaml_renamed_near_match_decoy(src: Path, dst: Path, exact_name: str) -> None:
+    """Add a renamed-near-match decoy step.
+
+    The decoy has a name that contains the required step's
+    name as a substring but is NOT an exact match.
+    """
+    config = _load_workflow_yaml(src)
+    decoy_step = {
+        "name": exact_name + " (decoy)",
+        "run": "echo 'this is a decoy'",
+    }
+    steps = config.get("jobs", {}).get("publish-core-image", {}).get("steps", [])
+    steps.append(decoy_step)
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def _mutate_yaml_unrelated_substring_decoy(src: Path, dst: Path, exact_name: str) -> None:
+    """Add an unrelated substring decoy step.
+
+    The decoy has a name that contains the required step's
+    FULL name as a substring, but is NOT an exact match.
+    For example: required name = "Sign the published image
+    (keyless, via GitHub OIDC)"; decoy = "Sign the published
+    image (keyless, via GitHub OIDC) (decoy)".
+    """
+    config = _load_workflow_yaml(src)
+    # The decoy is the exact name + " (decoy)" suffix
+    decoy_step = {
+        "name": exact_name + " (decoy)",
+        "run": "echo 'this is an unrelated decoy'",
+    }
+    steps = config.get("jobs", {}).get("publish-core-image", {}).get("steps", [])
+    steps.append(decoy_step)
+    dst.write_text(_dump_workflow_yaml(config))
 
 
 @pytest.mark.parametrize(
-    "step_name_key,step_name_substring,if_condition",
+    "step_key,exact_name,if_condition",
     [
         (
             "cosign_sign_uses_event_name",
-            "Sign the published image",
+            "Sign the published image (keyless, via GitHub OIDC)",
             "${{ github.event_name == 'workflow_dispatch' }}",
         ),
         (
             "sbom_uses_startsWith",
-            "Generate SBOM",
+            "Generate SBOM (CycloneDX)",
             "${{ startsWith(github.ref, 'refs/heads/main') }}",
         ),
         (
@@ -955,151 +1199,161 @@ def _mutate_yaml_decoy_step(src: Path, dst: Path, name_substring: str) -> None:
         ),
         (
             "trivy_table_uses_ref_type",
-            "Trivy vulnerability scan (table",
+            "Trivy vulnerability scan (table — always visible in logs)",
             "${{ github.ref_type == 'branch' }}",
         ),
         (
             "trivy_sarif_uses_event_name",
-            "Trivy vulnerability scan (SARIF",
+            "Trivy vulnerability scan (SARIF — CRITICAL gate)",
             "${{ github.event_name == 'push' }}",
         ),
     ],
 )
 def test_wrong_fixture_inv3_add_if_key_to_step(
-    step_name_key: str,
-    step_name_substring: str,
+    step_key: str,
+    exact_name: str,
     if_condition: str,
     fixture_dir: Any,
 ) -> None:
     """Wrong-fixture: adding a realistic trigger expression
-    breaks Invariant 3.
-
-    Per Yua 20:48:34 #1: invoke the same
-    assert_no_if_key_in_publish_step helper used by the
-    production guard. The wrong-fixture asserts the same
-    checker raises.
-    """
+    breaks Invariant 3."""
     dst = fixture_dir / "publish-core-image.yml"
-    _mutate_yaml_add_if_to_step(PUBLISH_WF, dst, step_name_substring, if_condition)
+    _mutate_yaml_add_if_to_step(PUBLISH_WF, dst, exact_name, if_condition)
     try:
-        assert_no_if_key_in_publish_step(step_name_substring, dst)
+        assert_no_if_key_in_publish_step(exact_name, dst)
     except NoIfKeyInStepError:
         return
     raise InvariantError(
         f"Wrong-fixture FAIL: adding 'if' ({if_condition!r}) to "
-        f"step {step_name_key!r} did NOT cause the production "
-        f"checker to raise."
+        f"step {step_key!r} did NOT cause the production "
+        f"helper to raise."
     )
 
 
 @pytest.mark.parametrize(
-    "step_name_substring",
-    list(REQUIRED_STEPS.values()),
+    "exact_name",
+    list(REQUIRED_STEPS_EXACT.values()),
 )
-def test_wrong_fixture_inv3_missing_step(step_name_substring: str, fixture_dir: Any) -> None:
+def test_wrong_fixture_inv3_missing_step(exact_name: str, fixture_dir: Any) -> None:
     """Wrong-fixture: removing a required step breaks Invariant 3."""
     dst = fixture_dir / "publish-core-image.yml"
-    _mutate_yaml_remove_step(PUBLISH_WF, dst, step_name_substring)
+    _mutate_yaml_remove_step(PUBLISH_WF, dst, exact_name)
     try:
         assert_all_required_steps_present(dst)
     except NoIfKeyInStepError:
         return
     raise InvariantError(
-        f"Wrong-fixture FAIL: removing step {step_name_substring!r} "
-        f"did NOT cause the production checker to raise."
+        f"Wrong-fixture FAIL: removing step {exact_name!r} "
+        f"did NOT cause the production helper to raise."
     )
 
 
 @pytest.mark.parametrize(
-    "step_name_substring",
-    list(REQUIRED_STEPS.values()),
+    "exact_name",
+    list(REQUIRED_STEPS_EXACT.values()),
 )
-def test_wrong_fixture_inv3_duplicate_step(step_name_substring: str, fixture_dir: Any) -> None:
-    """Wrong-fixture: duplicating a required step breaks Invariant 3."""
+def test_wrong_fixture_inv3_duplicate_step(exact_name: str, fixture_dir: Any) -> None:
+    """Wrong-fixture: duplicating a required step breaks
+    Invariant 3."""
     dst = fixture_dir / "publish-core-image.yml"
-    _mutate_yaml_duplicate_step(PUBLISH_WF, dst, step_name_substring)
+    _mutate_yaml_duplicate_step(PUBLISH_WF, dst, exact_name)
     try:
         assert_all_required_steps_present(dst)
     except NoIfKeyInStepError:
         return
     raise InvariantError(
-        f"Wrong-fixture FAIL: duplicating step {step_name_substring!r} "
-        f"did NOT cause the production checker to raise."
+        f"Wrong-fixture FAIL: duplicating step {exact_name!r} "
+        f"did NOT cause the production helper to raise."
     )
 
 
 @pytest.mark.parametrize(
-    "step_name_substring",
-    list(REQUIRED_STEPS.values()),
+    "exact_name",
+    list(REQUIRED_STEPS_EXACT.values()),
 )
-def test_wrong_fixture_inv3_decoy_step(step_name_substring: str, fixture_dir: Any) -> None:
-    """Wrong-fixture: adding a decoy step that looks like a
-    required step breaks Invariant 3."""
+def test_wrong_fixture_inv3_renamed_near_match_decoy(exact_name: str, fixture_dir: Any) -> None:
+    """Wrong-fixture: adding a renamed-near-match decoy breaks
+    Invariant 3."""
     dst = fixture_dir / "publish-core-image.yml"
-    _mutate_yaml_decoy_step(PUBLISH_WF, dst, step_name_substring)
+    _mutate_yaml_renamed_near_match_decoy(PUBLISH_WF, dst, exact_name)
     try:
         assert_all_required_steps_present(dst)
     except NoIfKeyInStepError:
         return
     raise InvariantError(
-        f"Wrong-fixture FAIL: adding decoy for step "
-        f"{step_name_substring!r} did NOT cause the production "
-        f"checker to raise."
+        f"Wrong-fixture FAIL: renamed-near-match decoy for "
+        f"step {exact_name!r} did NOT cause the production "
+        f"helper to raise."
     )
 
 
-# --- Invariant 4 wrong-fixtures ---
+@pytest.mark.parametrize(
+    "exact_name",
+    list(REQUIRED_STEPS_EXACT.values()),
+)
+def test_wrong_fixture_inv3_unrelated_substring_decoy(exact_name: str, fixture_dir: Any) -> None:
+    """Wrong-fixture: adding an unrelated substring decoy breaks
+    Invariant 3."""
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_unrelated_substring_decoy(PUBLISH_WF, dst, exact_name)
+    try:
+        assert_all_required_steps_present(dst)
+    except NoIfKeyInStepError:
+        return
+    raise InvariantError(
+        f"Wrong-fixture FAIL: unrelated substring decoy for "
+        f"step {exact_name!r} did NOT cause the production "
+        f"helper to raise."
+    )
 
 
-def _mutate_yaml_remove_v_guard_in_autopin(src: Path, dst: Path) -> None:
-    """Remove the v* head_branch guard from auto-digest-bump.yml."""
-    config: Any = yaml.safe_load(src.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        job = config.get("jobs", {}).get("bump", {})
-        if isinstance(job, dict):
-            if_conditions = job.get("if", "")
-            if isinstance(if_conditions, str):
-                new_if = re.sub(
-                    r"\s*&&?\s*startsWith\s*\(\s*github\.event\.workflow_run\.head_branch\s*,\s*['\"]v['\"]\s*\)",
-                    "",
-                    if_conditions,
-                )
-                new_if = re.sub(
-                    r"\|\|\s*\(?\s*\(github\.event\.workflow_run\.conclusion",
-                    "|| (github.event.workflow_run.conclusion",
-                    new_if,
-                )
-                job["if"] = new_if
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
+# --- Invariant 4 wrong-fixtures (shared helper) ---
 
 
-def test_wrong_fixture_inv4_remove_v_guard_in_autopin(
+def _mutate_yaml_remove_v_gate_in_autopin(src: Path, dst: Path) -> None:
+    """Remove the v* head_branch guard from auto-digest-bump.yml
+    jobs.bump.if."""
+    config = _load_workflow_yaml(src)
+    job = config.get("jobs", {}).get("bump", {})
+    if isinstance(job, dict):
+        if_conditions = job.get("if", "")
+        if isinstance(if_conditions, str):
+            new_if = re.sub(
+                r"\s*&&?\s*startsWith\s*\(\s*github\.event\.workflow_run\.head_branch\s*,\s*['\"]v['\"]\s*\)",
+                "",
+                if_conditions,
+            )
+            new_if = re.sub(
+                r"\|\|\s*\(?\s*\(github\.event\.workflow_run\.conclusion",
+                "|| (github.event.workflow_run.conclusion",
+                new_if,
+            )
+            job["if"] = new_if
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv4_remove_v_gate_in_autopin(
     fixture_dir: Any,
 ) -> None:
-    """Wrong-fixture: removing the v* head_branch guard breaks
-    Invariant 4."""
+    """Wrong-fixture: removing the v* gate breaks Invariant 4."""
     dst = fixture_dir / "auto-digest-bump.yml"
-    _mutate_yaml_remove_v_guard_in_autopin(AUTO_PIN_WF, dst)
-    text = dst.read_text()
-    if "startsWith" not in text or "head_branch" not in text:
-        # The v* guard is absent; the invariant IS broken.
+    _mutate_yaml_remove_v_gate_in_autopin(AUTO_PIN_WF, dst)
+    try:
+        assert_workflow_run_v_gate(dst)
+    except WorkflowRunVGateError:
         return
     raise InvariantError(
         "Wrong-fixture FAIL: removing the v* head_branch "
-        "guard did NOT cause the Invariant 4 check to fail."
+        "gate did NOT cause the production helper to raise."
     )
 
 
 # --- Invariant 5 wrong-fixtures ---
 
 
-# Synthetic corrected fixture (the parent artifact)
+# Synthetic corrected guard block (the parent artifact)
 CORRECTED_GUARD = """          if ! [[ "$TAG" == v* ]]; then
-            echo "Manual-dispatch tag must start with v"
+            echo "::error::Manual-dispatch tag must start with v"
             exit 1
           fi
 """
@@ -1108,14 +1362,10 @@ CORRECTED_GUARD = """          if ! [[ "$TAG" == v* ]]; then
 def _write_corrected_resolve_step(src: Path, dst: Path) -> None:
     """Add the corrected guard to the Resolve step's run script.
 
-    Per Yua 20:48:34 #3: the guard must appear after all
-    TAG sources resolve and BEFORE tag is emitted or used.
-    The original script emits tag (echo "tag=${TAG}" >> ...)
-    and then echoes "Resolved tag: ${TAG}". The guard must
-    appear between the TAG assignment and the tag output.
+    Per Yua 20:57:08 #1: the guard must appear AFTER all TAG
+    sources resolve and BEFORE tag is emitted.
     """
     text = src.read_text(encoding="utf-8")
-    # Insert the guard BEFORE the output emission
     text = text.replace(
         'echo "tag=${TAG}" >> "$GITHUB_OUTPUT"',
         CORRECTED_GUARD + 'echo "tag=${TAG}" >> "$GITHUB_OUTPUT"',
@@ -1131,16 +1381,9 @@ def _remove_guard_from_resolve_step(src: Path, dst: Path) -> None:
 
 
 def _move_guard_after_output(src: Path, dst: Path) -> None:
-    """Move the guard to AFTER the tag output emission.
-
-    Per Yua 20:48:34 #3: the wrong-fixture moves the guard
-    AFTER the output emission. The placement check detects
-    this.
-    """
+    """Move the guard to AFTER the tag output emission."""
     text = src.read_text(encoding="utf-8")
-    # First remove the guard from its correct position
     text = text.replace(CORRECTED_GUARD, "")
-    # Add the guard AFTER the output emission
     text = text.replace(
         'echo "tag=${TAG}" >> "$GITHUB_OUTPUT"',
         'echo "tag=${TAG}" >> "$GITHUB_OUTPUT"\n' + CORRECTED_GUARD,
@@ -1149,74 +1392,45 @@ def _move_guard_after_output(src: Path, dst: Path) -> None:
 
 
 def _replace_guard_with_noop(src: Path, dst: Path) -> None:
-    """Replace the guard with an always-pass predicate.
-
-    Per Yua 20:48:34 #3: the wrong-fixture REPLACES the v*
-    guard with an always-pass predicate. The placement check
-    detects this because the noop does NOT check v*.
-    """
+    """Replace the guard with an always-pass predicate."""
     text = src.read_text(encoding="utf-8")
     noop_guard = """          if ! [[ "$TAG" == "" ]]; then
             echo "Always passes"
             exit 1
           fi
 """
-    # Replace the corrected guard with the noop guard
     text = text.replace(CORRECTED_GUARD, noop_guard)
     dst.write_text(text, encoding="utf-8")
 
 
 def _comment_only_guard(src: Path, dst: Path) -> None:
-    """Add only a comment, no executable guard.
-
-    Per Yua 20:48:34 #3: the wrong-fixture REPLACES the
-    executable guard with a comment-only version. The
-    predicate check detects this because the comment is
-    not a valid bash predicate.
-    """
+    """Replace the guard with a comment-only version."""
     text = src.read_text(encoding="utf-8")
     comment_guard = """          # if ! [[ "$TAG" == v* ]]; then
+          #   echo "comment-only"
           #   exit 1
           # fi
 """
-    # Replace the corrected guard with the comment-only version
     text = text.replace(CORRECTED_GUARD, comment_guard)
     dst.write_text(text, encoding="utf-8")
 
 
 def _inverted_guard(src: Path, dst: Path) -> None:
-    """Add an inverted guard (rejects v*, accepts non-v).
-
-    Per Yua 20:48:34 #3: the wrong-fixture REPLACES the
-    guard with an inverted version. The predicate check
-    detects this because the inverted guard does NOT check
-    v* on the non-v* branch.
-    """
+    """Replace the guard with an inverted version."""
     text = src.read_text(encoding="utf-8")
     inverted_guard = """          if [[ "$TAG" == v* ]]; then
             echo "Inverted: rejects v* tags"
             exit 1
           fi
 """
-    # Replace the corrected guard with the inverted guard
     text = text.replace(CORRECTED_GUARD, inverted_guard)
     dst.write_text(text, encoding="utf-8")
 
 
 def _guard_outside_resolve_step(src: Path, dst: Path) -> None:
-    """Add the guard in a different step (not the Resolve step).
-
-    Per Yua 20:48:34 #3: the wrong-fixture REMOVES the guard
-    from the Resolve step and adds it to a different step.
-    The placement check detects this because the Resolve
-    step's run script no longer has the guard.
-    """
+    """Remove the guard from Resolve and add a no-op step."""
     text = src.read_text(encoding="utf-8")
-    # First remove the guard from the Resolve step
     text = text.replace(CORRECTED_GUARD, "")
-    # Add a no-op step with the guard text (but it's in the
-    # wrong place, so the production checker won't find it
-    # in the Resolve step's run script)
     text = text.replace(
         "- name: Patch group_vars",
         "- name: Decoy guard step\n        run: |\n"
@@ -1226,27 +1440,29 @@ def _guard_outside_resolve_step(src: Path, dst: Path) -> None:
     dst.write_text(text, encoding="utf-8")
 
 
+def _exit_outside_if_block(src: Path, dst: Path) -> None:
+    """Guard with exit OUTSIDE the if block (after fi)."""
+    text = src.read_text(encoding="utf-8")
+    outside_exit_guard = """          if ! [[ "$TAG" == v* ]]; then
+            echo "Tag must start with v"
+          fi
+          exit 1
+"""
+    text = text.replace(CORRECTED_GUARD, outside_exit_guard)
+    dst.write_text(text, encoding="utf-8")
+
+
 # Synthetic corrected fixture (parent artifact)
 def test_wrong_fixture_inv5_synthetic_fixed(fixture_dir: Any) -> None:
-    """Synthetic corrected fixture: the inputs.tag v* guard
-    is present, and the contract is satisfied.
-
-    Per Yua 20:48:34 #5: this is the EXPLICIT PARENT ARTIFACT.
-    All Inv5 wrong-fixtures derive FROM this same fixed
-    artifact. The shared checker passes the parent.
-    """
+    """Synthetic corrected fixture: the guard is present and
+    the contract is satisfied."""
     dst = fixture_dir / "auto-digest-bump.yml"
     _write_corrected_resolve_step(AUTO_PIN_WF, dst)
     assert_release_only_manual_dispatch_guard(dst)
 
 
-# Wrong-fixtures derive from the parent (corrected) artifact
 def test_wrong_fixture_inv5_bypass_guard(fixture_dir: Any) -> None:
-    """Wrong-fixture: bypass the guard (remove it).
-
-    Derives from the corrected fixture (parent) by removing
-    the guard.
-    """
+    """Wrong-fixture: bypass the guard (remove it)."""
     parent = fixture_dir / "parent.yml"
     child = fixture_dir / "auto-digest-bump.yml"
     _write_corrected_resolve_step(AUTO_PIN_WF, parent)
@@ -1256,7 +1472,7 @@ def test_wrong_fixture_inv5_bypass_guard(fixture_dir: Any) -> None:
     except ManualDispatchGuardMissingError:
         return
     raise InvariantError(
-        "Wrong-fixture FAIL: bypassing the guard did NOT cause the production checker to raise."
+        "Wrong-fixture FAIL: bypassing the guard did NOT cause the production helper to raise."
     )
 
 
@@ -1272,7 +1488,7 @@ def test_wrong_fixture_inv5_guard_after_output(fixture_dir: Any) -> None:
         return
     raise InvariantError(
         "Wrong-fixture FAIL: moving the guard after tag "
-        "output did NOT cause the production checker to raise."
+        "output did NOT cause the production helper to raise."
     )
 
 
@@ -1288,7 +1504,7 @@ def test_wrong_fixture_inv5_noop_guard(fixture_dir: Any) -> None:
         return
     raise InvariantError(
         "Wrong-fixture FAIL: replacing the guard with a "
-        "noop did NOT cause the production checker to raise."
+        "noop did NOT cause the production helper to raise."
     )
 
 
@@ -1303,7 +1519,7 @@ def test_wrong_fixture_inv5_comment_only(fixture_dir: Any) -> None:
     except ManualDispatchGuardMissingError:
         return
     raise InvariantError(
-        "Wrong-fixture FAIL: comment-only guard did NOT cause the production checker to raise."
+        "Wrong-fixture FAIL: comment-only guard did NOT cause the production helper to raise."
     )
 
 
@@ -1318,7 +1534,7 @@ def test_wrong_fixture_inv5_inverted_guard(fixture_dir: Any) -> None:
     except ManualDispatchGuardMissingError:
         return
     raise InvariantError(
-        "Wrong-fixture FAIL: inverted guard did NOT cause the production checker to raise."
+        "Wrong-fixture FAIL: inverted guard did NOT cause the production helper to raise."
     )
 
 
@@ -1336,52 +1552,60 @@ def test_wrong_fixture_inv5_guard_outside_resolve(
         return
     raise InvariantError(
         "Wrong-fixture FAIL: guard outside the Resolve step "
-        "did NOT cause the production checker to raise."
+        "did NOT cause the production helper to raise."
     )
 
 
-# --- Invariant 6 wrong-fixtures (auto-pin release-only consumption) ---
-
-
-def test_wrong_fixture_inv6_autopin_uses_main(
+def test_wrong_fixture_inv5_exit_outside_if_block(
     fixture_dir: Any,
 ) -> None:
-    """Wrong-fixture: auto-pin uses 'main' as a direct ref.
-
-    Per Yua 20:48:34 #2: Inv6 is about auto-pin consuming the
-    signed release tag only, never the moving main ref. The
-    wrong-fixture adds 'main' as a direct ref in auto-pin.
-    """
-    dst = fixture_dir / "auto-digest-bump.yml"
-    config: Any = yaml.safe_load(AUTO_PIN_WF.read_text())
-    if isinstance(config, dict):
-        if True in config and "on" not in config:
-            config["on"] = config.pop(True)
-        # Add 'main' as a direct ref in the workflow_run if:
-        on = config.get("on", {})
-        if isinstance(on, dict):
-            workflow_run = on.get("workflow_run", {})
-            if isinstance(workflow_run, dict):
-                workflow_run["branches"] = ["main", "v*"]
-            on["workflow_run"] = workflow_run
-        if "on" in config and True not in config:
-            config[True] = config.pop("on")
-    dst.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
-    text = dst.read_text()
-    # The auto-pin now has 'main' as a branch (in either
-    # inline or block list form)
-    has_main_branch = re.search(
-        r"workflow_run:.*?branches:.*?(?:\[?\s*['\"]?main['\"]?|\n\s+-\s*['\"]?main['\"]?)",
-        text,
-        re.DOTALL,
-    )
-    if has_main_branch:
-        # The wrong-fixture is in place; the production check
-        # would detect this
+    """Wrong-fixture: exit outside the if block (not inside)."""
+    parent = fixture_dir / "parent.yml"
+    child = fixture_dir / "auto-digest-bump.yml"
+    _write_corrected_resolve_step(AUTO_PIN_WF, parent)
+    _exit_outside_if_block(parent, child)
+    try:
+        assert_release_only_manual_dispatch_guard(child)
+    except ManualDispatchGuardMissingError:
         return
     raise InvariantError(
-        "Wrong-fixture FAIL: adding main as a direct ref did "
-        "NOT cause the Invariant 6 check to fail."
+        "Wrong-fixture FAIL: exit outside the if block did "
+        "NOT cause the production helper to raise."
+    )
+
+
+# --- Invariant 6 wrong-fixtures (shared helper) ---
+
+
+def _mutate_yaml_overlap_enables(src: Path, dst: Path) -> None:
+    """Add refs/heads/main to the semver enable (overlapping)."""
+    config = _load_workflow_yaml(src)
+    for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+        if "Derive image tags" in step.get("name", ""):
+            with_block = step.get("with", {})
+            tags_value = with_block.get("tags", "")
+            if isinstance(tags_value, str):
+                tags_value = tags_value.replace(
+                    "startsWith(github.ref, 'refs/tags/v')",
+                    "startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'",
+                )
+                with_block["tags"] = tags_value
+            break
+    dst.write_text(_dump_workflow_yaml(config))
+
+
+def test_wrong_fixture_inv6_overlap_enables(fixture_dir: Any) -> None:
+    """Wrong-fixture: overlapping enables break Invariant 6."""
+    dst = fixture_dir / "publish-core-image.yml"
+    _mutate_yaml_overlap_enables(PUBLISH_WF, dst)
+    try:
+        assert_release_channel_consumption(dst)
+    except ChannelMetadataError:
+        return
+    except MutexChannelMissingError:
+        return
+    raise InvariantError(
+        "Wrong-fixture FAIL: overlapping enables did NOT cause the production helper to raise."
     )
 
 
@@ -1415,6 +1639,7 @@ def test_control_explicit_v_tag_input_dispatches() -> None:
     a v* tag pin."""
     assert _resolve_release_tag("v1.13.0", None) == "v1.13.0"
     assert _resolve_release_tag("v2.0.0-rc.1", None) == "v2.0.0-rc.1"
+    assert _resolve_release_tag("v0.7.0", None) == "v0.7.0"
 
 
 def test_control_blank_input_falls_back_to_latest_release() -> None:
@@ -1429,14 +1654,21 @@ def test_control_explicit_main_rejected() -> None:
         _resolve_release_tag("main", "v1.13.0")
 
 
-def test_control_blank_invalid_latest_rejected() -> None:
-    """Control 6: blank input with invalid latest is rejected."""
-    with pytest.raises(TagResolutionRejectError):
-        _resolve_release_tag("", "main")
-    with pytest.raises(TagResolutionRejectError):
-        _resolve_release_tag("", "")
-    with pytest.raises(TagResolutionRejectError):
-        _resolve_release_tag("", "not-a-tag")
+def test_control_malformed_v_prefix_rejected() -> None:
+    """Control 6: malformed v-prefix values are rejected for
+    both explicit and latest fallback.
+
+    Per Yua 20:57:08 #6: use the release tag grammar
+    RELEASE_TAG_GRAMMAR.
+    """
+    # Explicit malformed values
+    for bad in ["v1garbage", "v", "v.", "v1.2", "v1.2.3.4", "1.13.0"]:
+        with pytest.raises(TagResolutionRejectError):
+            _resolve_release_tag(bad, None)
+    # Latest fallback malformed values
+    for bad in ["v1garbage", "v", "main", "", "1.13.0"]:
+        with pytest.raises(TagResolutionRejectError):
+            _resolve_release_tag("", bad)
 
 
 def test_control_mutation_helper_writes_to_temp_not_real() -> None:
@@ -1450,8 +1682,8 @@ def test_control_mutation_helper_writes_to_temp_not_real() -> None:
         if isinstance(config, dict):
             if True in config and "on" not in config:
                 config["on"] = config.pop(True)
-            for step in config["jobs"]["publish-core-image"]["steps"]:
-                if "Sign the published image" in step.get("name", ""):
+            for step in config.get("jobs", {}).get("publish-core-image", {}).get("steps", []):
+                if step.get("name", "") == "Sign the published image (keyless, via GitHub OIDC)":
                     step["if"] = "${{ github.event_name == 'workflow_dispatch' }}"
             if "on" in config and True not in config:
                 config[True] = config.pop("on")

@@ -9,6 +9,7 @@ owner: tama
 phase: "8 Ops"
 tags: [section/slices, status/in-progress, type/slice, release-automation, v1.13.0-followup]
 updated: 2026-07-13
+spec-update: 6ea08a9-to-following-commit per Yua 20:57:08 #7 (slice doc must match test file)
 reviewed: true
 depends-on: []
 blocks: []
@@ -72,49 +73,89 @@ The test `test_red_hardening_defect_manual_dispatch_main` reproduces this defect
 
 ## 6 Architecture-Contract Invariants (positive guards)
 
-1. **push trigger set:** `{main, v*}` only (no other branches or tag patterns). workflow_dispatch is a SEPARATE operator trigger.
-2. **main tag surface vs release v+latest surface:** main → `:main`; v* → `:v<version> + :latest`. Mutually exclusive meta-step guards: `type=ref,event=branch` with `github.ref == 'refs/heads/main'` for main; `type=semver,pattern={{version}}` with `startsWith(github.ref, 'refs/tags/v')` for v*.
-3. **all supply-chain steps shared:** `cosign sign`, `anchore/sbom-action@v0` (CycloneDX SBOM), `cosign attest`, `aquasecurity/trivy-action` (Trivy table + SARIF). None conditional on the trigger type.
-4. **auto-pin accepts only successful v-tag publish:** gates on `workflow_run` with `conclusion == 'success'` AND `startsWith(head_branch, 'v')`. NEVER main.
-5. **main digest can never feed pin:** resolves via `/v2/<image>/manifests/<tag>`; NEVER `:main` ref.
-6. **channel-specific metadata/digest divergence is expected:** mutually exclusive main ref and release semver guards; the contract is that divergence is ALLOWED, not GUARANTEED.
+1. **push trigger set:** `{main, v*}` only (no other branches or tag patterns). workflow_dispatch is a SEPARATE operator trigger. Production helper: `assert_push_trigger_set(path)`.
+2. **main tag surface vs release v+latest surface:** main → `:main`; v* → `:v<version> + :latest`. Mutually exclusive meta-step guards: `type=ref,event=branch` with `github.ref == 'refs/heads/main'` for main; `type=semver,pattern={{version}}` with `startsWith(github.ref, 'refs/tags/v')` for v*. Production helper: `assert_distinct_mutex_tags(path)`.
+3. **all supply-chain steps shared:** `cosign sign`, `anchore/sbom-action@v0` (CycloneDX SBOM), `cosign attest`, `aquasecurity/trivy-action` (Trivy table + SARIF). None conditional on the trigger type. Production helper: `assert_all_required_steps_present(path)` + `assert_no_if_key_in_publish_step(name, path)`.
+4. **auto-pin accepts only successful v-tag publish:** gates on `workflow_run` with `conclusion == 'success'` AND `startsWith(head_branch, 'v')`. The gate is at `jobs.bump.if`, NOT at `workflow_run.branches`. Production helper: `assert_workflow_run_v_gate(path)`.
+5. **main digest can never feed pin:** the Resolve tag + digest step must have a valid bash guard `if ! [[ "$TAG" == v* ]]; then ... exit N; fi` that runs BEFORE tag is emitted and inside the matched if block. Production helper: `assert_release_only_manual_dispatch_guard(path)` (executable bash proof).
+6. **channel-metadata rule / allowed-divergence contract:** the publish workflow's with.tags has mutually exclusive main ref and release semver guards. Divergence between main and v* digests is ALLOWED, not GUARANTEED. Production helper: `assert_release_channel_consumption(path)`.
 
 ## 1 Strict red (reproduces the hardening defect)
 
 `test_red_hardening_defect_manual_dispatch_main` asserts the current source exhibits the manual-dispatch-main hardening defect. It MUST fail against the current source for the intended reason. Source/workflow fix is FORBIDDEN until Yua accepts this red commit.
 
-## 6 Wrong-fixture mutation tests (mechanically testable)
+## Wrong-fixture mutation tests (mechanically testable)
 
-The wrong-fixture tests create a mutated copy of the workflow with a specific invariant broken, then assert the invariant check on the mutated fixture FAILS. This proves that the invariant is mechanically testable.
+The wrong-fixture tests create a mutated copy of the workflow with a specific invariant broken, then assert the production helper on the mutated fixture FAILS. This proves that the invariant is mechanically testable. Per Yua 20:57:08 #3: every wrong-fixture invokes the same helper as the production guard.
 
-| Test | Mutation | What breaks |
-| --- | --- | --- |
-| `test_wrong_fixture_inv1_remove_v_tag_trigger` | Remove `      - "v*"` from triggers | Invariant 1: trigger set no longer has v* |
-| `test_wrong_fixture_inv2_main_publishes_release_tags` | Change `type=ref,event=branch` to `type=semver` for main | Invariant 2: main no longer uses type=ref,event=branch |
-| `test_wrong_fixture_inv3_gate_sign_on_main` | Add `if: github.ref == 'refs/heads/main'` to sign step | Invariant 3: sign step is now conditional |
-| `test_wrong_fixture_inv4_remove_v_guard_in_autopin` | Replace `startsWith(head_branch, 'v')` with `true` | Invariant 4: v* guard is removed |
-| `test_wrong_fixture_inv5_add_inputs_tag_v_guard` | Add v* guard to inputs.tag | This is a HYPOTHETICAL FIX; the guard correctly catches tag=main |
-| `test_wrong_fixture_inv6_remove_channel_distinction` | Remove the `github.ref == 'refs/heads/main'` guard from main | Invariant 6: main and v* are no longer mutually exclusive |
+| Test | Invariant | Mutation | What breaks |
+| --- | --- | --- | --- |
+| `test_wrong_fixture_inv1_remove_v_tag_trigger` | 1 | Remove `v*` tag trigger | Trigger set no longer has v* |
+| `test_wrong_fixture_inv2_missing_main_ref_rule` | 2 | Remove `type=ref` rule | Main-ref rule missing |
+| `test_wrong_fixture_inv2_missing_semver_rule` | 2 | Remove `type=semver` rule | Semver rule missing |
+| `test_wrong_fixture_inv2_missing_raw_rule` | 2 | Remove `type=raw` rule | Manual-raw rule missing |
+| `test_wrong_fixture_inv2_semver_enabled_on_main` | 2 | Change semver enable to gate on main | Mutex broken |
+| `test_wrong_fixture_inv2_main_enabled_on_tag` | 2 | Change main enable to gate on tag | Mutex broken |
+| `test_wrong_fixture_inv2_raw_enabled_outside_dispatch` | 2 | Change raw enable to gate on push | Mutex broken |
+| `test_wrong_fixture_inv2_raw_allows_blank` | 2 | Remove non-blank check from raw | Mutex broken |
+| `test_wrong_fixture_inv2_token_smear` | 2 | Replace semver enable with main check | Token-smear breaks mutex |
+| `test_wrong_fixture_inv2_missing_prefix` | 2 | Remove `prefix=v` from semver | Semver rule malformed |
+| `test_wrong_fixture_inv2_missing_value` | 2 | Remove `value=` from raw | Raw rule malformed |
+| `test_wrong_fixture_inv3_add_if_key_to_step` (5) | 3 | Add `if:` to each required step | Step conditional on trigger |
+| `test_wrong_fixture_inv3_missing_step` (5) | 3 | Remove each required step | Step missing |
+| `test_wrong_fixture_inv3_duplicate_step` (5) | 3 | Duplicate each required step | Duplicate name |
+| `test_wrong_fixture_inv3_renamed_near_match_decoy` (5) | 3 | Add decoy with `(decoy)` suffix | Renamed-near-match decoy |
+| `test_wrong_fixture_inv3_unrelated_substring_decoy` (5) | 3 | Add step that is unrelated substring | Unrelated substring decoy |
+| `test_wrong_fixture_inv4_remove_v_gate_in_autopin` | 4 | Remove v* head_branch check | v* gate removed |
+| `test_wrong_fixture_inv5_synthetic_fixed` | 5 | (parent) Add the corrected guard | Guard present, contract satisfied |
+| `test_wrong_fixture_inv5_bypass_guard` | 5 | Remove the guard from parent | Bypass |
+| `test_wrong_fixture_inv5_guard_after_output` | 5 | Move guard after output emission | Wrong placement |
+| `test_wrong_fixture_inv5_noop_guard` | 5 | Replace guard with always-pass | No real guard |
+| `test_wrong_fixture_inv5_comment_only` | 5 | Replace guard with comment-only | Not executable |
+| `test_wrong_fixture_inv5_inverted_guard` | 5 | Replace guard with inverted | Wrong direction |
+| `test_wrong_fixture_inv5_guard_outside_resolve` | 5 | Remove guard from Resolve, add decoy step | Guard in wrong step |
+| `test_wrong_fixture_inv5_exit_outside_if_block` | 5 | Exit outside the if block | Exit not inside |
+| `test_wrong_fixture_inv6_overlap_enables` | 6 | Replace semver enable with main check | Mutex broken |
 
-## 6 Legitimate controls (prove the tests are not vacuous)
+## 7 Legitimate controls (prove the tests are not vacuous)
 
 1. `test_control_publish_workflow_readable` — the publish workflow file is readable and has the expected structure.
 2. `test_control_autopin_workflow_readable` — the auto-pin workflow file is readable.
-3. `test_control_explicit_v_tag_input_dispatches` — an explicit v-tag manual dispatch correctly produces a v* tag pin (legitimate control: the v* path must work).
-4. `test_control_blank_input_falls_back_to_latest_release` — a blank input falls back to the latest release (legitimate control: the fallback must work).
-5. `test_control_mutation_helper_writes_to_temp_not_real` — the mutation helper writes to a temp path, NOT the real workflow files. The real source hashes are unchanged after the test run.
-6. `test_control_test_file_is_read_only` — this test file is read-only.
+3. `test_control_explicit_v_tag_input_dispatches` — an explicit v-tag input correctly produces a v* tag pin.
+4. `test_control_blank_input_falls_back_to_latest_release` — a blank input falls back to the latest release.
+5. `test_control_explicit_main_rejected` — explicit 'main' input is rejected.
+6. `test_control_malformed_v_prefix_rejected` — malformed v-prefix values are rejected for both explicit and latest fallback.
+7. `test_control_mutation_helper_writes_to_temp_not_real` — the mutation helper writes to a temp path, NOT the real workflow files.
 
 ## Per-wrong discrimination matrix (summary)
 
-| Wrong | Invariant | What mutation does | What the test catches |
-| --- | --- | --- | --- |
-| Remove v* trigger | Inv 1 | v* tag trigger removed | The trigger set no longer has v* |
-| Main publishes release tags | Inv 2 | main type=semver | Main no longer uses type=ref,event=branch |
-| Gate sign on main | Inv 3 | sign step conditional on main | Sign step is now conditional |
-| Remove v* guard in autopin | Inv 4 | v* guard replaced with `true` | The guard is removed |
-| Add inputs.tag v* guard | Inv 5 (hypothetical fix) | Add v* guard | The fixed workflow passes Inv 5 |
-| Remove main guard | Inv 6 | Remove the `refs/heads/main` guard | Main and v* are no longer mutually exclusive |
+| Wrong | Invariant | Shared production helper |
+| --- | --- | --- |
+| Remove v* trigger | Inv 1 | `assert_push_trigger_set` |
+| Missing main-ref rule | Inv 2 | `assert_distinct_mutex_tags` |
+| Missing semver rule | Inv 2 | `assert_distinct_mutex_tags` |
+| Missing raw rule | Inv 2 | `assert_distinct_mutex_tags` |
+| Semver enabled on main | Inv 2 | `assert_distinct_mutex_tags` |
+| Main enabled on tag | Inv 2 | `assert_distinct_mutex_tags` |
+| Raw enabled outside dispatch | Inv 2 | `assert_distinct_mutex_tags` |
+| Raw allows blank | Inv 2 | `assert_distinct_mutex_tags` |
+| Token-smear | Inv 2 | `assert_distinct_mutex_tags` |
+| Missing prefix=v | Inv 2 | `assert_distinct_mutex_tags` |
+| Missing value= | Inv 2 | `assert_distinct_mutex_tags` |
+| Add if-key to step | Inv 3 | `assert_no_if_key_in_publish_step` |
+| Missing step | Inv 3 | `assert_all_required_steps_present` |
+| Duplicate step | Inv 3 | `assert_all_required_steps_present` |
+| Renamed-near-match decoy | Inv 3 | `assert_all_required_steps_present` |
+| Unrelated substring decoy | Inv 3 | `assert_all_required_steps_present` |
+| Remove v* gate | Inv 4 | `assert_workflow_run_v_gate` |
+| Bypass guard | Inv 5 | `assert_release_only_manual_dispatch_guard` |
+| Guard after output | Inv 5 | `assert_release_only_manual_dispatch_guard` |
+| Noop guard | Inv 5 | `assert_release_only_manual_dispatch_guard` |
+| Comment-only guard | Inv 5 | `assert_release_only_manual_dispatch_guard` |
+| Inverted guard | Inv 5 | `assert_release_only_manual_dispatch_guard` |
+| Guard outside Resolve | Inv 5 | `assert_release_only_manual_dispatch_guard` |
+| Exit outside if block | Inv 5 | `assert_release_only_manual_dispatch_guard` |
+| Overlap enables | Inv 6 | `assert_release_channel_consumption` |
 
 ## Tests/docs/design only (per Yua 19:11:24)
 
