@@ -36,6 +36,7 @@ PLATFORMS = {
 }
 QUERY = [1.0, 0.0]
 EXACT_K = 2
+MIN_ALIAS_OBSERVATIONS = 100
 
 
 def _uuid(value: str) -> str:
@@ -61,10 +62,20 @@ def _wait_ready(url: str) -> None:
     raise AssertionError(f"Qdrant did not become ready: {url}")
 
 
+def _qdrant_platform(machine: str) -> tuple[str, str]:
+    normalized = machine.lower()
+    if normalized not in PLATFORMS:
+        supported = ", ".join(sorted(PLATFORMS))
+        raise RuntimeError(
+            f"unsupported Qdrant spike architecture {machine!r}; supported: {supported}"
+        )
+    return PLATFORMS[normalized]
+
+
 @pytest.fixture(scope="module")
 def qdrant_url() -> Iterator[str]:
     machine = platform.machine().lower()
-    docker_platform, digest = PLATFORMS[machine]
+    docker_platform, digest = _qdrant_platform(machine)
     http_port, grpc_port = _free_port(), _free_port()
     while grpc_port == http_port:
         grpc_port = _free_port()
@@ -319,6 +330,43 @@ def _alias_target(client: QdrantClient, alias: str) -> str:
     return matches[0]
 
 
+def _validate_alias_observations(
+    result: dict[str, Any],
+    *,
+    expected_old: list[str],
+    expected_new: list[str],
+    minimum: int = MIN_ALIAS_OBSERVATIONS,
+) -> None:
+    errors = list(result["errors"])
+    if errors:
+        raise AssertionError(f"alias reader errors: {errors}")
+    seen = list(result["seen"])
+    for names in seen:
+        if names == []:
+            raise AssertionError("alias reader observed an empty gap")
+        if len(names) != EXACT_K:
+            raise AssertionError(f"alias reader observed wrong result length: {names}")
+        if names not in (expected_old, expected_new):
+            raise AssertionError(f"alias reader observed a mixed or unexpected set: {names}")
+    if len(seen) < minimum:
+        raise AssertionError(f"alias reader sample floor not met: {len(seen)} < {minimum}")
+    if expected_old not in seen:
+        raise AssertionError("alias reader never observed the old snapshot")
+    if expected_new not in seen:
+        raise AssertionError("alias reader never observed the new snapshot")
+
+
+def _stop_reader(reader: subprocess.Popen[bytes] | None) -> None:
+    if reader is None or reader.poll() is not None:
+        return
+    reader.terminate()
+    try:
+        reader.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        reader.kill()
+        reader.wait(timeout=5)
+
+
 READER = r"""
 import json, sys, time
 from pathlib import Path
@@ -405,6 +453,51 @@ def test_real_server_and_cross_arch_pins_are_exact(qdrant_url: str) -> None:
         assert json.load(response)["version"] == QDRANT_VERSION
 
 
+def test_supported_architecture_selects_exact_platform_and_digest() -> None:
+    assert _qdrant_platform("amd64") == ("linux/amd64", DIGEST_AMD64)
+    assert _qdrant_platform("x86_64") == ("linux/amd64", DIGEST_AMD64)
+    assert _qdrant_platform("arm64") == ("linux/arm64", DIGEST_ARM64)
+    assert _qdrant_platform("aarch64") == ("linux/arm64", DIGEST_ARM64)
+
+
+def test_unknown_architecture_fails_closed_without_skip_or_fallback() -> None:
+    with pytest.raises(RuntimeError, match="unsupported Qdrant spike architecture 'riscv64'"):
+        _qdrant_platform("riscv64")
+
+
+@pytest.mark.parametrize(
+    ("result", "message"),
+    [
+        ({"seen": [["old-a", "stable-b"]] * 100, "errors": ["UnexpectedResponse"]}, "errors"),
+        ({"seen": [["old-a", "stable-b"], []] * 50, "errors": []}, "empty gap"),
+        ({"seen": [["old-a"]] * 100, "errors": []}, "wrong result length"),
+        (
+            {"seen": [["old-a", "new-a"]] * 100, "errors": []},
+            "mixed or unexpected set",
+        ),
+        ({"seen": [["new-a", "stable-b"]] * 100, "errors": []}, "never observed the old"),
+        ({"seen": [["old-a", "stable-b"]] * 100, "errors": []}, "never observed the new"),
+        (
+            {
+                "seen": [["old-a", "stable-b"]] * 49 + [["new-a", "stable-b"]] * 50,
+                "errors": [],
+            },
+            "sample floor not met",
+        ),
+    ],
+    ids=["error", "gap", "wrong-length", "mixed", "missing-old", "missing-new", "floor"],
+)
+def test_alias_observation_validator_rejects_every_visibility_defect(
+    result: dict[str, Any], message: str
+) -> None:
+    with pytest.raises(AssertionError, match=message):
+        _validate_alias_observations(
+            result,
+            expected_old=["old-a", "stable-b"],
+            expected_new=["new-a", "stable-b"],
+        )
+
+
 def test_adversarial_matrix_names_every_required_visibility_state() -> None:
     roles = {str(point.payload["role"]) for point in _matrix() if point.payload is not None}
     assert roles == {
@@ -449,6 +542,7 @@ def test_complete_collection_alias_cutover_preserves_exact_k_for_concurrent_read
     client: QdrantClient, qdrant_url: str, tmp_path: Path
 ) -> None:
     old, new, alias = _seed_alias_pair(client)
+    reader: subprocess.Popen[bytes] | None = None
     ready = tmp_path / "reader.ready"
     output = tmp_path / "reader.json"
     expected_old = ["old-committed-a", "stable-current-b"]
@@ -476,13 +570,13 @@ def test_complete_collection_alias_cutover_preserves_exact_k_for_concurrent_read
         stdout, stderr = reader.communicate(timeout=20)
         assert reader.returncode == 0, (stdout, stderr)
         result = json.loads(output.read_text())
-        assert result["errors"] == []
-        assert len(result["seen"]) >= 2
-        assert all(names in (expected_old, expected_new) for names in result["seen"])
-        assert expected_old in result["seen"]
-        assert expected_new in result["seen"]
-        assert all(len(names) == EXACT_K for names in result["seen"])
+        _validate_alias_observations(
+            result,
+            expected_old=expected_old,
+            expected_new=expected_new,
+        )
     finally:
+        _stop_reader(reader)
         client.delete_collection(old)
         client.delete_collection(new)
 
@@ -720,3 +814,44 @@ def test_red_per_artifact_alias_promotion_loses_unaffected_current_rows(
 def test_red_ambiguous_client_death_proves_mid_server_crash_atomicity() -> None:
     _reject_fabricated_server_crash_claim("client death after accepted request")
     assert True
+
+
+@pytest.mark.xfail(
+    strict=True, reason="wrong candidate: split delete/create alias calls preserve gap-free reads"
+)
+def test_red_non_atomic_split_alias_switch_exposes_a_real_query_gap(
+    client: QdrantClient, qdrant_url: str
+) -> None:
+    old, new, alias = _seed_alias_pair(client)
+    reader = QdrantClient(url=qdrant_url, timeout=20)
+    expected_old = ["old-committed-a", "stable-current-b"]
+    expected_new = ["new-winning-a", "stable-current-b"]
+    result: dict[str, Any] = {"seen": [expected_old] * 50, "errors": []}
+    try:
+        client.update_collection_aliases(
+            change_aliases_operations=[
+                models.DeleteAliasOperation(delete_alias=models.DeleteAlias(alias_name=alias))
+            ]
+        )
+        try:
+            gap = _names(reader, alias)
+            result["seen"].append(gap)
+        except Exception as exc:
+            result["errors"].append(type(exc).__name__)
+        client.update_collection_aliases(
+            change_aliases_operations=[
+                models.CreateAliasOperation(
+                    create_alias=models.CreateAlias(collection_name=new, alias_name=alias)
+                )
+            ]
+        )
+        result["seen"].extend([expected_new] * 50)
+        _validate_alias_observations(
+            result,
+            expected_old=expected_old,
+            expected_new=expected_new,
+        )
+    finally:
+        reader.close()
+        client.delete_collection(old)
+        client.delete_collection(new)
