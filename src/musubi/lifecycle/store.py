@@ -40,6 +40,7 @@ slice (S2) and are intentionally NOT declared here.
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -107,13 +108,12 @@ def connect(
 ) -> sqlite3.Connection:
     """Open a connection to the shared lifecycle DB with the uniform policy applied.
 
-    ``busy_timeout`` is set FIRST, before the WAL pragma (a brief write lock) or any
-    schema DDL, so a concurrent first-open under contention waits a bounded
-    ``busy_timeout_ms`` rather than failing. WAL is then set AND VERIFIED
-    (``PRAGMA journal_mode`` must report ``wal``); the busy_timeout supplies the whole
-    contention budget, so there is no unbounded retry and no false "we were first"
-    assumption. Any PRAGMA error or a non-WAL result is fail-closed: the connection is
-    closed and the error re-raised.
+    ``busy_timeout`` is set FIRST, then WAL is established and VERIFIED via
+    :func:`_establish_wal` (``PRAGMA journal_mode`` must report ``wal``). Setting
+    busy_timeout alone does NOT reliably make a concurrent journal-mode conversion
+    wait, so WAL establishment carries a bounded retry within a total wall-clock budget
+    derived from ``busy_timeout_ms`` (see :func:`_establish_wal`). Any PRAGMA error or a
+    non-WAL result is fail-closed: the connection is closed and the error re-raised.
 
     The caller's ``isolation_level`` and ``check_same_thread`` are passed straight
     through so its transaction semantics are unchanged.
@@ -135,18 +135,76 @@ def connect(
     )
     try:
         conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
-        row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
-        mode = str(row[0]) if row else ""
-        if mode.casefold() != "wal":
-            raise LifecycleStoreError(
-                f"could not enable WAL on {str(db_path)!r}: journal_mode={mode!r} "
-                "(the busy_timeout already bounds the contention wait; WAL is required "
-                "for the shared lifecycle store connection policy)"
-            )
+        _establish_wal(conn, db_path, busy_timeout_ms)
     except Exception:
         conn.close()
         raise
     return conn
+
+
+#: Small bounded backoff (seconds) between WAL-establishment retries, giving a peer
+#: process time to win the exclusive journal-mode lock before we re-attempt.
+_WAL_RETRY_BACKOFF_S = 0.02
+
+
+def _establish_wal(conn: sqlite3.Connection, db_path: Path, busy_timeout_ms: int) -> None:
+    """Set and verify ``journal_mode=WAL`` with a bounded retry ONLY on SQLITE_BUSY /
+    SQLITE_LOCKED during concurrent journal-mode conversion.
+
+    Setting ``PRAGMA busy_timeout`` does not reliably make a concurrent journal-mode
+    conversion wait, so the exclusive-lock contention is retried within a TOTAL
+    wall-clock budget — a monotonic deadline derived from ``busy_timeout_ms``, NOT a
+    fresh per-attempt timeout. Before each retry the connection's busy_timeout is
+    lowered to the remaining budget so a later execute cannot multiply the wait, and the
+    configured value is restored once WAL succeeds. A ``busy_timeout_ms`` of 0 means a
+    single attempt. Errors whose sqlite base code is neither BUSY nor LOCKED are never
+    retried. The final mode is verified to be exactly ``wal``. The caller
+    (:func:`connect`) closes the connection on any raised error.
+    """
+    deadline = time.monotonic() + busy_timeout_ms / 1000.0
+    reduced = False
+    last_exc: sqlite3.OperationalError | None = None
+    attempt = 0
+    while True:
+        if attempt > 0:
+            # Retry path. Sleep a small backoff — capped to the remaining budget — then
+            # RECHECK the deadline and cap this execute's busy_timeout to the remaining
+            # budget, computed immediately before the execute so waits cannot multiply
+            # past the total deadline.
+            remaining_s = deadline - time.monotonic()
+            if remaining_s <= 0:
+                break
+            time.sleep(min(_WAL_RETRY_BACKOFF_S, remaining_s))
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                break
+            conn.execute(f"PRAGMA busy_timeout={remaining_ms}")
+            reduced = True
+        attempt += 1
+        try:
+            row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+        except sqlite3.OperationalError as exc:
+            base_code = (getattr(exc, "sqlite_errorcode", 0) or 0) & 0xFF
+            if base_code not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise  # non-lock error: never retried
+            last_exc = exc
+            if busy_timeout_ms == 0:
+                break  # zero timeout means a single attempt — no retry
+            continue
+        mode = str(row[0]) if row else ""
+        if mode.casefold() != "wal":
+            raise LifecycleStoreError(
+                f"could not enable WAL on {str(db_path)!r}: journal_mode={mode!r} "
+                "(WAL is required for the shared lifecycle store connection policy)"
+            )
+        if reduced:
+            # Restore the operator-visible busy_timeout to the configured value.
+            conn.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+        return
+    raise LifecycleStoreError(
+        f"could not enable WAL on {str(db_path)!r} within {busy_timeout_ms}ms: "
+        "journal-mode conversion stayed locked"
+    ) from last_exc
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
