@@ -14,13 +14,27 @@ volume/network that is removed on exit.
 The committed test file now executes the matrix and discrimination families;
 they are no longer stubs. Local arm64 run against the pinned v1.17.1 container:
 
-- normal: `18 passed, 7 xfailed`;
-- discrimination: `pytest --runxfail` gives exactly `7 failed, 18 passed`;
+- normal: `20 passed, 7 xfailed`;
+- discrimination: `pytest --runxfail` gives exactly `7 failed, 20 passed`;
 - all seven failures reach their named desired-property assertion;
 - Property 6 (different-artifact concurrency) is the one desired property that
   current source satisfies and therefore remains a normal green control;
+- Property 1 single-clean-index and Property 8 clean-count controls are
+  independent green tests, outside the strict-xfail bodies;
 - the duplicate-delete setup regression is guarded by an exact call-count test;
 - teardown leaves no ART-001 container, network, or volume behind.
+
+Soundness successor details:
+
+- wrong candidates 1-6 now execute their bad write/delete/filter orderings on
+  live Qdrant collections rather than comparing preconstructed tuple lists;
+- each live candidate has a live correct-reference artifact that satisfies the
+  same acceptance assertion before the wrong candidate is rejected;
+- wrong candidate 7 invokes the exact Property 5 helper and proves the helper
+  refuses a bare `FakeEmbedder` without its `asyncio.Event` rendezvous;
+- Property 8 executes reindex, failed publication, retry, and deterministic
+  same-artifact concurrency before one dedicated verdict; the forced-red
+  failure reports all four mismatches together.
 
 The eight matrix observations are:
 

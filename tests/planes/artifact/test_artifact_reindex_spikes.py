@@ -561,8 +561,19 @@ def _fail_next_metadata_publication(plane: ArtifactPlane, monkeypatch: pytest.Mo
 
 
 # ---------------------------------------------------------------------------
-# Eight desired properties: controls execute before each strict current-source red.
+# Eight desired properties: healthy controls are independent from strict reds.
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_property_1_control_single_clean_index_exposes_one_generation(
+    plane: ArtifactPlane,
+) -> None:
+    artifact = _make_artifact()
+    await plane.create(artifact)
+    indexed = await plane.index(artifact, "single clean generation")
+    visible = await plane.query_by_artifact(artifact_id=artifact.object_id)
+    assert indexed.chunk_count == len(visible) == 1
 
 
 @pytest.mark.asyncio
@@ -572,10 +583,7 @@ async def test_property_1_second_successful_index_exposes_exactly_one_committed_
 ) -> None:
     artifact = _make_artifact()
     await plane.create(artifact)
-    first = await plane.index(artifact, "same content")
-    assert (
-        first.chunk_count == len(await plane.query_by_artifact(artifact_id=artifact.object_id)) == 1
-    )
+    await plane.index(artifact, "same content")
     second = await plane.index(artifact, "same content")
     assert (
         second.chunk_count
@@ -645,15 +653,15 @@ class _RendezvousEmbedder(FakeEmbedder):
         return await super().embed_dense(texts)
 
 
-@pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="ART-001: same-artifact writers are not fenced")
-async def test_property_5_deterministic_same_artifact_concurrency_has_one_serialized_winner(
-    qdrant_server: tuple[str, str],
-) -> None:
-    base_url, _ = qdrant_server
+async def _run_property_5_harness(
+    base_url: str,
+    embedder: FakeEmbedder,
+) -> tuple[tuple[SourceArtifact, SourceArtifact], list[str]]:
+    assert isinstance(embedder, _RendezvousEmbedder), (
+        "Property 5 requires the real asyncio.Event rendezvous harness"
+    )
     client = QdrantClient(url=base_url, timeout=30)
-    rendezvous = _RendezvousEmbedder()
-    concurrent_plane = ArtifactPlane(client=client, embedder=rendezvous)
+    concurrent_plane = ArtifactPlane(client=client, embedder=embedder)
     artifact = _make_artifact()
     try:
         await concurrent_plane.create(artifact)
@@ -661,12 +669,23 @@ async def test_property_5_deterministic_same_artifact_concurrency_has_one_serial
             concurrent_plane.index(artifact, "writer alpha"),
             concurrent_plane.index(artifact, "writer beta"),
         )
+        assert embedder.arrivals == 2
+        assert embedder.all_arrived.is_set()
         visible = await concurrent_plane.query_by_artifact(artifact_id=artifact.object_id)
-        contents = {chunk.content for chunk in visible}
-        assert all(result.artifact_state == "indexed" for result in results)
-        assert len(contents) == len(visible) == 1
+        return results, [chunk.content for chunk in visible]
     finally:
         client.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason="ART-001: same-artifact writers are not fenced")
+async def test_property_5_deterministic_same_artifact_concurrency_has_one_serialized_winner(
+    qdrant_server: tuple[str, str],
+) -> None:
+    base_url, _ = qdrant_server
+    results, visible = await _run_property_5_harness(base_url, _RendezvousEmbedder())
+    assert all(result.artifact_state == "indexed" for result in results)
+    assert len(set(visible)) == len(visible) == 1
 
 
 @pytest.mark.asyncio
@@ -705,94 +724,365 @@ async def test_property_7_retry_after_ambiguous_failure_is_idempotent(
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason="ART-001: metadata count diverges from visible chunks")
-async def test_property_8_metadata_chunk_count_equals_visible_chunks_after_every_outcome(
+async def test_property_8_control_clean_index_metadata_equals_visible_chunks(
     plane: ArtifactPlane,
 ) -> None:
     artifact = _make_artifact()
     await plane.create(artifact)
-    clean = await plane.index(artifact, "clean")
-    assert clean.chunk_count == len(await plane.query_by_artifact(artifact_id=artifact.object_id))
-    reindexed = await plane.index(artifact, "replacement")
+    clean = await plane.index(artifact, "clean control")
     visible = await plane.query_by_artifact(artifact_id=artifact.object_id)
-    assert reindexed.chunk_count == len(visible)
+    assert clean.chunk_count == len(visible)
+
+
+@pytest.mark.asyncio
+@pytest.mark.xfail(strict=True, reason="ART-001: metadata count diverges from visible chunks")
+async def test_property_8_metadata_chunk_count_equals_visible_chunks_after_every_outcome(
+    plane: ArtifactPlane,
+    monkeypatch: pytest.MonkeyPatch,
+    qdrant_server: tuple[str, str],
+) -> None:
+    outcomes: list[tuple[str, int, int]] = []
+
+    reindex_artifact = _make_artifact()
+    await plane.create(reindex_artifact)
+    await plane.index(reindex_artifact, "first generation")
+    reindexed = await plane.index(reindex_artifact, "replacement generation")
+    outcomes.append(
+        (
+            "reindex",
+            reindexed.chunk_count,
+            len(await plane.query_by_artifact(artifact_id=reindex_artifact.object_id)),
+        )
+    )
+
+    failed_artifact = _make_artifact()
+    await plane.create(failed_artifact)
+    with monkeypatch.context() as failure_patch:
+        _fail_next_metadata_publication(plane, failure_patch)
+        failed = await plane.index(failed_artifact, "failed generation")
+    outcomes.append(
+        (
+            "failed",
+            failed.chunk_count,
+            len(await plane.query_by_artifact(artifact_id=failed_artifact.object_id)),
+        )
+    )
+
+    retry_artifact = _make_artifact()
+    await plane.create(retry_artifact)
+    with monkeypatch.context() as retry_patch:
+        _fail_next_metadata_publication(plane, retry_patch)
+        await plane.index(retry_artifact, "retry generation")
+    retried = await plane.index(retry_artifact, "retry generation")
+    outcomes.append(
+        (
+            "retry",
+            retried.chunk_count,
+            len(await plane.query_by_artifact(artifact_id=retry_artifact.object_id)),
+        )
+    )
+
+    base_url, _ = qdrant_server
+    concurrent, concurrent_visible = await _run_property_5_harness(base_url, _RendezvousEmbedder())
+    outcomes.append(("concurrent", concurrent[-1].chunk_count, len(concurrent_visible)))
+
+    mismatches = [
+        f"{name}: metadata={metadata}, visible={visible}"
+        for name, metadata, visible in outcomes
+        if metadata != visible
+    ]
+    assert not mismatches, "; ".join(mismatches)
 
 
 # ---------------------------------------------------------------------------
-# Seven wrong-candidate discriminators (test-only reference model).
+# Seven wrong-candidate discriminators (test-only live-Qdrant candidate seams).
 # ---------------------------------------------------------------------------
 
 
-def _assert_single_generation(view: list[tuple[str, str]]) -> None:
-    assert len({generation for generation, _ in view}) == 1
-    assert len({content for _, content in view}) == 1
+def _candidate_upsert(
+    client: QdrantClient,
+    collection: str,
+    *,
+    artifact_id: str,
+    generation: str,
+    writer: str,
+    contents: list[str],
+    deterministic_ids: bool = False,
+) -> None:
+    points = []
+    for index, content in enumerate(contents):
+        point_id = (
+            str(uuid.uuid5(uuid.NAMESPACE_URL, f"{artifact_id}:{index}"))
+            if deterministic_ids
+            else str(uuid.uuid4())
+        )
+        points.append(
+            _point_with_id(
+                point_id,
+                {
+                    "artifact_id": artifact_id,
+                    "generation": generation,
+                    "writer": writer,
+                    "chunk_index": index,
+                    "content": content,
+                },
+            )
+        )
+    client.upsert(collection_name=collection, wait=True, points=points)
 
 
-def _assert_prior_survives_publish_failure(view: list[tuple[str, str]]) -> None:
-    assert view == [("prior", "prior-content")]
+def _candidate_delete(client: QdrantClient, collection: str, artifact_id: str) -> None:
+    from qdrant_client.http import models
+
+    client.delete(
+        collection_name=collection,
+        wait=True,
+        points_selector=models.FilterSelector(
+            filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="artifact_id", match=models.MatchValue(value=artifact_id)
+                    )
+                ]
+            )
+        ),
+    )
 
 
-def _assert_one_serialized_winner(view: list[tuple[str, str]]) -> None:
+def _candidate_view(
+    client: QdrantClient, collection: str, artifact_id: str
+) -> list[dict[str, Any]]:
+    from qdrant_client.http import models
+
+    rows = _scroll_payloads(
+        client,
+        collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="artifact_id", match=models.MatchValue(value=artifact_id))
+            ]
+        ),
+    )
+    return sorted(
+        rows, key=lambda row: (cast(int, row["chunk_index"]), cast(str, row["generation"]))
+    )
+
+
+def _assert_single_generation(view: list[dict[str, Any]]) -> None:
+    assert view
+    assert len({row["generation"] for row in view}) == 1
+    assert len({row["writer"] for row in view}) == 1
+
+
+def _assert_prior_survives_publish_failure(view: list[dict[str, Any]]) -> None:
+    assert [row["generation"] for row in view] == ["prior"]
+    assert [row["content"] for row in view] == ["prior-content"]
+
+
+def _assert_one_serialized_winner(view: list[dict[str, Any]], winner: str) -> None:
     _assert_single_generation(view)
-    assert len(view) == 1
+    assert {row["writer"] for row in view} == {winner}
 
 
-def test_wrong_candidate_1_deterministic_ids_without_fence_is_rejected() -> None:
-    correct = [("winner", "writer-a")]
-    wrong = [("writer-a", "writer-a"), ("writer-b", "writer-b")]
-    _assert_one_serialized_winner(correct)
-    with pytest.raises(AssertionError):
-        _assert_one_serialized_winner(wrong)
+def test_wrong_candidate_1_deterministic_ids_without_fence_is_rejected(
+    real_client: QdrantClient,
+) -> None:
+    with _temporary_collection(real_client) as collection:
+        correct_id, wrong_id = str(uuid.uuid4()), str(uuid.uuid4())
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=correct_id,
+            generation="winner",
+            writer="writer-b",
+            contents=["winner-0"],
+            deterministic_ids=True,
+        )
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=wrong_id,
+            generation="writer-a",
+            writer="writer-a",
+            contents=["a-0", "a-stale-tail"],
+            deterministic_ids=True,
+        )
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=wrong_id,
+            generation="writer-b",
+            writer="writer-b",
+            contents=["b-0"],
+            deterministic_ids=True,
+        )
+        _assert_one_serialized_winner(
+            _candidate_view(real_client, collection, correct_id), "writer-b"
+        )
+        with pytest.raises(AssertionError):
+            _assert_one_serialized_winner(
+                _candidate_view(real_client, collection, wrong_id), "writer-b"
+            )
 
 
-def test_wrong_candidate_2_delete_before_upsert_without_fence_is_rejected() -> None:
-    correct = [("winner", "winner-content")]
-    wrong: list[tuple[str, str]] = []
-    _assert_one_serialized_winner(correct)
-    with pytest.raises(AssertionError):
-        _assert_one_serialized_winner(wrong)
+def test_wrong_candidate_2_delete_before_upsert_without_fence_is_rejected(
+    real_client: QdrantClient,
+) -> None:
+    with _temporary_collection(real_client) as collection:
+        correct_id, wrong_id = str(uuid.uuid4()), str(uuid.uuid4())
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=correct_id,
+            generation="winner",
+            writer="writer-b",
+            contents=["winner"],
+        )
+        _candidate_delete(real_client, collection, wrong_id)
+        _candidate_delete(real_client, collection, wrong_id)
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=wrong_id,
+            generation="winner",
+            writer="writer-b",
+            contents=["winner"],
+        )
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=wrong_id,
+            generation="loser",
+            writer="writer-a",
+            contents=["loser-published-last"],
+        )
+        _assert_one_serialized_winner(
+            _candidate_view(real_client, collection, correct_id), "writer-b"
+        )
+        with pytest.raises(AssertionError):
+            _assert_one_serialized_winner(
+                _candidate_view(real_client, collection, wrong_id), "writer-b"
+            )
 
 
-def test_wrong_candidate_3_upsert_before_delete_on_publish_failure_is_rejected() -> None:
-    correct = [("prior", "prior-content")]
-    wrong = [("failed", "failed-content")]
-    _assert_prior_survives_publish_failure(correct)
-    with pytest.raises(AssertionError):
-        _assert_prior_survives_publish_failure(wrong)
+def test_wrong_candidate_3_upsert_before_delete_on_publish_failure_is_rejected(
+    real_client: QdrantClient,
+) -> None:
+    with _temporary_collection(real_client) as collection:
+        correct_id, wrong_id = str(uuid.uuid4()), str(uuid.uuid4())
+        for artifact_id in (correct_id, wrong_id):
+            _candidate_upsert(
+                real_client,
+                collection,
+                artifact_id=artifact_id,
+                generation="prior",
+                writer="prior-writer",
+                contents=["prior-content"],
+            )
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=wrong_id,
+            generation="failed",
+            writer="failed-writer",
+            contents=["failed-content"],
+        )
+        _candidate_delete(real_client, collection, wrong_id)
+        _assert_prior_survives_publish_failure(_candidate_view(real_client, collection, correct_id))
+        with pytest.raises(AssertionError):
+            _assert_prior_survives_publish_failure(
+                _candidate_view(real_client, collection, wrong_id)
+            )
 
 
-def test_wrong_candidate_4_generation_pointer_without_read_filter_is_rejected() -> None:
-    correct = [("new", "same-content")]
-    wrong = [("old", "same-content"), ("new", "same-content")]
-    _assert_single_generation(correct)
-    with pytest.raises(AssertionError):
-        _assert_single_generation(wrong)
+def test_wrong_candidate_4_generation_pointer_without_read_filter_is_rejected(
+    real_client: QdrantClient,
+) -> None:
+    with _temporary_collection(real_client) as collection:
+        correct_id, wrong_id = str(uuid.uuid4()), str(uuid.uuid4())
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=correct_id,
+            generation="new",
+            writer="writer",
+            contents=["same-content"],
+        )
+        for generation in ("old", "new"):
+            _candidate_upsert(
+                real_client,
+                collection,
+                artifact_id=wrong_id,
+                generation=generation,
+                writer="writer",
+                contents=["same-content"],
+            )
+        _assert_single_generation(_candidate_view(real_client, collection, correct_id))
+        with pytest.raises(AssertionError):
+            _assert_single_generation(_candidate_view(real_client, collection, wrong_id))
 
 
-def test_wrong_candidate_5_unfenced_last_writer_wins_switch_is_rejected() -> None:
-    correct = [("writer-b", "writer-b")]
-    wrong = [("writer-a", "writer-a"), ("writer-b", "writer-b")]
-    _assert_one_serialized_winner(correct)
-    with pytest.raises(AssertionError):
-        _assert_one_serialized_winner(wrong)
+def test_wrong_candidate_5_unfenced_last_writer_wins_switch_is_rejected(
+    real_client: QdrantClient,
+) -> None:
+    with _temporary_collection(real_client) as collection:
+        correct_id, wrong_id = str(uuid.uuid4()), str(uuid.uuid4())
+        _candidate_upsert(
+            real_client,
+            collection,
+            artifact_id=correct_id,
+            generation="writer-b",
+            writer="writer-b",
+            contents=["writer-b"],
+        )
+        for writer in ("writer-a", "writer-b"):
+            _candidate_upsert(
+                real_client,
+                collection,
+                artifact_id=wrong_id,
+                generation=writer,
+                writer=writer,
+                contents=[writer],
+            )
+        _assert_one_serialized_winner(
+            _candidate_view(real_client, collection, correct_id), "writer-b"
+        )
+        with pytest.raises(AssertionError):
+            _assert_one_serialized_winner(
+                _candidate_view(real_client, collection, wrong_id), "writer-b"
+            )
 
 
-def test_wrong_candidate_6_compensating_rollback_deleting_winner_is_rejected() -> None:
-    correct = [("winner", "winner-content")]
-    wrong: list[tuple[str, str]] = []
-    _assert_one_serialized_winner(correct)
-    with pytest.raises(AssertionError):
-        _assert_one_serialized_winner(wrong)
+def test_wrong_candidate_6_compensating_rollback_deleting_winner_is_rejected(
+    real_client: QdrantClient,
+) -> None:
+    with _temporary_collection(real_client) as collection:
+        correct_id, wrong_id = str(uuid.uuid4()), str(uuid.uuid4())
+        for artifact_id in (correct_id, wrong_id):
+            _candidate_upsert(
+                real_client,
+                collection,
+                artifact_id=artifact_id,
+                generation="winner",
+                writer="winner",
+                contents=["winner-content"],
+            )
+        _candidate_delete(real_client, collection, wrong_id)
+        _assert_one_serialized_winner(
+            _candidate_view(real_client, collection, correct_id), "winner"
+        )
+        with pytest.raises(AssertionError):
+            _assert_one_serialized_winner(
+                _candidate_view(real_client, collection, wrong_id), "winner"
+            )
 
 
-def test_wrong_candidate_7_bare_gather_without_rendezvous_is_rejected() -> None:
-    async def bare_gather_harness() -> None:
-        await asyncio.gather(asyncio.sleep(0), asyncio.sleep(0))
-
-    async def rendezvous_harness() -> None:
-        event = asyncio.Event()
-        event.set()
-        await asyncio.gather(event.wait(), event.wait())
-
-    assert "Event" in rendezvous_harness.__code__.co_names
-    assert "Event" not in bare_gather_harness.__code__.co_names
+@pytest.mark.asyncio
+async def test_wrong_candidate_7_bare_gather_without_rendezvous_is_rejected(
+    qdrant_server: tuple[str, str],
+) -> None:
+    base_url, _ = qdrant_server
+    with pytest.raises(
+        AssertionError, match=r"Property 5 requires the real asyncio\.Event rendezvous harness"
+    ):
+        await _run_property_5_harness(base_url, FakeEmbedder())

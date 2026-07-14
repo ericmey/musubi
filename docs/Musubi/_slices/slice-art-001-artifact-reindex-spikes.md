@@ -99,8 +99,24 @@ Owner: tama (the spike is a tests/docs-only deliverable). ART-001 implementation
 - Added an exact one-call regression guard for `_ensure_collection` deletion.
 - Replaced the placeholder-only test file with executable 8-row matrix,
   8-property, and 7-wrong-candidate families.
-- Local arm64 evidence: `18 passed, 7 xfailed`; `--runxfail` reaches exactly
-  seven named property assertions (`7 failed, 18 passed`). Property 6 is the
+- Initial recovery evidence before the soundness successor: `18 passed, 7
+  xfailed`; `--runxfail` reached seven named property assertions (`7 failed,
+  18 passed`). Property 6 was the
   healthy green control.
 - No `src/`, harem-ops ledger, production host, deploy, readiness promotion,
   or merge action.
+
+## Work log — 2026-07-14 soundness successor
+
+- Replaced all six production wrong-candidate tuple examples with executable
+  live-Qdrant candidate seams plus live correct-reference controls.
+- Tied wrong candidate 7 to the exact Property 5 harness: the helper refuses a
+  bare gather path without the real `asyncio.Event` rendezvous.
+- Split Property 1 and Property 8 healthy controls out of strict-xfail bodies.
+- Property 8 now executes reindex, failed publication, retry, and deterministic
+  same-artifact concurrency before its dedicated aggregate verdict.
+- Targeted arm64 evidence: `20 passed, 7 xfailed`; `--runxfail` reaches exactly
+  seven named property assertions (`7 failed, 20 passed`) and Property 8's
+  failure reports all four named outcome mismatches.
+- Scope remains additive tests/docs only. No `src/`, host, ledger, deploy,
+  readiness promotion, or merge action.
