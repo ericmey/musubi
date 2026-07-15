@@ -184,7 +184,7 @@ the AGENTS.md Test Contract Closure Rule.
 6. `test_salesai_cannot_be_reenabled_by_recent_lane` — RED
 7. `test_salesai_cannot_be_reenabled_by_streaming` — RED
 8. `test_salesai_cannot_be_reenabled_by_adapter_path` — RED
-9. `test_token_exclusion_adds_to_mandatory_not_subtracts` — RED
+9. `test_settings_exclusions_add_to_mandatory_not_subtract` — RED
 10. `test_per_agent_settings_adds_to_mandatory` — RED
 11. `test_per_agent_settings_keyed_by_subject_or_presence_both_contribute` — RED
 12. `test_unauthorized_namespaces_remain_denied_not_silently_broadened` — RED

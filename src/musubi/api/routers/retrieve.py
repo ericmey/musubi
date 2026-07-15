@@ -78,6 +78,7 @@ class RetrieveQuery(BaseModel):
     # is supplied; no second boolean.
     namespace: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Namespace pattern. Three shapes accepted: "
             "3-segment concrete `<tenant>/<presence>/<plane>` (single target), "
@@ -86,8 +87,7 @@ class RetrieveQuery(BaseModel):
             "(e.g. `nyla/*/episodic`, `*/voice/curated`). "
             "Optional in AUTH-001: omit (or null) to recall across all "
             "authorized namespaces; the per-agent exclusion list "
-            "(`salesai` mandatory + per-agent settings + token "
-            "additions) is applied centrally. See ADR 0031 + AUTH-001."
+            "(`salesai` mandatory + per-agent settings) is applied centrally. See ADR 0031 + AUTH-001."
         ),
     )
     # query_text required for fast/deep/blended; optional for recent.
@@ -436,33 +436,10 @@ async def retrieve(
     # AUTH-001: when the body omits ``namespace`` (or sends null),
     # recall spans every concrete namespace in the caller's
     # identity_family across the caller's authorized planes. The
-    # per-agent exclusion list (``salesai`` mandatory baseline +
-    # per-agent settings + token additions) is applied centrally
+    # per-agent exclusion list (`salesai` mandatory baseline +
+    # per-agent settings) is applied centrally
     # by ``enforce_namespace_policy`` after target resolution. The
     # seam is the single source of truth for the exclusion policy.
-    if body.namespace is None:
-        # The caller's identity_family is the first segment of
-        # ``context.presence`` (e.g., ``acme/voice`` → ``acme``).
-        # The context is required; the auth path below raises 401
-        # if missing. We compute the family from a placeholder
-        # here and re-derive after auth (or restructure to auth
-        # first). The router currently does auth after target
-        # resolution, so we need to know the family up-front.
-        # Use the canonical ``family_of`` derivation on a
-        # synthetic placeholder; the auth path below
-        # re-validates. For the default-to-all case, the
-        # identity_family is derived from the JWT ``presence``
-        # claim post-auth. To keep the existing structure, the
-        # router does auth first (below) and then resolves
-        # targets. Restructure: we defer the target enumeration
-        # until after auth.
-        targets: list[tuple[str, str]] = []
-        shape_err: str | None = None
-    else:
-        targets, shape_err = _resolve_targets(body.namespace, body.planes)
-        if shape_err is not None:
-            raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
-
     # Authenticate first so unauth callers cannot probe for empty
     # wildcard matches. Token check is once per request — the per-target
     # work is scope evaluation on the single resulting context.
@@ -477,25 +454,7 @@ async def retrieve(
         raise APIError(status_code=err.status_code, code=code, detail=err.detail)
     context = auth_result.value
 
-    # AUTH-001: when the body omits ``namespace``, do the default-
-    # to-all enumeration now that we have the auth context. The
-    # caller's identity_family is the first segment of
-    # ``context.presence``.
     if body.namespace is None:
-        family = context.presence.split("/", 1)[0]
-        planes = body.planes or ["curated", "concept", "episodic"]
-        targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
-
-    # AUTH-001: when the body omits ``namespace`` (or sends null),
-    # recall spans every concrete namespace in the caller's
-    # identity_family across the caller's authorized planes. The
-    # per-agent exclusion list (``salesai`` mandatory baseline +
-    # per-agent settings + token additions) is applied centrally
-    # by ``enforce_namespace_policy`` after target resolution. The
-    # seam is the single source of truth for the exclusion policy.
-    if body.namespace is None:
-        # The caller's identity_family is the first segment of
-        # ``context.presence`` (e.g., ``acme/voice`` → ``acme``).
         family = context.presence.split("/", 1)[0]
         planes = body.planes or ["curated", "concept", "episodic"]
         targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
@@ -526,13 +485,13 @@ async def retrieve(
         )
 
     # AUTH-001: the shared READ-ONLY enforcement seam. Drops any
-    # target whose namespace is in ``context.excluded_namespaces``
-    # (the canonical per-agent exclusion list) and then runs the
+    # target whose namespace is in the configured exclusion list
+    # (the canonical per-agent exclusion list from Settings) and then runs the
     # per-namespace scope check. Replaces the per-target
     # ``resolve_namespace_scope`` loop. The seam is the single
     # source of truth for the exclusion policy; hardcoding route-
     # specific exclusions is a code-review must-fix.
-    policy_result = enforce_namespace_policy(context, targets=targets, access="r")
+    policy_result = enforce_namespace_policy(context, targets=targets, settings=settings)
     if isinstance(policy_result, Err):
         raise APIError(
             status_code=policy_result.error.status_code,
@@ -540,6 +499,19 @@ async def retrieve(
             detail=policy_result.error.detail,
         )
     targets = policy_result.value
+
+    if not targets:
+        if body.mode == "recent":
+            return RecentRetrieveResponse(
+                results=[],
+                mode="recent",
+                limit=body.limit,
+            )
+        return RankedRetrieveResponse(
+            results=[],
+            mode=body.mode,
+            limit=body.limit,
+        )
 
     # Hand orchestration the fully-resolved targets. A 3-segment
     # call reduces to exactly one (namespace, plane) target, so the

@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from musubi.auth.tokens import AuthContext
+from musubi.settings import Settings
 from musubi.types.common import Err, Ok, Result
 
 logger = logging.getLogger(__name__)
@@ -40,59 +41,56 @@ def enforce_namespace_policy(
     context: AuthContext,
     *,
     targets: list[tuple[str, str]],
-    access: AccessLevel = "r",
+    settings: Settings,
 ) -> Result[list[tuple[str, str]], ScopeError]:
     """AUTH-001: the shared READ-ONLY enforcement seam.
 
-    Drops any target whose namespace is in ``context.excluded_namespaces``
-    (the canonical per-agent exclusion list composed at token-validation
-    time: mandatory baseline UNION per-agent settings UNION token
-    additions), then runs ``resolve_namespace_scope(... access=access)``
-    on each surviving target. Returns the validated targets (or the
-    first ``ScopeError``).
-
-    This is the single source of truth for the exclusion policy. Every
-    read entry point (HTTP ``/v1/retrieve``, ``/v1/context``,
-    ``/v1/retrieve/stream``, SDK, adapter, voice, auth middleware)
-    calls this function exactly once, after target resolution and
-    wildcard expansion. Hardcoding route-specific exclusions is a
-    code-review must-fix.
-
-    The seam is READ-ONLY. The write path runs the existing
-    ``resolve_namespace_scope(... access=\"w\")`` flow unchanged;
-    ``excluded_namespaces`` is NOT applied to writes.
-
-    The seam is intrinsic: the per-agent exclusion list is the only
-    input. No corpus scan, no hand-picked weight, no per-plane
-    calibration table. The composition is additive (the token
-    cannot subtract from the mandatory baseline).
+    FIRST runs resolve_namespace_scope on every concrete target. If any is unauthorized, it must fail (403).
+    THEN filters the authorized set using Settings mandatory + subject/presence additive roots with parsed segment matching.
+    Direct authorized-but-excluded exact target may return 200 empty.
     """
-    if access != "r":
-        # READ-ONLY contract: the seam is not invoked on the write
-        # path. A write to an excluded namespace is permitted under
-        # the existing write scope. See the write flow in the
-        # per-route handlers (the per-target ``resolve_namespace_scope``
-        # call is unchanged for ``access=\"w\"``).
-        pass
 
-    excluded = context.excluded_namespaces
-    filtered: list[tuple[str, str]] = []
+    # 1. Authorize all targets first
+    authorized: list[tuple[str, str]] = []
     for ns, plane in targets:
-        if ns in excluded:
-            continue
-        filtered.append((ns, plane))
-    if not filtered:
-        return Ok(value=[])
-
-    # Run the per-namespace scope check on each surviving target.
-    # The first failure short-circuits with the ``ScopeError`` so the
-    # caller gets a clean 403 rather than a partial response.
-    validated: list[tuple[str, str]] = []
-    for ns, plane in filtered:
-        result = resolve_namespace_scope(context, namespace=ns, access=access)
+        result = resolve_namespace_scope(context, namespace=ns, access="r")
         if isinstance(result, Err):
             return Err(error=result.error)
-        validated.append((ns, plane))
+        authorized.append((ns, plane))
+
+    if not authorized:
+        return Ok(value=[])
+
+    # 2. Filter authorized targets against exclusions
+    exclusions = set(settings.default_excluded_namespaces)
+    if context.subject in settings.per_agent_excluded_namespaces:
+        exclusions.update(settings.per_agent_excluded_namespaces[context.subject])
+    if context.presence in settings.per_agent_excluded_namespaces:
+        exclusions.update(settings.per_agent_excluded_namespaces[context.presence])
+
+    validated: list[tuple[str, str]] = []
+
+    for ns, plane in authorized:
+        parts = ns.split("/")
+        excluded = False
+        print(f"DEBUG: checking ns={ns} against exclusions={exclusions}")
+        for ex in exclusions:
+            ex_parts = ex.split("/")
+
+            if len(ex_parts) == 1:
+                if len(parts) > 1 and parts[1] == ex_parts[0]:
+                    print(f"DEBUG: excluded by 1-segment {ex}")
+                    excluded = True
+                    break
+            else:
+                if parts[:len(ex_parts)] == ex_parts:
+                    print(f"DEBUG: excluded by prefix {ex}")
+                    excluded = True
+                    break
+
+        if not excluded:
+            validated.append((ns, plane))
+
     return Ok(value=validated)
 
 

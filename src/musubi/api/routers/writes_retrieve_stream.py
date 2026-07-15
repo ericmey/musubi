@@ -106,7 +106,7 @@ async def retrieve_stream(
         return StreamingResponse(_emit_empty(), media_type="application/x-ndjson", headers=headers)
 
     # AUTH-001: the shared READ-ONLY enforcement seam.
-    policy_result = enforce_namespace_policy(context, targets=targets, access="r")
+    policy_result = enforce_namespace_policy(context, targets=targets, settings=settings)
     if isinstance(policy_result, Err):
         raise APIError(
             status_code=policy_result.error.status_code,
@@ -114,6 +114,20 @@ async def retrieve_stream(
             detail=policy_result.error.detail,
         )
     targets = policy_result.value
+
+    if not targets:
+        headers = {
+            "X-Musubi-Mode": body.mode,
+            "X-Musubi-Limit": str(body.limit),
+            "X-Musubi-Warnings": "[]",
+        }
+
+        async def _emit_empty() -> AsyncIterator[bytes]:
+            if False:
+                yield b""
+            return
+
+        return StreamingResponse(_emit_empty(), media_type="application/x-ndjson", headers=headers)
 
     query_body: dict[str, object] = {
         "namespace": body.namespace or "",

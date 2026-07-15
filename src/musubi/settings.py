@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -194,13 +194,19 @@ class Settings(BaseSettings):
             "recall; a token claim cannot subtract from this set."
         ),
     )
+
+    @field_validator("default_excluded_namespaces", mode="after")
+    @classmethod
+    def _enforce_mandatory_salesai(cls, v: frozenset[str]) -> frozenset[str]:
+        return v | frozenset({"salesai"})
+
     per_agent_excluded_namespaces: dict[str, tuple[str, ...]] = Field(
         default_factory=dict,
         description=(
             "Per-agent additional exclusions keyed by stable "
             "authenticated subject OR presence. Both contribute via "
             "union; the per-agent exclusion is additive on top of "
-            "default_excluded_namespaces + the token claim."
+            "default_excluded_namespaces."
         ),
     )
 

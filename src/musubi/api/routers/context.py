@@ -12,7 +12,7 @@ from musubi.api.dependencies import get_embedder, get_qdrant_client, get_reranke
 from musubi.api.errors import APIError, ErrorCode
 from musubi.api.routers.retrieve import _KIND_STATUS_MAP, _expand_wildcard_targets, _resolve_targets
 from musubi.auth import authenticate_request
-from musubi.auth.scopes import resolve_namespace_scope
+from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.accounting import account_delivered
 from musubi.retrieve.context_pack import (
@@ -102,14 +102,26 @@ async def context_pack(
             ),
         )
 
-    for target_namespace, _plane in targets:
-        scope_result = resolve_namespace_scope(context, namespace=target_namespace, access="r")
-        if isinstance(scope_result, Err):
-            raise APIError(
-                status_code=scope_result.error.status_code,
-                code="FORBIDDEN",
-                detail=scope_result.error.detail,
-            )
+    policy_result = enforce_namespace_policy(context, targets=targets, settings=settings)
+    if isinstance(policy_result, Err):
+        raise APIError(
+            status_code=policy_result.error.status_code,
+            code="FORBIDDEN",
+            detail=policy_result.error.detail,
+        )
+    targets = policy_result.value
+
+    if not targets:
+        return build_context_pack(
+            [],
+            ContextPackQuery(
+                query_text=body.query_text,
+                mode=body.mode,
+                max_items=body.max_items,
+                max_chars=body.max_chars,
+                include_history=body.include_history,
+            ),
+        )
 
     # RET-013: Query Qdrant twice for a blended recent/ranked mix.
     recent_query_body: dict[str, object] = {
