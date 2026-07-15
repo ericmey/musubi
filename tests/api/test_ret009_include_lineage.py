@@ -54,8 +54,12 @@ def _make_app(monkeypatch: pytest.MonkeyPatch, api_settings: Settings) -> Any:
         )
 
     async def mock_run_orchestration(*args: Any, **kwargs: Any) -> Any:
-        # args: (client, embedder, reranker, query)
+        # Router calls ``run_orchestration_retrieve(client=..., embedder=..., reranker=...,
+        # query=...)`` — query is always a keyword. Accept it positionally too (args[3]) so
+        # the mock survives a future router refactor that switches to positional.
         query = kwargs.get("query")
+        if query is None and len(args) >= 4:
+            query = args[3]
         if isinstance(query, dict):
             _CAPTURED.append(query)
 
