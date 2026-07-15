@@ -72,6 +72,7 @@ not-found semantics.
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 import time
 from collections.abc import Callable
@@ -80,9 +81,12 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
+_log = logging.getLogger(__name__)
+
 _LEASE_TTL_US = 5_000_000  # an owner token older than this may be taken over (crash/stall recovery)
 _MAX_ROUNDS = 160  # bounded round budget; caps a pathological live-lock, fail-loud past it
 _MAX_BACKOFF_US = 8000  # max jittered backoff between retry rounds (de-synchronizes contenders)
+_SKIP_CLEAR_ATTEMPTS = 8  # bounded immediate exact-own clear attempts on a skip before fail-loud
 
 #: Fields the mutation lease itself stamps on every publish — a caller's change-set must not carry
 #: them (``version`` is derived from the fenced read; the token is owned by this seam).
@@ -164,6 +168,30 @@ def _clear_token(
     )
 
 
+def _release_own_confirmed(
+    client: QdrantClient, collection: str, namespace: str, object_id: str, token: str
+) -> dict[str, Any]:
+    """Release the EXACT own ``token`` and CONFIRM the release by exact-token readback, bounded and
+    immediate. The skip / no-op path uses this so a lease is never left for the outer-loop TTL
+    recovery to reclaim. Returns the released current payload (no change was made, so it is the
+    current truth). Raises :class:`MutationRowVanished` if the row disappears mid-release, or
+    :class:`MutationLeaseConflict` — fail-loud — if the exact-own clear cannot be confirmed within
+    the bounded attempts."""
+    for _ in range(_SKIP_CLEAR_ATTEMPTS):
+        _clear_token(client, collection, namespace, object_id, token)
+        after = _read(client, collection, namespace, object_id)
+        if not after:
+            raise MutationRowVanished(
+                f"row ({namespace!r}, {object_id!r}) vanished during skip-release"
+            )
+        if after.get("update_lease_token") != token:
+            return after  # released (or taken over) — no change was made; return current truth.
+    raise MutationLeaseConflict(
+        f"skip-release for ({namespace!r}, {object_id!r}) in {collection} could not confirm the "
+        f"exact-own clear after {_SKIP_CLEAR_ATTEMPTS} attempts"
+    )
+
+
 async def owned_update(
     client: QdrantClient,
     collection: str,
@@ -230,18 +258,54 @@ async def owned_update(
         if held.get("update_lease_token") != token:
             continue  # lost the acquire (foreign winner, or the version moved) — retry.
 
-        # ---- compute the intended change against the CONFIRMED-current row ----
-        # A plan error must not leak our lease (which would block the row until the TTL). Release our
-        # exact own token first, then re-raise the ORIGINAL error fail-loud.
+        # ===== own token CONFIRMED. A single handler from HERE through the phase-4 commit releases
+        # our EXACT own token on ANY pre-commit failure — a plan() error, a seam-field rejection, an
+        # update_vectors error, a commit exception, or a BaseException (e.g. cancellation) — and then
+        # re-raises the ORIGINAL unchanged, so the row is never left leased until TTL. The handler
+        # begins ONLY after the acquire is confirmed above, so it can never clear a token it did not
+        # prove it owns. If the commit already LANDED (the row now holds our ``done`` token), the
+        # exact-own clear matches zero and cannot erase it (DD4: never clear ``done`` here) — the
+        # committed change stands and the stale ``done`` self-heals via takeover (phase 6).
+        #
+        # DD2 — there is NO ``await`` inside this region today: plan(), update_vectors, and the
+        # commit set_payload are all synchronous, so asyncio.CancelledError is not injectable here and
+        # the BaseException coverage is defensive/future-proofing (it also catches a BaseException
+        # raised by plan()). Do NOT introduce an async plan or a new await inside this region without
+        # revisiting this cleanup — a mid-region suspension point would make cancellation reachable.
         try:
             mutation = plan(held)
-        except Exception:
-            _clear_token(client, collection, namespace, object_id, token)
-            raise
-        if mutation.skip:
+            if mutation.skip:
+                # No commit will happen — release now, bounded + confirmed, never via outer-loop TTL.
+                return _release_own_confirmed(client, collection, namespace, object_id, token)
+            _reject_seam_fields(mutation.changes)
+
+            # ---- phase 3: proven owner publishes vectors ----
+            # NOT SAFE: update_vectors is unfenceable on the deployed Qdrant (server 1.15 silently
+            # ignores update_filter — verified). A stalled old owner's late write can corrupt a newer
+            # committed vector. Vector atomicity is Phase-2 (immutable point + fenced pointer); this
+            # path is best-effort and explicitly out of Phase-1's safety claim.
+            if mutation.vectors is not None:
+                client.update_vectors(
+                    collection_name=collection,
+                    points=[models.PointVectors(id=point_id, vector=mutation.vectors)],
+                )
+
+            # ---- phase 4: COMMIT — narrow changes + version+1 + token=done, fenced on OUR own ----
+            # Mirrors store/access_lease.py's two-phase attributable lease: the commit stamps a UNIQUE
+            # ``done`` token (not ``None``), fenced on our exact ``own`` token, so a stale/taken-over
+            # writer matches zero and cannot commit. The EXACT ``done`` token read back is the ONLY
+            # success signal — ``{token==None AND version==read+1}`` is NOT attributable (a takeover
+            # that published a different change at the same next version and cleared the token would
+            # be falsely claimed as ours, silently losing our change).
+            done = _token("done", int(time.time() * 1_000_000))
+            publish = {
+                **mutation.changes,
+                "version": read_version + 1,
+                "update_lease_token": done,
+            }
             client.set_payload(
                 collection_name=collection,
-                payload={"update_lease_token": None},
+                payload=publish,
                 points=models.Filter(
                     must=[
                         *_conditions(namespace, object_id),
@@ -251,53 +315,29 @@ async def owned_update(
                     ]
                 ),
             )
-            # Verify the release by exact-token readback — never assume the fenced write landed.
-            after = _read(client, collection, namespace, object_id)
-            if not after:
-                raise MutationRowVanished(
-                    f"row ({namespace!r}, {object_id!r}) vanished during skip-release"
+        except BaseException as original:
+            # Release our EXACT own token (fenced), then re-raise the ORIGINAL unchanged. Fencing on
+            # ``own`` makes this a safe no-op when the commit already landed as ``done`` (DD3/DD4).
+            # A cleanup failure must NEVER mask the original error: catch it, surface it as observable
+            # context (a note on the original + a log line — never a silent claim that cleanup
+            # succeeded), then re-raise the ORIGINAL with its traceback intact.
+            try:
+                _clear_token(client, collection, namespace, object_id, token)
+            except Exception as cleanup_error:  # the original must still propagate below
+                _log.warning(
+                    "mutation-lease own-token cleanup failed after a pre-commit error for "
+                    "(%r, %r) in %s: %r; the lease may persist until TTL. The original error is "
+                    "preserved and re-raised.",
+                    namespace,
+                    object_id,
+                    collection,
+                    cleanup_error,
                 )
-            if after.get("update_lease_token") != token:
-                return after  # released (or taken over) — no change was made; return current truth.
-            continue  # our token is somehow still held — retry the release, fail loud on exhaustion.
-        _reject_seam_fields(mutation.changes)
-
-        # ---- phase 3: proven owner publishes vectors ----
-        # NOT SAFE: update_vectors is unfenceable on the deployed Qdrant (server 1.15 silently
-        # ignores update_filter — verified). A stalled old owner's late write can corrupt a newer
-        # committed vector. Vector atomicity is Phase-2 (immutable point + fenced pointer); this
-        # path is best-effort and explicitly out of Phase-1's safety claim.
-        if mutation.vectors is not None:
-            client.update_vectors(
-                collection_name=collection,
-                points=[models.PointVectors(id=point_id, vector=mutation.vectors)],
-            )
-
-        # ---- phase 4: COMMIT — publish narrow changes + version+1 + token=done, fenced on OUR own --
-        # Mirrors store/access_lease.py's two-phase attributable lease: the commit stamps a UNIQUE
-        # ``done`` token (not ``None``), fenced on our exact ``own`` token, so a stale/taken-over
-        # writer matches zero and cannot commit. The EXACT ``done`` token read back is the ONLY
-        # success signal — ``{token==None AND version==read+1}`` is NOT attributable (a takeover that
-        # published a different change at the same next version and cleared the token would be falsely
-        # claimed as ours, silently losing our change).
-        done = _token("done", int(time.time() * 1_000_000))
-        publish = {
-            **mutation.changes,
-            "version": read_version + 1,
-            "update_lease_token": done,
-        }
-        client.set_payload(
-            collection_name=collection,
-            payload=publish,
-            points=models.Filter(
-                must=[
-                    *_conditions(namespace, object_id),
-                    models.FieldCondition(
-                        key="update_lease_token", match=models.MatchValue(value=token)
-                    ),
-                ]
-            ),
-        )
+                original.add_note(
+                    f"mutation-lease own-token cleanup ALSO failed: {cleanup_error!r} "
+                    "(the lease may persist until TTL; original error preserved and re-raised)"
+                )
+            raise
 
         # ---- phase 5: ATTRIBUTE — our change landed IFF our EXACT done token is stored ----
         committed = _read(client, collection, namespace, object_id)

@@ -121,7 +121,11 @@ def test_reinforce_composes_concurrent_access_increment(
     monkeypatch.setattr(
         plane, "_find_dedup_candidate", lambda namespace, dense: (stale, None, None)
     )
-    asyncio.run(plane.create(EpisodicMemory(namespace=ns, content="near dup", state="matured")))
+    # The reinforce only fires when the candidate is factually compatible (_is_factually_compatible
+    # is fail-closed: normalized content + participants must match). Use a near-duplicate surface form
+    # of the seed's "occ probe" so a REAL reinforce runs — otherwise create() inserts a fresh row and
+    # this composition assertion silently exercises nothing.
+    asyncio.run(plane.create(EpisodicMemory(namespace=ns, content="Occ probe.", state="matured")))
 
     row = _row(real_qdrant, oid)
     assert row.get("access_count") == 1  # leased increment composed with the reinforce

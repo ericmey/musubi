@@ -435,3 +435,316 @@ def test_exhaustion_is_fail_loud() -> None:
             point_id="p1",
             plan=lambda cur: MutationPlan(changes={"tags": ["x"]}),
         )
+
+
+# --------------------------------------------------------------------------------------------------
+# DATA-001 Phase 1 cleanup threads (#539) — exact-own release on EVERY pre-commit failure path, and a
+# skip that clears immediately-and-bounded rather than leaking the lease to TTL recovery. Each test
+# below is RED against the pre-cleanup code (the own token leaks / the exception is narrowed to
+# Exception / skip falls through to the outer TTL loop) and GREEN after the single-handler + bounded
+# skip-clear land.
+# --------------------------------------------------------------------------------------------------
+
+
+class _Boom(RuntimeError):
+    """A pre-commit failure raised from inside the held region."""
+
+
+class _BaseBoom(BaseException):
+    """A BaseException-derived failure (models asyncio.CancelledError's base class) raised from the
+    plan callback — proves the handler catches BaseException, not merely Exception. No await exists
+    in the held region today (DD2), so a real CancelledError is not injectable there; this exercises
+    the defensive coverage directly at the plan seam."""
+
+
+class _UpdateVectorsBoom:
+    """Wraps a real client and raises on ``update_vectors`` (phase-3), before any commit."""
+
+    def __init__(self, inner: QdrantClient) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def update_vectors(self, *_a: Any, **_k: Any) -> Any:
+        raise _Boom("update_vectors blew up")
+
+
+class _CommitBoom:
+    """Wraps a real client and raises on the phase-4 commit ``set_payload`` (the one whose payload
+    carries ``version``). With ``land_first=True`` it first lets the commit LAND on the real server,
+    then raises — modelling a network error after a successful server-side write (DD3)."""
+
+    def __init__(self, inner: QdrantClient, *, land_first: bool) -> None:
+        self._inner = inner
+        self._land_first = land_first
+        self._fired = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def set_payload(
+        self, *, collection_name: str, payload: dict[str, Any], points: Any, **kw: Any
+    ) -> Any:
+        if "version" in payload and not self._fired:
+            self._fired = True
+            if self._land_first:
+                self._inner.set_payload(
+                    collection_name=collection_name, payload=payload, points=points, **kw
+                )
+            raise _Boom("commit set_payload blew up")
+        return self._inner.set_payload(
+            collection_name=collection_name, payload=payload, points=points, **kw
+        )
+
+
+@pytest.mark.integration
+def test_seam_reject_releases_own_token(real_qdrant: QdrantClient) -> None:
+    """T3: a seam-owned field in the change-set is rejected AND the own token is released — the row
+    must not stay leased until TTL after a caller error."""
+    ns, oid = _seed(real_qdrant, importance=5)
+    with pytest.raises(ValueError, match="seam-owned"):
+        _run_owned(
+            real_qdrant,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=lambda cur: MutationPlan(changes={"version": 99}),
+        )
+    row = _payload(real_qdrant, oid)
+    assert row.get("update_lease_token") is None  # released — no leaked lease
+    assert row.get("version") == 1  # nothing committed
+
+
+@pytest.mark.integration
+def test_update_vectors_error_releases_own_token_and_fails_loud(real_qdrant: QdrantClient) -> None:
+    """T3: if update_vectors (phase-3, proven owner) raises pre-commit, the own token is released and
+    the ORIGINAL error propagates; nothing is committed."""
+    ns, oid = _seed(real_qdrant, importance=5)
+    original = _dense(real_qdrant, oid)
+    client = cast(QdrantClient, _UpdateVectorsBoom(real_qdrant))
+    with pytest.raises(_Boom, match="update_vectors blew up"):
+        _run_owned(
+            client,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=lambda cur: MutationPlan(
+                changes={"tags": ["x"]}, vectors={DENSE_VECTOR_NAME: [0.5] * 1024}
+            ),
+        )
+    row = _payload(real_qdrant, oid)
+    assert row.get("update_lease_token") is None  # released
+    assert row.get("version") == 1  # not committed
+    assert _dense(real_qdrant, oid) == original  # vector untouched (fake raised before writing)
+
+
+@pytest.mark.integration
+def test_commit_error_releases_own_token_and_fails_loud(real_qdrant: QdrantClient) -> None:
+    """T4: a phase-4 commit set_payload that raises BEFORE landing releases the own token and
+    propagates the original error; the row is unchanged."""
+    ns, oid = _seed(real_qdrant, importance=5)
+    client = cast(QdrantClient, _CommitBoom(real_qdrant, land_first=False))
+    with pytest.raises(_Boom, match="commit set_payload blew up"):
+        _run_owned(
+            client,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=lambda cur: MutationPlan(changes={"tags": ["x"]}),
+        )
+    row = _payload(real_qdrant, oid)
+    assert row.get("update_lease_token") is None  # released
+    assert row.get("version") == 1  # not committed
+
+
+@pytest.mark.integration
+def test_commit_raises_after_landing_preserves_done_and_change(real_qdrant: QdrantClient) -> None:
+    """DD3: if the commit set_payload actually LANDS (done token stamped, version bumped, change
+    published) and then raises, the exact-own cleanup matches zero and must NOT erase the done token
+    or the change; the ORIGINAL exception still propagates. The stale done then self-heals via the
+    existing takeover path — never re-applied, never lost."""
+    ns, oid = _seed(real_qdrant, importance=5)
+    client = cast(QdrantClient, _CommitBoom(real_qdrant, land_first=True))
+    with pytest.raises(_Boom, match="commit set_payload blew up"):
+        _run_owned(
+            client,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=lambda cur: MutationPlan(changes={"tags": ["landed"]}),
+        )
+    row = _payload(real_qdrant, oid)
+    assert row.get("tags") == ["landed"]  # the committed change survived the own-clear
+    assert row.get("version") == 2  # commit landed
+    token = row.get("update_lease_token")
+    assert token is not None and str(token).startswith("done:")  # done preserved, not erased
+
+
+@pytest.mark.integration
+def test_plan_baseexception_releases_own_token(real_qdrant: QdrantClient) -> None:
+    """T1: the handler catches BaseException, not merely Exception — a BaseException-derived plan
+    failure still releases the own token and propagates the original."""
+    ns, oid = _seed(real_qdrant, importance=5)
+
+    def exploding_plan(_cur: dict[str, Any]) -> MutationPlan:
+        raise _BaseBoom("base-level plan failure")
+
+    with pytest.raises(_BaseBoom, match="base-level plan failure"):
+        _run_owned(
+            real_qdrant,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=exploding_plan,
+        )
+    row = _payload(real_qdrant, oid)
+    assert row.get("update_lease_token") is None  # released even on a BaseException
+    assert row.get("version") == 1
+
+
+class _SkipClearFake:
+    """Pure-unit fake: acquire succeeds, but the skip-release set_payload NEVER lands (the clear is a
+    no-op), so the own token can never be confirmed cleared. Proves the skip path fails loud on its
+    bounded exact-token clear instead of falling through to outer-loop TTL recovery."""
+
+    def __init__(self) -> None:
+        self._token: str | None = None
+        self._acquired = False
+
+    def scroll(self, *_a: Any, **_k: Any) -> Any:
+        rec = type(
+            "R",
+            (),
+            {
+                "id": "p1",
+                "payload": {
+                    "namespace": "n/n/episodic",
+                    "object_id": "o",
+                    "version": 1,
+                    "update_lease_token": self._token,
+                },
+            },
+        )()
+        return ([rec], None)
+
+    def set_payload(self, *, payload: dict[str, Any], **_k: Any) -> Any:
+        tok = payload.get("update_lease_token", "__missing__")
+        if tok not in (None, "__missing__") and not self._acquired:
+            self._token = cast(str, tok)  # acquire our own token
+            self._acquired = True
+        # A clear (tok is None) is a deliberate no-op: the token stays, so readback never confirms.
+        return None
+
+
+class _SkipClearFlakyFake(_SkipClearFake):
+    """Like _SkipClearFake, but the clear lands after ``clear_fails`` refusals — proves the bounded
+    skip-clear RETRIES and confirms within budget."""
+
+    def __init__(self, clear_fails: int) -> None:
+        super().__init__()
+        self._clear_fails = clear_fails
+
+    def set_payload(self, *, payload: dict[str, Any], **_k: Any) -> Any:
+        tok = payload.get("update_lease_token", "__missing__")
+        if tok not in (None, "__missing__") and not self._acquired:
+            self._token = cast(str, tok)
+            self._acquired = True
+        elif tok is None:  # a clear attempt
+            if self._clear_fails > 0:
+                self._clear_fails -= 1  # refuse this round
+            else:
+                self._token = None  # land the clear
+        return None
+
+
+def test_skip_clear_fails_loud_when_unclearable() -> None:
+    """T2: a skip whose exact-own clear can never confirm fails loud on the BOUNDED skip-release
+    (discriminated by message), NOT by falling through to the 160-round outer-loop TTL exhaustion —
+    the pre-cleanup bug path, which also raises MutationLeaseConflict but with the generic message."""
+    with pytest.raises(MutationLeaseConflict, match="skip-release"):
+        _run_owned(
+            cast(Any, _SkipClearFake()),
+            _COLL,
+            namespace="n/n/episodic",
+            object_id="o",
+            point_id="p1",
+            plan=lambda cur: MutationPlan(changes={}, skip=True),
+        )
+
+
+def test_skip_clear_retries_until_confirmed() -> None:
+    """T2: the bounded skip-clear retries and confirms within budget when the clear eventually lands.
+    Returns the released current truth without raising."""
+    published = _run_owned(
+        cast(Any, _SkipClearFlakyFake(clear_fails=2)),
+        _COLL,
+        namespace="n/n/episodic",
+        object_id="o",
+        point_id="p1",
+        plan=lambda cur: MutationPlan(changes={}, skip=True),
+    )
+    assert published.get("update_lease_token") is None  # confirmed released
+    assert published.get("version") == 1  # no-op — nothing bumped
+
+
+class _CleanupBoom(RuntimeError):
+    """Raised by the exact-own cleanup clear itself, to prove it never masks the original error."""
+
+
+class _ClearBoom:
+    """Wraps a real client and raises on the exact-own CLEANUP clear only (a ``set_payload`` whose
+    payload sets ``update_lease_token`` to None and carries no ``version`` — i.e. not the acquire, not
+    the commit). Acquire and confirm proceed on the real row so the own token is genuinely held."""
+
+    def __init__(self, inner: QdrantClient) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def set_payload(
+        self, *, collection_name: str, payload: dict[str, Any], points: Any, **kw: Any
+    ) -> Any:
+        if payload.get("update_lease_token", "__x__") is None and "version" not in payload:
+            raise _CleanupBoom("exact-own clear failed")
+        return self._inner.set_payload(
+            collection_name=collection_name, payload=payload, points=points, **kw
+        )
+
+
+@pytest.mark.integration
+def test_cleanup_failure_does_not_mask_original(real_qdrant: QdrantClient) -> None:
+    """Yua checkpoint fix 1 (exception integrity): when plan() raises AND the exact-own cleanup ALSO
+    raises, the ORIGINAL plan error must propagate (type + message intact) and the cleanup failure
+    must be OBSERVABLE as attached context — never a silent claim that cleanup succeeded, and never
+    the cleanup error masking the original."""
+    ns, oid = _seed(real_qdrant, importance=5)
+
+    def exploding_plan(_cur: dict[str, Any]) -> MutationPlan:
+        raise _Boom("plan blew up")
+
+    client = cast(QdrantClient, _ClearBoom(real_qdrant))
+    with pytest.raises(
+        _Boom, match="plan blew up"
+    ) as excinfo:  # ORIGINAL survives, not _CleanupBoom
+        _run_owned(
+            client,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=exploding_plan,
+        )
+    notes = getattr(excinfo.value, "__notes__", [])
+    assert any("cleanup" in n.lower() for n in notes), (
+        f"cleanup failure must be observable on the original as a note; got {notes!r}"
+    )
+    assert any(
+        "_CleanupBoom" in n for n in notes
+    )  # the actual cleanup error is surfaced, not hidden
