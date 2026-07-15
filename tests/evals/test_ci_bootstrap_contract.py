@@ -148,3 +148,75 @@ jobs:
     """
     with pytest.raises(AssertionError, match="Must use canonical uv python install"):
         _assert_workflow_contract(decoy_content)
+
+
+# --- On-demand dispatch of the live scheduled gate -------------------------------------------------
+
+
+def _assert_dispatch_contract(content: str) -> None:
+    """The live scheduled gate must be dispatchable on demand: ``workflow_dispatch`` present, and the
+    step that runs ``musubi.evals scheduled`` fires for it (schedule OR workflow_dispatch) — in
+    whatever job it lives (a step in ``smoke`` today, a dedicated job after the RET-004 merge)."""
+    parsed = yaml.safe_load(content)
+    # PyYAML parses the ``on:`` key as the YAML 1.1 boolean True — accept either.
+    triggers = parsed.get("on", parsed.get(True, {})) or {}
+    assert "workflow_dispatch" in triggers, (
+        "evals.yml must expose workflow_dispatch on the default branch so the live scheduled gate can "
+        "be dispatched on demand pre-merge"
+    )
+
+    scheduled_guard: str | None = None
+    for job in parsed.get("jobs", {}).values():
+        for step in job.get("steps", []):
+            run_cmd = step.get("run", "") or ""
+            if "musubi.evals scheduled" in run_cmd or "musubi-evals scheduled" in run_cmd:
+                scheduled_guard = step.get("if") or job.get("if") or ""
+    assert scheduled_guard is not None, "Workflow must run the live scheduled gate somewhere"
+    assert "workflow_dispatch" in scheduled_guard, (
+        "the live scheduled gate must run for workflow_dispatch (schedule OR workflow_dispatch), "
+        "otherwise the on-demand trigger fires nothing"
+    )
+
+
+def test_evals_workflow_dispatch_enabled() -> None:
+    """Contract: evals.yml exposes workflow_dispatch and wires the scheduled gate to it."""
+    repo_root = Path(__file__).parent.parent.parent
+    content = (repo_root / ".github" / "workflows" / "evals.yml").read_text(encoding="utf-8")
+    _assert_dispatch_contract(content)
+
+
+def test_evals_workflow_dispatch_discriminator_missing_trigger() -> None:
+    """Contract: a workflow that runs the scheduled gate but omits the workflow_dispatch trigger is
+    rejected — it could never be dispatched on demand pre-merge."""
+    no_dispatch = """
+on:
+  schedule:
+    - cron: '0 0 * * *'
+jobs:
+  smoke:
+    steps:
+      - name: Run Scheduled Baseline Report
+        if: github.event_name == 'schedule'
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+    """
+    with pytest.raises(AssertionError, match="must expose workflow_dispatch"):
+        _assert_dispatch_contract(no_dispatch)
+
+
+def test_evals_workflow_dispatch_discriminator_gate_not_wired() -> None:
+    """Contract: workflow_dispatch present but the scheduled gate step not wired to it is rejected —
+    the on-demand trigger would fire nothing."""
+    unwired = """
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+jobs:
+  smoke:
+    steps:
+      - name: Run Scheduled Baseline Report
+        if: github.event_name == 'schedule'
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+    """
+    with pytest.raises(AssertionError, match="must run for workflow_dispatch"):
+        _assert_dispatch_contract(unwired)
