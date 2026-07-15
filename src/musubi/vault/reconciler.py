@@ -31,8 +31,7 @@ from typing import Any, Literal, cast
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.types.common import Err
-from musubi.types.curated import CuratedKnowledge
-from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
+from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter, curated_knowledge_from_frontmatter
 from musubi.vault.namespacing import infer_namespace
 
 logger = logging.getLogger(__name__)
@@ -202,22 +201,7 @@ class VaultReconciler:
                 return "unchanged"
 
             fm = CuratedFrontmatter.model_validate(data)
-            memory = CuratedKnowledge(
-                object_id=fm.object_id,  # type: ignore[arg-type]
-                namespace=fm.namespace,  # type: ignore[arg-type]
-                vault_path=rel_path,
-                body_hash=body_hash,
-                title=fm.title,
-                content=body,
-                summary=fm.summary,
-                state=cast(Literal["matured", "superseded", "archived"], fm.state),
-                importance=fm.importance,
-                topics=fm.topics,
-                tags=fm.tags,
-                version=fm.version,
-                created_at=fm.created,
-                updated_at=fm.updated,
-            )
+            memory = curated_knowledge_from_frontmatter(fm, vault_path=rel_path, body_hash=body_hash, content=body)
             await self.curated_plane.create(memory)
             self._last_seen_hash[str(object_id)] = body_hash
             logger.debug("vault-reconcile upserted %s (hash=%s)", rel_path, body_hash[:12])
