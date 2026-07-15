@@ -123,6 +123,7 @@ class TransitionError:
     - ``circular_supersession`` — supersession would create A → B → A.
     - ``invariant_violation``  — model validation failed on the updated payload.
     - ``lifecycle_event_write_failed`` — mutation committed, audit persistence refused.
+    - ``version_fence_violation``     — expected_version did not match current_version.
     """
 
     code: str
@@ -193,12 +194,16 @@ def transition(
     # produces its warning even when the race collapses onto an illegal
     # transition from the actual current state.
     if expected_version is not None and expected_version != current_version:
-        log.warning(
-            "concurrent transition on %s: expected_version=%d, current_version=%d "
-            "(stale version; last writer wins)",
-            object_id,
-            expected_version,
-            current_version,
+        return Err(
+            error=TransitionError(
+                code="version_fence_violation",
+                message=(
+                    f"concurrent transition on {object_id}: expected_version={expected_version}, "
+                    f"current_version={current_version}"
+                ),
+                from_state=current_state,
+                to_state=target_state,
+            )
         )
 
     if not is_legal_transition(object_type, current_state, target_state):
