@@ -90,10 +90,15 @@ Parallel call to TEI for dense + sparse. See [[06-ingestion/embedding-strategy]]
 
 ### Step 4 — Dedup
 
-Same as POC: query Qdrant for cosine similarity ≥ `DUPLICATE_THRESHOLD` (0.92 default) within the same `namespace`. If hit:
+Query Qdrant for cosine similarity ≥ `DUPLICATE_THRESHOLD` (0.92 default) within the same
+`namespace`. A probe hit is eligible to merge only when strict factual compatibility also passes:
+normalized content must match and structured participants must be identical. Corrections,
+negations, participant or time changes, conflicting numbers, and other incompatible near-matches
+are inserted as new points. For a compatible hit:
 
 - Merge tags (set union).
-- Update content if the new content is strictly longer (more detail wins).
+- Update content if the new content is strictly longer (more detail wins). This `longer-wins`
+  policy applies only after factual compatibility authorizes the merge.
 - Bump `updated_at`, `updated_epoch`, `version`.
 - Increment `reinforcement_count`.
 - Emit LifecycleEvent(dedup-merged).

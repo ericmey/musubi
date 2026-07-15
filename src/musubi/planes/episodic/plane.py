@@ -4,8 +4,10 @@ Responsibilities (from [[04-data-model/episodic-memory]]):
 
 - **Create** — always ``state = "provisional"``, ``version = 1``. Auto-embed
   dense + sparse. Dedup against existing points in the same namespace via
-  dense cosine similarity; on hit, merge tags, bump ``reinforcement_count``
-  and ``version``, replace content with new text.
+  dense cosine similarity; on hit, merges ONLY when factual compatibility passes
+  (rejecting negations, corrections, specific participant or time changes).
+  On compatible hit, merges tags, bumps ``reinforcement_count`` and ``version``,
+  and decides content retention based on ``merge_strategy``.
 - **Get** — fetch by namespace + ``object_id``. Namespace scoping is
   enforced so a caller asking for the wrong namespace sees ``None``.
 - **Query** — dense retrieval filtered to the caller's namespace. Default
@@ -157,9 +159,15 @@ class EpisodicPlane:
     ) -> EpisodicMemory:
         """Write ``memory`` to Qdrant, deduping against the same namespace.
 
-        On a dedup hit, merges tags + bumps ``reinforcement_count`` and
+        Dedup evaluates dense cosine similarity, but merges ONLY if the
+        candidate passes strict factual compatibility (rejecting semantic
+        near-matches like negations or participant alterations). If incompatible,
+        inserts a fresh distinct row.
+
+        On a compatible dedup hit, merges tags + bumps ``reinforcement_count`` and
         ``version`` on the existing row instead of inserting. ``content``
-        is kept vs replaced based on ``merge_strategy``:
+        is kept vs replaced based on ``merge_strategy`` ONLY after compatibility
+        authorizes the merge:
 
         - ``longer-wins`` (default, matches spec §06-ingestion/capture):
           keep whichever of existing / new content is strictly longer.
@@ -244,12 +252,13 @@ class EpisodicPlane:
         one for sparse, then one atomic Qdrant upsert at the end.
 
         Dedup probes are per-row because Qdrant doesn't have a
-        "batch query_points" shape we can use today — but every dedup
-        hit writes via the same single terminal upsert (reinforce
-        updates + fresh inserts land in one call).
+        "batch query_points" shape we can use today. Each dedup probe must pass
+        factual compatibility to authorize the hit; incompatible candidates
+        resolve to fresh inserts. Every compatible dedup hit and fresh insert
+        write via the same single terminal upsert.
 
         Returns the final row for each input position in input order,
-        same as ``create`` (existing row on dedup hit, fresh row
+        same as ``create`` (existing row on compatible dedup hit, fresh row
         otherwise).
         """
         if not memories:
