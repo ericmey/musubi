@@ -245,6 +245,15 @@ def test_legacy_run_eval_validates_input_and_bounds_ndcg() -> None:
     assert 0.0 <= result.metrics["ndcg@10"] <= 1.0
 
 
+def test_smoke_gate_ndcg_at_10_excludes_rank_eleven() -> None:
+    from musubi.evals.runner import run_smoke_gate
+
+    corpus = [{"id": f"d{i:02d}", "embedding": [float(20 - i)], "relevance": 0} for i in range(10)]
+    corpus.append({"id": "relevant", "embedding": [0.0], "relevance": 3})
+    result = run_smoke_gate(corpus, query_embedding=[1.0])
+    assert result.metrics["ndcg@10"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # Test 4: Deterministic Rerun Stability
 # ---------------------------------------------------------------------------

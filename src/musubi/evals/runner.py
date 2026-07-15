@@ -73,7 +73,8 @@ def run_smoke_gate(corpus: list[dict[str, Any]], *, query_embedding: list[float]
     def dcg(rels: list[int]) -> float:
         return float(sum((2**r - 1) / log2(i + 2) for i, r in enumerate(rels)))
 
-    idcg = dcg(sorted(relevances, reverse=True))
-    ndcg = dcg(relevances) / idcg if idcg > 0 else 0.0
+    top_k = relevances[:10]
+    idcg = dcg(sorted(relevances, reverse=True)[:10])
+    ndcg = dcg(top_k) / idcg if idcg > 0 else 0.0
 
     return EvalResult({"ndcg@10": ndcg}, ordered, corpus_checksum=checksum)

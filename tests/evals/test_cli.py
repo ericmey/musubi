@@ -233,8 +233,46 @@ def test_discrimination_unrelated_exception_not_swallowed(
     with open(data_dir / "manifest.json", "w") as f:
         f.write("{bad json")
 
-    with pytest.raises(AssertionError, match="unrelated"):
-        _run_cli_and_catch_legacy_defect(monkeypatch, capsys, data_dir)
+    monkeypatch.setattr(sys, "argv", ["musubi-evals", "smoke", "--data-dir", str(data_dir)])
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+    assert exc_info.value.code != 0
+    assert "Manifest loading failed" in capsys.readouterr().out
+
+
+def test_smoke_missing_input_names_smoke_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["musubi-evals", "smoke", "--data-dir", str(tmp_path)])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert "smoke_fixture.json or manifest.json" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bad_value", [None, "bad", float("nan"), float("inf"), True])
+def test_smoke_baseline_ndcg_fails_closed(
+    bad_value: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data_dir = tmp_path / "data"
+    fixture = {
+        "query_embedding": [1.0],
+        "corpus": [
+            {"id": "good", "text": "good", "relevance": 1, "embedding": [1.0]},
+            {"id": "bad", "text": "bad", "relevance": 0, "embedding": [0.0]},
+        ],
+    }
+    _write_fixture(data_dir, fixture)
+    (data_dir / "baseline.json").write_text(
+        json.dumps({"ndcg@10": bad_value}, allow_nan=True), encoding="utf-8"
+    )
+    monkeypatch.setattr(sys, "argv", ["musubi-evals", "smoke", "--data-dir", str(data_dir)])
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+    assert exc_info.value.code != 0
+    assert "Baseline validation failed" in capsys.readouterr().out
 
 
 def test_scheduled_command_fails_closed_until_live_gate_exists(

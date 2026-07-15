@@ -10,6 +10,8 @@ def test_uv_virtualenv_active() -> None:
     """
     Contract: The CI runner MUST execute within a properly isolated virtual environment.
     """
+    if not os.environ.get("CI"):
+        pytest.skip("CI-only environment contract")
     assert sys.prefix != sys.base_prefix, "CI execution MUST be isolated in a virtual environment"
     assert "VIRTUAL_ENV" in os.environ, "VIRTUAL_ENV environment variable MUST be present"
 

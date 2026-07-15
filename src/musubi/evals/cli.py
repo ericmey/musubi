@@ -1,5 +1,6 @@
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -29,11 +30,15 @@ def main() -> None:
 
     required_input = smoke_fixture_path if args.command == "smoke" else corpus_path
     if not manifest_path.exists() or not required_input.exists():
-        _write("Missing corpus or manifest.")
+        _write(f"Missing {required_input.name} or manifest.json.")
         raise SystemExit(1)
 
-    with open(manifest_path) as f:
-        manifest = json.load(f)
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        _write(f"Manifest loading failed: {exc}")
+        raise SystemExit(1) from exc
 
     # Validate manifest and checksum
     try:
@@ -58,10 +63,21 @@ def main() -> None:
             _write(f"Smoke gate failed threshold: ndcg@10={ndcg} < 0.5")
             raise SystemExit(1)
         if baseline_path.exists():
-            with open(baseline_path) as f:
-                baseline = json.load(f)
-            if ndcg < baseline.get("ndcg@10", 0.0) - 0.02:
-                _write(f"Regression detected: ndcg@10={ndcg} vs baseline {baseline.get('ndcg@10')}")
+            try:
+                with open(baseline_path) as f:
+                    baseline = json.load(f)
+                baseline_ndcg = baseline.get("ndcg@10") if isinstance(baseline, dict) else None
+                if (
+                    isinstance(baseline_ndcg, bool)
+                    or not isinstance(baseline_ndcg, (int, float))
+                    or not math.isfinite(float(baseline_ndcg))
+                ):
+                    raise ValueError("ndcg@10 must be a finite number")
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
+                _write(f"Baseline validation failed: {exc}")
+                raise SystemExit(1) from exc
+            if ndcg < float(baseline_ndcg) - 0.02:
+                _write(f"Regression detected: ndcg@10={ndcg} vs baseline {baseline_ndcg}")
                 raise SystemExit(1)
         _write(f"Smoke gate passed. ndcg@10={ndcg}")
         raise SystemExit(0)
