@@ -1,16 +1,24 @@
-import pytest
-from datetime import datetime, timezone
-from musubi.types.common import generate_ksuid, ArtifactRef
-from musubi.vault.frontmatter import CuratedFrontmatter, curated_knowledge_from_frontmatter, parse_frontmatter
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
-def test_vault004_fidelity_round_trip():
-    # 1. Provide all explicitly supported fields in frontmatter
+import pytest
+
+from musubi.types.common import generate_ksuid
+from musubi.vault.frontmatter import (
+    CuratedFrontmatter,
+    curated_knowledge_from_frontmatter,
+    parse_frontmatter,
+)
+
+
+def test_vault004_fidelity_round_trip() -> None:
     fid = generate_ksuid()
     sid = generate_ksuid()
     cid = generate_ksuid()
     aid = generate_ksuid()
     promoted_ksuid = generate_ksuid()
-    
+
     yaml_text = f"""---
 object_id: {fid}
 namespace: aoi/knowledge/curated
@@ -49,13 +57,13 @@ Body text."""
 
     data, body = parse_frontmatter(yaml_text)
     fm = CuratedFrontmatter.model_validate(data)
-    
-    # 2. Reconstruct CuratedKnowledge via shared seam
+
     vault_path = "test/path.md"
     body_hash = "a" * 64
-    memory = curated_knowledge_from_frontmatter(fm, vault_path=vault_path, body_hash=body_hash, content=body)
-    
-    # 3. Assert all supported fields are correctly copied
+    memory = curated_knowledge_from_frontmatter(
+        fm, vault_path=vault_path, body_hash=body_hash, content=body
+    )
+
     assert memory.object_id == fid
     assert memory.namespace == "aoi/knowledge/curated"
     assert memory.title == "The Binding Contract"
@@ -66,27 +74,27 @@ Body text."""
     assert memory.state == "matured"
     assert memory.version == 3
     assert memory.musubi_managed is False
-    assert memory.created_at == datetime(2026, 7, 1, tzinfo=timezone.utc)
-    assert memory.updated_at == datetime(2026, 7, 15, tzinfo=timezone.utc)
-    assert memory.valid_from == datetime(2026, 7, 2, tzinfo=timezone.utc)
-    assert memory.valid_until == datetime(2027, 1, 1, tzinfo=timezone.utc)
+    assert memory.created_at == datetime(2026, 7, 1, tzinfo=UTC)
+    assert memory.updated_at == datetime(2026, 7, 15, tzinfo=UTC)
+    assert memory.valid_from == datetime(2026, 7, 2, tzinfo=UTC)
+    assert memory.valid_until == datetime(2027, 1, 1, tzinfo=UTC)
     assert memory.supersedes == [sid]
     assert memory.superseded_by == sid
     assert memory.merged_from == [fid]
     assert memory.promoted_from == promoted_ksuid
-    assert memory.promoted_at == datetime(2026, 7, 10, tzinfo=timezone.utc)
+    assert memory.promoted_at == datetime(2026, 7, 10, tzinfo=UTC)
     assert len(memory.supported_by) == 1
     assert memory.supported_by[0].artifact_id == aid
     assert memory.supported_by[0].quote == "Explicitly backed"
     assert memory.linked_to_topics == ["testing"]
     assert memory.contradicts == [cid]
-    
+
     assert memory.vault_path == vault_path
     assert memory.body_hash == body_hash
     assert memory.content == "Body text."
 
-def test_vault004_visible_failure_on_unsupported_fields():
-    # Provide frontmatter with unsupported read_by list
+
+def test_vault004_visible_failure_on_unsupported_fields() -> None:
     fid = generate_ksuid()
     yaml_text = f"""---
 object_id: {fid}
@@ -100,7 +108,118 @@ read_by:
 Body."""
     data, body = parse_frontmatter(yaml_text)
     fm = CuratedFrontmatter.model_validate(data)
-    
-    # The seam MUST fail visibly
+
     with pytest.raises(ValueError, match="read_by is unsupported on CuratedKnowledge"):
-        curated_knowledge_from_frontmatter(fm, vault_path="x", body_hash="a"*64, content=body)
+        curated_knowledge_from_frontmatter(fm, vault_path="x", body_hash="a" * 64, content=body)
+
+
+def test_vault004_visible_failure_on_unknown_extra_fields() -> None:
+    fid = generate_ksuid()
+    yaml_text = f"""---
+object_id: {fid}
+namespace: aoi/knowledge/curated
+title: "Unsupported Extra"
+created: 2026-07-01T00:00:00Z
+updated: 2026-07-15T00:00:00Z
+made_up_field_1: true
+made_up_field_2: false
+---
+Body."""
+    data, body = parse_frontmatter(yaml_text)
+    fm = CuratedFrontmatter.model_validate(data)
+
+    with pytest.raises(ValueError, match="Unsupported frontmatter fields detected"):
+        curated_knowledge_from_frontmatter(fm, vault_path="x", body_hash="a" * 64, content=body)
+
+
+@pytest.mark.anyio
+async def test_vault004_operational_reconciler_call(tmp_path: Path) -> None:
+
+    from musubi.types.curated import CuratedKnowledge
+    from musubi.vault.reconciler import VaultReconciler
+
+    class DummyCuratedPlane:
+        def __init__(self) -> None:
+            self.created_memory: CuratedKnowledge | None = None
+
+        async def create(self, memory: CuratedKnowledge) -> None:
+            self.created_memory = memory
+
+        def scan_vault_rows(self) -> Any:
+            class DummyScanner:
+                async def filter(self, _: Any) -> list[Any]:
+                    return []
+
+            return DummyScanner()
+
+    reconciler = VaultReconciler(
+        vault_root=tmp_path,
+        curated_plane=DummyCuratedPlane(),  # type: ignore
+        coordinator=None,  # type: ignore
+    )
+
+    fid = generate_ksuid()
+    md_path = tmp_path / "test.md"
+    yaml_text = f"""---
+object_id: {fid}
+namespace: aoi/knowledge/curated
+title: "Op Test"
+created: 2026-07-01T00:00:00Z
+updated: 2026-07-15T00:00:00Z
+musubi-managed: false
+---
+Body."""
+    md_path.write_text(yaml_text)
+
+    res = await reconciler._reconcile_file(md_path)
+    assert res == "upserted"
+
+    created = getattr(reconciler.curated_plane, "created_memory")
+    assert created is not None
+    assert created.object_id == fid
+    assert created.title == "Op Test"
+    assert created.musubi_managed is False
+    assert created.content == "Body."
+
+
+@pytest.mark.anyio
+async def test_vault004_operational_watcher_call(tmp_path: Path) -> None:
+    from musubi.types.curated import CuratedKnowledge
+    from musubi.vault.watcher import VaultWatcher
+
+    class DummyCuratedPlane:
+        def __init__(self) -> None:
+            self.created_memory: CuratedKnowledge | None = None
+
+        async def create(self, memory: CuratedKnowledge) -> None:
+            self.created_memory = memory
+
+    watcher = VaultWatcher(
+        vault_root=tmp_path,
+        curated_plane=DummyCuratedPlane(),  # type: ignore
+        write_log=type("WL", (), {"consume_if_exists": lambda self, a, b: False})(),
+    )
+
+    fid = generate_ksuid()
+    md_path = tmp_path / "test.md"
+    yaml_text = f"""---
+object_id: {fid}
+namespace: aoi/knowledge/curated
+title: "Op Watcher"
+created: 2026-07-01T00:00:00Z
+updated: 2026-07-15T00:00:00Z
+musubi-managed: false
+---
+Body."""
+    md_path.write_text(yaml_text)
+
+    await watcher._handle_event_inner(
+        str(md_path), type("Event", (), {"event_type": "modified", "is_directory": False})()
+    )
+
+    created = getattr(watcher.curated_plane, "created_memory")
+    assert created is not None
+    assert created.object_id == fid
+    assert created.title == "Op Watcher"
+    assert created.musubi_managed is False
+    assert created.content == "Body."
