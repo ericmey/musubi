@@ -206,8 +206,20 @@ async def test_archived_row_excluded_from_default_retrieval(
     ns: str,
     watcher: VaultWatcher,
 ) -> None:
-    """Bullet 2: post-archive, the curated default-retrieval query returns
-    nothing; the row remains readable by ``object_id`` (audit/history path)."""
+    """Bullet 2: post-archive, the curated default-retrieval path
+    (``CuratedPlane.query``) does NOT return the archived row, and
+    the row remains readable by ``object_id`` via
+    :meth:`CuratedPlane.get` (the audit/history path).
+
+    This is the Yua-review-corrected (round-4) version: the previous
+    raw ``plane._client.scroll(scroll_filter=None)`` assertion
+    could not actually prove the row was excluded from the default
+    retrieval path because the default path is
+    ``CuratedPlane.query(...)`` which filters on
+    ``state in ("matured",)``. This test now drives the default
+    path directly and asserts the archived row is absent from its
+    result while still readable by id.
+    """
     saved = await plane.create(
         _make_curated(
             namespace=ns,
@@ -220,19 +232,23 @@ async def test_archived_row_excluded_from_default_retrieval(
         str(watcher.vault_root / rel_path),
         FileDeletedEvent(str(watcher.vault_root / rel_path)),
     )
-    # Default retrieval excludes archived. The CuratedPlane contract for
-    # default retrieval is `state in {provisional, matured, promoted,
-    # synthesized, demoted, superseded}`. Verify via a payload filter.
-    archived_only = plane._client.scroll(
-        collection_name="musubi_curated",
-        scroll_filter=None,
-        limit=100,
-        with_payload=["object_id", "state"],
-        with_vectors=False,
+
+    # The actual default retrieval path: ``CuratedPlane.query`` filters
+    # on ``state in ("matured",)`` and namespace + valid_at. The
+    # archived row must NOT be in the result.
+    default_view = await plane.query(namespace=ns, query="default excluded")
+    default_view_ids = {row.object_id for row in default_view}
+    assert saved.object_id not in default_view_ids, (
+        f"archived row {saved.object_id} must NOT appear in the "
+        f"default retrieval view; got {default_view_ids!r}"
     )
-    states = {pt.payload.get("state") for pt in archived_only[0] if pt.payload}
-    assert "archived" in states, "the canonical transition did not write 'archived'"
-    # The row is still readable by id (audit/history retention).
+    assert all(row.state == "matured" for row in default_view), (
+        f"default view must contain ONLY matured rows; got "
+        f"states={[row.state for row in default_view]!r}"
+    )
+
+    # The row is still readable by id (audit/history retention) — the
+    # ``get`` path is state-agnostic.
     fetched = await plane.get(namespace=ns, object_id=saved.object_id)
     assert fetched is not None
     assert fetched.state == "archived"
@@ -799,7 +815,7 @@ def test_runtime_factory_produces_watcher_construction_inputs(
     """VAULT-003 Blocker 1 (deeper): with a stubbed settings object the
     runtime factory must produce a bundle that successfully
     constructs a ``VaultWatcher`` (i.e. the field names match the
-    new required-keyword-only ``coordinator`` parameter). This
+    new required-no-default ``coordinator`` parameter). This
     proves the production wiring is end-to-end constructable, not
     just importable.
 
@@ -902,7 +918,7 @@ def test_runtime_factory_produces_watcher_construction_inputs(
     # And `coordinator` must be required (no default) — production-wiring
     # discriminator.
     assert sig.parameters["coordinator"].default is sig.parameters["coordinator"].empty, (
-        "coordinator must be a required keyword-only parameter"
+        "coordinator must be a required parameter (no default) — production-wiring discriminator"
     )
 
     # Construct a real watcher from the runtime fields (MagicMock

@@ -109,8 +109,8 @@ The watcher's delete handler does:
 
 ### Constructor seam (production-wiring discriminator)
 
-`VaultWatcher.__init__` adds a REQUIRED keyword-only `coordinator`
-parameter:
+`VaultWatcher.__init__` adds a REQUIRED `coordinator` parameter
+(no default):
 
 ```python
 def __init__(
@@ -126,8 +126,12 @@ def __init__(
 ```
 
 No default. A caller that omits the argument fails at the Python
-call site (`TypeError: missing 1 required keyword-only argument`)
-— there is no silent fallback to a no-op coordinator.
+call site (`TypeError: missing 1 required positional argument`)
+— there is no silent fallback to a no-op coordinator. All call
+sites in this slice pass `coordinator=...` by keyword for
+readability, but the parameter is not formally keyword-only
+(yielding to Yua review: don't change constructor semantics
+just for prose).
 
 The existing `tests/vault/test_sync.py` watcher fixture is updated
 to pass a `MagicMock()` coordinator (these legacy sync tests do
@@ -187,48 +191,6 @@ and exercise the canonical seam end-to-end.
 
 - [[06-ingestion/vault-sync#Delete event handling]]
 - [[06-ingestion/vault-sync#Identity resolution from stored vault_path]]
-
-## Test Contract (10 bullets, state 1 = passing at handoff)
-
-The VAULT-003 slice narrows the parent slice-vault-sync Test Contract
-to the 10 bullets that close the live-delete gap. The 26 parent
-bullets outside this scope are unchanged by VAULT-003 and remain the
-parent slice's concern; this slice does NOT close them.
-
-1. `test_delete_archives_matching_row_via_canonical_transition`
-   — RED. Delete resolves to exact stored `vault_path`; the row's
-   `state` transitions to `'archived'` through the canonical
-   coordinator (NOT raw `set_payload`).
-2. `test_archived_row_excluded_from_default_retrieval`
-   — RED. Post-archive, the curated default-retrieval query returns
-   nothing; the row remains readable by `object_id`.
-3. `test_audit_and_history_retain_archived_row`
-   — RED. The `lifecycle_events` table contains a row with
-   `reason='vault file deleted: ...'`, `to_state='archived'`,
-   `actor='vault-watcher'`.
-4. `test_repeat_delete_is_idempotent`
-   — RED. A second delete on an already-archived row returns
-   `illegal_transition` from the canonical state machine; the
-   watcher treats that single error code as success (no warning,
-   no mutation, no retry).
-5. `test_sibling_path_does_not_archive_target`
-   — RED. Delete `foo/bar.md`; `foo/bar-2.md` and `foo/bar.md.bak`
-   both remain in `matured`. The exact-match lookup excludes both.
-6. `test_prefix_collision_does_not_archive`
-   — RED. Delete `dir/sub/file.md`; `dir/subfile.md` and
-   `dir/sub2/file.md` remain in `matured`.
-7. `test_missing_row_is_observable_noop`
-   — RED. Delete a path with no curated row; an `info`-level log
-   records the path; no mutation, no error, no warning.
-8. `test_transition_failure_remains_visible`
-   — RED. Coordinator returns `Err(TransitionError(
-   code='version_fence_violation'))`; the watcher logs a structured
-   `warning` with `code`, `message`, `path`. No retry. No
-   success-log. The row's state is unchanged.
-9. GREEN preservation guard: existing
-   `test_on_created_indexes_new_file` continues to pass.
-10. GREEN preservation guard: existing `test_dotfile_ignored`
-    continues to pass.
 
 ## Issue #552 assignment path (work-log audit trail)
 

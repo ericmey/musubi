@@ -159,9 +159,11 @@ class VaultWatcher:
         self.curated_plane = curated_plane
         self.write_log = write_log
         # VAULT-003: the canonical archive path requires the
-        # LifecycleTransitionCoordinator. Required keyword-only param
-        # is the production-wiring discriminator — a caller that
-        # omits the argument fails at the Python call site.
+        # LifecycleTransitionCoordinator. The required-no-default
+        # parameter is the production-wiring discriminator — a
+        # caller that omits the argument fails at the Python
+        # call site (`TypeError: missing 1 required positional
+        # argument`).
         self.coordinator = coordinator
         self.debounce_sec = debounce_sec
         self.writer = VaultWriter(vault_root, write_log)
