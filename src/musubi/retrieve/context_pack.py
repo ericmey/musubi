@@ -129,6 +129,13 @@ class ContextPackItem(BaseModel):
     evidence_handle: str
     why_surfaced: str
     score: float
+    # DQ-001: silent-truncation fix. The displayed content is the
+    # post-cap text; these fields surface the cut state (was the
+    # original truncated?) and the original (pre-cap) character length
+    # so callers can detect the cut and fetch the full body via
+    # ``evidence_handle`` (namespace/object_id).
+    content_truncated: bool = False
+    content_length: int | None = None
 
 
 class ContextPackGroup(BaseModel):
@@ -285,6 +292,9 @@ def _to_item(ranked: _RankedCandidate, *, remaining_chars: int) -> ContextPackIt
     if remaining_chars <= 0:
         return None
     text = _display_text(ranked.candidate)
+    # DQ-001: capture the original (pre-cap) character length BEFORE _cap_text
+    # so we can surface the cut state and original length to callers.
+    original_length = len(text)
     content = _cap_text(text, max_chars=remaining_chars)
     if not content:
         return None
@@ -299,6 +309,12 @@ def _to_item(ranked: _RankedCandidate, *, remaining_chars: int) -> ContextPackIt
         evidence_handle=evidence,
         why_surfaced=_why(ranked),
         score=round(ranked.score, 4),
+        # DQ-001: silent-truncation fix. Was the displayed text cut from a
+        # longer original? Default False (no cut); set True when the cap
+        # truncated the text. Carry the original length alongside so
+        # callers can detect the cut and fetch the full body.
+        content_truncated=(original_length > remaining_chars),
+        content_length=original_length,
     )
 
 
