@@ -29,7 +29,9 @@ blocks: []
 - `tests/vault/test_watcher_boot_scan_vault_002.py` (red contract test, tests only; no src/ changes)
 - `tests/vault/test_watcher_boot_scan.py` (transfer of ownership from `slice-ops-hardening-suite` per Yua 17:54:34: the dispatch-shape expectation in `test_boot_scan_detects_body_hash_change` must match the accepted source fix (c0c91ba) which passes `str(path)` (the ABSOLUTE in-root path) instead of the relative path string; also prefers deterministic task completion over fixed `asyncio.sleep(0.1)`)
 - `docs/Musubi/_slices/slice-vault-002-boot-scan-fix.md`
-- `docs/Musubi/_inbox/locks/slice-vault-002-boot-scan-fix.lock`
+
+The completed slice's former lock was removed during the 2026-07-15 board reconciliation; it is
+not an active owned path.
 
 ## Out of owns_paths (intentionally not claimed by this slice)
 
