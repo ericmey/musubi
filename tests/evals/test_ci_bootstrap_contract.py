@@ -165,17 +165,26 @@ def _assert_dispatch_contract(content: str) -> None:
         "be dispatched on demand pre-merge"
     )
 
-    scheduled_guard: str | None = None
+    # GitHub applies BOTH the job guard AND the step guard: the gate runs only if EVERY applicable
+    # guard permits the event. So collect ALL non-empty applicable guards (job-level + step-level) on
+    # the scheduled-gate step — checking only one (the old ``step or job``) falsely passes when the
+    # unchecked guard excludes workflow_dispatch (Copilot #550).
+    applicable_guards: list[str] | None = None
     for job in parsed.get("jobs", {}).values():
         for step in job.get("steps", []):
             run_cmd = step.get("run", "") or ""
             if "musubi.evals scheduled" in run_cmd or "musubi-evals scheduled" in run_cmd:
-                scheduled_guard = step.get("if") or job.get("if") or ""
-    assert scheduled_guard is not None, "Workflow must run the live scheduled gate somewhere"
-    assert "workflow_dispatch" in scheduled_guard, (
-        "the live scheduled gate must run for workflow_dispatch (schedule OR workflow_dispatch), "
-        "otherwise the on-demand trigger fires nothing"
-    )
+                applicable_guards = [guard for guard in (job.get("if"), step.get("if")) if guard]
+    assert applicable_guards is not None, "Workflow must run the live scheduled gate somewhere"
+    for guard in applicable_guards:
+        # A guard that gates on the event (references github.event_name) must permit
+        # workflow_dispatch; a guard that does not gate on the event does not restrict it.
+        if "github.event_name" in guard:
+            assert "workflow_dispatch" in guard, (
+                "every event-gated guard on the scheduled gate (job-level AND step-level) must permit "
+                "workflow_dispatch — a job or step guard that excludes it silently blocks the "
+                "on-demand run"
+            )
 
 
 def test_evals_workflow_dispatch_enabled() -> None:
@@ -203,10 +212,10 @@ jobs:
         _assert_dispatch_contract(no_dispatch)
 
 
-def test_evals_workflow_dispatch_discriminator_gate_not_wired() -> None:
-    """Contract: workflow_dispatch present but the scheduled gate step not wired to it is rejected —
-    the on-demand trigger would fire nothing."""
-    unwired = """
+def test_evals_workflow_dispatch_discriminator_step_guard_excludes() -> None:
+    """Contract: workflow_dispatch present but the scheduled gate STEP guard is schedule-only is
+    rejected — the on-demand trigger would fire nothing."""
+    step_excludes = """
 on:
   workflow_dispatch:
   schedule:
@@ -218,5 +227,26 @@ jobs:
         if: github.event_name == 'schedule'
         run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
     """
-    with pytest.raises(AssertionError, match="must run for workflow_dispatch"):
-        _assert_dispatch_contract(unwired)
+    with pytest.raises(AssertionError, match="must permit workflow_dispatch"):
+        _assert_dispatch_contract(step_excludes)
+
+
+def test_evals_workflow_dispatch_discriminator_job_guard_excludes() -> None:
+    """Contract (Copilot #550): a dispatch-wired STEP is still blocked when its JOB guard is
+    schedule-only — GitHub requires BOTH guards to permit the event. The contract must catch the
+    job-level exclusion, not just the step-level one."""
+    job_excludes = """
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+jobs:
+  scheduled:
+    if: github.event_name == 'schedule'
+    steps:
+      - name: Run Scheduled Baseline Report
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+    """
+    with pytest.raises(AssertionError, match="must permit workflow_dispatch"):
+        _assert_dispatch_contract(job_excludes)
