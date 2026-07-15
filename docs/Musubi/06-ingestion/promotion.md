@@ -179,13 +179,18 @@ The operator (human) sees this in their Obsidian vault's inbox or via any presen
 
 ## Rejection / Promotion failure
 
-If promotion fails for any concept (rendering validation, path conflict, LLM repeated failure):
+If promotion fails deterministically for a concept (rendered-body policy validation,
+path policy, or curated model validation):
 
 - `promotion_attempts += 1`.
 - `promotion_rejected_at = now`.
 - `promotion_rejected_reason = "..."`.
 - Emit Thought on `ops-alerts` with the reason.
 - Concept remains in `matured` state, still eligible for retry on next run — unless `promotion_attempts == 3`, in which case it stays "matured" forever until human intervention (we stop trying).
+
+Transient transport, malformed-envelope, vault, Qdrant, transition, and other
+infrastructure failures do not modify rejection fields or consume an attempt; the
+next sweep retries them and logs the exception with traceback.
 
 ## Human override
 

@@ -277,6 +277,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             "Transient infrastructure failure during render for concept %s: %s",
             concept.object_id,
             e,
+            exc_info=True,
         )
         return False
 
@@ -411,6 +412,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             "Transient infrastructure failure during post-render for concept %s: %s",
             concept.object_id,
             e,
+            exc_info=True,
         )
         return False
 

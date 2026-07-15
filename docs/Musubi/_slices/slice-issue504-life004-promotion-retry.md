@@ -27,10 +27,12 @@ Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure
 ## Owned paths
 - `docs/Musubi/06-ingestion/promotion.md`
 - `src/musubi/lifecycle/promotion.py`
+- `src/musubi/llm/promotion_client.py`
 - `tests/lifecycle/test_promotion.py`
+- `tests/llm/test_promotion_client.py`
 
 ## Forbidden paths
-- Qdrant logic, LLM adapter implementations.
+- Qdrant logic and unrelated LLM adapter implementations.
 
 ## Test Contract
 - `test_deterministic_rendering_failure_increments_attempts`
@@ -46,6 +48,7 @@ Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure
 
 ## Work log
 - Integration and property bullets 30-33 are pre-existing downstream test requirements explicitly out-of-scope for the LIFE-004 fix boundary.
-- Updated `promotion.py` to differentiate ValueError (deterministic) from generic Exception (transient) during LLM rendering.
-- Updated post-render pipeline to catch PromotionPolicyError as deterministic, while broad exceptions (OSError, RuntimeError, TypeError, unclassified infra issues) remain explicitly transient.
-- Converted single failing test into four distinct tests covering transient vs deterministic cases for both stages.
+- Updated the render boundary so only explicit `PromotionPolicyError` is deterministic; transport/envelope `ValueError` and other infrastructure exceptions remain transient.
+- Updated `HttpxPromotionClient` to raise `PromotionPolicyError` only for validated-body policy rejection, while malformed upstream envelopes remain transient.
+- Updated post-render model construction to wrap local `ValueError`/`TypeError` validation as `PromotionPolicyError`; vault, Qdrant, transition, and other infrastructure failures remain transient.
+- Added five focused lifecycle discriminators plus production-client coverage for deterministic body rejection versus transient envelope failure.
