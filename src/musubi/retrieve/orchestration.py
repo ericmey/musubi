@@ -18,6 +18,7 @@ from musubi.observability.retrieval_metrics import (
     RETRIEVAL_ERRORS_TOTAL,
     RETRIEVAL_WARNINGS_TOTAL,
 )
+from musubi.retrieve.accounting import account_delivered
 from musubi.retrieve.blended import (
     BlendedRetrievalQuery,
     run_blended_retrieve,
@@ -225,10 +226,35 @@ async def retrieve(
     query: RetrievalQuery | dict[str, Any],
     llm: DeepRetrievalLLM | None = None,
     now: float | None = None,
+    account_access: bool = True,
 ) -> Result[RetrievalEnvelope, RetrievalError]:
     """Execute the configured retrieval pipeline, then finalize at the shared boundary (telemetry +
-    fail-closed bounded warnings). This is the ONE place RET-007 warnings/errors are counted."""
+    fail-closed bounded warnings). This is the ONE place RET-007 warnings/errors are counted.
+
+    ``account_access`` (default True) accounts access here over the delivered rows — correct for
+    ``/v1/retrieve`` and ``/v1/retrieve/stream``, whose delivered set IS this envelope. Callers
+    that drop rows AFTER retrieval (``/v1/context`` → ``build_context_pack`` trims by
+    max_items/max_chars/filler) pass ``account_access=False`` and account the FINAL surfaced set
+    themselves, so trimmed candidates are never counted.
+    """
     result = await _retrieve_uncounted(client, embedder, reranker, query=query, llm=llm, now=now)
+    # RET-002 (#500): account access ONCE, over exactly the delivered rows — after
+    # fanout/dedup/sort/limit — never on a dropped candidate and independent of lineage
+    # hydration. Covers HTTP and streaming (both call this seam). Accounting runs before
+    # _finalize so telemetry records the actual terminal outcome exactly once.
+    if account_access and isinstance(result, Ok):
+        # Fail-LOUD (access accounting drives lifecycle; it must never silently vanish) but honor
+        # the Result contract: normalize an accounting failure to a typed Err, never a raw raise.
+        try:
+            await account_delivered(client, result.value.results)
+        except Exception as exc:
+            return _finalize(
+                Err(
+                    error=RetrievalError(
+                        kind="internal", detail=f"access accounting failed: {type(exc).__name__}"
+                    )
+                )
+            )
     return _finalize(result)
 
 
