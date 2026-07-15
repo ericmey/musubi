@@ -7,6 +7,7 @@ import hashlib
 import time
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from watchdog.events import (
@@ -32,6 +33,9 @@ class FakeCuratedPlane:
     async def create(self, memory: CuratedKnowledge) -> CuratedKnowledge:
         self.created.append(memory)
         return memory
+
+    async def scan_vault_rows(self) -> list[CuratedKnowledge]:
+        return list(self.created)
 
 
 @pytest.fixture
@@ -67,7 +71,7 @@ def writer(vault_root: Path, write_log: WriteLog) -> VaultWriter:
 
 @pytest.fixture
 def reconciler(vault_root: Path) -> VaultReconciler:
-    return VaultReconciler(vault_root, FakeCuratedPlane())  # type: ignore
+    return VaultReconciler(vault_root, FakeCuratedPlane(), MagicMock())  # type: ignore
 
 
 @pytest.mark.asyncio
