@@ -4,12 +4,12 @@ slice_id: slice-dq001-content-truncation
 issue: 443
 section: _slices
 type: slice
-status: in-review
-owner: tama
+status: in-progress
+owner: minimax-m3
 phase: "Retrieval"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/in-progress, type/slice]
 updated: 2026-07-15
-reviewed: true
+reviewed: false
 depends-on: []
 blocks: []
 ---
