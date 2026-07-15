@@ -18,6 +18,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
+from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
 from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,9 @@ def _snippet(payload: dict[str, Any], max_chars: int = 300) -> tuple[str, bool, 
     content = str(payload.get("content") or payload.get("title") or "")
     original_length = len(content)
     truncated = original_length > max_chars
-    return content[:max_chars], truncated, original_length
+    if not truncated:
+        return content, False, original_length
+    return truncate_grapheme_safe(content, max_chars), True, original_length
 
 
 __all__ = [
