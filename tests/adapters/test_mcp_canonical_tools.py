@@ -241,22 +241,48 @@ async def test_search_backend_error_returns_tool_error_string() -> None:
 @pytest.mark.asyncio
 async def test_search_formats_truncation_metadata() -> None:
     mcp, client = _make_server()
-    client._retrieve_response = {"results": [
-        {
-            "object_id": "test-id",
-            "plane": "episodic",
-            "score": 0.99,
-            "namespace": "eric/test/episodic",
-            "content": "This is a very long string...",
-            "content_truncated": True,
-            "content_length": 2500,
-        }
-    ]}
+    client._retrieve_response = {
+        "results": [
+            {
+                "object_id": "test-id",
+                "plane": "episodic",
+                "score": 0.99,
+                "namespace": "eric/test/episodic",
+                "content": "This is a very long string...",
+                "content_truncated": True,
+                "content_length": 2500,
+            }
+        ]
+    }
     result = await _invoke(mcp, "musubi_search", namespace="eric/test", query="long")
     # Should include the content and a specific truncation marker
     assert "This is a very long string..." in result
     assert "content truncated" in result.lower()
     assert "2500" in result
+
+
+@pytest.mark.asyncio
+async def test_recent_formats_truncation_metadata() -> None:
+    mcp, client = _make_server()
+    client._retrieve_response = {
+        "results": [
+            {
+                "object_id": "test-id-recent",
+                "plane": "episodic",
+                "score": 1783957804.0,
+                "namespace": "eric/test/episodic",
+                "content": "This is a very long string...",
+                "content_truncated": True,
+                "content_length": 2500,
+            }
+        ]
+    }
+    result = await _invoke(mcp, "musubi_recent", namespace="eric/test")
+    # Should include the content and a specific truncation marker
+    assert "This is a very long string..." in result
+    assert "content truncated" in result.lower()
+    assert "2500" in result
+
 
 # musubi_get
 # --------------------------------------------------------------------------
