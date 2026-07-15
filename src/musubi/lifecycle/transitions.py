@@ -190,9 +190,9 @@ def transition(
     current_version = int(payload.get("version", 1))
 
     # Concurrent-modification check runs BEFORE the legality check so the
-    # "last writer wins with logged warning" contract in spec bullet 13
-    # produces its warning even when the race collapses onto an illegal
-    # transition from the actual current state.
+    # hard-fence contract (LIFE-010) explicitly rejects the mutation
+    # with version_fence_violation before checking state transitions,
+    # rather than allowing LWW overwrites.
     if expected_version is not None and expected_version != current_version:
         return Err(
             error=TransitionError(
