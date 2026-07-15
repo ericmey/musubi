@@ -179,13 +179,18 @@ The operator (human) sees this in their Obsidian vault's inbox or via any presen
 
 ## Rejection / Promotion failure
 
-If promotion fails for any concept (rendering validation, path conflict, LLM repeated failure):
+If promotion fails deterministically for a concept (rendered-body policy validation,
+path policy, or curated model validation):
 
 - `promotion_attempts += 1`.
 - `promotion_rejected_at = now`.
 - `promotion_rejected_reason = "..."`.
 - Emit Thought on `ops-alerts` with the reason.
 - Concept remains in `matured` state, still eligible for retry on next run — unless `promotion_attempts == 3`, in which case it stays "matured" forever until human intervention (we stop trying).
+
+Transient transport, malformed-envelope, vault, Qdrant, transition, and other
+infrastructure failures do not modify rejection fields or consume an attempt; the
+next sweep retries them and logs the exception with traceback.
 
 ## Human override
 
@@ -257,24 +262,28 @@ Notification:
 Failure:
 
 24. `test_promotion_rejected_after_3_attempts_stops_retrying`
-25. `test_rendering_failure_increments_attempts_not_promotes`
+25. `test_deterministic_rendering_failure_increments_attempts`
+26. `test_transient_rendering_failure_leaves_attempts_unchanged`
+27. `test_deterministic_post_render_failure_increments_attempts`
+28. `test_transient_post_render_failure_leaves_attempts_unchanged`
+29. `test_deterministic_model_validation_failure_increments_attempts`
 
 Concurrency:
 
-26. `test_concurrent_promotion_of_different_concepts_ok`
-27. `test_concurrent_promotion_of_same_concept_one_wins`
+30. `test_concurrent_promotion_of_different_concepts_ok`
+31. `test_concurrent_promotion_of_same_concept_one_wins`
 
 Human override:
 
-28. `test_cli_force_promote_with_custom_body`
-29. `test_cli_reject_sets_rejected_fields_and_demotes`
+32. `test_cli_force_promote_with_custom_body`
+33. `test_cli_reject_sets_rejected_fields_and_demotes`
 
 Property:
 
-30. `hypothesis: every successful promotion produces exactly one curated file and one Qdrant point`
+34. `hypothesis: every successful promotion produces exactly one curated file and one Qdrant point`
 
 Integration:
 
-31. `integration: happy path — 1 concept → 1 file in vault/, 1 point in musubi_curated, both linked, ops-alert present`
-32. `integration: path conflict with human file — sibling created, no human file modified`
-33. `integration: rollback flow — promote then archive, vault file in _archive/, Qdrant state=archived`
+35. `integration: happy path — 1 concept → 1 file in vault/, 1 point in musubi_curated, both linked, ops-alert present`
+36. `integration: path conflict with human file — sibling created, no human file modified`
+37. `integration: rollback flow — promote then archive, vault file in _archive/, Qdrant state=archived`
