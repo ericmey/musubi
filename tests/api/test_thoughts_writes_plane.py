@@ -1,6 +1,7 @@
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -13,8 +14,8 @@ from musubi.store.specs import DENSE_VECTOR_NAME
 class DummyEmbedder(Embedder):
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         # deterministic non-zero, different from FakeEmbedder
-        # Single 1.0 to avoid complex normalization math
-        return [[1.0] + [0.0] * 1023 for _ in texts]
+        # Embeds length-dependent vectors to discriminate different content directionally
+        return [[1.0, float((sum(map(ord, t)) % 7) + 1)] + [0.0] * 1022 for t in texts]
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         return [{} for _ in texts]
@@ -64,8 +65,28 @@ def test_thought_send_uses_configured_plane_and_embedder(
 
     vector = points[0].vector
     assert DENSE_VECTOR_NAME in vector
-    # DummyEmbedder returns 0.1, FakeEmbedder returns gauss(0,1) normalized or zeros.
-    assert vector[DENSE_VECTOR_NAME][0] == 1.0
+    assert any(v != 0 for v in vector[DENSE_VECTOR_NAME])
+
+    # Assert second distinct content produces distinct vector
+    r2 = client.post(
+        "/v1/thoughts/send",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "namespace": "eric/ns/thought",
+            "from_presence": "eric/me",
+            "to_presence": "eric/other",
+            "content": "different length content",
+            "channel": "default",
+            "importance": 5,
+        },
+    )
+    object_id2 = r2.json()["object_id"]
+    point_id2 = _point_id(object_id2)
+    points2 = qdrant.retrieve(collection_name="musubi_thought", ids=[point_id2], with_vectors=True)
+    vector2 = points2[0].vector
+
+    assert any(v != 0 for v in vector2[DENSE_VECTOR_NAME])
+    assert vector[DENSE_VECTOR_NAME] != vector2[DENSE_VECTOR_NAME]
 
 
 def test_thought_read_uses_configured_plane(
@@ -81,16 +102,30 @@ def test_thought_read_uses_configured_plane(
 
     app_factory.dependency_overrides[get_thoughts_plane] = lambda: spy_plane
 
+    # First ID raises LookupError, second succeeds
+    async def mock_read(*args: Any, **kwargs: Any) -> None:
+        if kwargs.get("object_id") == "invalid-id":
+            raise LookupError("Not found")
+        # second call succeeds (does nothing)
+
+    spy_plane.read.side_effect = mock_read
+
     r = client.post(
         "/v1/thoughts/read",
         headers={"Authorization": f"Bearer {token}"},
-        json={"namespace": "eric/ns/thought", "ids": ["invalid-id"], "reader": "eric/other"},
+        json={
+            "namespace": "eric/ns/thought",
+            "ids": ["invalid-id", "valid-id"],
+            "reader": "eric/other",
+        },
     )
     assert r.status_code == 200
 
-    spy_plane.read.assert_called_once_with(
-        namespace="eric/ns/thought", object_id="invalid-id", reader="eric/other"
-    )
+    # Assert both were called, meaning loop continued after the first exception
+    assert spy_plane.read.call_count == 2
+
+    # Count returned should be 1 (only the second succeeded)
+    assert r.json()["count"] == 1
 
 
 def test_production_router_has_no_fake_embedder() -> None:
@@ -101,21 +136,25 @@ def test_production_router_has_no_fake_embedder() -> None:
 
 
 def test_missing_dependency_fails_loud(
-    client: TestClient, app_factory: FastAPI, api_settings: Any
+    client: TestClient, app_factory: FastAPI, api_settings: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
     from tests.api.conftest import mint_token
 
     token = mint_token(api_settings, scopes=["eric/ns/thought:w"])
 
-    # Remove the dependency from app
-    app_factory.dependency_overrides[get_thoughts_plane] = lambda: Exception(
-        "loud failure injected"
-    )
+    def raise_dependency() -> None:
+        raise RuntimeError("loud failure injected")
 
-    # It should raise HTTP 500 when it hits the overridden dependency Exception
+    app_factory.dependency_overrides[get_thoughts_plane] = raise_dependency
 
-    try:
-        r = client.post(
+    from fastapi.testclient import TestClient as _TestClient
+
+    err_client = _TestClient(app_factory, raise_server_exceptions=False)
+
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="musubi.api.app"):
+        r = err_client.post(
             "/v1/thoughts/send",
             headers={"Authorization": f"Bearer {token}"},
             json={
@@ -127,6 +166,6 @@ def test_missing_dependency_fails_loud(
                 "importance": 5,
             },
         )
-        assert r.status_code == 500
-    except Exception as exc:
-        assert "loud failure injected" in str(exc)
+    assert r.status_code == 500
+    assert r.json()["error"]["code"] == "INTERNAL"
+    assert any("loud failure injected" in rec.exc_text for rec in caplog.records if rec.exc_text)
