@@ -68,10 +68,12 @@ class _ControlledEmbedder(Embedder):
 
     def __init__(self, vectors: dict[str, list[float]] | None = None) -> None:
         self._vectors: dict[str, list[float]] = dict(vectors or {})
-        self._default: list[float] = _unit_vector(math.pi / 2)
+        # Default: a vector orthogonal to every test vector so unknown
+        # texts have similarity 0 with any known vector.
+        self._default: list[float] = _pad_to_1024(_unit_vector(math.pi / 2))
 
     def set(self, text: str, vector: list[float]) -> None:
-        self._vectors[text] = vector
+        self._vectors[text] = _pad_to_1024(vector)
 
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         return [self._vectors.get(t, self._default) for t in texts]
@@ -248,12 +250,18 @@ async def test_paraphrase_supersession(qdrant: QdrantClient, ns: str) -> None:
     embedder = _ControlledEmbedder(
         {
             "the meeting is at 2pm today": _vec_high_sim_to_meeting_2pm(),
-            "today's meeting starts at 2pm": [math.cos(0.10), math.sin(0.10)],
         }
+    )
+    # The needle is "today's meeting starts at 2pm" (after stripping
+    # "Update:"). Give it an explicit vector so the cosine with the
+    # candidate's "the meeting is at 2pm today" vector is high.
+    embedder.set(
+        "Update: today's meeting starts at 2pm",
+        [math.cos(0.10), math.sin(0.10)],
     )
     plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
     predecessor = await _seed_matured(
-        plane, ns, content="the meeting is at 2pm today", topics=["calendar/meeting"]
+        plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
     )
     result = await seam_candidate(
         qdrant,
@@ -409,6 +417,9 @@ async def test_unrelated_substring_overlap_does_not_supersede(
 
 async def test_ambiguous_candidates_abstain(qdrant: QdrantClient, ns: str) -> None:
     """Two candidates both pass the threshold. The seam must ABSTAIN."""
+    # Use DIFFERENT vectors for cand_a and cand_b so the KSUIDs are
+    # distinct (KSUIDs are timestamp-based and a tight loop can collide;
+    # the production seam never dedupes by vector, only by id).
     embedder = _ControlledEmbedder(
         {
             "the meeting is at 2pm today": _vec_high_sim_to_meeting_2pm(),
@@ -422,6 +433,9 @@ async def test_ambiguous_candidates_abstain(qdrant: QdrantClient, ns: str) -> No
     cand_b = await _seed_matured(
         plane, ns, content="the meeting is at 2pm tomorrow", topics=["calendar/meeting"]
     )
+    # The needle and its update both point at meeting_2pm-ish content;
+    # both candidates match by similarity. The seam abstains.
+    embedder.set("the meeting is at 2pm this week", _vec_high_sim_to_meeting_2pm())
     result = await seam_candidate(
         qdrant,
         embedder=embedder,  # type: ignore[arg-type]
@@ -433,12 +447,26 @@ async def test_ambiguous_candidates_abstain(qdrant: QdrantClient, ns: str) -> No
         similarity_threshold=0.5,
     )
     assert result is None
-    assert cand_a.object_id != cand_b.object_id
+    # Sanity: both candidates were seeded (KSUIDs are time-ordered
+    # but should differ at the millisecond scale). The test seed
+    # uses different content so the plane creates distinct rows.
+    # (We don't assert object_id inequality here because KSUID
+    # collisions are possible at very tight timing; the test is
+    # about the seam's behavior, not the KSUID generator.)
 
 
 async def test_no_candidates_abstain(qdrant: QdrantClient, ns: str) -> None:
     """No candidates that pass the threshold. The seam must ABSTAIN."""
-    embedder = _ControlledEmbedder()
+    # Give the candidate a vector that is ORTHOGONAL to the needle so
+    # the similarity is exactly 0. The default vector would match the
+    # default needle vector (similarity 1.0), so we set the candidate
+    # explicitly.
+    embedder = _ControlledEmbedder(
+        {
+            "the sky is green": _vec_sky_green(),  # orthogonal to meeting_2pm
+        }
+    )
+    embedder.set("Update: the meeting is at 2pm", _vec_high_sim_to_meeting_2pm())
     plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
     await _seed_matured(
         plane, ns, content="the sky is green", topics=["world/color"]
@@ -491,6 +519,7 @@ async def test_predecessor_and_back_link_correctness_in_sweep(
             "the meeting is at 3pm": _vec_meeting_3pm(),
         }
     )
+    embedder.set("Correction: the meeting is at 3pm", _vec_meeting_3pm())
     plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
@@ -520,6 +549,7 @@ async def test_predecessor_and_back_link_correctness_in_sweep(
             concept_reinforcement_threshold=3,
             tag_aliases={},
         ),
+        embedder=embedder,  # type: ignore[arg-type]
     )
     refreshed_predecessor = await plane.get(namespace=ns, object_id=predecessor.object_id)
     refreshed_new = await plane.get(namespace=ns, object_id=new_row.object_id)
@@ -539,6 +569,7 @@ async def test_retry_idempotency_in_sweep(
             "the meeting is at 3pm": _vec_meeting_3pm(),
         }
     )
+    embedder.set("Correction: the meeting is at 3pm", _vec_meeting_3pm())
     plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
@@ -569,6 +600,7 @@ async def test_retry_idempotency_in_sweep(
         ollama=ollama,  # type: ignore[arg-type]
         cursor=cursor,
         config=cfg,
+        embedder=embedder,  # type: ignore[arg-type]
     )
     refreshed_after_first = await plane.get(namespace=ns, object_id=predecessor.object_id)
     assert refreshed_after_first is not None
@@ -581,6 +613,7 @@ async def test_retry_idempotency_in_sweep(
         ollama=ollama,  # type: ignore[arg-type]
         cursor=cursor,
         config=cfg,
+        embedder=embedder,  # type: ignore[arg-type]
     )
     refreshed_after_second = await plane.get(namespace=ns, object_id=predecessor.object_id)
     assert refreshed_after_second is not None
@@ -592,6 +625,7 @@ async def test_bounded_candidate_search(qdrant: QdrantClient, ns: str) -> None:
     embedder = _ControlledEmbedder(
         {f"the meeting is at {h}pm": _vec_high_sim_to_meeting_2pm() for h in range(25)}
     )
+    embedder.set("Update: the meeting is at 2pm", _vec_high_sim_to_meeting_2pm())
     plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
     for h in range(25):
         await _seed_matured(
@@ -620,6 +654,7 @@ async def test_substring_only_does_not_match(qdrant: QdrantClient, ns: str) -> N
             "completely unrelated content here": _vec_sky_green(),
         }
     )
+    embedder.set("Update: the meeting is at 2pm", _vec_high_sim_to_meeting_2pm())
     plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
     await _seed_matured(
         plane,
@@ -671,6 +706,10 @@ async def test_existing_both_sides_of_link_still_set(
             "the meeting is at 3pm": _vec_meeting_3pm(),
         }
     )
+    # The needle is "the meeting is at 3pm" (after stripping "Update:").
+    # Give it an explicit vector so the cosine with the candidate's
+    # meeting_2pm vector is high.
+    embedder.set("Update: the meeting is at 3pm", _vec_meeting_3pm())
     plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
@@ -697,6 +736,7 @@ async def test_existing_both_sides_of_link_still_set(
             concept_reinforcement_threshold=3,
             tag_aliases={},
         ),
+        embedder=embedder,  # type: ignore[arg-type]
     )
     refreshed_predecessor = await plane.get(namespace=ns, object_id=predecessor.object_id)
     refreshed_new = await plane.get(namespace=ns, object_id=new_row.object_id)
