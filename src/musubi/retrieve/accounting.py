@@ -50,7 +50,7 @@ async def account_delivered(client: QdrantClient, results: list[Any]) -> None:
             by_plane.setdefault(plane, set()).add((namespace, object_id))
 
     for plane, pairs in by_plane.items():
-        lease_increment_access(client, collection_for_plane(plane), pairs)
+        await lease_increment_access(client, collection_for_plane(plane), pairs)
 
 
 __all__ = ["ACCOUNTABLE_PLANES", "account_delivered"]

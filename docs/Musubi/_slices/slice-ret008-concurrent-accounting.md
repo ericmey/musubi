@@ -38,14 +38,14 @@ The broader full-object read-to-upsert lost-update race is tracked separately as
 ## Mechanism — fenced per-record lease (single internal field, no other schema)
 
 `store/access_lease.py::lease_increment_access` (shared seam): ACQUIRE a record's lease by writing
-`access_lease_token = issued_at_us:nonce` filtered on the token being EMPTY (fresh) or matching the
-EXACT observed EXPIRED token (crash-recovery takeover — never a blind steal); confirm we hold it
-and it is still fresh; then increment `access_count` + clear the lease in ONE update fenced on
-`access_lease_token == ours` — a stale/taken-over holder's fenced write matches zero, so it can
-never corrupt the counter. A fresh lease cannot be taken over, so the fenced increment is
-guaranteed to apply. Batched per collection (scroll + acquire + readback + increment/release per
-round); bounded retry + jitter; exhaustion raises (`AccessLeaseExhausted`) and is finalized as a
-typed `Err` by `orchestration.retrieve` (INTERNAL APIError at `/v1/context`).
+`access_lease_token = <phase>:<issued_us>:<nonce>` filtered on the token being EMPTY (fresh) or
+matching the EXACT observed EXPIRED token (crash-recovery takeover — never a blind steal); confirm
+the exact `held` token; then increment `access_count` and atomically replace it with the attributable
+`done` token, fenced on that exact `held` token. Exact `done` readback proves the increment landed;
+the final clear is fenced on that exact `done` token. A stale/taken-over holder's write matches zero
+and retries rather than losing a delivery. Batched per collection; bounded async retry jitter;
+exhaustion raises (`AccessLeaseExhausted`) and is finalized as a typed `Err` by
+`orchestration.retrieve` (INTERNAL APIError at `/v1/context`).
 
 **Prior mechanisms rejected (verified):** CAS on the counter with a token-readback is RACY — the
 single token slot gets CLOBBERED by the next legitimate winner before the prior winner reads back

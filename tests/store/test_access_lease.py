@@ -90,7 +90,7 @@ def _set_token(client: QdrantClient, ns: str, oid: str, token: str) -> None:
 @pytest.mark.integration
 def test_update_and_release_atomic_readback(real_qdrant: QdrantClient) -> None:
     ns, oid = _seed(real_qdrant)
-    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})
+    asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))
     row = _row(real_qdrant, oid)
     assert row.get("access_count") == 1  # incremented
     assert row.get("access_lease_token") is None  # released in the same fenced update
@@ -104,7 +104,7 @@ def test_nonexpired_lease_cannot_be_stolen(real_qdrant: QdrantClient) -> None:
     # A live foreign lease must never be stolen — the increment can't proceed and fails loud
     # rather than corrupting the counter.
     with pytest.raises(AccessLeaseExhausted):
-        lease_increment_access(real_qdrant, _COLL, {(ns, oid)})
+        asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))
     row = _row(real_qdrant, oid)
     assert row.get("access_count") == 0  # untouched
     assert row.get("access_lease_token") == fresh  # the live lease is intact
@@ -117,7 +117,7 @@ def test_expired_lease_exact_token_takeover_recovers(real_qdrant: QdrantClient) 
     ns, oid = _seed(real_qdrant)
     expired = f"held:{int(time.time() * 1_000_000) - 10_000_000}:crashedholder"  # 10s ago → expired
     _set_token(real_qdrant, ns, oid, expired)
-    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})
+    asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))
     row = _row(real_qdrant, oid)
     assert row.get("access_count") == 1  # taken over + incremented
     assert row.get("access_lease_token") is None  # released
@@ -130,7 +130,7 @@ def test_old_holder_fenced_after_takeover(real_qdrant: QdrantClient) -> None:
     ns, oid = _seed(real_qdrant)
     old = f"held:{int(time.time() * 1_000_000) - 10_000_000}:oldholder"
     _set_token(real_qdrant, ns, oid, old)
-    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})  # takes over `old`, count → 1, released
+    asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))
     # The old holder resumes and tries its fenced increment+release on its stale token:
     real_qdrant.set_payload(
         collection_name=_COLL,
@@ -180,7 +180,7 @@ def test_full_payload_update_cannot_reset_leased_increment(real_qdrant: QdrantCl
 
     ns, oid = _seed(real_qdrant)  # access_count starts at 0
     stale = _row(real_qdrant, oid)  # snapshot with access_count == 0 (pre-bump)
-    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})  # → access_count = 1
+    asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))
     assert _row(real_qdrant, oid).get("access_count") == 1
 
     # Simulate a concurrent transition/patch writing back its STALE (count==0) model.
@@ -197,7 +197,11 @@ def test_full_payload_update_cannot_reset_leased_increment(real_qdrant: QdrantCl
 
 def test_lease_exhaustion_is_fail_loud() -> None:
     with pytest.raises(AccessLeaseExhausted):
-        lease_increment_access(cast(Any, _AlwaysLiveLeaseClient()), _COLL, {("n/n/episodic", "o")})
+        asyncio.run(
+            lease_increment_access(
+                cast(Any, _AlwaysLiveLeaseClient()), _COLL, {("n/n/episodic", "o")}
+            )
+        )
 
 
 @pytest.mark.asyncio
@@ -278,7 +282,7 @@ def test_delayed_expiry_between_confirm_and_commit_retries_and_lands_exactly_onc
     discriminator."""
     ns, oid = _seed(real_qdrant)
     racer = cast(QdrantClient, _CommitRacer(real_qdrant, _COLL, oid))
-    lease_increment_access(racer, _COLL, {(ns, oid)})
+    asyncio.run(lease_increment_access(racer, _COLL, {(ns, oid)}))
     row = _row(real_qdrant, oid)
     assert racer._raced  # type: ignore[attr-defined]  # the mid-commit stall was actually injected
     assert row.get("access_count") == 1  # exactly one — the zero-matched commit did not lose it
@@ -305,7 +309,7 @@ def test_crash_after_done_before_clear_recovers_without_double_count(
     expired_done = f"done:{int(time.time() * 1_000_000) - 10_000_000}:crashedcommitter"
     _set_token(real_qdrant, ns, oid, expired_done)
 
-    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})
+    asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))
     row = _row(real_qdrant, oid)
     assert row.get("access_count") == 2  # predecessor's 1 + this writer's 1 — no double-count
     assert row.get("access_lease_token") is None  # the stuck done token was cleared
@@ -327,7 +331,7 @@ def test_dedup_merge_upsert_preserves_leased_access_count(
     ns, oid = _seed(real_qdrant)  # access_count starts at 0
     stale_existing = EpisodicMemory.model_validate(_row(real_qdrant, oid))  # count == 0 snapshot
 
-    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})  # → access_count = 1
+    asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))
     assert _row(real_qdrant, oid).get("access_count") == 1
 
     # The dedup probe returns the STALE (count==0) candidate as if it read before the bump.
@@ -363,7 +367,9 @@ def test_curated_update_upsert_preserves_leased_access_count(real_qdrant: Qdrant
     the wiring, GREEN after (reads the stored lease-owned fields fresh). Naturally non-vacuous — the
     incoming model's stale count is real, not injected."""
     row = _seed_curated(real_qdrant, body_hash="a" * 64)
-    lease_increment_access(real_qdrant, _CURATED_COLL, {(str(row.namespace), row.object_id)})
+    asyncio.run(
+        lease_increment_access(real_qdrant, _CURATED_COLL, {(str(row.namespace), row.object_id)})
+    )
     assert _curated_count(real_qdrant, row.object_id) == 1
 
     # Same object_id + vault_path, DIFFERENT body → the same-id UPDATE path.

@@ -563,7 +563,7 @@ class EpisodicPlane:
             # RET-008 (#502): route the direct-fetch bump through the SHARED fenced lease so it
             # never races a concurrent retrieval-delivery increment (or another get) on the same
             # row under multi-worker/cross-process parallelism. Re-read to return the post-bump row.
-            lease_increment_access(
+            await lease_increment_access(
                 self._client, self._collection, {(str(namespace), str(object_id))}
             )
             refreshed, _ = self._client.scroll(
@@ -632,7 +632,7 @@ class EpisodicPlane:
         # RET-008 (#502): route the batched access bump through the shared fenced lease (never a
         # bare RMW that would race/lose a concurrent leased increment).
         if pairs:
-            lease_increment_access(self._client, self._collection, pairs)
+            await lease_increment_access(self._client, self._collection, pairs)
         return out
 
     # ------------------------------------------------------------------

@@ -31,6 +31,7 @@ invalidates the mechanism.
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from typing import Any
@@ -104,7 +105,7 @@ def _set_op(
     )
 
 
-def lease_increment_access(
+async def lease_increment_access(
     client: QdrantClient, collection: str, pairs: set[tuple[str, str]]
 ) -> None:
     """Increment ``access_count`` exactly once for each (namespace, object_id) under the two-phase
@@ -116,7 +117,7 @@ def lease_increment_access(
         if not remaining:
             return
         if round_index:
-            time.sleep(secrets.randbelow(_MAX_BACKOFF_US) / 1_000_000)
+            await asyncio.sleep(secrets.randbelow(_MAX_BACKOFF_US) / 1_000_000)
 
         now_us = int(time.time() * 1_000_000)
         states = _read(

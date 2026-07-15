@@ -368,7 +368,9 @@ class ConceptPlane:
         # RET-008 (#502): route the access_count bump through the shared fenced lease so it never
         # races a concurrent leased increment (or resets one). The lease owns access_count +
         # last_accessed_at; re-read to return the post-bump row.
-        lease_increment_access(self._client, self._collection, {(str(namespace), str(object_id))})
+        await lease_increment_access(
+            self._client, self._collection, {(str(namespace), str(object_id))}
+        )
         refreshed = await self.get(namespace=namespace, object_id=object_id)
         return refreshed if refreshed is not None else current
 
