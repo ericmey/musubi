@@ -254,6 +254,7 @@ Replay identity:
 39. `test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists`
 40. `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
 41. `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
+42. `test_idempotent_replay_adopts_persisted_qdrant_identity`
 
 Qdrant:
 

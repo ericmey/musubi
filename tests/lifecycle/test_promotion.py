@@ -45,7 +45,17 @@ class FakeVaultWriter:
         return self._vault_root
 
     def write_curated(self, vault_relative_path: str, frontmatter: Any, body: str) -> Path:
-        return self._vault_root / vault_relative_path
+        from musubi.vault.frontmatter import dump_frontmatter
+
+        full_path = self._vault_root / vault_relative_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        # Handle dict or Pydantic model
+        if hasattr(frontmatter, "model_dump"):
+            data = frontmatter.model_dump(by_alias=True, exclude_none=True, mode="json")
+        else:
+            data = frontmatter
+        full_path.write_text(dump_frontmatter(data, body))
+        return full_path
 
 
 class FakeThoughtEmitter:
@@ -312,7 +322,8 @@ async def test_idempotent_replay_reuses_existing_vault_object_id(deps: Any) -> N
     full_path.write_text(dump_frontmatter(fm, "Body"))
 
     # Execute the replay
-    await _promote_concept(deps, c)
+    res = await _promote_concept(deps, c)
+    print("Promote result:", res)
 
     # 1. Concept's promoted_to MUST match the pre-existing ID
     readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
@@ -387,7 +398,7 @@ async def test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists(deps: A
         object_id=existing_id,
         namespace=c.namespace,
         vault_path=path_str,
-        body_hash="a" * 64,
+        body_hash="f675f346623d23fd92cb92f670c7189b0f2626b4583d6e2a43992ab692682f9d",
         title=c.title,
         content="Body",
         summary=c.summary,
@@ -401,7 +412,8 @@ async def test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists(deps: A
     await deps.curated_plane.create(memory)
 
     # Execute the replay
-    await _promote_concept(deps, c)
+    res = await _promote_concept(deps, c)
+    print("Promote result:", res)
 
     # All assertions hold identity consistency
     readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
@@ -434,6 +446,74 @@ async def test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists(deps: A
 
 
 @pytest.mark.asyncio
+async def test_idempotent_replay_adopts_persisted_qdrant_identity(deps: Any) -> None:
+    from musubi.lifecycle.promotion import _promote_concept, compute_path
+    from musubi.store import collection_for_plane
+    from musubi.types.common import generate_ksuid, utc_now
+    from musubi.types.curated import CuratedKnowledge
+    from musubi.vault.frontmatter import parse_frontmatter
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+
+    path_str = compute_path(c)
+
+    # Preseed Qdrant with a DIFFERENT object_id but same namespace/vault_path
+    existing_id = str(generate_ksuid())
+    memory = CuratedKnowledge(
+        object_id=existing_id,
+        namespace=c.namespace,
+        vault_path=path_str,
+        body_hash="f675f346623d23fd92cb92f670c7189b0f2626b4583d6e2a43992ab692682f9d",
+        title=c.title,
+        content="Body",
+        state="matured",
+        importance=c.importance,
+        promoted_from=c.object_id,
+        promoted_at=utc_now(),
+    )
+    await deps.curated_plane.create(memory)
+
+    # Let promotion run normally.
+    # It will generate a new KSUID for the vault file, but curated_plane.create()
+    # will return the existing row based on namespace/path.
+    await _promote_concept(deps, c)
+
+    # Target invariant: returned persisted.object_id == final vault frontmatter object_id == concept.promoted_to
+    readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert str(readback_concept.promoted_to) == existing_id
+
+    # The vault file must have been updated to adopt the existing_id
+    full_path = deps.vault_writer.vault_root / path_str
+    data, _ = parse_frontmatter(full_path.read_text())
+    assert data["object_id"] == existing_id
+
+    # And there should be exactly one row matching this namespace & promoted_from
+    from qdrant_client.http import models as rest
+
+    res, _ = deps.qdrant.scroll(
+        collection_name=collection_for_plane("curated"),
+        scroll_filter=rest.Filter(
+            must=[
+                rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
+                rest.FieldCondition(
+                    key="promoted_from", match=rest.MatchValue(value=str(c.object_id))
+                ),
+            ]
+        ),
+        limit=10,
+    )
+    assert len(res) == 1
+
+
 async def test_idempotent_replay_fails_closed_on_missing_vault_object_id(deps: Any) -> None:
     from musubi.lifecycle.promotion import _promote_concept
     from musubi.types.common import utc_now
@@ -470,7 +550,8 @@ Body"""
     # Wait, the production implementation parses the frontmatter. Since `object_id` is None, `fm_obj.object_id` is None.
     # The production code requires a valid KSUID for object_id during `CuratedFrontmatter` construction.
     # Let's see if _promote_concept handles it gracefully as False without raising.
-    result = await _promote_concept(deps, c)
+    result = res = await _promote_concept(deps, c)
+    print("Promote result:", res)
     assert result is False
 
     readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
@@ -509,7 +590,8 @@ promoted_from: {c.object_id!s}
 Body"""
     full_path.write_text(raw_yaml)
 
-    result = await _promote_concept(deps, c)
+    result = res = await _promote_concept(deps, c)
+    print("Promote result:", res)
     assert result is False
 
     readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
@@ -563,7 +645,8 @@ async def test_path_conflict_with_same_concept_rewrites_in_place(deps: Any) -> N
     full_path.write_text(dump_frontmatter(fm, "Body"))
 
     # Should not raise
-    await _promote_concept(deps, c)
+    res = await _promote_concept(deps, c)
+    print("Promote result:", res)
 
 
 @pytest.mark.asyncio
@@ -593,7 +676,8 @@ async def test_path_conflict_with_other_concept_writes_sibling(deps: Any) -> Non
     }
     full_path.write_text(dump_frontmatter(fm, "Body"))
 
-    await _promote_concept(deps, c)
+    res = await _promote_concept(deps, c)
+    print("Promote result:", res)
     # The sibling logic in _promote_concept writes to vault_writer, which doesn't
     # actually write to disk in our Fake, but it should succeed without errors.
 
@@ -625,7 +709,8 @@ async def test_path_conflict_with_human_file_writes_sibling_and_logs(deps: Any) 
     }
     full_path.write_text(dump_frontmatter(fm, "Body"))
 
-    await _promote_concept(deps, c)
+    res = await _promote_concept(deps, c)
+    print("Promote result:", res)
 
 
 # Write-log:

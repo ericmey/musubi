@@ -37,6 +37,7 @@ Fix `promoted_to` identity drift during promotion replay (Issue #516). If a tran
 - `test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists`
 - `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
 - `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
+- `test_idempotent_replay_adopts_persisted_qdrant_identity`
 
 ## Definition of Done
 - `curated_id` is parsed from the vault if present and valid during idempotent rewrite.
