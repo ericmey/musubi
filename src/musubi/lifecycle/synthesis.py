@@ -9,9 +9,7 @@ import logging
 import sqlite3
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from functools import wraps
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -20,7 +18,6 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding.base import Embedder
 from musubi.lifecycle import LifecycleEventSink, store
 from musubi.lifecycle.scheduler import Job, file_lock
-from musubi.observability import default_registry
 from musubi.planes.concept import ConceptPlane
 from musubi.store.names import collection_for_plane
 from musubi.store.specs import DENSE_VECTOR_NAME
@@ -28,35 +25,6 @@ from musubi.types.concept import SynthesizedConcept
 from musubi.types.episodic import EpisodicMemory
 
 logger = logging.getLogger(__name__)
-
-_REG = default_registry()
-_DURATION = _REG.histogram(
-    "musubi_lifecycle_job_duration_seconds",
-    "lifecycle worker tick duration",
-    labelnames=("job",),
-)
-_ERRORS = _REG.counter(
-    "musubi_lifecycle_job_errors_total",
-    "lifecycle worker tick errors",
-    labelnames=("job",),
-)
-
-
-def _instrument_synthesis_job[**P, R](
-    func: Callable[P, Awaitable[R]],
-) -> Callable[P, Awaitable[R]]:
-    @wraps(func)
-    async def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
-        start = time.monotonic()
-        try:
-            return await func(*args, **kwargs)
-        except Exception:
-            _ERRORS.labels(job="synthesis").inc()
-            raise
-        finally:
-            _DURATION.labels(job="synthesis").observe(time.monotonic() - start)
-
-    return _wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -405,7 +373,6 @@ class SynthesisReport:
 # The Job
 # ---------------------------------------------------------------------------
 
-
 _FAMILY_SYNTHESIS_PRESENCE = "shared"
 """Convention: family-level synthesis writes concepts to
 ``<family>/shared/concept``. The `shared` presence already means
@@ -414,7 +381,6 @@ which carries Aoi's joy entry, visual identity, codeword authority
 — all identity-wide things)."""
 
 
-@_instrument_synthesis_job
 async def synthesis_run(
     client: QdrantClient,
     sink: LifecycleEventSink,

@@ -220,19 +220,6 @@ async def test_skips_when_fewer_than_3_new_memories(
     assert report.clusters_formed == 0
 
 
-async def test_synthesis_worker_observes_lifecycle_job_duration(
-    qdrant: QdrantClient,
-    ns: str,
-    sink: LifecycleEventSink,
-    cursor: SynthesisCursor,
-    embedder: FakeEmbedder,
-) -> None:
-    before = _duration_count("synthesis")
-    report = await synthesis_run(qdrant, sink, FakeSynthesisOllama(), embedder, cursor, ns)
-    assert report.memories_selected == 0
-    assert _duration_count("synthesis") == before + 1
-
-
 async def test_cursor_per_namespace_tracked_separately(
     qdrant: QdrantClient,
     ns: str,

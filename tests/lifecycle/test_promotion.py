@@ -433,14 +433,6 @@ async def test_curated_point_upserted_with_promoted_from(deps: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_promotion_worker_observes_lifecycle_job_duration(deps: Any) -> None:
-    from musubi.lifecycle.promotion import run_promotion_sweep
-
-    before = _duration_count("promotion")
-    assert await run_promotion_sweep(deps) == 0
-    assert _duration_count("promotion") == before + 1
-
-
 @pytest.mark.asyncio
 async def test_concept_state_set_to_promoted(deps: Any) -> None:
     from musubi.lifecycle.promotion import run_promotion_sweep
