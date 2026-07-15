@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.1](https://github.com/ericmey/musubi/compare/v1.17.0...v1.17.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* ING-001 semantic dedup strict compatibility bounds (Issue [#534](https://github.com/ericmey/musubi/issues/534)) ([#535](https://github.com/ericmey/musubi/issues/535)) ([dba8f10](https://github.com/ericmey/musubi/commit/dba8f10a12869b87e379e31d0a0f4c879550fcf2))
+
 ## [1.17.0](https://github.com/ericmey/musubi/compare/v1.16.2...v1.17.0) (2026-07-15)
 
 
