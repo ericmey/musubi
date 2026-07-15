@@ -618,6 +618,7 @@ async def test_transient_rendering_failure_leaves_attempts_unchanged(deps: Any) 
     assert readback.state == "matured"
     assert readback.promotion_attempts == 0
     assert readback.promotion_rejected_at is None
+    assert readback.promotion_rejected_reason is None
 
 
 class _TransientFailingVault:
