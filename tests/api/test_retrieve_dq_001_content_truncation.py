@@ -8,7 +8,14 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from musubi.api.responses import RankedResultRow, RecentResultRow
+from musubi.api.responses import (
+    RankedExtra,
+    RankedResultRow,
+    RankedScoreComponents,
+    RecentExtra,
+    RecentResultRow,
+    RecentScoreComponents,
+)
 from musubi.retrieve.context_pack import ContextCandidate, ContextPackQuery, build_context_pack
 from musubi.retrieve.fast import _snippet as fast_snippet
 from musubi.retrieve.orchestration import (
@@ -101,7 +108,7 @@ def _mock_orchestration(*, recent: bool) -> OrchestrationMock:
     return run
 
 
-@pytest.mark.parametrize("mode", ["fast", "recent"])
+@pytest.mark.parametrize("mode", ["fast", "deep", "blended", "recent"])
 def test_retrieve_wire_emits_truncation_metadata(
     client: TestClient,
     valid_token: str,
@@ -128,9 +135,44 @@ def test_retrieve_wire_emits_truncation_metadata(
 
     assert response.status_code == 200, response.text
     row = response.json()["results"][0]
+    assert row["object_id"] == "dq001-row"
     assert row["content"] == "z" * 200
     assert row["content_truncated"] is True
     assert row["content_length"] == 500
+
+
+def test_ranked_projection_declares_facts_after_301_1501_and_at_end_unavailable() -> None:
+    content = list("x" * 1608)
+    content[300] = "A"  # ordinal character 301
+    content[1500] = "B"  # ordinal character 1501
+    content[-1] = "Z"  # final character
+
+    rendered, truncated, content_length = _ranked({"content": "".join(content)})
+
+    assert len(rendered) == 300
+    assert "A" not in rendered
+    assert "B" not in rendered
+    assert not rendered.endswith("Z")
+    assert truncated is True
+    assert content_length == 1608
+
+
+@pytest.mark.parametrize(
+    "cluster",
+    ["e\u0301", "\U0001f468\u200d\U0001f469\u200d\U0001f467"],
+    ids=["decomposed-combining-mark", "multi-codepoint-zwj-emoji"],
+)
+def test_unicode_cluster_at_ranked_boundary_is_never_silent(cluster: str) -> None:
+    content = ("x" * 299) + cluster + "TAIL"
+
+    rendered, truncated, content_length = _ranked({"content": content})
+
+    # The current core projection is code-point bounded, not a full grapheme segmenter.
+    # DQ-001 therefore remains open for grapheme-safe projection, but the wire must
+    # truthfully disclose that content was cut and preserve the original character count.
+    assert rendered == content[:300]
+    assert truncated is True
+    assert content_length == len(content)
 
 
 def test_wire_models_keep_backward_compatible_defaults() -> None:
@@ -143,16 +185,16 @@ def test_wire_models_keep_backward_compatible_defaults() -> None:
         state="matured",
         importance=5,
         score_kind="ranked_combined",
-        extra={
-            "score_components": {
-                "relevance": 0.5,
-                "recency": 0.1,
-                "importance": 0.2,
-                "provenance": 0.3,
-                "reinforcement": 0.4,
-            },
-            "lineage": {},
-        },
+        extra=RankedExtra(
+            score_components=RankedScoreComponents(
+                relevance=0.5,
+                recency=0.1,
+                importance=0.2,
+                provenance=0.3,
+                reinforcement=0.4,
+            ),
+            lineage={},
+        ),
     )
     recent = RecentResultRow(
         object_id="recent",
@@ -164,7 +206,7 @@ def test_wire_models_keep_backward_compatible_defaults() -> None:
         importance=5,
         score_kind="created_epoch",
         provenance_score=0.8,
-        extra={"score_components": {}, "lineage": {}},
+        extra=RecentExtra(score_components=RecentScoreComponents(), lineage={}),
     )
 
     assert ranked.content_truncated is False

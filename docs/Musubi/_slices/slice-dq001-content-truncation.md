@@ -61,8 +61,15 @@ indication that more content existed.
 - explicit truncation (content > cap) → ``True``; original length preserved
 - exact-cap content → ``False`` (no false truncation)
 - multibyte/Unicode → length is the character count, not the byte count
-- mode parity: fast / recent / ranked / context-pack all surface the
+- mode parity: fast / deep / blended / recent / context-pack all surface the
   same metadata with the same semantics.
+- facts at ordinal characters 301 and 1501, and at the final character, are
+  never omitted silently: the row reports truncation, the original length,
+  and the stable ``object_id`` fetch handle.
+- decomposed combining marks and multi-codepoint ZWJ emoji at the projection
+  boundary are covered. The current projection remains code-point bounded;
+  grapheme-safe cutting stays open under Issue #443 rather than being claimed
+  complete by this metadata slice.
 
 ## Process drift disclosure
 
@@ -70,18 +77,20 @@ This slice did NOT begin test-first. The original production change
 was committed first (5 source files + context_pack + openapi.yaml),
 and the contract test file was committed in a follow-up commit. This
 is a packaging correction disclosed in the PR body, not a redesign.
-The 11-test contract is the production proof (tests/api/test_retrieve_dq_001_content_truncation.py).
+The contract tests in ``tests/api/test_retrieve_dq_001_content_truncation.py``
+are the production proof.
 
 ## Out of scope (NOT closed by this slice)
 
-- Deep path: no slice, no cap; reads the full body. No change needed.
+- Deep and blended use the ranked projection path and its 300-character cap;
+  both are covered by the same explicit metadata contract.
 - ``ContextPackItem`` cap is explicit (``query.max_chars`` from the request
   body). The cap is the documented contract; the new metadata surfaces
   whether the cap was applied.
-- **Cross-adapter acceptance is NOT closed by this slice** (per Issue
+- **Cross-adapter acceptance and grapheme-safe cutting are NOT closed by this slice** (per Issue
   #443 acceptance). The fleet-tools Hermes provider and the live
   Nyla/Sumi adapters each have separate 200/300/400-char caps in
-  their own repos. The 11-test contract covers the Musubi core; the
+  their own repos. The contract tests cover the Musubi core; the
   fleet-tools and live-adapter tracking is a follow-up.
 - Test-first process: documented as drift above; future slices should
   be tests-first.
@@ -107,5 +116,7 @@ Commits in branch order (additive, no amend, no force):
 - Cross-adapter acceptance: fleet-tools Hermes provider and live
   Nyla/Sumi adapter (separate repos). This slice closes the Musubi
   core; the cross-adapter tracking is a separate scope.
+- Grapheme-safe cutting: metadata makes a boundary cut explicit, but a future
+  #443 slice must avoid splitting combining sequences and ZWJ emoji.
 - Rename contract: a future breaking change (``content`` → ``snippet`` +
   new ``content`` field) was considered and explicitly deferred.
