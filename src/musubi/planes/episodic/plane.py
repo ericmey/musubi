@@ -109,6 +109,24 @@ def _memory_from_payload(payload: dict[str, Any]) -> EpisodicMemory:
     return EpisodicMemory.model_validate(payload)
 
 
+def _is_factually_compatible(existing: EpisodicMemory, new: EpisodicMemory) -> bool:
+    import re
+    import unicodedata
+
+    def _normalize(text: str) -> str:
+        text = unicodedata.normalize("NFKC", text)
+        text = text.casefold()
+        text = re.sub(r"\s+", " ", text)
+        text = text.strip()
+        text = re.sub(r"[.!?]+$", "", text)
+        return text
+
+    if _normalize(existing.content) != _normalize(new.content):
+        return False
+
+    return sorted(existing.participants) == sorted(new.participants)
+
+
 class EpisodicPlane:
     """CRUD + lifecycle transitions for the episodic plane."""
 
@@ -183,15 +201,16 @@ class EpisodicPlane:
         found = self._find_dedup_candidate(memory.namespace, dense)
         if found is not None:
             existing, existing_dense, existing_sparse = found
-            return self._reinforce(
-                existing=existing,
-                existing_dense=existing_dense,
-                existing_sparse=existing_sparse,
-                new=memory,
-                dense=dense,
-                sparse=sparse,
-                merge_strategy=merge_strategy,
-            )
+            if _is_factually_compatible(existing, memory):
+                return self._reinforce(
+                    existing=existing,
+                    existing_dense=existing_dense,
+                    existing_sparse=existing_sparse,
+                    new=memory,
+                    dense=dense,
+                    sparse=sparse,
+                    merge_strategy=merge_strategy,
+                )
 
         data = memory.model_dump()
         data.update(
@@ -270,7 +289,13 @@ class EpisodicPlane:
         finalised: list[EpisodicMemory] = []
         for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
             found = self._find_dedup_candidate(memory.namespace, dense)
+
+            compatible = False
             if found is not None:
+                existing, existing_dense, existing_sparse = found
+                compatible = _is_factually_compatible(existing, memory)
+
+            if found is not None and compatible:
                 existing, existing_dense, existing_sparse = found
                 updated, existing_content_won = self._merge_row(
                     existing=existing,

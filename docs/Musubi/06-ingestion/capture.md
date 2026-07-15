@@ -213,3 +213,15 @@ Batch:
 20. `test_batch_capture_single_tei_embed_call` (instrumented)
 21. `test_batch_capture_single_qdrant_upsert` (instrumented)
 22. `test_batch_capture_100_items_under_1s` (benchmark)
+
+
+23. `test_semantic_dedup_merges_exact_duplicate`
+24. `test_semantic_dedup_merges_normalized_duplicate`
+25. `test_semantic_dedup_rejects_correction`
+26. `test_semantic_dedup_rejects_negation`
+27. `test_semantic_dedup_rejects_participant_change`
+28. `test_semantic_dedup_rejects_time_change`
+29. `test_semantic_dedup_rejects_conflicting_numbers`
+30. `test_semantic_dedup_rejects_ambiguity`
+31. `test_semantic_dedup_rejects_language_token_punctuation`
+32. `test_semantic_dedup_compares_content_not_summary`

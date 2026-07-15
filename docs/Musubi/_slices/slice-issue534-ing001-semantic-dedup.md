@@ -1,6 +1,6 @@
 ---
 owner: gemini-3-1-shiori
-status: in-progress
+status: in-review
 issue: 534
 title: "Slice: ING-001 semantic dedup strict compatibility bounds"
 slice_id: slice-issue534-ing001-semantic-dedup
@@ -25,14 +25,23 @@ Semantic dedup may merge only factually compatible duplicates. Corrections, nega
 - [[06-ingestion/capture]] (assuming deduplication rule is documented here)
 
 ## Owned paths
-- `src/musubi/ingestion/capture.py`
-- `tests/ingestion/test_capture.py`
+- `src/musubi/planes/episodic/plane.py`
+- `tests/planes/test_episodic.py`
 
 ## Forbidden paths
 - Qdrant cluster indexing logic, LLM adapter internal implementations. No new engine.
 
 ## Test Contract
-- Pending definition...
+- `test_semantic_dedup_merges_exact_duplicate`
+- `test_semantic_dedup_merges_normalized_duplicate`
+- `test_semantic_dedup_rejects_correction`
+- `test_semantic_dedup_rejects_negation`
+- `test_semantic_dedup_rejects_participant_change`
+- `test_semantic_dedup_rejects_time_change`
+- `test_semantic_dedup_rejects_conflicting_numbers`
+- `test_semantic_dedup_rejects_ambiguity`
+- `test_semantic_dedup_rejects_language_token_punctuation`
+- `test_semantic_dedup_compares_content_not_summary`
 
 ## Definition of Done
 - Strict factual compatibility evaluated during dedup.

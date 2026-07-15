@@ -197,19 +197,17 @@ async def test_create_dedup_hit_bumps_reinforcement_count_and_version(
 async def test_create_dedup_hit_updates_content_with_new_text(
     plane: EpisodicPlane, ns: str
 ) -> None:
-    # FakeEmbedder is content-addressed on SHA-256(text). We need two texts
-    # close enough that the test would normally dedup. Since FakeEmbedder
-    # gives random-ish vectors per unique text, force dedup by using a very
-    # low threshold so *any* point counts as "same".
+    # The longer-wins/new-text policy applies ONLY after factual compatibility authorizes the merge.
+    # We must use normalization-equivalent content to bypass the factual compatibility guard.
     low_plane = EpisodicPlane(
         client=plane._client,
         embedder=plane._embedder,
         dedup_threshold=-1.0,
     )
-    first = await low_plane.create(_make("first version", "eric/claude-code/episodic"))
-    second = await low_plane.create(_make("second version", "eric/claude-code/episodic"))
+    first = await low_plane.create(_make("first version.", "eric/claude-code/episodic"))
+    second = await low_plane.create(_make("  FIRST version !!!  ", "eric/claude-code/episodic"))
     assert second.object_id == first.object_id
-    assert second.content == "second version"
+    assert second.content == "  FIRST version !!!  "
 
 
 async def test_create_dedup_below_threshold_creates_new(
@@ -679,3 +677,261 @@ def test_hypothesis_lifecycle_monotonicity_state_transitions_never_go_backwards_
     None
 ):
     pass
+
+
+# ---------------------------------------------------------------------------
+# Semantic Factual Deduplication — ING-001
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_merges_exact_duplicate(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # 1. Exact duplicate
+    base = await plane.create(_make("Deploy succeeded.", ns))
+    candidate = _make("Deploy succeeded.", ns)
+
+    if use_batch:
+        res = await plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await plane.create(candidate)
+
+    assert final.object_id == base.object_id
+    assert final.reinforcement_count == 1
+
+    count = qdrant.count(collection_name="musubi_episodic", exact=True).count
+    assert count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_merges_normalized_duplicate(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # 2. Normalized duplicate (case, whitespace, terminal punctuation differences only)
+    base = await plane.create(_make("Deploy succeeded.", ns))
+    candidate = _make("  DEPLOY  succeeded!!! ", ns)
+
+    # We must force a low threshold because our FakeEmbedder will randomly generate vectors for different strings.
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id == base.object_id
+    assert final.reinforcement_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_paraphrase(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # Paraphrases that are not normalization-equivalent must remain distinct
+    base = await plane.create(_make("The deployment was successful.", ns))
+    candidate = _make("Deployment succeeded.", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id != base.object_id
+    assert final.reinforcement_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_participants_change(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # In addition to normal participant changes in text, verify structured participants metadata differences
+    base_obj = _make("Meeting finished", ns)
+    base_obj.participants = ["aoi"]
+    base = await plane.create(base_obj)
+
+    candidate = _make("Meeting finished", ns)
+    candidate.participants = ["yua"]
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id != base.object_id
+    assert final.reinforcement_count == 0
+
+
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_correction(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # 3. Correction
+    base = await plane.create(_make("Deploy succeeded.", ns))
+    candidate = _make("Deploy failed.", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id != base.object_id
+    assert final.reinforcement_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_negation(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # 4. Negation
+    base = await plane.create(_make("The server is up.", ns))
+    candidate = _make("The server is not up.", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id != base.object_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_participant_change(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # 5. Participant change
+    base = await plane.create(_make("Aoi reviewed the PR.", ns))
+    candidate = _make("Yua reviewed the PR.", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id != base.object_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_time_change(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # 6. Time change
+    base = await plane.create(_make("Meeting at 4pm.", ns))
+    candidate = _make("Meeting at 5pm.", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id != base.object_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_conflicting_numbers(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # 7. Conflicting Numbers (including signs/decimals)
+    base = await plane.create(_make("We have 10 nodes.", ns))
+    c1 = _make("We have 12 nodes.", ns)
+
+    base2 = await plane.create(_make("Temp is 4.5", ns))
+    c2 = _make("Temp is 45", ns)
+
+    base3 = await plane.create(_make("Offset is 5", ns))
+    c3 = _make("Offset is -5", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    for c, b in [(c1, base), (c2, base2), (c3, base3)]:
+        if use_batch:
+            res = await low_plane.batch_create([c])
+            final = res[0]
+        else:
+            final = await low_plane.create(c)
+        assert final.object_id != b.object_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_ambiguity(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # 8. Ambiguity
+    base = await plane.create(_make("Near match.", ns))
+    candidate = _make("A near match.", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id != base.object_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_rejects_language_token_punctuation(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # Punctuation that changes meaning (e.g. C vs C++, can't vs cant) MUST reject
+    base = await plane.create(_make("We write C", ns))
+    c1 = _make("We write C++", ns)
+
+    base2 = await plane.create(_make("I cant", ns))
+    c2 = _make("I can't", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    for c, b in [(c1, base), (c2, base2)]:
+        if use_batch:
+            res = await low_plane.batch_create([c])
+            final = res[0]
+        else:
+            final = await low_plane.create(c)
+        assert final.object_id != b.object_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_batch", [False, True])
+async def test_semantic_dedup_compares_content_not_summary(
+    plane: EpisodicPlane, ns: str, use_batch: bool, qdrant: QdrantClient
+) -> None:
+    # Summary matches, but authoritative content does not
+    base_obj = _make("Detailed failure log A", ns)
+    base_obj.summary = "Failure summary"
+    base = await plane.create(base_obj)
+
+    candidate = _make("Detailed failure log B", ns)
+    candidate.summary = "Failure summary"
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    if use_batch:
+        res = await low_plane.batch_create([candidate])
+        final = res[0]
+    else:
+        final = await low_plane.create(candidate)
+
+    assert final.object_id != base.object_id
