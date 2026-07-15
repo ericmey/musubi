@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.0](https://github.com/ericmey/musubi/compare/v1.16.2...v1.17.0) (2026-07-15)
+
+
+### Features
+
+* RET-013 bounded recent-memory lane in canonical cross-modality context (Issue [#522](https://github.com/ericmey/musubi/issues/522)) ([#525](https://github.com/ericmey/musubi/issues/525)) ([0e3e1ee](https://github.com/ericmey/musubi/commit/0e3e1eea5b34e4d7a163f30d5292f10638dbdd02))
+
 ## [1.16.2](https://github.com/ericmey/musubi/compare/v1.16.1...v1.16.2) (2026-07-15)
 
 
