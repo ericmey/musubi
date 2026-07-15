@@ -279,7 +279,11 @@ class LifecycleRunner:
 
                 if self.thought_emitter is not None:
                     try:
-                        safe_content = f"Job '{job.name}' crashed with {type(exc).__name__}. See logs for details."
+                        safe_content = _bounded_job_failure_alert(
+                            job_name=job.name,
+                            exc=exc,
+                            span=span,
+                        )
                         await asyncio.wait_for(
                             self.thought_emitter.emit(
                                 channel="ops-alerts",
@@ -300,6 +304,36 @@ class LifecycleRunner:
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
             finally:
                 _DURATION.labels(job=job.name).observe(time.monotonic() - start)
+
+
+def _trace_id_hex(span: Any) -> str:
+    """Extract a hex trace_id from an OTel span, or a stable placeholder.
+
+    Must never raise and must never include exception / PII content — alerts
+    are operator-facing Thoughts that land in the Thought plane.
+    """
+    try:
+        ctx = span.get_span_context()
+        trace_id = getattr(ctx, "trace_id", 0)
+        if isinstance(trace_id, int) and trace_id != 0:
+            return format(trace_id, "032x")
+    except Exception:
+        pass
+    return "unavailable"
+
+
+def _bounded_job_failure_alert(*, job_name: str, exc: BaseException, span: Any) -> str:
+    """Bounded, non-secret ops-alert body for a crashed lifecycle job.
+
+    Includes job name, exception *class* (not ``str(exc)``), a UTC timestamp,
+    and the current span's ``trace_id`` so operators can distinguish repeats
+    and jump from the Thought into logs/traces.
+    """
+    occurred = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (
+        f"Job '{job_name}' crashed with {type(exc).__name__} "
+        f"at {occurred} trace_id={_trace_id_hex(span)}. See logs for details."
+    )
 
 
 def _utc_now() -> datetime:
@@ -637,9 +671,13 @@ async def _main_async() -> None:
         ],
     )
 
+    # LIFE-006: wire the same Thought emitter demotion/promotion use into the
+    # runner so crashed ticks emit a durable ops-alerts Thought in production
+    # (not only when tests inject a fake emitter).
     runner = LifecycleRunner(
         jobs=jobs,
         tick_seconds=min(60, settings.lifecycle_reconcile_interval_s),
+        thought_emitter=thought_emitter,
     )
     runner.install_signal_handlers()
     await runner.run()
