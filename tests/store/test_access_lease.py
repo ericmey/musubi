@@ -17,14 +17,19 @@ import pytest
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.coordinator import TransitionIntent, _intended_patch
+from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.store import bootstrap
 from musubi.store.access_lease import AccessLeaseExhausted, lease_increment_access
+from musubi.store.memory_serialization import LEASE_OWNED_FIELDS
 from musubi.store.names import collection_for_plane
 from musubi.types.common import generate_ksuid
+from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
 
 _COLL = collection_for_plane("episodic")
+_CURATED_COLL = collection_for_plane("curated")
 
 
 @pytest.fixture
@@ -58,6 +63,18 @@ def _row(client: QdrantClient, oid: str) -> dict[str, Any]:
         with_payload=True,
     )
     return dict(recs[0].payload or {}) if recs else {}
+
+
+def _curated_count(client: QdrantClient, oid: str) -> int:
+    recs, _ = client.scroll(
+        collection_name=_CURATED_COLL,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+        ),
+        limit=1,
+        with_payload=True,
+    )
+    return (recs[0].payload or {}).get("access_count", -1) if recs else -1
 
 
 def _set_token(client: QdrantClient, ns: str, oid: str, token: str) -> None:
@@ -203,3 +220,190 @@ async def test_single_loop_deliveries_stay_correct() -> None:
         assert _row(client, row.object_id).get("access_count") == 5
     finally:
         client.close()
+
+
+# ── the four remaining proofs (RET-008 restart note) ───────────────────────────
+
+
+class _CommitRacer:
+    """Wraps a real client. On the FIRST commit (the batched op that sets ``access_count``) it
+    stomps the row's token to an EXPIRED foreign value BEFORE the real fenced commit runs — so our
+    exact-held-fenced commit matches ZERO. This models a stall/takeover BETWEEN confirm and commit.
+    Thereafter it passes through, so the lease RETRIES, takes over the expired token, and lands
+    exactly one increment (no loss, no double)."""
+
+    def __init__(self, inner: QdrantClient, collection: str, object_id: str) -> None:
+        self._inner = inner
+        self._collection = collection
+        self._object_id = object_id
+        self._raced = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def batch_update_points(
+        self, *, collection_name: str, update_operations: Any, **kw: Any
+    ) -> Any:
+        is_commit = any(
+            isinstance(op, models.SetPayloadOperation)
+            and "access_count" in (op.set_payload.payload or {})
+            for op in update_operations
+        )
+        if is_commit and not self._raced:
+            self._raced = True
+            expired = f"held:{int(time.time() * 1_000_000) - 10_000_000}:racer"
+            self._inner.set_payload(
+                collection_name=self._collection,
+                payload={"access_lease_token": expired},
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=self._object_id)
+                        )
+                    ]
+                ),
+            )
+        return self._inner.batch_update_points(
+            collection_name=collection_name, update_operations=update_operations, **kw
+        )
+
+
+@pytest.mark.integration
+def test_delayed_expiry_between_confirm_and_commit_retries_and_lands_exactly_once(
+    real_qdrant: QdrantClient,
+) -> None:
+    """Proof 1: a stall/takeover BETWEEN confirm and commit makes the fenced commit match zero →
+    our ``done`` token is absent → the op does NOT falsely attribute; it RETRIES and still lands
+    exactly one increment. The mechanism already handles this; the test makes it an explicit
+    discriminator."""
+    ns, oid = _seed(real_qdrant)
+    racer = cast(QdrantClient, _CommitRacer(real_qdrant, _COLL, oid))
+    lease_increment_access(racer, _COLL, {(ns, oid)})
+    row = _row(real_qdrant, oid)
+    assert racer._raced  # type: ignore[attr-defined]  # the mid-commit stall was actually injected
+    assert row.get("access_count") == 1  # exactly one — the zero-matched commit did not lose it
+    assert row.get("access_lease_token") is None  # released after the retry landed
+
+
+@pytest.mark.integration
+def test_crash_after_done_before_clear_recovers_without_double_count(
+    real_qdrant: QdrantClient,
+) -> None:
+    """Proof 2: a predecessor COMMITTED (its increment landed, ``done`` token written) then crashed
+    before clearing. The stale EXPIRED ``done`` token is taken over by the next writer, which does
+    its own increment on top — the predecessor's increment is already counted (not double-counted)
+    and the stuck ``done`` token is cleared."""
+    ns, oid = _seed(real_qdrant)
+    # Predecessor committed: increment already landed (count=1), done token written, then crashed.
+    real_qdrant.set_payload(
+        collection_name=_COLL,
+        payload={"access_count": 1},
+        points=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+        ),
+    )
+    expired_done = f"done:{int(time.time() * 1_000_000) - 10_000_000}:crashedcommitter"
+    _set_token(real_qdrant, ns, oid, expired_done)
+
+    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})
+    row = _row(real_qdrant, oid)
+    assert row.get("access_count") == 2  # predecessor's 1 + this writer's 1 — no double-count
+    assert row.get("access_lease_token") is None  # the stuck done token was cleared
+
+
+@pytest.mark.integration
+def test_dedup_merge_upsert_preserves_leased_access_count(
+    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Proof 3: ``EpisodicPlane.create()``'s dedup-MERGE path re-upserts an existing row via a
+    full-point upsert. If the dedup probe read the row BEFORE a concurrent leased increment, the
+    merge carries a STALE ``access_count`` and the upsert would reset the increment. The reinforce
+    path now reads the lease-owned fields FRESH at upsert time (``preserve_lease_fields``), so the
+    leased increment survives. RED before the wiring, GREEN after.
+
+    The stale probe is injected deterministically by pinning ``_find_dedup_candidate`` to a
+    pre-bump snapshot — modelling the probe-before / upsert-after race without a live thread."""
+    plane = EpisodicPlane(client=real_qdrant, embedder=FakeEmbedder())
+    ns, oid = _seed(real_qdrant)  # access_count starts at 0
+    stale_existing = EpisodicMemory.model_validate(_row(real_qdrant, oid))  # count == 0 snapshot
+
+    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})  # → access_count = 1
+    assert _row(real_qdrant, oid).get("access_count") == 1
+
+    # The dedup probe returns the STALE (count==0) candidate as if it read before the bump.
+    monkeypatch.setattr(
+        plane, "_find_dedup_candidate", lambda namespace, dense: (stale_existing, None, None)
+    )
+    asyncio.run(
+        plane.create(EpisodicMemory(namespace=ns, content="near duplicate", state="matured"))
+    )
+    assert _row(real_qdrant, oid).get("access_count") == 1  # leased increment survived the merge
+
+
+def _seed_curated(client: QdrantClient, *, body_hash: str) -> CuratedKnowledge:
+    ns = f"lease-{generate_ksuid()[:8].lower()}/dev/curated"
+    return asyncio.run(
+        CuratedPlane(client=client, embedder=FakeEmbedder()).create(
+            CuratedKnowledge(
+                namespace=ns,
+                content="lease invariant body",
+                title="lease invariant",
+                vault_path="notes/lease.md",
+                body_hash=body_hash,
+            )
+        )
+    )
+
+
+@pytest.mark.integration
+def test_curated_update_upsert_preserves_leased_access_count(real_qdrant: QdrantClient) -> None:
+    """Proof 4a: ``CuratedPlane.create()``'s same-id UPDATE path (same ``object_id``, new body)
+    re-upserts via a full-point upsert built from the INCOMING model, which carries a DEFAULT
+    ``access_count = 0``. Without preservation the upsert resets a leased increment to 0. RED before
+    the wiring, GREEN after (reads the stored lease-owned fields fresh). Naturally non-vacuous — the
+    incoming model's stale count is real, not injected."""
+    row = _seed_curated(real_qdrant, body_hash="a" * 64)
+    lease_increment_access(real_qdrant, _CURATED_COLL, {(str(row.namespace), row.object_id)})
+    assert _curated_count(real_qdrant, row.object_id) == 1
+
+    # Same object_id + vault_path, DIFFERENT body → the same-id UPDATE path.
+    asyncio.run(
+        CuratedPlane(client=real_qdrant, embedder=FakeEmbedder()).create(
+            CuratedKnowledge(
+                object_id=row.object_id,
+                namespace=row.namespace,
+                content="a different body entirely",
+                title="lease invariant",
+                vault_path="notes/lease.md",
+                body_hash="b" * 64,
+            )
+        )
+    )
+    assert _curated_count(real_qdrant, row.object_id) == 1  # leased increment survived the update
+
+
+def test_transition_patch_never_carries_lease_owned_fields() -> None:
+    """Proof 4b: ``CuratedPlane.transition()`` delegates to the lifecycle coordinator, which applies
+    only ``_intended_patch`` via a fenced ``set_payload`` MERGE. The patch is state/version/lineage
+    only — it structurally CANNOT carry a lease-owned field, so a transition can never reset a
+    leased increment. This guards that property: if a lease-owned field is ever added to the patch,
+    this fails."""
+    intent = TransitionIntent(
+        collection=_CURATED_COLL,
+        object_id="obj-1",
+        namespace="n/dev/curated",
+        expected_version=1,
+        target_state="matured",
+        actor="tester",
+        reason="proof",
+        updated_at="2026-07-15T00:00:00Z",
+        updated_epoch=1,
+        superseded_by=None,
+        supersedes=(),
+        merged_from=(),
+        contradicts=(),
+        promoted_to=None,
+        promoted_at=None,
+    )
+    patch = _intended_patch(intent)
+    assert LEASE_OWNED_FIELDS.isdisjoint(patch.keys())

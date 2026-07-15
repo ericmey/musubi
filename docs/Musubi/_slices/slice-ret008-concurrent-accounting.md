@@ -90,6 +90,12 @@ Every active production `access_count` writer, verified:
 - `test_update_and_release_atomic_readback` — increment + release land together.
 - `test_lease_exhaustion_is_fail_loud` (unit) — bounded exhaustion raises a typed error.
 - `test_single_loop_deliveries_stay_correct` (unit) — single-event-loop correctness guard.
+- `test_full_payload_update_cannot_reset_leased_increment` — a stale full-payload UPDATE (set_payload merge) cannot reset a leased increment.
+- `test_delayed_expiry_between_confirm_and_commit_retries_and_lands_exactly_once` — a stall/takeover between confirm and commit zero-matches the fenced commit → retries, lands exactly one.
+- `test_crash_after_done_before_clear_recovers_without_double_count` — an expired `done` token is taken over; predecessor's increment is not double-counted; stuck token cleared.
+- `test_dedup_merge_upsert_preserves_leased_access_count` — episodic dedup-merge full-point upsert preserves a leased increment (stale-probe injected).
+- `test_curated_update_upsert_preserves_leased_access_count` — curated same-id UPDATE full-point upsert preserves a leased increment.
+- `test_transition_patch_never_carries_lease_owned_fields` (unit) — the lifecycle transition patch structurally excludes the lease-owned fields.
 - RET-002 HTTP/stream/context suites — semantics unchanged.
 
 ## Definition of Done
@@ -105,6 +111,24 @@ Every active production `access_count` writer, verified:
   lease (clobber-safe; verified robust 8-way ×6).
 - Inventoried every access_count writer; routed the two active ones (accounting seam, episodic.get)
   through the shared lease; proved query/mark_accessed dead and demotion read-only.
+- Closed the four remaining proofs (2026-07-15): (1) delayed-expiry between confirm and commit —
+  zero-matched fenced commit retries and lands exactly once; (2) crash-after-done-before-clear —
+  expired `done` token takeover, no double-count; (3) episodic dedup-merge and (4) curated same-id
+  update — full-point upserts now read the lease-owned fields FRESH and carry them forward
+  (`preserve_lease_fields`) so a concurrent leased increment is never reset. Proofs 3 + 4a verified
+  RED without the wiring, GREEN with. Transition path proven safe by construction — the lifecycle
+  `_intended_patch` is a narrow set_payload merge that structurally cannot carry a lease-owned field
+  (`test_transition_patch_never_carries_lease_owned_fields`).
+- Full-payload bypass inventory (2026-07-15): every `_upsert`/`set_payload`/`model_dump` write across
+  episodic/curated/concept audited. Every CREATE keeps `access_count=0` (demotion); every full-point
+  UPDATE preserves lease fields; every set_payload UPDATE uses `memory_update_payload` exclusion.
+  **Zero unaccounted bypasses remain.**
+- Known residual (documented, not a gate): a full-point upsert cannot be server-fenced the way a
+  filtered set_payload can, so `preserve_lease_fields(payload, fresh-read)` narrows the read→upsert
+  window to one round-trip but does not fully close it. Fully closing would require splitting the
+  upsert into `set_vectors` + a lease-excluding `set_payload` merge — a write-shape change out of
+  this slice's fix-forward scope. The dedup-merge/update paths (ingestion) race the lease
+  (retrieval-delivery) only rarely; flagged for a follow-up if the residual is ever observed.
 
 ### Out-of-scope: pre-existing `05-retrieval/orchestration` Test Contract bullets
 

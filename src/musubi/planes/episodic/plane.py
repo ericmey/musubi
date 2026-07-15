@@ -39,7 +39,7 @@ from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.store.access_lease import lease_increment_access
-from musubi.store.memory_serialization import memory_update_payload
+from musubi.store.memory_serialization import memory_update_payload, preserve_lease_fields
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
@@ -280,6 +280,15 @@ class EpisodicPlane:
                     merge_strategy=merge_strategy,
                     now=now,
                 )
+                # UPDATE of an existing row via a full-point upsert — read the stored lease-owned
+                # fields and carry them forward so a concurrent leased increment is never reset
+                # (RET-008 #502). Same bypass as the single-row create() dedup-merge path.
+                stored_lease = raw_payload(
+                    self._client,
+                    self._collection,
+                    namespace=str(updated.namespace),
+                    object_id=str(updated.object_id),
+                )
                 # Preserve existing vectors when existing content won
                 # (otherwise we'd overwrite them with the new text's
                 # embeddings — a payload/vector drift bug).
@@ -289,10 +298,19 @@ class EpisodicPlane:
                     and existing_sparse is not None
                 ):
                     points.append(
-                        self._make_point(updated, dense=existing_dense, sparse=existing_sparse)
+                        self._make_point(
+                            updated,
+                            dense=existing_dense,
+                            sparse=existing_sparse,
+                            stored_lease=stored_lease,
+                        )
                     )
                 else:
-                    points.append(self._make_point(updated, dense=dense, sparse=sparse))
+                    points.append(
+                        self._make_point(
+                            updated, dense=dense, sparse=sparse, stored_lease=stored_lease
+                        )
+                    )
                 finalised.append(updated)
             else:
                 data = memory.model_dump()
@@ -357,13 +375,26 @@ class EpisodicPlane:
         *,
         dense: list[float],
         sparse: dict[int, float],
+        stored_lease: dict[str, Any] | None = None,
     ) -> models.PointStruct:
         """Build a Qdrant PointStruct for ``memory``. Kept out of
         ``_upsert`` so ``batch_create`` can collect points without
-        calling upsert per row."""
+        calling upsert per row.
+
+        ``stored_lease`` is the row's currently-stored payload on an UPDATE
+        (dedup-merge reinforce). A full-point upsert would otherwise write the
+        in-memory model's STALE ``access_count`` / ``last_accessed_at`` /
+        ``access_lease_token`` and reset a concurrent leased increment (RET-008
+        #502). When given, :func:`preserve_lease_fields` carries the stored
+        lease-owned values forward. ``None`` on a CREATE keeps the model's
+        ``access_count = 0`` (lifecycle demotion keys on a fresh row having
+        ``access_count == 0``)."""
+        payload = memory.model_dump(mode="json")
+        if stored_lease is not None:
+            payload = preserve_lease_fields(payload, stored_lease)
         return models.PointStruct(
             id=_point_id(memory.object_id),
-            payload=memory.model_dump(mode="json"),
+            payload=payload,
             vector={
                 DENSE_VECTOR_NAME: dense,
                 SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
@@ -393,10 +424,12 @@ class EpisodicPlane:
         updated, existing_content_won = self._merge_row(
             existing=existing, new=new, merge_strategy=merge_strategy, now=now
         )
+        # UPDATE of an existing row via a full-point upsert — preserve the lease-owned fields so a
+        # concurrent retrieval-delivery increment is never reset (RET-008 #502).
         if existing_content_won and existing_dense is not None and existing_sparse is not None:
-            self._upsert(updated, dense=existing_dense, sparse=existing_sparse)
+            self._upsert(updated, dense=existing_dense, sparse=existing_sparse, preserve_lease=True)
         else:
-            self._upsert(updated, dense=dense, sparse=sparse)
+            self._upsert(updated, dense=dense, sparse=sparse, preserve_lease=True)
         return updated
 
     def _upsert(
@@ -405,15 +438,21 @@ class EpisodicPlane:
         *,
         dense: list[float],
         sparse: dict[int, float],
+        preserve_lease: bool = False,
     ) -> None:
-        point = models.PointStruct(
-            id=_point_id(memory.object_id),
-            payload=memory.model_dump(mode="json"),
-            vector={
-                DENSE_VECTOR_NAME: dense,
-                SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
-            },
-        )
+        stored_lease: dict[str, Any] | None = None
+        if preserve_lease:
+            # UPDATE path: read the lease-owned fields FRESH and carry them forward so the
+            # full-point upsert never resets a concurrent leased access_count. This narrows the
+            # read->upsert window to one round-trip; a full-point upsert cannot be server-fenced
+            # the way a filtered set_payload can, so a residual window remains (RET-008 PR notes).
+            stored_lease = raw_payload(
+                self._client,
+                self._collection,
+                namespace=str(memory.namespace),
+                object_id=str(memory.object_id),
+            )
+        point = self._make_point(memory, dense=dense, sparse=sparse, stored_lease=stored_lease)
         self._client.upsert(collection_name=self._collection, points=[point])
 
     # ------------------------------------------------------------------
