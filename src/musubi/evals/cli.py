@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import math
 import sys
@@ -8,6 +9,12 @@ import yaml
 from pydantic import ValidationError
 
 from musubi.evals.corpus import verify_manifest
+from musubi.evals.live_gate import (
+    LiveGateUnavailable,
+    build_settings_retriever,
+    enforce_thresholds,
+    run_live_gate,
+)
 from musubi.evals.runner import run_smoke_gate
 from musubi.evals.schema import GoldenQuery, SmokeFixture
 
@@ -82,26 +89,42 @@ def main() -> None:
         _write(f"Smoke gate passed. ndcg@10={ndcg}")
         raise SystemExit(0)
 
-    corpus: list[dict[str, object]] = []
+    golden_queries: list[GoldenQuery] = []
     try:
         with open(corpus_path) as f:
             docs = list(yaml.safe_load_all(f))
         for doc in docs:
-            # We assume GoldenQuery schema
             if doc:
-                q = GoldenQuery.model_validate(doc)
-                # Need to convert to runner shape for smoke gate
-                # The smoke gate expects dicts
-                # But here we just prove schema is validated
-                # Let's rebuild a simple mock dictionary for run_smoke_gate
-                corpus.append({"id": q.id, "text": q.text, "relevance": 1 if q.relevant else 0})
+                golden_queries.append(GoldenQuery.model_validate(doc))
     except (OSError, yaml.YAMLError, ValidationError, ValueError, TypeError) as exc:
         _write(f"Schema validation failed: {exc}")
         raise SystemExit(1) from exc
 
     if args.command == "scheduled":
-        _write("Scheduled live Qdrant+TEI quality gate is not implemented; see Issue #430.")
-        raise SystemExit(2)
+        queries = [
+            {
+                "id": query.id,
+                "text": query.text,
+                "mode": query.mode,
+                "namespace": query.namespace,
+                "relevant": query.relevant,
+            }
+            for query in golden_queries
+        ]
+        try:
+            retriever = build_settings_retriever()
+            by_mode = asyncio.run(run_live_gate(queries, retriever))
+            enforce_thresholds(by_mode)
+        except LiveGateUnavailable as exc:
+            # No TEI stack (or it dropped mid-run): FAIL LOUD — never a fabricated or empty pass.
+            # Real quality numbers are proven on the scheduled x86 TEI CI, not on a TEI-less box.
+            _write(f"Scheduled live gate unavailable — fail-loud, no fabricated numbers: {exc}")
+            raise SystemExit(3) from exc
+        except ValueError as exc:
+            _write(f"Scheduled live gate FAILED quality thresholds: {exc}")
+            raise SystemExit(1) from exc
+        _write(f"Scheduled live gate passed all mode thresholds: {by_mode}")
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

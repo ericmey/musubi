@@ -275,14 +275,21 @@ def test_smoke_baseline_ndcg_fails_closed(
     assert "Baseline validation failed" in capsys.readouterr().out
 
 
-def test_scheduled_command_fails_closed_until_live_gate_exists(
+def test_scheduled_command_fails_loud_without_tei(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """RET-004 successor: the scheduled command runs the REAL live gate. When TEI is unavailable
+    (this TEI-less box, and the fail path on any box) it FAILS LOUD — non-zero, saying the gate is
+    unavailable and that it does NOT fabricate numbers. It must NOT be the old "not implemented"
+    stub, and it must NOT exit 0. Real quality numbers are proven on the scheduled x86 TEI CI."""
+    from musubi.evals.live_gate import LiveGateUnavailable
+
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     corpus = data_dir / "corpus.yaml"
     corpus.write_text(
-        "id: q1\ntext: query\nrelevant: [doc1]\nmode: hybrid\nnamespace: test/default\n",
+        "id: q1\ntext: query\nrelevant:\n- object_id: a\n  relevance: 3\n"
+        "mode: fast\nnamespace: test/default/blended\n",
         encoding="utf-8",
     )
 
@@ -294,11 +301,19 @@ def test_scheduled_command_fails_closed_until_live_gate_exists(
         encoding="utf-8",
     )
 
+    # Model a TEI-less environment: the live backend build fails loud.
+    def _tei_unavailable() -> None:
+        raise LiveGateUnavailable("TEI dense endpoint unavailable: connect error")
+
+    monkeypatch.setattr(cli, "build_settings_retriever", _tei_unavailable)
     monkeypatch.setattr(sys, "argv", ["musubi-evals", "scheduled", "--data-dir", str(data_dir)])
     with pytest.raises(SystemExit) as exc_info:
         cli.main()
-    assert exc_info.value.code != 0
-    assert "not implemented" in capsys.readouterr().out.lower()
+    assert exc_info.value.code != 0  # fail loud, never a silent/zero pass
+    out = capsys.readouterr().out.lower()
+    assert "unavailable" in out  # the real fail-loud reason
+    assert "not implemented" not in out  # NOT the retired stub
+    assert "no fabricated numbers" in out  # the no-fake-green promise is surfaced
 
 
 # --- Schema Validation Invariants ---
