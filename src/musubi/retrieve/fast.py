@@ -414,19 +414,16 @@ def _cache_key(
     limit: int,
     state_filter: Sequence[LifecycleState],
 ) -> tuple[Any, ...]:
-    """Cache key scoped to identity family, not exact namespace.
+    """Cache key scoped to the EXACT deployment namespace (RET-011 / #510).
 
-    Retrieval federates at the identity level (see
-    ``musubi.retrieve.hybrid._build_filter``), so two queries from
-    different presences of the same identity — e.g. caller namespaces
-    ``aoi/command-chair/episodic`` vs ``aoi/voice/episodic`` — produce
-    identical results and SHOULD share a cache entry. Keying on the
-    full namespace would split that cache and miss on every cross-
-    substrate query.
+    Retrieval of a concrete target is presence-exact (see
+    ``musubi.retrieve.hybrid._build_filter``), so two queries from different presences of the
+    same identity — e.g. ``aoi/command-chair/episodic`` vs ``aoi/voice/episodic`` — resolve
+    DIFFERENT rows and must NOT share a cache entry. Keying on ``family_of`` here was the
+    second half of the cross-presence leak: even with an exact query filter, fast mode would
+    serve one presence's cached rows to another presence's query.
     """
-    from musubi.types.common import family_of
-
-    return (family_of(namespace), query, tuple(collections), limit, tuple(state_filter))
+    return (namespace, query, tuple(collections), limit, tuple(state_filter))
 
 
 __all__ = [

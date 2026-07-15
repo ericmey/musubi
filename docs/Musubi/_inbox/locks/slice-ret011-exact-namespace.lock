@@ -1,0 +1,16 @@
+{
+  "agent": "aoi-command-chair",
+  "branch": "slice/ret-011-exact-namespace",
+  "timestamp": "2026-07-15T11:32:09Z",
+  "reason": "RET-011 (#510) exact deployment-namespace retrieval implementation",
+  "owns_paths": [
+    "src/musubi/retrieve/hybrid.py",
+    "src/musubi/retrieve/fast.py",
+    "docs/Musubi/05-retrieval/hybrid-search.md",
+    "docs/Musubi/_slices/slice-ret011-exact-namespace.md",
+    "tests/retrieve/test_ret011_exact_namespace.py",
+    "tests/retrieve/test_ret011_exact_namespace_integration.py",
+    "tests/api/test_ret011_streaming_namespace.py",
+    "tests/retrieve/test_hybrid.py"
+  ]
+}
