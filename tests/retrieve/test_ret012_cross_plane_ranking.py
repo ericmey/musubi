@@ -353,6 +353,69 @@ async def test_cross_plane_tiebreak_object_id_then_plane(
     )
 
 
+@pytest.mark.parametrize(
+    "plane_order",
+    [
+        ("curated", "episodic"),
+        ("episodic", "curated"),
+    ],
+    ids=["curated_first", "episodic_first"],
+)
+async def test_dedup_equal_score_prefers_lower_plane(
+    monkeypatch: pytest.MonkeyPatch, plane_order: tuple[str, str]
+) -> None:
+    """Equal-score copies of the same ``object_id`` from different legs must dedup to the
+    lexicographically smaller plane, regardless of which leg was first in the gather.
+
+    The previous strict ``hit.score > current.score`` dedup picked the first-seen copy on
+    equal scores, which made the result depend on gather order and could not be repaired
+    by the final ``(-score, object_id, plane)`` sort (one copy was already discarded by
+    the time the sort ran). The fix uses the same deterministic key in the dedup as in
+    the final sort: higher score wins; on tie, lower object_id wins; on further tie,
+    lower plane wins.
+
+    The two parametrized ``plane_order`` cases (curated first vs episodic first) prove
+    the dedup is order-independent for the same input.
+    """
+    shared_oid = "shared-equal"
+    # Both legs carry the same ``raw_rrf`` and the same other components ⇒ identical
+    # per-leg score ⇒ identical recalibrated score after the seam. The dedup must
+    # choose deterministically, not by gather order.
+    leg_a = _mk_leg_result(
+        object_id=shared_oid,
+        plane=plane_order[0],
+        raw_rrf=0.5,
+        marker=f"leg-{plane_order[0]}",
+    )
+    leg_b = _mk_leg_result(
+        object_id=shared_oid,
+        plane=plane_order[1],
+        raw_rrf=0.5,
+        marker=f"leg-{plane_order[1]}",
+    )
+    targets = [
+        NamespaceTarget(namespace="test/ns", plane=plane_order[0]),
+        NamespaceTarget(namespace="test/ns", plane=plane_order[1]),
+    ]
+    result = await _run_orch(
+        monkeypatch,
+        by_plane={plane_order[0]: leg_a, plane_order[1]: leg_b},
+        targets=targets,
+    )
+    assert isinstance(result, Ok)
+    rows = list(result.value.results)
+    assert len(rows) == 1, (
+        f"dedup must collapse the two equal-score copies into one row; got {len(rows)} "
+        f"(plane_order={plane_order})"
+    )
+    expected_lower = min(plane_order[0], plane_order[1])
+    chosen_plane = rows[0].plane
+    assert chosen_plane == expected_lower, (
+        f"dedup must prefer the lexicographically smaller plane on equal score; "
+        f"expected {expected_lower!r}, got {chosen_plane!r} (plane_order={plane_order})"
+    )
+
+
 # --------------------------------------------------------------------------- #
 # GREEN — preservation guards (pass under live code; the seam must not break them)
 # --------------------------------------------------------------------------- #

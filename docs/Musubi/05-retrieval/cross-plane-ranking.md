@@ -31,7 +31,8 @@ A weak plane's sole hit must not become maximally relevant merely by being alone
 2. `test_three_plane_wildcard_uses_global_calibration`
 3. `test_pre_dedup_calibration_picks_higher_recalibrated_copy`
 4. `test_cross_plane_tiebreak_object_id_then_plane`
-5. `test_single_target_fast_path_unchanged`
-6. `test_rerank_sigmoid_relevance_unchanged`
-7. `test_recent_mode_passthrough_at_seam`
-8. `test_empty_working_set_no_op`
+5. `test_dedup_equal_score_prefers_lower_plane` (parametrized over gather order)
+6. `test_single_target_fast_path_unchanged`
+7. `test_rerank_sigmoid_relevance_unchanged`
+8. `test_recent_mode_passthrough_at_seam`
+9. `test_empty_working_set_no_op`

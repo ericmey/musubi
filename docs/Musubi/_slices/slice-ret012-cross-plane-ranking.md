@@ -89,11 +89,17 @@ must not become maximally relevant merely by being alone.
    then the existing ``best_by_id`` loop picks the highest-recalibrated
    copy per ``object_id``. Calibrating after dedup can permanently
    discard the better copy using the bad per-leg score.
-4. **Deterministic final sort key is ``(-score, object_id, plane)``**.
-   The current multi-target sort (``sorted(..., key=lambda r: r.score,
-   reverse=True)``) has no tie-break. The new sort key restores
-   deterministic ordering for ties, matching the key
-   ``scoring.rank_hits`` already uses for per-leg ranking.
+4. **Deterministic final sort key is ``(-score, object_id, plane)``**
+   AND the cross-plane dedup uses the same key to choose between
+   equal-score copies of the same ``object_id``. The current multi-target
+   sort (``sorted(..., key=lambda r: r.score, reverse=True)``) has no
+   tie-break. The new sort key restores deterministic ordering for ties,
+   matching the key ``scoring.rank_hits`` already uses for per-leg
+   ranking. The dedup MUST use the same key — a strict
+   ``hit.score > current.score`` would let the first-seen copy win on
+   equal scores, leaking the gather order into the final result; the
+   final sort could not repair it because one copy was already
+   discarded by the dedup.
 5. **Two optional internal fields on ``RetrievalResult``:**
    ``raw_rrf_score: float | None = None`` and
    ``raw_rerank_score: float | None = None``. Populated at the three
@@ -126,16 +132,19 @@ discriminating tests, four GREEN preservation guards. Test function
 names transcribe the Test Contract bullets verbatim per the AGENTS.md
 Test Contract Closure Rule.
 
-### Test Contract (8 bullets, state 1 = passing at handoff)
+### Test Contract (9 bullets, state 1 = passing at handoff)
 
 1. `test_asymmetric_two_plane_fast_weak_sole_does_not_maximize` — RED
 2. `test_three_plane_wildcard_uses_global_calibration` — RED
 3. `test_pre_dedup_calibration_picks_higher_recalibrated_copy` — RED
 4. `test_cross_plane_tiebreak_object_id_then_plane` — RED
-5. `test_single_target_fast_path_unchanged` — GREEN guard
-6. `test_rerank_sigmoid_relevance_unchanged` — GREEN guard
-7. `test_recent_mode_passthrough_at_seam` — GREEN guard
-8. `test_empty_working_set_no_op` — GREEN guard
+5. `test_dedup_equal_score_prefers_lower_plane` — RED (parametrized over
+   gather order: `curated_first`, `episodic_first`; same input must yield
+   the same chosen copy)
+6. `test_single_target_fast_path_unchanged` — GREEN guard
+7. `test_rerank_sigmoid_relevance_unchanged` — GREEN guard
+8. `test_recent_mode_passthrough_at_seam` — GREEN guard
+9. `test_empty_working_set_no_op` — GREEN guard
 
 At handoff, every bullet above is in state 1 (passing test whose name
 transcribes the bullet text verbatim) per the AGENTS.md Closure Rule.
@@ -278,6 +287,58 @@ follow-up action, not a block on the slice.
 - **No PR open yet.** The seam impl commit is review-ready; the
   draft PR will be opened after this commit, with the body linking
   Issue #512 and the first commit's test evidence.
+
+### 2026-07-15 — cowork-tama (review feedback: equal-score dedup tie-break gap; main@76878c7 integration; handoff hygiene)
+
+- **Review feedback (Yua 08:21 REQ):** a real binding tie-break gap
+  remained. The dedup used a strict ``hit.score > current.score``,
+  which let the first-seen copy win on equal scores and leaked
+  the gather order into the final result. The final
+  ``(-score, object_id, plane)`` sort could not repair it because
+  one copy was already discarded by the dedup.
+- **Fix-forward commits (this branch, follow-up):**
+  1. Added `test_dedup_equal_score_prefers_lower_plane` (5th RED
+     bullet, parametrized over gather order: `curated_first`,
+     `episodic_first`). Discriminates: under the old code the
+     ``episodic_first`` parametrization picked the wrong copy
+     (gather-order leak); under the fix both parametrizations pick
+     the lexicographically smaller plane.
+  2. Added `_dedup_prefers(candidate, incumbent)` helper in
+     `orchestration.py` that mirrors the final sort key. Higher
+     score wins; on tie, lower `object_id` wins; on further tie,
+     lower `plane` wins (defense in depth; equal `object_id` is
+     impossible after dedup). Replaced the strict
+     ``hit.score > current.score`` with the helper.
+  3. Updated the slice doc's contract section to bind the dedup
+     key to the final sort key (bullet 4 expanded). Test Contract
+     section now lists 9 bullets (5 RED + 4 GREEN). Updated the
+     spec `05-retrieval/cross-plane-ranking.md` to match.
+  4. Integrated `main@76878c7` via `git merge origin/main` (no
+     rebase; fix-forward preserves the existing tests-first
+     history). RET-002 (orchestration accounting) is structurally
+     disjoint from RET-012 (cross-plane relevance calibration) and
+     the merge had no conflicts.
+  5. Deleted `docs/Musubi/_inbox/locks/slice-ret012-cross-plane-ranking.lock`
+     on handoff (per the slice lifecycle: the lock marks the
+     in-progress claim and is removed when the slice goes to
+     in-review; the slice frontmatter `status: in-review` is the
+     authoritative state record per AGENTS.md Dual-update rule).
+  6. Edited the PR body to remove the "draft PR" sentence (PR #521
+     was marked ready for review in the previous round; the body
+     still said "this is a draft PR" — fix-forward cleanup).
+- **Files touched in the fix-forward commits:**
+  `src/musubi/retrieve/orchestration.py` (dedup helper + call site);
+  `tests/retrieve/test_ret012_cross_plane_ranking.py` (5th RED
+  bullet, parametrized);
+  `docs/Musubi/_slices/slice-ret012-cross-plane-ranking.md` (contract
+  bullet 4 expanded, Test Contract 9 bullets, work log);
+  `docs/Musubi/05-retrieval/cross-plane-ranking.md` (Test Contract 9
+  bullets); plus the lock delete and the PR body edit.
+- **Test count:** 10 items (9 bullets; bullet 5 is parametrized).
+  All 10 ✓ passing.
+- **No spec drift:** the function signature is unchanged. The new
+  behavior is a tightening of the dedup key, not a new function or
+  a new field.
 
 ## Out-of-band continuation
 

@@ -405,11 +405,14 @@ async def _retrieve_uncounted(
         # object_id. First-seen dedup would drop a stronger match purely
         # because it arrived from a later target in the gather order.
         # Build a {object_id → best hit} map, then materialise once at
-        # the end.
+        # the end. The dedup key MUST match the final sort key — the
+        # final sort runs on what survived dedup, so an equal-score
+        # copy of the same ``object_id`` from a different leg would be
+        # invisible to the sort if dedup kept the wrong one.
         best_by_id: dict[str, RetrievalResult] = {}
         for hit in calibrated:
             current = best_by_id.get(hit.object_id)
-            if current is None or hit.score > current.score:
+            if current is None or _dedup_prefers(hit, current):
                 best_by_id[hit.object_id] = hit
 
         # RET-012: deterministic final sort key is (-score, object_id,
@@ -766,6 +769,32 @@ def _pack_scored_hits(hits: Sequence[Any], include_payload: bool) -> list[Retrie
             )
         )
     return results
+
+
+def _dedup_prefers(candidate: RetrievalResult, incumbent: RetrievalResult) -> bool:
+    """Return True if ``candidate`` should replace ``incumbent`` in ``best_by_id``.
+
+    Mirrors the final sort key ``(-score, object_id, plane)`` so the
+    dedup is gather-order-independent: the same input set always
+    produces the same chosen copy, regardless of which leg's result
+    arrived first in the gather.
+
+    Tie-break order (load-bearing for cross-plane merge):
+      1. higher ``score`` wins
+      2. on equal ``score``, lexicographically smaller ``object_id`` wins
+      3. on further tie, lexicographically smaller ``plane`` wins (defense
+         in depth; equal ``object_id`` is impossible after dedup)
+
+    A strict ``candidate.score > incumbent.score`` check would let the
+    first-seen copy win on equal scores — the gathered order would leak
+    into the final result, and the deterministic final sort could not
+    repair it because one copy was already discarded.
+    """
+    if candidate.score != incumbent.score:
+        return candidate.score > incumbent.score
+    if candidate.object_id != incumbent.object_id:
+        return candidate.object_id < incumbent.object_id
+    return candidate.plane < incumbent.plane
 
 
 def _snippet(payload: dict[str, Any], max_chars: int) -> tuple[str, bool, int]:
