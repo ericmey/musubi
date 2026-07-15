@@ -24,9 +24,9 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
-import pytest_mock
 from hypothesis import given
 from hypothesis import strategies as st
 
@@ -387,7 +387,6 @@ async def test_concurrent_transitions_stale_expected_version_fence_violation(
     qdrant: QdrantClient,
     ns: str,
     sink: LifecycleEventSink,
-    mocker: pytest_mock.MockerFixture,
 ) -> None:
     """LIFE-010 — concurrent transitions: stale expected_version hard-fenced."""
     saved = await _seed_matured(plane, ns, _coordinator(qdrant, sink), content="concurrent")
@@ -406,39 +405,40 @@ async def test_concurrent_transitions_stale_expected_version_fence_violation(
 
     snapshot_events = sink.read_all()
 
-    # Spy on coordinator and sink
     coordinator = _coordinator(qdrant, sink)
-    spy_transition = mocker.spy(coordinator, "transition")
-    spy_sink = mocker.spy(sink, "record")
 
-    second = transition(
-        qdrant,
-        coordinator=coordinator,
-        object_id=saved.object_id,
-        target_state="superseded",
-        actor="worker-b",
-        reason="b-supersede",
-        expected_version=saved.version,  # stale!
-        lineage_updates=LineageUpdates(superseded_by="0" * 27),
-        sink=sink,
-    )
+    with (
+        patch.object(coordinator, "transition", wraps=coordinator.transition) as spy_transition,
+        patch.object(sink, "record", wraps=sink.record) as spy_sink,
+    ):
+        second = transition(
+            qdrant,
+            coordinator=coordinator,
+            object_id=saved.object_id,
+            target_state="superseded",
+            actor="worker-b",
+            reason="b-supersede",
+            expected_version=saved.version,  # stale!
+            lineage_updates=LineageUpdates(superseded_by="0" * 27),
+            sink=sink,
+        )
 
-    # Must return version_fence_violation immediately
-    assert isinstance(second, Err)
-    assert second.error.code == "version_fence_violation"
+        # Must return version_fence_violation immediately
+        assert isinstance(second, Err)
+        assert second.error.code == "version_fence_violation"
 
-    # Prove zero coordinator dispatches or sink writes
-    spy_transition.assert_not_called()
-    spy_sink.assert_not_called()
+        # Prove zero coordinator dispatches or sink writes
+        spy_transition.assert_not_called()
+        spy_sink.assert_not_called()
 
-    assert sink.read_all() == snapshot_events
+        assert sink.read_all() == snapshot_events
 
-    # Prove no mutation to the state, version, and lineage
-    reloaded = await plane.get(namespace=ns, object_id=saved.object_id)
-    assert reloaded is not None
-    assert reloaded.state == "demoted"
-    assert reloaded.version == saved.version + 1
-    assert reloaded.superseded_by is None
+        # Prove no mutation to the state, version, and lineage
+        reloaded = await plane.get(namespace=ns, object_id=saved.object_id)
+        assert reloaded is not None
+        assert reloaded.state == "demoted"
+        assert reloaded.version == saved.version + 1
+        assert reloaded.superseded_by is None
 
 
 async def test_event_batch_flushed_within_5s_under_load(
