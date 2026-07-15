@@ -188,7 +188,8 @@ lineage was hydrated. One async step in `retrieve()` immediately after `_finaliz
 - **`/v1/context` delivers a DIFFERENT final set.** It retrieves `candidate_limit` candidates,
   then `build_context_pack` trims by `max_items`/`max_chars`/filler. So the router passes
   `retrieve(account_access=False)` and calls `account_delivered` itself on the flattened final
-  pack items (each carries `object_id` + `plane`) — a trimmed candidate is never counted. An
+  pack items (each carries `namespace` + `object_id` + `plane`) — a trimmed candidate is never
+  counted. An
   empty pack accounts nothing.
 - Concurrency: batched read-modify-write, **not** atomic. True concurrent-counter safety is
   tracked separately (Issue #502). Typed results and warnings are unchanged by this step.
