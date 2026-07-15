@@ -134,7 +134,8 @@ CREATE TABLE IF NOT EXISTS lifecycle_outbox (
     lease_expires_epoch REAL,
     attempts INTEGER NOT NULL DEFAULT 0,
     next_attempt_epoch REAL,
-    failure_class TEXT
+    failure_class TEXT,
+    intent_kind TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS ux_active_intent
     ON lifecycle_outbox (collection, object_id) WHERE state IN ('PENDING','APPLIED');
@@ -272,6 +273,20 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     """Create every shared lifecycle table/index if absent — idempotent and
     cross-process safe under the connection's busy_timeout. No process-local guard."""
     conn.executescript(_LIFECYCLE_SCHEMA)
+    # Additive backward-safe migration (C4/ART-001): older lifecycle DBs predate the
+    # ``intent_kind`` discriminator. ADD COLUMN if absent so an existing outbox keeps working;
+    # a NULL intent_kind is read as the default lifecycle-transition kind.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(lifecycle_outbox)").fetchall()}
+    if "intent_kind" not in cols:
+        try:
+            conn.execute("ALTER TABLE lifecycle_outbox ADD COLUMN intent_kind TEXT")
+        except sqlite3.OperationalError as exc:
+            # Two-process race: another process ADD COLUMN'd intent_kind between our PRAGMA read and
+            # this ALTER. Tolerate ONLY the duplicate-column error; NEVER mask any other
+            # OperationalError (a genuine schema/lock fault must still surface).
+            if "duplicate column name" not in str(exc).lower():
+                raise
+    conn.commit()
 
 
 __all__ = ["DEFAULT_BUSY_TIMEOUT_MS", "LifecycleStoreError", "connect", "ensure_schema"]

@@ -330,6 +330,12 @@ class JsonChunker:
         return chunks
 
 
+#: The chunker names ``get_chunker`` recognizes explicitly (anything else falls back to token-sliding).
+#: The committed-generation indexer rejects an unknown chunker as a deterministic config error rather
+#: than silently mis-chunking under the default.
+KNOWN_CHUNKERS = frozenset({"markdown-headings-v1", "vtt-turns-v1", "token-sliding-v1", "json-v1"})
+
+
 def get_chunker(name: str) -> ChunkerProtocol:
     if name == "markdown-headings-v1":
         return MarkdownHeadingChunker()

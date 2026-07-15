@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, Request
 from pydantic import BaseModel, Field
-from qdrant_client import QdrantClient
 
-from musubi.api.dependencies import get_qdrant_client, get_settings_dep
+from musubi.api.dependencies import get_settings_dep, get_thoughts_plane
 from musubi.api.errors import APIError, ErrorCode
 from musubi.auth import AuthRequirement, authenticate_request
-from musubi.embedding.fake import FakeEmbedder
 from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
 from musubi.types.common import Err
@@ -64,11 +62,10 @@ def _check_body_scope(request: Request, namespace: str, settings: Settings) -> N
 async def send_thought(
     request: Request,
     body: ThoughtSendRequest = Body(...),
-    qdrant: QdrantClient = Depends(get_qdrant_client),
+    thoughts_plane: ThoughtsPlane = Depends(get_thoughts_plane),
     settings: Settings = Depends(get_settings_dep),
 ) -> ThoughtSendResponse:
     _check_body_scope(request, body.namespace, settings)
-    plane = ThoughtsPlane(client=qdrant, embedder=FakeEmbedder())
     thought = Thought(
         namespace=body.namespace,
         from_presence=body.from_presence,
@@ -77,7 +74,7 @@ async def send_thought(
         channel=body.channel,
         importance=body.importance,
     )
-    saved = await plane.send(thought)
+    saved = await thoughts_plane.send(thought)
 
     # Fire-and-forget publish hook
     from musubi.api.events import broker
@@ -95,15 +92,14 @@ async def send_thought(
 async def read_thoughts(
     request: Request,
     body: ThoughtReadRequest = Body(...),
-    qdrant: QdrantClient = Depends(get_qdrant_client),
+    thoughts_plane: ThoughtsPlane = Depends(get_thoughts_plane),
     settings: Settings = Depends(get_settings_dep),
 ) -> ThoughtReadResponse:
     _check_body_scope(request, body.namespace, settings)
-    plane = ThoughtsPlane(client=qdrant, embedder=FakeEmbedder())
     count = 0
     for oid in body.ids:
         try:
-            await plane.read(namespace=body.namespace, object_id=oid, reader=body.reader)
+            await thoughts_plane.read(namespace=body.namespace, object_id=oid, reader=body.reader)
             count += 1
         except (LookupError, ValueError):
             continue
