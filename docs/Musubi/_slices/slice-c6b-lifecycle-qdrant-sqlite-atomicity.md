@@ -16,12 +16,14 @@ issue: 437
 
 # Slice: C6b lifecycle audit — Qdrant↔SQLite atomicity (precondition of C6 source merge)
 
-The concrete follow-on that C6's durability work explicitly does **not** close. Tracked as Issue #437
-(distinct from #433, which is C6 only). Status `in-progress` (claimed by aoi, lock
-`_inbox/locks/slice-c6b-lifecycle-qdrant-sqlite-atomicity.lock`). It **blocks** the C6 source slice
-([[_slices/slice-c6-lifecycle-event-loss]] lists it in `depends-on`), which must not be
-authorized/merged before C6b has a design + red contract, because the transition `Err` semantics after a
-committed Qdrant mutation are otherwise undefined.
+**DONE** (2026-07-14). Tracked as Issue #437 (distinct from #433, which is C6 only). Phase 1 source
+implementation merged via PR #455 at `dd0f971` (S1–S7: coordinator wiring, Pending semantics, S6 rollback,
+maintenance barrier). H5/G1 closure merged via PR #473 at `7e5864d` (canonical coordinator boundary, five
+plane writers migrated, eight production callers consume Final/Pending/Err; G1 exact denominator moved from
+six to zero). The separate legacy FILE-to-DIR lifecycle storage migration utility is preserved and
+deferred in Issue #474 — it is **not** a C6b completion gate (C6b core is landed via PRs #455 and #473;
+the FILE-to-DIR utility is a separate legacy-layout maintenance item, deferred by Eric on 2026-07-14
+until after the active code-fix ledger is complete).
 
 **Design + exact red inventory (v2, ruling applied):** [[13-decisions/c6b-lifecycle-atomicity-design]] —
 a durable-intent outbox behind a distinct **`LifecycleTransitionCoordinator`** boundary (+ a distinct
