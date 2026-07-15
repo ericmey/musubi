@@ -326,41 +326,47 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
 
         curated_id = generate_ksuid()
 
-        fm_obj = CuratedFrontmatter(  # type: ignore
-            object_id=curated_id,
-            namespace=concept.namespace,
-            title=concept.title,
-            topics=concept.topics or concept.linked_to_topics,
-            tags=concept.tags,
-            importance=concept.importance,
-            state="matured",
-            musubi_managed=True,
-            created=now,
-            updated=now,
-            promoted_from=concept.object_id,
-            promoted_at=now,
-        )
+        try:
+            fm_obj = CuratedFrontmatter(  # type: ignore
+                object_id=curated_id,
+                namespace=concept.namespace,
+                title=concept.title,
+                topics=concept.topics or concept.linked_to_topics,
+                tags=concept.tags,
+                importance=concept.importance,
+                state="matured",
+                musubi_managed=True,
+                created=now,
+                updated=now,
+                promoted_from=concept.object_id,
+                promoted_at=now,
+            )
+        except (ValueError, TypeError) as e:
+            raise PromotionPolicyError(f"Invalid frontmatter fields: {e}") from e
 
         # Write to vault
         deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
 
         # Create Qdrant point
         body_hash = hashlib.sha256(render.body.encode("utf-8")).hexdigest()
-        memory = CuratedKnowledge(
-            object_id=curated_id,
-            namespace=concept.namespace,
-            vault_path=rel_path,
-            body_hash=body_hash,
-            title=concept.title,
-            content=render.body,
-            summary=concept.summary,
-            state="matured",
-            importance=concept.importance,
-            topics=concept.topics or concept.linked_to_topics,
-            tags=concept.tags,
-            promoted_from=concept.object_id,
-            promoted_at=now,
-        )
+        try:
+            memory = CuratedKnowledge(
+                object_id=curated_id,
+                namespace=concept.namespace,
+                vault_path=rel_path,
+                body_hash=body_hash,
+                title=concept.title,
+                content=render.body,
+                summary=concept.summary,
+                state="matured",
+                importance=concept.importance,
+                topics=concept.topics or concept.linked_to_topics,
+                tags=concept.tags,
+                promoted_from=concept.object_id,
+                promoted_at=now,
+            )
+        except (ValueError, TypeError) as e:
+            raise PromotionPolicyError(f"Invalid curated memory fields: {e}") from e
 
         await deps.curated_plane.create(memory)
 

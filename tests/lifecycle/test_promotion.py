@@ -687,6 +687,38 @@ async def test_deterministic_post_render_failure_increments_attempts(
 
 
 @pytest.mark.asyncio
+async def test_deterministic_model_validation_failure_increments_attempts(
+    deps: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import musubi.lifecycle.promotion
+    from musubi.lifecycle.promotion import run_promotion_sweep
+
+    def _failing_model(*args: Any, **kwargs: Any) -> Any:
+        raise ValueError("Invalid field generated")
+
+    monkeypatch.setattr(musubi.lifecycle.promotion, "CuratedFrontmatter", _failing_model)
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+    _set_old(deps, "concept", str(c.object_id))
+
+    promoted_count = await run_promotion_sweep(deps)
+    assert promoted_count == 0
+
+    readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback is not None
+    assert readback.promotion_attempts == 1
+
+
+@pytest.mark.asyncio
 async def test_promotion_rejected_after_3_attempts_stops_retrying(deps: Any) -> None:
     from dataclasses import replace
 
