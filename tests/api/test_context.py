@@ -622,6 +622,41 @@ def test_context_endpoint_custom_state_filter_applies_to_both_lanes(
     assert fast_query["state_filter"] == ["archived"]
 
 
+def test_context_endpoint_preserves_explicit_empty_state_filter(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope
+
+    captured_queries: list[dict[str, object]] = []
+
+    async def mock_retrieve(**kwargs: object) -> object:
+        captured_queries.append(kwargs["query"])  # type: ignore[arg-type]
+        return Ok(value=RetrievalEnvelope(results=[], warnings=()))
+
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    response = client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "explicit empty filter",
+            "state_filter": [],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [query["state_filter"] for query in captured_queries] == [[], []]
+
+
 def test_context_endpoint_returns_grouped_server_ranked_pack(
     client: TestClient,
     valid_token: str,

@@ -26,7 +26,9 @@ Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canoni
 
 ## Owned paths
 - `src/musubi/api/routers/context.py`
+- `src/musubi/retrieve/context_pack.py`
 - `tests/api/test_context.py`
+- `tests/retrieve/test_context_pack.py`
 - `tests/api/test_ret007_telemetry_boundary.py` (RET-013 compatibility assertion only)
 - `docs/Musubi/05-retrieval/context-pack.md` (RET-013 contract update only)
 

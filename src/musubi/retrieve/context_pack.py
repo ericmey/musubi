@@ -97,7 +97,7 @@ class ContextPackQuery(BaseModel):
     max_items: int = Field(default=8, ge=1, le=50)
     max_chars: int = Field(default=1200, ge=120, le=8000)
     include_history: bool = False
-    recent_reserve: int = 0
+    recent_reserve: int = Field(default=0, ge=0, le=50)
 
 
 class ContextCandidate(BaseModel):

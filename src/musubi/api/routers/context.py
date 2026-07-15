@@ -123,7 +123,11 @@ async def context_pack(
         "planes": [plane for _, plane in targets],
         "include_archived": body.include_history,
         "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
-        "state_filter": body.state_filter or ["provisional", "matured", "promoted"],
+        "state_filter": (
+            body.state_filter
+            if body.state_filter is not None
+            else ["provisional", "matured", "promoted"]
+        ),
     }
 
     fast_query_body: dict[str, object] = {
@@ -134,7 +138,9 @@ async def context_pack(
         "planes": [plane for _, plane in targets],
         "include_archived": body.include_history,
         "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
-        "state_filter": body.state_filter or ["matured", "promoted"],
+        "state_filter": (
+            body.state_filter if body.state_filter is not None else ["matured", "promoted"]
+        ),
     }
 
     # RET-002 (#500): /v1/context's DELIVERED set is the final pack, not the retrieval

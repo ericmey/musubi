@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from musubi.retrieve.context_pack import ContextCandidate, ContextPackQuery, build_context_pack
 
 
@@ -235,3 +238,9 @@ def test_recent_lane_uses_full_capacity_when_ranked_lane_is_empty() -> None:
     )
 
     assert len([item for group in pack.groups for item in group.items]) == 4
+
+
+@pytest.mark.parametrize("recent_reserve", [-1, 51])
+def test_recent_reserve_is_bounded(recent_reserve: int) -> None:
+    with pytest.raises(ValidationError):
+        ContextPackQuery(recent_reserve=recent_reserve)
