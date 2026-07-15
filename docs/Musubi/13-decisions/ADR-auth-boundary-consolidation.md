@@ -383,8 +383,8 @@ shipped through PR #403 and replacement PR #414 and are now production behavior.
 | concurrent miss → no double-mutate (IDEM-001B) | accepted (#404) | D4 Phase 0 |
 | faithful replay (headers/cookies/bytes/media, REQ-5) | accepted (#404) | D3 observer |
 | ineligible stream + key not buffered (B1) | accepted (#404) | D3 route-declared eligibility |
-| tuple issuer/subject/presence consistency (REQ-7) | XFAIL — OPEN | REQ7 (deferred) |
-| public absent-vs-invalid bearer (REQ-8) | XFAIL — OPEN | REQ8 (deferred) |
+| tuple issuer/subject/presence consistency (REQ-7) | XFAIL — OPEN | REQ7 deferred in #412 |
+| public absent-vs-invalid bearer (REQ-8) | XFAIL — OPEN | REQ8 deferred in #413 |
 | oversize multipart → 413 (D5) | deferred | Phase C (design proven @239029a) |
 
 ## Ownership / process (Yua's proposal, adopted)
