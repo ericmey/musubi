@@ -183,6 +183,23 @@ class CleanupReport:
     terminal_total: int = 0
 
 
+@dataclass(frozen=True)
+class CustomIntentContext:
+    """The claimed-intent context handed to a registered non-transition intent handler (C4/ART-001).
+
+    ``owner_token`` is the coordinator's fresh, never-reused per-claim lease token — the handler
+    uses it as the never-reused publish owner (the ABA fence). The handler MUST mint its own
+    never-reused ``generation`` per attempt, stage work under (generation, owner_token), publish by
+    a conditional head replace, and return ``'confirmed'`` (published + won), ``'fence'`` (a stale/
+    lost attempt — terminal), or ``'retry'`` (transient — keep PENDING + backoff)."""
+
+    operation_key: str
+    object_id: str
+    collection: str
+    namespace: str
+    owner_token: str
+
+
 class CleanupConfigError(ValueError):
     """Raised when terminal cleanup receives an unsafe cutoff or batch bound."""
 
@@ -334,6 +351,11 @@ class LifecycleTransitionCoordinator:
         #: Private fault-injection seam (default no-op); tests set it to raise/crash at
         #: a named boundary. Not a public switch.
         self._checkpoint: Callable[[str], None] = lambda _name: None
+        #: Additive intent-kind handlers (C4/ART-001): a registered handler owns the APPLY of a
+        #: non-``lifecycle_transition`` intent while the coordinator keeps owning the durable
+        #: intent lifecycle (admission, claim/lease, attempts/backoff, reconcile, terminal). The
+        #: lifecycle-transition path is the built-in default and never consults this registry.
+        self._intent_handlers: dict[str, Callable[[CustomIntentContext], str]] = {}
         conn = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
         try:
             store.ensure_schema(conn)
@@ -1155,6 +1177,90 @@ class LifecycleTransitionCoordinator:
         correction 6). Delegates to the 3-way :meth:`_classify`."""
         return self._classify(exc) == "terminal"
 
+    def _drive_custom_intent(
+        self,
+        kind: str,
+        opk: str,
+        oid: str,
+        coll: str,
+        ns: str,
+        token: str,
+        counts: dict[str, int],
+    ) -> None:
+        """Drive a claimed non-transition intent (C4/ART-001): dispatch to the registered handler and
+        map its outcome onto the SAME disposition policy as a transition apply. A missing handler keeps
+        the row PENDING + backoff (a not-yet-registered handler is transient, never abandoned). The
+        lease releases at every terminal/pending disposition; the confirmed path holds the lease into an
+        owner-guarded ``_finalize_custom``."""
+        handler = self._intent_handlers.get(kind)
+        if handler is None:
+            self._persist_attempt(
+                opk, reschedule=True, failure_class="transient", owner=token, release=True
+            )
+            counts["pending"] += 1
+            return
+        ctx = CustomIntentContext(
+            operation_key=opk, object_id=oid, collection=coll, namespace=ns, owner_token=token
+        )
+        try:
+            outcome = handler(ctx)
+        except Exception as exc:  # same terminal-vs-transient classification as a transition apply
+            cls = self._classify(exc)
+            self._observe_failure(cls)
+            if cls == "terminal":
+                self._persist_attempt(
+                    opk,
+                    reschedule=False,
+                    state="ABANDONED",
+                    failure_class="terminal",
+                    owner=token,
+                    release=True,
+                )
+                counts["abandoned"] += 1
+            else:
+                self._persist_attempt(
+                    opk, reschedule=True, failure_class=cls, owner=token, release=True
+                )
+                counts["pending"] += 1
+            return
+        if outcome == "confirmed":
+            self._persist_attempt(opk, reschedule=False, owner=token)  # count attempt, hold lease
+            self._finalize_custom(opk, owner=token)
+            counts["finalized"] += 1
+        elif outcome == "fence":
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
+        else:  # 'retry' — transient; keep PENDING + bounded backoff, never abandoned by uncertainty
+            self._persist_attempt(
+                opk, reschedule=True, failure_class="transient", owner=token, release=True
+            )
+            counts["pending"] += 1
+
+    def _finalize_custom(self, opk: str, *, owner: str) -> None:
+        """Terminal FINAL for a custom intent whose handler already committed its external effect (the
+        artifact head is published). Owner-guarded PENDING/APPLIED -> FINAL + lease release; NO
+        ``lifecycle_events`` row (indexing is not a lifecycle transition). A non-owner is a silent
+        no-op (exact-owner R16)."""
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            con.execute(
+                "UPDATE lifecycle_outbox SET state='FINAL', terminal_epoch=?, "
+                "lease_owner=NULL, lease_expires_epoch=NULL "
+                "WHERE operation_key=? AND state IN ('PENDING','APPLIED') AND lease_owner=?",
+                (self._now(), opk, owner),
+            )
+            con.execute("COMMIT")
+        finally:
+            con.close()
+
     def _mark_terminal(self, opk: str) -> None:
         """Move a non-terminal row to ABANDONED, stamping ``terminal_epoch`` atomically."""
         con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
@@ -1350,6 +1456,51 @@ class LifecycleTransitionCoordinator:
             con.close()
         return bool(row and row[0])
 
+    # -- C4/ART-001 additive intent-kind extension ----------------------------------------- #
+
+    def register_intent_handler(
+        self, kind: str, handler: Callable[[CustomIntentContext], str]
+    ) -> None:
+        """Register the APPLY handler for a non-transition intent ``kind`` (e.g. ``'artifact_index'``).
+        The reconcile loop dispatches a claimed row of this kind to the handler and maps its outcome
+        (``'confirmed'``/``'fence'``/``'retry'``) onto the standard terminal/retry disposition; the
+        coordinator still owns admission, claim/lease, attempts/backoff, and the terminal write."""
+        if not kind or kind == "lifecycle_transition":
+            raise ValueError("intent kind must be non-empty and not 'lifecycle_transition'")
+        self._intent_handlers[kind] = handler
+
+    def enqueue_index_intent(
+        self, *, object_id: str, namespace: str, collection: str = "musubi_artifact"
+    ) -> str:
+        """Durably admit ONE artifact-indexing intent (C4/ART-001). Reuses the outbox +
+        ``ux_active_intent`` (one active intent per ``(collection, object_id)``). Cap-gated like a
+        transition admission — backpressure NEVER raises. Returns a status the caller must honor:
+        ``'admitted'`` (a new intent is PENDING), ``'already_active'`` (one is already in flight —
+        idempotent no-op), or ``'at_capacity'`` (the outbox cap was hit — the caller MUST record a
+        visible terminal disposition; the artifact is NOT silently left ``indexing`` forever)."""
+        opk = f"artifact_index:{object_id}:{self._new_token()}"
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                if self._over_cap(con):
+                    con.execute("ROLLBACK")
+                    return "at_capacity"
+                con.execute(
+                    "INSERT INTO lifecycle_outbox "
+                    "(operation_key,object_id,collection,namespace,state,intent_kind,attempts) "
+                    "VALUES (?,?,?,?,'PENDING','artifact_index',0)",
+                    (opk, object_id, collection, namespace),
+                )
+                con.execute("COMMIT")
+                return "admitted"
+            except sqlite3.IntegrityError:
+                # ux_active_intent: an index intent is already active for this artifact — idempotent.
+                con.execute("ROLLBACK")
+                return "already_active"
+        finally:
+            con.close()
+
     def reconcile_once(self, *, limit: int = 100) -> ReconcileReport:
         """Run one reconcile pass while holding the S6 shared maintenance barrier."""
         with self._barrier_admit(role="reconcile") as admitted:
@@ -1378,7 +1529,7 @@ class LifecycleTransitionCoordinator:
         try:
             rows = con.execute(
                 "SELECT operation_key,object_id,collection,target_state,expected_version,namespace,"
-                "actor,reason,event_id,state,patch_json FROM lifecycle_outbox "
+                "actor,reason,event_id,state,patch_json,intent_kind FROM lifecycle_outbox "
                 "WHERE state IN ('PENDING','APPLIED') "
                 "AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
                 "ORDER BY (next_attempt_epoch IS NOT NULL), next_attempt_epoch, rowid LIMIT ?",
@@ -1387,7 +1538,20 @@ class LifecycleTransitionCoordinator:
         finally:
             con.close()
         counts = {"claimed": 0, "finalized": 0, "pending": 0, "abandoned": 0}
-        for opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state, patch_json in rows:
+        for (
+            opk,
+            oid,
+            coll,
+            tstate,
+            ver,
+            ns,
+            actor,
+            reason,
+            event_id,
+            state,
+            patch_json,
+            ikind,
+        ) in rows:
             token = self._new_token()
             self._checkpoint(
                 "before_claim"
@@ -1404,6 +1568,11 @@ class LifecycleTransitionCoordinator:
                 continue  # not due-and-claimable now, or lost the claim race (a valid owner holds it)
             counts["claimed"] += 1
             self._checkpoint("after_claim_before_qdrant")  # durable-claim barrier / crash point
+            # C4/ART-001: a non-transition intent-kind delegates its APPLY to a registered handler;
+            # the built-in lifecycle-transition path (ikind NULL/'lifecycle_transition') is untouched.
+            if ikind and ikind != "lifecycle_transition":
+                self._drive_custom_intent(ikind, opk, oid, coll, ns, token, counts)
+                continue
             self._reconcile_claimed(
                 opk,
                 oid,

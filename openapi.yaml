@@ -1417,6 +1417,16 @@ components:
           additionalProperties: true
           type: object
           title: Chunk Metadata
+        generation:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Generation
+        owner_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner Token
       additionalProperties: false
       type: object
       required:
@@ -2972,6 +2982,26 @@ components:
           - type: string
           - type: 'null'
           title: Failure Reason
+        committed_generation:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Committed Generation
+        committed_owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Committed Owner
+        index_operation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Index Operation Id
+        publication_version:
+          type: integer
+          minimum: 0.0
+          title: Publication Version
+          default: 0
       additionalProperties: false
       type: object
       required:
