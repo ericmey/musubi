@@ -10,11 +10,9 @@ paths:
       tags:
       - ops
       summary: Health
-      description: 'Liveness probe. Always 200 if the process can serve requests.
-
-        Readiness — does the process have working dependencies — is on
-
-        ``/v1/ops/status``.'
+      description: "Liveness probe. Always 200 if the process can serve requests.\n\
+        Readiness \u2014 does the process have working dependencies \u2014 is on\n\
+        ``/v1/ops/status``."
       operationId: health_v1_ops_health_get
       responses:
         '200':
@@ -28,7 +26,7 @@ paths:
       tags:
       - ops
       summary: Status
-      description: Per-component readiness — Qdrant + every TEI service + Ollama.
+      description: "Per-component readiness \u2014 Qdrant + every TEI service + Ollama."
       operationId: status_v1_ops_status_get
       responses:
         '200':
@@ -130,20 +128,12 @@ paths:
       tags:
       - episodic-writes
       summary: Patch Episodic
-      description: 'Update non-state metadata on an existing episodic row.
-
-
-        State changes are forbidden on this surface — they go through
-
-        POST /v1/lifecycle/transition so the lifecycle ledger records every
-
-        state mutation. Tags / importance / summary are non-state metadata
-
-        and land via a payload-only ``set_payload`` (analogous to the
-
-        enrichment writes the maturation sweep does — see
-
-        :mod:`musubi.lifecycle.maturation` for precedent).'
+      description: "Update non-state metadata on an existing episodic row.\n\nState\
+        \ changes are forbidden on this surface \u2014 they go through\nPOST /v1/lifecycle/transition\
+        \ so the lifecycle ledger records every\nstate mutation. Tags / importance\
+        \ / summary are non-state metadata\nand land via a payload-only ``set_payload``\
+        \ (analogous to the\nenrichment writes the maturation sweep does \u2014 see\n\
+        :mod:`musubi.lifecycle.maturation` for precedent)."
       operationId: patch_episodic.bucket=default
       parameters:
       - name: object_id
@@ -181,69 +171,30 @@ paths:
       tags:
       - episodic-writes
       summary: Delete Episodic
-      description: 'Soft-delete by default (state → archived via the canonical
-
-        ``transition()`` primitive). ``?hard=true`` requires operator
-
-        scope and removes the point from Qdrant entirely.
-
-
-        The operator-scope check on the hard path reads the
-
-        :class:`AuthContext` that the outer ``require_auth`` dependency has
-
-        already attached to ``request.state.auth``.
-
-
-        Neither path deserializes the row. ``get()`` model-validates, so a row with
-        an
-
-        unmodeled payload key raised a 500 *inside the 404-guard*, before the delete
-        ran —
-
-        the row was unremovable precisely because it was broken, which is exactly
-        backwards.
-
-
-        **The hard path delegates to ``plane.delete()``.** It used to do its own
-
-        ``plane.exists()`` check and then delete via an ``object_id`` PAYLOAD FILTER
-        — both
-
-        of which locate the row by payload fields. So a row that had lost or malformed
-        its
-
-        ``namespace`` / ``object_id`` keys returned 404 and stayed stored, **through
-        the very
-
-        route the fleet and operators actually use.** Rev3 hardened the SDK method
-        with
-
-        deterministic point-ID addressing and left this route on the old contract:
-        the path
-
-        nobody calls was fixed, and the path that actually failed in production was
-        not.
-
-        (Yua, rev3 review of PR #398.)
-
-
-        ``plane.delete()`` addresses the point by its deterministic ID, enforces the
-        stored
-
-        namespace when the payload can state one, normalizes an unreadable prior state
-        for the
-
-        audit record, and emits the LifecycleEvent. One hardened contract, one place.
-
-
-        The soft path remains payload-filtered by design: archiving requires constructing
-        a
-
-        valid lifecycle transition, which an identity-damaged row cannot support.
-        Such a row
-
-        is removable (hard delete), not archivable — and removable is what matters.'
+      description: "Soft-delete by default (state \u2192 archived via the canonical\n\
+        ``transition()`` primitive). ``?hard=true`` requires operator\nscope and removes\
+        \ the point from Qdrant entirely.\n\nThe operator-scope check on the hard\
+        \ path reads the\n:class:`AuthContext` that the outer ``require_auth`` dependency\
+        \ has\nalready attached to ``request.state.auth``.\n\nNeither path deserializes\
+        \ the row. ``get()`` model-validates, so a row with an\nunmodeled payload\
+        \ key raised a 500 *inside the 404-guard*, before the delete ran \u2014\n\
+        the row was unremovable precisely because it was broken, which is exactly\
+        \ backwards.\n\n**The hard path delegates to ``plane.delete()``.** It used\
+        \ to do its own\n``plane.exists()`` check and then delete via an ``object_id``\
+        \ PAYLOAD FILTER \u2014 both\nof which locate the row by payload fields. So\
+        \ a row that had lost or malformed its\n``namespace`` / ``object_id`` keys\
+        \ returned 404 and stayed stored, **through the very\nroute the fleet and\
+        \ operators actually use.** Rev3 hardened the SDK method with\ndeterministic\
+        \ point-ID addressing and left this route on the old contract: the path\n\
+        nobody calls was fixed, and the path that actually failed in production was\
+        \ not.\n(Yua, rev3 review of PR #398.)\n\n``plane.delete()`` addresses the\
+        \ point by its deterministic ID, enforces the stored\nnamespace when the payload\
+        \ can state one, normalizes an unreadable prior state for the\naudit record,\
+        \ and emits the LifecycleEvent. One hardened contract, one place.\n\nThe soft\
+        \ path remains payload-filtered by design: archiving requires constructing\
+        \ a\nvalid lifecycle transition, which an identity-damaged row cannot support.\
+        \ Such a row\nis removable (hard delete), not archivable \u2014 and removable\
+        \ is what matters."
       operationId: delete_episodic.bucket=default
       parameters:
       - name: object_id
@@ -706,20 +657,12 @@ paths:
       tags:
       - artifact
       summary: Get Artifact Blob
-      description: 'Stream the raw bytes of an artifact.
-
-
-        Bytes are served from ``settings.artifact_blob_path/<namespace>/<object_id>``
-
-        — the same layout the cleanup worker walks (ops/cleanup.py). The
-
-        write path lives in ``writes_artifact.upload_artifact``. Content-
-
-        addressed storage (by sha256, S3 backend) is a follow-up; this
-
-        slice is the minimum viable round-trip so adapters can retrieve
-
-        what they uploaded.'
+      description: "Stream the raw bytes of an artifact.\n\nBytes are served from\
+        \ ``settings.artifact_blob_path/<namespace>/<object_id>``\n\u2014 the same\
+        \ layout the cleanup worker walks (ops/cleanup.py). The\nwrite path lives\
+        \ in ``writes_artifact.upload_artifact``. Content-\naddressed storage (by\
+        \ sha256, S3 backend) is a follow-up; this\nslice is the minimum viable round-trip\
+        \ so adapters can retrieve\nwhat they uploaded."
       operationId: get_artifact_blob_v1_artifacts__object_id__blob_get
       parameters:
       - name: object_id
@@ -874,20 +817,12 @@ paths:
       tags:
       - thoughts
       summary: Stream Thoughts
-      description: 'SSE endpoint for real-time thought delivery.
-
-
-        Replay: if ``Last-Event-ID: <ksuid>`` is present, every thought matching
-
-        the subscription scope where ``object_id > last_event_id`` (lex,
-
-        ascending) is emitted before entering live-tail mode. Capped at 500
-
-        events — if more matched, the ``X-Musubi-Replay-Truncated: true``
-
-        response header tells the client to fall back to ``/v1/thoughts/history``
-
-        for deeper backfill.'
+      description: "SSE endpoint for real-time thought delivery.\n\nReplay: if ``Last-Event-ID:\
+        \ <ksuid>`` is present, every thought matching\nthe subscription scope where\
+        \ ``object_id > last_event_id`` (lex,\nascending) is emitted before entering\
+        \ live-tail mode. Capped at 500\nevents \u2014 if more matched, the ``X-Musubi-Replay-Truncated:\
+        \ true``\nresponse header tells the client to fall back to ``/v1/thoughts/history``\n\
+        for deeper backfill."
       operationId: stream_thoughts.bucket=default
       parameters:
       - name: namespace
@@ -1071,21 +1006,12 @@ paths:
       tags:
       - contradictions
       summary: List Contradictions
-      description: 'Concept rows whose ``contradicts`` field is non-empty.
-
-
-        Namespace-scoped when ``namespace`` is supplied (the route-level ``require_auth``
-        authorizes
-
-        the query namespace). Omitting the namespace is a cross-tenant fan-out and
-        requires OPERATOR
-
-        scope (SEC-004) — never an all-tenant scroll under ordinary auth. The data
-        source is the
-
-        concept plane payload — concepts mark each other as contradicting during synthesis
-
-        (slice-lifecycle-synthesis).'
+      description: "Concept rows whose ``contradicts`` field is non-empty.\n\nNamespace-scoped\
+        \ when ``namespace`` is supplied (the route-level ``require_auth`` authorizes\n\
+        the query namespace). Omitting the namespace is a cross-tenant fan-out and\
+        \ requires OPERATOR\nscope (SEC-004) \u2014 never an all-tenant scroll under\
+        \ ordinary auth. The data source is the\nconcept plane payload \u2014 concepts\
+        \ mark each other as contradicting during synthesis\n(slice-lifecycle-synthesis)."
       operationId: list_contradictions_v1_contradictions_get
       parameters:
       - name: namespace
@@ -1135,12 +1061,9 @@ paths:
       tags:
       - namespaces
       summary: Namespace Stats
-      description: 'Counts per plane for the given namespace + last activity epoch.
-
-
-        The ``namespace_path`` arrives URL-encoded (slashes → ``%2F``) per
-
-        standard FastAPI ``:path`` handling.'
+      description: "Counts per plane for the given namespace + last activity epoch.\n\
+        \nThe ``namespace_path`` arrives URL-encoded (slashes \u2192 ``%2F``) per\n\
+        standard FastAPI ``:path`` handling."
       operationId: namespace_stats_v1_namespaces__namespace_path__stats_get
       parameters:
       - name: namespace_path
@@ -1229,14 +1152,10 @@ paths:
       tags:
       - concept-writes
       summary: Promote Concept
-      description: 'Operator-forced promotion. Writes the matured→promoted transition
-
-        on the concept with the supplied ``promoted_to`` curated id.
-
-
-        Requires operator scope (read from the auth context attached by the
-
-        inline ``require_auth`` invocation).'
+      description: "Operator-forced promotion. Writes the matured\u2192promoted transition\n\
+        on the concept with the supplied ``promoted_to`` curated id.\n\nRequires operator\
+        \ scope (read from the auth context attached by the\ninline ``require_auth``\
+        \ invocation)."
       operationId: promote_concept.bucket=transition
       parameters:
       - name: object_id
@@ -1543,8 +1462,8 @@ components:
       - start_offset
       - end_offset
       title: ArtifactChunk
-      description: One chunk of a source artifact. Not a MusubiObject — lives inside
-        one.
+      description: "One chunk of a source artifact. Not a MusubiObject \u2014 lives\
+        \ inside one."
     ArtifactCreateResponse:
       properties:
         object_id:
@@ -1586,11 +1505,8 @@ components:
       required:
       - artifact_id
       title: ArtifactRef
-      description: 'A pointer into a ``SourceArtifact`` — whole artifact or a specific
-        chunk.
-
-
-        Used by ``MemoryObject.supported_by`` to cite evidence.'
+      description: "A pointer into a ``SourceArtifact`` \u2014 whole artifact or a\
+        \ specific chunk.\n\nUsed by ``MemoryObject.supported_by`` to cite evidence."
     BatchCaptureRequest:
       properties:
         namespace:
@@ -2178,14 +2094,10 @@ components:
       - vault_path
       - body_hash
       title: CuratedKnowledge
-      description: 'A curated, human-authored knowledge note mirrored from the vault.
-
-
-        ``vault_path`` points at the ``.md`` file in the vault; ``body_hash`` is the
-
-        sha256 of the rendered markdown body (frontmatter excluded) — used by the
-
-        watcher to detect real edits vs. metadata-only churn.'
+      description: "A curated, human-authored knowledge note mirrored from the vault.\n\
+        \n``vault_path`` points at the ``.md`` file in the vault; ``body_hash`` is\
+        \ the\nsha256 of the rendered markdown body (frontmatter excluded) \u2014\
+        \ used by the\nwatcher to detect real edits vs. metadata-only churn."
     EpisodicMemory:
       properties:
         object_id:
@@ -2373,12 +2285,9 @@ components:
       - namespace
       - content
       title: EpisodicMemory
-      description: 'One captured event — a message, a tool call, a system signal.
-
-
-        ``event_at`` is when the thing happened in the world. ``ingested_at`` is when
-
-        Musubi learned about it (typically == ``created_at``).'
+      description: "One captured event \u2014 a message, a tool call, a system signal.\n\
+        \n``event_at`` is when the thing happened in the world. ``ingested_at`` is\
+        \ when\nMusubi learned about it (typically == ``created_at``)."
     HTTPValidationError:
       properties:
         detail:
@@ -2574,12 +2483,9 @@ components:
       additionalProperties: true
       type: object
       title: PatchCuratedRequest
-      description: 'Non-state metadata only — same convention as PATCH /v1/episodic.
-
-
-        ``extra="allow"`` so the handler can return a typed BAD_REQUEST
-
-        naming the forbidden field instead of a generic 422.'
+      description: "Non-state metadata only \u2014 same convention as PATCH /v1/episodic.\n\
+        \n``extra=\"allow\"`` so the handler can return a typed BAD_REQUEST\nnaming\
+        \ the forbidden field instead of a generic 422."
     PatchEpisodicRequest:
       properties:
         tags:
@@ -2610,57 +2516,26 @@ components:
       additionalProperties: true
       type: object
       title: PatchEpisodicRequest
-      description: 'Non-state field updates only. ``state`` mutations go through
-
-        POST /v1/lifecycle/transition (the canonical primitive). Extra
-
-        fields are captured (``extra="allow"``) so the handler can return
-
-        a typed BAD_REQUEST naming the forbidden field instead of a
-
-        generic 422.
-
-
-        **This model IS the public PATCH contract** — the handler''s allowlist is
-
-        derived from it (``_PATCHABLE_FIELDS``), so a field that is not declared here
-
-        is not patchable, full stop.
-
-
-        ``content`` is declared because retraction depends on it. Musubi is
-
-        append-only: a false memory cannot be deleted, it can only be rewritten to
-        say
-
-        that it lied. ``memory-data musubi retract`` therefore PATCHes ``content``
-        (plus
-
-        summary/tags/importance), and it is the fleet''s only mechanism for neutralising
-
-        a falsehood. An earlier revision of this allowlist omitted ``content`` and
-        would
-
-        have returned 400 to every retraction — shipping a memory-integrity fix that
-
-        disabled the tool for fixing memory. Caught by Yua in review of PR #398, and
-        the
-
-        reason this docstring now spells the contract out instead of leaving it implied.
-
-
-        Note on vectors: ``content`` is patched via ``set_payload``, which does NOT
-
-        re-embed. A retracted row keeps the embedding of its original text — which
-        is
-
-        the behaviour we want: searching the false claim still surfaces the row, and
-        the
-
-        row now says RETRACTED. If that ever changes, retraction stops being findable
-        by
-
-        the thing people actually remember.'
+      description: "Non-state field updates only. ``state`` mutations go through\n\
+        POST /v1/lifecycle/transition (the canonical primitive). Extra\nfields are\
+        \ captured (``extra=\"allow\"``) so the handler can return\na typed BAD_REQUEST\
+        \ naming the forbidden field instead of a\ngeneric 422.\n\n**This model IS\
+        \ the public PATCH contract** \u2014 the handler's allowlist is\nderived from\
+        \ it (``_PATCHABLE_FIELDS``), so a field that is not declared here\nis not\
+        \ patchable, full stop.\n\n``content`` is declared because retraction depends\
+        \ on it. Musubi is\nappend-only: a false memory cannot be deleted, it can\
+        \ only be rewritten to say\nthat it lied. ``memory-data musubi retract`` therefore\
+        \ PATCHes ``content`` (plus\nsummary/tags/importance), and it is the fleet's\
+        \ only mechanism for neutralising\na falsehood. An earlier revision of this\
+        \ allowlist omitted ``content`` and would\nhave returned 400 to every retraction\
+        \ \u2014 shipping a memory-integrity fix that\ndisabled the tool for fixing\
+        \ memory. Caught by Yua in review of PR #398, and the\nreason this docstring\
+        \ now spells the contract out instead of leaving it implied.\n\nNote on vectors:\
+        \ ``content`` is patched via ``set_payload``, which does NOT\nre-embed. A\
+        \ retracted row keeps the embedding of its original text \u2014 which is\n\
+        the behaviour we want: searching the false claim still surfaces the row, and\
+        \ the\nrow now says RETRACTED. If that ever changes, retraction stops being\
+        \ findable by\nthe thing people actually remember."
     PromoteRequest:
       properties:
         promoted_to:
@@ -2759,27 +2634,14 @@ components:
       - score_kind
       - extra
       title: RankedResultRow
-      description: 'One row in a ranked-mode response.
-
-
-        Required fields (per spec §4.3 + Yua 2026-07-13 11:57:59 #3):
-
-        `object_id`, `namespace`, `plane`, `score`, `content`, `state`,
-
-        `importance`, `score_kind`, `extra`. `title` is optional.
-
-
-        `state` and `importance` are REQUIRED-NULLABLE (no `default=`) so
-
-        the OpenAPI schema lists them as required but the wire value may
-
-        be `null` for missing-legacy rows. The orchestration layer
-
-        populates these from the source row (per spec §6 invalid source
-
-        semantics: present-invalid → 500, present-valid → exact, missing
-
-        → null).'
+      description: "One row in a ranked-mode response.\n\nRequired fields (per spec\
+        \ \xA74.3 + Yua 2026-07-13 11:57:59 #3):\n`object_id`, `namespace`, `plane`,\
+        \ `score`, `content`, `state`,\n`importance`, `score_kind`, `extra`. `title`\
+        \ is optional.\n\n`state` and `importance` are REQUIRED-NULLABLE (no `default=`)\
+        \ so\nthe OpenAPI schema lists them as required but the wire value may\nbe\
+        \ `null` for missing-legacy rows. The orchestration layer\npopulates these\
+        \ from the source row (per spec \xA76 invalid source\nsemantics: present-invalid\
+        \ \u2192 500, present-valid \u2192 exact, missing\n\u2192 null)."
     RankedRetrieveResponse:
       properties:
         limit:
@@ -2809,18 +2671,12 @@ components:
       - mode
       - results
       title: RankedRetrieveResponse
-      description: 'Top-level response for mode in {fast, deep, blended}.
-
-
-        `mode` is the top-level discriminator (rows do NOT carry `mode`).
-
-        The results list is concrete `list[RankedResultRow]` — NOT a
-
-        Union — so a recent row cannot be smuggled into a ranked
-
-        response (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema
-
-        is a list of `RankedResultRow`, not an `anyOf` of both row types.'
+      description: "Top-level response for mode in {fast, deep, blended}.\n\n`mode`\
+        \ is the top-level discriminator (rows do NOT carry `mode`).\nThe results\
+        \ list is concrete `list[RankedResultRow]` \u2014 NOT a\nUnion \u2014 so a\
+        \ recent row cannot be smuggled into a ranked\nresponse (per Yua 2026-07-13\
+        \ 12:45:46 #1). The OpenAPI schema\nis a list of `RankedResultRow`, not an\
+        \ `anyOf` of both row types."
     RankedScoreComponents:
       properties:
         relevance:
@@ -2857,18 +2713,12 @@ components:
       - provenance
       - reinforcement
       title: RankedScoreComponents
-      description: 'The 5 real contributors exposed on the wire for ranked mode.
-
-
-        All 5 fields are REQUIRED (`extra=''forbid''` rejects fabrication).
-
-        Values are clamped to [0, 1]. A ranked row missing any of the 5
-
-        fields is a server-side data integrity failure and fails loud at
-
-        response validation (500, NOT 422 — per spec §4.6: corrupt stored
-
-        data is server integrity, not request validation).'
+      description: "The 5 real contributors exposed on the wire for ranked mode.\n\
+        \nAll 5 fields are REQUIRED (`extra='forbid'` rejects fabrication).\nValues\
+        \ are clamped to [0, 1]. A ranked row missing any of the 5\nfields is a server-side\
+        \ data integrity failure and fails loud at\nresponse validation (500, NOT\
+        \ 422 \u2014 per spec \xA74.6: corrupt stored\ndata is server integrity, not\
+        \ request validation)."
     RecentExtra:
       properties:
         score_components:
@@ -2977,23 +2827,12 @@ components:
       - provenance_score
       - extra
       title: RecentResultRow
-      description: 'One row in a recent-mode response.
-
-
-        Required fields (per spec §4.3 + Yua 2026-07-13 11:57:59 #3):
-
-        `object_id`, `namespace`, `plane`, `score`, `content`, `state`,
-
-        `importance`, `score_kind`, `provenance_score`, `extra`. `title`
-
-        is optional.
-
-
-        `state`, `importance`, `provenance_score` are REQUIRED-NULLABLE
-
-        (no `default=`); they are present on every row but the value may
-
-        be `null` for missing-legacy rows.'
+      description: "One row in a recent-mode response.\n\nRequired fields (per spec\
+        \ \xA74.3 + Yua 2026-07-13 11:57:59 #3):\n`object_id`, `namespace`, `plane`,\
+        \ `score`, `content`, `state`,\n`importance`, `score_kind`, `provenance_score`,\
+        \ `extra`. `title`\nis optional.\n\n`state`, `importance`, `provenance_score`\
+        \ are REQUIRED-NULLABLE\n(no `default=`); they are present on every row but\
+        \ the value may\nbe `null` for missing-legacy rows."
     RecentRetrieveResponse:
       properties:
         limit:
@@ -3020,29 +2859,20 @@ components:
       - mode
       - results
       title: RecentRetrieveResponse
-      description: 'Top-level response for mode=''recent''.
-
-
-        The results list is concrete `list[RecentResultRow]` — NOT a
-
-        Union — so a ranked row cannot be smuggled into a recent
-
-        response (per Yua 2026-07-13 12:45:46 #1). The OpenAPI schema
-
-        is a list of `RecentResultRow`, not an `anyOf` of both row types.'
+      description: "Top-level response for mode='recent'.\n\nThe results list is concrete\
+        \ `list[RecentResultRow]` \u2014 NOT a\nUnion \u2014 so a ranked row cannot\
+        \ be smuggled into a recent\nresponse (per Yua 2026-07-13 12:45:46 #1). The\
+        \ OpenAPI schema\nis a list of `RecentResultRow`, not an `anyOf` of both row\
+        \ types."
     RecentScoreComponents:
       properties: {}
       additionalProperties: false
       type: object
       title: RecentScoreComponents
-      description: 'The exact empty object for recent mode.
-
-
-        Recent has no breakdown: `score_components == {}` typed. Never `null`.
-
-        `extra=''forbid''` rejects any non-empty input at Pydantic validation
-
-        time (which surfaces as 500, NOT 422 — per spec §4.3).'
+      description: "The exact empty object for recent mode.\n\nRecent has no breakdown:\
+        \ `score_components == {}` typed. Never `null`.\n`extra='forbid'` rejects\
+        \ any non-empty input at Pydantic validation\ntime (which surfaces as 500,\
+        \ NOT 422 \u2014 per spec \xA74.3)."
     ReinforceRequest:
       properties:
         additional_source:
@@ -3066,6 +2896,7 @@ components:
         namespace:
           anyOf:
           - type: string
+            minLength: 1
           - type: 'null'
           title: Namespace
           description: 'Namespace pattern. Three shapes accepted: 3-segment concrete
@@ -3073,8 +2904,8 @@ components:
             (cross-plane fanout, requires `planes`), or wildcard with `*` replacing
             any single segment (e.g. `nyla/*/episodic`, `*/voice/curated`). Optional
             in AUTH-001: omit (or null) to recall across all authorized namespaces;
-            the per-agent exclusion list (`salesai` mandatory + per-agent settings
-            + token additions) is applied centrally. See ADR 0031 + AUTH-001.'
+            the per-agent exclusion list (`salesai` mandatory + per-agent settings)
+            is applied centrally. See ADR 0031 + AUTH-001.'
         query_text:
           type: string
           title: Query Text
@@ -3108,9 +2939,9 @@ components:
           - type: number
           - type: 'null'
           title: Since
-          description: 'Recent-mode only: inclusive lower bound on `created_epoch`.
-            Rows older than `since` are excluded. ISO-format timestamps are NOT accepted
-            — convert client-side via `datetime.timestamp()`.'
+          description: "Recent-mode only: inclusive lower bound on `created_epoch`.\
+            \ Rows older than `since` are excluded. ISO-format timestamps are NOT\
+            \ accepted \u2014 convert client-side via `datetime.timestamp()`."
         tags:
           anyOf:
           - items:
@@ -3118,8 +2949,8 @@ components:
             type: array
           - type: 'null'
           title: Tags
-          description: Recent-mode tag filter. AND semantics — a row must contain
-            every listed tag to match. Empty list and `null` both mean no filter.
+          description: "Recent-mode tag filter. AND semantics \u2014 a row must contain\
+            \ every listed tag to match. Empty list and `null` both mean no filter."
         state_filter:
           anyOf:
           - items:
@@ -3127,24 +2958,25 @@ components:
             type: array
           - type: 'null'
           title: State Filter
-          description: 'Lifecycle states to include. Default `null` resolves to `(''matured'',
-            ''promoted'')` for fast/deep/blended (matching the pre-`recent` behaviour).
-            For `mode=''recent''`, the default is `(''provisional'', ''matured'',
-            ''promoted'')` — recent''s purpose is ''what just happened'', so the freshest
-            tier is included by default. Set explicitly to `[''provisional'', ''matured'',
-            ''promoted'']` for recall on ranked modes when you want fresh deliberate
-            `memory_store` rows visible before they age through the maturation cron.
-            Note: in `mode=''fast''`, `include_archived: true` augments the default
-            by adding `(''demoted'', ''archived'', ''superseded'')`. In `mode=''deep''`
-            and `mode=''blended''`, `include_archived` is currently ignored — pass
-            `state_filter` explicitly when those modes need archive-side states.'
+          description: "Lifecycle states to include. Default `null` resolves to `('matured',\
+            \ 'promoted')` for fast/deep/blended (matching the pre-`recent` behaviour).\
+            \ For `mode='recent'`, the default is `('provisional', 'matured', 'promoted')`\
+            \ \u2014 recent's purpose is 'what just happened', so the freshest tier\
+            \ is included by default. Set explicitly to `['provisional', 'matured',\
+            \ 'promoted']` for recall on ranked modes when you want fresh deliberate\
+            \ `memory_store` rows visible before they age through the maturation cron.\
+            \ Note: in `mode='fast'`, `include_archived: true` augments the default\
+            \ by adding `('demoted', 'archived', 'superseded')`. In `mode='deep'`\
+            \ and `mode='blended'`, `include_archived` is currently ignored \u2014\
+            \ pass `state_filter` explicitly when those modes need archive-side states."
         include_lineage:
           type: boolean
           title: Include Lineage
-          description: Forwarded verbatim to the orchestration seam. Defaults to true;
-            set explicitly to false to disable lineage hydration on the wire. Preserved
-            across concrete and fanout namespace shapes. Strict bool — non-boolean
-            values (strings, numbers, null) are rejected at the wire boundary.
+          description: "Forwarded verbatim to the orchestration seam. Defaults to\
+            \ true; set explicitly to false to disable lineage hydration on the wire.\
+            \ Preserved across concrete and fanout namespace shapes. Strict bool \u2014\
+            \ non-boolean values (strings, numbers, null) are rejected at the wire\
+            \ boundary."
           default: true
       type: object
       title: RetrieveQuery
@@ -3276,16 +3108,11 @@ components:
       - size_bytes
       - chunker
       title: SourceArtifact
-      description: 'A raw uploaded file (PDF, VTT, markdown dump, etc.).
-
-
-        ``state`` tracks the *lifecycle* axis (archived/matured), while
-
-        ``artifact_state`` tracks the *indexing* axis (indexing/indexed/failed). The
-
-        two are orthogonal — an artifact is typically ``state=matured`` its whole
-
-        life and moves only on the indexing axis.'
+      description: "A raw uploaded file (PDF, VTT, markdown dump, etc.).\n\n``state``\
+        \ tracks the *lifecycle* axis (archived/matured), while\n``artifact_state``\
+        \ tracks the *indexing* axis (indexing/indexed/failed). The\ntwo are orthogonal\
+        \ \u2014 an artifact is typically ``state=matured`` its whole\nlife and moves\
+        \ only on the indexing axis."
     StatusResponse:
       properties:
         status:
@@ -3732,10 +3559,10 @@ components:
         simulate_ollama_offline:
           type: boolean
           title: Simulate Ollama Offline
-          description: Wire a stub Ollama client that always returns None (simulates
-            an unreachable LLM). When false, the endpoint returns 501 — a real Ollama
-            client impl is future work (there's no production OllamaClient in the
-            codebase yet; the Protocol is satisfied by workers only).
+          description: "Wire a stub Ollama client that always returns None (simulates\
+            \ an unreachable LLM). When false, the endpoint returns 501 \u2014 a real\
+            \ Ollama client impl is future work (there's no production OllamaClient\
+            \ in the codebase yet; the Protocol is satisfied by workers only)."
           default: false
       type: object
       required:
