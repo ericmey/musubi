@@ -111,7 +111,20 @@ async def context_pack(
                 detail=scope_result.error.detail,
             )
 
-    query_body: dict[str, object] = {
+    # RET-013: Query Qdrant twice for a blended recent/ranked mix.
+    recent_query_body: dict[str, object] = {
+        "namespace": body.namespace,
+        "query_text": body.query_text,
+        "mode": "recent",
+        # Cap recent to a sensible limit to avoid swamping ranked results
+        "limit": min(10, body.candidate_limit),
+        "planes": [plane for _, plane in targets],
+        "include_archived": body.include_history,
+        "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
+        "state_filter": body.state_filter or ["provisional", "matured", "promoted"],
+    }
+
+    fast_query_body: dict[str, object] = {
         "namespace": body.namespace,
         "query_text": body.query_text,
         "mode": "fast",
@@ -119,28 +132,64 @@ async def context_pack(
         "planes": [plane for _, plane in targets],
         "include_archived": body.include_history,
         "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
-        "state_filter": body.state_filter or ["provisional", "matured", "promoted"],
+        "state_filter": body.state_filter or ["matured", "promoted"],
     }
+
     # RET-002 (#500): /v1/context's DELIVERED set is the final pack, not the retrieval
     # candidates — build_context_pack trims by max_items/max_chars/filler below. Defer access
     # accounting (account_access=False) and account the surfaced pack items ourselves, so a
     # trimmed candidate is never counted.
-    orchestration_result = await run_orchestration_retrieve(
+    recent_result = await run_orchestration_retrieve(
         client=qdrant,
         embedder=embedder,
         reranker=reranker,
-        query=query_body,
+        query=recent_query_body,
         account_access=False,
     )
-    if isinstance(orchestration_result, Err):
-        retrieval_err = orchestration_result.error
+    if isinstance(recent_result, Err):
+        retrieval_err = recent_result.error
         status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
         raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
 
-    envelope = orchestration_result.value
-    candidates = [_candidate_from_hit(hit) for hit in envelope.results]
+    fast_result = await run_orchestration_retrieve(
+        client=qdrant,
+        embedder=embedder,
+        reranker=reranker,
+        query=fast_query_body,
+        account_access=False,
+    )
+    if isinstance(fast_result, Err):
+        retrieval_err = fast_result.error
+        status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
+        raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
+
+    recent_env = recent_result.value
+    fast_env = fast_result.value
+
+    # Deduplicate recent + fast results by (namespace, plane, object_id), favoring
+    # the ranked hit if it appears in both.
+    candidates_dict = {}
+    for hit in recent_env.results:
+        c = _candidate_from_hit(hit)
+        c.lane = "recent"
+        candidates_dict[(c.namespace, c.plane, c.object_id)] = c
+
+    for hit in fast_env.results:
+        c = _candidate_from_hit(hit)
+        c.lane = "ranked"
+        candidates_dict[(c.namespace, c.plane, c.object_id)] = c
+
+    candidates = list(candidates_dict.values())
+    combined_warnings = list(
+        set(
+            [warning.code for warning in recent_env.warnings]
+            + [warning.code for warning in fast_env.warnings]
+        )
+    )
+
     # RET-007: thread the bounded degradation codes onto the pack so /v1/context is NOT a surface where
     # degraded context is indistinguishable from healthy.
+    recent_reserve = min(2, max(1, body.max_items // 4))
     pack = build_context_pack(
         candidates,
         ContextPackQuery(
@@ -149,8 +198,9 @@ async def context_pack(
             max_items=body.max_items,
             max_chars=body.max_chars,
             include_history=body.include_history,
+            recent_reserve=recent_reserve,
         ),
-        warnings=[warning.code for warning in envelope.warnings],
+        warnings=combined_warnings,
     )
     # Account exactly the FINAL surfaced items (each carries namespace + object_id + plane), once.
     # An empty pack accounts nothing. Fail-loud but bounded: an accounting failure becomes an

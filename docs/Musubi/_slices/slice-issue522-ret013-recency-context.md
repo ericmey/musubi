@@ -32,7 +32,7 @@ Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canoni
 - Scattered authorization exceptions (Issue #523 is out of scope).
 
 ## Test Contract
-- Pending definition...
+- `test_context_endpoint_blends_recent_provisional_with_established_ranked`
 
 ## Definition of Done
 - Mixed lane implemented.

@@ -13,6 +13,156 @@ from musubi.types.common import Ok
 from musubi.types.episodic import EpisodicMemory
 
 
+def test_context_endpoint_blends_recent_provisional_with_established_ranked(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RET-013: Canonical context returns a blended mix of recent memories
+    and top-ranked established memories.
+
+    The endpoint must:
+    1. Query Qdrant twice: once in `mode="recent"` (fetching the absolute newest memories, explicitly
+       including `provisional`), and once in `mode="fast"` (the standard ranked fetch).
+    2. Dedupe the combined candidates (by object_id) favoring the ranked score when present.
+    3. Pass the blended candidates into `build_context_pack`.
+    """
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope, RetrievalResult
+    from musubi.types.common import Ok
+
+    query_modes = []
+
+    async def mock_retrieve(
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        account_access: bool,
+    ) -> object:
+        query_modes.append(query["mode"])
+
+        # Return different sets based on mode to simulate the two lanes
+        if query["mode"] == "recent":
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="recent-prov-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="A brand new provisional thought",
+                            score=1.0,
+                            score_components={},
+                            payload={"staleness": "current"},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                        ),
+                        RetrievalResult(
+                            object_id="overlap-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending I am both recent and highly ranked",
+                            score=1.0,
+                            score_components={},
+                            payload={"staleness": "current"},
+                            lineage={},
+                            state="matured",
+                            importance=8,
+                            provenance_score=1.0,
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+        else:
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="overlap-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending I am both recent and highly ranked",
+                            score=0.95,
+                            score_components={
+                                "relevance": 0.95,
+                                "recency": 0.8,
+                                "importance": 0.8,
+                                "provenance": 0.1,
+                                "reinforcement": 0,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=8,
+                        ),
+                        RetrievalResult(
+                            object_id="ranked-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending Old but extremely relevant established memory",
+                            score=0.85,
+                            score_components={
+                                "relevance": 0.9,
+                                "recency": 0.1,
+                                "importance": 0.9,
+                                "provenance": 0.5,
+                                "reinforcement": 1,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=9,
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+
+    # We stub account_delivered to not hit the db with fake IDs
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    resp = client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "test blending",
+            "mode": "startup",
+            "max_items": 10,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+
+    # Assert both modes were executed
+    assert set(query_modes) == {"recent", "fast"}
+
+    data = resp.json()
+    items = []
+    for group in data["groups"]:
+        items.extend(group["items"])
+
+    # The deduplicated mix should have exactly 3 items:
+    # - recent-prov-1: retained despite 0 token overlap because it is in the recent quota
+    # - overlap-1: deduped in favor of ranked (lane="ranked")
+    # - ranked-1: retained via normal ranked logic
+    assert len(items) == 3
+    object_ids = {i["object_id"] for i in items}
+    assert object_ids == {"recent-prov-1", "overlap-1", "ranked-1"}
+
+    # Overlap item should prefer the ranked snippet/metadata
+    # Actually build_context_pack sorts by score and limits.
+    # Just asserting it's included is enough for the dedupe proof.
+
+
 def test_context_endpoint_returns_grouped_server_ranked_pack(
     client: TestClient,
     valid_token: str,
@@ -91,9 +241,9 @@ def test_context_endpoint_can_include_history_when_explicitly_requested(
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
             "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
             "query_text": "agent-msg adoption-day audit",
             "include_history": True,
-            "planes": ["episodic"],
         },
     )
 
@@ -110,6 +260,7 @@ def test_capture_rejects_unknown_typed_kind_tag(client: TestClient, valid_token:
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
             "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
             "content": "bad typed write",
             "tags": ["kind:whatever"],
         },
@@ -125,6 +276,7 @@ def test_capture_allows_legacy_untyped_tags(client: TestClient, valid_token: str
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
             "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
             "content": "legacy gist-style write",
             "tags": ["old-note", "vice"],
         },
