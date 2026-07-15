@@ -224,8 +224,10 @@ async def _hydrate_one(
             concept.get(namespace=ns, object_id=hit.object_id), timeout=1.0
         )
     elif hit.plane == "episodic":
+        # RET-002: hydration must NOT account. Access is accounted once at the final
+        # delivery boundary (orchestration.retrieve), never as a side effect of lineage.
         obj = await asyncio.wait_for(
-            episodic.get(namespace=ns, object_id=hit.object_id), timeout=1.0
+            episodic.get(namespace=ns, object_id=hit.object_id, bump_access=False), timeout=1.0
         )
 
     if not obj:
@@ -248,7 +250,8 @@ async def _hydrate_one(
         elif hit.plane == "concept":
             current = await concept.get(namespace=ns, object_id=nxt_id)
         elif hit.plane == "episodic":
-            current = await episodic.get(namespace=ns, object_id=nxt_id)
+            # RET-002: a lineage-walk hop is never a delivered row — never account it.
+            current = await episodic.get(namespace=ns, object_id=nxt_id, bump_access=False)
         if not current:
             break
         tip_id = current.object_id

@@ -148,6 +148,10 @@ If `query.include_lineage == True` (default on deep, false on fast):
 
 Each hydration is a targeted read; parallelized via `asyncio.gather`.
 
+**Hydration does NOT account access (RET-002).** Lineage reads use `bump_access=False`; a
+lineage-walk hop is never a delivered row and is never accounted. All access accounting
+happens once at step 9, on the final delivered set.
+
 ### 8. Pack
 
 ```python
@@ -167,6 +171,22 @@ results = [
 ]
 return Ok(results)
 ```
+
+### 9. Account access (final delivery boundary — RET-002 / #500)
+
+After the envelope is finalized (fanout, dedup, sort, and limit all applied), account each
+**delivered** row exactly once — never a dropped candidate, and identically whether or not
+lineage was hydrated. One async step in `retrieve()` immediately after `_finalize`, over
+`envelope.results`:
+
+- Group delivered rows by plane; account only planes whose type carries `access_count`
+  (episodic, curated, concept). artifact and thought lack the field → explicit no-op.
+- Per accountable collection: **one batched read** of current counts + **one batched write**
+  (`access_count += 1`, stamp `last_accessed_at`). Never N+1.
+- The same seam covers `POST /v1/retrieve` and `POST /v1/retrieve/stream` — both call
+  `retrieve()`.
+- Concurrency: batched read-modify-write, **not** atomic. True concurrent-counter safety is
+  tracked separately (Issue #502). Typed results and warnings are unchanged by this step.
 
 ## Timeouts (layered)
 
@@ -253,3 +273,17 @@ Integration:
 16. `integration: end-to-end fast-path on 10K corpus with real TEI + Qdrant, p95 ≤ 400ms`
 17. `integration: end-to-end deep-path with rerank, NDCG@10 on golden set ≥ threshold`
 18. `integration: kill TEI mid-request, pipeline returns with documented degradation`
+
+Access accounting (RET-002 / #500) — realized in `tests/retrieve/test_ret002_access_accounting.py`
+and `tests/api/test_ret002_streaming_access.py`:
+
+19. `test_delivered_episodic_row_accounted_once_per_mode`
+20. `test_deep_include_lineage_false_still_accounts_delivered`
+21. `test_deep_accounting_identical_regardless_of_include_lineage`
+22. `test_limit_drop_accounts_only_delivered_not_dropped_candidates`
+23. `test_delivered_curated_row_accounted`
+24. `test_delivered_concept_row_accounted`
+25. `test_delivered_artifact_row_is_explicit_noop`
+26. `test_delivered_thought_row_is_explicit_noop`
+27. `test_accounting_is_batched_per_collection_not_n_plus_1`
+28. `test_streaming_retrieval_accounts_each_delivered_row_once`

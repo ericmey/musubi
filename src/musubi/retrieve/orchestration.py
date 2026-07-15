@@ -18,6 +18,7 @@ from musubi.observability.retrieval_metrics import (
     RETRIEVAL_ERRORS_TOTAL,
     RETRIEVAL_WARNINGS_TOTAL,
 )
+from musubi.retrieve.accounting import account_delivered
 from musubi.retrieve.blended import (
     BlendedRetrievalQuery,
     run_blended_retrieve,
@@ -224,7 +225,13 @@ async def retrieve(
     """Execute the configured retrieval pipeline, then finalize at the shared boundary (telemetry +
     fail-closed bounded warnings). This is the ONE place RET-007 warnings/errors are counted."""
     result = await _retrieve_uncounted(client, embedder, reranker, query=query, llm=llm, now=now)
-    return _finalize(result)
+    finalized = _finalize(result)
+    # RET-002 (#500): account access ONCE, here, over exactly the delivered rows — after
+    # fanout/dedup/sort/limit — never on a dropped candidate and independent of lineage
+    # hydration. Covers HTTP and streaming (both call this seam). Does not touch results/warnings.
+    if isinstance(finalized, Ok):
+        await account_delivered(client, finalized.value.results)
+    return finalized
 
 
 async def _retrieve_uncounted(
