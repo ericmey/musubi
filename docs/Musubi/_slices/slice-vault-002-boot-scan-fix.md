@@ -4,11 +4,11 @@ slice_id: slice-vault-002-boot-scan-fix
 issue: 444
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: tama
 phase: "Retrieval"
-tags: [section/slices, status/in-progress, type/slice]
-updated: 2026-07-13
+tags: [section/slices, status/done, type/slice]
+updated: 2026-07-15
 reviewed: true
 depends-on: []
 blocks: []
@@ -16,9 +16,9 @@ blocks: []
 
 # Slice: VAULT-002 boot_scan relative path no-op
 
-> Combined contract+implementation: tests-first red contract for the boot_scan relative-path silent-swallow bug PLUS the accepted source fix (Option A: pass absolute path in boot_scan, commit c0c91ba). Both the red contract and the implementation are in this slice on branch slice/vault-002-boot-scan-fix (PR #445). History is preserved in the commit log; the red-contract work and the source-fix work are additive, not a rewrite. No claim of merge/closure; status remains in-progress until deployment proof and independent sign-off per the final completion gate.
+> Combined contract+implementation: tests-first red contract for the boot_scan relative-path silent-swallow bug PLUS the accepted source fix (Option A: pass absolute path in boot_scan, commit c0c91ba). Both the red contract and the implementation shipped through PR #445. History is preserved in the commit log; the red-contract work and the source-fix work are additive, not a rewrite. Issue #444 was reconciled to done and closed on 2026-07-15 after the fix was confirmed on main.
 
-**Phase:** Retrieval · **Status:** `in-progress` · **Owner:** `tama` · **Reviewed by:** Yua (exact-head review and acceptance), Shiori (independent second-read APPROVE)
+**Phase:** Retrieval · **Status:** `done` · **Owner:** `tama` · **Reviewed by:** Yua (exact-head review and acceptance), Shiori (independent second-read APPROVE)
 
 ## Specs to implement
 
@@ -29,7 +29,9 @@ blocks: []
 - `tests/vault/test_watcher_boot_scan_vault_002.py` (red contract test, tests only; no src/ changes)
 - `tests/vault/test_watcher_boot_scan.py` (transfer of ownership from `slice-ops-hardening-suite` per Yua 17:54:34: the dispatch-shape expectation in `test_boot_scan_detects_body_hash_change` must match the accepted source fix (c0c91ba) which passes `str(path)` (the ABSOLUTE in-root path) instead of the relative path string; also prefers deterministic task completion over fixed `asyncio.sleep(0.1)`)
 - `docs/Musubi/_slices/slice-vault-002-boot-scan-fix.md`
-- `docs/Musubi/_inbox/locks/slice-vault-002-boot-scan-fix.lock`
+
+The completed slice's former lock was removed during the 2026-07-15 board reconciliation; it is
+not an active owned path.
 
 ## Out of owns_paths (intentionally not claimed by this slice)
 

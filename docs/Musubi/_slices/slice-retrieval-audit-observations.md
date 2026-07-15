@@ -3,12 +3,12 @@ title: "Slice: retrieval audit — neutral observation harness + red tests"
 slice_id: slice-retrieval-audit-observations
 section: _slices
 type: slice
-status: in-progress
+status: retired
 owner: aoi
 phase: "Retrieval audit 2026-07-12"
-tags: [section/slices, status/in-progress, type/slice, retrieval, audit, observability]
-updated: 2026-07-12
-reviewed: false
+tags: [section/slices, status/retired, type/slice, retrieval, audit, observability]
+updated: 2026-07-15
+reviewed: true
 depends-on: []
 issue: 411
 blocks: []
@@ -96,18 +96,20 @@ behaviour):
 
 ## Status
 
-**`in-progress`** (STAYS in-progress — NOT in-review, NOT closed by this stack). Observation-only:
-the `tests/retrieve/observe_*` harnesses are landed evidence, not fixes. Tracking Issue #411.
+**`retired`** — this observation-only harness is preserved as historical audit evidence. Issue #411
+was closed on 2026-07-15 after each validated finding had a canonical successor Issue/slice; closing
+the parent does not claim the unchecked observation bullets above were implemented here.
 
-**Open defects (explicit — NOT closed, NOT out-of-scope):**
-- **DQ-001** (projection truncation) — OPEN; canonical follow-up Issue/slice to be filed before this
-  slice's eventual handoff.
-- **RET-002** (fast-mode access-marking) — OPEN; follow-up Issue/slice before handoff.
-- **RET-009** (`include_lineage` not wire-controllable) — OPEN; follow-up Issue/slice before handoff.
-- **DQ-003** — WITHDRAWN/corrected (not a defect; the earlier lineage observation was retracted).
-- **RET-007** (backend failure → empty 200) — belongs to **Phase A** (folded into SEC-004, closed by
-  PR #403), NOT this slice.
+Successor ownership:
 
-No production fix here; each open defect gets its canonical Issue/slice before this slice is handed
-off. Its `tc-coverage` closure (observation-harness correctness only) is deferred to that handoff, as
-this slice is not part of the mergeable auth-boundary stack.
+- **DQ-001** (projection truncation) — completed through its canonical DQ-001 slices and PRs.
+- **RET-002** (delivery-boundary access accounting) — completed through Issue #500 / PR #508.
+- **RET-009** (`include_lineage` wire control) — tracked in its canonical successor lane.
+- **DQ-003** — withdrawn/corrected; not a defect.
+- **RET-007** (backend failure → empty 200) — closed by its canonical degradation work.
+
+## Work log
+
+- 2026-07-15 — `codex-gpt5`: retired the historical parent after board reconciliation. The landed
+  observations remain evidence; production fixes and remaining contracts live in their named
+  successor Issues rather than keeping Issue #411 falsely `in-progress`.
