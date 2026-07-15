@@ -1,0 +1,34 @@
+owner: cowork-tama
+branch: slice/auth001-token-scope
+claimed: 2026-07-15
+worktree: /tmp/auth001/wt
+base: 86e1dc4 (live origin/main, no drift on this lane)
+scope: AUTH-001 all-namespace recall with configurable exclusions (Issue #523) —
+  tests-first slice (zero src in this commit). 15 acceptance tests
+  (13 RED discriminating + 2 GREEN preservation guards) at
+  tests/api/test_auth001_token_scope.py. Implementation (seam,
+  AuthContext.excluded_namespaces, Settings.default_excluded_namespaces
+  + per_agent_excluded_namespaces, RetrieveQuery.namespace becomes
+  str | None, router enforcement, SDK signature change) lands in a
+  follow-up commit after the test contract is accepted.
+authorization: Yua (lane assignment 2026-07-15T09:28:10, AUTH-001
+  tests-first lane is Tama's; the three binding corrections ACK'd
+  09:35 and the final API shape ACK'd 10:14). Spec source-of-truth:
+  Issue #523 acceptance (Required proof section). Final API shape
+  per Yua 10:14: namespace is optional, no second boolean
+  (expand_to_all was WITHHELD). Composition per Yua 09:35: mandatory
+  (salesai) UNION per_agent (subject or presence, both contribute)
+  UNION token_add (additive only, cannot subtract mandatory). Writes
+  per Yua 09:35: unchanged and always use their existing explicit
+  active namespace; the seam is READ-ONLY.
+open-defects: Issue #523 assignee resolution (org-admin follow-up;
+  not a block on the slice). The GraphQL `replaceActorsForAssignable`
+  failure on `minimax-m3` is logged in the slice doc as a
+  non-blocking open-defect; the slice frontmatter owner=cowork-tama
+  is the authoritative work-assignment record.
+second-reader: yua; acceptance: yua.
+forbidden: any src/musubi/** change in this commit; any production
+  code edit before Yua's next ACK. The 13 RED tests are RED (will
+  fail against the current main) and that is expected; the seam
+  implementation lands in a follow-up slice after the test
+  contract is accepted.
