@@ -825,6 +825,71 @@ async def test_concurrent_archive_race_is_idempotent_not_warned(
     assert saved.object_id
 
 
+@pytest.mark.asyncio
+async def test_delete_success_log_distinguishes_pending_from_finalized(
+    plane: CuratedPlane,
+    ns: str,
+    watcher: VaultWatcher,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """H12 Copilot round-4 (Yua ruling 3): the watcher success log must not
+    conflate ``Ok(TransitionPending)`` (durable-accept admitted, NOT yet
+    finalized) with a finalized ``TransitionResult``. Pending -> truthful
+    ``outcome=pending`` carrying the stable operation_key + event_id;
+    finalized -> ``outcome=finalized`` carrying the event_id. The pre-fix log
+    emitted ``outcome=ok`` for BOTH, so the pending assertions are RED before
+    the fix."""
+    from musubi.lifecycle.coordinator import TransitionPending
+
+    # --- Case A: durable-accept pending (simulated seam result) ---
+    await plane.create(
+        _make_curated(namespace=ns, vault_path="eric/shared/pending.md", content="pending row")
+    )
+
+    async def _pending_transition(*args: Any, **kwargs: Any) -> Any:
+        return Ok(
+            value=TransitionPending(operation_key="op-pending-001", event_id="ev-pending-001")
+        )
+
+    real_transition = plane.transition
+    plane.transition = _pending_transition  # type: ignore[method-assign]
+    try:
+        rel = "eric/shared/pending.md"
+        with caplog.at_level(logging.INFO, logger="musubi.vault.watcher"):
+            await watcher._handle_event(
+                str(watcher.vault_root / rel), FileDeletedEvent(str(watcher.vault_root / rel))
+            )
+    finally:
+        plane.transition = real_transition  # type: ignore[method-assign]
+
+    pending_logs = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.INFO)
+    assert "outcome=pending" in pending_logs, (
+        f"durable-accept must log outcome=pending (not outcome=ok); got {pending_logs!r}"
+    )
+    assert "op-pending-001" in pending_logs, "pending log must carry the stable operation_key"
+    assert "ev-pending-001" in pending_logs, "pending log must carry the stable event_id"
+    assert "outcome=ok" not in pending_logs, "the conflated pre-fix 'outcome=ok' must be gone"
+
+    caplog.clear()
+
+    # --- Case B: real finalized archive (through the live coordinator) ---
+    saved = await plane.create(
+        _make_curated(namespace=ns, vault_path="eric/shared/finalized.md", content="finalized row")
+    )
+    rel2 = "eric/shared/finalized.md"
+    with caplog.at_level(logging.INFO, logger="musubi.vault.watcher"):
+        await watcher._handle_event(
+            str(watcher.vault_root / rel2), FileDeletedEvent(str(watcher.vault_root / rel2))
+        )
+    final_logs = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.INFO)
+    assert "outcome=finalized" in final_logs, (
+        f"a finalized archive must log outcome=finalized; got {final_logs!r}"
+    )
+    # And the finalized path actually committed the archive.
+    after = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert after is not None and after.state == "archived"
+
+
 # --------------------------------------------------------------------------- #
 # VAULT-003 Blocker 1: LIVE REACHABILITY discriminator
 # --------------------------------------------------------------------------- #
@@ -1036,38 +1101,47 @@ def test_runtime_factory_produces_watcher_construction_inputs(
 # --------------------------------------------------------------------------- #
 
 
-def test_find_by_vault_path_uses_limit_two_for_fail_closed() -> None:
-    """VAULT-003 re-review (Yua 17:06): the production ``find_by_vault_path``
-    MUST use ``limit=2`` (NOT ``limit=1000``) so the second match is
-    sufficient to fail closed without pulling a potentially unbounded
-    row count. The behaviour is: zero -> not_found, one -> Ok, two ->
-    multiple_matches. This test reads the source text of
-    ``CuratedPlane.find_by_vault_path`` and asserts ``limit=2`` is
-    used (not a different value, not a parameterised
-    ``limit=None``/``limit=1000``)."""
-    import inspect
+@pytest.mark.asyncio
+async def test_find_by_vault_path_uses_limit_two_for_fail_closed(
+    plane: CuratedPlane,
+    ns: str,
+) -> None:
+    """VAULT-003 re-review (Yua 17:06) + H12 Copilot round-4: the production
+    ``find_by_vault_path`` MUST scroll with ``limit=2`` — the smallest value
+    that still surfaces the duplicate case (zero -> not_found, one -> Ok,
+    two -> multiple_matches) without pulling an unbounded row count.
 
-    from musubi.planes.curated import CuratedPlane
+    This spies the EXACT scroll request against the real client. The earlier
+    ``inspect.getsource`` assertion was false-positive-prone: the method's own
+    docstring contains the literal ``limit=2``, so the source check would pass
+    even if the actual scroll call regressed."""
+    await plane.create(
+        _make_curated(
+            namespace=ns,
+            vault_path="eric/shared/limit-two.md",
+            content="Row whose lookup must scroll bounded at limit=2.",
+        )
+    )
 
-    src = inspect.getsource(CuratedPlane.find_by_vault_path)
-    # The bounded contract: limit=2 (the smallest value that still
-    # surfaces the duplicate case).
-    assert "limit=2" in src, (
-        "find_by_vault_path must scroll with limit=2; the second match "
-        "is sufficient to fail closed and a larger value is wasteful. "
-        f"Source:\n{src}"
-    )
-    # And NOT a higher limit (the previous Yua-review fix used 1000).
-    assert "limit=1000" not in src, (
-        "find_by_vault_path must NOT use limit=1000; the bounded contract "
-        "is limit=2. The pre-fix code had limit=1000.\n"
-        f"Source:\n{src}"
-    )
-    assert "limit=None" not in src, (
-        "find_by_vault_path must NOT use limit=None; the in-memory Qdrant "
-        "client rejects it (TypeError) and the bounded contract is "
-        "limit=2.\n"
-        f"Source:\n{src}"
+    captured: dict[str, Any] = {}
+    real_scroll = plane._client.scroll
+
+    def _spy_scroll(*args: Any, **kwargs: Any) -> Any:
+        captured.clear()
+        captured.update(kwargs)
+        return real_scroll(*args, **kwargs)
+
+    plane._client.scroll = _spy_scroll  # type: ignore[method-assign]
+    try:
+        result = await plane.find_by_vault_path("eric/shared/limit-two.md")
+    finally:
+        plane._client.scroll = real_scroll  # type: ignore[method-assign]
+
+    assert isinstance(result, Ok), f"expected Ok resolution, got {result!r}"
+    assert captured.get("limit") == 2, (
+        "find_by_vault_path must scroll with limit=2: the second match is "
+        "sufficient to fail closed, a larger value is wasteful, and limit=1 "
+        f"would hide duplicates. captured scroll kwargs={captured!r}"
     )
 
 
@@ -1076,11 +1150,11 @@ async def test_find_by_vault_path_scroll_requests_payload_only(
     plane: CuratedPlane,
     ns: str,
 ) -> None:
-    """H12 Copilot round-3 (Yua ruling 2): ``find_by_vault_path`` only
-    needs the payload (object_id + state). It must ask Qdrant for
-    ``with_vectors=False`` so the dense + sparse vectors are not shipped
-    back on every vault delete. This spies the EXACT scroll request
-    against the real client rather than reading source text."""
+    """H12 Copilot round-3 (Yua ruling 2): ``find_by_vault_path`` rehydrates
+    the full payload but never needs the dense + sparse vectors, so it must
+    ask Qdrant for ``with_vectors=False`` to avoid shipping the embeddings
+    back on every vault delete. This spies the EXACT scroll request against
+    the real client rather than reading source text."""
     await plane.create(
         _make_curated(
             namespace=ns,

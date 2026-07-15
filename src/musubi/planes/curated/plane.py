@@ -397,9 +397,11 @@ class CuratedPlane:
             ),
             limit=2,
             with_payload=True,
-            # This resolver only needs the payload (object_id + state);
-            # pulling the dense+sparse vectors back would be wasted
-            # bandwidth on every vault delete. Ask Qdrant for payload only.
+            # with_payload=True still rehydrates the FULL CuratedKnowledge
+            # payload (this is not a field-selective fetch of object_id/
+            # state). The only optimization here is with_vectors=False: the
+            # resolver never needs the dense+sparse embeddings, so we avoid
+            # shipping them back on every vault delete.
             with_vectors=False,
         )
         if not records:

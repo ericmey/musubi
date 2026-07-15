@@ -420,11 +420,32 @@ class VaultWatcher:
         )
 
         if isinstance(result, Ok):
-            logger.info(
-                "vault-delete-archived path=%s object_id=%s outcome=ok",
-                rel_path,
-                current.object_id,
-            )
+            # The canonical seam returns Ok in two distinct shapes and the
+            # log must not conflate them: TransitionPending (durable-accept
+            # admitted, NOT yet finalized) vs a finalized TransitionResult.
+            # Lazy import keeps coordinator out of the module import graph
+            # (see the TYPE_CHECKING note at the top of this file).
+            from musubi.lifecycle.coordinator import TransitionPending
+
+            value = result.value
+            if isinstance(value, TransitionPending):
+                logger.info(
+                    "vault-delete-archived path=%s object_id=%s outcome=pending "
+                    "operation_key=%s event_id=%s",
+                    rel_path,
+                    current.object_id,
+                    value.operation_key,
+                    value.event_id,
+                )
+            else:
+                logger.info(
+                    "vault-delete-archived path=%s object_id=%s outcome=finalized "
+                    "event_id=%s version=%s",
+                    rel_path,
+                    current.object_id,
+                    value.event.event_id,
+                    value.version,
+                )
             return
 
         err = result.error
