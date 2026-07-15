@@ -44,5 +44,5 @@ Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure
 
 ## Work log
 - Updated `promotion.py` to differentiate ValueError (deterministic) from generic Exception (transient) during LLM rendering.
-- Updated post-render pipeline to catch ValueError, TypeError, RuntimeError as deterministic, and generic Exception as transient.
+- Updated post-render pipeline to catch PromotionPolicyError as deterministic, while broad exceptions (OSError, RuntimeError, TypeError, unclassified infra issues) remain explicitly transient.
 - Converted single failing test into four distinct tests covering transient vs deterministic cases for both stages.
