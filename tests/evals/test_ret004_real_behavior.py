@@ -26,6 +26,7 @@ from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.retrieve.orchestration import NamespaceTarget, RetrievalQuery
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.store import bootstrap
+from musubi.store.names import collection_for_plane
 from musubi.types.common import generate_ksuid
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
@@ -181,4 +182,57 @@ async def test_eval_contradiction_blending(real_qdrant: QdrantClient) -> None:
     top_k = {r.object_id for r in res.unwrap().results}
     assert pro.object_id in top_k and con.object_id in top_k, (
         "contradiction collapsed — both contradictory facts must appear in top-K"
+    )
+
+
+@pytest.mark.integration
+async def test_eval_abstention_fpr(real_qdrant: QdrantClient) -> None:
+    """Discriminating REAL behavior on the PRE-fusion seam (Yua, 2026-07-15): the frozen abstention
+    threshold on ABSOLUTE dense cosine separates an answerable query (≥1 candidate clears it) from a
+    pure-noise query (ZERO candidates clear it → the system abstains). The retrieve()-output
+    relevance is normalized to 1.0 per-query and the fused RRF score is rank-shaped — neither is an
+    absolute signal — so the gate reads the real candidates' dense cosine before fusion. The test
+    FAILS (not skips) if the signal cannot discriminate."""
+    from musubi.evals.abstention import (
+        ABSTENTION_DENSE_COSINE_THRESHOLD,
+        confident_hits,
+        dense_candidate_scores,
+    )
+
+    embedder = FakeEmbedder()
+    tenant = f"ret004a-{generate_ksuid()[:8].lower()}"
+    ns = f"{tenant}/main/episodic"
+    collection = collection_for_plane("episodic")
+    plane = EpisodicPlane(client=real_qdrant, embedder=embedder, dedup_threshold=0.999)
+    answerable_doc = "orchid conservation requires careful humidity control and filtered sunlight"
+    for text in (
+        "the annual botanical survey documented rare orchid species in the coastal wetlands",
+        answerable_doc,
+        "the coastal wetlands host migratory birds during the spring survey season",
+    ):
+        await plane.create(EpisodicMemory(namespace=ns, content=text, state="matured"))
+
+    answer_scores = await dense_candidate_scores(
+        real_qdrant, embedder, collection=collection, namespace=ns, query=answerable_doc
+    )
+    noise_scores = await dense_candidate_scores(
+        real_qdrant,
+        embedder,
+        collection=collection,
+        namespace=ns,
+        query="quantum blockchain synergy paradigm quokka xylophone",
+    )
+
+    # The raw signal MUST discriminate — proven before thresholding (Yua's binding caveat).
+    assert answer_scores and noise_scores, "expected real candidates for both queries"
+    assert max(answer_scores) > max(noise_scores), (
+        f"raw dense signal did not separate answerable ({max(answer_scores):.4f}) from noise "
+        f"({max(noise_scores):.4f}) — abstention cannot be gated on it"
+    )
+    # Frozen threshold: answerable clears it (confident), noise does not (abstain — zero hits).
+    assert confident_hits(answer_scores, ABSTENTION_DENSE_COSINE_THRESHOLD) >= 1, (
+        "answerable query produced no candidate above the abstention threshold (false abstain)"
+    )
+    assert confident_hits(noise_scores, ABSTENTION_DENSE_COSINE_THRESHOLD) == 0, (
+        f"pure-noise query cleared the abstention threshold (false positive): {noise_scores}"
     )
