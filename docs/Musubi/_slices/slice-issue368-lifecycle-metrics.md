@@ -1,5 +1,5 @@
 ---
-owner: codex-gpt5-shiori
+owner: gemini-3-1-shiori
 status: in-progress
 issue: 368
 title: "Slice: METRICS-001 lifecycle job metrics visibility"
@@ -22,8 +22,8 @@ blocks: []
 Fix lifecycle job metrics and failure visibility (Issue #368). Implement centralized scheduler-dispatch wrapper so every registered job emits duration + errors with exact canonical dispatch name, removing double-counting.
 
 ## Specs to implement
-- [[06-lifecycle/scheduler]]
-- [[08-observability/metrics]]
+- [[13-decisions/0025-lifecycle-runner-without-apscheduler]]
+- Issue #368
 
 ## Owned paths
 - `src/musubi/lifecycle/runner.py`
