@@ -47,11 +47,6 @@ def test_integration_end_to_end_fast_path_on_10K_corpus_with_real_TEI_Qdrant_p95
     pass
 
 
-@pytest.mark.skip(reason="deferred to slice-retrieval-evals")
-def test_integration_end_to_end_deep_path_with_rerank_NDCG_10_on_golden_set_ge_threshold() -> None:
-    pass
-
-
 @pytest.mark.skip(reason="deferred to slice-ops-gpu")
 def test_integration_kill_TEI_mid_request_pipeline_returns_with_documented_degradation() -> None:
     pass

@@ -3,12 +3,12 @@ title: "Slice: C6b lifecycle audit — Qdrant↔SQLite atomicity (precondition o
 slice_id: slice-c6b-lifecycle-qdrant-sqlite-atomicity
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: aoi
 phase: "Lifecycle-audit 2026-07-13 — C6b atomicity design + red contract"
-tags: [section/slices, status/in-progress, type/slice, lifecycle, audit, atomicity]
+tags: [section/slices, status/done, type/slice, lifecycle, audit, atomicity]
 updated: 2026-07-14
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: ["[[_slices/slice-c6-lifecycle-event-loss]]", "[[_slices/slice-h5-unify-state-mutation]]", "[[_slices/slice-c6b-phase1-source-impl]]"]
 issue: 437
@@ -16,12 +16,14 @@ issue: 437
 
 # Slice: C6b lifecycle audit — Qdrant↔SQLite atomicity (precondition of C6 source merge)
 
-The concrete follow-on that C6's durability work explicitly does **not** close. Tracked as Issue #437
-(distinct from #433, which is C6 only). Status `in-progress` (claimed by aoi, lock
-`_inbox/locks/slice-c6b-lifecycle-qdrant-sqlite-atomicity.lock`). It **blocks** the C6 source slice
-([[_slices/slice-c6-lifecycle-event-loss]] lists it in `depends-on`), which must not be
-authorized/merged before C6b has a design + red contract, because the transition `Err` semantics after a
-committed Qdrant mutation are otherwise undefined.
+**DONE** (2026-07-14). Tracked as Issue #437 (distinct from #433, which is C6 only). Phase 1 source
+implementation merged via PR #455 at `dd0f971` (S1–S7: coordinator wiring, Pending semantics, S6 rollback,
+maintenance barrier). H5/G1 closure merged via PR #473 at `7e5864d` (canonical coordinator boundary, five
+plane writers migrated, eight production callers consume Final/Pending/Err; G1 exact denominator moved from
+six to zero). The separate legacy FILE-to-DIR lifecycle storage migration utility is preserved and
+deferred in Issue #474 — it is **not** a C6b completion gate (C6b core is landed via PRs #455 and #473;
+the FILE-to-DIR utility is a separate legacy-layout maintenance item, deferred by Eric on 2026-07-14
+until after the active code-fix ledger is complete).
 
 **Design + exact red inventory (v2, ruling applied):** [[13-decisions/c6b-lifecycle-atomicity-design]] —
 a durable-intent outbox behind a distinct **`LifecycleTransitionCoordinator`** boundary (+ a distinct
@@ -131,7 +133,18 @@ The red contract labels each red as **Phase-1-acceptance** (R1–R22, G2, G3) or
 
 ## Status
 
-**`in-progress`** (2026-07-13) — claimed by aoi (Issue #437, lock in `_inbox/locks/`). Direction accepted
-+ design revised to v2 for Yua's fork rulings + corrections A–J. The **22-red + 3-guard** tests-only
-contract (R1–R22 + G1/G2/G3) is **encoded and accepted** (zero src); the **Phase-1 source is unbuilt**,
-and **G1 stays strict-RED pending H5**. Blocked-by H5 (#439) for closure; blocks C6 (#433 stays C6 only).
+**`done`** (2026-07-14) — C6b lifecycle atomicity contract closed. The **22-red + 3-guard** tests-only
+red contract (R1–R22 + G1/G2/G3) is **encoded and accepted** (commit `c7b95da`, Issue #437, PR #434 draft on
+`slice/c6-lifecycle-event-loss-red`); the **Phase-1 source implementation is merged to `main` in PR #455
+at `dd0f971`** (S1–S7: coordinator wiring, Pending semantics, S6 rollback, maintenance barrier, exact-head
+CI + Vault check + Publish + Release Please all green); **H5/G1 closure merged in PR #473 at `7e5864d`**
+(canonical coordinator boundary, five plane writers migrated, eight production callers consume
+Final/Pending/Err; G1 exact denominator moved from six to zero). Blocked-by H5 (#439) lifted via #473.
+
+The separate legacy FILE-to-DIR lifecycle storage migration utility is **preserved and deferred** in
+**Issue #474** ("Deferred: legacy lifecycle SQLite FILE-to-DIR migration utility"). It is **not a C6b
+completion gate**: C6b core (coordinator/atomicity) is landed via PRs #455 and #473; the FILE-to-DIR
+utility is a separate legacy-layout maintenance item, deferred by Eric on 2026-07-14 until after the
+active code-fix ledger is complete. Current production is already DIR-only; the legacy FILE path is
+absent; the utility is not required to complete C6b or the current code-fix closeout. Resume only after
+Eric explicitly reprioritizes.

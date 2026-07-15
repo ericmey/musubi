@@ -750,7 +750,7 @@ wheels = [
 
 [[package]]
 name = "musubi"
-version = "1.13.4"
+version = "1.14.0"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
