@@ -34,7 +34,7 @@ We will introduce the well-maintained `regex` library (and `types-regex` for typ
 ### Truncation Policy
 The `max_chars` parameter conceptually defines the payload size limit, which we continue to treat strictly as a **codepoint budget** for wire format parity.
 The algorithm will step forward by grapheme clusters. It will select the final completely-rendered grapheme cluster whose appended string length does not exceed `max_chars` (or `max_chars - 3` if padding with `...`).
-It will **never** alter the internal whitespace or perform secondary normalizations during this projection boundary to preserve exact context payload fidelity.
+The truncation helper intrinsically preserves internal and trailing whitespace entirely unaltered; any whitespace normalization (e.g., in the Context Pack pipeline) must be performed by the caller before invoking the truncation helper.
 
 ## Consequences
 - **Positive:** Terminal users and downstream LLM contexts will never receive fractured visual characters or corrupted emoji modifiers.

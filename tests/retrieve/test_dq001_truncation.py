@@ -68,7 +68,7 @@ def test_truncation_preserves_trailing_whitespace_if_within_budget() -> None:
 
 def test_truncation_prevents_skin_tone_modifier_bisection() -> None:
     text = "Hi 👋🏽!"  # len = 3 + 2 + 1 = 6 codepoints
-    # Budget = 5. No pad.
+    # Budget = 4. No pad.
     assert truncate_grapheme_safe(text, max_chars=4) == "Hi "
 
 

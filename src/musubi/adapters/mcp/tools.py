@@ -342,6 +342,12 @@ async def _do_search(
         content = (hit.get("content") or hit.get("snippet") or "").strip()
         if content:
             lines.append(content)
+
+        # DQ-001: preserve adapter parity for truncated responses
+        if hit.get("content_truncated") is True:
+            length = hit.get("content_length") or "unknown"
+            lines.append(f"... (content truncated, originally {length} characters)")
+
         lines.append("")
     return "\n".join(lines).rstrip()
 
@@ -398,6 +404,12 @@ async def _do_recent(
         content = (hit.get("content") or hit.get("snippet") or "").strip()
         if content:
             lines.append(content)
+
+        # DQ-001: preserve adapter parity for truncated responses
+        if hit.get("content_truncated") is True:
+            length = hit.get("content_length") or "unknown"
+            lines.append(f"... (content truncated, originally {length} characters)")
+
         lines.append("")
     return "\n".join(lines).rstrip()
 
