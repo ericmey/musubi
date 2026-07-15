@@ -108,8 +108,23 @@ async def test_score_importance_posts_chat_payload(httpx_mock: HTTPXMock) -> Non
     assert "items" in body["format"].get("properties", {})
     assert "items" in body["format"].get("required", [])
     assert body["options"]["temperature"] == 0
-    assert body["messages"][0]["role"] == "user"
-    assert items[0].object_id in body["messages"][0]["content"]
+    messages = body["messages"]
+    assert len(messages) == 2
+
+    sys_msg = messages[0]
+    assert sys_msg["role"] == "system"
+    assert items[0].object_id not in sys_msg["content"]
+
+    usr_msg = messages[1]
+    assert usr_msg["role"] == "user"
+
+    # Prove the JSON structure
+    extracted = usr_msg["content"].replace("DATA_PAYLOAD:\n", "")
+    parsed_payload = json.loads(extracted)
+
+    assert "items" in parsed_payload
+    assert parsed_payload["items"][0]["id"] == str(items[0].object_id)
+    assert parsed_payload["items"][0]["content"] == items[0].content
 
 
 async def test_infer_topics_happy_path(httpx_mock: HTTPXMock) -> None:
@@ -455,14 +470,23 @@ async def test_check_contradiction_rejects_unknown_verdict(
 # ---------------------------------------------------------------------------
 
 
-async def test_prompts_are_loadable_and_have_items_placeholder() -> None:
+async def test_prompts_are_loadable_and_have_no_raw_data_placeholders() -> None:
     from importlib.resources import files
 
-    for name in ("importance", "topics"):
+    for name in (
+        "importance",
+        "topics",
+        "synthesis",
+        "contradiction",
+        "reflection",
+        "promotion-render",
+    ):
         resource = files("musubi.llm.prompts").joinpath(name).joinpath("v1.txt")
         text = resource.read_text(encoding="utf-8")
-        assert "{ITEMS}" in text
-        assert len(text) > 100
+        assert "{ITEMS}" not in text
+        assert "{CONTENT}" not in text
+        assert "{TITLE}" not in text
+        assert len(text) > 50
 
 
-pytestmark = pytest.mark.asyncio
+pytestmark = pytest.mark.anyio

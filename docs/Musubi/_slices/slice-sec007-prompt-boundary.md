@@ -31,8 +31,8 @@ Enforces the deterministic `SEC-007` prompt-boundary separation. Centralizes exp
   - `docs/Musubi/_slices/slice-sec007-prompt-boundary.md`
 
 ## Test Contract
-1. `test_sec007_prompt_boundary_system_user_separation`
-2. `test_sec007_prompt_boundary_rejects_unserializable_objects`
+1. `test_sec007_prompt_boundary_system_user_separation` — RED
+2. `test_sec007_prompt_boundary_rejects_unserializable_objects` — RED
 
 ## Work log
 - Replaced string interpolation templates with lossless explicit JSON serializations across `ollama.py`, `reflection_client.py`, and `promotion_client.py`.
