@@ -34,12 +34,29 @@ from musubi.api.routers.retrieve import (
     _expand_wildcard_targets,
     _resolve_targets,
 )
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.episodic import EpisodicPlane
+from musubi.settings import Settings
 from musubi.types.episodic import EpisodicMemory
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, api_settings: Settings) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(
+        client=qdrant, db_path=api_settings.lifecycle_sqlite_path
+    )
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
 
 
 def _seed_episodic(plane: EpisodicPlane, namespace: str, content: str) -> None:
@@ -53,6 +70,7 @@ def _seed_episodic(plane: EpisodicPlane, namespace: str, content: str) -> None:
             to_state="matured",
             actor="seed",
             reason="seed",
+            coordinator=_coord(),
         )
 
     asyncio.run(_go())
@@ -560,6 +578,7 @@ def test_retrieve_state_filter_default_omitted_preserves_v1_0_behaviour(
             to_state="matured",
             actor="seed",
             reason="seed",
+            coordinator=_coord(),
         )
 
     asyncio.run(_seed())

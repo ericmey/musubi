@@ -47,12 +47,13 @@ from typing import Any
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
+from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
+from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Result, epoch_of, utc_now
 from musubi.types.curated import CuratedKnowledge
-from musubi.types.lifecycle_event import LifecycleEvent
 
 # Distinct from the episodic point-namespace UUID — keeps the two
 # collections' point IDs in disjoint UUID spaces even when KSUIDs collide
@@ -417,41 +418,27 @@ class CuratedPlane:
         to_state: LifecycleState,
         actor: str,
         reason: str,
-    ) -> tuple[CuratedKnowledge, LifecycleEvent]:
-        """Mutate ``state`` and emit a :class:`LifecycleEvent`.
-
-        Raises :class:`LookupError` when the object doesn't exist in the
-        given namespace (write-side namespace isolation). The
-        :class:`LifecycleEvent` validator raises :class:`ValueError` for
-        transitions outside the curated table.
-        """
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> Result[TransitionResult | TransitionPending, TransitionError]:
+        """Delegate the namespace-scoped state change to the canonical coordinator."""
         current = await self.get(namespace=namespace, object_id=object_id)
         if current is None:
-            raise LookupError(f"curated object {object_id!r} not found in namespace {namespace!r}")
-        event = LifecycleEvent(
+            return Err(
+                error=TransitionError(
+                    code="not_found",
+                    message=(f"curated object {object_id!r} not found in namespace {namespace!r}"),
+                    to_state=to_state,
+                )
+            )
+        return transition(
+            self._client,
+            coordinator=coordinator,
             object_id=object_id,
-            object_type="curated",
-            namespace=namespace,
-            from_state=current.state,
-            to_state=to_state,
+            target_state=to_state,
             actor=actor,
             reason=reason,
+            expected_version=current.version,
         )
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            state=to_state,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        updated = CuratedKnowledge.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated, event
 
     # ------------------------------------------------------------------
     # Helpers

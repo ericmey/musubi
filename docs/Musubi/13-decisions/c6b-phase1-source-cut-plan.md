@@ -1,0 +1,303 @@
+---
+title: "C6b Phase-1 source cut plan + authoritative Pending contract (P0 appendix, REV3)"
+section: 13-decisions
+type: adr
+status: proposed
+owner: aoi
+discoverer: eric
+phase: "Lifecycle-audit 2026-07-13 — C6b Phase-1 source planning (P0 appendix)"
+tags: [type/adr, status/proposed, lifecycle, atomicity, outbox, planning]
+updated: 2026-07-13
+supersedes: []
+---
+
+# C6b Phase-1 source cut plan + authoritative Pending contract — P0 appendix (REV3)
+
+**Author:** Aoi · 2026-07-13. Companion to [[13-decisions/c6b-lifecycle-atomicity-design]]. Reflects Yua's
+REV2 twelve rulings + the P0b/P0c checkpoint rulings (2026-07-13). **Planning + authoritative contract
+only — NOT source authorization.** Source, migration, merge, release, deploy, host contact remain
+forbidden until Yua explicitly authorizes S1. Accepted red-contract head at authoring: `ce2e527`
+(P0a+P0d landed on `23c61a3`).
+
+## A. Authoritative Pending contract (ruling P0b/6 — source must not reinvent this)
+
+The coordinator boundary returns `Result[TransitionOutcome, TransitionError]` where
+`TransitionOutcome = TransitionFinal | TransitionPending` (LOCKED API, test `:48-68`). `TransitionPending`
+carries `operation_key` + `event_id` (durable intent committed; Qdrant mutation NOT yet confirmed).
+
+**HTTP wire contract (all four transition routes):**
+- **`Ok(Final)`** → HTTP **200**, existing typed success body (unchanged).
+- **`Ok(Pending)`** → HTTP **202**, a TYPED Pydantic body with EXACTLY `status="pending"`, `operation_key`
+  (non-empty `str`), and `event_id` (non-empty `str`) — and NONE of the Final-only fields (`object_id`,
+  `from_state`, `to_state`, `version`). The Pending response model does NOT widen the existing Final/Err
+  shapes and carries no fabricated success payload; a body validated with `extra="forbid"` rejects any
+  Final field, and empty identifiers are rejected by validation.
+- **`Err(TransitionError)`** → existing typed error mapping (terminal only): `not_found`→404,
+  `illegal_transition`→400, others→400/4xx per current policy. Err is terminal — never a transient window.
+
+A Pending result MUST NOT: fall through as Final, be mapped to Err, lose either identifier, or return
+200/400/500.
+
+**Internal (maturation / non-HTTP caller) contract — Pending means DEFERRED.** The source must emit ONE
+exact observable shape and the reds assert it (read via `getattr(report, "deferred", [])`, so an
+absent field normalizes to `[]` rather than raising):
+- **`SweepReport` gains a `deferred` field** — a bounded list with ONE entry per Pending forward
+  transition, each entry carrying a NON-EMPTY `operation_key` AND `event_id` (identifiers only, PII-free;
+  no content). For a single seeded Pending row the list has exactly one such entry.
+- **`transitioned` EXCLUDES deferred rows** — a Pending forward does NOT increment `transitioned`
+  (`transitioned == 0` for a lone Pending); a deferral is never counted as a completed transition.
+- **Exactly ONE transition call per row** — the sweep issues a single `transition(...)` for the Pending
+  row and does NOT issue an immediate direct retry (the reconciler owns eventual completion).
+- **No post-transition dependent work on a Pending forward** — e.g. the supersession back-link at
+  maturation `:479` (a SECOND transition on the predecessor) must NOT run when the forward is Pending; it
+  is deferred until the forward finalizes.
+- `Final` follows the existing success path (counted, dependent work runs); `Err` follows the existing
+  error policy.
+
+## B. Ownership & validation ruling (REV2 ruling 4 — corrected from REV1)
+
+`transitions.py` KEEPS object lookup (`_locate_object`), legal-transition validation (`is_legal_transition`),
+lineage/cycle validation, and event construction — it produces ONE validated deterministic
+`TransitionIntent`. The **coordinator** owns durable begin, hard server-side version fence, conditional
+apply, readback, outcome, finalization, and reconcile. This avoids duplicate Qdrant lookup / business
+validation and avoids moving transition types into an import cycle. **The coordinator STILL rechecks the
+persisted fence/patch at apply and at replay — it never trusts stale validation as permission to mutate.**
+
+## C. Composition topology (rulings 3, P0c/1 — one coordinator PER PROCESS)
+
+- **core (API):** ONE app-lifetime coordinator, built in `api/bootstrap.py::bootstrap_production_app`
+  (alongside the Qdrant singleton at `:181-222`) and injected via
+  `app.dependency_overrides[get_lifecycle_service]` (placeholder `api/dependencies.py:116`). API mutations
+  use this injected coordinator. **API startup starts NO reconciler.**
+- **lifecycle-worker:** ONE process-lifetime coordinator built in `lifecycle/runner.py::_main_async`
+  (alongside sink/cursors at `:365-367`), plus the ONLY `reconcile_once` loop (a new interval job in
+  `build_lifecycle_jobs` + one startup pass; today `:137-191` has no startup reconcile).
+- Both processes share the SAME SQLite/outbox file + the cross-process `fcntl.flock` maintenance barrier.
+  No per-call construction, optional fallback, global-settings singleton, or private `sink._db_path` reach.
+
+## D. Shared schema / connection owner + concurrency (rulings 4, 8, 9, P0c/3)
+
+One owner of the shared `lifecycle_sqlite_path` schema creates `lifecycle_events` (today private
+`events.py:_SCHEMA` `:36-49`), `lifecycle_outbox`, `lifecycle_control`, and hands out policy-configured
+connections. `LifecycleEventSink` migrates onto it behavior-neutrally (no DDL duplication, no private
+`_SCHEMA` import, no "sink initialized first" assumption). **Connection policy (actually set, not prose —
+`events.py:19` claims WAL but sets none):** `PRAGMA journal_mode=WAL`, `PRAGMA busy_timeout=<ms>`,
+`isolation_level=None` + explicit `BEGIN IMMEDIATE` for writers, and **cross-process-safe schema init** (a
+process-local first-open guard is insufficient — concurrent `CREATE TABLE IF NOT EXISTS` under WAL +
+busy_timeout, proven by a multi-process test). Named checkpoint behavior or omit the claim. The shared file
+is confirmed used by `LifecycleEventSink` + `MaturationCursor` + `SynthesisCursor` (all on
+`settings.lifecycle_sqlite_path`, `runner.py:365-367`) → a mandatory concurrent sink+coordinator+both-cursors
+multi-process test with bounded busy handling; no lock-only-in-one-process false proof.
+
+## E. Config-drift NAMED BLOCKER (ruling P0c/5)
+
+Three sources disagree on the shared active-storage unit:
+- **Production ansible** (`deploy/ansible/templates/docker-compose.yml.j2:16,52`; env
+  `env.production.j2:13`): core + worker share the DIRECTORY `/var/lib/musubi/lifecycle`, DB
+  `/var/lib/musubi/lifecycle/work.sqlite`. `restore.yml:176` agrees.
+- **Root compose / examples** (`docker-compose.yml:123`, `.env.example:38`,
+  `deploy/docker/.env.production.example:17`): the FILE `/var/lib/musubi/lifecycle-work.sqlite` (parent
+  `/var/lib/musubi`); root compose has no lifecycle-worker service. `backup.yml:87-88` agrees.
+
+**Blocker:** coordinator source MUST NOT land on ambiguous active storage. P0c must either prove a
+deployment surface is explicitly non-production / out of scope, OR encode parity reds across every
+supported core/worker/backup/restore surface. Resolve before S1.
+
+**P0c encoding + flip mechanism (landed):** `test_p0c_deployment_active_storage_parity` (strict-xfail)
+classifies each surface — ansible compose mount, `env.production.j2`, `restore.yml`, root compose,
+`.env.example`, `deploy/docker/.env.production.example`, `backup.yml` — into its active-storage FAMILY
+(directory `/var/lib/musubi/lifecycle` → `work.sqlite` vs the file `/var/lib/musubi/lifecycle-work.sqlite`)
+and asserts a single family. It flips green ONLY when (a) the surfaces are reconciled to one family, OR
+(b) every dissenting surface is named in `_OUT_OF_SCOPE_STORAGE_SURFACES` (the test-local out-of-scope
+registry, each entry carrying a rationale + this pointer). The `test_p0c_config_surfaces_all_resolve`
+control asserts every surface still resolves so a silently-broken extractor can't fake parity. **The
+active backup/restore pair AGREES on the DIR** — the LIVE scheduler `deploy/backup/musubi-backup.sh`
+(`SQLITE_SRC=/var/lib/musubi/lifecycle/work.sqlite`) and `deploy/backup/restore.yml` (restores into
+`/var/lib/musubi/lifecycle/work.sqlite`) are the sound paired anchor. The FILE drift is confined to the
+non-live surfaces in FOUR groups: the LEGACY/offsite `deploy/backup/backup.yml` (its `sqlite3 … ".backup"`
+command still reads the bare FILE), the two env examples (`.env.example`,
+`deploy/docker/.env.production.example`), root `docker-compose.yml`, and the stale docs
+(`deploy/runbooks/manual-recovery.md`, `deploy/backup/README.md`). Align those to the DIR before S1 — the
+live scheduler and restore do NOT disagree.
+
+### E.1 LOCKED canonical layout + FILE→DIR migration contract (P0c storage-parity family)
+
+The active-storage family is **LOCKED to the DIRECTORY**. Source/deploy MUST NOT reinvent this — it is
+pinned here so the drift reds and the anchor controls in `test_c6b_atomicity.py` (the P0c storage-parity
+family) have one authority to converge on.
+
+**Canonical layout (the DIR family):**
+- Active-storage unit = the **directory** `/var/lib/musubi/lifecycle`, bind-mounted `…/lifecycle:…/lifecycle`
+  into **both** the `core` and the `lifecycle-worker` services (the worker shares the core image, different
+  entrypoint).
+- Shared DB file = `/var/lib/musubi/lifecycle/work.sqlite` (siblings `work.sqlite-wal`/`-shm` under WAL,
+  plus any `locks/` and `vault-writelog.db` cursor state live under the same directory parent).
+- `LIFECYCLE_SQLITE_PATH=/var/lib/musubi/lifecycle/work.sqlite`.
+- The directory is created by `bootstrap.yml` ("Create Musubi data directories" over `musubi_data_dirs`,
+  which includes `/var/lib/musubi/lifecycle`) as `musubi:musubi` mode `0750`.
+- The bare FILE `/var/lib/musubi/lifecycle-work.sqlite` (parent `/var/lib/musubi`) is **RETIRED**.
+
+**ANCHORS already on the DIR (preserve-green controls — must not regress to FILE):** ansible
+`docker-compose.yml.j2:16,52` (core+worker mounts) + `env.production.j2:13`; `bootstrap.yml:130` perms;
+live scheduler `musubi-backup.sh:211` (`SQLITE_SRC`); `restore.yml:176`.
+
+**DRIFT surfaces to align to the DIR (each a strict-xfail red until aligned):** root compose
+`docker-compose.yml:123` (bare-FILE mount **and** no `lifecycle-worker` service — align to the DIR mount +
+add the worker); `.env.example:38`; `deploy/docker/.env.production.example:17`; legacy offsite
+`deploy/backup/backup.yml:87-88`; runbook `deploy/runbooks/manual-recovery.md:118-131` (restores the DIR
+snapshot `$SNAP/sqlite/work.sqlite` INTO the bare FILE — retarget to `…/lifecycle/work.sqlite`); backup
+`deploy/backup/README.md:62` (stale `lifecycle-work.sqlite` wording).
+
+**FILE→DIR migration contract (DOWNSTREAM, R20-gated — spec only; do NOT execute here).** The migration
+that moves an existing bare-FILE deployment onto the DIR runs later, under R20 maintenance-mode quiescence.
+Its fail-closed contract (encoded as a reference-candidate red-proof in
+`test_p0c_storage_migration_contract_red_proof`, and marked UNBUILT-in-`deploy/` by
+`test_p0c_storage_migration_task_unbuilt`):
+1. **Fail closed on ambiguity.** If BOTH `/var/lib/musubi/lifecycle-work.sqlite` and
+   `/var/lib/musubi/lifecycle/work.sqlite` hold a DB (or a sibling `locks/` / `vault-writelog.db` exists at
+   both parents), REFUSE + signal — never silently pick one.
+2. **Verify before cutover.** `PRAGMA integrity_check` + a schema check + a row-count check on the DIR DB
+   before starting services; a bad DB must abort, never reach the started services.
+3. **Rollback rule.** The old FILE is a PRE-migration snapshot: restoring it is valid ONLY before writes
+   resume. AFTER the DIR DB has taken new writes, NEVER restore the stale old FILE — instead
+   `wal_checkpoint(TRUNCATE)` and copy the CURRENT DIR DB back under quiescence.
+
+The red `test_p0c_storage_migration_task_unbuilt` flips green when the migration task is **authored** per
+this contract (not when it is executed) — execution + deploy remain downstream of R20.
+
+## F. Corrected source-commit series + flip matrix (rulings 3, 10, 11, S1 active-storage)
+
+Each source commit = source + ATOMIC decorator flip in `test_c6b_atomicity.py` (no strict XPASS left) +
+focused rerun. **The flip matrix below is provisional and MUST be re-derived against the exact intermediate
+implementation — no paper mapping (ruling 11).** Controls green throughout: all `*_rule_discriminates_*`,
+`test_red_proof_*`/`test_crash_red_proof_*`, **G1 stays strict RED** (until H5), `test_c6_event_loss.py`,
+`test_tc_coverage.py`.
+
+**Checkpoint A — shared storage + begin/finalize:**
+- **S1** shared store/schema+connection owner (§D) + behavior-neutral sink migration. **ACTIVE-STORAGE**
+  (ruling 10 — WAL/busy_timeout/connection policy changes live sink storage behavior; under the release
+  hold). C6 overlap accepted for schema/connection ownership only; buffered accept/flush stays C6.
+- **S2** outbox DAO + value types + `begin_transition` (durable PENDING) + admission/single-active-intent/
+  cap. Flips the begin-only reds that DON'T require a full `coord.transition()` — verify empirically.
+- **S3** conditional apply + readback + atomic finalize + outcome types → full `coord.transition()`.
+  **R10 and R12 call full `coord.transition()` and flip HERE, not in S2 (ruling 11).** Flips R1–R4, R8,
+  R13, and R10/R12 once the full call exists. **R22 is a coordinator two-process race and flips as soon as
+  the coordinator race capability exists (S2/S3), NOT at S7 wiring (ruling 11).**
+
+**Checkpoint B — reconciliation/leases/maintenance:**
+- **S4** `reconcile_once` + leases + backoff + classification + crash matrix → R5–R7, R9, R15–R18.
+- **S5** observability → R19.
+- **S6 — DONE:** rollback/maintenance flock barrier + `cleanup_terminal` → R20 + G2b. The
+  durable control row is set before the exclusive drain; transition and reconcile hold the stable
+  per-DB shared lock for their full operations; rollback/abort are generation-fenced; terminal
+  backfill preserves unknown ages; cleanup is one bounded deterministic named-CTE DELETE.
+
+**Checkpoint C — injection/API/runner wiring (DONE; awaiting exact-head independent review):**
+- **S7 — DONE:** inject the app-lifetime + worker coordinators (§C); rewire `transitions.py` seam onto the required
+  injected coordinator (§B, adapter never erasing Pending); map Pending→202 at the 4 routes; branch the 6
+  maturation callsites to DEFERRED (§A); wire `reconcile_once` in the worker. Flips G2a, G3, R21 + the
+  P0c wiring reds. **Same commit:** G1 present-denominator 6→5 (transitions.py migrated), red-proofed;
+  **G1 stays strict RED** (5 plane bypasses remain until H5).
+
+Review cadence (ruling 10): independent exact-SHA checkpoints after A, B, C — not after every mechanical
+commit.
+
+## G. Settings inventory (ruling 12) — validate finite/positive/bounded; only what composition consumes
+
+New settings (none exist today beyond `lifecycle_sqlite_path:102`, `lifecycle_metrics_port:116`): pending
+cap (int>0), lease TTL (float>0), reconcile cadence (int>0), backoff base/max (float>0, max≥base) + jitter
+policy if configurable, SQLite busy_timeout (int≥0 ms), cleanup retention + batch (int>0), and any
+readiness / reconcile-failure thresholds. **API and worker must resolve the SAME active-storage path**
+(proven by a red). Do not add a setting production composition does not consume.
+
+## H. Release hold + readiness (rulings 9, P0c/2)
+
+Phase-1 source may be reviewed/merged behind the hold but MUST NOT be released/deployed as "C6b fixed"
+while H5/G1 (#439) and the FILE→DIR migration gate remain open. C6 sink durability (#433) is merged,
+released, deployed, and pinned in v1.13.4 (`acf97dd` / `927f84e` / `8379afe`); it is no longer a blocker.
+S1–S6 are inert-except-S1-storage; **S7 is active** (canonical rewire = production behavior). **Worker
+readiness:** S7 publishes `musubi_lifecycle_coordinator_ready` only after shared storage opens and a
+worker-only reconcile pass succeeds, and the production healthcheck consumes that exact signal. This
+closes the readiness wiring red but does not waive H5 or the migration/release proof.
+
+**Pinned readiness signal (P0c):** `musubi_lifecycle_coordinator_ready` — a gauge on the worker metrics
+port set to 1 ONLY when the coordinator's shared SQLite/outbox schema is open AND `reconcile_once` can
+safely participate (equivalently, a dedicated `/readyz`-style readiness endpoint). The executable
+`test_p0c_worker_healthcheck_consumes_readiness_signal` parses the REAL ansible template and is GREEN:
+the lifecycle-worker healthcheck consumes this signal rather than treating `/metrics` HTTP 200 as ready.
+The deployed baseline before this S7 branch is v1.13.4; S7 itself is not yet merged or deployed.
+
+## I. The twelve REV2 rulings — disposition
+
+1. G1 = exactly 6 (P0a landed `34db9a0`). 2. 4 API routers + 6 maturation callsites are the acceptance
+surface (P0b). 3. one coordinator per process (§C). 4. validation ownership: transitions.py builds the
+intent, coordinator owns atomicity + rechecks fence (§B). 5. G2a injected boundary (P0d landed `ce2e527`).
+6. R21 covers Final/Pending/Err at the boundary + 4 HTTP + 6 maturation (P0b, §A). 7. wiring proof + real
+readiness red (P0c, §H). 8. shared-file concurrency confirmed → mandatory multi-process test (§D). 9.
+cross-process schema init (§D). 10. S1 ACTIVE-STORAGE (§F). 11. flip matrix follows actual checks —
+R10/R12 need full transition, R22 is coordinator-race (§F). 12. complete validated settings inventory (§G).
+
+## J. NAMED PRE-S1 BLOCKER — R22 crash-proof nondeterminism (flake-hardening required)
+
+`test_crash_red_proof_correct_passes_and_wrong_fails[r22]` — the two-process race crash-proof (real
+subprocesses + on-disk Qdrant) — is **nondeterministic under load**: on 2026-07-14 the FIRST CI run on
+`b77c2ff` FAILED with the CORRECT candidate producing TWO winners (exit codes `[31, 34]` = a lost-update /
+double-operation race); the rerun passed, and it passes reliably locally. The failure was a harness timing
+race, NOT a regression (the failing commit touched only the P0c config parsers).
+
+**Blocker (Yua ruling, 2026-07-14):** S1 coordinator source MUST NOT proceed while a nondeterministic crash
+proof gates it — a flaky red-proof cannot certify the single-winner invariant it exists to prove. Before S1
+that exercises the R22 race, the R22 crash harness must be **flake-hardened to determinism** (e.g. an
+explicit rendezvous/barrier so both processes are provably in-flight before the fenced apply, bounded
+retries removed, or a deterministic scheduler seam) and shown stable across N repeated runs in CI. This is
+a **separate scoped task** — do NOT fix R22 inside the P0c parity work. Tracked here as a pre-S1 gate;
+promote to an issue when S1 is scheduled.
+
+### J.1 RESOLVED-in-harness (2026-07-14, tests-only, zero src) — Yua option-B flake-harden
+
+**Root cause (reproduced deterministically, not inferred).** The flake is a HARNESS rendezvous gap plus an
+on-disk-Qdrant lock artifact — NOT a reference-apply bug. The original harness released both children at
+`before_pending_commit` and then let them race FREELY with no further rendezvous. The two-winner interleaving
+is: the winner (op-a22) runs its whole transition (INSERT PENDING → version-fenced apply → APPLIED → FINAL)
+BEFORE the loser (op-b22) inserts. Because the winner's row is now FINAL, the partial-unique `ux_active_intent`
+(which fences only `PENDING`/`APPLIED`) no longer blocks the loser, so the loser inserts PENDING successfully
+and proceeds to apply. It SHOULD then be caught by the version fence — and it is, *when it can open Qdrant*.
+But local Qdrant (path mode) is a **single-writer store**: the winner holds the storage lock from its lazy-open
+until `os._exit`. If the loser lazy-opens Qdrant while the winner is FINAL-but-not-yet-exited, `QdrantClient(path=…)`
+raises `RuntimeError("… already accessed by another instance")`, which `_classify` maps to `unknown` → NOT
+terminal → `transition` returns `Ok(_RefPending)`. The child scored **any** `Ok` as a WIN → the loser exits
+`_R22_WIN_B` → **two winners**.
+
+Direct reproduction (forced interleaving, winner holds vs releases the Qdrant lock):
+
+| variant | loser exit | loser result | outbox (op-b22) | apply markers | Qdrant end | winners |
+| --- | --- | --- | --- | --- | --- | --- |
+| winner HOLDS Qdrant lock | `34` (WIN_B) | `Ok(Pending)` | `PENDING` (stuck) | `[(op-a22, matured)]` only | `(2, matured)` | **2 (flake)** |
+| winner RELEASES then signals | `33` (FENCE) | `Err(version_fence_violation)` | `ABANDONED` | `[(op-a22, matured)]` only | `(2, matured)` | 1 (correct) |
+
+The tells prove the reference apply is genuinely version-conditional: in the two-winner case the loser wrote
+NO second apply marker and did NOT mutate Qdrant (still `(2, matured)`) — it was a *phantom* winner produced
+solely by the `Ok(Pending)` mis-score, not a real lost update. The fix belongs in the harness, not the reference.
+
+**Hardening (explicit cross-process rendezvous at the atomic boundary).** `_r22_child_source` now takes a
+`role`. The **winner** runs its full transition, then RELEASES the on-disk Qdrant lock (closes its client)
+and only THEN signals `winner_done`. The **loser** blocks at `before_pending_commit` until `winner_done`, so
+it deterministically inserts AFTER the winner's row is FINAL (past `ux_active_intent`) and issues its
+version-fenced conditional apply against a FREE Qdrant already at the winner's version → a guaranteed
+zero-match → `version_fence_violation`, **every run**. Belt-and-suspenders: a WIN now requires an `Ok` whose
+value actually FINALIZED (`kind == 'final'`), so a stuck `Ok(Pending)` can never again be scored a winner.
+Outcome collection waits on each child by identity (not arrival order): `codes[0]==_R22_WIN_A`,
+`codes[1]==_R22_FENCE` for the correct reference. `non_atomic_cas` (fence OFF) still lets the loser apply
+without the fence → it mutates + finalizes a second FINAL → two winners, every run — the R22 discriminator is
+preserved (R22 discriminates on the FENCE, not the insert race, which is R11's).
+
+**Stress evidence.** 70 iterations of `_check_r22` (40 unloaded + 30 under 8-way CPU load simulating CI
+scheduling pressure): **0** two-winner failures for the correct reference; `non_atomic_cas` failed (two
+winners) on **every** iteration. Full CI gate green at the changed head: `ruff format --check`, `ruff check`,
+`mypy src tests`, and the full `uv run pytest` suite (1733 passed / 78 xfailed — G1 `test_r22_two_process_race_…`
+stays strict-xfail; all pre-existing dispositions unchanged). Zero `src/musubi` changes.
+
+**Status: RESOLVED-in-harness.** The pre-S1 gate on R22 *harness* nondeterminism is cleared. NOTE this does
+NOT relieve S1: when the real coordinator source lands and exercises a genuine multi-process apply, S1's own
+implementation MUST preserve the single-winner determinism this harness now pins (a real winner releases its
+store handle / the loser's apply is genuinely version-fenced) rather than relying on the test's rendezvous.

@@ -35,7 +35,7 @@ On LUKS-encrypted NVMe. Content-addressed (filename = SHA-256 of blob) — no me
 
 ### Sqlite
 
-`lifecycle-work.sqlite` on LUKS-encrypted disk. Contains write-log entries (path + hash + presence) — low sensitivity, but covered by LUKS.
+`lifecycle/work.sqlite` on LUKS-encrypted disk. Contains write-log entries (path + hash + presence) — low sensitivity, but covered by LUKS.
 
 ### Backups
 

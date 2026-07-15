@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -48,9 +49,11 @@ with warnings.catch_warnings():
     from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+from musubi.lifecycle.transitions import TransitionResult
 from musubi.planes.concept import ConceptPlane
 from musubi.store import bootstrap
-from musubi.types.common import generate_ksuid, utc_now
+from musubi.types.common import Err, Ok, generate_ksuid, utc_now
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.lifecycle_event import LifecycleEvent
 
@@ -74,6 +77,26 @@ def qdrant() -> Iterator[QdrantClient]:
 @pytest.fixture
 def plane(qdrant: QdrantClient) -> ConceptPlane:
     return ConceptPlane(client=qdrant, embedder=FakeEmbedder())
+
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, tmp_path: Path) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
+
+
+def _final(result: object) -> TransitionResult:
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, TransitionResult)
+    return result.value
 
 
 @pytest.fixture
@@ -153,16 +176,18 @@ async def test_concept_promoted_to_requires_state_promoted(plane: ConceptPlane, 
     # Attempting to add promoted_to without going through the transition
     # rejects.
     other = generate_ksuid()
-    with pytest.raises(ValueError, match="promoted_to"):
-        await plane.transition(
-            namespace=ns,
-            object_id=saved.object_id,
-            to_state="matured",
-            actor="t",
-            reason="unit",
-            promoted_to=other,
-            promoted_at=utc_now(),
-        )
+    result = await plane.transition(
+        namespace=ns,
+        object_id=saved.object_id,
+        to_state="matured",
+        actor="t",
+        reason="unit",
+        promoted_to=other,
+        promoted_at=utc_now(),
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "invariant_violation"
 
 
 # ---------------------------------------------------------------------------
@@ -184,17 +209,23 @@ async def test_concept_promotion_rejected_fields_mutually_exclusive_with_promote
         to_state="matured",
         actor="t",
         reason="unit",
+        coordinator=_coord(),
     )
     curated_ref = generate_ksuid()
-    promoted, _ = await plane.transition(
-        namespace=ns,
-        object_id=saved.object_id,
-        to_state="promoted",
-        actor="t",
-        reason="unit",
-        promoted_to=curated_ref,
-        promoted_at=utc_now(),
+    _final(
+        await plane.transition(
+            namespace=ns,
+            object_id=saved.object_id,
+            to_state="promoted",
+            actor="t",
+            reason="unit",
+            promoted_to=curated_ref,
+            promoted_at=utc_now(),
+            coordinator=_coord(),
+        )
     )
+    promoted = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert promoted is not None
     assert promoted.state == "promoted"
     assert promoted.promoted_to == curated_ref
     # Trying to *also* set rejected fields on the same row is invalid.
@@ -267,17 +298,24 @@ async def test_promotion_sets_concept_state_promoted(plane: ConceptPlane, ns: st
         to_state="matured",
         actor="t",
         reason="unit",
+        coordinator=_coord(),
     )
     curated_ref = generate_ksuid()
-    promoted, event = await plane.transition(
-        namespace=ns,
-        object_id=saved.object_id,
-        to_state="promoted",
-        actor="lifecycle-promotion",
-        reason="gate passed",
-        promoted_to=curated_ref,
-        promoted_at=utc_now(),
+    outcome = _final(
+        await plane.transition(
+            namespace=ns,
+            object_id=saved.object_id,
+            to_state="promoted",
+            actor="lifecycle-promotion",
+            reason="gate passed",
+            promoted_to=curated_ref,
+            promoted_at=utc_now(),
+            coordinator=_coord(),
+        )
     )
+    promoted = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert promoted is not None
+    event = outcome.event
     assert promoted.state == "promoted"
     assert promoted.promoted_to == curated_ref
     assert promoted.promoted_at is not None
@@ -453,14 +491,16 @@ async def test_isolation_write_enforcement(plane: ConceptPlane) -> None:
     a_ns = "eric/claude-code/concept"
     b_ns = "yua/livekit/concept"
     a = await plane.create(_make(namespace=a_ns))
-    with pytest.raises(LookupError):
-        await plane.transition(
-            namespace=b_ns,
-            object_id=a.object_id,
-            to_state="matured",
-            actor="t",
-            reason="unit",
-        )
+    result = await plane.transition(
+        namespace=b_ns,
+        object_id=a.object_id,
+        to_state="matured",
+        actor="t",
+        reason="unit",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "not_found"
     still = await plane.get(namespace=a_ns, object_id=a.object_id)
     assert still is not None and still.state == "synthesized"
 
@@ -468,16 +508,18 @@ async def test_isolation_write_enforcement(plane: ConceptPlane) -> None:
 async def test_transition_illegal_raises(plane: ConceptPlane, ns: str) -> None:
     saved = await plane.create(_make(namespace=ns))
     # synthesized → promoted is illegal — must mature first.
-    with pytest.raises(ValueError):
-        await plane.transition(
-            namespace=ns,
-            object_id=saved.object_id,
-            to_state="promoted",
-            actor="t",
-            reason="unit",
-            promoted_to=generate_ksuid(),
-            promoted_at=utc_now(),
-        )
+    result = await plane.transition(
+        namespace=ns,
+        object_id=saved.object_id,
+        to_state="promoted",
+        actor="t",
+        reason="unit",
+        promoted_to=generate_ksuid(),
+        promoted_at=utc_now(),
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "illegal_transition"
 
 
 async def test_transition_to_promoted_requires_promoted_to(plane: ConceptPlane, ns: str) -> None:
@@ -488,15 +530,18 @@ async def test_transition_to_promoted_requires_promoted_to(plane: ConceptPlane, 
         to_state="matured",
         actor="t",
         reason="unit",
+        coordinator=_coord(),
     )
-    with pytest.raises(ValueError, match="promoted_to"):
-        await plane.transition(
-            namespace=ns,
-            object_id=saved.object_id,
-            to_state="promoted",
-            actor="t",
-            reason="unit",
-        )
+    result = await plane.transition(
+        namespace=ns,
+        object_id=saved.object_id,
+        to_state="promoted",
+        actor="t",
+        reason="unit",
+        coordinator=_coord(),
+    )
+    assert isinstance(result, Err)
+    assert result.error.code == "invariant_violation"
 
 
 async def test_transition_to_demoted_filters_default_reads(plane: ConceptPlane, ns: str) -> None:
@@ -507,6 +552,7 @@ async def test_transition_to_demoted_filters_default_reads(plane: ConceptPlane, 
         to_state="matured",
         actor="t",
         reason="unit",
+        coordinator=_coord(),
     )
     await plane.transition(
         namespace=ns,
@@ -514,6 +560,7 @@ async def test_transition_to_demoted_filters_default_reads(plane: ConceptPlane, 
         to_state="demoted",
         actor="t",
         reason="unit",
+        coordinator=_coord(),
     )
     results = await plane.query(namespace=ns, query="demote-target-text", limit=10)
     assert all(r.object_id != saved.object_id for r in results)
@@ -547,6 +594,7 @@ async def test_query_respects_limit(plane: ConceptPlane, ns: str) -> None:
             to_state="matured",
             actor="t",
             reason="unit",
+            coordinator=_coord(),
         )
     results = await plane.query(namespace=ns, query="limit-fixture", limit=3)
     assert len(results) <= 3

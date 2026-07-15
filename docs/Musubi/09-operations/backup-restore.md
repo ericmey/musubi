@@ -19,7 +19,7 @@ From [[09-operations/asset-matrix]], four stores need backup:
 1. **Vault** (Markdown + frontmatter) → git.
 2. **Qdrant** (episodic, concepts, curated mirror, artifact heads/chunks, thoughts) → snapshot API.
 3. **Artifact blobs** → rsync.
-4. **sqlite** (lifecycle-work.sqlite) → `sqlite3 .backup`.
+4. **sqlite** (lifecycle/work.sqlite) → `sqlite3 .backup`.
 
 Everything else (config, secrets) is in Ansible's repo / 1Password — different lifecycle.
 
@@ -168,7 +168,7 @@ That's it. Core re-reads on next lookup.
 Daily:
 
 ```bash
-sqlite3 /var/lib/musubi/lifecycle-work.sqlite \
+sqlite3 /var/lib/musubi/lifecycle/work.sqlite \
   ".backup /mnt/snapshots/sqlite/lifecycle-$(date +%F).sqlite"
 find /mnt/snapshots/sqlite/ -name "*.sqlite" -mtime +30 -delete
 ```
@@ -180,7 +180,7 @@ find /mnt/snapshots/sqlite/ -name "*.sqlite" -mtime +30 -delete
 ```bash
 systemctl stop musubi
 cp /mnt/snapshots/sqlite/lifecycle-<ts>.sqlite \
-   /var/lib/musubi/lifecycle-work.sqlite
+   /var/lib/musubi/lifecycle/work.sqlite
 systemctl start musubi
 ```
 

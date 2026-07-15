@@ -30,6 +30,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from qdrant_client import QdrantClient
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.episodic import EpisodicPlane
 from musubi.settings import Settings
 from musubi.types.episodic import EpisodicMemory
@@ -38,6 +39,21 @@ from tests.api.conftest import mint_token
 # ---------------------------------------------------------------------------
 # Capture
 # ---------------------------------------------------------------------------
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, api_settings: Settings) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(
+        client=qdrant, db_path=api_settings.lifecycle_sqlite_path
+    )
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
 
 
 def _get_tags(
@@ -1204,6 +1220,7 @@ def test_ndjson_retrieve_stream_yields_per_result(
                 to_state="matured",
                 actor="seed",
                 reason="seed",
+                coordinator=_coord(),
             )
 
     asyncio.run(_seed())

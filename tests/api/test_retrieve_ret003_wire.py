@@ -66,7 +66,7 @@ from __future__ import annotations
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -168,7 +168,7 @@ def asyncio_run(coro: object) -> object:
 
 def requests_get(path: str, client: TestClient) -> Response:
     """Synchronous HTTP GET helper that uses the test's `client` fixture."""
-    return client.get(path)
+    return cast(Response, client.get(path))
 
 
 # =====================================================================

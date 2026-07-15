@@ -146,7 +146,7 @@ Yua-authorized narrow).
 > (R19's `_observe_pending` guard was REMOVED at S5; all three R20 `rollback` guards were REMOVED at
 > S6). **S7 flips R21, G2a, G3, and the P0c injection/worker/readiness/settings wiring while reducing
 > the pinned G1 denominator from six bypasses to five. G1 is closure-only and flips ONLY under H5**
-> (PR #473).
+> Direct (PR #473).
 > Direct real-source proofs: `test_s2_coordinator_admission.py` (admission, client-free) +
 > `test_s3_coordinator_apply.py` (apply/finalize + wrong-shape + parity) + `test_s4_reconcile.py`
 > (reconcile: leases, backoff, crash matrix, exact-owner no-op). See the **Guard-removal checklist** below.

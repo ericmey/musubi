@@ -6,8 +6,11 @@ from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel
 
 from musubi.api.auth import require_auth
-from musubi.api.dependencies import get_concept_plane
+from musubi.api.dependencies import get_concept_plane, get_lifecycle_service, get_settings_dep
 from musubi.api.errors import APIError
+from musubi.api.lifecycle_responses import TransitionPendingBody, pending_response
+from musubi.config import Settings
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.planes.concept import ConceptPlane
 from musubi.types.common import generate_ksuid, utc_now
 from musubi.types.concept import SynthesizedConcept
@@ -57,6 +60,7 @@ async def reinforce_concept(
 @router.post(
     "/{object_id}/promote",
     response_model=SynthesizedConcept,
+    responses={202: {"model": TransitionPendingBody, "description": "Transition durably pending."}},
     operation_id="promote_concept.bucket=transition",
 )
 async def promote_concept(
@@ -65,7 +69,9 @@ async def promote_concept(
     namespace: str = Query(...),
     body: PromoteRequest = Body(...),
     plane: ConceptPlane = Depends(get_concept_plane),
-) -> SynthesizedConcept:
+    coordinator: LifecycleTransitionCoordinator = Depends(get_lifecycle_service),
+    settings: Settings = Depends(get_settings_dep),
+) -> SynthesizedConcept | Response:
     """Operator-forced promotion. Writes the matured→promoted transition
     on the concept with the supplied ``promoted_to`` curated id.
 
@@ -78,12 +84,10 @@ async def promote_concept(
     # (We can't attach ``dependencies=[]`` at the decorator level with
     # operator=True here because the request has a required body.)
     dep = _require(operator=True)
-    from musubi.api.dependencies import get_settings_dep
-
-    dep(request, get_settings_dep())
+    dep(request, settings)
 
     try:
-        updated, _event = await plane.transition(
+        result = await plane.transition(
             namespace=namespace,
             object_id=object_id,
             to_state="promoted",
@@ -91,11 +95,29 @@ async def promote_concept(
             reason=body.reason,
             promoted_to=body.promoted_to,
             promoted_at=utc_now(),
+            coordinator=coordinator,
         )
     except LookupError as exc:
         raise APIError(status_code=404, code="NOT_FOUND", detail=str(exc)) from exc
     except ValueError as exc:
         raise APIError(status_code=400, code="BAD_REQUEST", detail=str(exc)) from exc
+    if result.kind == "err":
+        not_found = result.error.code == "not_found"
+        raise APIError(
+            status_code=404 if not_found else 400,
+            code="NOT_FOUND" if not_found else "BAD_REQUEST",
+            detail=result.error.message,
+        )
+    outcome = result.value
+    if isinstance(outcome, TransitionPending):
+        return pending_response(outcome)
+    updated = await plane.get(namespace=namespace, object_id=object_id)
+    if updated is None:
+        raise APIError(
+            status_code=404,
+            code="NOT_FOUND",
+            detail=f"concept {object_id!r} missing after finalized transition",
+        )
     return updated
 
 
@@ -133,11 +155,13 @@ async def reject_concept(
     "/{object_id}",
     operation_id="delete_concept.bucket=default",
     dependencies=[Depends(require_auth(access="w"))],
+    responses={202: {"model": TransitionPendingBody, "description": "Transition durably pending."}},
 )
 async def delete_concept(
     object_id: str,
     namespace: str = Query(...),
     plane: ConceptPlane = Depends(get_concept_plane),
+    coordinator: LifecycleTransitionCoordinator = Depends(get_lifecycle_service),
 ) -> Response:
     # exists(), not get(): the transition below goes by object_id and never uses the
     # deserialized row, so a corrupted payload must not be able to block removal.
@@ -152,15 +176,26 @@ async def delete_concept(
     # superseded as the soft-delete target (spec leaves this to the
     # caller; we pick the closest terminal state).
     try:
-        await plane.transition(
+        result = await plane.transition(
             namespace=namespace,
             object_id=object_id,
             to_state="superseded",
             actor="api-delete",
             reason="api-soft-delete",
+            coordinator=coordinator,
         )
     except ValueError as exc:
         raise APIError(status_code=400, code="BAD_REQUEST", detail=str(exc)) from exc
+    if result.kind == "err":
+        not_found = result.error.code == "not_found"
+        raise APIError(
+            status_code=404 if not_found else 400,
+            code="NOT_FOUND" if not_found else "BAD_REQUEST",
+            detail=result.error.message,
+        )
+    outcome = result.value
+    if isinstance(outcome, TransitionPending):
+        return pending_response(outcome)
     return Response(
         status_code=200, content=b'{"status":"superseded"}', media_type="application/json"
     )

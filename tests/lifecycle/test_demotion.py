@@ -11,6 +11,7 @@ import pytest
 from qdrant_client import QdrantClient
 
 from musubi.embedding.fake import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.demotion import DemotionDeps, demotion_concept, demotion_episodic, reinstate
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.planes.concept.plane import ConceptPlane
@@ -58,14 +59,21 @@ def events_sink(tmp_path: Path) -> Any:
 
 
 @pytest.fixture
+def coordinator(qdrant: QdrantClient, tmp_path: Path) -> LifecycleTransitionCoordinator:
+    return LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+
+
+@pytest.fixture
 def deps(
     qdrant: QdrantClient,
     episodic_plane: EpisodicPlane,
     concept_plane: ConceptPlane,
     events_sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
 ) -> DemotionDeps:
     return DemotionDeps(
         qdrant=qdrant,
+        coordinator=coordinator,
         episodic_plane=episodic_plane,
         concept_plane=concept_plane,
         events=events_sink,
@@ -111,7 +119,12 @@ async def test_episodic_demotion_selects_by_all_four_criteria(deps: DemotionDeps
     await deps.episodic_plane.create(e)
     # transition to matured since create makes it provisional
     await deps.episodic_plane.transition(
-        namespace=e.namespace, object_id=e.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=e.namespace,
+        object_id=e.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     _set_old(deps, "episodic", str(e.object_id))
 
@@ -127,7 +140,12 @@ async def test_episodic_demotion_skips_if_accessed(deps: DemotionDeps) -> None:
     e = _episodic()
     await deps.episodic_plane.create(e)
     await deps.episodic_plane.transition(
-        namespace=e.namespace, object_id=e.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=e.namespace,
+        object_id=e.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     _set_old(deps, "episodic", str(e.object_id))
     # modify access_count manually since transition sets it? No, transition doesn't.
@@ -148,7 +166,12 @@ async def test_episodic_demotion_skips_if_reinforced(deps: DemotionDeps) -> None
     e = _episodic()
     await deps.episodic_plane.create(e)
     await deps.episodic_plane.transition(
-        namespace=e.namespace, object_id=e.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=e.namespace,
+        object_id=e.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     _set_old(deps, "episodic", str(e.object_id))
     from musubi.planes.episodic.plane import _point_id
@@ -167,7 +190,12 @@ async def test_episodic_demotion_skips_if_high_importance(deps: DemotionDeps) ->
     e = _episodic(importance=6)
     await deps.episodic_plane.create(e)
     await deps.episodic_plane.transition(
-        namespace=e.namespace, object_id=e.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=e.namespace,
+        object_id=e.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     _set_old(deps, "episodic", str(e.object_id))
     count = await demotion_episodic(deps)
@@ -179,7 +207,12 @@ async def test_episodic_demotion_skips_if_young(deps: DemotionDeps) -> None:
     e = _episodic()
     await deps.episodic_plane.create(e)
     await deps.episodic_plane.transition(
-        namespace=e.namespace, object_id=e.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=e.namespace,
+        object_id=e.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     _set_old(deps, "episodic", str(e.object_id), days_old=30)
     count = await demotion_episodic(deps)
@@ -191,7 +224,12 @@ async def test_episodic_demotion_transitions_and_emits_event(deps: DemotionDeps)
     e = _episodic()
     await deps.episodic_plane.create(e)
     await deps.episodic_plane.transition(
-        namespace=e.namespace, object_id=e.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=e.namespace,
+        object_id=e.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     _set_old(deps, "episodic", str(e.object_id))
     count = await demotion_episodic(deps)
@@ -220,7 +258,12 @@ async def test_concept_demotion_selects_by_last_reinforced(deps: DemotionDeps) -
     )
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     # Backdate created/updated to 100 days ago, but set last_reinforced
@@ -266,7 +309,12 @@ async def test_concept_demotion_selects_when_never_reinforced_and_stale(
     )
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     old_epoch = epoch_of(now) - 40 * 24 * 3600
@@ -302,7 +350,12 @@ async def test_concept_demotion_emits_ops_thought(deps: DemotionDeps) -> None:
     )
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     _set_old(deps, "concept", str(c.object_id), days_old=31)
 
@@ -331,7 +384,12 @@ async def test_concept_reinforcement_resets_demotion_clock(deps: DemotionDeps) -
     )
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     old_epoch = epoch_of(now) - 40 * 24 * 3600
@@ -361,6 +419,7 @@ async def test_artifact_archival_off_by_default(
     episodic_plane: EpisodicPlane,
     concept_plane: ConceptPlane,
     events_sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
 ) -> None:
     # Omit artifact_plane + leave the toggle False. `demotion_artifact`
     # must no-op even when the data would otherwise qualify for archival.
@@ -392,6 +451,7 @@ async def test_artifact_archival_off_by_default(
     # Default toggles: archival disabled.
     deps = DemotionDeps(
         qdrant=qdrant,
+        coordinator=coordinator,
         episodic_plane=episodic_plane,
         concept_plane=concept_plane,
         events=events_sink,
@@ -410,6 +470,7 @@ async def test_artifact_archival_respects_referenced_by(
     episodic_plane: EpisodicPlane,
     concept_plane: ConceptPlane,
     events_sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
 ) -> None:
     from musubi.lifecycle.demotion import demotion_artifact
     from musubi.planes.artifact.plane import ArtifactPlane
@@ -445,6 +506,7 @@ async def test_artifact_archival_respects_referenced_by(
 
     deps = DemotionDeps(
         qdrant=qdrant,
+        coordinator=coordinator,
         episodic_plane=episodic_plane,
         concept_plane=concept_plane,
         events=events_sink,
@@ -465,6 +527,7 @@ async def test_artifact_archival_transitions_to_archived_keeps_blob(
     episodic_plane: EpisodicPlane,
     concept_plane: ConceptPlane,
     events_sink: LifecycleEventSink,
+    coordinator: LifecycleTransitionCoordinator,
 ) -> None:
     from musubi.lifecycle.demotion import demotion_artifact
     from musubi.planes.artifact.plane import ArtifactPlane
@@ -490,6 +553,7 @@ async def test_artifact_archival_transitions_to_archived_keeps_blob(
 
     deps = DemotionDeps(
         qdrant=qdrant,
+        coordinator=coordinator,
         episodic_plane=episodic_plane,
         concept_plane=concept_plane,
         events=events_sink,
@@ -516,10 +580,20 @@ async def test_reinstate_moves_back_to_matured(deps: DemotionDeps) -> None:
     e = _episodic()
     await deps.episodic_plane.create(e)
     await deps.episodic_plane.transition(
-        namespace=e.namespace, object_id=e.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=e.namespace,
+        object_id=e.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     await deps.episodic_plane.transition(
-        namespace=e.namespace, object_id=e.object_id, to_state="demoted", actor="sys", reason="test"
+        namespace=e.namespace,
+        object_id=e.object_id,
+        to_state="demoted",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
 
     await reinstate(deps, e.namespace, str(e.object_id), "because")
@@ -548,7 +622,12 @@ async def test_reinstate_resets_reinforced_clock(deps: DemotionDeps) -> None:
     )
     await deps.concept_plane.create(c)
     await deps.concept_plane.transition(
-        namespace=c.namespace, object_id=c.object_id, to_state="matured", actor="sys", reason="test"
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
     )
     await deps.concept_plane.transition(
         namespace=c.namespace,
@@ -556,6 +635,7 @@ async def test_reinstate_resets_reinforced_clock(deps: DemotionDeps) -> None:
         to_state="demoted",
         actor="sys",
         reason="stale",
+        coordinator=deps.coordinator,
     )
 
     # Simulate the state that caused demotion in the first place: old

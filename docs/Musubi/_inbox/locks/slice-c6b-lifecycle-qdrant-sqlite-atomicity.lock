@@ -1,0 +1,8 @@
+owner: aoi
+branch: slice/c6-lifecycle-event-loss-red
+worktree: /Users/ericmey/Projects/musubi-worktrees/aoi-c6-event-loss
+claimed: 2026-07-13
+scope: C6b Qdrant<->SQLite atomicity — SPEC/ADR + behavior-shaped RED CONTRACT only, ZERO src/musubi.
+authorization: Yua (C6b lane 2026-07-13, Issue #437) — docs/tests first; design choices + red inventory returned for approval BEFORE any source.
+second-reader: Tama or Shiori (only after their current lanes clear).
+forbidden: src/musubi (zero src); C6 source (held, PR434 draft on hold); host/deploy state.
