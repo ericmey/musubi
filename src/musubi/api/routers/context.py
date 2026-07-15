@@ -178,7 +178,7 @@ async def context_pack(
     # the ranked hit if it appears in both.
     candidates_dict = {}
     for hit in recent_env.results:
-        c = _candidate_from_hit(hit)
+        c = _candidate_from_hit(hit, recent=True)
         c.lane = "recent"
         candidates_dict[(c.namespace, c.plane, c.object_id)] = c
 
@@ -222,7 +222,7 @@ async def context_pack(
     return pack
 
 
-def _candidate_from_hit(hit: Any) -> ContextCandidate:
+def _candidate_from_hit(hit: Any, *, recent: bool = False) -> ContextCandidate:
     payload = hit.payload if isinstance(hit.payload, dict) else {}
     state = hit.state if hit.state is not None else payload.get("state")
     importance = hit.importance if hit.importance is not None else payload.get("importance")
@@ -235,7 +235,9 @@ def _candidate_from_hit(hit: Any) -> ContextCandidate:
         title=_optional_str(payload.get("title") or hit.title),
         tags=_string_list(payload.get("tags")),
         state=str(state or "matured"),
-        created_epoch=_optional_float(payload.get("created_epoch")) or 0.0,
+        created_epoch=(
+            _optional_float(payload.get("created_epoch")) or (float(hit.score) if recent else 0.0)
+        ),
         updated_epoch=_optional_float(payload.get("updated_epoch")),
         importance=int(importance or 5),
         retrieve_score=float(hit.score),

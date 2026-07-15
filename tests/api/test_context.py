@@ -36,6 +36,29 @@ def test_context_candidate_uses_typed_state_and_importance_without_payload() -> 
     assert candidate.importance == 9
 
 
+def test_recent_context_candidate_uses_recent_score_as_created_epoch_without_payload() -> None:
+    from musubi.api.routers.context import _candidate_from_hit
+    from musubi.retrieve.orchestration import RetrievalResult
+
+    candidate = _candidate_from_hit(
+        RetrievalResult(
+            object_id="recent-hit",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            snippet="chronological recent row",
+            score=1_721_234_567.0,
+            score_components={},
+            lineage={},
+            payload=None,
+            state="provisional",
+            importance=5,
+        ),
+        recent=True,
+    )
+
+    assert candidate.created_epoch == 1_721_234_567.0
+
+
 def test_context_endpoint_blends_recent_provisional_with_established_ranked(
     client: TestClient,
     valid_token: str,
