@@ -70,7 +70,7 @@ def reconciler(vault_root: Path) -> VaultReconciler:
     return VaultReconciler(vault_root, FakeCuratedPlane())  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_on_created_indexes_new_file(vault_root: Path, watcher: VaultWatcher) -> None:
     file_path = vault_root / "eric" / "shared" / "test.md"
     ksuid = generate_ksuid()
@@ -92,7 +92,7 @@ async def test_on_created_indexes_new_file(vault_root: Path, watcher: VaultWatch
     assert plane.created[0].content == "Body"  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_on_modified_reindexes_body_change(vault_root: Path, watcher: VaultWatcher) -> None:
     file_path = vault_root / "eric" / "shared" / "test.md"
     ksuid = generate_ksuid()
@@ -122,7 +122,7 @@ def test_on_modified_frontmatter_only_no_reembed() -> None:
     pass
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_on_moved_updates_vault_path(vault_root: Path, watcher: VaultWatcher) -> None:
     src_path = vault_root / "eric" / "shared" / "old.md"
     dest_path = vault_root / "eric" / "shared" / "new.md"
@@ -145,13 +145,19 @@ async def test_on_moved_updates_vault_path(vault_root: Path, watcher: VaultWatch
     assert plane.created[0].vault_path == "eric/shared/new.md"  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_on_deleted_archives_point(vault_root: Path, watcher: VaultWatcher) -> None:
     file_path = vault_root / "eric" / "shared" / "test.md"
+    from unittest.mock import AsyncMock
+
+    watcher.curated_plane.archive_by_vault_path = AsyncMock(return_value=True)  # type: ignore[method-assign]
     await watcher._handle_event(str(file_path), FileDeletedEvent(str(file_path)))
+    watcher.curated_plane.archive_by_vault_path.assert_called_once_with(
+        namespace="eric/shared/curated", vault_path="eric/shared/test.md"
+    )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_dotfile_ignored(vault_root: Path, watcher: VaultWatcher) -> None:
     file_path = vault_root / ".ignored.md"
     file_path.write_text("Title: ignored", encoding="utf-8")
@@ -160,7 +166,7 @@ async def test_dotfile_ignored(vault_root: Path, watcher: VaultWatcher) -> None:
     assert len(watcher._pending_tasks) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_underscore_dir_ignored(vault_root: Path, watcher: VaultWatcher) -> None:
     dir_path = vault_root / "_ignored"
     dir_path.mkdir()
@@ -171,7 +177,7 @@ async def test_underscore_dir_ignored(vault_root: Path, watcher: VaultWatcher) -
     assert len(watcher._pending_tasks) == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_debounce_multiple_rapid_writes_process_once(
     vault_root: Path, watcher: VaultWatcher
 ) -> None:
@@ -203,7 +209,7 @@ async def test_debounce_multiple_rapid_writes_process_once(
     assert any(c.content == "Body 4" for c in watcher.curated_plane.created)  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_debounce_extends_on_new_event_during_window(
     vault_root: Path, watcher: VaultWatcher
 ) -> None:
@@ -236,7 +242,7 @@ async def test_debounce_extends_on_new_event_during_window(
     assert len(watcher.curated_plane.created) >= 1  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_invalid_yaml_emits_thought_and_skips(
     vault_root: Path, watcher: VaultWatcher, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -246,7 +252,7 @@ async def test_invalid_yaml_emits_thought_and_skips(
     assert len(watcher.curated_plane.created) == 0  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_missing_required_field_emits_thought(
     vault_root: Path, watcher: VaultWatcher, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -262,7 +268,7 @@ def test_body_only_no_frontmatter_rejected() -> None:
     pass
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_missing_object_id_gets_generated_and_written_back(
     vault_root: Path, watcher: VaultWatcher
 ) -> None:
@@ -277,7 +283,7 @@ async def test_missing_object_id_gets_generated_and_written_back(
     assert "namespace: eric/shared/curated" in content
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_writelog_matches_core_write_event_consumed(
     vault_root: Path, watcher: VaultWatcher, writer: VaultWriter
 ) -> None:
@@ -303,7 +309,7 @@ async def test_writelog_matches_core_write_event_consumed(
     assert len(watcher.curated_plane.created) == 0  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_writelog_mismatch_body_hash_reindexes(
     vault_root: Path, watcher: VaultWatcher, write_log: WriteLog
 ) -> None:
@@ -327,7 +333,7 @@ async def test_writelog_mismatch_body_hash_reindexes(
     assert len(watcher.curated_plane.created) == 1  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_writelog_orphan_older_than_5m_logged_as_warning(write_log: WriteLog) -> None:
     # Test WriteLog logic directly
     body_hash = hashlib.sha256(b"body").hexdigest()
@@ -343,7 +349,7 @@ async def test_writelog_orphan_older_than_5m_logged_as_warning(write_log: WriteL
     assert len(orphans) == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_writelog_entry_purged_after_1h(write_log: WriteLog) -> None:
     write_log.record_write("old.md", "hash")
     import sqlite3
@@ -355,7 +361,7 @@ async def test_writelog_entry_purged_after_1h(write_log: WriteLog) -> None:
     assert count == 1
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_oversize_markdown_skipped_with_warning(
     vault_root: Path,
     watcher: VaultWatcher,
@@ -395,7 +401,7 @@ async def test_oversize_markdown_skipped_with_warning(
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_binary_extension_skipped_with_warning(
     vault_root: Path,
     watcher: VaultWatcher,
@@ -424,13 +430,13 @@ async def test_binary_extension_skipped_with_warning(
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_reconciler_detects_orphan_point() -> None:
     # Reconciler logic TODO
     pass
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_reconciler_detects_orphan_file(
     vault_root: Path, reconciler: VaultReconciler
 ) -> None:
@@ -452,7 +458,7 @@ async def test_reconciler_detects_orphan_file(
     assert len(plane.created) == 1  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_reconciler_reindexes_drifted_body_hash(
     vault_root: Path, reconciler: VaultReconciler
 ) -> None:
@@ -460,7 +466,7 @@ async def test_reconciler_reindexes_drifted_body_hash(
     pass
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_reconciler_idempotent_on_second_run(
     vault_root: Path, reconciler: VaultReconciler
 ) -> None:
@@ -489,7 +495,7 @@ async def test_reconciler_idempotent_on_second_run(
     assert len(plane.created) == 1  # type: ignore
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_event_rate_limit_drops_with_warning(
     vault_root: Path,
     write_log: WriteLog,
@@ -531,7 +537,7 @@ async def test_event_rate_limit_drops_with_warning(
     assert len(warnings) == 4, f"expected 4 drop warnings; saw {warnings}"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_indexing_rate_limit_backpressure(
     vault_root: Path,
     write_log: WriteLog,

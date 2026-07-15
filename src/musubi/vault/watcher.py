@@ -355,17 +355,17 @@ class VaultWatcher:
         return "system/internal/curated"
 
     async def _handle_deleted(self, rel_path: str) -> None:
-        from qdrant_client import models
-
-        self.curated_plane._client.delete(
-            collection_name="musubi_curated",
-            points_selector=models.Filter(
-                must=[
-                    models.FieldCondition(key="vault_path", match=models.MatchValue(value=rel_path))
-                ]
-            ),
-        )
-        logger.info("File deleted and removed from Qdrant: %s", rel_path)
+        try:
+            namespace = self._infer_namespace(rel_path)
+            archived = await self.curated_plane.archive_by_vault_path(
+                namespace=namespace, vault_path=rel_path
+            )
+            if archived:
+                logger.info("File deleted and archived in Qdrant: %s", rel_path)
+            else:
+                logger.debug("File deleted but not found in Qdrant: %s", rel_path)
+        except Exception as exc:
+            logger.error("Failed to archive deleted file %s in Qdrant: %s", rel_path, exc)
 
     def boot_scan(self) -> None:
         """Run a background scan over the vault to catch missed edits."""

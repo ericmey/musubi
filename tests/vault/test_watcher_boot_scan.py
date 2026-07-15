@@ -140,12 +140,9 @@ async def test_boot_scan_removes_ghost_row(
     await captured[0]
 
     # Should call delete
-    assert mock_curated_plane._client.delete.call_count == 1
-    _args, kwargs = mock_curated_plane._client.delete.call_args
-    assert kwargs["collection_name"] == "musubi_curated"
-    filter_arg = kwargs["points_selector"]
-    assert filter_arg.must[0].key == "vault_path"
-    assert filter_arg.must[0].match.value == "missing.md"
+    assert mock_curated_plane.archive_by_vault_path.call_count == 1
+    _args, kwargs = mock_curated_plane.archive_by_vault_path.call_args
+    assert kwargs["vault_path"] == "missing.md"
 
 
 @pytest.mark.anyio
@@ -181,7 +178,7 @@ async def test_boot_scan_ignores_unchanged_files(
     watcher.boot_scan()
     await captured[0]
 
-    assert mock_curated_plane._client.delete.call_count == 0
+    assert mock_curated_plane.archive_by_vault_path.call_count == 0
     assert cast(AsyncMock, watcher._handle_event).call_count == 0
 
 
@@ -205,11 +202,9 @@ async def test_handle_event_inner_processes_move(
 
     await watcher._handle_event_inner(str(f1), event)
 
-    assert mock_curated_plane._client.delete.call_count == 1
-    _args, kwargs = mock_curated_plane._client.delete.call_args
-    filter_arg = kwargs["points_selector"]
-    assert filter_arg.must[0].key == "vault_path"
-    assert filter_arg.must[0].match.value == "old.md"
+    assert mock_curated_plane.archive_by_vault_path.call_count == 1
+    _args, kwargs = mock_curated_plane.archive_by_vault_path.call_args
+    assert kwargs["vault_path"] == "old.md"
 
 
 @pytest.mark.anyio
@@ -226,7 +221,11 @@ async def test_failure_visibility_on_ghost_row(
     point.payload = {"vault_path": "missing.md", "body_hash": "old_hash"}
     mock_curated_plane._client.scroll.return_value = ([point], None)
 
-    mock_curated_plane._client.delete.side_effect = Exception("delete_failed_injected")
+    from unittest.mock import AsyncMock
+
+    mock_curated_plane.archive_by_vault_path = AsyncMock(
+        side_effect=Exception("archive_failed_injected")
+    )
 
     captured: list[asyncio.Task[Any]] = []
     original_create_task = watcher._loop.create_task
@@ -240,7 +239,8 @@ async def test_failure_visibility_on_ghost_row(
     watcher.boot_scan()
     await captured[0]
 
-    assert mock_curated_plane._client.delete.call_count == 1
+    assert mock_curated_plane.archive_by_vault_path.call_count == 1
     assert (
-        "Boot scan failed to reconcile ghost row missing.md: delete_failed_injected" in caplog.text
+        "Failed to archive deleted file missing.md in Qdrant: archive_failed_injected"
+        in caplog.text
     )

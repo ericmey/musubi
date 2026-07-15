@@ -247,6 +247,34 @@ class CuratedPlane:
         )
         self._client.upsert(collection_name=self._collection, points=[point])
 
+    async def archive_by_vault_path(self, *, namespace: str, vault_path: str) -> bool:
+        """Archive the curated row mirroring ``vault_path``.
+
+        Returns True if a row was found and archived, False otherwise.
+        """
+        existing = self._find_by_vault_path(namespace=namespace, vault_path=vault_path)
+        if existing is None:
+            return False
+
+        if existing.state == "archived":
+            return True
+
+        now = utc_now()
+        data = existing.model_dump()
+        data.update(
+            state="archived",
+            version=existing.version + 1,
+            updated_at=now,
+            updated_epoch=epoch_of(now),
+        )
+        updated = CuratedKnowledge.model_validate(data)
+        self._client.set_payload(
+            collection_name=self._collection,
+            payload=updated.model_dump(mode="json"),
+            points=[_point_id(existing.object_id)],
+        )
+        return True
+
     # ------------------------------------------------------------------
     # Read
     # ------------------------------------------------------------------
