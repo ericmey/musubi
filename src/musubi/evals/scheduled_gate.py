@@ -270,6 +270,11 @@ async def run_scheduled_seeded_gate(
                 collections=(collection,),
                 limit=20,
                 state_filter=state_filter,
+                # This gate measures ranking QUALITY, not latency — the interactive 250ms per-plane
+                # default 503s on the cold CPU-TEI CI stack. Give retrieval generous headroom so a
+                # slow embed can't fail the quality measurement (latency has its own contracts).
+                plane_timeout_s=30.0,
+                sparse_timeout_s=30.0,
             )
         return _hits_or_raise(result, query_text)
 
