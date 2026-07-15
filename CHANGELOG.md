@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.4](https://github.com/ericmey/musubi/compare/v1.17.3...v1.17.4) (2026-07-15)
+
+
+### Documentation
+
+* **integrity:** reconcile shipped remediation state ([#561](https://github.com/ericmey/musubi/issues/561)) ([cf4bfd8](https://github.com/ericmey/musubi/commit/cf4bfd82ffb3909363ad379bf05c1f60f4990889))
+
 ## [1.17.3](https://github.com/ericmey/musubi/compare/v1.17.2...v1.17.3) (2026-07-15)
 
 
