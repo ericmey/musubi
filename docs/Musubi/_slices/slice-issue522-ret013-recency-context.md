@@ -19,7 +19,7 @@ blocks: []
 # Slice: RET-013 bounded recent-memory lane in canonical cross-modality context
 
 ## Context
-Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canonical agent recall blends recent (including provisional immediately) with the highest-ranked established memories. Recent must be capped and deduped against ranked results, with provenance, state, warnings, and truncation surviving. Cross-modality federation uses explicitly authorized concrete namespace targets (without undoing RET-011 exact filtering). 
+Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canonical agent recall blends recent (including provisional immediately) with the highest-ranked established memories. Recent must be capped and deduped against ranked results, with provenance, state, warnings, and truncation surviving. Cross-modality federation uses explicitly authorized concrete namespace targets (without undoing RET-011 exact filtering).
 
 ## Specs to implement
 - Issue #522 (Wait, let me verify actual specs for this)
