@@ -128,6 +128,17 @@ class MemoryObject(MusubiObject):
     #: serialization/API response (a read never exposes a stale token) while remaining an accepted
     #: (not ``forbid``-rejected) key when a row is model-validated from its payload.
     access_lease_token: str | None = Field(default=None, exclude=True)
+    #: DATA-001 (#530): internal attributable owner token for concurrency-safe FULL-OBJECT updates
+    #: (dedup-merge reinforce, curated same-id update, patch/supersede/concept-update). A writer
+    #: ACQUIRES ownership by writing a unique never-reused ``own:<issued_us>:<nonce>`` token fenced on
+    #: the row's exact ``version`` + this token being empty (or takeover of an exact expired token);
+    #: an exact-token readback is the ONLY win signal (a same-next-version contender is otherwise
+    #: indistinguishable). Only the proven owner may update vectors; the narrow intended-field payload
+    #: publish + version bump + release are fenced on ``update_lease_token == mine``. Distinct from
+    #: ``access_lease_token`` — different lifecycle and seam (``store.mutation_lease``); never
+    #: overloaded. ``exclude=True`` keeps it out of every serialization/API response while remaining
+    #: an accepted (not ``forbid``-rejected) key when a row is model-validated from its payload.
+    update_lease_token: str | None = Field(default=None, exclude=True)
 
     # Lineage
     supersedes: list[KSUID] = Field(default_factory=list)
