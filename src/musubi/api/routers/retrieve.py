@@ -7,8 +7,14 @@ parameters; no state mutation. NDJSON streaming variant
 Three namespace shapes are accepted:
 
 - **3-segment** (``tenant/presence/plane``): single-plane query. The
-  stored-row filter is literal; the ``planes`` field, if set, must
-  not contradict the namespace's trailing plane.
+  stored-row filter is literal; the trailing plane segment is the
+  authoritative single target. The ``planes`` request field is
+  IGNORED for this shape — the pre-AUTH-001 contract that a 3-seg
+  concrete namespace is always single-plane is preserved. Supplying
+  a non-empty ``planes`` does NOT trigger an "inconsistent planes"
+  400; the default ``ContextQuery.planes`` is silently ignored.
+  3-seg with ``*`` as the plane segment is the wildcard-plane shape
+  (handled below) and DOES use the supplied ``planes`` list.
 - **2-segment** (``tenant/presence``): cross-plane query. Each entry
   in ``planes`` is expanded to ``<namespace>/<plane>`` server-side
   and the pipeline fans out, merging results by score. Scope is
@@ -299,12 +305,14 @@ def _resolve_targets(
                 f"3-segment namespace '{namespace}' names unknown plane "
                 f"'{derived_plane}' (valid: {sorted(_VALID_PLANES)})",
             )
-        if requested is not None and requested != [derived_plane]:
-            return (
-                [],
-                f"3-segment namespace '{namespace}' pins plane "
-                f"'{derived_plane}'; planes={requested} is inconsistent",
-            )
+        # 3-segment concrete plane already pins the plane; the
+        # `planes` request field is IGNORED for this shape (the
+        # 3-seg concrete plane is the single source of truth). The
+        # default `ContextQuery.planes` value must not be allowed to
+        # flip a well-formed 3-seg concrete request into a 400
+        # "inconsistent planes list" error. This matches the
+        # pre-AUTH-001 contract: a 3-seg concrete namespace was
+        # always single-plane.
         return ([(namespace, derived_plane)], None)
 
     if shape == 2:
@@ -401,13 +409,18 @@ def _enumerate_family_targets(
     per-agent exclusion list are applied afterwards by
     ``enforce_namespace_policy``.
 
+    Dedups ``planes`` before facetting — duplicate plane names
+    (e.g. ``["episodic", "episodic"]``) would otherwise facet the
+    same collection twice and emit duplicate namespace targets,
+    causing redundant authorization checks and retrieval work.
+
     Uses Qdrant's server-side facet operation over the indexed namespace
     field, filtered by the indexed identity-family field. This transfers
     distinct namespace values rather than every stored point. The hard cap
     fails loudly instead of silently narrowing default recall.
     """
     expanded: list[tuple[str, str]] = []
-    for plane in planes:
+    for plane in _dedup_planes(planes):
         collection = collection_for_plane(plane)
         response = client.facet(
             collection_name=collection,
@@ -424,9 +437,23 @@ def _enumerate_family_targets(
             exact=True,
         )
         if len(response.hits) >= _NAMESPACE_FACET_LIMIT:
-            raise RuntimeError(
-                f"namespace enumeration reached safety cap {_NAMESPACE_FACET_LIMIT} "
-                f"for collection {collection!r}"
+            # Fail closed + visibly. This is a graceful backend
+            # resource cap (too many distinct namespaces for one
+            # family+plane) — surface as a typed BACKEND_UNAVAILABLE
+            # envelope so the client gets Musubi's structured error
+            # shape (not FastAPI's generic 500). The HTTP status
+            # is 503 because the operator can resolve it (raise the
+            # cap, partition the family, etc.) — it is not a 5xx
+            # server bug.
+            raise APIError(
+                status_code=503,
+                code="BACKEND_UNAVAILABLE",
+                detail=(
+                    f"namespace enumeration reached safety cap "
+                    f"{_NAMESPACE_FACET_LIMIT} for collection {collection!r}; "
+                    "narrow the request or contact the operator to "
+                    "raise the cap"
+                ),
             )
         seen = {hit.value for hit in response.hits if isinstance(hit.value, str)}
         for ns in sorted(seen):

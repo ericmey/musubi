@@ -1134,14 +1134,17 @@ def test_retrieve_two_segment_strict_scope_403s_when_any_plane_is_out_of_scope(
     assert "curated" in detail or "eric/claude-code/curated" in detail
 
 
-def test_retrieve_three_segment_rejects_contradictory_planes_list(
+def test_retrieve_three_segment_concrete_ignores_planes_list(
     client: TestClient,
     auth: dict[str, str],
 ) -> None:
-    """A 3-segment namespace pins the plane; a `planes` list that
-    disagrees (the historical openclaw shape) would silently discard
-    the caller's intent. The router rejects it with 400 so the caller
-    sees the mismatch."""
+    """A 3-segment CONCRETE namespace pins the plane; the ``planes``
+    field is IGNORED for that shape. The pre-AUTH-001 contract
+    (reject inconsistent planes as 400) is replaced by the
+    single-source-of-truth contract: the 3-seg trailing plane
+    segment IS the plane, regardless of any client-supplied planes
+    list. Wildcard-plane 3-seg namespaces STILL use planes
+    (covered by the context tests)."""
     r = client.post(
         "/v1/retrieve",
         headers=auth,
@@ -1153,7 +1156,12 @@ def test_retrieve_three_segment_rejects_contradictory_planes_list(
             "limit": 5,
         },
     )
-    assert r.status_code == 400, r.text
+    # 3-seg concrete plane is the single source of truth; the
+    # supplied planes list is silently ignored. The call succeeds.
+    assert r.status_code == 200, (
+        f"3-seg concrete namespace must be accepted (200) even with "
+        f"a non-matching planes list; got {r.status_code} {r.text!r}"
+    )
 
 
 def test_retrieve_two_segment_unknown_plane_is_400(
