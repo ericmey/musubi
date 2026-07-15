@@ -1,0 +1,70 @@
+# RET-004 canonical scheduled-gate graded corpus (checksum-pinned in manifest.json).
+# Representative + multi-query. Documents are seeded via the production write seam into a fresh
+# run-scoped namespace; queries are scored per mode against the frozen NDCG/MRR/Recall/P@1 thresholds.
+# Includes a provisional-state target so the immediate-recall contract is exercised. Real quality
+# numbers come from the scheduled x86 TEI run; thresholds are frozen and never tuned to green.
+documents:
+  - key: livekit-restart
+    plane: episodic
+    state: matured
+    content: "To restart the livekit voice agent after a deploy: stop the systemd unit, clear the session cache, then start the unit and confirm it registers with the room server."
+  - key: livekit-noise
+    plane: episodic
+    state: matured
+    content: "General background on the livekit voice agent architecture and how rooms are allocated across regions."
+  - key: concept-promotion
+    plane: episodic
+    state: matured
+    content: "The procedure to promote a concept from episodic memory into curated knowledge: it must be matured, corroborated across at least two sessions, and pass the synthesis review."
+  - key: concept-noise
+    plane: episodic
+    state: matured
+    content: "A passing mention of curated knowledge in an unrelated discussion about vault sync timing."
+  - key: qdrant-prefetch
+    plane: episodic
+    state: matured
+    content: "Tuning the qdrant hybrid retrieval prefetch limit: raise it when recall on long-tail queries drops, but watch the p95 latency budget on the deep path."
+  - key: qdrant-noise
+    plane: episodic
+    state: matured
+    content: "Notes on qdrant snapshot backups and volume restore, unrelated to prefetch tuning."
+  - key: token-rotation-fresh
+    plane: episodic
+    state: provisional
+    content: "Just rotated the musubi presence token in 1Password and updated the service-account env; the new token is live as of this session."
+  - key: token-noise
+    plane: episodic
+    state: matured
+    content: "Historical note about 1Password vault organization and item naming conventions."
+
+queries:
+  - id: q-livekit
+    text: "how do I restart the livekit voice agent after a deploy"
+    mode: fast
+    relevant:
+      - key: livekit-restart
+        relevance: 3
+      - key: livekit-noise
+        relevance: 1
+  - id: q-promotion
+    text: "what is the procedure to promote a concept into curated knowledge"
+    mode: fast
+    relevant:
+      - key: concept-promotion
+        relevance: 3
+      - key: concept-noise
+        relevance: 1
+  - id: q-prefetch
+    text: "how should I tune the qdrant hybrid prefetch limit"
+    mode: deep
+    relevant:
+      - key: qdrant-prefetch
+        relevance: 3
+      - key: qdrant-noise
+        relevance: 1
+  - id: q-provisional-recall
+    text: "did we just rotate the musubi presence token"
+    mode: fast
+    relevant:
+      - key: token-rotation-fresh
+        relevance: 3

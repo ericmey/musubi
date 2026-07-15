@@ -124,10 +124,29 @@ class _ErrResult:
         return True
 
 
+class _DeepOkResult:
+    """Mirrors a deep DeepResult: ranked hits live on `.hits` (fast uses `.results`)."""
+
+    def __init__(self, hits: list[_Hit]) -> None:
+        self.hits = hits
+
+    @property
+    def value(self) -> _DeepOkResult:
+        return self
+
+    def is_ok(self) -> bool:
+        return True
+
+    def is_err(self) -> bool:
+        return False
+
+
 def test_hits_or_raise_extracts_ok_and_fails_loud_on_err() -> None:
-    """Regression for the bug the first live x86 run caught: is_ok/is_err are METHODS. An Err must
-    raise LiveGateUnavailable (fail loud), never fall through to `.value` and AttributeError."""
-    assert _hits_or_raise(_OkResult([_Hit("a"), _Hit("b")]), "q1") == ["a", "b"]
+    """Regression for two bugs the first live x86 run + local mechanism test caught: (1) is_ok/is_err
+    are METHODS — an Err must fail loud (LiveGateUnavailable), never fall to `.value`/AttributeError;
+    (2) fast hits are `.results`, deep hits are `.hits` — both must extract."""
+    assert _hits_or_raise(_OkResult([_Hit("a"), _Hit("b")]), "q1") == ["a", "b"]  # fast shape
+    assert _hits_or_raise(_DeepOkResult([_Hit("c"), _Hit("d")]), "q2") == ["c", "d"]  # deep shape
     with pytest.raises(LiveGateUnavailable, match="retrieval failed for query 'q1'"):
         _hits_or_raise(_ErrResult("empty_query"), "q1")
 

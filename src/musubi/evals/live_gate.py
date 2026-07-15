@@ -207,7 +207,17 @@ def _hits_or_raise(result: Any, query_id: Any) -> list[str]:
     fell through to ``result.value`` — the AttributeError the first live x86 run caught."""
     if result.is_err():
         raise LiveGateUnavailable(f"retrieval failed for query {query_id!r}: {result.error}")
-    return [hit.object_id for hit in result.value.results]
+    value = result.value
+    # Fast retrieval exposes the ranked hits as `.results`; deep exposes them as `.hits`. Support both
+    # so the same extractor drives fast and deep modes.
+    hits = getattr(value, "results", None)
+    if hits is None:
+        hits = getattr(value, "hits", None)
+    if hits is None:
+        raise LiveGateUnavailable(
+            f"unexpected retrieval result shape (no results/hits) for query {query_id!r}"
+        )
+    return [hit.object_id for hit in hits]
 
 
 def build_settings_retriever() -> Retriever:

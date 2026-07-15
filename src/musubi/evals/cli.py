@@ -5,18 +5,16 @@ import math
 import sys
 from pathlib import Path
 
-import yaml
 from pydantic import ValidationError
 
 from musubi.evals.corpus import verify_manifest
 from musubi.evals.live_gate import (
     LiveGateUnavailable,
-    build_settings_retriever,
+    build_settings_backends,
     enforce_thresholds,
-    run_live_gate,
 )
 from musubi.evals.runner import run_smoke_gate
-from musubi.evals.schema import GoldenQuery, SmokeFixture
+from musubi.evals.schema import SmokeFixture
 
 
 def _write(message: str) -> None:
@@ -30,12 +28,16 @@ def main() -> None:
     args = parser.parse_args()
 
     data_dir = args.data_dir
+
+    if args.command == "scheduled":
+        _run_scheduled(data_dir)  # self-seeding live gate; raises SystemExit internally
+        return
+
     manifest_path = data_dir / "manifest.json"
-    corpus_path = data_dir / "corpus.yaml"
     smoke_fixture_path = data_dir / "smoke_fixture.json"
     baseline_path = data_dir / "baseline.json"
 
-    required_input = smoke_fixture_path if args.command == "smoke" else corpus_path
+    required_input = smoke_fixture_path
     if not manifest_path.exists() or not required_input.exists():
         _write(f"Missing {required_input.name} or manifest.json.")
         raise SystemExit(1)
@@ -89,42 +91,42 @@ def main() -> None:
         _write(f"Smoke gate passed. ndcg@10={ndcg}")
         raise SystemExit(0)
 
-    golden_queries: list[GoldenQuery] = []
-    try:
-        with open(corpus_path) as f:
-            docs = list(yaml.safe_load_all(f))
-        for doc in docs:
-            if doc:
-                golden_queries.append(GoldenQuery.model_validate(doc))
-    except (OSError, yaml.YAMLError, ValidationError, ValueError, TypeError) as exc:
-        _write(f"Schema validation failed: {exc}")
-        raise SystemExit(1) from exc
 
-    if args.command == "scheduled":
-        queries = [
-            {
-                "id": query.id,
-                "text": query.text,
-                "mode": query.mode,
-                "namespace": query.namespace,
-                "relevant": query.relevant,
-            }
-            for query in golden_queries
-        ]
-        try:
-            retriever = build_settings_retriever()
-            by_mode = asyncio.run(run_live_gate(queries, retriever))
-            enforce_thresholds(by_mode)
-        except LiveGateUnavailable as exc:
-            # No TEI stack (or it dropped mid-run): FAIL LOUD — never a fabricated or empty pass.
-            # Real quality numbers are proven on the scheduled x86 TEI CI, not on a TEI-less box.
-            _write(f"Scheduled live gate unavailable — fail-loud, no fabricated numbers: {exc}")
-            raise SystemExit(3) from exc
-        except ValueError as exc:
-            _write(f"Scheduled live gate FAILED quality thresholds: {exc}")
-            raise SystemExit(1) from exc
-        _write(f"Scheduled live gate passed all mode thresholds: {by_mode}")
-        raise SystemExit(0)
+def _run_scheduled(data_dir: Path) -> None:
+    """The self-seeding scheduled live gate: seed the checksum-pinned graded corpus into a fresh
+    run-scoped namespace via the production write seam, measure per-mode metrics, enforce the FROZEN
+    thresholds, tear down the run data. Fail loud without TEI or on any seed/visibility/corpus error;
+    on a threshold MISS, print the RAW per-mode results + corpus attribution — never tune to green."""
+    from musubi.evals.scheduled_gate import (
+        ScheduledGateFailure,
+        new_run_id,
+        run_scheduled_seeded_gate,
+    )
+
+    try:
+        backends = build_settings_backends()
+    except LiveGateUnavailable as exc:
+        _write(f"Scheduled gate unavailable — fail-loud, no fabricated numbers: {exc}")
+        raise SystemExit(3) from exc
+
+    run_id = new_run_id()
+    try:
+        by_mode = asyncio.run(run_scheduled_seeded_gate(backends, data_dir=data_dir, run_id=run_id))
+    except (LiveGateUnavailable, ScheduledGateFailure) as exc:
+        _write(f"Scheduled gate failed (fail-loud, no fabricated numbers): {exc}")
+        raise SystemExit(3) from exc
+
+    try:
+        enforce_thresholds(by_mode)
+    except ValueError as exc:
+        # Below threshold: report RAW per-mode results + corpus attribution, never tuned to green.
+        _write(
+            f"Scheduled gate BELOW thresholds (raw results, NOT tuned) — "
+            f"corpus=scheduled_corpus.yaml run={run_id} metrics={by_mode} :: {exc}"
+        )
+        raise SystemExit(1) from exc
+    _write(f"Scheduled gate PASSED — corpus=scheduled_corpus.yaml run={run_id} metrics={by_mode}")
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":

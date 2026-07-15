@@ -286,26 +286,13 @@ def test_scheduled_command_fails_loud_without_tei(
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    corpus = data_dir / "corpus.yaml"
-    corpus.write_text(
-        "id: q1\ntext: query\nrelevant:\n- object_id: a\n  relevance: 3\n"
-        "mode: fast\nnamespace: test/default/blended\n",
-        encoding="utf-8",
-    )
 
-    import hashlib
-
-    checksum = hashlib.sha256(corpus.read_bytes()).hexdigest()
-    (data_dir / "manifest.json").write_text(
-        json.dumps({"name": "scheduled", "files": {"corpus.yaml": checksum}}),
-        encoding="utf-8",
-    )
-
-    # Model a TEI-less environment: the live backend build fails loud.
+    # Model a TEI-less environment: the live backend build fails loud (this happens BEFORE any corpus
+    # seeding, so the self-seeding gate never touches Qdrant).
     def _tei_unavailable() -> None:
         raise LiveGateUnavailable("TEI dense endpoint unavailable: connect error")
 
-    monkeypatch.setattr(cli, "build_settings_retriever", _tei_unavailable)
+    monkeypatch.setattr(cli, "build_settings_backends", _tei_unavailable)
     monkeypatch.setattr(sys, "argv", ["musubi-evals", "scheduled", "--data-dir", str(data_dir)])
     with pytest.raises(SystemExit) as exc_info:
         cli.main()
