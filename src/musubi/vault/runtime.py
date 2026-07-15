@@ -15,14 +15,22 @@ refactor is a future ``musubi.runtime`` module that all three
 entrypoints consume. This file is the smallest change that closes
 the live-reachability gap.
 
-The TEI composite glue (``_TEICompositeEmbedder``, defined in
-``src/musubi/vault/watcher.py``) IS imported and used here: the
-factory wraps it in ``ChunkedEmbedder`` so sparse inputs > 510
-tokens are sliding-window-chunked + max-pooled before they hit
-tei-sparse (SPLADE-v3 has a hard 512-token model cap). The same
-adapter class is duplicated in ``src/musubi/api/bootstrap.py`` and
-``src/musubi/lifecycle/runner.py``; promoting to a shared home is the
-natural extraction point when a fourth caller needs it.
+The TEI composite glue (``_TEICompositeEmbedder``, defined LOCALLY
+in this module — NOT imported from ``musubi.vault.watcher``) is
+instantiated here and wrapped in ``ChunkedEmbedder`` so sparse
+inputs > 510 tokens are sliding-window-chunked + max-pooled before
+they hit tei-sparse (SPLADE-v3 has a hard 512-token model cap). The
+composite lives in the runtime module (NOT in the entrypoint
+module) so the watcher's ``python -m musubi.vault.watcher`` never
+re-loads the entrypoint via a qualified import to fetch this
+class — Python executes ``python -m musubi.vault.watcher`` under
+``musubi.vault.watcher.__main__``, and a qualified
+``import musubi.vault.watcher`` would return the ``__main__``
+module (not the regular module), creating duplicate module state.
+The same adapter class is duplicated in
+``src/musubi/api/bootstrap.py`` and
+``src/musubi/lifecycle/runner.py``; promoting to a shared home is
+the natural extraction point when a fourth caller needs it.
 """
 
 from __future__ import annotations
@@ -30,7 +38,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from musubi.config import Settings, get_settings
 from musubi.embedding.chunked import ChunkedEmbedder
@@ -45,6 +53,34 @@ if TYPE_CHECKING:
     from musubi.embedding.base import Embedder
 
 log = logging.getLogger(__name__)
+
+
+class _TEICompositeEmbedder:
+    """Embedder Protocol impl backed by three TEI clients.
+
+    Lives in the runtime module (NOT in :mod:`musubi.vault.watcher`)
+    so the watcher's ``python -m musubi.vault.watcher`` entrypoint
+    never loads the watcher module via a qualified import to fetch
+    this class — that would re-enter the entrypoint module as
+    ``__main__`` and create duplicate module state. The same
+    adapter is duplicated in :mod:`musubi.api.bootstrap` and
+    :mod:`musubi.lifecycle.runner`; promoting to a shared home is
+    the natural extraction point when a fourth caller needs it.
+    """
+
+    def __init__(self, *, dense: Any, sparse: Any, reranker: Any) -> None:
+        self._dense = dense
+        self._sparse = sparse
+        self._reranker = reranker
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        return await self._dense.embed_dense(texts)  # type: ignore[no-any-return]
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        return await self._sparse.embed_sparse(texts)  # type: ignore[no-any-return]
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return await self._reranker.rerank(query, candidates)  # type: ignore[no-any-return]
 
 
 class VaultRuntimeError(RuntimeError):
@@ -86,8 +122,15 @@ def build_vault_sync_runtime(*, settings: Settings | None = None) -> VaultSyncRu
             (the standard musubi-core factory).
 
     Raises:
-        VaultRuntimeError: if any required setting is missing or the
-            graph cannot be constructed.
+        VaultRuntimeError: only when ``settings.vault_path`` is
+            missing or invalid (the watcher must refuse to start
+            without a vault root). Dependency construction errors
+            (Qdrant unreachable, TEI probe failure, coordinator /
+            sink construction failure, etc.) propagate typed and
+            AS-IS so the caller can decide whether to retry,
+            restart the supervisor, or surface a typed failure to
+            the systemd journal without a wrapped ``VaultRuntimeError``
+            hiding the underlying exception type.
     """
     if settings is None:
         settings = get_settings()
@@ -119,8 +162,19 @@ def build_vault_sync_runtime(*, settings: Settings | None = None) -> VaultSyncRu
     # (SPLADE-v3 has a hard 512-token model cap). Same wrap the API
     # server uses; without it, a long-content file delete would 413.
     # See musubi#367.
-    from musubi.vault.watcher import _TEICompositeEmbedder
-
+    #
+    # The composite glue (``_TEICompositeEmbedder``) is defined
+    # LOCALLY in this module — NOT imported from ``musubi.vault.watcher``.
+    # That prevents the watcher entrypoint module from being
+    # re-loaded via a qualified import when the runtime factory is
+    # constructed inside the watcher's ``__main__`` block (Python
+    # executes ``python -m musubi.vault.watcher`` under
+    # ``musubi.vault.watcher.__main__``, and a qualified
+    # ``import musubi.vault.watcher`` would return the
+    # ``__main__`` module, not the regular module — duplicate
+    # module state). Same adapter class lives duplicated in
+    # ``src/musubi/api/bootstrap.py`` and
+    # ``src/musubi/lifecycle/runner.py``.
     embedder: Embedder = ChunkedEmbedder(
         _TEICompositeEmbedder(dense=dense, sparse=sparse, reranker=reranker)
     )

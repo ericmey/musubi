@@ -1064,3 +1064,126 @@ def test_systemd_command_path_reaches_main_behaviorally(
         f"Pre-fix modules never reach this point because they have no "
         f"main() and no __main__ block."
     )
+
+
+# --------------------------------------------------------------------------- #
+# VAULT-003 round-5 (Yua 17:50): runtime module is self-contained
+# --------------------------------------------------------------------------- #
+
+
+def test_runtime_module_does_not_import_watcher() -> None:
+    """VAULT-003 round-5: the watcher entrypoint module
+    (``musubi.vault.watcher``) is executed via
+    ``python -m musubi.vault.watcher``. To prevent the
+    ``__main__`` re-entry bug (Python executes ``python -m
+    musubi.vault.watcher`` under ``musubi.vault.watcher.__main__``,
+    and a qualified ``import musubi.vault.watcher`` would return the
+    ``__main__`` module — not the regular module — creating
+    duplicate module state), the runtime module
+    (``musubi.vault.runtime``) MUST NOT import
+    ``musubi.vault.watcher`` at any point.
+
+    This test runs a TRUE COLD-START subprocess (Python ``-c``) so
+    other tests that have already imported ``musubi.vault.watcher``
+    (e.g. ``test_systemd_command_path_reaches_main_behaviorally``
+    uses ``runpy.run_module`` which leaves the module in
+    ``sys.modules``) cannot pollute the constraint. The subprocess
+    prints the sorted list of ``musubi.vault.*`` modules present
+    in ``sys.modules`` AFTER ``import musubi.vault.runtime``; we
+    assert ``musubi.vault.watcher`` is NOT in that list.
+    """
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path as _Path
+
+    repo_root = _Path(__file__).resolve().parents[2]
+    script = (
+        "import sys, json; "
+        "import musubi.vault.runtime; "
+        "mods = sorted(k for k in sys.modules if k.startswith('musubi.vault')); "
+        "sys.stdout.write(json.dumps(mods) + chr(10))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+    assert result.returncode == 0, f"cold-start subprocess failed: stderr={result.stderr!r}"
+    mods = json.loads(result.stdout.strip())
+    assert "musubi.vault.runtime" in mods, (
+        f"sanity: runtime module must be in sys.modules after import; got: {mods!r}"
+    )
+    assert "musubi.vault.watcher" not in mods, (
+        f"importing musubi.vault.runtime in a cold-start subprocess "
+        f"must NOT pull musubi.vault.watcher into sys.modules (the "
+        f"runtime factory would otherwise re-load the entrypoint "
+        f"module under __main__ when invoked from `python -m "
+        f"musubi.vault.watcher`). sys.modules musubi.vault.* = {mods!r}"
+    )
+
+
+def test_runtime_factory_does_not_import_watcher() -> None:
+    """VAULT-003 round-5: same constraint as above, but verified
+    during the FACTORY CALL. The factory's import graph stays
+    inside ``musubi.vault.runtime`` — no transitive
+    ``import musubi.vault.watcher``. We construct the factory
+    inside a TRUE COLD-START subprocess (so other tests that have
+    already imported ``musubi.vault.watcher`` via ``runpy.run_module``
+    cannot pollute the constraint) and re-assert the constraint
+    after the call.
+    """
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path as _Path
+
+    repo_root = _Path(__file__).resolve().parents[2]
+    # Stub the factory collaborators inside the subprocess so the
+    # call doesn't need a real Qdrant / TEI / coordinator. We embed
+    # the stubs as a Python heredoc.
+    script = (
+        "import json, sys; "
+        "from types import SimpleNamespace; "
+        "from unittest.mock import MagicMock; "
+        "import musubi.vault.runtime as rt; "
+        "rt.build_qdrant_client = lambda **_kw: MagicMock(name='qdrant'); "
+        "rt.ChunkedEmbedder = lambda _c: MagicMock(name='embedder'); "
+        "rt.LifecycleTransitionCoordinator = lambda **_kw: MagicMock(name='coord'); "
+        "rt.LifecycleEventSink = lambda **_kw: MagicMock(name='sink'); "
+        "rt.WriteLog = lambda **_kw: MagicMock(name='wlog'); "
+        "rt.CuratedPlane = lambda **_kw: MagicMock(name='cplane'); "
+        "import musubi.store as _store; "
+        "_store.bootstrap = lambda _q: None; "
+        "settings = SimpleNamespace("
+        "  vault_path='/tmp', "
+        "  qdrant_host='localhost', qdrant_port=6333, "
+        "  qdrant_api_key=SimpleNamespace(get_secret_value=lambda: 'k'), "
+        "  musubi_allow_plaintext=True, "
+        "  tei_dense_url='http://a', tei_sparse_url='http://b', tei_reranker_url='http://c', "
+        "  lifecycle_sqlite_path='/tmp/lc.db', "
+        "  lifecycle_pending_cap=1, lifecycle_lease_ttl_s=1.0, "
+        "  lifecycle_backoff_base_s=1.0, lifecycle_backoff_max_s=1.0, "
+        "  lifecycle_sqlite_busy_timeout_ms=1, "
+        "); "
+        "rt.build_vault_sync_runtime(settings=settings); "
+        "mods = sorted(k for k in sys.modules if k.startswith('musubi.vault')); "
+        "sys.stdout.write(json.dumps(mods) + chr(10))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+    assert result.returncode == 0, f"cold-start subprocess failed: stderr={result.stderr!r}"
+    mods = json.loads(result.stdout.strip())
+    assert "musubi.vault.watcher" not in mods, (
+        f"calling build_vault_sync_runtime in a cold-start "
+        f"subprocess must NOT pull musubi.vault.watcher into "
+        f"sys.modules (would re-load the entrypoint module under "
+        f"__main__ when invoked from `python -m "
+        f"musubi.vault.watcher`). sys.modules musubi.vault.* = "
+        f"{mods!r}"
+    )

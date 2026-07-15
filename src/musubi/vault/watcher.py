@@ -86,33 +86,6 @@ class _TokenBucket:
         return False
 
 
-class _TEICompositeEmbedder:
-    """Embedder Protocol impl backed by three TEI clients.
-
-    Duplicated from :mod:`musubi.api.bootstrap` and
-    :mod:`musubi.lifecycle.runner` deliberately — the vault watcher
-    boots without touching either dependency tree, and pulling
-    either into this module would break the existing layer rules.
-    The class itself is 20 lines of glue; promote to a shared home
-    only when a fourth caller needs it (the runtime module that
-    closes the cross-process graph is the natural extraction point).
-    """
-
-    def __init__(self, *, dense: Any, sparse: Any, reranker: Any) -> None:
-        self._dense = dense
-        self._sparse = sparse
-        self._reranker = reranker
-
-    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
-        return await self._dense.embed_dense(texts)  # type: ignore[no-any-return]
-
-    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
-        return await self._sparse.embed_sparse(texts)  # type: ignore[no-any-return]
-
-    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
-        return await self._reranker.rerank(query, candidates)  # type: ignore[no-any-return]
-
-
 class WatcherHandler(FileSystemEventHandler):
     """Bridge between watchdog events and our async sync logic."""
 
