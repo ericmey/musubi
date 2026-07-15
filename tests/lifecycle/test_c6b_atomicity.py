@@ -6088,10 +6088,10 @@ _R11_REASON = (
 )
 _R12_REASON = (
     "pre-LIFE-010 expected_version was warn-only (last writer wins), so a stale writer clobbered. "
-    "LIFE-010 / H7 (Issue #556, PR #568) shipped the hard fence: stale expected_version now "
-    "returns Err(version_fence_violation) BEFORE legality or coordinator.apply, and the "
-    "coordinator never sees a no-op mutation. R12 still validates the historic red; the "
-    "shipped contract is the green guarantee."
+    "LIFE-010 / H7 (Issue #556, slice slice-life010-transition-conflict) shipped the hard "
+    "fence: stale expected_version now returns Err(version_fence_violation) BEFORE legality or "
+    "coordinator.apply, and the coordinator never sees a no-op mutation. R12 still validates "
+    "the historic red; the shipped contract is the green guarantee."
 )
 
 
