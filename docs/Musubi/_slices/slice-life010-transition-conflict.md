@@ -4,6 +4,8 @@ slice_id: slice-life010-transition-conflict
 status: in-review
 owner: shiori@home
 phase: "Lifecycle"
+section: 06-ingestion
+type: slice
 tags: [section/slices, status/in-review, type/slice]
 updated: 2026-07-15
 reviewed: false
@@ -26,6 +28,9 @@ Enforces hard-fence semantic validation for `expected_version` mismatches during
 - `owns_paths`: 
   - `src/musubi/lifecycle/transitions.py`
   - `tests/lifecycle/test_lifecycle.py`
+  - `docs/Musubi/13-decisions/c6b-lifecycle-atomicity-design.md`
+  - `docs/Musubi/_slices/slice-lifecycle-engine.md`
+  - `docs/Musubi/_slices/slice-life010-transition-conflict.md`
 
 ## Test Contract
 1. `test_concurrent_transitions_stale_expected_version_fence_violation`

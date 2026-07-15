@@ -382,7 +382,6 @@ async def test_event_written_for_every_transition(
     assert [e.to_state for e in events_for_object] == ["matured", "demoted", "matured"]
 
 
-@pytest.mark.anyio
 async def test_concurrent_transitions_stale_expected_version_fence_violation(
     plane: EpisodicPlane,
     qdrant: QdrantClient,
@@ -392,7 +391,7 @@ async def test_concurrent_transitions_stale_expected_version_fence_violation(
 ) -> None:
     """LIFE-010 — concurrent transitions: stale expected_version hard-fenced."""
     saved = await _seed_matured(plane, ns, _coordinator(qdrant, sink), content="concurrent")
-    
+
     first = transition(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
@@ -423,17 +422,17 @@ async def test_concurrent_transitions_stale_expected_version_fence_violation(
         lineage_updates=LineageUpdates(superseded_by="0" * 27),
         sink=sink,
     )
-    
+
     # Must return version_fence_violation immediately
     assert isinstance(second, Err)
     assert second.error.code == "version_fence_violation"
-    
+
     # Prove zero coordinator dispatches or sink writes
     spy_transition.assert_not_called()
     spy_sink.assert_not_called()
-    
+
     assert sink.read_all() == snapshot_events
-    
+
     # Prove no mutation to the state, version, and lineage
     reloaded = await plane.get(namespace=ns, object_id=saved.object_id)
     assert reloaded is not None
