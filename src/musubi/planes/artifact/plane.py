@@ -12,19 +12,22 @@ from typing import Any
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
+from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.planes.artifact.chunking import get_chunker
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
 from musubi.types.common import (
     KSUID,
+    Err,
     LifecycleState,
     Namespace,
+    Result,
     epoch_of,
     generate_ksuid,
     utc_now,
 )
-from musubi.types.lifecycle_event import LifecycleEvent
 
 # Plane-specific point namespace UUID
 _POINT_NS = uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000004")
@@ -269,35 +272,26 @@ class ArtifactPlane:
         to_state: LifecycleState,
         actor: str,
         reason: str,
-    ) -> tuple[SourceArtifact, LifecycleEvent]:
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> Result[TransitionResult | TransitionPending, TransitionError]:
         current = await self.get(namespace=namespace, object_id=object_id)
         if current is None:
-            raise LookupError(f"artifact {object_id!r} not found in namespace {namespace!r}")
-
-        event = LifecycleEvent(
+            return Err(
+                error=TransitionError(
+                    code="not_found",
+                    message=f"artifact {object_id!r} not found in namespace {namespace!r}",
+                    to_state=to_state,
+                )
+            )
+        return transition(
+            self._client,
+            coordinator=coordinator,
             object_id=object_id,
-            object_type="artifact",
-            namespace=namespace,
-            from_state=current.state,
-            to_state=to_state,
+            target_state=to_state,
             actor=actor,
             reason=reason,
+            expected_version=current.version,
         )
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            state=to_state,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        updated = SourceArtifact.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated, event
 
 
 __all__ = ["ArtifactPlane"]

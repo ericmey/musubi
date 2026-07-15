@@ -44,7 +44,7 @@ Everything here assumes single-host v1 ([[08-deployment/index]]). Multi-host ops
 | Artifacts (metadata) | Qdrant | — | Qdrant snapshot | — |
 | Artifact chunks | Qdrant (text+vector) | (rebuildable from blob) | Qdrant snapshot | Restore or re-chunk |
 | Thoughts | Qdrant | — | Qdrant snapshot | — |
-| Lifecycle events | sqlite (`lifecycle-work.sqlite`) | — | sqlite backup cron | Restore file |
+| Lifecycle events | sqlite (`lifecycle/work.sqlite`) | — | sqlite backup cron | Restore file |
 | Write-log (vault echo prevention) | sqlite | — | sqlite backup cron | — |
 | Config | `/etc/musubi/` | — | Ansible repo | Re-run playbook |
 

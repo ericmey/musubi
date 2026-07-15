@@ -21,13 +21,14 @@ EXPECTED_SERVICES = {
     "tei-reranker",
     "ollama",
     "core",
+    "lifecycle-worker",
 }
 GPU_SERVICES = {"tei-dense", "tei-sparse", "tei-reranker", "ollama"}
 CORE_DEPENDENCIES = {"qdrant", "tei-dense", "tei-sparse", "tei-reranker", "ollama"}
 REQUIRED_BIND_MOUNTS = {
     "/var/lib/musubi/vault",
     "/var/lib/musubi/artifact-blobs",
-    "/var/lib/musubi/lifecycle-work.sqlite",
+    "/var/lib/musubi/lifecycle",
     "/var/log/musubi",
 }
 

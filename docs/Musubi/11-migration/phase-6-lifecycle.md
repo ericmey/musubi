@@ -35,7 +35,7 @@ See [[06-ingestion/lifecycle-engine]]. Single-host, single-scheduler via `fcntl.
 
 ### LifecycleEvent table
 
-Create in `lifecycle-work.sqlite`:
+Create in `lifecycle/work.sqlite`:
 
 ```sql
 CREATE TABLE lifecycle_events (

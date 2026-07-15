@@ -53,6 +53,7 @@ from musubi.embedding import (
     TEIRerankerClient,
     TEISparseClient,
 )
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
 from musubi.planes.curated import CuratedPlane
@@ -240,16 +241,18 @@ def bootstrap_production_app(
     app.dependency_overrides[get_thoughts_plane] = lambda: ThoughtsPlane(
         client=qdrant, embedder=embedder
     )
-    # Lifecycle service: surface a minimal handle for the /v1/lifecycle/*
-    # endpoints. The lifecycle worker itself is a separate process
-    # (slice-lifecycle-*); the API just needs a queryable handle for the
-    # status endpoints. Today that's a thin wrapper around Qdrant + the
-    # event ledger; the bootstrap supplies the same dict every consumer
-    # uses so the surface is uniform.
-    app.dependency_overrides[get_lifecycle_service] = lambda: {
-        "qdrant": qdrant,
-        "embedder": embedder,
-    }
+    # Exactly one app-lifetime coordinator. API callers submit durable
+    # transition intents through it; reconciliation remains worker-only.
+    coordinator = LifecycleTransitionCoordinator(
+        client=qdrant,
+        db_path=settings.lifecycle_sqlite_path,
+        pending_cap=settings.lifecycle_pending_cap,
+        lease_ttl=settings.lifecycle_lease_ttl_s,
+        backoff_base_s=settings.lifecycle_backoff_base_s,
+        backoff_max_s=settings.lifecycle_backoff_max_s,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    app.dependency_overrides[get_lifecycle_service] = lambda: coordinator
 
     # Close the TEI clients' pooled httpx.AsyncClient at shutdown so
     # docker-compose stop / k8s termination drains cleanly (and tests

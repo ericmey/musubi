@@ -24,15 +24,33 @@ import json
 import pytest
 import yaml
 from fastapi.testclient import TestClient
+from qdrant_client import QdrantClient
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.curated import CuratedPlane
 from musubi.planes.episodic import EpisodicPlane
+from musubi.settings import Settings
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
 
 # ---------------------------------------------------------------------------
 # Shape — bullets 1-3
 # ---------------------------------------------------------------------------
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, api_settings: Settings) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(
+        client=qdrant, db_path=api_settings.lifecycle_sqlite_path
+    )
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
 
 
 def test_openapi_generated_matches_pydantic(client: TestClient) -> None:
@@ -734,6 +752,7 @@ def test_retrieve_endpoint_routes_to_plane(
             to_state="matured",
             actor="seed",
             reason="seed",
+            coordinator=_coord(),
         )
         return saved.object_id
 
@@ -766,6 +785,7 @@ def _seed_episodic_batch(episodic: EpisodicPlane, namespace: str, fragments: lis
                 to_state="matured",
                 actor="seed",
                 reason="seed",
+                coordinator=_coord(),
             )
 
     asyncio.run(_seed())

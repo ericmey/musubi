@@ -27,12 +27,14 @@ from musubi.api.dependencies import (
     get_curated_plane,
     get_embedder,
     get_episodic_plane,
+    get_lifecycle_service,
     get_qdrant_client,
     get_reranker,
     get_settings_dep,
     get_thoughts_plane,
 )
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
 from musubi.planes.curated import CuratedPlane
@@ -145,6 +147,16 @@ def app_factory(
     app.dependency_overrides[get_concept_plane] = lambda: concept
     app.dependency_overrides[get_artifact_plane] = lambda: artifact
     app.dependency_overrides[get_thoughts_plane] = lambda: thoughts
+    coordinator = LifecycleTransitionCoordinator(
+        client=qdrant,
+        db_path=api_settings.lifecycle_sqlite_path,
+        pending_cap=api_settings.lifecycle_pending_cap,
+        lease_ttl=api_settings.lifecycle_lease_ttl_s,
+        backoff_base_s=api_settings.lifecycle_backoff_base_s,
+        backoff_max_s=api_settings.lifecycle_backoff_max_s,
+        busy_timeout_ms=api_settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    app.dependency_overrides[get_lifecycle_service] = lambda: coordinator
     return app
 
 

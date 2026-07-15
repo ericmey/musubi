@@ -230,8 +230,14 @@ async def trigger_synthesis(
         )
 
     settings = get_settings()
-    cursor = SynthesisCursor(db_path=settings.lifecycle_sqlite_path)
-    sink = LifecycleEventSink(db_path=settings.lifecycle_sqlite_path)
+    cursor = SynthesisCursor(
+        db_path=settings.lifecycle_sqlite_path,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    sink = LifecycleEventSink(
+        db_path=settings.lifecycle_sqlite_path,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
     ollama = _NoOpOllamaClient()
 
     report = await synthesis_run(

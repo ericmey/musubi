@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.13.4](https://github.com/ericmey/musubi/compare/v1.13.3...v1.13.4) (2026-07-14)
+
+
+### Bug Fixes
+
+* **c6:** make lifecycle event acceptance durable ([#470](https://github.com/ericmey/musubi/issues/470)) ([acf97dd](https://github.com/ericmey/musubi/commit/acf97ddf65d0fc00a5c8e184982bf16ca1e04173))
+
+## [1.13.3](https://github.com/ericmey/musubi/compare/v1.13.2...v1.13.3) (2026-07-14)
+
+
+### Bug Fixes
+
+* **deps:** clear fixed-version high findings ([#466](https://github.com/ericmey/musubi/issues/466)) ([17c002f](https://github.com/ericmey/musubi/commit/17c002f110858b11048f1509fc69613632c72f33))
+
+## [1.13.2](https://github.com/ericmey/musubi/compare/v1.13.1...v1.13.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **livekit:** preserve LiveKit transcript content on fallback write path ([#462](https://github.com/ericmey/musubi/issues/462)) ([bb282ed](https://github.com/ericmey/musubi/commit/bb282ed643049ac56d28a5eaaea9e8ccfda00030))
+
+## [1.13.1](https://github.com/ericmey/musubi/compare/v1.13.0...v1.13.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **tc-coverage:** resolve module variable xfail reasons ([#458](https://github.com/ericmey/musubi/issues/458)) ([b29f99b](https://github.com/ericmey/musubi/commit/b29f99b37e52c94c4fd555dd03f0c2dbf8dbdff6))
+
 ## [1.13.0](https://github.com/ericmey/musubi/compare/v1.12.0...v1.13.0) (2026-07-13)
 
 

@@ -18,7 +18,7 @@ from typing import Any, Protocol, cast
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
-from musubi.lifecycle import LifecycleEventSink
+from musubi.lifecycle import LifecycleEventSink, store
 from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.observability import default_registry
 from musubi.planes.concept import ConceptPlane
@@ -173,40 +173,6 @@ def _threshold_cluster(
 # Cursor
 # ---------------------------------------------------------------------------
 
-_CURSOR_SCHEMA = """
--- v1 cursor: per-namespace high-water mark. Left in place for any code
--- that still consults it, but new code (v1.5.5+) uses
--- `synthesis_family_cursor` keyed on identity_family.
-CREATE TABLE IF NOT EXISTS synthesis_cursor (
-    namespace TEXT PRIMARY KEY,
-    last_processed_epoch REAL NOT NULL
-);
-
--- v2 cursor: per-identity-family. Federates synthesis across substrates
--- (aoi/voice + aoi/command-chair share one cursor for identity_family="aoi").
-CREATE TABLE IF NOT EXISTS synthesis_family_cursor (
-    identity_family TEXT PRIMARY KEY,
-    last_processed_epoch REAL NOT NULL
-);
-
--- Candidate pool: memories that have been seen but haven't yet
--- participated in a successful cluster. Carried forward across runs
--- (within a TTL window) so slow-accumulating patterns can eventually
--- cluster as more peer memories arrive — fixing the cursor-skip flaw
--- where memories that didn't cluster on first pass were lost forever.
-CREATE TABLE IF NOT EXISTS synthesis_candidates (
-    identity_family TEXT NOT NULL,
-    memory_object_id TEXT NOT NULL,
-    first_seen_epoch REAL NOT NULL,
-    last_attempt_epoch REAL NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (identity_family, memory_object_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_candidates_age
-    ON synthesis_candidates(identity_family, first_seen_epoch);
-"""
-
 
 class SynthesisCursor:
     """Tracks synthesis state across runs.
@@ -233,14 +199,17 @@ class SynthesisCursor:
     `<tenant>/<presence>` reduce to `<tenant>` for cursor lookup.
     """
 
-    def __init__(self, *, db_path: Path) -> None:
+    def __init__(
+        self, *, db_path: Path, busy_timeout_ms: int = store.DEFAULT_BUSY_TIMEOUT_MS
+    ) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._busy_timeout_ms = busy_timeout_ms
         with self._connect() as conn:
-            conn.executescript(_CURSOR_SCHEMA)
+            store.ensure_schema(conn)
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self._db_path))
+        return store.connect(self._db_path, busy_timeout_ms=self._busy_timeout_ms)
 
     @staticmethod
     def _family_of(value: str) -> str:

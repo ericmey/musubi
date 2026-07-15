@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
 from qdrant_client import QdrantClient
 
 from musubi.embedding import FakeEmbedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+from musubi.lifecycle.transitions import TransitionResult
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.artifact.chunking import (
     JsonChunker,
@@ -20,7 +23,7 @@ from musubi.planes.artifact.chunking import (
 )
 from musubi.store import bootstrap
 from musubi.types.artifact import SourceArtifact
-from musubi.types.common import epoch_of, generate_ksuid, utc_now
+from musubi.types.common import Ok, epoch_of, generate_ksuid, utc_now
 
 
 @pytest.fixture
@@ -43,6 +46,26 @@ def fake() -> FakeEmbedder:
 @pytest.fixture
 def plane(qdrant: QdrantClient, fake: FakeEmbedder) -> ArtifactPlane:
     return ArtifactPlane(client=qdrant, embedder=fake)
+
+
+_COORDINATOR: LifecycleTransitionCoordinator | None = None
+
+
+@pytest.fixture(autouse=True)
+def _install_coordinator(qdrant: QdrantClient, tmp_path: Path) -> None:
+    global _COORDINATOR
+    _COORDINATOR = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+
+
+def _coord() -> LifecycleTransitionCoordinator:
+    assert _COORDINATOR is not None
+    return _COORDINATOR
+
+
+def _final(result: object) -> TransitionResult:
+    assert isinstance(result, Ok)
+    assert isinstance(result.value, TransitionResult)
+    return result.value
 
 
 def _make_artifact(chunker: str = "token-sliding-v1") -> SourceArtifact:
@@ -243,13 +266,19 @@ async def test_artifact_state_transitions_monotone(plane: ArtifactPlane) -> None
     await plane.create(art)
 
     # Default is "matured". Let's transition to "archived"
-    updated, event = await plane.transition(
-        namespace=art.namespace,
-        object_id=art.object_id,
-        to_state="archived",
-        actor="operator",
-        reason="test",
+    outcome = _final(
+        await plane.transition(
+            namespace=art.namespace,
+            object_id=art.object_id,
+            to_state="archived",
+            actor="operator",
+            reason="test",
+            coordinator=_coord(),
+        )
     )
+    updated = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert updated is not None
+    event = outcome.event
     assert updated.state == "archived"
     assert event.to_state == "archived"
     assert updated.version == 2
@@ -261,13 +290,18 @@ async def test_archive_marks_state_but_keeps_blob(plane: ArtifactPlane) -> None:
     await plane.create(art)
     await plane.index(art, "Some chunk content")
 
-    updated, _ = await plane.transition(
-        namespace=art.namespace,
-        object_id=art.object_id,
-        to_state="archived",
-        actor="operator",
-        reason="test",
+    _final(
+        await plane.transition(
+            namespace=art.namespace,
+            object_id=art.object_id,
+            to_state="archived",
+            actor="operator",
+            reason="test",
+            coordinator=_coord(),
+        )
     )
+    updated = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert updated is not None
     assert updated.state == "archived"
 
     # Chunks are still present
