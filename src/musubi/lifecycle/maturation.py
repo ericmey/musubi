@@ -51,6 +51,7 @@ Architecture decisions:
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -61,6 +62,7 @@ from typing import Any, Protocol
 from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
+from musubi.embedding.base import Embedder
 from musubi.lifecycle import store
 from musubi.lifecycle.coordinator import (
     LifecycleTransitionCoordinator,
@@ -90,7 +92,6 @@ _DEFAULT_LLM_BATCH = 10
 
 _LIFECYCLE_ACTOR = "lifecycle-worker"
 """Actor recorded on every transition this module emits — matches the spec."""
-
 
 # ---------------------------------------------------------------------------
 # OllamaClient — Protocol + production stub
@@ -327,6 +328,7 @@ async def episodic_maturation_sweep(
     cursor: MaturationCursor,
     config: MaturationConfig | None = None,
     now: datetime | None = None,
+    embedder: Embedder | None = None,
 ) -> SweepReport:
     """One pass of the maturation sweep.
 
@@ -407,17 +409,31 @@ async def episodic_maturation_sweep(
         )
 
         # ------------------------------------------------------------------
-        # Step 5 — supersession inference (cheap content-prefix only).
+        # Step 5 — supersession inference (LIFE-009: semantic + topic
+        # compatibility + abstention on ambiguity; bounded candidate
+        # search). The seam requires the embedder; if the runner did
+        # not pass one (legacy direct caller, or a test that bypasses
+        # the embedder), fall back to a NoopEmbedder. NoopEmbedder
+        # returns 1024D zero vectors so cosine is 0 with everything
+        # and the seam abstains on every candidate — conservative,
+        # not the OLD substring heuristic. The production-wired
+        # ``build_maturation_jobs`` path passes the real
+        # ``_TEICompositeEmbedder`` (LIFE-009 production wiring).
         # ------------------------------------------------------------------
         lineage_updates: LineageUpdates | None = None
         superseded_target_id: KSUID | None = None
-        if detect_supersession_hint(row.get("content", "")):
-            superseded_target_id = _find_supersession_candidate(
+
+        _hint = detect_supersession_hint(row.get("content", ""))
+        if _hint:
+            seam_embedder: Embedder = embedder if embedder is not None else _NoopEmbedder()
+            superseded_target_id = await _find_supersession_candidate(
                 client,
                 collection=_EPISODIC_COLLECTION,
                 namespace=row["namespace"],
                 self_id=object_id,
                 content=row.get("content", ""),
+                embedder=seam_embedder,
+                topics=new_topics,
             )
             if superseded_target_id is not None:
                 lineage_updates = LineageUpdates(supersedes=[superseded_target_id])
@@ -819,22 +835,39 @@ def _scroll_eligible(
     return out
 
 
-def _find_supersession_candidate(
+async def _find_supersession_candidate(
     client: QdrantClient,
     *,
     collection: str,
     namespace: str,
     self_id: KSUID,
     content: str,
+    embedder: Embedder,
+    topics: list[str],
+    similarity_threshold: float = 0.88,
+    max_candidates: int = 20,
 ) -> KSUID | None:
-    """Return the most recently matured row in the same namespace that
-    plausibly precedes ``self_id``.
+    """Return the unique matured row in the same namespace that passes
+    BOTH the semantic similarity AND the topic-compatibility checks
+    (Issue #532 / LIFE-009).
 
-    Spec calls for a similarity check at ≥ 0.88 plus a topic match. Both
-    require the embedder + a topics index that this slice doesn't hold;
-    a follow-up will tighten the heuristic. For now: same namespace,
-    state=matured, most recent updated_epoch — sufficient to exercise
-    the plumbing the spec calls for.
+    Discriminating contract:
+
+      - The candidate's post-hint content is semantically similar to
+        the new memory's post-hint content (cosine ≥ ``similarity_threshold``).
+      - The candidate shares at least one ``linked_to_topics`` entry
+        with the new memory's ``topics``.
+      - If zero or two-or-more candidates pass, the seam abstains
+        (returns ``None``). Only when EXACTLY ONE candidate passes
+        is the supersession inferred.
+
+    Substring overlap alone is NEVER sufficient (the OLD substring
+    heuristic would link unrelated rows that share a substring).
+
+    The function is bounded: at most ``max_candidates`` rows are
+    scored. The needle and candidate content have any leading
+    supersession hint (``update:``, ``correction:``, ``replacing:``)
+    stripped before embedding/scoring.
     """
     head = content.lstrip().lower()
     needle = head
@@ -844,6 +877,13 @@ def _find_supersession_candidate(
             break
     if not needle:
         return None
+    # Topic compatibility is a hard requirement (the seam's
+    # discriminating contract): a candidate MUST share at least one
+    # `linked_to_topics` entry with the needle. An empty `topics`
+    # list means "no topic is compatible with the needle" — abstain
+    # early without paying for the Qdrant scroll.
+    if not topics:
+        return None
     records, _ = client.scroll(
         collection_name=collection,
         scroll_filter=models.Filter(
@@ -852,30 +892,92 @@ def _find_supersession_candidate(
                 models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
             ]
         ),
-        limit=50,
+        limit=max_candidates,
         with_payload=True,
     )
-    best: KSUID | None = None
-    best_epoch = -1.0
+
+    # Topic-filter candidates first (no embedding needed; the topic
+    # check is cheap). Surviving topic-compatible candidates are the
+    # only rows whose dense vectors we will ever need.
+    candidate_pairs: list[tuple[KSUID, str]] = []
     for rec in records:
         if not rec.payload:
             continue
         candidate_id = rec.payload.get("object_id")
-        if candidate_id == self_id:
+        if not isinstance(candidate_id, str) or candidate_id == self_id:
             continue
         candidate_content = (rec.payload.get("content") or "").strip().lower()
         if not candidate_content:
             continue
-        if (
-            candidate_content == needle
-            or needle in candidate_content
-            or candidate_content in needle
-        ):
-            epoch = float(rec.payload.get("updated_epoch", 0.0))
-            if epoch > best_epoch:
-                best_epoch = epoch
-                best = candidate_id
-    return best
+        for hint in _SUPERSESSION_HINTS:
+            if candidate_content.startswith(hint):
+                candidate_content = candidate_content[len(hint) :].lstrip()
+                break
+        if not candidate_content:
+            continue
+        candidate_topics = rec.payload.get("linked_to_topics") or []
+        if not any(t in topics for t in candidate_topics):
+            continue
+        candidate_pairs.append((candidate_id, candidate_content))
+
+    # ONE batched embed_dense call (discriminator: at most one network
+    # roundtrip per seam invocation). The needle rides in the SAME
+    # batch as the topic-surviving candidates (`[needle] + contents`).
+    # This is the single-call contract: zero per-candidate network
+    # roundtrips, regardless of how many topic-compatible candidates
+    # the namespace has. The Embedder Protocol contract is
+    # `len(vectors) == len(batch)`; we defensively check it below.
+    if not candidate_pairs:
+        return None
+    batch = [needle] + [c for _, c in candidate_pairs]
+    try:
+        vectors = await embedder.embed_dense(batch)
+    except Exception as exc:
+        # Supersession detection is optional: an embedder outage (TEI
+        # unreachable, model OOM, etc.) must not crash the maturation
+        # sweep. Abstain (return None) and log a warning so the
+        # operator can see the failure mode without losing the row.
+        log.warning(
+            "supersession-seam-abstain-embed-failed batch_size=%d exc_type=%s",
+            len(batch),
+            type(exc).__name__,
+        )
+        return None
+    if len(vectors) != len(batch):
+        # Defensive: the Embedder Protocol promises len(vectors) == len(batch).
+        # Treat a malformed response as no candidate (abstain).
+        return None
+    needle_vec = vectors[0]
+    needle_norm = math.sqrt(sum(x * x for x in needle_vec)) or 1.0
+
+    candidates: list[KSUID] = []
+    for (cid, _), candidate_vec in zip(candidate_pairs, vectors[1:], strict=True):
+        # The Embedder Protocol doesn't guarantee fixed-length vectors.
+        # A misbehaving embedder returning a different-length candidate
+        # vector would let the strict-zip below raise and abort the
+        # whole sweep; we abstain on the malformed pair instead.
+        if len(candidate_vec) != len(needle_vec):
+            log.warning(
+                "supersession-seam-abstain-skipped-candidate candidate_id=%s "
+                "len(needle_vec)=%d len(candidate_vec)=%d",
+                cid,
+                len(needle_vec),
+                len(candidate_vec),
+            )
+            continue
+        candidate_norm = math.sqrt(sum(x * x for x in candidate_vec)) or 1.0
+        dot = sum(x * y for x, y in zip(needle_vec, candidate_vec, strict=True))
+        similarity = dot / (needle_norm * candidate_norm)
+        if similarity < similarity_threshold:
+            continue
+        candidates.append(cid)
+
+    # Abstain on zero or two-or-more matches (ambiguous). The seam
+    # never returns a list — a single confident predecessor is the
+    # only verdict.
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
 
 
 def _enrichment_changed(
@@ -978,11 +1080,21 @@ def build_maturation_jobs(
     ollama: OllamaClient,
     cursor: MaturationCursor,
     lock_dir: Path,
+    embedder: Embedder,
     config: MaturationConfig | None = None,
 ) -> list[Job]:
     """Return :class:`Job` objects matching the lifecycle-scheduler default
     job names that maturation *owns*: ``maturation_episodic``,
     ``provisional_ttl``, and ``concept_maturation``.
+
+    The ``embedder`` parameter is REQUIRED (production-wiring
+    discriminator). A caller that omits ``embedder=`` fails at the
+    Python call site (``TypeError: missing 1 required keyword-only
+    argument``) — there is no silent fallback to :class:`_NoopEmbedder`
+    at the scheduler boundary. Direct test callers that want the
+    conservative seam (abstain on every candidate) must explicitly
+    pass ``_NoopEmbedder()``. Production's :func:`musubi.lifecycle.runner._main_async`
+    passes the real ``ChunkedEmbedder`` wrapping ``_TEICompositeEmbedder``.
 
     Demotion used to live here (``demotion_episodic``, ``demotion_concept``)
     as helper sweeps that predated the dedicated demotion slice. They've
@@ -1042,6 +1154,7 @@ def build_maturation_jobs(
                 ollama=ollama,
                 cursor=cursor,
                 config=cfg,
+                embedder=embedder,
             ),
         ),
         _wrap(
@@ -1080,3 +1193,20 @@ __all__ = [
     "normalize_tags",
     "provisional_ttl_sweep",
 ]
+
+
+class _NoopEmbedder:
+    """Stub embedder used when the runner did not pass one. Returns
+    1024D zero vectors so the seam abstains (the zero vector has
+    cosine 0 with everything)."""
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        from musubi.store.specs import DENSE_SIZE
+
+        return [[0.0] * DENSE_SIZE for _ in texts]
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        return [{} for _ in texts]
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return [0.0 for _ in candidates]

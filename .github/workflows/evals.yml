@@ -5,6 +5,9 @@ on:
     branches: [main]
   schedule:
     - cron: '0 0 * * *'
+  # On-demand: workflow_dispatch lives on the default branch (landed via #550) so the live scheduled
+  # gate can be dispatched against a feature ref pre-merge to produce real x86 Qdrant+TEI numbers.
+  workflow_dispatch:
 
 jobs:
   # PR gate: deterministic, network-free fixed-embedding smoke — no real models.
@@ -30,7 +33,7 @@ jobs:
   # gate FAILS LOUD without this stack, so a scheduled run that skipped the boot could never pass —
   # the boot step is load-bearing, not optional.
   scheduled:
-    if: github.event_name == 'schedule'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
