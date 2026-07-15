@@ -563,6 +563,7 @@ async def _main_async() -> None:
         vault_root=Path(settings.vault_path),
         curated_plane=curated_plane,
         lock_dir=lock_dir,
+        coordinator=coordinator,
     )
     jobs = build_lifecycle_jobs(
         maturation_jobs=mat_jobs,

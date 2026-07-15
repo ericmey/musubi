@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.1](https://github.com/ericmey/musubi/compare/v1.14.0...v1.14.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* **vault:** VAULT-001 ghost row reconciliation via CuratedPlane transition ([#482](https://github.com/ericmey/musubi/issues/482)) ([ff5c1a6](https://github.com/ericmey/musubi/commit/ff5c1a6492fe92f4430218f677713d301adeff56))
+
 ## [1.14.0](https://github.com/ericmey/musubi/compare/v1.13.5...v1.14.0) (2026-07-15)
 
 

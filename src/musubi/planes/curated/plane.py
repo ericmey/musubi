@@ -406,6 +406,30 @@ class CuratedPlane:
                 out.append(_curated_from_payload(point.payload))
         return out
 
+    async def scan_vault_rows(self) -> list[CuratedKnowledge]:
+        """Return a snapshot of all validated curated rows.
+        Used by the vault reconciler to detect ghost rows.
+        """
+        out: list[CuratedKnowledge] = []
+        offset = None
+        while True:
+            resp, offset = self._client.scroll(
+                collection_name=self._collection,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in resp:
+                if point.payload is None:
+                    raise ValueError("curated inventory row is missing its payload")
+                row = _curated_from_payload(point.payload)
+                if row.vault_path:
+                    out.append(row)
+            if offset is None:
+                break
+        return out
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

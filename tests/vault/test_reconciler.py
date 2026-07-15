@@ -69,15 +69,23 @@ def _seed_md(
 def mock_curated_plane() -> MagicMock:
     plane = MagicMock()
     plane.create = AsyncMock(return_value=None)
+    plane.scan_vault_rows = AsyncMock(return_value=[])
     return plane
+
+
+@pytest.fixture
+def mock_coordinator() -> MagicMock:
+    return MagicMock()
 
 
 @pytest.mark.asyncio
 async def test_reconcile_upserts_stamped_file(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     _seed_md(tmp_path, "note.md", object_id=_ksuid())
-    rec = VaultReconciler(vault_root=tmp_path, curated_plane=mock_curated_plane)
+    rec = VaultReconciler(
+        vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=mock_coordinator
+    )
     upserted = await rec.reconcile()
     assert upserted == 1
     mock_curated_plane.create.assert_called_once()
@@ -85,10 +93,12 @@ async def test_reconcile_upserts_stamped_file(
 
 @pytest.mark.asyncio
 async def test_reconcile_skips_files_without_object_id(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     _seed_md(tmp_path, "no-id.md", object_id=None)
-    rec = VaultReconciler(vault_root=tmp_path, curated_plane=mock_curated_plane)
+    rec = VaultReconciler(
+        vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=mock_coordinator
+    )
     upserted = await rec.reconcile()
     assert upserted == 0
     mock_curated_plane.create.assert_not_called()
@@ -96,13 +106,15 @@ async def test_reconcile_skips_files_without_object_id(
 
 @pytest.mark.asyncio
 async def test_reconcile_skips_unchanged_on_second_pass(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     """Body-hash cache: same body → no second upsert. The core scope
     of the musubi#345 cleanup — without this, every 6h tick re-embeds
     the entire vault."""
     _seed_md(tmp_path, "stable.md", object_id=_ksuid(), body="unchanged body")
-    rec = VaultReconciler(vault_root=tmp_path, curated_plane=mock_curated_plane)
+    rec = VaultReconciler(
+        vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=mock_coordinator
+    )
 
     first = await rec.reconcile()
     second = await rec.reconcile()
@@ -113,11 +125,13 @@ async def test_reconcile_skips_unchanged_on_second_pass(
 
 @pytest.mark.asyncio
 async def test_reconcile_reupserts_when_body_changes(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     obj_id = _ksuid()
     _seed_md(tmp_path, "evolving.md", object_id=obj_id, body="first body")
-    rec = VaultReconciler(vault_root=tmp_path, curated_plane=mock_curated_plane)
+    rec = VaultReconciler(
+        vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=mock_coordinator
+    )
 
     await rec.reconcile()
     # Re-seed with a different body but same object_id.
@@ -129,40 +143,64 @@ async def test_reconcile_reupserts_when_body_changes(
 
 @pytest.mark.asyncio
 async def test_reconcile_excludes_hidden_and_underscore_dirs(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     _seed_md(tmp_path, "_secrets/keychain.md", object_id=_ksuid())
     _seed_md(tmp_path, ".obsidian/workspace.md", object_id=_ksuid())
     _seed_md(tmp_path, "normal.md", object_id=_ksuid())
-    rec = VaultReconciler(vault_root=tmp_path, curated_plane=mock_curated_plane)
+    rec = VaultReconciler(
+        vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=mock_coordinator
+    )
     upserted = await rec.reconcile()
     assert upserted == 1
 
 
 @pytest.mark.asyncio
 async def test_reconcile_non_md_files_ignored(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     (tmp_path / "note.txt").write_text("not markdown")
     (tmp_path / "image.png").write_bytes(b"binary")
-    rec = VaultReconciler(vault_root=tmp_path, curated_plane=mock_curated_plane)
+    rec = VaultReconciler(
+        vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=mock_coordinator
+    )
     upserted = await rec.reconcile()
     assert upserted == 0
 
 
 @pytest.mark.asyncio
 async def test_reconcile_missing_root_returns_zero(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     nonexistent = tmp_path / "does-not-exist"
-    rec = VaultReconciler(vault_root=nonexistent, curated_plane=mock_curated_plane)
+    rec = VaultReconciler(
+        vault_root=nonexistent, curated_plane=mock_curated_plane, coordinator=mock_coordinator
+    )
     upserted = await rec.reconcile()
     assert upserted == 0
 
 
+@pytest.mark.anyio
+async def test_reconcile_file_root_returns_zero_without_scanning_inventory(
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
+) -> None:
+    vault_root = tmp_path / "not-a-vault"
+    vault_root.write_text("not a directory", encoding="utf-8")
+    rec = VaultReconciler(
+        vault_root=vault_root,
+        curated_plane=mock_curated_plane,
+        coordinator=mock_coordinator,
+    )
+
+    upserted = await rec.reconcile()
+
+    assert upserted == 0
+    mock_curated_plane.scan_vault_rows.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_reconcile_individual_failure_doesnt_abort_pass(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     """One bad file shouldn't take down the whole pass."""
     _seed_md(tmp_path, "ok-1.md", object_id=_ksuid())
@@ -171,14 +209,16 @@ async def test_reconcile_individual_failure_doesnt_abort_pass(
     (tmp_path / "broken.md").write_text(
         "---\n[not valid yaml because: of: this\n---\n\nbody\n", encoding="utf-8"
     )
-    rec = VaultReconciler(vault_root=tmp_path, curated_plane=mock_curated_plane)
+    rec = VaultReconciler(
+        vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=mock_coordinator
+    )
     upserted = await rec.reconcile()
     # Two good files upserted; broken one logged + skipped.
     assert upserted == 2
 
 
 def test_build_vault_reconcile_jobs_produces_correct_shape(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     lock_dir = tmp_path / "locks"
     lock_dir.mkdir()
@@ -186,6 +226,7 @@ def test_build_vault_reconcile_jobs_produces_correct_shape(
         vault_root=tmp_path,
         curated_plane=mock_curated_plane,
         lock_dir=lock_dir,
+        coordinator=mock_coordinator,
     )
     assert len(jobs) == 1
     job = jobs[0]
@@ -199,7 +240,7 @@ def test_build_vault_reconcile_jobs_produces_correct_shape(
 
 
 def test_build_lifecycle_jobs_includes_real_vault_reconcile_job(
-    tmp_path: Path, mock_curated_plane: MagicMock
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
 ) -> None:
     """The lifecycle wiring should pick up the real vault_reconcile job
     instead of the placeholder. Without this, the lifecycle worker
@@ -213,6 +254,7 @@ def test_build_lifecycle_jobs_includes_real_vault_reconcile_job(
         vault_root=tmp_path,
         curated_plane=mock_curated_plane,
         lock_dir=lock_dir,
+        coordinator=mock_coordinator,
     )
     composed: list[Any] = build_lifecycle_jobs(vault_reconcile_jobs=vault_reconcile_jobs)
     vr_jobs = [j for j in composed if j.name == "vault_reconcile"]

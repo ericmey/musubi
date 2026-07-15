@@ -5,21 +5,20 @@ every 6 hours. It walks the vault filesystem, parses frontmatter, and
 upserts any markdown file with a non-empty ``object_id`` into the
 curated plane.
 
-Scope of this slice (musubi#345, partial):
+Current responsibilities:
 
 - Clean up debug-print code, add structured logging at INFO/DEBUG.
 - Skip-on-unchanged: body-hash compare so unchanged files don't churn
   embeddings on every 6h tick.
 - Wire into the lifecycle scheduler so the job runs.
+- Reconcile validated curated inventory against disk and archive missing-file
+  rows through the canonical lifecycle coordinator (VAULT-001).
 
 Out of scope (separate session per the issue):
 
 - ``musubi-vault-watcher`` real-time process — needs an architecture
   decision on where the vault lives relative to the musubi host
   (mounted, NAS-shared, git-synced).
-- Deletion handling — currently the reconciler is upsert-only; vault
-  files that disappear leave their qdrant rows behind. Requires a
-  "what's in qdrant but not on disk" pass + a deletion contract.
 """
 
 from __future__ import annotations
@@ -29,9 +28,12 @@ import logging
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.planes.curated.plane import CuratedPlane
+from musubi.types.common import Err
 from musubi.types.curated import CuratedKnowledge
 from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
+from musubi.vault.namespacing import infer_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +48,15 @@ class VaultReconciler:
     deals with already-stamped files).
     """
 
-    def __init__(self, vault_root: Path, curated_plane: CuratedPlane) -> None:
+    def __init__(
+        self,
+        vault_root: Path,
+        curated_plane: CuratedPlane,
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> None:
         self.vault_root = vault_root
         self.curated_plane = curated_plane
+        self.coordinator = coordinator
         # In-memory body-hash cache: ``object_id`` → last-upserted hash.
         # Survives the process lifetime; on restart the first pass
         # re-upserts everything (one-time cost; subsequent passes are
@@ -69,6 +77,9 @@ class VaultReconciler:
         if not self.vault_root.exists():
             logger.warning("vault-reconcile root does not exist: %s", self.vault_root)
             return 0
+        if not self.vault_root.is_dir():
+            logger.error("vault-reconcile root is not a directory: %s", self.vault_root)
+            return 0
 
         scanned = 0
         upserted = 0
@@ -76,13 +87,22 @@ class VaultReconciler:
         skipped_no_id = 0
         errored = 0
 
+        seen_paths: set[str] = set()
         for file_path in self.vault_root.rglob("*"):
             if not file_path.is_file() or file_path.suffix.lower() != ".md":
                 continue
-            rel_parts = file_path.relative_to(self.vault_root).parts
+            try:
+                rel_path = file_path.relative_to(self.vault_root)
+            except ValueError:
+                continue
+            # Every on-disk Markdown path prevents ghost archival, even when
+            # the file lives under an ignored directory.  The exclusion below
+            # governs indexing only; it must not turn an existing file into a
+            # false deletion signal.
+            seen_paths.add(rel_path.as_posix())
             # Hidden dirs (`.obsidian`, `.git`), Markdown-Obsidian
             # scratch dirs (`_sketch`, `_secrets`), and similar.
-            if any(p.startswith(".") or p.startswith("_") for p in rel_parts):
+            if any(p.startswith(".") or p.startswith("_") for p in rel_path.parts):
                 continue
 
             scanned += 1
@@ -96,21 +116,72 @@ class VaultReconciler:
             elif outcome == "error":
                 errored += 1
 
+        # Ghost row reconciliation (VAULT-001)
+        ghosts_archived = 0
+        ghosts_pending = 0
+
+        # Inventory validation and pagination failures intentionally propagate:
+        # without a complete, trustworthy inventory, archiving any row would be
+        # unsafe. Per-row transition failures are isolated below.
+        inventory = await self.curated_plane.scan_vault_rows()
+        for row in inventory:
+            # Vault paths are canonically POSIX-relative.  Normalize legacy
+            # Windows separators before comparing with the on-disk inventory
+            # so a present row cannot be misclassified as a ghost.
+            vp = row.vault_path.replace("\\", "/") if row.vault_path else None
+            if not vp or row.state in ("archived", "superseded"):
+                continue
+            if vp not in seen_paths:
+                expected_ns = infer_namespace(vp)
+                if row.namespace != expected_ns:
+                    logger.debug(
+                        "Ghost row candidate %s namespace %s does not match expected %s, skipping",
+                        vp,
+                        row.namespace,
+                        expected_ns,
+                    )
+                    continue
+
+                try:
+                    res = await self.curated_plane.transition(
+                        namespace=row.namespace,
+                        object_id=row.object_id,
+                        to_state="archived",
+                        actor="system/vault-reconciler",
+                        reason=f"Ghost row reconciliation (deleted from disk): {vp}",
+                        coordinator=self.coordinator,
+                    )
+                    if isinstance(res, Err):
+                        logger.error("Failed to archive ghost row %s: %s", vp, res.error.message)
+                        errored += 1
+                    else:
+                        if isinstance(res.value, TransitionPending):
+                            logger.info("Ghost row archive pending for %s", vp)
+                            ghosts_pending += 1
+                        else:
+                            logger.info("Archived ghost row missing from disk: %s", vp)
+                            ghosts_archived += 1
+                except Exception:
+                    logger.exception("Error archiving ghost row %s", vp)
+                    errored += 1
+
         logger.info(
             "vault-reconcile complete scanned=%d upserted=%d "
-            "unchanged=%d no_object_id=%d errored=%d",
+            "unchanged=%d no_object_id=%d errored=%d ghosts_archived=%d ghosts_pending=%d",
             scanned,
             upserted,
             skipped_unchanged,
             skipped_no_id,
             errored,
+            ghosts_archived,
+            ghosts_pending,
         )
         return upserted
 
     async def _reconcile_file(
         self, path: Path
     ) -> Literal["upserted", "unchanged", "no_object_id", "error"]:
-        rel_path = str(path.relative_to(self.vault_root))
+        rel_path = path.relative_to(self.vault_root).as_posix()
         try:
             content = path.read_text(encoding="utf-8")
             data, body = parse_frontmatter(content)
@@ -162,6 +233,7 @@ def build_vault_reconcile_jobs(
     vault_root: Path,
     curated_plane: CuratedPlane,
     lock_dir: Path,
+    coordinator: LifecycleTransitionCoordinator,
 ) -> list[Any]:
     """Return the one-element ``Job`` list for the lifecycle scheduler.
 
@@ -179,7 +251,9 @@ def build_vault_reconcile_jobs(
     from musubi.lifecycle.scheduler import Job, file_lock
 
     lock_path = lock_dir / "vault_reconcile.lock"
-    reconciler = VaultReconciler(vault_root=vault_root, curated_plane=curated_plane)
+    reconciler = VaultReconciler(
+        vault_root=vault_root, curated_plane=curated_plane, coordinator=coordinator
+    )
 
     async def _run_once() -> None:
         try:
