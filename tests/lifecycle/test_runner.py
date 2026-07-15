@@ -21,6 +21,12 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import sys
+from unittest.mock import MagicMock
+sys.modules['opentelemetry'] = MagicMock()
+sys.modules['opentelemetry.trace'] = MagicMock()
+sys.modules['opentelemetry.sdk'] = MagicMock()
+sys.modules['opentelemetry.sdk.trace'] = MagicMock()
 import pytest
 
 from musubi.lifecycle.runner import (

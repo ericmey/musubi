@@ -39,10 +39,15 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from musubi.lifecycle.scheduler import Job
 from musubi.observability.registry import default_registry
+
+
+class _AlertEmitter(Protocol):
+    async def emit(self, channel: str, content: str, title: str | None = None) -> None: ...
+
 
 _REG = default_registry()
 _DURATION = _REG.histogram(
@@ -54,6 +59,11 @@ _DURATION = _REG.histogram(
 _ERRORS = _REG.counter(
     "musubi_lifecycle_job_errors_total",
     "lifecycle worker tick errors",
+    labelnames=("job",),
+)
+_ALERT_ERRORS = _REG.counter(
+    "musubi_lifecycle_job_alert_errors_total",
+    "lifecycle worker tick alert emission errors",
     labelnames=("job",),
 )
 
@@ -162,6 +172,7 @@ class LifecycleRunner:
 
     jobs: list[Job]
     tick_seconds: int = 60
+    thought_emitter: _AlertEmitter | None = None
     _stopping: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _last_fired: dict[str, datetime] = field(default_factory=dict, init=False)
     _in_flight: set[asyncio.Task[None]] = field(default_factory=set, init=False)
@@ -265,6 +276,24 @@ class LifecycleRunner:
             except Exception as exc:
                 _ERRORS.labels(job=job.name).inc()
                 log.exception("lifecycle-job-crashed name=%s", job.name)
+
+                if self.thought_emitter is not None:
+                    try:
+                        safe_content = f"Job '{job.name}' crashed with {type(exc).__name__}. See logs for details."
+                        await asyncio.wait_for(
+                            self.thought_emitter.emit(
+                                channel="ops-alerts",
+                                content=safe_content,
+                                title="Lifecycle Job Failure",
+                            ),
+                            timeout=5.0,
+                        )
+                    except Exception as alert_exc:
+                        _ALERT_ERRORS.labels(job=job.name).inc()
+                        log.error(
+                            "lifecycle-job-alert-failed name=%s error=%r", job.name, alert_exc
+                        )
+
                 if span.is_recording():
                     span.set_attribute("lifecycle.job.crashed", True)
                     span.record_exception(exc)
