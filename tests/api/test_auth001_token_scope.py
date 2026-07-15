@@ -7,9 +7,10 @@ The single canonical source of exclusions is Settings.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from musubi.auth.tokens import AuthContext
@@ -226,7 +227,7 @@ def test_settings_exclusions_add_to_mandatory_not_subtract(
 
     from musubi.api.dependencies import get_settings_dep
 
-    client.app.dependency_overrides[get_settings_dep] = mock_get_settings
+    cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
     _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
     _seed_qdrant(client, token, "eric/custom/episodic", "hello custom")
@@ -262,7 +263,7 @@ def test_per_agent_settings_adds_to_mandatory(
 
     from musubi.api.dependencies import get_settings_dep
 
-    client.app.dependency_overrides[get_settings_dep] = mock_get_settings
+    cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
     _seed_qdrant(client, token, "eric/custom1/episodic", "hello")
     _seed_qdrant(client, token, "eric/command-chair/episodic", "hello")
@@ -296,7 +297,7 @@ def test_per_agent_settings_keyed_by_subject_or_presence_both_contribute(
 
     from musubi.api.dependencies import get_settings_dep
 
-    client.app.dependency_overrides[get_settings_dep] = mock_get_settings
+    cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
     _seed_qdrant(client, token, "eric/custom1/episodic", "hello")
     _seed_qdrant(client, token, "eric/custom2/episodic", "hello")
@@ -351,7 +352,7 @@ def test_canonical_config_source_is_single_no_scattered_exceptions(
 
     from musubi.api.dependencies import get_settings_dep
 
-    client.app.dependency_overrides[get_settings_dep] = mock_get_settings
+    cast(FastAPI, client.app).dependency_overrides[get_settings_dep] = mock_get_settings
 
     # Using context to prove the single seam propagates cleanly to all routes
     _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
