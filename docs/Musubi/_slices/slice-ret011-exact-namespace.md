@@ -20,13 +20,13 @@ blocks: []
 
 ## Context
 
-Single-target retrieval could return a row from another presence in the same identity family.
-`hybrid._build_filter` scoped to `identity_family` (the #332 federation key), not the exact
-namespace, and — the actual leak — `hybrid._build_prefetch` built each vector prefetch with NO
-filter, so candidate generation crossed presences and the top-level fusion filter did not remove
-them (the hybrid spec already states "filters are not applied after fusion"). A second surface,
-`fast._cache_key`, keyed on `family_of(namespace)`, so two presences shared a fast-response cache
-entry. `recent` already filtered exact namespace and was the reference-correct behavior. Fix: #510.
+Single-target retrieval could return a row from another presence in the same identity family. The
+PRODUCTION cause was `hybrid._build_filter` scoping to `identity_family` (the #332 federation key)
+instead of the exact namespace — a real Qdrant server applies the top-level `query_filter` to
+candidate generation, so an identity-family filter returned the whole family. A second production
+surface, `fast._cache_key`, keyed on `family_of(namespace)`, so two presences shared a
+fast-response cache entry. `recent` already filtered exact namespace and was the reference-correct
+behavior. Fix: #510.
 
 ## Invariant (Yua, 2026-07-15; #510 supersedes #332 for a CONCRETE target)
 
@@ -52,8 +52,9 @@ family federation are UNCHANGED. This slice does not touch lifecycle-state seman
 
 ## Modified (owned by shipped slices — coordinated via the lock)
 - `src/musubi/retrieve/hybrid.py` (slice-retrieval-hybrid, done) — `_build_filter` exact
-  namespace; `_build_prefetch` namespace-scopes each prefetch (the leak fix); `_namespace_filter`
-  / `_namespace_condition` helpers.
+  namespace (the production correction); `_build_prefetch` namespace-scopes each prefetch as
+  defense-in-depth + `:memory:` local-mode parity; `_namespace_filter` / `_namespace_condition`
+  helpers.
 - `src/musubi/retrieve/fast.py` (slice-retrieval-fast, done) — `_cache_key` keys on exact
   namespace, not `family_of`.
 - `docs/Musubi/05-retrieval/hybrid-search.md` (slice-retrieval-hybrid, done) — decision note +
@@ -80,15 +81,22 @@ the namespace filter can):
 - Full gate green; real-Qdrant integration proof green; exact-head CI.
 
 ## Work log
-- Grounded the leak: `identity_family` filter + UNFILTERED prefetch (the real leak site — top-level
-  fusion filter does not gate candidates) + `family_of` cache key. Wrote the 5-RED matrix; proved
-  RED pre-fix.
-- Fix is three bounded changes: exact `_build_filter`, namespace-scoped prefetch (namespace-ONLY,
-  to not silently broaden into lifecycle-state semantics), exact `_cache_key`. Updated the
-  `identity_family` test as the explicit reversal. All green; real-Qdrant proof green.
-- Discovered separately (filed as its own issue, NOT fixed here): the top-level fusion filter does
-  not constrain prefetch candidates, so lifecycle **state** filtering (only on the top-level filter,
-  not the prefetch) is not enforced in the hybrid path — a real-Qdrant reproduction confirms it.
+- Grounded the production leak: `identity_family` top-level filter (real Qdrant applies it to
+  candidate generation → whole-family match) + `family_of` cache key. Wrote the 5-RED matrix;
+  proved RED pre-fix.
+- Fix: exact `_build_filter` (production correction) + exact `_cache_key` (production correction) +
+  namespace-scoped prefetch (defense-in-depth + `:memory:` local-mode parity; namespace-ONLY, so no
+  lifecycle-state semantics change). Updated the `identity_family` test as the explicit #510-over-
+  #332 reversal. All green.
+- **Real-Qdrant verification (the authoritative production evidence):** the integration proof is
+  green — a concrete target is presence-exact on a real server. Two grounding probes: (a) real
+  Qdrant enforces the `state_filter` (a provisional row is excluded), and (b) the exact top-level
+  namespace filter alone stops the leak on real Qdrant (prefetch unfiltered → no leak). So the
+  prefetch scope is NOT the production root cause.
+- Note (NOT a production bug, NOT filed): the in-memory `:memory:` Qdrant test client does not apply
+  the top-level fusion filter to prefetch+fusion results, so unit tests must push filters to the
+  prefetch to observe them. A `:memory:` test-fidelity limitation; real Qdrant behaves correctly (an
+  earlier "state filter not enforced in production" hypothesis was refuted by the real-Qdrant probe).
 
 ### Out-of-scope: pre-existing hybrid-search Test Contract bullet
 

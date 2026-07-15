@@ -362,12 +362,14 @@ def _build_prefetch(
     sparse_enabled: bool,
     namespace_filter: models.Filter,
 ) -> list[models.Prefetch]:
-    # RET-011: each prefetch sub-query MUST carry the exact-namespace scope. Prefetch vector
-    # sub-queries pull their `limit` nearest neighbours independently; the top-level fusion filter
-    # does not constrain them, so an unfiltered prefetch surfaces cross-namespace rows whenever
-    # vectors are close. We apply ONLY the namespace condition here (not state): this slice is
-    # scoped to namespace exactness, and state visibility is enforced by the top-level query_filter
-    # exactly as before — narrowing the prefetch to namespace alone changes no state behaviour.
+    # RET-011: DEFENSE-IN-DEPTH + local-mode parity. The PRODUCTION namespace correction is the
+    # exact-namespace top-level `query_filter` (real Qdrant applies it to candidate generation, so
+    # exact scoping there stops the cross-presence leak on its own — verified against real Qdrant).
+    # But the in-memory (`:memory:`) Qdrant test client does NOT apply the top-level fusion filter
+    # to prefetch+fusion results, so unit tests can only observe the scope if it also rides on each
+    # prefetch. Scoping the prefetch makes `:memory:` faithful to production and is harmless
+    # belt-and-suspenders on a real server. NAMESPACE-ONLY on purpose: state visibility stays on the
+    # top-level query_filter, so this slice does not touch lifecycle-state semantics.
     prefetch: list[models.Prefetch] = []
     if dense_enabled and embedding.dense:
         prefetch.append(

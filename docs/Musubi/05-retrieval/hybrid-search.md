@@ -115,7 +115,7 @@ Cache invalidation: model swap → cache cleared at boot. Not something we need 
 
 ## Filter pushdown
 
-The filter goes in the same `query_points` call as `query_filter`. Qdrant evaluates it against the candidate set — filters are not applied after fusion. **Consequence (RET-011):** the `namespace` scope MUST be pushed onto each `prefetch` sub-query, not left on the top-level fusion filter alone — an unfiltered prefetch generates candidates across presences and fusion will not remove them.
+The filter goes in the same `query_points` call as `query_filter`. Qdrant evaluates it against the candidate set — filters are not applied after fusion. **The exact-`namespace` top-level `query_filter` is the production scope: a real Qdrant server applies it to candidate generation, so exact scoping there is sufficient to keep a concrete target presence-exact (verified against a real server).** RET-011 additionally pushes the `namespace` scope onto each `prefetch` sub-query as **defense-in-depth and local-mode parity** — the in-memory (`:memory:`) test client does not apply the top-level fusion filter to prefetch+fusion results, so per-prefetch scoping is what lets unit tests observe the same behaviour a real server already gives.
 
 Most-frequent filter: `namespace` (always set). Index hit rate on this field must be ~100% — it's the first gate.
 
