@@ -17,6 +17,7 @@ from musubi.evals.live_gate import (
     aggregate,
     enforce_thresholds,
     evaluate_query,
+    measure_hybrid_vs_dense,
     run_live_gate,
 )
 
@@ -84,3 +85,24 @@ def test_run_live_gate_groups_by_mode_and_enforce_catches_subthreshold() -> None
 def test_enforce_thresholds_rejects_no_metrics() -> None:
     with pytest.raises(ValueError, match="no metrics"):
         enforce_thresholds({})
+
+
+def test_measure_hybrid_vs_dense_computes_delta() -> None:
+    """The harness mechanics: over the same graded corpus, a hybrid ranking that surfaces the
+    relevant hit higher than dense-only yields a positive NDCG@10 delta. (The real 1000-doc numbers
+    run on CI; this proves the comparison itself is correct — a harness that ignored the hybrid/dense
+    distinction would report delta 0.)"""
+    query = {
+        "text": "t",
+        "mode": "hybrid",
+        "namespace": "test/default/blended",
+        "relevant": [{"object_id": "a", "relevance": 3}],
+    }
+
+    async def search(_query: dict[str, Any], hybrid: bool) -> list[str]:
+        return ["a", "b"] if hybrid else ["x", "a"]  # hybrid ranks the hit first; dense buries it
+
+    result = asyncio.run(measure_hybrid_vs_dense([query], search))
+    assert result["hybrid_ndcg@10"] == pytest.approx(1.0)
+    assert result["dense_ndcg@10"] < result["hybrid_ndcg@10"]
+    assert result["delta"] > 0.0

@@ -148,3 +148,76 @@ jobs:
     """
     with pytest.raises(AssertionError, match="Must use canonical uv python install"):
         _assert_workflow_contract(decoy_content)
+
+
+# --- RET-004 successor: the scheduled x86 TEI live-gate job -------------------------------------
+
+
+def _assert_scheduled_contract(content: str) -> None:
+    parsed = yaml.safe_load(content)
+    jobs = parsed.get("jobs", {})
+    scheduled = jobs.get("scheduled")
+    assert scheduled is not None, "Workflow must have a 'scheduled' job for the live quality gate"
+
+    steps = scheduled.get("steps", [])
+    boot_idx = -1
+    live_gate_idx = -1
+    for idx, step in enumerate(steps):
+        run_cmd = step.get("run", "")
+        if not run_cmd:
+            continue
+        assert "curl " not in run_cmd, "Must not use curl installer"
+        assert "uv pip install -e ." not in run_cmd, "Must not use raw pip install"
+        # The load-bearing stack boot: docker compose up against the test-env compose file.
+        if "docker compose" in run_cmd and "up" in run_cmd and "docker-compose.test.yml" in run_cmd:
+            boot_idx = idx
+        # The live scheduled gate itself.
+        if "musubi.evals scheduled" in run_cmd or "musubi-evals scheduled" in run_cmd:
+            live_gate_idx = idx
+
+    assert boot_idx != -1, (
+        "Scheduled job MUST boot the real Qdrant+TEI stack (docker compose up) — the live gate fails "
+        "loud without it and could never produce real numbers"
+    )
+    assert live_gate_idx != -1, "Scheduled job MUST run the live scheduled gate"
+    assert boot_idx < live_gate_idx, (
+        "The real stack must be booted BEFORE the live gate runs — otherwise the gate fails loud and "
+        "can never produce real numbers"
+    )
+
+
+def test_scheduled_workflow_live_gate_contract() -> None:
+    """Contract: .github/workflows/evals.yml has a scheduled job that boots the real Qdrant+TEI
+    stack before running the live gate — the only place real quality numbers are produced."""
+    repo_root = Path(__file__).parent.parent.parent
+    content = (repo_root / ".github" / "workflows" / "evals.yml").read_text(encoding="utf-8")
+    _assert_scheduled_contract(content)
+
+
+def test_scheduled_workflow_discriminator_no_stack_boot() -> None:
+    """Contract: a scheduled job that runs the live gate WITHOUT booting the stack is rejected — the
+    exact fail-loud-forever / never-real-numbers trap."""
+    no_boot = """
+jobs:
+  scheduled:
+    steps:
+      - name: Run Scheduled Live Quality Gate
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+    """
+    with pytest.raises(AssertionError, match="MUST boot the real Qdrant"):
+        _assert_scheduled_contract(no_boot)
+
+
+def test_scheduled_workflow_discriminator_boot_after_gate() -> None:
+    """Contract: booting the stack AFTER the gate already ran is rejected — order is load-bearing."""
+    wrong_order = """
+jobs:
+  scheduled:
+    steps:
+      - name: Run Scheduled Live Quality Gate
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+      - name: Boot stack
+        run: docker compose -f deploy/test-env/docker-compose.test.yml up -d --wait
+    """
+    with pytest.raises(AssertionError, match="booted BEFORE"):
+        _assert_scheduled_contract(wrong_order)

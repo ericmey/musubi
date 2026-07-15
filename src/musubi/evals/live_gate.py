@@ -94,6 +94,40 @@ def enforce_thresholds(by_mode: dict[str, dict[str, float]]) -> None:
         check_nightly_thresholds(metrics, mode)  # raises ValueError below threshold / on non-finite
 
 
+#: A hybrid-vs-dense search maps ``(query, hybrid?)`` to the RANKED ``object_id`` list — ``hybrid``
+#: True runs the fused dense+sparse pipeline, False runs dense-only. The injected boundary the BEIR
+#: contract measures.
+HybridDenseSearch = Callable[[dict[str, Any], bool], Awaitable[list[str]]]
+
+#: The BEIR contract: hybrid NDCG@10 must beat dense-only by at least this margin.
+BEIR_MIN_HYBRID_DENSE_DELTA = 0.02
+
+
+async def measure_hybrid_vs_dense(
+    queries: list[dict[str, Any]], search: HybridDenseSearch
+) -> dict[str, float]:
+    """Mean NDCG@10 of hybrid vs dense-only retrieval over the SAME graded corpus.
+
+    Returns ``{"hybrid_ndcg@10", "dense_ndcg@10", "delta"}``. The BEIR gate asserts
+    ``delta >= BEIR_MIN_HYBRID_DENSE_DELTA``. ``search`` is the injected retrieval boundary so the
+    comparison mechanics are deterministic and unit-testable; the real 1000-doc numbers (which
+    actually separate hybrid from dense) come from the live TEI+Qdrant pipeline on the scheduled CI.
+    """
+    hybrid_rows: list[dict[str, float]] = []
+    dense_rows: list[dict[str, float]] = []
+    for query in queries:
+        relevant = list(query.get("relevant", []))
+        hybrid_rows.append(evaluate_query(await search(query, True), relevant))
+        dense_rows.append(evaluate_query(await search(query, False), relevant))
+    hybrid_ndcg = aggregate(hybrid_rows).get("ndcg@10", 0.0)
+    dense_ndcg = aggregate(dense_rows).get("ndcg@10", 0.0)
+    return {
+        "hybrid_ndcg@10": hybrid_ndcg,
+        "dense_ndcg@10": dense_ndcg,
+        "delta": hybrid_ndcg - dense_ndcg,
+    }
+
+
 class _TEIComposite:
     """Minimal :class:`~musubi.embedding.base.Embedder` composing the dense + sparse + reranker TEI
     clients so :class:`~musubi.embedding.chunked.ChunkedEmbedder` can wrap them. Each retrieval entry
@@ -183,11 +217,14 @@ def build_settings_retriever() -> Retriever:
 
 
 __all__ = [
+    "BEIR_MIN_HYBRID_DENSE_DELTA",
+    "HybridDenseSearch",
     "LiveGateUnavailable",
     "Retriever",
     "aggregate",
     "build_settings_retriever",
     "enforce_thresholds",
     "evaluate_query",
+    "measure_hybrid_vs_dense",
     "run_live_gate",
 ]

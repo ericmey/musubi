@@ -7,7 +7,9 @@ on:
     - cron: '0 0 * * *'
 
 jobs:
+  # PR gate: deterministic, network-free fixed-embedding smoke — no real models.
   smoke:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,10 +22,38 @@ jobs:
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Run PR Smoke Gate
-        if: github.event_name == 'pull_request'
         run: |
           uv run python -m musubi.evals smoke --data-dir tests/evals/data
-      - name: Run Scheduled Baseline Report
-        if: github.event_name == 'schedule'
+
+  # Scheduled gate: the ONLY place real quality NUMBERS are produced. Boots the real Qdrant + TEI
+  # stack on x86, then runs the live scheduled gate + the BEIR hybrid-vs-dense measurement. The live
+  # gate FAILS LOUD without this stack, so a scheduled run that skipped the boot could never pass —
+  # the boot step is load-bearing, not optional.
+  scheduled:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Boot Qdrant + TEI stack
         run: |
+          docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-evals up -d --wait --wait-timeout 600
+      - name: Run Scheduled Live Quality Gate
+        run: |
+          set -a && . deploy/test-env/.env.test && set +a
           uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+      - name: Run BEIR hybrid-vs-dense gate
+        run: |
+          set -a && . deploy/test-env/.env.test && set +a
+          uv run pytest -m integration -k beir_style_eval tests/retrieve/test_hybrid.py -ra
+      - name: Tear down stack
+        if: always()
+        run: |
+          docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-evals down -v --remove-orphans
