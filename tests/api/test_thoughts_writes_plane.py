@@ -14,7 +14,7 @@ from musubi.store.specs import DENSE_VECTOR_NAME
 class DummyEmbedder(Embedder):
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         # deterministic non-zero, different from FakeEmbedder
-        # Embeds length-dependent vectors to discriminate different content directionally
+        # Embeds content-dependent vectors to discriminate different content directionally
         return [[1.0, float((sum(map(ord, t)) % 7) + 1)] + [0.0] * 1022 for t in texts]
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
@@ -80,11 +80,14 @@ def test_thought_send_uses_configured_plane_and_embedder(
             "importance": 5,
         },
     )
+    assert r2.status_code == 202
     object_id2 = r2.json()["object_id"]
     point_id2 = _point_id(object_id2)
     points2 = qdrant.retrieve(collection_name="musubi_thought", ids=[point_id2], with_vectors=True)
+    assert len(points2) == 1
     vector2 = points2[0].vector
 
+    assert DENSE_VECTOR_NAME in vector2
     assert any(v != 0 for v in vector2[DENSE_VECTOR_NAME])
     assert vector[DENSE_VECTOR_NAME] != vector2[DENSE_VECTOR_NAME]
 
@@ -168,4 +171,9 @@ def test_missing_dependency_fails_loud(
         )
     assert r.status_code == 500
     assert r.json()["error"]["code"] == "INTERNAL"
-    assert any("loud failure injected" in rec.exc_text for rec in caplog.records if rec.exc_text)
+    assert any(
+        rec.exc_info is not None
+        and isinstance(rec.exc_info[1], RuntimeError)
+        and str(rec.exc_info[1]) == "loud failure injected"
+        for rec in caplog.records
+    )
