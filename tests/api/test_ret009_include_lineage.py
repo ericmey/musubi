@@ -1,13 +1,17 @@
-"""RET-009 — public retrieval must forward include_lineage.
+"""RET-009 — public retrieval forwards include_lineage.
 
-The public ``POST /v1/retrieve`` model currently lacks ``include_lineage``;
-Pydantic's default ``extra='ignore'`` silently drops the field, and the router
-never forwards it. This slice adds the field with default ``True``, forwards the
-caller's exact value through the existing canonical orchestration seam, and proves
-the contract at the HTTP/OpenAPI boundary.
+The public ``POST /v1/retrieve`` model declares ``include_lineage: bool = True``
+and the router forwards the caller value verbatim through the existing canonical
+orchestration seam. These tests prove the wire contract end-to-end:
 
-Tests first, zero source in this commit. All 7 reds must fail for their named
-missing behavior only; the implementation will satisfy them.
+- omitted field forwards the default ``True`` (backward-compatible)
+- explicit ``true``/``false`` reach orchestration with the caller's value
+- concrete and fanout namespace shapes both preserve the value
+- non-boolean scalars (strings, ints, lists, dicts) are rejected at the wire (422)
+- the generated OpenAPI exposes the field with default ``True``
+
+The field is ``StrictBool`` so Pydantic does not silently coerce non-boolean scalars
+(e.g. ``"false"`` → ``True``, ``0`` → ``False``).
 """
 
 from __future__ import annotations
@@ -21,7 +25,7 @@ from musubi.types.common import Ok
 
 
 class DefectStillPresent(Exception):
-    """Raised when the current code still exhibits the contract-forbidden defect."""
+    """Raised when the current code does not exhibit the contract-required behavior."""
 
 
 # Module-level capture list. Each test appends the forwarded query dict here.
