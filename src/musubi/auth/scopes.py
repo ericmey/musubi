@@ -57,7 +57,12 @@ def enforce_namespace_policy(
     # 1. Authorize all targets first
     authorized: list[tuple[str, str]] = []
     for ns, plane in targets:
-        result = resolve_namespace_scope(context, namespace=ns, access="r")
+        result = resolve_namespace_scope(
+            context,
+            namespace=ns,
+            access="r",
+            audit_denial=reject_unauthorized,
+        )
         if isinstance(result, Err):
             if reject_unauthorized:
                 return Err(error=result.error)
@@ -102,8 +107,14 @@ def resolve_namespace_scope(
     *,
     namespace: str,
     access: AccessLevel,
+    audit_denial: bool = True,
 ) -> Result[ScopeGrant, ScopeError]:
-    """Resolve a token's namespace scopes against a requested namespace/access."""
+    """Resolve a token's namespace scopes against a requested namespace/access.
+
+    Explicit authorization checks audit denials by default. Callers enumerating
+    an implicit discovery set may suppress per-candidate denial events while
+    preserving the same authorization decision.
+    """
 
     for scope in context.scopes:
         if _namespace_scope_allows(scope, namespace, access):
@@ -118,7 +129,15 @@ def resolve_namespace_scope(
             )
 
     detail = f"namespace {namespace!r} not in token scope for {access!r} access"
-    _audit("auth.deny", context, namespace=namespace, scope_used=None, access=access, reason=detail)
+    if audit_denial:
+        _audit(
+            "auth.deny",
+            context,
+            namespace=namespace,
+            scope_used=None,
+            access=access,
+            reason=detail,
+        )
     return Err(error=ScopeError(detail=detail))
 
 

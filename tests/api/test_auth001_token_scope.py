@@ -668,3 +668,57 @@ def test_direct_matcher_unit_tests_does_not_break_auth001() -> None:
     assert "tenant/salesai2/episodic" in val
     assert "tenant/custom1/episodic" not in val
     assert "salesai/agent/episodic" in val
+
+
+def test_implicit_discovery_does_not_audit_each_unauthorized_candidate(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from musubi.auth.scopes import enforce_namespace_policy
+    from musubi.auth.tokens import AuthContext
+    from musubi.settings import Settings
+    from musubi.types.common import Ok
+
+    context = AuthContext(
+        subject="eric",
+        issuer="test",
+        audience="musubi",
+        scopes=("eric/command-chair/*:r",),
+        presence="eric/command-chair",
+        token_id="test",
+    )
+    settings = Settings(
+        **{  # type: ignore[arg-type]
+            "log_dir": "/",
+            "jwt_signing_key": "a",
+            "oauth_authority": "http://a",
+            "qdrant_host": "a",
+            "qdrant_api_key": "a",
+            "tei_dense_url": "http://a",
+            "tei_sparse_url": "http://a",
+            "tei_reranker_url": "http://a",
+            "ollama_url": "http://a",
+            "embedding_model": "a",
+            "sparse_model": "a",
+            "reranker_model": "a",
+            "llm_model": "a",
+            "vault_path": "/",
+            "artifact_blob_path": "/",
+            "lifecycle_sqlite_path": "/",
+        }
+    )
+
+    with caplog.at_level("INFO", logger="musubi.auth.scopes"):
+        result = enforce_namespace_policy(
+            context,
+            targets=[
+                ("eric/command-chair/episodic", "episodic"),
+                ("aoi/voice/episodic", "episodic"),
+                ("tama/voice/episodic", "episodic"),
+            ],
+            settings=settings,
+            reject_unauthorized=False,
+        )
+
+    assert isinstance(result, Ok)
+    assert result.value == [("eric/command-chair/episodic", "episodic")]
+    assert [record.message for record in caplog.records] == ["auth.allow"]
