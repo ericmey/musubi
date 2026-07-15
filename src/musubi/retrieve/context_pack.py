@@ -193,9 +193,11 @@ def build_context_pack(
     else:
         recent_max_chars = query.max_chars
 
-    # 1. Fill recent quota
+    # 1. Fill recent quota. If ranked has no candidates, let recent use the
+    # entire item budget rather than suppressing valid context behind a reserve.
+    recent_item_limit = query.recent_reserve if ranked_pool else query.max_items
     for r in recent_pool:
-        if used_items >= query.recent_reserve or used_items >= query.max_items:
+        if used_items >= recent_item_limit or used_items >= query.max_items:
             break
         item = _to_item(r, remaining_chars=recent_max_chars - used_chars)
         if item is None:

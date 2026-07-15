@@ -114,7 +114,9 @@ async def context_pack(
     # RET-013: Query Qdrant twice for a blended recent/ranked mix.
     recent_query_body: dict[str, object] = {
         "namespace": body.namespace,
-        "query_text": body.query_text,
+        # Recent retrieval is chronological and intentionally ignores query text.
+        # Passing it would produce an accept-and-ignore warning on every context call.
+        "query_text": "",
         "mode": "recent",
         # Cap recent to a sensible limit to avoid swamping ranked results
         "limit": min(10, body.candidate_limit),
@@ -216,6 +218,8 @@ async def context_pack(
 
 def _candidate_from_hit(hit: Any) -> ContextCandidate:
     payload = hit.payload if isinstance(hit.payload, dict) else {}
+    state = hit.state if hit.state is not None else payload.get("state")
+    importance = hit.importance if hit.importance is not None else payload.get("importance")
     return ContextCandidate(
         object_id=str(hit.object_id),
         namespace=str(payload.get("namespace") or hit.namespace),
@@ -224,10 +228,10 @@ def _candidate_from_hit(hit: Any) -> ContextCandidate:
         summary=_optional_str(payload.get("summary")),
         title=_optional_str(payload.get("title") or hit.title),
         tags=_string_list(payload.get("tags")),
-        state=str(payload.get("state") or "matured"),
+        state=str(state or "matured"),
         created_epoch=_optional_float(payload.get("created_epoch")) or 0.0,
         updated_epoch=_optional_float(payload.get("updated_epoch")),
-        importance=int(payload.get("importance") or 5),
+        importance=int(importance or 5),
         retrieve_score=float(hit.score),
         extra={key: value for key, value in payload.items() if key in {"kind", "staleness"}},
     )

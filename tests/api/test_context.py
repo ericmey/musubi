@@ -13,6 +13,29 @@ from musubi.types.common import Ok
 from musubi.types.episodic import EpisodicMemory
 
 
+def test_context_candidate_uses_typed_state_and_importance_without_payload() -> None:
+    from musubi.api.routers.context import _candidate_from_hit
+    from musubi.retrieve.orchestration import RetrievalResult
+
+    candidate = _candidate_from_hit(
+        RetrievalResult(
+            object_id="typed-hit",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            snippet="typed lifecycle fields survive brief projection",
+            score=1.0,
+            score_components={},
+            lineage={},
+            payload=None,
+            state="superseded",
+            importance=9,
+        )
+    )
+
+    assert candidate.state == "superseded"
+    assert candidate.importance == 9
+
+
 def test_context_endpoint_blends_recent_provisional_with_established_ranked(
     client: TestClient,
     valid_token: str,
@@ -189,6 +212,7 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
 
     # 3. Default lane-state split explicit and identical namespace_targets
     assert recent_query["mode"] == "recent"
+    assert recent_query["query_text"] == ""
     assert recent_query["state_filter"] == ["provisional", "matured", "promoted"]
     assert fast_query["mode"] == "fast"
     assert fast_query["state_filter"] == ["matured", "promoted"]
