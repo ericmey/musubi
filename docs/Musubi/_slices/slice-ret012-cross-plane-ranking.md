@@ -112,9 +112,8 @@ must not become maximally relevant merely by being alone.
    touched. The seam only runs in the ``len(targets) > 1`` branch.
 7. **Recent mode is a passthrough** at the seam. ``raw_rrf_score`` and
    ``raw_rerank_score`` are both ``None`` for recent rows; the seam's
-   ``else`` branch returns ``score_components["relevance"]`` and
-   ``score`` unchanged. Recent's existing ``created_epoch`` ordering
-   survives.
+   ``else`` branch leaves ``score_components`` and ``score`` unchanged.
+   Recent's existing ``created_epoch`` ordering survives.
 8. **Wildcard namespace fanout (ADR 0031)** is structurally the same
    multi-target branch; it inherits the seam for free. No new code
    path.
@@ -287,10 +286,12 @@ follow-up action, not a block on the slice.
   affects every slice in the repo).
 - **Spec drift:** none. The slice doc, the spec
   (`05-retrieval/cross-plane-ranking.md`), and the impl are
-  consistent. The function signature is
-  `calibrate_global_relevance(candidates: list[RetrievalResult])`
-  (no `now` parameter — the seam is purely intrinsic on the working
-  set, with no time-dependent logic).
+  consistent. The helper intentionally uses the duck-typed signature
+  `calibrate_global_relevance(candidates: list[Any]) -> list[Any]` to
+  avoid importing `RetrievalResult` into `scoring.py`; the orchestration
+  caller casts the returned list back to `list[RetrievalResult]`. There
+  is no `now` parameter because the seam is purely intrinsic on the
+  working set, with no time-dependent logic.
 - **No PR open yet.** The seam impl commit is review-ready; the
   draft PR will be opened after this commit, with the body linking
   Issue #512 and the first commit's test evidence.

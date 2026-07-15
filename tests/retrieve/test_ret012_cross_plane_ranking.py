@@ -4,8 +4,8 @@ Owner slice: slice-ret012-cross-plane-ranking (#512).
 
 The discriminating contract: a weak plane's sole hit must not become
 maximally relevant merely by being alone. Per-plane local batch
-maxima currently make that happen (a sole hit divides by itself and
-reaches relevance 1.0); the seam under construction will recompute
+maxima make that happen without RET-012 (a sole hit divides by itself
+and reaches relevance 1.0); the implemented seam recomputes
 each hit's relevance against a single working-set global max BEFORE
 the ``best_by_id`` dedup, then sort by ``(-score, object_id, plane)``
 so cross-plane ordering is deterministic.
@@ -13,9 +13,8 @@ so cross-plane ordering is deterministic.
 The first contract is bounded to nine bullets (ten items; bullet 5 is
 parametrized over gather order):
 
-    5 RED discriminating tests   (currently failing under live code)
-    4 GREEN preservation guards  (passing under live code; the seam
-                                  must not break them)
+    5 RED discriminating tests   (would fail without RET-012)
+    4 GREEN preservation guards  (the seam must not break them)
 
 Test function names transcribe the slice doc's Test Contract bullets
 verbatim per the AGENTS.md Test Contract Closure Rule.
@@ -77,18 +76,6 @@ _RECENCY = 0.5
 _IMPORTANCE = 0.5
 _PROVENANCE = 0.5
 _REINFORCE = 0.5
-
-
-def _other_components_total() -> float:
-    """The weighted contribution of recency/importance/provenance/reinforce at the SCORE_WEIGHTS used
-    by these tests (the seam must not change those four components)."""
-    return SCORE_WEIGHTS.combine(
-        relevance=0.0,
-        recency=_RECENCY,
-        importance=_IMPORTANCE,
-        provenance=_PROVENANCE,
-        reinforce=_REINFORCE,
-    )
 
 
 def _mk_leg_result(

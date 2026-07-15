@@ -707,11 +707,9 @@ def test_fast_path_does_not_call_reranker() -> None:
     # allowed; it is set to ``None`` for fast mode and never invokes
     # the reranker. The invariant is "fast mode does not CALL rerank,"
     # not "the file contains no occurrence of the substring 'rerank'."
-    # Both ``from X import Y`` and ``import X`` forms are forbidden;
-    # an ``ast``-level scan is the only way to be sure no rerank
-    # reference slipped in via a less-common form (e.g. ``importlib``,
-    # dynamic ``__import__``, conditional import, parent-module re-export
-    # like ``from musubi.retrieve import rerank``).
+    # Static ``from X import Y`` and ``import X`` forms are forbidden;
+    # an ``ast``-level scan covers those forms, including a parent-module
+    # re-export like ``from musubi.retrieve import rerank``.
     import ast
 
     tree = ast.parse(source)

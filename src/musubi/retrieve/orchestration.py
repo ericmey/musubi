@@ -425,7 +425,7 @@ async def _retrieve_uncounted(
         # list), preserves the cross-encoder sigmoid for reranked legs,
         # and passes recent / non-ranked rows through unchanged. Single-
         # target fast path bit-for-bit preserved (seam does not run).
-        calibrated = calibrate_global_relevance(all_hits)
+        calibrated = cast(list[RetrievalResult], calibrate_global_relevance(all_hits))
 
         # Merge dedup keeps the **highest-recalibrated** hit per
         # object_id. First-seen dedup would drop a stronger match purely
