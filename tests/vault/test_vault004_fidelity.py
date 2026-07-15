@@ -198,6 +198,7 @@ async def test_vault004_operational_watcher_call(tmp_path: Path) -> None:
         vault_root=tmp_path,
         curated_plane=DummyCuratedPlane(),  # type: ignore
         write_log=type("WL", (), {"consume_if_exists": lambda self, a, b: False})(),
+        coordinator=None,  # type: ignore
     )
 
     fid = generate_ksuid()

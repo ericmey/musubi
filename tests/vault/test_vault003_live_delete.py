@@ -174,7 +174,7 @@ async def watcher(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_delete_archives_matching_row_via_canonical_transition(
     plane: CuratedPlane,
     ns: str,
@@ -200,7 +200,7 @@ async def test_delete_archives_matching_row_via_canonical_transition(
     assert after.state == "archived"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_archived_row_excluded_from_default_retrieval(
     plane: CuratedPlane,
     ns: str,
@@ -255,7 +255,7 @@ async def test_archived_row_excluded_from_default_retrieval(
     assert fetched.object_id == saved.object_id
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_audit_and_history_retain_archived_row(
     plane: CuratedPlane,
     ns: str,
@@ -292,7 +292,7 @@ async def test_audit_and_history_retain_archived_row(
     )
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_repeat_delete_is_idempotent(
     plane: CuratedPlane,
     ns: str,
@@ -331,7 +331,7 @@ async def test_repeat_delete_is_idempotent(
     assert after_second.version == after_first.version, "version must not bump on idempotent repeat"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_sibling_path_does_not_archive_target(
     plane: CuratedPlane,
     ns: str,
@@ -372,7 +372,7 @@ async def test_sibling_path_does_not_archive_target(
     assert sibling_dot_after is not None and sibling_dot_after.state == "matured"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_prefix_collision_does_not_archive(
     plane: CuratedPlane,
     ns: str,
@@ -414,7 +414,7 @@ async def test_prefix_collision_does_not_archive(
     assert sibling_deeper_dir_after is not None and sibling_deeper_dir_after.state == "matured"
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_missing_row_is_observable_noop(
     plane: CuratedPlane,
     ns: str,
@@ -451,7 +451,7 @@ async def test_missing_row_is_observable_noop(
     assert records == []
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_transition_failure_remains_visible(
     plane: CuratedPlane,
     ns: str,
@@ -523,7 +523,7 @@ async def test_transition_failure_remains_visible(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_on_created_indexes_new_file(
     vault_root: Path,
     plane: CuratedPlane,
@@ -563,7 +563,7 @@ async def test_on_created_indexes_new_file(
     await w._handle_event(str(file_path), FileCreatedEvent(str(file_path)))
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_dotfile_ignored(
     vault_root: Path,
     plane: CuratedPlane,
@@ -593,6 +593,7 @@ async def test_dotfile_ignored(
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.anyio
 async def test_two_namespaces_same_vault_path_neither_archives(
     plane: CuratedPlane,
     coordinator: LifecycleTransitionCoordinator,
@@ -656,6 +657,7 @@ async def test_two_namespaces_same_vault_path_neither_archives(
     assert row_b.object_id in joined, f"warning must list row_b object_id, got: {joined!r}"
 
 
+@pytest.mark.anyio
 async def test_superseded_row_delete_emits_visible_warning(
     plane: CuratedPlane,
     ns: str,
