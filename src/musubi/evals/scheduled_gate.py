@@ -211,9 +211,13 @@ async def run_scheduled_seeded_gate(
     from musubi.evals.live_gate import _hits_or_raise
     from musubi.retrieve.deep import RetrievalQuery, run_deep_retrieve
     from musubi.retrieve.fast import run_fast_retrieve
+    from musubi.store import bootstrap as bootstrap_collections
     from musubi.store.names import collection_for_plane
 
     corpus = load_corpus(data_dir)
+    # Ensure the canonical collections exist before seeding — a fresh CI Qdrant has none, and an
+    # upsert into a missing collection fails (the production api.bootstrap does the same). Idempotent.
+    bootstrap_collections(backends.client)
     namespace = run_namespace("episodic", run_id=run_id)
     collection = collection_for_plane("episodic")
     plane_factory = _episodic_plane_factory(backends)

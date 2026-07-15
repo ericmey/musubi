@@ -181,12 +181,12 @@ def test_scheduled_seeded_gate_full_mechanism_local() -> None:
 
     from musubi.embedding import FakeEmbedder
     from musubi.evals.live_gate import LiveBackends
-    from musubi.store import bootstrap
     from musubi.store.names import collection_for_plane
 
     port = int(os.environ.get("MUSUBI_TEST_QDRANT_PORT", "6339"))
     client = QdrantClient(host="localhost", port=port)
-    bootstrap(client)
+    # NOTE: no manual bootstrap — the gate must bootstrap its own collections (a fresh CI Qdrant has
+    # none). Relying on the gate here keeps this test faithful to the real scheduled path.
     embedder = FakeEmbedder()
     backends = LiveBackends(client=client, embedder=embedder, reranker=embedder)
     run_id = sg.new_run_id()
