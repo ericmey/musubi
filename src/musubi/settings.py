@@ -183,15 +183,15 @@ class Settings(BaseSettings):
     oauth_authority: AnyHttpUrl = Field(description="OIDC issuer (Auth0 / Kong) base URL.")
 
     # AUTH-001: per-agent namespace-exclusion list. The default
-    # ``salesai`` is a mandatory baseline and cannot be removed by a
-    # token claim; per-agent settings may add more exclusions. The
-    # enforcement seam (auth.scopes.enforce_namespace_policy) reads
-    # the composed tuple off the AuthContext.
+    # ``salesai`` is a mandatory baseline and cannot be removed.
+    # Per-agent settings may add more exclusions. The enforcement
+    # seam (auth.scopes.enforce_namespace_policy) composes this
+    # at request time directly from Settings.
     default_excluded_namespaces: frozenset[str] = Field(
         default=frozenset({"salesai"}),
         description=(
             "Mandatory baseline exclusion list. Always excluded from "
-            "recall; a token claim cannot subtract from this set."
+            "recall; Settings overrides cannot subtract from this set."
         ),
     )
 

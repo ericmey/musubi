@@ -7,7 +7,7 @@ type: slice
 status: in-review
 owner: cowork-tama
 phase: "Auth"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-07-15
 reviewed: false
 depends-on: []
@@ -169,7 +169,7 @@ discriminating tests, two GREEN preservation guards. Test
 function names transcribe the Test Contract bullets verbatim per
 the AGENTS.md Test Contract Closure Rule.
 
-### Test Contract (15 bullets, state 1 = passing at handoff)
+### Test Contract (16 bullets, state 1 = passing at handoff)
 
 1. `test_default_read_spans_at_least_two_non_excluded_namespaces` — RED
 2. `test_salesai_cannot_be_reenabled_by_empty_settings_override` — RED
@@ -250,7 +250,7 @@ follow-up action, not a block on the slice.
   ``namespace: str | None = None``. All other internal callers
   are bound to a specific presence and continue to pass a
   string.
-- **Test contract.** 15 tests, bounded per AGENTS.md Closure
+- **Test contract.** 16 tests, bounded per AGENTS.md Closure
   Rule: 13 RED discriminating + 2 GREEN preservation guards.
   Every proof point Yua named is covered.
 
