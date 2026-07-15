@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.3](https://github.com/ericmey/musubi/compare/v1.17.2...v1.17.3) (2026-07-15)
+
+
+### CI / Ops
+
+* **evals:** enable workflow_dispatch for the live scheduled gate ([#550](https://github.com/ericmey/musubi/issues/550)) ([d5e057b](https://github.com/ericmey/musubi/commit/d5e057b326f797b4522d856dec6e96dc5c899826))
+
 ## [1.17.2](https://github.com/ericmey/musubi/compare/v1.17.1...v1.17.2) (2026-07-15)
 
 
