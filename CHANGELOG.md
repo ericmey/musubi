@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.15.2](https://github.com/ericmey/musubi/compare/v1.15.1...v1.15.2) (2026-07-15)
+
+
+### Documentation
+
+* **lifecycle:** record metrics slice completion ([#505](https://github.com/ericmey/musubi/issues/505)) ([09a4ea2](https://github.com/ericmey/musubi/commit/09a4ea2b2a99babb11a48b8dad74acdaaa8de2bd))
+
+## [1.15.1](https://github.com/ericmey/musubi/compare/v1.15.0...v1.15.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* lifecycle job metrics and failure visibility (Issue [#368](https://github.com/ericmey/musubi/issues/368)) ([#498](https://github.com/ericmey/musubi/issues/498)) ([ee5ef6d](https://github.com/ericmey/musubi/commit/ee5ef6d7b866f6ad5b3cf67f2ff15cd34b9116ed))
+
 ## [1.15.0](https://github.com/ericmey/musubi/compare/v1.14.3...v1.15.0) (2026-07-15)
 
 
