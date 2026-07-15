@@ -17,6 +17,7 @@ without TEI. :func:`build_settings_retriever` is the real Qdrant+TEI boundary, e
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from musubi.evals.gates import check_nightly_thresholds
@@ -152,10 +153,19 @@ class _TEIComposite:
         return scores
 
 
-def build_settings_retriever() -> Retriever:
-    """Construct a retriever backed by REAL Qdrant + TEI from :class:`~musubi.settings.Settings`,
-    probing the dense TEI endpoint up front so an unavailable stack fails loud immediately rather
-    than mid-corpus. Mirrors the wiring in :mod:`musubi.api.bootstrap`. CI-exercised path."""
+@dataclass(frozen=True)
+class LiveBackends:
+    """The real Qdrant + TEI backends the live gate + BEIR measurement share."""
+
+    client: Any
+    embedder: Any
+    reranker: Any
+
+
+def build_settings_backends() -> LiveBackends:
+    """Construct the real Qdrant + TEI backends from :class:`~musubi.settings.Settings`, probing the
+    dense TEI endpoint up front so an unavailable stack fails loud immediately rather than mid-run.
+    Mirrors the wiring in :mod:`musubi.api.bootstrap`. CI-exercised path."""
     import asyncio
 
     from qdrant_client import QdrantClient
@@ -163,8 +173,6 @@ def build_settings_retriever() -> Retriever:
     from musubi.embedding import TEIDenseClient, TEIRerankerClient, TEISparseClient
     from musubi.embedding.base import EmbeddingError
     from musubi.embedding.chunked import ChunkedEmbedder
-    from musubi.retrieve.deep import RetrievalQuery, run_deep_retrieve
-    from musubi.retrieve.fast import run_fast_retrieve
     from musubi.settings import Settings
 
     try:
@@ -187,6 +195,19 @@ def build_settings_retriever() -> Retriever:
         asyncio.run(embedder.embed_dense(["live-gate readiness probe"]))
     except EmbeddingError as exc:
         raise LiveGateUnavailable(f"TEI dense endpoint unavailable: {exc}") from exc
+
+    return LiveBackends(client=client, embedder=embedder, reranker=reranker)
+
+
+def build_settings_retriever() -> Retriever:
+    """A retriever backed by the real Qdrant + TEI backends (fast/deep by query mode), for the live
+    scheduled gate. CI-exercised path."""
+    from musubi.embedding.base import EmbeddingError
+    from musubi.retrieve.deep import RetrievalQuery, run_deep_retrieve
+    from musubi.retrieve.fast import run_fast_retrieve
+
+    backends = build_settings_backends()
+    client, embedder, reranker = backends.client, backends.embedder, backends.reranker
 
     async def retrieve(query: dict[str, Any]) -> list[str]:
         namespace = str(query["namespace"])
@@ -219,9 +240,11 @@ def build_settings_retriever() -> Retriever:
 __all__ = [
     "BEIR_MIN_HYBRID_DENSE_DELTA",
     "HybridDenseSearch",
+    "LiveBackends",
     "LiveGateUnavailable",
     "Retriever",
     "aggregate",
+    "build_settings_backends",
     "build_settings_retriever",
     "enforce_thresholds",
     "evaluate_query",
