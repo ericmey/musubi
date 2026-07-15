@@ -96,3 +96,11 @@ Closure gap under frozen RET-004 scope (no new metrics/corpus/redesign):
 
 Gates green: `make check` (ruff format+check, mypy strict, pytest, coverage ≥85), focused eval + PR smoke,
 `make tc-coverage SLICE=slice-ret004-evals` → Closure Rule satisfied (7/7 harness bullets passing).
+
+**Scope of this PR — harness FOUNDATION, not the complete quality gate.** `tests/evals/` is
+**39 passed / 24 strict-xfail**. Only the **7 spec harness bullets** are closed here. The **24 explicit
+strict reds** (SmokeFixture / CLI-seam validation, the scheduled/nightly real-gate, abstention-FPR,
+contradiction/cross-plane blending, provisional recall, etc.) and the `@pytest.mark.evals` **integration
+stage remain OPEN** and are NOT implemented in this PR. Issue #430 stays **open**; the slice stays
+`in-review` (→ `in-progress`/further slices after merge). This PR does not claim the full RET-004 quality
+gate or all 14 contracts are complete.
