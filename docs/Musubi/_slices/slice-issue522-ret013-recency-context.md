@@ -9,10 +9,10 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -22,12 +22,13 @@ blocks: []
 Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canonical agent recall blends recent (including provisional immediately) with the highest-ranked established memories. Recent must be capped and deduped against ranked results, with provenance, state, warnings, and truncation surviving. Cross-modality federation uses explicitly authorized concrete namespace targets (without undoing RET-011 exact filtering).
 
 ## Specs to implement
-- Issue #522 (Wait, let me verify actual specs for this)
+- [[05-retrieval/context-pack]]
 
 ## Owned paths
 - `src/musubi/api/routers/context.py`
 - `tests/api/test_context.py`
 - `tests/api/test_ret007_telemetry_boundary.py` (RET-013 compatibility assertion only)
+- `docs/Musubi/05-retrieval/context-pack.md` (RET-013 contract update only)
 
 ## Forbidden paths
 - Scattered authorization exceptions (Issue #523 is out of scope).
@@ -43,6 +44,12 @@ Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canoni
 - `make check` is fully passing.
 
 ## Work log
+- 2026-07-15: Independent Yua closeout integrated RET-012/main once without
+  conflict, repaired the isolated worktree from the locked dependency set, and
+  reran the combined gates: `make check` passed with 2,136 tests, 194 skips,
+  four expected failures, and coverage above the repository threshold. The
+  context-pack Test Contract is now mechanically numbered; `tc-coverage`
+  proves all 15 bullets passing, including all four RET-013 bullets.
 - 2026-07-15: RET-013 now invokes the shared orchestration boundary once for the
   recent lane and once for the ranked lane. Updated the existing RET-007 context
   telemetry assertion to require one warning-counter increment per degraded lane
