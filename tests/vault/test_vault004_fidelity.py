@@ -3,7 +3,9 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from qdrant_client import QdrantClient
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.types.common import generate_ksuid
 from musubi.vault.frontmatter import (
     CuratedFrontmatter,
@@ -132,7 +134,7 @@ Body."""
         curated_knowledge_from_frontmatter(fm, vault_path="x", body_hash="a" * 64, content=body)
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_vault004_operational_reconciler_call(tmp_path: Path) -> None:
 
     from musubi.types.curated import CuratedKnowledge
@@ -152,10 +154,12 @@ async def test_vault004_operational_reconciler_call(tmp_path: Path) -> None:
 
             return DummyScanner()
 
+    qdrant = QdrantClient(":memory:")
+    coordinator = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
     reconciler = VaultReconciler(
         vault_root=tmp_path,
         curated_plane=DummyCuratedPlane(),  # type: ignore
-        coordinator=None,  # type: ignore
+        coordinator=coordinator,
     )
 
     fid = generate_ksuid()
@@ -180,9 +184,10 @@ Body."""
     assert created.title == "Op Test"
     assert created.musubi_managed is False
     assert created.content == "Body."
+    qdrant.close()
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_vault004_operational_watcher_call(tmp_path: Path) -> None:
     from musubi.types.curated import CuratedKnowledge
     from musubi.vault.watcher import VaultWatcher
@@ -194,10 +199,13 @@ async def test_vault004_operational_watcher_call(tmp_path: Path) -> None:
         async def create(self, memory: CuratedKnowledge) -> None:
             self.created_memory = memory
 
+    qdrant = QdrantClient(":memory:")
+    coordinator = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
     watcher = VaultWatcher(
         vault_root=tmp_path,
         curated_plane=DummyCuratedPlane(),  # type: ignore
         write_log=type("WL", (), {"consume_if_exists": lambda self, a, b: False})(),
+        coordinator=coordinator,
     )
 
     fid = generate_ksuid()
@@ -223,3 +231,4 @@ Body."""
     assert created.title == "Op Watcher"
     assert created.musubi_managed is False
     assert created.content == "Body."
+    qdrant.close()
