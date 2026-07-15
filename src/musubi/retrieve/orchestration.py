@@ -238,22 +238,24 @@ async def retrieve(
     themselves, so trimmed candidates are never counted.
     """
     result = await _retrieve_uncounted(client, embedder, reranker, query=query, llm=llm, now=now)
-    finalized = _finalize(result)
     # RET-002 (#500): account access ONCE, over exactly the delivered rows — after
     # fanout/dedup/sort/limit — never on a dropped candidate and independent of lineage
-    # hydration. Covers HTTP and streaming (both call this seam). Does not touch results/warnings.
-    if account_access and isinstance(finalized, Ok):
+    # hydration. Covers HTTP and streaming (both call this seam). Accounting runs before
+    # _finalize so telemetry records the actual terminal outcome exactly once.
+    if account_access and isinstance(result, Ok):
         # Fail-LOUD (access accounting drives lifecycle; it must never silently vanish) but honor
         # the Result contract: normalize an accounting failure to a typed Err, never a raw raise.
         try:
-            await account_delivered(client, finalized.value.results)
+            await account_delivered(client, result.value.results)
         except Exception as exc:
-            return Err(
-                error=RetrievalError(
-                    kind="internal", detail=f"access accounting failed: {type(exc).__name__}"
+            return _finalize(
+                Err(
+                    error=RetrievalError(
+                        kind="internal", detail=f"access accounting failed: {type(exc).__name__}"
+                    )
                 )
             )
-    return finalized
+    return _finalize(result)
 
 
 async def _retrieve_uncounted(

@@ -321,7 +321,15 @@ async def test_retrieve_normalizes_accounting_failure_to_typed_err(
     async def _boom(*_a: Any, **_k: Any) -> None:
         raise RuntimeError("qdrant write exploded with secret detail")
 
+    finalized_kinds: list[str] = []
+    real_finalize = orch._finalize
+
+    def _record_finalize(result: Any) -> Any:
+        finalized_kinds.append("err" if isinstance(result, Err) else "ok")
+        return real_finalize(result)
+
     monkeypatch.setattr(orch, "account_delivered", _boom)
+    monkeypatch.setattr(orch, "_finalize", _record_finalize)
     q = RetrievalQuery(
         namespace=ns,
         query_text="loud failure marker",
@@ -336,6 +344,10 @@ async def test_retrieve_normalizes_accounting_failure_to_typed_err(
     assert res.error.kind == "internal"
     assert "secret detail" not in res.error.detail, (
         "detail must be bounded (type name, not raw message)"
+    )
+    assert finalized_kinds == ["err"], (
+        "accounting failure must pass through the shared final boundary exactly once; "
+        "a success must not emit telemetry before accounting completes"
     )
 
 

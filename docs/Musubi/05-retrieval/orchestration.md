@@ -176,8 +176,9 @@ return Ok(results)
 
 After the envelope is finalized (fanout, dedup, sort, and limit all applied), account each
 **delivered** row exactly once — never a dropped candidate, and identically whether or not
-lineage was hydrated. One async step in `retrieve()` immediately after `_finalize`, over
-`envelope.results`:
+lineage was hydrated. One async step in `retrieve()` immediately before `_finalize`, over the
+candidate envelope's final `results`, so accounting failures also pass through the shared telemetry
+boundary exactly once:
 
 - Group delivered rows by plane; account only planes whose type carries `access_count`
   (episodic, curated, concept). artifact and thought lack the field → explicit no-op.
@@ -189,8 +190,7 @@ lineage was hydrated. One async step in `retrieve()` immediately after `_finaliz
   then `build_context_pack` trims by `max_items`/`max_chars`/filler. So the router passes
   `retrieve(account_access=False)` and calls `account_delivered` itself on the flattened final
   pack items (each carries `namespace` + `object_id` + `plane`) — a trimmed candidate is never
-  counted. An
-  empty pack accounts nothing.
+  counted. An empty pack accounts nothing.
 - Concurrency: batched read-modify-write, **not** atomic. True concurrent-counter safety is
   tracked separately (Issue #502). Typed results and warnings are unchanged by this step.
 
