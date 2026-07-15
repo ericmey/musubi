@@ -29,9 +29,12 @@ import logging
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.planes.curated.plane import CuratedPlane
+from musubi.types.common import Err
 from musubi.types.curated import CuratedKnowledge
 from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
+from musubi.vault.watcher import infer_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +49,15 @@ class VaultReconciler:
     deals with already-stamped files).
     """
 
-    def __init__(self, vault_root: Path, curated_plane: CuratedPlane) -> None:
+    def __init__(
+        self,
+        vault_root: Path,
+        curated_plane: CuratedPlane,
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> None:
         self.vault_root = vault_root
         self.curated_plane = curated_plane
+        self.coordinator = coordinator
         # In-memory body-hash cache: ``object_id`` → last-upserted hash.
         # Survives the process lifetime; on restart the first pass
         # re-upserts everything (one-time cost; subsequent passes are
@@ -76,16 +85,22 @@ class VaultReconciler:
         skipped_no_id = 0
         errored = 0
 
+        seen_paths: set[str] = set()
         for file_path in self.vault_root.rglob("*"):
             if not file_path.is_file() or file_path.suffix.lower() != ".md":
                 continue
-            rel_parts = file_path.relative_to(self.vault_root).parts
+            try:
+                rel_parts = file_path.relative_to(self.vault_root).parts
+            except ValueError:
+                continue
             # Hidden dirs (`.obsidian`, `.git`), Markdown-Obsidian
             # scratch dirs (`_sketch`, `_secrets`), and similar.
             if any(p.startswith(".") or p.startswith("_") for p in rel_parts):
                 continue
 
             scanned += 1
+            rel_str = str(file_path.relative_to(self.vault_root))
+            seen_paths.add(rel_str)
             outcome = await self._reconcile_file(file_path)
             if outcome == "upserted":
                 upserted += 1
@@ -96,14 +111,63 @@ class VaultReconciler:
             elif outcome == "error":
                 errored += 1
 
+        # Ghost row reconciliation (VAULT-001)
+        ghosts_archived = 0
+        ghosts_pending = 0
+        try:
+            inventory = await self.curated_plane.scan_vault_rows()
+            for row in inventory:
+                vp = row.vault_path
+                if not vp or row.state in ("archived", "superseded"):
+                    continue
+                if vp not in seen_paths:
+                    expected_ns = infer_namespace(vp)
+                    if row.namespace != expected_ns:
+                        logger.debug(
+                            "Ghost row candidate %s namespace %s does not match expected %s, skipping",
+                            vp,
+                            row.namespace,
+                            expected_ns,
+                        )
+                        continue
+
+                    try:
+                        res = await self.curated_plane.transition(
+                            namespace=row.namespace,
+                            object_id=row.object_id,
+                            to_state="archived",
+                            actor="system/vault-reconciler",
+                            reason=f"Ghost row reconciliation (deleted from disk): {vp}",
+                            coordinator=self.coordinator,
+                        )
+                        if isinstance(res, Err):
+                            logger.error(
+                                "Failed to archive ghost row %s: %s", vp, res.error.message
+                            )
+                            errored += 1
+                        else:
+                            if isinstance(res.value, TransitionPending):
+                                logger.info("Ghost row archive pending for %s", vp)
+                                ghosts_pending += 1
+                            else:
+                                logger.info("Archived ghost row missing from disk: %s", vp)
+                                ghosts_archived += 1
+                    except Exception as exc:
+                        logger.error("Error archiving ghost row %s: %s", vp, exc)
+                        errored += 1
+        except Exception as exc:
+            logger.error("Failed to scan curated plane for ghost rows: %s", exc)
+
         logger.info(
             "vault-reconcile complete scanned=%d upserted=%d "
-            "unchanged=%d no_object_id=%d errored=%d",
+            "unchanged=%d no_object_id=%d errored=%d ghosts_archived=%d ghosts_pending=%d",
             scanned,
             upserted,
             skipped_unchanged,
             skipped_no_id,
             errored,
+            ghosts_archived,
+            ghosts_pending,
         )
         return upserted
 
@@ -162,6 +226,7 @@ def build_vault_reconcile_jobs(
     vault_root: Path,
     curated_plane: CuratedPlane,
     lock_dir: Path,
+    coordinator: LifecycleTransitionCoordinator,
 ) -> list[Any]:
     """Return the one-element ``Job`` list for the lifecycle scheduler.
 
@@ -179,7 +244,9 @@ def build_vault_reconcile_jobs(
     from musubi.lifecycle.scheduler import Job, file_lock
 
     lock_path = lock_dir / "vault_reconcile.lock"
-    reconciler = VaultReconciler(vault_root=vault_root, curated_plane=curated_plane)
+    reconciler = VaultReconciler(
+        vault_root=vault_root, curated_plane=curated_plane, coordinator=coordinator
+    )
 
     async def _run_once() -> None:
         try:

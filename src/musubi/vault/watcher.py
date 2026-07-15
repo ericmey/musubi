@@ -101,6 +101,15 @@ class WatcherHandler(FileSystemEventHandler):
             self.loop.call_soon_threadsafe(self.watcher.enqueue_event, event)
 
 
+def infer_namespace(rel_path: str) -> str:
+    parts = Path(rel_path).parts
+    if len(parts) >= 2:
+        tenant = parts[0]
+        presence = parts[1]
+        return f"{tenant}/{presence}/curated"
+    return "system/internal/curated"
+
+
 class VaultWatcher:
     """Monitors the vault and synchronizes changes to Qdrant."""
 
@@ -320,7 +329,7 @@ class VaultWatcher:
                 "object_id": generate_ksuid(),
                 "created": now,
                 "updated": now,
-                "namespace": self._infer_namespace(rel_path),
+                "namespace": infer_namespace(rel_path),
             }
         )
         # Ensure it has a title if we're writing it back
@@ -330,14 +339,6 @@ class VaultWatcher:
         fm = CuratedFrontmatter.model_validate(data)
         self.writer.write_curated(rel_path, fm, body)
         logger.info("Bootstrapped object_id for %s", rel_path)
-
-    def _infer_namespace(self, rel_path: str) -> str:
-        parts = Path(rel_path).parts
-        if len(parts) >= 2:
-            tenant = parts[0]
-            presence = parts[1]
-            return f"{tenant}/{presence}/curated"
-        return "system/internal/curated"
 
     async def _handle_deleted(self, rel_path: str) -> None:
         # TODO: Implement archival flow
