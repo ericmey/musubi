@@ -375,6 +375,32 @@ def test_crash_after_done_before_clear_recovers_without_reapply(real_qdrant: Qdr
     assert row.get("update_lease_token") is None  # the stale done token was cleared
 
 
+@pytest.mark.integration
+def test_plan_error_releases_own_token_and_fails_loud(real_qdrant: QdrantClient) -> None:
+    """Yua #539 review 3: if plan(held) raises, the own token must be released (no lease leak that
+    would block the row until TTL) and the ORIGINAL error must propagate fail-loud."""
+
+    class _Boom(RuntimeError):
+        pass
+
+    def exploding_plan(_cur: dict[str, Any]) -> MutationPlan:
+        raise _Boom("plan blew up")
+
+    ns, oid = _seed(real_qdrant, importance=5)
+    with pytest.raises(_Boom, match="plan blew up"):
+        _run_owned(
+            real_qdrant,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=exploding_plan,
+        )
+    row = _payload(real_qdrant, oid)
+    assert row.get("update_lease_token") is None  # released — no leaked lease
+    assert row.get("version") == 1  # row untouched — the failed plan committed nothing
+
+
 class _AlwaysLiveOwnerClient:
     """Fake client whose row always shows a FRESH foreign owner token → acquire can never win."""
 

@@ -43,18 +43,25 @@ same next version), so the only sound win signal is an exact, unique, never-reus
 1. ACQUIRE — write `own:<issued_us>:<nonce>` fenced on the row being at the EXACT read `version`
    AND the token empty, or on the EXACT observed EXPIRED token (crash takeover, never a blind steal).
 2. ATTRIBUTE — read back; proceed only if the stored token is our exact token. The only win signal.
-3. VECTORS (proven owner only) — `update_vectors` runs inside the held critical section, so a loser
-   never reaches it and can never overwrite a vector.
-4. PUBLISH — `set_payload` of ONLY the intended-change fields + `version = read_version+1` +
-   `update_lease_token = None`, fenced on the exact token. Narrow write ⇒ unrelated fields compose;
-   a same-field conflict surfaces as a retry against the fresh row. Single commit point.
-5. ATTRIBUTE PUBLISH — landed iff token cleared and version advanced; else retry, never a silent
-   overwrite. Bounded retry + jitter; exhaustion raises `MutationLeaseConflict` (typed).
+3. VECTORS (best-effort, **NOT safe — Phase-2 gap**) — `update_vectors` for the two vector-changing
+   paths. `update_vectors` is **unfenceable on the deployed Qdrant (server 1.15 silently ignores
+   `update_filter`, verified)**, so a stalled old owner's late write can corrupt a newer committed
+   vector. Vector atomicity is explicitly Phase-2 (immutable point + fenced pointer); this path is
+   out of Phase-1's safety claim. If plan() raises, the own token is released before re-raising.
+4. COMMIT — `set_payload` of ONLY the intended-change fields + `version = read_version+1` +
+   `update_lease_token = "done:<issued>:<nonce>"`, fenced on the exact `own` token. Narrow write ⇒
+   unrelated fields compose; a same-field conflict retries against the fresh row.
+5. ATTRIBUTE — landed **iff our EXACT `done` token is read back** (mirrors `access_lease`);
+   `{token==None AND version==read+1}` is NOT attributable — a takeover publishing a different change
+   at the same next version would be falsely claimed as ours. Then CLEAR fenced on the exact `done`.
+   Bounded retry + jitter; exhaustion raises `MutationLeaseConflict` (typed).
 
-Crash safety: the fenced publish is the only commit point, so a crash before it abandons the whole
-update (no partial commit) and the row is taken over on its exact expired token; a crash between the
-vector publish and the payload publish leaves vectors ahead of a not-yet-committed payload under a
-held token, converged by the next owner re-deriving from the committed content.
+Crash safety (payload): the done-token commit is the single commit point. A crash before it abandons
+the whole update (no partial commit); a crash after it (expired `done`) self-heals — the next writer
+takes over the exact expired token and applies its change at the next version, never re-applying or
+losing the committed change. **Vectors are NOT crash-safe** (Phase-2, above); a crash between the
+vector write and the payload commit can leave vectors mismatched with content, and no takeover
+repairs it — the reason vector-changing paths are excluded from Phase-1's guarantee.
 
 ## Full-point / full-object UPDATE inventory (all routed through the mutation lease)
 

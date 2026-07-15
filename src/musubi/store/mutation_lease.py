@@ -145,6 +145,25 @@ def _read(client: QdrantClient, collection: str, namespace: str, object_id: str)
     return dict(records[0].payload or {}) if records else {}
 
 
+def _clear_token(
+    client: QdrantClient, collection: str, namespace: str, object_id: str, token: str
+) -> None:
+    """Release the EXACT ``token`` (fenced). Best-effort cleanup — a taken-over token matches zero,
+    which is fine (it is no longer ours to release)."""
+    client.set_payload(
+        collection_name=collection,
+        payload={"update_lease_token": None},
+        points=models.Filter(
+            must=[
+                *_conditions(namespace, object_id),
+                models.FieldCondition(
+                    key="update_lease_token", match=models.MatchValue(value=token)
+                ),
+            ]
+        ),
+    )
+
+
 async def owned_update(
     client: QdrantClient,
     collection: str,
@@ -212,7 +231,13 @@ async def owned_update(
             continue  # lost the acquire (foreign winner, or the version moved) — retry.
 
         # ---- compute the intended change against the CONFIRMED-current row ----
-        mutation = plan(held)
+        # A plan error must not leak our lease (which would block the row until the TTL). Release our
+        # exact own token first, then re-raise the ORIGINAL error fail-loud.
+        try:
+            mutation = plan(held)
+        except Exception:
+            _clear_token(client, collection, namespace, object_id, token)
+            raise
         if mutation.skip:
             client.set_payload(
                 collection_name=collection,
