@@ -946,7 +946,21 @@ def test_systemd_module_command_reaches_construction() -> None:
         "watcher.py must have an `if __name__ == '__main__':` block "
         "for `python -m musubi.vault.watcher` to actually call main()"
     )
-    assert "main()" in src, "the __main__ block must call main() (not just exit silently)"
+    # The __main__ block must actually CALL main(), not merely define it.
+    # A bare ``"main()" in src`` is a false positive: it matches the
+    # ``def main()`` definition above the guard even if the guard body never
+    # calls it. Capture the guard's indented body and assert a main() call
+    # lives inside it (Copilot PR #562).
+    import re
+
+    guard_match = re.search(
+        r"if\s+__name__\s*==\s*['\"]__main__['\"]\s*:(?P<body>(?:\n[ \t]+.*)+)",
+        src,
+    )
+    assert guard_match is not None and re.search(r"\bmain\(\)", guard_match.group("body")), (
+        "the `if __name__ == '__main__':` block must actually CALL main() "
+        "(not just define it above the guard, which would exit silently)"
+    )
     # 3. The runtime factory module is importable and exposes the
     # canonical production seam.
     runtime_module = importlib.import_module("musubi.vault.runtime")
