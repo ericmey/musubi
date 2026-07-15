@@ -358,8 +358,10 @@ async def test_accounting_is_batched_per_collection_not_n_plus_1(
     reranker: _FakeReranker,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Five delivered episodic rows must cost ONE accounting write to the episodic collection,
-    not five. Today deep hydration issues one write PER hydrated row (N+1)."""
+    """Five delivered episodic rows must be accounted with a bounded, batched number of writes to
+    the collection — NOT one write per row (N+1). Under the RET-008 fenced lease with no
+    contention this is one round = one batched acquire + one batched increment/release (2 writes),
+    for all five rows together, independent of row count."""
     ns = f"{_ROOT}/episodic"
     for i in range(5):
         await _seed_episodic(qdrant, embedder, ns, f"shared batch {i}")
@@ -382,6 +384,6 @@ async def test_accounting_is_batched_per_collection_not_n_plus_1(
 
     rows = await _run(qdrant, embedder, reranker, ns=ns, plane="episodic", mode="deep", limit=5)
     assert len(rows) == 5
-    assert writes.get(collection_for_plane("episodic"), 0) == 1, (
-        "accounting must be one batched write, not N+1"
+    assert writes.get(collection_for_plane("episodic"), 0) <= 2, (
+        "accounting must be batched (bounded writes for all rows), not N+1"
     )

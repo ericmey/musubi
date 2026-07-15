@@ -119,6 +119,15 @@ class MemoryObject(MusubiObject):
     reinforcement_count: int = Field(ge=0, default=0)
     last_accessed_at: datetime | None = None
     access_count: int = Field(ge=0, default=0)
+    #: RET-008 (#502): internal fenced-lease token for concurrency-safe access_count increments.
+    #: A writer ACQUIRES this record's lease (atomic filtered update when empty, or takeover of an
+    #: exact expired token), then increments ``access_count`` + clears the lease in one update
+    #: fenced on ``access_lease_token == mine`` — so a stale/taken-over holder can never write.
+    #: Encodes ``issued_at_us:nonce``. Written only by the shared lease seam
+    #: (``store.access_lease``). ``exclude=True`` keeps this operational plumbing OUT of every
+    #: serialization/API response (a read never exposes a stale token) while remaining an accepted
+    #: (not ``forbid``-rejected) key when a row is model-validated from its payload.
+    access_lease_token: str | None = Field(default=None, exclude=True)
 
     # Lineage
     supersedes: list[KSUID] = Field(default_factory=list)

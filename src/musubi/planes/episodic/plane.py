@@ -38,6 +38,7 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
+from musubi.store.access_lease import lease_increment_access
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
@@ -519,22 +520,29 @@ class EpisodicPlane:
             return None
 
         if bump_access:
-            access_count = payload.get("access_count", 0) + 1
-            now = utc_now()
-            now_str = now.isoformat().replace("+00:00", "Z")
-            self._client.batch_update_points(
-                collection_name=self._collection,
-                update_operations=[
-                    models.SetPayloadOperation(
-                        set_payload=models.SetPayload(
-                            payload={"access_count": access_count, "last_accessed_at": now_str},
-                            points=[_point_id(object_id)],
-                        )
-                    )
-                ],
+            # RET-008 (#502): route the direct-fetch bump through the SHARED fenced lease so it
+            # never races a concurrent retrieval-delivery increment (or another get) on the same
+            # row under multi-worker/cross-process parallelism. Re-read to return the post-bump row.
+            lease_increment_access(
+                self._client, self._collection, {(str(namespace), str(object_id))}
             )
-            payload["access_count"] = access_count
-            payload["last_accessed_at"] = now_str
+            refreshed, _ = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=namespace)
+                        ),
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=object_id)
+                        ),
+                    ]
+                ),
+                limit=1,
+                with_payload=True,
+            )
+            if refreshed and refreshed[0].payload:
+                payload = refreshed[0].payload
 
         return _memory_from_payload(payload)
 
