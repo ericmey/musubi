@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.0](https://github.com/ericmey/musubi/compare/v1.14.3...v1.15.0) (2026-07-15)
+
+
+### Features
+
+* streaming retrieval parity (Issue [#493](https://github.com/ericmey/musubi/issues/493)) ([#494](https://github.com/ericmey/musubi/issues/494)) ([713c32c](https://github.com/ericmey/musubi/commit/713c32c7cb7a05b15d10953c9fd5cd5d19bacb98))
+
 ## [1.14.3](https://github.com/ericmey/musubi/compare/v1.14.2...v1.14.3) (2026-07-15)
 
 
