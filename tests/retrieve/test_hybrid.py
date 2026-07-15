@@ -714,6 +714,33 @@ def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_d
             seeded_object_ids.add(str(written.object_id))
         per_query.append({"group": group, "target": str(answer.object_id)})
 
+    # Mature each distinct seeded row through the CANONICAL lifecycle transition. EpisodicPlane.create
+    # forcibly persists rows as provisional (ignoring the constructor's state=), and default
+    # hybrid_search excludes provisional — so unmatured rows are invisible to this mature-retrieval
+    # benchmark (the 0/0 root cause, Yua 2026-07-15). Do NOT raw-set state; transition each ACTUAL
+    # distinct object_id exactly once (dedup already collapsed them).
+    import tempfile
+    from pathlib import Path
+
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+
+    coordinator = LifecycleTransitionCoordinator(
+        client=backends.client, db_path=Path(tempfile.mkdtemp()) / "beir-coord.db"
+    )
+    for object_id in seeded_object_ids:
+        outcome = asyncio.run(
+            plane.transition(
+                namespace=namespace,
+                object_id=object_id,
+                to_state="matured",
+                actor="beir-eval",
+                reason="benchmark maturation",
+                coordinator=coordinator,
+            )
+        )
+        if isinstance(outcome, Err):
+            raise AssertionError(f"maturation transition failed for {object_id}: {outcome}")
+
     # Reuse the scheduled gate's visibility semantics on the ACTUAL distinct seeded count.
     asyncio.run(
         wait_for_visibility(
@@ -771,6 +798,105 @@ def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_d
         f"hybrid must beat dense-only by >= {BEIR_MIN_HYBRID_DENSE_DELTA} NDCG@10; "
         f"got hybrid {hybrid_ndcg:.4f} dense {dense_ndcg:.4f} delta {delta:.4f}"
     )
+
+
+@pytest.mark.integration
+def test_beir_maturation_makes_provisional_rows_visible_to_default_search() -> None:
+    """RED discriminator (Yua ruling): EpisodicPlane.create persists a row PROVISIONAL, and default
+    hybrid_search (mature-only visible states) cannot see it — the BEIR 0/0 root cause. The canonical
+    maturation transition makes the EXACT SAME row visible to default search. Real Qdrant + a
+    FakeEmbedder prove the maturation-visibility invariant with no TEI: pre-fix INVISIBLE, post-fix
+    VISIBLE."""
+    import os
+    import tempfile
+    from pathlib import Path
+
+    from qdrant_client import QdrantClient
+    from qdrant_client import models as qmodels
+
+    from musubi.embedding import FakeEmbedder
+    from musubi.evals.scheduled_gate import wait_for_visibility
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.planes.episodic.plane import EpisodicPlane
+    from musubi.retrieve.hybrid import hybrid_search
+    from musubi.store import bootstrap
+    from musubi.store.names import collection_for_plane
+    from musubi.types.common import LifecycleState, generate_ksuid
+    from musubi.types.episodic import EpisodicMemory
+
+    port = int(os.environ.get("MUSUBI_TEST_QDRANT_PORT", "6339"))
+    client = QdrantClient(host="localhost", port=port)
+    bootstrap(client)
+    embedder = FakeEmbedder()
+    plane = EpisodicPlane(client=client, embedder=embedder)
+    collection = collection_for_plane("episodic")
+    namespace = f"beirmat-{generate_ksuid()[:8].lower()}/dev/episodic"
+    probe = "maturation visibility probe row for the discriminator"
+
+    async def _search(*, include_provisional: bool) -> list[str]:
+        state_filter: tuple[LifecycleState, ...] | None = (
+            ("provisional", "matured") if include_provisional else None
+        )
+        result = await hybrid_search(
+            client,
+            embedder,
+            namespace=namespace,
+            query=probe,
+            collection=collection,
+            limit=10,
+            state_filter=state_filter,
+        )
+        assert not isinstance(result, Err), result
+        return [hit.object_id for hit in result.value.hits]
+
+    try:
+        saved = asyncio.run(
+            plane.create(EpisodicMemory(namespace=namespace, content=probe, state="matured"))
+        )
+        oid = str(saved.object_id)
+        asyncio.run(wait_for_visibility(client, collection, namespace, expected_count=1))
+
+        # Seeded + queryable when provisional is allowed — proves the row exists and is indexed.
+        assert oid in asyncio.run(_search(include_provisional=True))
+        # RED: default (mature-only) search cannot see the provisional row.
+        assert oid not in asyncio.run(_search(include_provisional=False)), (
+            "a create()-persisted provisional row must be INVISIBLE to default hybrid_search"
+        )
+
+        # Canonical maturation of the EXACT same row (no raw payload-set).
+        coordinator = LifecycleTransitionCoordinator(
+            client=client, db_path=Path(tempfile.mkdtemp()) / "coord.db"
+        )
+        outcome = asyncio.run(
+            plane.transition(
+                namespace=namespace,
+                object_id=oid,
+                to_state="matured",
+                actor="test",
+                reason="maturation-visibility probe",
+                coordinator=coordinator,
+            )
+        )
+        assert not isinstance(outcome, Err), outcome
+
+        # GREEN: the same row is now visible to default (mature-only) search.
+        assert oid in asyncio.run(_search(include_provisional=False)), (
+            "after canonical maturation the same row must be VISIBLE to default hybrid_search"
+        )
+    finally:
+        client.delete(
+            collection_name=collection,
+            points_selector=qmodels.FilterSelector(
+                filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="namespace", match=qmodels.MatchValue(value=namespace)
+                        )
+                    ]
+                )
+            ),
+        )
+        client.close()
 
 
 @pytest.mark.skip(reason="deferred to slice-ops-gpu: live TEI/Qdrant p95 requires reference host")
