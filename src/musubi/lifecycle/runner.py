@@ -491,9 +491,15 @@ async def _main_async() -> None:
         cursor=cursor,
         lock_dir=lock_dir,
     )
+    from musubi.planes.artifact.indexer import ArtifactIndexer
     from musubi.planes.artifact.plane import ArtifactPlane
 
     artifact_plane = ArtifactPlane(client=qdrant, embedder=embedder)
+    # C4/ART-001: register the committed-generation indexer as the coordinator's 'artifact_index'
+    # handler so the reconcile job drives upload-enqueued indexing intents to a committed head.
+    ArtifactIndexer(
+        client=qdrant, embedder=embedder, blob_root=settings.artifact_blob_path
+    ).register(coordinator)
     dem_jobs = build_demotion_jobs(
         deps=DemotionDeps(
             qdrant=qdrant,
