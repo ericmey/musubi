@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.6](https://github.com/ericmey/musubi/compare/v1.17.5...v1.17.6) (2026-07-15)
+
+
+### Bug Fixes
+
+* **lifecycle:** enforce hard-fence semantics rejecting mismatched expected_version mutations ([#568](https://github.com/ericmey/musubi/issues/568)) ([e9319e1](https://github.com/ericmey/musubi/commit/e9319e1be7b3a93d2ce38ff1fc7934e3ae4775ef))
+
 ## [1.17.5](https://github.com/ericmey/musubi/compare/v1.17.4...v1.17.5) (2026-07-15)
 
 
