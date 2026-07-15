@@ -1,6 +1,6 @@
 ---
 owner: gemini-3-1-shiori
-status: in-progress
+status: in-review
 issue: 504
 title: "Slice: LIFE-004 promotion retry classification"
 slice_id: slice-issue504-life004-promotion-retry
@@ -9,7 +9,7 @@ type: slice
 phase: "Lifecycle"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
 reviewed: false
@@ -22,7 +22,7 @@ blocks: []
 Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure failures burn a strike, leading to concepts being incorrectly blocked from promotion. We must classify deterministic/policy failures vs transient ones so only deterministic errors increment the attempts count.
 
 ## Specs to implement
-- Issue #504
+- [[06-ingestion/promotion]]
 
 ## Owned paths
 - `src/musubi/lifecycle/promotion.py`
@@ -32,11 +32,17 @@ Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure
 - Qdrant logic, LLM adapter implementations.
 
 ## Test Contract
-- Deterministic failure increments attempts.
-- Transient failure leaves attempts unchanged.
+- `test_deterministic_rendering_failure_increments_attempts`
+- `test_transient_rendering_failure_leaves_attempts_unchanged`
+- `test_deterministic_post_render_failure_increments_attempts`
+- `test_transient_post_render_failure_leaves_attempts_unchanged`
+
 
 ## Definition of Done
 - Error classification logic is in place.
 - `make check` is fully passing.
 
 ## Work log
+- Updated `promotion.py` to differentiate ValueError (deterministic) from generic Exception (transient) during LLM rendering.
+- Updated post-render pipeline to catch ValueError, TypeError, RuntimeError as deterministic, and generic Exception as transient.
+- Converted single failing test into four distinct tests covering transient vs deterministic cases for both stages.

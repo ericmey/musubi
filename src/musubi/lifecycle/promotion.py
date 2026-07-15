@@ -36,6 +36,10 @@ PROMOTION_IMPORTANCE_THRESHOLD = 6
 PROMOTION_MAX_ATTEMPTS = 3
 
 
+class PromotionPolicyError(Exception):
+    """Deterministic business logic/policy rejection that burns a strike."""
+
+
 class PromotionRender(BaseModel):
     body: str = Field(min_length=100, max_length=20000)
     wikilinks: list[str]
@@ -247,13 +251,13 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
     """Attempt to promote one concept. Returns True iff it actually shipped
     a curated row + vault file.
 
-    Any failure — render, vault write, curated-plane create, concept
-    transition, thought emit — records a rejection via
+    Explicit deterministic failures (render ValueError, path/frontmatter validation
+    via PromotionPolicyError) record a rejection via
     :meth:`ConceptPlane.record_promotion_rejection`, which bumps
     `promotion_attempts`. The three-strikes gate then locks the concept
-    out after three consecutive failures. Transient infra issues (e.g.
-    Qdrant briefly down) do burn an attempt — accepted cost for making
-    a genuinely broken concept stop poisoning every sweep."""
+    out after three consecutive failures. Transient infra issues (vault
+    write, Qdrant briefly down, etc.) do NOT burn an attempt and are
+    left for the next sweep."""
     now = utc_now()
 
     # Render markdown via LLM
@@ -264,17 +268,27 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             rationale=concept.synthesis_rationale,
             top_memories=[],
         )
-    except Exception as e:
-        log.warning("Rendering failed for concept %s: %s", concept.object_id, e)
+    except ValueError as e:
+        log.warning("Rendering failed deterministically for concept %s: %s", concept.object_id, e)
         await _record_rejection(deps, concept, reason=f"Rendering failed: {e}")
         return False
+    except Exception as e:
+        log.warning(
+            "Transient infrastructure failure during render for concept %s: %s",
+            concept.object_id,
+            e,
+        )
+        return False
 
-    # Post-render path. Any exception below bumps promotion_attempts via
-    # `record_promotion_rejection` so a broken concept can't poison every
-    # sweep indefinitely; the three-strikes gate will lock it out for
-    # operator attention after three consecutive failures.
+    # Post-render path. Explicit PromotionPolicyError (path computation,
+    # frontmatter validation) bumps promotion_attempts via
+    # `record_promotion_rejection`. Transient infra failures (vault,
+    # Qdrant) are caught but do not burn attempts.
     try:
-        rel_path = compute_path(concept)
+        try:
+            rel_path = compute_path(concept)
+        except ValueError as e:
+            raise PromotionPolicyError(f"Path computation failed: {e}") from e
 
         # Check conflict
         full_path = deps.vault_writer.vault_root / rel_path
@@ -380,9 +394,18 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             "Concept Promoted",
         )
         return True
-    except Exception as e:
-        log.warning("Post-render promotion failed for concept %s: %s", concept.object_id, e)
+    except PromotionPolicyError as e:
+        log.warning(
+            "Deterministic post-render promotion failed for concept %s: %s", concept.object_id, e
+        )
         await _record_rejection(deps, concept, reason=f"Post-render failed: {e}")
+        return False
+    except Exception as e:
+        log.warning(
+            "Transient infrastructure failure during post-render for concept %s: %s",
+            concept.object_id,
+            e,
+        )
         return False
 
 

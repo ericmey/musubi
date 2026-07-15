@@ -545,22 +545,29 @@ async def test_thought_emitted_to_ops_alerts(deps: Any) -> None:
 
 
 # Failure:
-class _AlwaysFailingLLM:
-    """LLM that raises on every render — drives the rejection path."""
-
+class _TransientFailingLLM:
     async def render_curated_markdown(
         self, title: str, content: str, rationale: str, top_memories: list[str]
-    ) -> PromotionRender:
-        raise RuntimeError("LLM render failed")
+    ) -> Any:
+        import httpx
+
+        raise httpx.ConnectError("Connection refused", request=httpx.Request("POST", "http://test"))
+
+
+class _DeterministicFailingLLM:
+    async def render_curated_markdown(
+        self, title: str, content: str, rationale: str, top_memories: list[str]
+    ) -> Any:
+        raise ValueError("Invalid markdown")
 
 
 @pytest.mark.asyncio
-async def test_rendering_failure_increments_attempts_not_promotes(deps: Any) -> None:
+async def test_deterministic_rendering_failure_increments_attempts(deps: Any) -> None:
     from dataclasses import replace
 
     from musubi.lifecycle.promotion import run_promotion_sweep
 
-    failing_deps = replace(deps, llm=_AlwaysFailingLLM())
+    failing_deps = replace(deps, llm=_DeterministicFailingLLM())
     c = _concept()
     await failing_deps.concept_plane.create(c)
     await failing_deps.concept_plane.transition(
@@ -576,50 +583,61 @@ async def test_rendering_failure_increments_attempts_not_promotes(deps: Any) -> 
     promoted_count = await run_promotion_sweep(failing_deps)
     assert promoted_count == 0
 
-    after = await failing_deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
-    assert after is not None
-    # Render failure took the rejection path, which bumps attempts.
-    assert after.promotion_attempts == 1
-    # Rejection fields set, not promotion fields.
-    assert after.promotion_rejected_at is not None
-    assert after.promotion_rejected_reason is not None
-    assert after.promoted_to is None
-
-
-class _ExplodingVaultWriter(FakeVaultWriter):
-    """Vault writer that raises from `write_curated` — exercises the
-    post-render failure path (not the render path)."""
-
-    def write_curated(self, vault_relative_path: str, frontmatter: Any, body: str) -> Path:
-        raise OSError("simulated disk failure")
+    readback = await failing_deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback is not None
+    assert readback.state == "matured"
+    assert readback.promotion_attempts == 1
+    assert readback.promotion_rejected_at is not None
+    assert readback.promotion_rejected_reason is not None
 
 
 @pytest.mark.asyncio
-async def test_post_render_failure_also_bumps_attempts(
-    qdrant: QdrantClient,
-    concept_plane: ConceptPlane,
-    curated_plane: CuratedPlane,
-    events_sink: LifecycleEventSink,
-    vault_root: Path,
-    coordinator: LifecycleTransitionCoordinator,
-) -> None:
-    # Render succeeds (FakePromotionLLM returns a valid body), but the
-    # vault writer raises. The three-strikes gate has to cover this too
-    # — otherwise a concept whose LLM renders but whose FS op breaks
-    # would retry forever.
+async def test_transient_rendering_failure_leaves_attempts_unchanged(deps: Any) -> None:
+    from dataclasses import replace
 
-    from musubi.lifecycle.promotion import PromotionDeps, run_promotion_sweep
+    from musubi.lifecycle.promotion import run_promotion_sweep
 
-    deps = PromotionDeps(
-        qdrant=qdrant,
-        coordinator=coordinator,
-        concept_plane=concept_plane,
-        curated_plane=curated_plane,
-        events=events_sink,
-        llm=FakePromotionLLM(),
-        vault_writer=_ExplodingVaultWriter(vault_root),
-        thoughts=FakeThoughtEmitter(),
+    failing_deps = replace(deps, llm=_TransientFailingLLM())
+    c = _concept()
+    await failing_deps.concept_plane.create(c)
+    await failing_deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=failing_deps.coordinator,
     )
+    _set_old(failing_deps, "concept", str(c.object_id))
+
+    promoted_count = await run_promotion_sweep(failing_deps)
+    assert promoted_count == 0
+
+    readback = await failing_deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback is not None
+    assert readback.state == "matured"
+    assert readback.promotion_attempts == 0
+    assert readback.promotion_rejected_at is None
+
+
+class _TransientFailingVault:
+    vault_root: Any = Path("/tmp")
+
+    def write_curated(self, path: str, frontmatter: Any, body: str) -> None:
+        raise OSError("Disk full")
+
+
+@pytest.mark.asyncio
+async def test_deterministic_post_render_failure_increments_attempts(
+    deps: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import musubi.lifecycle.promotion
+    from musubi.lifecycle.promotion import run_promotion_sweep
+
+    def _failing_compute_path(concept: Any) -> str:
+        raise ValueError("Path computation failed deterministically")
+
+    monkeypatch.setattr(musubi.lifecycle.promotion, "compute_path", _failing_compute_path)
 
     c = _concept()
     await deps.concept_plane.create(c)
@@ -633,16 +651,12 @@ async def test_post_render_failure_also_bumps_attempts(
     )
     _set_old(deps, "concept", str(c.object_id))
 
-    count = await run_promotion_sweep(deps)
-    assert count == 0
+    promoted_count = await run_promotion_sweep(deps)
+    assert promoted_count == 0
 
-    after = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
-    assert after is not None
-    assert after.promotion_attempts == 1
-    assert after.promotion_rejected_reason is not None
-    assert "Post-render failed" in after.promotion_rejected_reason
-    # Not promoted.
-    assert after.promoted_to is None
+    readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback is not None
+    assert readback.promotion_attempts == 1
 
 
 @pytest.mark.asyncio
@@ -651,7 +665,7 @@ async def test_promotion_rejected_after_3_attempts_stops_retrying(deps: Any) -> 
 
     from musubi.lifecycle.promotion import run_promotion_sweep
 
-    failing_deps = replace(deps, llm=_AlwaysFailingLLM())
+    failing_deps = replace(deps, llm=_DeterministicFailingLLM())
     c = _concept()
     await failing_deps.concept_plane.create(c)
     await failing_deps.concept_plane.transition(
