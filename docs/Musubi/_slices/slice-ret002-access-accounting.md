@@ -1,6 +1,6 @@
 ---
-owner: aoi
-status: in-progress
+owner: claude-code-opus48
+status: in-review
 issue: 500
 title: "Slice: RET-002 final-delivery access accounting"
 slice_id: slice-ret002-access-accounting
@@ -9,7 +9,7 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
 reviewed: false
@@ -87,3 +87,28 @@ guards (green before and after) and a streaming proof:
 - Wrote the discriminating red matrix FIRST; proved 9 RED + 4 correctly-green on base
   `5b53693` before any src change; implemented the decouple + shared batch seam; all green.
 - Concurrent-counter safety deliberately out of scope → Issue #502.
+
+### Out-of-scope: pre-existing `05-retrieval/orchestration` Test Contract bullets
+
+This slice cites `[[05-retrieval/orchestration]]` for its access-accounting bullets (19–28,
+all realized here). The spec's OTHER bullets are pre-existing gaps owned by the shipped
+`slice-retrieval-orchestration`, NOT introduced or in scope for RET-002 — they were already
+missing before this slice touched the spec. Their real follow-up is **Issue #509**. Declared
+out-of-scope here (per Yua, 2026-07-15) so the Closure Rule is honestly machine-green; NOT
+implemented in this slice:
+
+- `test_fast_mode_skips_rerank` — pre-existing, out-of-scope; follow-up #509.
+- `test_deep_mode_invokes_rerank` — pre-existing, out-of-scope; follow-up #509.
+- `test_fast_mode_skips_lineage_hydrate` — pre-existing, out-of-scope; follow-up #509.
+- `test_deep_mode_hydrates_when_flag_true` — pre-existing, out-of-scope; follow-up #509.
+- `test_steps_run_in_documented_order` — pre-existing, out-of-scope; follow-up #509.
+- `test_planes_run_in_parallel` — pre-existing, out-of-scope; follow-up #509.
+- `test_hydrate_fetches_run_in_parallel` — pre-existing, out-of-scope; follow-up #509.
+- `test_whole_call_timeout_fast_400ms` — pre-existing, out-of-scope; follow-up #509.
+- `test_per_plane_timeout_deep_1500ms` — pre-existing, out-of-scope; follow-up #509.
+- `test_rerank_timeout_returns_with_warning` — pre-existing, out-of-scope; follow-up #509.
+- `test_deterministic_for_fixed_inputs` — pre-existing, out-of-scope; follow-up #509.
+- `test_tiebreak_on_object_id` — pre-existing, out-of-scope; follow-up #509.
+- `integration: end-to-end fast-path on 10K corpus with real TEI + Qdrant, p95 ≤ 400ms` — integration, out-of-scope; follow-up #509.
+- `integration: end-to-end deep-path with rerank, NDCG@10 on golden set ≥ threshold` — integration, out-of-scope; follow-up #509.
+- `integration: kill TEI mid-request, pipeline returns with documented degradation` — integration, out-of-scope; follow-up #509.
