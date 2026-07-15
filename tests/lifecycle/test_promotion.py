@@ -690,13 +690,7 @@ async def test_deterministic_post_render_failure_increments_attempts(
 async def test_deterministic_model_validation_failure_increments_attempts(
     deps: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    import musubi.lifecycle.promotion
     from musubi.lifecycle.promotion import run_promotion_sweep
-
-    def _failing_model(*args: Any, **kwargs: Any) -> Any:
-        raise ValueError("Invalid field generated")
-
-    monkeypatch.setattr(musubi.lifecycle.promotion, "CuratedFrontmatter", _failing_model)
 
     c = _concept()
     await deps.concept_plane.create(c)
@@ -708,6 +702,27 @@ async def test_deterministic_model_validation_failure_increments_attempts(
         reason="test",
         coordinator=deps.coordinator,
     )
+
+    import musubi.lifecycle.promotion
+    from musubi.vault.frontmatter import CuratedFrontmatter
+
+    # We monkeypatch CuratedFrontmatter to just invoke itself with invalid arguments,
+    # ensuring a REAL pydantic.ValidationError is emitted, matching the exact
+    # production exception shape.
+    def _failing_model(*args, **kwargs):
+        # Passing an invalid `importance` type (e.g. dict) will reliably throw ValidationError
+        return CuratedFrontmatter(
+            object_id=c.object_id,
+            namespace=c.namespace,
+            title=c.title,
+            importance={},
+            state="matured",
+            created=c.created_at,
+            updated=c.updated_at,
+        )
+
+    monkeypatch.setattr(musubi.lifecycle.promotion, "CuratedFrontmatter", _failing_model)
+
     _set_old(deps, "concept", str(c.object_id))
 
     promoted_count = await run_promotion_sweep(deps)

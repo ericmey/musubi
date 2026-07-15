@@ -37,6 +37,7 @@ Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure
 - `test_transient_rendering_failure_leaves_attempts_unchanged`
 - `test_deterministic_post_render_failure_increments_attempts`
 - `test_transient_post_render_failure_leaves_attempts_unchanged`
+- `test_deterministic_model_validation_failure_increments_attempts`
 
 
 ## Definition of Done

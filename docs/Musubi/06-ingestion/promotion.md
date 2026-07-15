@@ -261,6 +261,7 @@ Failure:
 26. `test_transient_rendering_failure_leaves_attempts_unchanged`
 27. `test_deterministic_post_render_failure_increments_attempts`
 28. `test_transient_post_render_failure_leaves_attempts_unchanged`
+29. `test_deterministic_model_validation_failure_increments_attempts`
 
 Concurrency:
 
