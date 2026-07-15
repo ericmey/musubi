@@ -427,11 +427,31 @@ class VaultWatcher:
             )
             return
 
-        # Err(TransitionError) — every code here is a real anomaly now
-        # that we've pre-filtered the common repeat-delete case. Log
-        # the from_state so operators can see WHY it failed (e.g.
-        # superseded -> archived is illegal in the curated state table).
         err = result.error
+
+        # Concurrent-archive race: between our find_by_vault_path read
+        # (which saw a non-archived row) and this transition, another
+        # actor archived the SAME row. The canonical transition then
+        # sees state=archived and rejects archived -> archived as an
+        # illegal_transition with from_state=archived. The end state is
+        # exactly what this delete wanted, so it is an idempotent no-op —
+        # the same outcome as the pre-read archived-state check above,
+        # just resolved one layer down. We do NOT warn. Every OTHER
+        # illegal from_state (superseded/demoted/etc) is a real anomaly
+        # and stays a fail-closed warning.
+        if err.code == "illegal_transition" and getattr(err, "from_state", None) == "archived":
+            logger.debug(
+                "vault-delete-idempotent-race path=%s object_id=%s from_state=archived",
+                rel_path,
+                current.object_id,
+            )
+            return
+
+        # Err(TransitionError) — every code here is a real anomaly now
+        # that we've pre-filtered the common repeat-delete case AND the
+        # concurrent archived->archived race. Log the from_state so
+        # operators can see WHY it failed (e.g. superseded -> archived is
+        # illegal in the curated state table).
         logger.warning(
             "vault-delete-failed path=%s object_id=%s code=%s from_state=%s to_state=%s message=%s",
             rel_path,

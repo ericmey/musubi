@@ -54,7 +54,7 @@ from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.transitions import TransitionError
 from musubi.planes.curated import CuratedPlane
-from musubi.types.common import Err
+from musubi.types.common import Err, Ok
 from musubi.types.curated import CuratedKnowledge
 from musubi.vault.frontmatter import CuratedFrontmatter, dump_frontmatter
 from musubi.vault.watcher import VaultWatcher
@@ -746,6 +746,87 @@ async def test_superseded_row_delete_emits_visible_warning(
     )
 
 
+@pytest.mark.asyncio
+async def test_concurrent_archive_race_is_idempotent_not_warned(
+    plane: CuratedPlane,
+    ns: str,
+    watcher: VaultWatcher,
+    coordinator: LifecycleTransitionCoordinator,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """H12 Copilot round-3 (Yua ruling 1): the concurrent-archive race.
+
+    ``find_by_vault_path`` reads a non-archived row, but before the
+    watcher issues its transition another actor archives the SAME row.
+    The canonical transition then rejects ``archived -> archived`` with
+    ``illegal_transition(from_state='archived')``. The end state is
+    exactly what this delete wanted, so it MUST be an idempotent no-op
+    (debug, NO warning) — the same outcome as the pre-read
+    archived-state carve-out, just resolved one layer down.
+
+    Discriminator vs test_superseded_row_delete_emits_visible_warning:
+    identical rejection shape EXCEPT ``from_state``. superseded -> WARN
+    (real anomaly); archived -> DEBUG no-op (benign race). The pre-fix
+    watcher warned on BOTH, so this test is RED before the fix.
+    """
+    saved = await plane.create(
+        _make_curated(
+            namespace=ns,
+            vault_path="eric/shared/race-archived.md",
+            content="Row archived by a concurrent actor mid-delete.",
+        )
+    )
+
+    real_transition = plane.transition
+    called: dict[str, Any] = {}
+
+    async def _archived_race_transition(*args: Any, **kwargs: Any) -> Any:
+        called["kwargs"] = kwargs
+        from musubi.lifecycle.transitions import TransitionError
+
+        return Err(
+            error=TransitionError(
+                code="illegal_transition",
+                message="simulated race: archived -> archived is not permitted",
+                from_state="archived",
+                to_state="archived",
+            )
+        )
+
+    plane.transition = _archived_race_transition  # type: ignore[method-assign]
+    try:
+        rel_path = "eric/shared/race-archived.md"
+        abs_path = str(watcher.vault_root / rel_path)
+        with caplog.at_level(logging.DEBUG, logger="musubi.vault.watcher"):
+            await watcher._handle_event(abs_path, FileDeletedEvent(abs_path))
+    finally:
+        plane.transition = real_transition  # type: ignore[method-assign]
+
+    # The seam was actually invoked — the row was NOT short-circuited by
+    # the archived-state pre-check (it was 'matured' at find time here),
+    # so the idempotency decision came from the from_state='archived'
+    # transition result, which is exactly the race path.
+    assert called, f"the canonical transition seam must have been invoked; called={called!r}"
+
+    # NO warning: the benign race must not page an operator.
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert not warnings, (
+        f"concurrent archived->archived race must NOT warn (idempotent no-op); got: "
+        f"{[r.getMessage() for r in warnings]!r}"
+    )
+
+    # A visible DEBUG breadcrumb records the race for anyone reading logs.
+    debug_msgs = " ".join(
+        r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG
+    )
+    assert "vault-delete-idempotent-race" in debug_msgs, (
+        f"race must log a 'vault-delete-idempotent-race' debug breadcrumb; got: {debug_msgs!r}"
+    )
+    # Sanity: the saved row still exists (the simulated reject committed
+    # nothing; the real race would have it already archived by the peer).
+    assert saved.object_id
+
+
 # --------------------------------------------------------------------------- #
 # VAULT-003 Blocker 1: LIVE REACHABILITY discriminator
 # --------------------------------------------------------------------------- #
@@ -989,6 +1070,47 @@ def test_find_by_vault_path_uses_limit_two_for_fail_closed() -> None:
         "client rejects it (TypeError) and the bounded contract is "
         "limit=2.\n"
         f"Source:\n{src}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_by_vault_path_scroll_requests_payload_only(
+    plane: CuratedPlane,
+    ns: str,
+) -> None:
+    """H12 Copilot round-3 (Yua ruling 2): ``find_by_vault_path`` only
+    needs the payload (object_id + state). It must ask Qdrant for
+    ``with_vectors=False`` so the dense + sparse vectors are not shipped
+    back on every vault delete. This spies the EXACT scroll request
+    against the real client rather than reading source text."""
+    await plane.create(
+        _make_curated(
+            namespace=ns,
+            vault_path="eric/shared/payload-only.md",
+            content="Row whose lookup must not pull vectors back.",
+        )
+    )
+
+    captured: dict[str, Any] = {}
+    real_scroll = plane._client.scroll
+
+    def _spy_scroll(*args: Any, **kwargs: Any) -> Any:
+        # Record the LAST scroll's kwargs (find_by_vault_path issues one).
+        captured.clear()
+        captured.update(kwargs)
+        return real_scroll(*args, **kwargs)
+
+    plane._client.scroll = _spy_scroll  # type: ignore[method-assign]
+    try:
+        result = await plane.find_by_vault_path("eric/shared/payload-only.md")
+    finally:
+        plane._client.scroll = real_scroll  # type: ignore[method-assign]
+
+    # The lookup resolved (sanity: the spy delegated to the real scroll).
+    assert isinstance(result, Ok), f"expected Ok resolution, got {result!r}"
+    assert captured.get("with_vectors") is False, (
+        "find_by_vault_path must scroll with with_vectors=False (payload-only); "
+        f"captured scroll kwargs={captured!r}"
     )
 
 

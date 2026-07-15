@@ -397,6 +397,10 @@ class CuratedPlane:
             ),
             limit=2,
             with_payload=True,
+            # This resolver only needs the payload (object_id + state);
+            # pulling the dense+sparse vectors back would be wasted
+            # bandwidth on every vault delete. Ask Qdrant for payload only.
+            with_vectors=False,
         )
         if not records:
             return Err(
