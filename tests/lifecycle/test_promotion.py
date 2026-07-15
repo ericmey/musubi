@@ -18,6 +18,7 @@ from musubi.lifecycle.promotion import PromotionRender, _is_eligible, compute_pa
 from musubi.observability import default_registry, render_text_format
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
+from musubi.store import collection_for_plane
 from musubi.store.bootstrap import bootstrap
 from musubi.types.common import epoch_of, generate_ksuid, utc_now
 from musubi.types.concept import SynthesizedConcept
@@ -276,7 +277,6 @@ def test_vault_writer_rejects_path_escape(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.asyncio
 async def test_idempotent_replay_reuses_existing_vault_object_id(deps: Any) -> None:
     from musubi.lifecycle.promotion import _promote_concept
     from musubi.types.common import generate_ksuid
@@ -334,7 +334,7 @@ async def test_idempotent_replay_reuses_existing_vault_object_id(deps: Any) -> N
 
     qdrant = deps.qdrant
     res, _ = qdrant.scroll(
-        collection_name="musubi_curated",
+        collection_name=collection_for_plane("curated"),
         scroll_filter=rest.Filter(
             must=[
                 rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
@@ -419,7 +419,7 @@ async def test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists(deps: A
 
     qdrant = deps.qdrant
     res, _ = qdrant.scroll(
-        collection_name="musubi_curated",
+        collection_name=collection_for_plane("curated"),
         scroll_filter=rest.Filter(
             must=[
                 rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
@@ -514,6 +514,26 @@ Body"""
 
     readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
     assert readback.promotion_attempts == 1
+    assert readback.promoted_to is None
+    assert readback.state == "matured"
+
+    # Vault bytes unchanged
+    assert full_path.read_text() == raw_yaml
+
+    # No curated row created
+    from qdrant_client.http import models as rest
+
+    qdrant = deps.qdrant
+    res, _ = qdrant.scroll(
+        collection_name=collection_for_plane("curated"),
+        scroll_filter=rest.Filter(
+            must=[
+                rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
+            ]
+        ),
+        limit=10,
+    )
+    assert len(res) == 0
 
 
 async def test_path_conflict_with_same_concept_rewrites_in_place(deps: Any) -> None:
@@ -665,14 +685,13 @@ async def test_curated_point_upserted_with_promoted_from(deps: Any) -> None:
     await run_promotion_sweep(deps)
 
     curated_points = deps.qdrant.scroll(
-        collection_name="musubi_curated",
+        collection_name=collection_for_plane("curated"),
         with_payload=True,
     )
     assert len(curated_points[0]) == 1
     assert curated_points[0][0].payload["promoted_from"] == str(c.object_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_concept_state_set_to_promoted(deps: Any) -> None:
     from musubi.lifecycle.promotion import run_promotion_sweep
@@ -719,7 +738,7 @@ async def test_bidirectional_links_set_in_single_batch(deps: Any) -> None:
 
     p = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
     curated_points = deps.qdrant.scroll(
-        collection_name="musubi_curated",
+        collection_name=collection_for_plane("curated"),
         with_payload=True,
     )
     assert str(p.promoted_to) == curated_points[0][0].payload["object_id"]

@@ -238,10 +238,6 @@ Rendering:
 Path:
 
 12. `test_path_derived_from_topic_and_title`
-13. `test_idempotent_replay_reuses_existing_vault_object_id`
-14. `test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists`
-15. `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
-16. `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
 13. `test_path_conflict_with_same_concept_rewrites_in_place`
 14. `test_path_conflict_with_other_concept_writes_sibling`
 15. `test_path_conflict_with_human_file_writes_sibling_and_logs`
@@ -251,6 +247,13 @@ Write-log:
 16. `test_writelog_entry_precedes_file_write`
 17. `test_file_written_atomically`
 18. `test_watcher_sees_writelog_and_skips_reindex`
+
+Replay identity:
+
+38. `test_idempotent_replay_reuses_existing_vault_object_id`
+39. `test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists`
+40. `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
+41. `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
 
 Qdrant:
 

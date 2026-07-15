@@ -9,7 +9,7 @@ type: slice
 phase: "Lifecycle"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
 reviewed: false
@@ -25,6 +25,7 @@ Fix `promoted_to` identity drift during promotion replay (Issue #516). If a tran
 - [[06-ingestion/promotion]]
 
 ## Owned paths
+- `docs/Musubi/06-ingestion/promotion.md`
 - `src/musubi/lifecycle/promotion.py`
 - `tests/lifecycle/test_promotion.py`
 
@@ -32,7 +33,10 @@ Fix `promoted_to` identity drift during promotion replay (Issue #516). If a tran
 - Qdrant logic, LLM adapter implementations.
 
 ## Test Contract
-- Idempotent replay must reuse existing curated object_id.
+- `test_idempotent_replay_reuses_existing_vault_object_id`
+- `test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists`
+- `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
+- `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
 
 ## Definition of Done
 - `curated_id` is parsed from the vault if present and valid during idempotent rewrite.
