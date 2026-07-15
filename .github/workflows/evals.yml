@@ -49,10 +49,16 @@ jobs:
         run: |
           docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-evals up -d --wait --wait-timeout 600
       - name: Run Scheduled Live Quality Gate
+        # The ChunkedEmbedder loads the gated SPLADE-v3 tokenizer for sparse chunking; without an auth
+        # token a cache-miss 401s (the same gotcha integration.yml wires). Provide the HF secret.
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -a && . deploy/test-env/.env.test && set +a
           uv run python -m musubi.evals scheduled --data-dir tests/evals/data
       - name: Run BEIR hybrid-vs-dense gate
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -a && . deploy/test-env/.env.test && set +a
           uv run pytest -m integration -k beir_style_eval tests/retrieve/test_hybrid.py -ra
