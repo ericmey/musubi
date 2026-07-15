@@ -126,6 +126,11 @@ class RetrievalResult(BaseModel):
     plane: str
     title: str | None = None
     snippet: str
+    # DQ-001: silent-truncation fix. Sliced snippets are tagged with the
+    # original (untruncated) character length and a truncated flag so
+    # callers can detect the cut and fetch the full body via ``object_id``.
+    content_truncated: bool = False
+    content_length: int | None = None
     score: float
     score_components: dict[str, float]
     lineage: dict[str, Any]
@@ -602,6 +607,12 @@ async def _run_single(
                         state=raw_state if raw_state is not None else None,
                         importance=raw_importance if raw_importance is not None else None,
                         provenance_score=prov_score,
+                        # DQ-001: silent-truncation fix. Forward the slice
+                        # truncation state and original character length from
+                        # the hit so the router can surface a truthful
+                        # truncation signal in the wire response.
+                        content_truncated=recent_hit.content_truncated,
+                        content_length=recent_hit.content_length,
                     )
                 )
             return Ok(value=RetrievalEnvelope(results=recent_results, warnings=tuple(warnings)))
@@ -654,6 +665,12 @@ async def _run_single(
                         title=hit.payload.get("title"),
                         snippet=hit.snippet,
                         score=hit.score,
+                        # DQ-001: silent-truncation fix. Forward the slice
+                        # truncation state and original character length from
+                        # the hit so the router can surface a truthful
+                        # truncation signal in the wire response.
+                        content_truncated=hit.content_truncated,
+                        content_length=hit.content_length,
                         score_components={
                             "relevance": hit.score_components.relevance,
                             "recency": hit.score_components.recency,
@@ -691,14 +708,17 @@ def _pack_scored_hits(hits: Sequence[Any], include_payload: bool) -> list[Retrie
         payload = hit.payload
         raw_state = payload.get("state")
         raw_importance = payload.get("importance")
+        _snippet_str, _ct, _cl = _snippet(payload, max_chars=300)
         results.append(
             RetrievalResult(
                 object_id=hit.object_id,
+                score=hit.score,
                 namespace=payload.get("namespace", ""),
                 plane=hit.plane,
                 title=payload.get("title"),
-                snippet=_snippet(payload, max_chars=300),
-                score=hit.score,
+                snippet=_snippet_str,
+                content_truncated=_ct,
+                content_length=_cl,
                 score_components={
                     "relevance": hit.score_components.relevance,
                     "recency": hit.score_components.recency,
@@ -717,9 +737,17 @@ def _pack_scored_hits(hits: Sequence[Any], include_payload: bool) -> list[Retrie
     return results
 
 
-def _snippet(payload: dict[str, Any], max_chars: int) -> str:
+def _snippet(payload: dict[str, Any], max_chars: int) -> tuple[str, bool, int]:
+    """Return (snippet, content_truncated, content_length).
+
+    The snippet is at most ``max_chars`` chars. When the original content
+    is longer than the cap, the snippet is truncated and the original
+    character length is preserved for caller-side detection.
+    """
     content = str(payload.get("content") or payload.get("title") or "")
-    return content[:max_chars]
+    original_length = len(content)
+    truncated = original_length > max_chars
+    return content[:max_chars], truncated, original_length
 
 
 def _summarize_lineage(payload: dict[str, Any]) -> dict[str, Any]:

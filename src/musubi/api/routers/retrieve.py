@@ -493,6 +493,12 @@ async def retrieve(
                     score_kind="created_epoch",
                     provenance_score=hit.provenance_score,
                     extra=recent_extra,
+                    # DQ-001: silent-truncation fix. Forward the slice
+                    # truncation state and the original (untruncated)
+                    # character length from the orchestration plane so
+                    # callers can detect a cut and fetch the full body.
+                    content_truncated=hit.content_truncated,
+                    content_length=hit.content_length,
                 )
             )
         else:
@@ -527,6 +533,12 @@ async def retrieve(
                     importance=hit.importance,
                     score_kind="ranked_combined",
                     extra=ranked_extra,
+                    # DQ-001: silent-truncation fix. Forward the slice
+                    # truncation state and the original (untruncated)
+                    # character length from the orchestration plane so
+                    # callers can detect a cut and fetch the full body.
+                    content_truncated=hit.content_truncated,
+                    content_length=hit.content_length,
                 )
             )
 
