@@ -1347,9 +1347,10 @@ def test_runtime_module_does_not_import_watcher() -> None:
         text=True,
         cwd=repo_root,
         # Bound the child so an import deadlock / environment hang fails fast
-        # instead of stalling CI. 60s is generous for a cold-start import that
-        # normally completes in a few seconds (Copilot PR #562).
-        timeout=60,
+        # instead of stalling CI. 30s matches the nearby test_c6_event_loss.py
+        # precedent and is ample for a cold-start import that normally completes
+        # in a few seconds (Copilot PR #562).
+        timeout=30,
     )
     assert result.returncode == 0, f"cold-start subprocess failed: stderr={result.stderr!r}"
     mods = json.loads(result.stdout.strip())
@@ -1433,9 +1434,10 @@ def test_runtime_factory_does_not_import_watcher(tmp_path: Path) -> None:
         text=True,
         cwd=repo_root,
         # Bound the child so an import deadlock / environment hang fails fast
-        # instead of stalling CI. 60s is generous for a cold-start import that
-        # normally completes in a few seconds (Copilot PR #562).
-        timeout=60,
+        # instead of stalling CI. 30s matches the nearby test_c6_event_loss.py
+        # precedent and is ample for a cold-start import that normally completes
+        # in a few seconds (Copilot PR #562).
+        timeout=30,
     )
     assert result.returncode == 0, f"cold-start subprocess failed: stderr={result.stderr!r}"
     mods = json.loads(result.stdout.strip())
