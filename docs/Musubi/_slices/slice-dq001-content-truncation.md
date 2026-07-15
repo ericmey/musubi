@@ -4,10 +4,10 @@ slice_id: slice-dq001-content-truncation
 issue: 443
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: minimax-m3
 phase: "Retrieval"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-07-15
 reviewed: false
 depends-on: []
@@ -54,6 +54,10 @@ indication that more content existed.
    at the wire projection.
 5. ``openapi.yaml`` is regenerated to include the new fields in the
    corresponding schemas.
+
+## Specs to implement
+
+- [[05-retrieval/content-truncation]]
 
 ## Acceptance
 
@@ -110,6 +114,8 @@ Commits in branch order (additive, no amend, no force):
 3. ``test(dq001): add the bounded 11-test contract file`` — the
    production-proof test file (untracked at handoff).
 4. ``docs(dq001): slice-dq001-content-truncation.md`` — this slice doc.
+5. ``docs(dq001): retrieval content-truncation contract`` — binds the seven
+   production test names used by the Test Contract closure gate.
 
 ## Out-of-band continuation
 
