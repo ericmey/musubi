@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.3](https://github.com/ericmey/musubi/compare/v1.14.2...v1.14.3) (2026-07-15)
+
+
+### Bug Fixes
+
+* **thoughts:** THOUGHT-002 production writes use configured embedder ([#487](https://github.com/ericmey/musubi/issues/487)) ([d6a9f19](https://github.com/ericmey/musubi/commit/d6a9f19b20e016b3beb4220afd6b7380c9f6bd0a))
+
 ## [1.14.2](https://github.com/ericmey/musubi/compare/v1.14.1...v1.14.2) (2026-07-15)
 
 
