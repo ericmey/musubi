@@ -4,10 +4,10 @@ slice_id: slice-ret004-evals
 issue: 430
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: gemini-3-1
 phase: "Retrieval"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-07-13
 reviewed: false
 depends-on: ["[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-scoring]]"]
