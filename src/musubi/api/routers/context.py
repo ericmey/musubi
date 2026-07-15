@@ -89,7 +89,7 @@ async def context_pack(
     context = auth_result.value
 
     pattern_had_wildcards = any("*" in ns for ns, _ in targets)
-    targets = _expand_wildcard_targets(qdrant, targets)
+    targets = _expand_wildcard_targets(qdrant, targets, context, settings)
     if pattern_had_wildcards and not targets:
         return build_context_pack(
             [],

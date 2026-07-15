@@ -30,6 +30,11 @@ with warnings.catch_warnings():
     warnings.simplefilter("ignore")
     from qdrant_client import QdrantClient
 
+from musubi.auth.tokens import AuthContext
+from musubi.settings import Settings
+
+_ctx = AuthContext(subject="test", issuer="test", audience="musubi", scopes=("*/*/*:r",), presence="test")
+_set = Settings(qdrant_host="a", qdrant_api_key="a", tei_dense_url="http://a", tei_sparse_url="http://a", tei_reranker_url="http://a", ollama_url="http://a", embedding_model="a", sparse_model="a", reranker_model="a", llm_model="a", vault_path="/", artifact_blob_path="/", lifecycle_sqlite_path="/", agent_exclusions={})
 from musubi.api.routers.retrieve import (
     _expand_wildcard_targets,
     _resolve_targets,
@@ -156,7 +161,7 @@ def test_expansion_returns_concrete_namespaces_for_wildcard_pattern(
     _seed_episodic(episodic, "nyla/voice/episodic", "voice memory")
     _seed_episodic(episodic, "nyla/openclaw/episodic", "openclaw memory")
 
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")], _ctx, _set)
 
     namespaces = sorted(ns for ns, _ in expanded)
     assert namespaces == ["nyla/openclaw/episodic", "nyla/voice/episodic"]
@@ -171,7 +176,7 @@ def test_expansion_filters_by_segment_count(qdrant: QdrantClient, episodic: Epis
     _seed_episodic(episodic, "nyla/voice/episodic", "x")
     # Pattern is 2-seg so even though "nyla/voice" is a prefix of the
     # stored 3-seg namespace, it should not match.
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/*", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("nyla/*", "episodic")], _ctx, _set)
     # 2-seg pattern fed in here would be a programming error in the router
     # (router resolves 2-seg to 3-seg before calling expansion). The
     # expansion routine still respects segment count: empty result.
@@ -190,7 +195,7 @@ def test_expansion_segment_match_is_literal_not_substring(
     _seed_episodic(episodic, "nyla/voice/episodic", "x")
     # Mixed-segment patterns: in our model `n*` is not "starts with n",
     # it's "literal segment n*" — which doesn't match `nyla`. Empty result.
-    expanded = _expand_wildcard_targets(qdrant, [("n*/voice/episodic", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("n*/voice/episodic", "episodic")], _ctx, _set)
     namespaces = [ns for ns, _ in expanded]
     assert namespaces == []
 
@@ -200,14 +205,14 @@ def test_expansion_dedups_namespaces(qdrant: QdrantClient, episodic: EpisodicPla
     _seed_episodic(episodic, "nyla/voice/episodic", "second")
     _seed_episodic(episodic, "nyla/voice/episodic", "third")
 
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")], _ctx, _set)
 
     namespaces = [ns for ns, _ in expanded]
     assert namespaces == ["nyla/voice/episodic"]
 
 
 def test_expansion_returns_empty_list_when_no_match(qdrant: QdrantClient) -> None:
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("nyla/*/episodic", "episodic")], _ctx, _set)
     assert expanded == []
 
 
@@ -216,7 +221,7 @@ def test_no_wildcard_passes_through_unchanged(
 ) -> None:
     """A concrete (no-`*`) target is not scrolled — the helper short-circuits."""
     _seed_episodic(episodic, "nyla/voice/episodic", "x")
-    expanded = _expand_wildcard_targets(qdrant, [("nyla/voice/episodic", "episodic")])
+    expanded = _expand_wildcard_targets(qdrant, [("nyla/voice/episodic", "episodic")], _ctx, _set)
     assert expanded == [("nyla/voice/episodic", "episodic")]
 
 
@@ -555,7 +560,7 @@ def test_concrete_3seg_namespace_passes_through_expansion_unchanged(
 ) -> None:
     """Property: any non-wildcard 3-seg namespace is idempotent under expansion."""
     plane = concrete_ns.rsplit("/", 1)[-1]
-    expanded = _expand_wildcard_targets(qdrant, [(concrete_ns, plane)])
+    expanded = _expand_wildcard_targets(qdrant, [(concrete_ns, plane)], _ctx, _set)
     assert expanded == [(concrete_ns, plane)]
 
 

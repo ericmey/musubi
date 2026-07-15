@@ -247,6 +247,14 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Authorization & Policies
+    # ------------------------------------------------------------------
+    agent_exclusions: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Additive per-subject/presence namespace exclusion roots. E.g. {'yua': ['salesai']}",
+    )
+
     # OpenTelemetry tracing (server-side). Per
     # [[09-operations/observability]] § Tracing. All fields are optional
     # and default to "off" / unset — the server runs unchanged when

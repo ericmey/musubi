@@ -59,6 +59,7 @@ from musubi.api.responses import (
 )
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import resolve_namespace_scope
+from musubi.auth.tokens import AuthContext
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
@@ -317,6 +318,8 @@ def _segments_match(pattern_segs: list[str], stored_segs: list[str]) -> bool:
 def _expand_wildcard_targets(
     client: QdrantClient,
     targets: list[tuple[str, str]],
+    context: AuthContext,
+    settings: Settings,
 ) -> list[tuple[str, str]]:
     """Expand any ``*``-bearing target by enumerating concrete matches
     from Qdrant.
@@ -357,7 +360,31 @@ def _expand_wildcard_targets(
                 ns = payload.get("namespace")
                 if not isinstance(ns, str) or ns in seen:
                     continue
-                if _segments_match(pattern_segs, ns.split("/")):
+
+                parts = ns.split("/")
+
+                # AUTH-001: Central recall exclusions. Mandatory 'salesai' root, plus per-agent config.
+                exclusions = ["salesai"]
+                exclusions.extend(settings.agent_exclusions.get(context.subject, []))
+                if context.presence:
+                    exclusions.extend(settings.agent_exclusions.get(context.presence, []))
+
+                excluded = False
+                for ex in set(exclusions):
+                    ex_parts = ex.split("/")
+                    # Exact prefix match of segments, not naive substring
+                    if parts[: len(ex_parts)] == ex_parts:
+                        excluded = True
+                        break
+                    # Also exclude if 'salesai' (or any exclusion) is the presence segment (tenant/presence/plane)
+                    if len(ex_parts) == 1 and len(parts) > 1 and parts[1] == ex_parts[0]:
+                        excluded = True
+                        break
+
+                if excluded:
+                    continue
+
+                if _segments_match(pattern_segs, parts):
                     seen.add(ns)
             if next_offset is None:
                 break
@@ -399,7 +426,7 @@ async def retrieve(
     # (no-`*`) namespaces still run the full pipeline; only wildcard
     # patterns get the early-return treatment.
     pattern_had_wildcards = any("*" in ns for ns, _ in targets)
-    targets = _expand_wildcard_targets(qdrant, targets)
+    targets = _expand_wildcard_targets(qdrant, targets, context, settings)
     if pattern_had_wildcards and not targets:
         # Wildcard early-return: empty results for the requested mode.
         if body.mode == "recent":
