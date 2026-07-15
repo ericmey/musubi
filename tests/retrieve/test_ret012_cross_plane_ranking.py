@@ -159,11 +159,24 @@ def _mk_recent_result(
 
 
 def _mk_rerank_result(
-    *, object_id: str, plane: str, rerank_score: float, marker: str
+    *,
+    object_id: str,
+    plane: str,
+    rerank_score: float,
+    marker: str,
+    raw_rrf: float = 0.5,
 ) -> RetrievalResult:
     """Construct one deep-mode ``RetrievalResult`` as the current per-leg code would produce it:
     per-leg relevance is ``_sigmoid(rerank_score)`` (intrinsic, not divided by batch_max). The
-    seam's sigmoid branch fires on ``raw_rerank_score`` and preserves the per-leg value."""
+    seam's sigmoid branch fires on ``raw_rerank_score`` and preserves the per-leg value.
+
+    The ``raw_rrf`` default (0.5) matches a typical deep / blended hit's
+    hybrid RRF before rerank; production ``ScoredHit.raw_rrf_score`` is
+    propagated from the input ``Hit.rrf_score``. The seam's rerank
+    branch takes priority over the RRF branch (rerank is intrinsic and
+    bounded [0, 1]) so the RRF value only matters for the test's audit
+    payload and the dedup tie-break, not for the relevance computation.
+    """
     relevance = _sigmoid(rerank_score)
     components = {
         "relevance": relevance,
@@ -187,11 +200,18 @@ def _mk_rerank_result(
         score=score,
         score_components=components,
         lineage={},
-        payload={"_ret012_marker": marker, "_ret012_rerank_score": rerank_score},
+        payload={
+            "_ret012_marker": marker,
+            "_ret012_rerank_score": rerank_score,
+            "_ret012_raw_rrf": raw_rrf,
+        },
         # RET-012: the raw inputs the seam reads. Deep / blended
         # carries a ``raw_rerank_score`` (cross-encoder logit) and
-        # also a ``raw_rrf_score`` (the hybrid RRF before rerank).
-        raw_rrf_score=None,
+        # also a ``raw_rrf_score`` (the hybrid RRF before rerank,
+        # propagated from ``Hit.rrf_score`` via ``score_result``).
+        # The seam's rerank branch takes priority; the RRF is audit
+        # metadata for the dedup tie-break on equal scores.
+        raw_rrf_score=raw_rrf,
         raw_rerank_score=rerank_score,
     )
 
