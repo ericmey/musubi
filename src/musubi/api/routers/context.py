@@ -240,7 +240,10 @@ def _candidate_from_hit(hit: Any, *, recent: bool = False) -> ContextCandidate:
         ),
         updated_epoch=_optional_float(payload.get("updated_epoch")),
         importance=int(importance or 5),
-        retrieve_score=float(hit.score),
+        # Recent orchestration uses ``score`` as a chronological epoch, not
+        # relevance.  Keep that signal in ``created_epoch`` without feeding a
+        # timestamp into the context-pack rank formula.
+        retrieve_score=0.0 if recent else float(hit.score),
         extra={key: value for key, value in payload.items() if key in {"kind", "staleness"}},
     )
 

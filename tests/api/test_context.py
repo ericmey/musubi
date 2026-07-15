@@ -57,6 +57,7 @@ def test_recent_context_candidate_uses_recent_score_as_created_epoch_without_pay
     )
 
     assert candidate.created_epoch == 1_721_234_567.0
+    assert candidate.retrieve_score == 0.0
 
 
 def test_context_endpoint_blends_recent_provisional_with_established_ranked(
