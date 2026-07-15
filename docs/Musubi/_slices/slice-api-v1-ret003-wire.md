@@ -3,12 +3,12 @@ title: "Slice: RET-003 ranked vs recent wire contract"
 slice_id: slice-api-v1-ret003-wire
 section: _slices
 type: slice
-status: ready
+status: done
 owner: tama
 phase: "slice-api-v1 — additive wire contract"
-tags: [section/slices, status/ready, type/slice, area:api, area:retrieval, wire-contract, ranked-mode, recent-mode, additive]
+tags: [section/slices, status/done, type/slice, area:api, area:retrieval, wire-contract, ranked-mode, recent-mode, additive]
 updated: 2026-07-13
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-scoring]]"]
 blocks: []
 issue: 435

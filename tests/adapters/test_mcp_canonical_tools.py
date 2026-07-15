@@ -238,6 +238,50 @@ async def test_search_backend_error_returns_tool_error_string() -> None:
 
 
 # --------------------------------------------------------------------------
+@pytest.mark.parametrize("length_val", [2500, 0])
+@pytest.mark.asyncio
+async def test_search_formats_truncation_metadata(length_val: int) -> None:
+    mcp, client = _make_server()
+    client._retrieve_response = {
+        "results": [
+            {
+                "object_id": "test-id",
+                "plane": "episodic",
+                "score": 0.99,
+                "namespace": "eric/test/episodic",
+                "content": "This is a very long string...",
+                "content_truncated": True,
+                "content_length": length_val,
+            }
+        ]
+    }
+    result = await _invoke(mcp, "musubi_search", namespace="eric/test", query="long")
+    assert "This is a very long string..." in result
+    assert f"... (content truncated, originally {length_val} characters)" in result
+
+
+@pytest.mark.parametrize("length_val", [2500, 0])
+@pytest.mark.asyncio
+async def test_recent_formats_truncation_metadata(length_val: int) -> None:
+    mcp, client = _make_server()
+    client._retrieve_response = {
+        "results": [
+            {
+                "object_id": "test-id-recent",
+                "plane": "episodic",
+                "score": 1783957804.0,
+                "namespace": "eric/test/episodic",
+                "content": "This is a very long string...",
+                "content_truncated": True,
+                "content_length": length_val,
+            }
+        ]
+    }
+    result = await _invoke(mcp, "musubi_recent", namespace="eric/test")
+    assert "This is a very long string..." in result
+    assert f"... (content truncated, originally {length_val} characters)" in result
+
+
 # musubi_get
 # --------------------------------------------------------------------------
 

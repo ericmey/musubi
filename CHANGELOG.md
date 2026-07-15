@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.17.2](https://github.com/ericmey/musubi/compare/v1.17.1...v1.17.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* DQ-001 complete grapheme-safe and adapter parity (Issue [#443](https://github.com/ericmey/musubi/issues/443)) ([#540](https://github.com/ericmey/musubi/issues/540)) ([1231c93](https://github.com/ericmey/musubi/commit/1231c93a9b43fba0f4d902e548b8687fd691a3b2))
+* **integration:** create host runtime directories ([#545](https://github.com/ericmey/musubi/issues/545)) ([539b16d](https://github.com/ericmey/musubi/commit/539b16d1112f26dd97c88086daaaddcaffd8d226))
+
+## [1.17.1](https://github.com/ericmey/musubi/compare/v1.17.0...v1.17.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* ING-001 semantic dedup strict compatibility bounds (Issue [#534](https://github.com/ericmey/musubi/issues/534)) ([#535](https://github.com/ericmey/musubi/issues/535)) ([dba8f10](https://github.com/ericmey/musubi/commit/dba8f10a12869b87e379e31d0a0f4c879550fcf2))
+
+## [1.17.0](https://github.com/ericmey/musubi/compare/v1.16.2...v1.17.0) (2026-07-15)
+
+
+### Features
+
+* RET-013 bounded recent-memory lane in canonical cross-modality context (Issue [#522](https://github.com/ericmey/musubi/issues/522)) ([#525](https://github.com/ericmey/musubi/issues/525)) ([0e3e1ee](https://github.com/ericmey/musubi/commit/0e3e1eea5b34e4d7a163f30d5292f10638dbdd02))
+
 ## [1.16.2](https://github.com/ericmey/musubi/compare/v1.16.1...v1.16.2) (2026-07-15)
 
 
