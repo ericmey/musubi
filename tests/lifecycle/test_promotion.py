@@ -549,16 +549,16 @@ class _TransientFailingLLM:
     async def render_curated_markdown(
         self, title: str, content: str, rationale: str, top_memories: list[str]
     ) -> Any:
-        import httpx
-
-        raise httpx.ConnectError("Connection refused", request=httpx.Request("POST", "http://test"))
+        raise ValueError("promotion-render envelope not JSON")
 
 
 class _DeterministicFailingLLM:
     async def render_curated_markdown(
         self, title: str, content: str, rationale: str, top_memories: list[str]
     ) -> Any:
-        raise ValueError("Invalid markdown")
+        from musubi.lifecycle.promotion import PromotionPolicyError
+
+        raise PromotionPolicyError("Invalid markdown")
 
 
 @pytest.mark.asyncio
@@ -624,7 +624,7 @@ class _TransientFailingVault:
     def __init__(self, vault_root: Path) -> None:
         self.vault_root = vault_root
 
-    def write_curated(self, path: str, frontmatter: Any, body: str) -> None:
+    def write_curated(self, path: str, frontmatter: Any, body: str) -> Path:
         raise OSError("Disk full")
 
 

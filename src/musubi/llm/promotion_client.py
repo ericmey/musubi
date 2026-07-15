@@ -29,7 +29,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from musubi.lifecycle.promotion import PromotionRender
+from musubi.lifecycle.promotion import PromotionPolicyError, PromotionRender
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +130,7 @@ class HttpxPromotionClient:
                 sections=wire.sections,
             )
         except ValidationError as exc:
-            raise ValueError(f"promotion-render body rejected: {exc}") from exc
+            raise PromotionPolicyError(f"promotion-render body rejected: {exc}") from exc
 
     async def _chat(self, prompt: str) -> str:
         # Pass the Pydantic-derived JSON Schema as `format` to engage

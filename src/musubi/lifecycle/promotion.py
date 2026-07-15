@@ -251,7 +251,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
     """Attempt to promote one concept. Returns True iff it actually shipped
     a curated row + vault file.
 
-    Explicit deterministic failures (render ValueError, path/frontmatter validation
+    Explicit deterministic failures (render policy rejection, path/frontmatter validation
     via PromotionPolicyError) record a rejection via
     :meth:`ConceptPlane.record_promotion_rejection`, which bumps
     `promotion_attempts`. The three-strikes gate then locks the concept
@@ -268,7 +268,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             rationale=concept.synthesis_rationale,
             top_memories=[],
         )
-    except ValueError as e:
+    except PromotionPolicyError as e:
         log.warning("Rendering failed deterministically for concept %s: %s", concept.object_id, e)
         await _record_rejection(deps, concept, reason=f"Rendering failed: {e}")
         return False
@@ -493,6 +493,7 @@ def build_promotion_jobs(
 __all__ = [
     "PromotionDeps",
     "PromotionLLM",
+    "PromotionPolicyError",
     "PromotionRender",
     "ThoughtEmitter",
     "VaultWriter",
