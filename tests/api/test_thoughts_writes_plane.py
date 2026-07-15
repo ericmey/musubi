@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from qdrant_client import models
 
 from musubi.api.dependencies import get_qdrant_client, get_thoughts_plane
 from musubi.embedding.base import Embedder
@@ -11,11 +12,22 @@ from musubi.planes.thoughts import ThoughtsPlane
 from musubi.store.specs import DENSE_VECTOR_NAME
 
 
+def _expected_dense(text: str) -> list[float]:
+    return [1.0, float((sum(map(ord, text)) % 7) + 1)] + [0.0] * 1022
+
+
+def _expected_stored_dense(text: str) -> list[float]:
+    """Qdrant cosine collections normalize dense vectors at storage."""
+    vector = _expected_dense(text)
+    norm = sum(value * value for value in vector) ** 0.5
+    return [value / norm for value in vector]
+
+
 class DummyEmbedder(Embedder):
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         # deterministic non-zero, different from FakeEmbedder
         # Embeds content-dependent vectors to discriminate different content directionally
-        return [[1.0, float((sum(map(ord, t)) % 7) + 1)] + [0.0] * 1022 for t in texts]
+        return [_expected_dense(text) for text in texts]
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         return [{} for _ in texts]
@@ -32,7 +44,10 @@ def test_thought_send_uses_configured_plane_and_embedder(
     token = mint_token(api_settings, scopes=["eric/ns/thought:w"])
 
     qdrant = app_factory.dependency_overrides[get_qdrant_client]()
-    spy_plane = ThoughtsPlane(client=qdrant, embedder=DummyEmbedder())
+    embedder = DummyEmbedder()
+    embedder.embed_dense = AsyncMock(wraps=embedder.embed_dense)  # type: ignore[method-assign]
+    embedder.embed_sparse = AsyncMock(wraps=embedder.embed_sparse)  # type: ignore[method-assign]
+    spy_plane = ThoughtsPlane(client=qdrant, embedder=embedder)
     spy_plane.send = AsyncMock(wraps=spy_plane.send)  # type: ignore[method-assign]
 
     app_factory.dependency_overrides[get_thoughts_plane] = lambda: spy_plane
@@ -52,20 +67,31 @@ def test_thought_send_uses_configured_plane_and_embedder(
     assert r.status_code == 202
 
     spy_plane.send.assert_called_once()
+    embedder.embed_dense.assert_awaited_once_with(["hello world"])
+    embedder.embed_sparse.assert_awaited_once_with(["hello world"])
 
     # Also verify that the vector stored is from DummyEmbedder, not FakeEmbedder
     object_id = r.json()["object_id"]
-    from musubi.planes.thoughts.plane import _point_id
-
-    point_id = _point_id(object_id)
-
-    # Retrieve the raw point from Qdrant to check the vector
-    points = qdrant.retrieve(collection_name="musubi_thought", ids=[point_id], with_vectors=True)
+    points, _ = qdrant.scroll(
+        collection_name="musubi_thought",
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id",
+                    match=models.MatchValue(value=object_id),
+                )
+            ]
+        ),
+        limit=2,
+        with_payload=False,
+        with_vectors=True,
+    )
     assert len(points) == 1
 
     vector = points[0].vector
+    assert isinstance(vector, dict)
     assert DENSE_VECTOR_NAME in vector
-    assert any(v != 0 for v in vector[DENSE_VECTOR_NAME])
+    assert vector[DENSE_VECTOR_NAME] == pytest.approx(_expected_stored_dense("hello world"))
 
     # Assert second distinct content produces distinct vector
     r2 = client.post(
@@ -81,14 +107,33 @@ def test_thought_send_uses_configured_plane_and_embedder(
         },
     )
     assert r2.status_code == 202
+    assert embedder.embed_dense.await_count == 2
+    assert embedder.embed_sparse.await_count == 2
+    embedder.embed_dense.assert_awaited_with(["different length content"])
+    embedder.embed_sparse.assert_awaited_with(["different length content"])
     object_id2 = r2.json()["object_id"]
-    point_id2 = _point_id(object_id2)
-    points2 = qdrant.retrieve(collection_name="musubi_thought", ids=[point_id2], with_vectors=True)
+    points2, _ = qdrant.scroll(
+        collection_name="musubi_thought",
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id",
+                    match=models.MatchValue(value=object_id2),
+                )
+            ]
+        ),
+        limit=2,
+        with_payload=False,
+        with_vectors=True,
+    )
     assert len(points2) == 1
     vector2 = points2[0].vector
 
+    assert isinstance(vector2, dict)
     assert DENSE_VECTOR_NAME in vector2
-    assert any(v != 0 for v in vector2[DENSE_VECTOR_NAME])
+    assert vector2[DENSE_VECTOR_NAME] == pytest.approx(
+        _expected_stored_dense("different length content")
+    )
     assert vector[DENSE_VECTOR_NAME] != vector2[DENSE_VECTOR_NAME]
 
 
