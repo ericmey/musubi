@@ -92,6 +92,34 @@ async def test_reconciler_ignores_present_or_archived_rows(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("ignored_dir", [".obsidian", "_sketch"])
+async def test_reconciler_does_not_archive_present_rows_under_ignored_directories(
+    vault_root: Path,
+    mock_curated_plane: MagicMock,
+    mock_coordinator: MagicMock,
+    ignored_dir: str,
+) -> None:
+    reconciler = VaultReconciler(vault_root, mock_curated_plane, mock_coordinator)
+    rel_path = f"{ignored_dir}/present.md"
+    path = vault_root / rel_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("ignored by indexing but present on disk")
+
+    row = MagicMock()
+    row.vault_path = rel_path
+    row.state = "matured"
+    row.namespace = "eric/ignored/curated"
+    row.object_id = "id-ignored"
+    mock_curated_plane.scan_vault_rows = AsyncMock(return_value=[row])
+    reconciler._reconcile_file = AsyncMock(return_value="upserted")  # type: ignore
+
+    await reconciler.reconcile()
+
+    reconciler._reconcile_file.assert_not_awaited()
+    mock_curated_plane.transition.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_reconciler_failure_visibility(
     vault_root: Path,
     mock_curated_plane: MagicMock,

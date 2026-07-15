@@ -92,13 +92,17 @@ class VaultReconciler:
                 rel_path = file_path.relative_to(self.vault_root)
             except ValueError:
                 continue
+            # Every on-disk Markdown path prevents ghost archival, even when
+            # the file lives under an ignored directory.  The exclusion below
+            # governs indexing only; it must not turn an existing file into a
+            # false deletion signal.
+            seen_paths.add(rel_path.as_posix())
             # Hidden dirs (`.obsidian`, `.git`), Markdown-Obsidian
             # scratch dirs (`_sketch`, `_secrets`), and similar.
             if any(p.startswith(".") or p.startswith("_") for p in rel_path.parts):
                 continue
 
             scanned += 1
-            seen_paths.add(rel_path.as_posix())
             outcome = await self._reconcile_file(file_path)
             if outcome == "upserted":
                 upserted += 1
