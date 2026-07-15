@@ -119,6 +119,27 @@ class MemoryObject(MusubiObject):
     reinforcement_count: int = Field(ge=0, default=0)
     last_accessed_at: datetime | None = None
     access_count: int = Field(ge=0, default=0)
+    #: RET-008 (#502): internal fenced-lease token for concurrency-safe access_count increments.
+    #: A writer ACQUIRES this record's lease (atomic filtered update when empty, or takeover of an
+    #: exact expired token), then increments ``access_count`` + clears the lease in one update
+    #: fenced on ``access_lease_token == mine`` — so a stale/taken-over holder can never write.
+    #: Encodes ``<phase>:<issued_us>:<nonce>`` where phase is ``held`` or ``done``. Written only by
+    #: the shared lease seam
+    #: (``store.access_lease``). ``exclude=True`` keeps this operational plumbing OUT of every
+    #: serialization/API response (a read never exposes a stale token) while remaining an accepted
+    #: (not ``forbid``-rejected) key when a row is model-validated from its payload.
+    access_lease_token: str | None = Field(default=None, exclude=True)
+    #: DATA-001 (#530): internal attributable owner token for concurrency-safe FULL-OBJECT updates
+    #: (dedup-merge reinforce, curated same-id update, patch/supersede/concept-update). A writer
+    #: ACQUIRES ownership by writing a unique never-reused ``own:<issued_us>:<nonce>`` token fenced on
+    #: the row's exact ``version`` + this token being empty (or takeover of an exact expired token);
+    #: an exact-token readback is the ONLY win signal (a same-next-version contender is otherwise
+    #: indistinguishable). Only the proven owner may update vectors; the narrow intended-field payload
+    #: publish + version bump + release are fenced on ``update_lease_token == mine``. Distinct from
+    #: ``access_lease_token`` — different lifecycle and seam (``store.mutation_lease``); never
+    #: overloaded. ``exclude=True`` keeps it out of every serialization/API response while remaining
+    #: an accepted (not ``forbid``-rejected) key when a row is model-validated from its payload.
+    update_lease_token: str | None = Field(default=None, exclude=True)
 
     # Lineage
     supersedes: list[KSUID] = Field(default_factory=list)

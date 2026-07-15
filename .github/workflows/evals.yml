@@ -5,6 +5,9 @@ on:
     branches: [main]
   schedule:
     - cron: '0 0 * * *'
+  # On-demand: workflow_dispatch must exist on the default branch to be callable pre-merge, so the
+  # RET-004 successor (#549) can dispatch the live scheduled gate against its ref before it merges.
+  workflow_dispatch:
 
 jobs:
   smoke:
@@ -24,6 +27,6 @@ jobs:
         run: |
           uv run python -m musubi.evals smoke --data-dir tests/evals/data
       - name: Run Scheduled Baseline Report
-        if: github.event_name == 'schedule'
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           uv run python -m musubi.evals scheduled --data-dir tests/evals/data

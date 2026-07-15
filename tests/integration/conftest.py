@@ -151,6 +151,7 @@ def _start_api(*, port: int, env_file: Path) -> subprocess.Popen[bytes]:
     """
     env = os.environ.copy()
     env.update(_parse_env_file(env_file))
+    _prepare_runtime_dirs(env)
     return subprocess.Popen(
         [
             "uv",
@@ -166,6 +167,23 @@ def _start_api(*, port: int, env_file: Path) -> subprocess.Popen[bytes]:
         env=env,
         cwd=_REPO_ROOT,
     )
+
+
+def _prepare_runtime_dirs(env: dict[str, str]) -> None:
+    """Create host-side directories required by the test-only uvicorn process.
+
+    The compose stack owns dependency containers, but musubi-core runs on the
+    host. Its configured SQLite, vault, artifact, and log paths therefore need
+    host parents before application bootstrap.
+    """
+    for key in ("LIFECYCLE_SQLITE_PATH",):
+        value = env.get(key)
+        if value:
+            Path(value).expanduser().parent.mkdir(parents=True, exist_ok=True)
+    for key in ("VAULT_PATH", "ARTIFACT_BLOB_PATH", "LOG_DIR"):
+        value = env.get(key)
+        if value:
+            Path(value).expanduser().mkdir(parents=True, exist_ok=True)
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:

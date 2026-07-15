@@ -97,12 +97,14 @@ class ContextPackQuery(BaseModel):
     max_items: int = Field(default=8, ge=1, le=50)
     max_chars: int = Field(default=1200, ge=120, le=8000)
     include_history: bool = False
+    recent_reserve: int = Field(default=0, ge=0, le=50)
 
 
 class ContextCandidate(BaseModel):
     """A retrieval row normalised for essence ranking."""
 
     object_id: str
+    lane: Literal["recent", "ranked"] = "ranked"
     namespace: str
     plane: str
     content: str
@@ -173,18 +175,47 @@ def build_context_pack(
 
     visible, suppressed = _visible_candidates(candidates, include_history=query.include_history)
     ranked = _rank(visible, query)
+
+    recent_pool = sorted(
+        [r for r in ranked if r.candidate.lane == "recent"],
+        key=lambda r: r.candidate.created_epoch,
+        reverse=True,
+    )
+    ranked_pool = [r for r in ranked if r.candidate.lane == "ranked"]
+
     groups: dict[str, list[ContextPackItem]] = {title: [] for title in _GROUP_ORDER}
     used_chars = 0
     used_items = 0
-
     query_tokens = _tokenize(query.query_text)
-    for ranked_candidate in ranked:
+
+    if len(recent_pool) > 0 and len(ranked_pool) > 0 and query.max_items >= 2:
+        recent_max_chars = query.max_chars // 3
+    else:
+        recent_max_chars = query.max_chars
+
+    # 1. Fill recent quota. If ranked has no candidates, let recent use the
+    # entire item budget rather than suppressing valid context behind a reserve.
+    recent_item_limit = query.recent_reserve if ranked_pool else query.max_items
+    for r in recent_pool:
+        if used_items >= recent_item_limit or used_items >= query.max_items:
+            break
+        item = _to_item(r, remaining_chars=recent_max_chars - used_chars)
+        if item is None:
+            break
+        groups[_GROUP_BY_KIND[item.kind]].append(item)
+        used_items += 1
+        used_chars += len(item.content)
+        if used_chars >= query.max_chars:
+            break
+
+    # 2. Fill remaining from ranked pool
+    for r in ranked_pool:
         if used_items >= query.max_items:
             break
-        if _should_skip_ranked_filler(ranked_candidate, has_query=bool(query_tokens)):
+        if _should_skip_ranked_filler(r, has_query=bool(query_tokens)):
             suppressed["low_relevance"] = suppressed.get("low_relevance", 0) + 1
             continue
-        item = _to_item(ranked_candidate, remaining_chars=query.max_chars - used_chars)
+        item = _to_item(r, remaining_chars=query.max_chars - used_chars)
         if item is None:
             break
         groups[_GROUP_BY_KIND[item.kind]].append(item)
@@ -296,7 +327,9 @@ def _to_item(ranked: _RankedCandidate, *, remaining_chars: int) -> ContextPackIt
     # normalized display text so whitespace collapse cannot produce a false truncation signal.
     display_text = " ".join(text.split())
     original_length = len(display_text)
-    content = _cap_text(display_text, max_chars=remaining_chars)
+    from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
+
+    content = truncate_grapheme_safe(display_text, max_chars=remaining_chars, suffix="...")
     if not content:
         return None
     evidence = f"{ranked.candidate.namespace}/{ranked.candidate.object_id}"
@@ -413,15 +446,6 @@ def _recency_hint(candidate: ContextCandidate) -> float:
     # Only a tiebreaker: newer records should not outrank durable rules
     # solely by being fresh.
     return min(0.5, math.log10(max(epoch, 1.0)) / 20.0)
-
-
-def _cap_text(text: str, *, max_chars: int) -> str:
-    clean = " ".join(text.split())
-    if len(clean) <= max_chars:
-        return clean
-    if max_chars <= 3:
-        return clean[:max_chars]
-    return clean[: max_chars - 3].rstrip() + "..."
 
 
 def _why(ranked: _RankedCandidate) -> str:

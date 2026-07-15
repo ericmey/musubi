@@ -11,6 +11,7 @@ from typing import Any
 from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
+from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
 from musubi.retrieve.hybrid import (
     HybridHit,
     HybridSearchResult,
@@ -52,6 +53,13 @@ class FastHit:
     # callers can detect the cut and fetch the full body via ``object_id``.
     content_truncated: bool = False
     content_length: int | None = None
+    # RET-012: the raw RRF that fed the per-leg ``_to_score_hit`` call.
+    # Propagated to ``RetrievalResult.raw_rrf_score`` so the cross-plane
+    # seam (``scoring.calibrate_global_relevance``) can re-anchor the
+    # leg's relevance against the working-set global max instead of the
+    # per-leg local max. Internal-only — not on wire models.
+    raw_rrf_score: float | None = None
+    raw_rerank_score: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +358,11 @@ def _pack(
                 lineage_summary=_lineage_summary(payload),
                 content_truncated=_ct,
                 content_length=_cl,
+                # RET-012: forward the raw RRF to the cross-plane seam.
+                # Fast mode never reranks, so ``raw_rerank_score`` stays
+                # ``None`` and the seam's sigmoid branch is skipped.
+                raw_rrf_score=hybrid_hit.score,
+                raw_rerank_score=None,
             )
         )
     return sorted(packed, key=lambda hit: (-hit.score, hit.object_id))[:limit]
@@ -393,7 +406,9 @@ def _snippet(payload: dict[str, Any]) -> tuple[str, bool, int]:
     content = str(payload.get("content") or payload.get("title") or "")
     original_length = len(content)
     truncated = original_length > 200
-    return content[:200], truncated, original_length
+    if not truncated:
+        return content, False, original_length
+    return truncate_grapheme_safe(content, 200), True, original_length
 
 
 def _lineage_summary(payload: dict[str, Any]) -> dict[str, Any]:

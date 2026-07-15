@@ -20,7 +20,6 @@ before any ``set_payload`` call.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -51,9 +50,6 @@ from musubi.types.lifecycle_event import (
     is_legal_transition,
     legal_next_states,
 )
-
-log = logging.getLogger(__name__)
-
 
 # ---------------------------------------------------------------------------
 # Public surface
@@ -123,6 +119,7 @@ class TransitionError:
     - ``circular_supersession`` — supersession would create A → B → A.
     - ``invariant_violation``  — model validation failed on the updated payload.
     - ``lifecycle_event_write_failed`` — mutation committed, audit persistence refused.
+    - ``version_fence_violation``     — expected_version did not match current_version.
     """
 
     code: str
@@ -189,16 +186,20 @@ def transition(
     current_version = int(payload.get("version", 1))
 
     # Concurrent-modification check runs BEFORE the legality check so the
-    # "last writer wins with logged warning" contract in spec bullet 13
-    # produces its warning even when the race collapses onto an illegal
-    # transition from the actual current state.
+    # hard-fence contract (LIFE-010) explicitly rejects the mutation
+    # with version_fence_violation before checking state transitions,
+    # rather than allowing LWW overwrites.
     if expected_version is not None and expected_version != current_version:
-        log.warning(
-            "concurrent transition on %s: expected_version=%d, current_version=%d "
-            "(stale version; last writer wins)",
-            object_id,
-            expected_version,
-            current_version,
+        return Err(
+            error=TransitionError(
+                code="version_fence_violation",
+                message=(
+                    f"concurrent transition on {object_id}: expected_version={expected_version}, "
+                    f"current_version={current_version}"
+                ),
+                from_state=current_state,
+                to_state=target_state,
+            )
         )
 
     if not is_legal_transition(object_type, current_state, target_state):
