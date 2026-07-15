@@ -25,15 +25,21 @@ So this is a single-row, two-phase **attributable owner lease** on the dedicated
    never a blind steal).
 2. **Attribute acquire** — read back; proceed only if the stored token is our exact token. This is
    the only win signal; a same-next-version contender fails it.
-3. **Publish vectors (proven owner only)** — if the update changes vectors, ``update_vectors`` now,
-   inside the held critical section. A loser never reaches here, so it can never overwrite a vector.
-4. **Publish payload + bump version + release, in ONE fenced update** — ``set_payload`` of ONLY the
-   intended-change fields plus ``version = read_version + 1`` and ``update_lease_token = None``,
-   fenced on ``update_lease_token == ours``. Because the write set is narrow, unrelated fields are
-   never touched → they compose; a same-field conflict is surfaced as a retry (the loser re-reads
-   fresh). This fenced publish is the SINGLE commit point.
-5. **Attribute publish** — read back; the update landed iff the token is cleared and the version
-   advanced. Else a stall/takeover raced us → retry, never a silent overwrite.
+3. **Publish vectors (proven owner only)** — if the update changes vectors, ``update_vectors`` now.
+   This is NOT safe (``update_vectors`` is unfenceable on the deployed Qdrant); it is best-effort and
+   its atomicity is Phase-2 (see the scope note below). A loser never *reaches* it, but a stalled old
+   owner's late write can still corrupt a newer vector.
+4. **Publish payload + bump version, fenced on ``update_lease_token == ours``** — ``set_payload`` of
+   ONLY the intended-change fields plus ``version = read_version + 1``. Narrow write ⇒ unrelated
+   fields compose; a same-field conflict retries.
+5. **Attribute publish** — **KNOWN PHASE-1 BUG (Yua #539 review, pending fix):** this currently
+   clears the token and attributes on ``{token==None AND version==read+1}``, which is NOT
+   attributable — a takeover that published a different change at the same next version is falsely
+   claimed as ours, silently losing our change. The sound fix mirrors the RET-008 access lease's
+   two-phase token: publish ``token=done:<nonce>`` fenced on ``own``, read back the EXACT ``done``
+   token as the only success signal, then clear ``done`` fenced on exact ``done`` (plus
+   crash-after-done recovery). Tracked in ``DATA001-PHASE2-HANDOFF.md``; #539 must not merge until
+   it lands with an exact done-token proof.
 
 **Scope — DATA-001 Phase 1 (this module): PAYLOAD-only concurrency safety.** The narrow fenced
 ``set_payload`` publish is concurrency-safe and crash-safe: it is the only commit point, it never
@@ -226,7 +232,11 @@ async def owned_update(
             continue  # our token is somehow still held — retry the release, fail loud on exhaustion.
         _reject_seam_fields(mutation.changes)
 
-        # ---- phase 3: proven owner publishes vectors (update_vectors is unfenced; safe ONLY here) -
+        # ---- phase 3: proven owner publishes vectors ----
+        # NOT SAFE: update_vectors is unfenceable on the deployed Qdrant (server 1.15 silently
+        # ignores update_filter — verified). A stalled old owner's late write can corrupt a newer
+        # committed vector. Vector atomicity is Phase-2 (immutable point + fenced pointer); this
+        # path is best-effort and explicitly out of Phase-1's safety claim.
         if mutation.vectors is not None:
             client.update_vectors(
                 collection_name=collection,
@@ -234,6 +244,13 @@ async def owned_update(
             )
 
         # ---- phase 4: publish narrow payload + bump version + release, fenced on OUR token ----
+        # KNOWN PHASE-1 BUG (Yua #539 review, pending done-token fix — see DATA001-PHASE2-HANDOFF.md):
+        # clearing the token here and attributing on {token==None AND version==read+1} is NOT
+        # attributable — a takeover that published a DIFFERENT change at the same next version and
+        # cleared the token makes phase-5 FALSELY attribute the takeover's commit to us, silently
+        # losing our change. The fix (mirror the RET-008 access lease): publish token=done:<nonce>
+        # fenced on own, read back that EXACT done token as the only success signal, then clear done
+        # fenced on exact done. Not yet applied — do not rely on this attribution.
         publish = {
             **mutation.changes,
             "version": read_version + 1,
@@ -252,7 +269,7 @@ async def owned_update(
             ),
         )
 
-        # ---- phase 5: attribute the publish — landed iff token cleared AND version advanced ----
+        # ---- phase 5: attribute the publish (see KNOWN BUG above — version+cleared is not sound) --
         published = _read(client, collection, namespace, object_id)
         if (
             published.get("update_lease_token") is None
