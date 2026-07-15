@@ -119,7 +119,8 @@ async def test_score_importance_posts_chat_payload(httpx_mock: HTTPXMock) -> Non
     assert usr_msg["role"] == "user"
 
     # Prove the JSON structure
-    extracted = usr_msg["content"].replace("DATA_PAYLOAD:\n", "")
+    assert usr_msg["content"].startswith("DATA_PAYLOAD:\n")
+    extracted = usr_msg["content"].removeprefix("DATA_PAYLOAD:\n")
     parsed_payload = json.loads(extracted)
 
     assert "items" in parsed_payload
@@ -489,4 +490,4 @@ async def test_prompts_are_loadable_and_have_no_raw_data_placeholders() -> None:
         assert len(text) > 50
 
 
-pytestmark = pytest.mark.anyio
+pytestmark = pytest.mark.asyncio

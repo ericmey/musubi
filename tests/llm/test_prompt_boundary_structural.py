@@ -33,7 +33,7 @@ def test_sec007_prompt_boundary_system_user_separation() -> None:
     assert usr_msg["content"].startswith("DATA_PAYLOAD:\n")
 
     # Extract the JSON payload back out and parse it to prove byte-for-byte fidelity and structure integrity
-    extracted_json = usr_msg["content"].replace("DATA_PAYLOAD:\n", "")
+    extracted_json = usr_msg["content"].removeprefix("DATA_PAYLOAD:\n")
     parsed_payload = json.loads(extracted_json)
 
     assert "items" in parsed_payload
