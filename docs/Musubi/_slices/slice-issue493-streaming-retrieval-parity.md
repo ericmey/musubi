@@ -1,6 +1,6 @@
 ---
 owner: codex-gpt5-shiori
-status: in-progress
+status: in-review
 issue: 493
 title: "Slice: STREAM-001 retrieval stream parity"
 slice_id: slice-issue493-streaming-retrieval-parity
@@ -9,7 +9,7 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
 reviewed: false
@@ -23,7 +23,6 @@ Fix `POST /v1/retrieve/stream` to use canonical orchestration, returning exact m
 
 ## Specs to implement
 - [[07-interfaces/canonical-api]]
-- [[05-retrieval/orchestration]]
 
 ## Owned paths
 - `src/musubi/api/routers/writes_retrieve_stream.py`
@@ -40,6 +39,7 @@ Fix `POST /v1/retrieve/stream` to use canonical orchestration, returning exact m
 - `test_streaming_retrieval_degraded_warning_header`
 - `test_streaming_typed_error_mapping`
 - `test_streaming_retrieval_forwards_all_query_parameters`
+- `test_streaming_retrieval_multi_plane_fanout`
 
 ## Definition of Done
 - `run_orchestration_retrieve` invoked directly.
@@ -49,3 +49,4 @@ Fix `POST /v1/retrieve/stream` to use canonical orchestration, returning exact m
 ## Work log
 - Initial implementation replacing direct Episodic plane call with orchestration.
 - Addressed Yua review: removed unused seed helper, tightened zero-row/degraded assertions, verified setup POST successes, proved parameter forwarding, extended row schema checks, and corrected module docstrings.
+- Addressed Aoi independent review: added `test_streaming_retrieval_multi_plane_fanout` and 500 error mapping proof.

@@ -204,12 +204,18 @@ def test_streaming_typed_error_mapping(
     from musubi.retrieve.orchestration import RetrievalError
     from musubi.types.common import Err
 
+    current_error_kind = "bad_query"
+
     async def failing_retrieve(*args: object, **kwargs: object) -> object:
-        return Err(error=RetrievalError(kind="bad_query", detail="Forced bad query error"))
+        # Use model_construct to bypass literal validation for the unknown test case
+        return Err(
+            error=RetrievalError.model_construct(kind=current_error_kind, detail="Forced error")
+        )
 
     monkeypatch.setattr(writes_retrieve_stream, "run_orchestration_retrieve", failing_retrieve)
 
-    r = client.post(
+    # 1. Known mapping (bad_query -> 400 BAD_REQUEST)
+    r1 = client.post(
         "/v1/retrieve/stream",
         headers={"Authorization": f"Bearer {valid_token}"},
         json={
@@ -218,9 +224,23 @@ def test_streaming_typed_error_mapping(
             "mode": "fast",
         },
     )
-    assert r.status_code == 400
-    assert r.json()["error"]["code"] == "BAD_REQUEST"
-    assert r.json()["error"]["detail"] == "Forced bad query error"
+    assert r1.status_code == 400
+    assert r1.json()["error"]["code"] == "BAD_REQUEST"
+    assert r1.json()["error"]["detail"] == "Forced error"
+
+    # 2. Unknown mapping -> 500 INTERNAL
+    current_error_kind = "some_unknown_weird_error"
+    r2 = client.post(
+        "/v1/retrieve/stream",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "query_text": "trigger error",
+            "mode": "fast",
+        },
+    )
+    assert r2.status_code == 500
+    assert r2.json()["error"]["code"] == "INTERNAL"
 
 
 def test_streaming_retrieval_forwards_all_query_parameters(
@@ -267,3 +287,86 @@ def test_streaming_retrieval_forwards_all_query_parameters(
     assert captured_query["namespace_targets"] == [
         {"namespace": "eric/claude-code/episodic", "plane": "episodic"}
     ]
+
+
+def test_streaming_retrieval_multi_plane_fanout(
+    client: TestClient, valid_token: str, monkeypatch: MonkeyPatch
+) -> None:
+    import musubi.api.routers.writes_retrieve_stream as writes_retrieve_stream
+    from musubi.retrieve.orchestration import RetrievalEnvelope, RetrievalResult
+    from musubi.types.common import Ok
+
+    async def mock_retrieve(
+        client: object, embedder: object, reranker: object, query: dict[str, object]
+    ) -> object:
+        assert query["namespace_targets"] == [
+            {"namespace": "eric/claude-code/episodic", "plane": "episodic"},
+            {"namespace": "eric/claude-code/curated", "plane": "curated"},
+        ]
+        return Ok(
+            value=RetrievalEnvelope(
+                results=[
+                    RetrievalResult(
+                        object_id="ep-1",
+                        namespace="eric/claude-code/episodic",
+                        plane="episodic",
+                        snippet="ep content",
+                        score=0.9,
+                        score_components={
+                            "relevance": 0.9,
+                            "recency": 0.1,
+                            "importance": 0.2,
+                            "provenance": 0.3,
+                            "reinforcement": 0.4,
+                        },
+                        lineage={},
+                        state="matured",
+                        importance=3,
+                    ),
+                    RetrievalResult(
+                        object_id="cur-1",
+                        namespace="eric/claude-code/curated",
+                        plane="curated",
+                        snippet="cur content",
+                        score=0.8,
+                        score_components={
+                            "relevance": 0.8,
+                            "recency": 0.1,
+                            "importance": 0.5,
+                            "provenance": 0.6,
+                            "reinforcement": 0.0,
+                        },
+                        lineage={},
+                        state="promoted",
+                        importance=5,
+                    ),
+                ],
+                warnings=(),
+            )
+        )
+
+    monkeypatch.setattr(writes_retrieve_stream, "run_orchestration_retrieve", mock_retrieve)
+
+    r = client.post(
+        "/v1/retrieve/stream",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code",
+            "planes": ["episodic", "curated"],
+            "query_text": "fanout",
+            "mode": "fast",
+        },
+    )
+    assert r.status_code == 200
+
+    lines = [line for line in r.text.split("\n") if line]
+    assert len(lines) == 2
+
+    row1 = json.loads(lines[0])
+    row2 = json.loads(lines[1])
+
+    assert row1["object_id"] == "ep-1"
+    assert row1["plane"] == "episodic"
+
+    assert row2["object_id"] == "cur-1"
+    assert row2["plane"] == "curated"
