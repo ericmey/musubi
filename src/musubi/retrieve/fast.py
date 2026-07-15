@@ -396,8 +396,6 @@ def _plane_from_namespace(payload: dict[str, Any]) -> str:
     return "episodic"
 
 
-
-
 def _snippet(payload: dict[str, Any]) -> tuple[str, bool, int]:
     """Return (snippet, content_truncated, content_length).
 
@@ -410,7 +408,7 @@ def _snippet(payload: dict[str, Any]) -> tuple[str, bool, int]:
     truncated = original_length > 200
     if not truncated:
         return content, False, original_length
-    return truncate_grapheme_safe(content, max_chars=200), True, original_length
+    return truncate_grapheme_safe(content, 200), True, original_length
 
 
 def _lineage_summary(payload: dict[str, Any]) -> dict[str, Any]:

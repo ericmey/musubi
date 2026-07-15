@@ -296,3 +296,20 @@ Access accounting (RET-002 / #500) — realized in `tests/retrieve/test_ret002_a
 29. `test_context_accounts_only_surfaced_pack_items_not_dropped_candidates`
 30. `test_retrieve_normalizes_accounting_failure_to_typed_err`
 31. `test_context_accounting_failure_returns_internal_not_raw`
+
+
+Grapheme-safe truncation:
+19. `test_truncation_bypasses_short_text`
+20. `test_truncation_cuts_at_grapheme_boundaries_safely`
+21. `test_truncation_respects_max_chars_lte_3`
+22. `test_truncation_prevents_emoji_zwj_bisection`
+23. `test_truncation_preserves_single_emoji`
+24. `test_truncation_prevents_combined_diacritic_bisection`
+25. `test_truncation_prevents_regional_indicator_bisection`
+26. `test_truncation_preserves_internal_whitespace`
+27. `test_truncation_preserves_trailing_whitespace_if_within_budget`
+28. `test_truncation_prevents_skin_tone_modifier_bisection`
+29. `test_fast_retrieval_uses_grapheme_truncation_for_long_content`
+30. `test_recent_retrieval_uses_grapheme_truncation_for_long_content`
+31. `test_orchestration_uses_grapheme_truncation_for_long_content`
+32. `test_context_pack_uses_grapheme_truncation_for_long_content`

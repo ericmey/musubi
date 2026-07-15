@@ -62,10 +62,10 @@ def test_truncation_preserves_internal_whitespace() -> None:
 
 
 def test_truncation_preserves_trailing_whitespace_if_within_budget() -> None:
-    text = "A   B   C"
+    text = "A   B   C "
     # To drop C but keep trailing whitespace: budget = 9. pad = 3 -> 6.
     # "A   B " is 6.
-    assert truncate_grapheme_safe(text, max_chars=8) == "A   B..."
+    assert truncate_grapheme_safe(text, max_chars=9) == "A   B ..."
 
 
 def test_truncation_prevents_skin_tone_modifier_bisection() -> None:
@@ -95,7 +95,7 @@ async def test_recent_retrieval_uses_grapheme_truncation_for_long_content() -> N
 
     text = "A" * 195 + "👨‍👩‍👧‍👦"
     payload = {"content": text}
-    _snippet_val, trunc, length = _snippet(payload)
+    _snippet_val, trunc, length = _snippet(payload, max_chars=200)
     assert trunc is True
     assert length == 202
 
@@ -106,7 +106,7 @@ async def test_orchestration_uses_grapheme_truncation_for_long_content() -> None
 
     text = "A" * 195 + "👨‍👩‍👧‍👦"
     payload = {"content": text}
-    _snippet_val, trunc, length = _snippet(payload)
+    _snippet_val, trunc, length = _snippet(payload, max_chars=200)
     assert trunc is True
     assert length == 202
 
@@ -116,7 +116,7 @@ async def test_context_pack_uses_grapheme_truncation_for_long_content() -> None:
     from musubi.retrieve.context_pack import ContextCandidate, ContextPackQuery, build_context_pack
     from musubi.types.common import generate_ksuid
 
-    text = "A" * 115 + "👨‍👩‍👧‍👦"
+    text = "hello " + "A" * 112 + "👨‍👩‍👧‍👦"
 
     cand = ContextCandidate(
         object_id=str(generate_ksuid()),
@@ -126,9 +126,11 @@ async def test_context_pack_uses_grapheme_truncation_for_long_content() -> None:
         state="matured",
     )
 
-    pack = build_context_pack([cand], ContextPackQuery(query_text="A", max_items=1, max_chars=120))
+    pack = build_context_pack(
+        [cand], ContextPackQuery(query_text="hello", max_items=1, max_chars=120)
+    )
     item = next((i for group in pack.groups for i in group.items), None)
     assert item is not None
     assert item.content_truncated is True
-    assert item.content_length == 122
-    assert item.content == "A" * 115 + "..."
+    assert item.content_length == 125
+    assert item.content == "hello " + "A" * 111 + "..."
