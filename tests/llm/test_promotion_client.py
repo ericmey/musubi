@@ -4,14 +4,14 @@ The Protocol contract (:class:`musubi.lifecycle.promotion.PromotionLLM`):
 
 - Happy path → returns a :class:`PromotionRender` with at least one H2
   section, body between 100 and 20k chars, no AI-disclaimer strings.
-- Network failure / timeout / HTTP 4xx/5xx → raise (the sweep wraps
-  each call in try/except and records a rejection — see
-  ``_promote_concept``). Returning ``None`` like the maturation Ollama
+- Network failure / timeout / HTTP 4xx/5xx → raise as transient (the sweep
+  leaves the attempt budget unchanged — see ``_promote_concept``).
+  Returning ``None`` like the maturation Ollama
   client would be silently consumed as "rendering succeeded with no
   content," which is worse than a loud failure.
-- Envelope parse failure → raise ``ValueError``.
+- Envelope parse failure → raise ``ValueError`` as transient.
 - Validation failure (body too short, no H2, AI disclaimer) → raise
-  ``ValueError`` with the concrete message — lets the sweep record a
+  ``PromotionPolicyError`` with the concrete message — lets the sweep record a
   specific rejection reason.
 
 Tests drive the client through ``pytest-httpx`` so no live Ollama is
@@ -26,6 +26,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
+from musubi.lifecycle.promotion import PromotionPolicyError
 from musubi.llm.promotion_client import HttpxPromotionClient
 
 _BASE_URL = "http://ollama:11434"
@@ -166,7 +167,7 @@ async def test_render_raises_when_body_has_no_h2(httpx_mock: HTTPXMock) -> None:
         json=_chat_body(bad),
     )
     client = _client()
-    with pytest.raises(ValueError):
+    with pytest.raises(PromotionPolicyError):
         await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
 
 
@@ -182,7 +183,7 @@ async def test_render_raises_on_ai_disclaimer(httpx_mock: HTTPXMock) -> None:
         json=_chat_body(bad),
     )
     client = _client()
-    with pytest.raises(ValueError):
+    with pytest.raises(PromotionPolicyError):
         await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
 
 
@@ -195,5 +196,5 @@ async def test_render_raises_on_body_too_short(httpx_mock: HTTPXMock) -> None:
         json=_chat_body(bad),
     )
     client = _client()
-    with pytest.raises(ValueError):
+    with pytest.raises(PromotionPolicyError):
         await client.render_curated_markdown(title="T", content="C", rationale="R", top_memories=[])
