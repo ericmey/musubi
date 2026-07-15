@@ -731,3 +731,82 @@ async def test_existing_both_sides_of_link_still_set(
     assert refreshed_new is not None
     assert refreshed_predecessor.superseded_by == new_row.object_id
     assert list(refreshed_new.supersedes) == [predecessor.object_id]
+
+
+# --------------------------------------------------------------------------- #
+# Call-shape discriminator
+# --------------------------------------------------------------------------- #
+
+
+class _CallShapeTrackingEmbedder(Embedder):
+    """Wraps a backing embedder and counts ``embed_dense`` calls.
+
+    The seam contract requires at most ONE ``embed_dense`` call per
+    invocation (no per-candidate network roundtrip). This wrapper
+    enforces the call-shape in tests.
+    """
+
+    def __init__(self, backing: Embedder) -> None:
+        self._backing = backing
+        self.call_count = 0
+        self.batches: list[list[str]] = []
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        self.call_count += 1
+        self.batches.append(list(texts))
+        return await self._backing.embed_dense(texts)
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        return await self._backing.embed_sparse(texts)
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return await self._backing.rerank(query, candidates)
+
+
+async def test_seam_makes_exactly_one_embed_dense_call(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+) -> None:
+    """The seam contract is no-per-candidate-network-roundtrip: a single
+    batched ``embed_dense`` call, regardless of how many topic-surviving
+    candidates the namespace has. Three matured candidates in the same
+    namespace plus a supersession-hint needle must produce exactly one
+    ``embed_dense`` call (a batch of needle + 3 candidates = 4 items)."""
+    embedder = _ControlledEmbedder()
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
+    # Three topic-compatible matured candidates (different times).
+    await _seed_matured(plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"])
+    await _seed_matured(plane, ns, content="the meeting is at 4pm", topics=["calendar/meeting"])
+    await _seed_matured(
+        plane, ns, content="the meeting is at 5pm tomorrow", topics=["calendar/meeting"]
+    )
+
+    # New provisional row with a supersession hint — shares the topic
+    # with all three candidates; the seam will abstain on ambiguity.
+    new_row = await _seed_provisional(
+        plane, ns, content="Update: the meeting is at 3pm", topics=["calendar/meeting"]
+    )
+
+    tracker = _CallShapeTrackingEmbedder(embedder)
+    result = await seam_candidate(
+        qdrant,
+        collection="musubi_episodic",
+        namespace=ns,
+        self_id=new_row.object_id,
+        content="Update: the meeting is at 3pm",
+        embedder=tracker,
+        topics=["calendar/meeting"],
+    )
+    # The discriminator: exactly one embed_dense call, regardless of candidate count.
+    assert tracker.call_count == 1, (
+        f"seam made {tracker.call_count} embed_dense calls (batches={tracker.batches}); "
+        "the contract is exactly one batched call"
+    )
+    # The batch should be needle + surviving topic-compatible candidates = 4 items.
+    assert len(tracker.batches[0]) == 4, (
+        f"expected batch of 4 (1 needle + 3 candidates), got {len(tracker.batches[0])}"
+    )
+    # The seam abstained on ambiguity (multiple cosine-passing candidates) — None is the
+    # correct verdict, but the discriminator's primary job is to lock the call shape.
+    assert result is None

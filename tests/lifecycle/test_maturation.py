@@ -1082,7 +1082,7 @@ def test_build_maturation_jobs_registers_documented_names(
     scheduler's default-job registry. Demotion moved to the dedicated
     `demotion.py` module after slice-lifecycle-demotion-builder landed;
     maturation retains the three sweeps that still live here."""
-    from musubi.lifecycle.maturation import build_maturation_jobs
+    from musubi.lifecycle.maturation import _NoopEmbedder, build_maturation_jobs
 
     jobs = build_maturation_jobs(
         client=qdrant,
@@ -1091,6 +1091,7 @@ def test_build_maturation_jobs_registers_documented_names(
         ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         lock_dir=tmp_path / "locks",
+        embedder=_NoopEmbedder(),
         config=_config(),
     )
     names = {j.name for j in jobs}
@@ -1113,7 +1114,7 @@ def test_build_maturation_jobs_runner_skips_when_lock_held(
     """Wrapped jobs acquire the per-job file lock before running. We
     verify by holding the lock externally and confirming the job's
     runner returns cleanly without doing work."""
-    from musubi.lifecycle.maturation import build_maturation_jobs
+    from musubi.lifecycle.maturation import _NoopEmbedder, build_maturation_jobs
 
     jobs = build_maturation_jobs(
         client=qdrant,
@@ -1122,6 +1123,7 @@ def test_build_maturation_jobs_runner_skips_when_lock_held(
         ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         lock_dir=tmp_path / "locks",
+        embedder=_NoopEmbedder(),
         config=_config(),
     )
     by_name = {j.name: j for j in jobs}

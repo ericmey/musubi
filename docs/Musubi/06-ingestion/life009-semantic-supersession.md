@@ -16,7 +16,7 @@ Supersession promises semantic similarity plus topic compatibility. A candidate 
 
 - Similarity ≥ 0.88 (cosine, dense embedding) on the post-hint content of the new memory and the post-hint content of the candidate.
 - Topic match: at least one `linked_to_topics` entry in common between the new memory and the candidate.
-- Abstain (return None) on: zero candidates that pass; one or more candidates that pass (ambiguous).
+- Abstain (return None) on: zero candidates that pass; two or more candidates that pass (ambiguous).
 - Bounded candidate search via Qdrant `scroll(limit=max_candidates, ...)` with a default of 20.
 
 ## Contract

@@ -4,10 +4,10 @@ slice_id: slice-life009-semantic-supersession
 issue: 532
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: cowork-tama
 phase: "Lifecycle"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-07-15
 reviewed: false
 depends-on: []
@@ -143,13 +143,16 @@ slice's work log records the implementation.
 
 ## Acceptance
 
-The first contract is bounded to thirteen tests in
+The first contract is bounded to sixteen tests in
 ``tests/lifecycle/test_life009_semantic_supersession.py``:
-nine RED discriminating tests, four GREEN preservation
-guards. Test function names transcribe the Test Contract
-bullets verbatim per the AGENTS.md Test Contract Closure Rule.
+eleven RED discriminating tests, two GREEN preservation
+guards, one RED→GREEN call-shape discriminator, two pre-existing
+test-maturation migrations (controlled embedder + shared
+``linked_to_topics`` evidence). Test function names transcribe the
+Test Contract bullets verbatim per the AGENTS.md Test Contract
+Closure Rule.
 
-### Test Contract (13 bullets, state 1 = passing at handoff)
+### Test Contract (16 bullets, state 1 = passing at handoff)
 
 1. `test_paraphrase_supersession` — RED
 2. `test_correction_supersession_links_to_right_predecessor` — RED
@@ -166,6 +169,7 @@ bullets verbatim per the AGENTS.md Test Contract Closure Rule.
 13. `test_substring_only_does_not_match` — RED (the OLD substring
     logic would have matched these; the NEW semantic logic does
     not)
+14. `test_seam_makes_exactly_one_embed_dense_call` — RED→GREEN call-shape discriminator (close-out add)
 
 GREEN preservation guards (the seam must not break the existing
 correctness contract; the slice adds GREEN guards that pin the

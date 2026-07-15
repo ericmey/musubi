@@ -889,11 +889,10 @@ async def _find_supersession_candidate(
         with_payload=True,
     )
 
-    # Embed the needle once; embed each surviving candidate once.
-    needle_vec = (await embedder.embed_dense([needle]))[0]
-    needle_norm = math.sqrt(sum(x * x for x in needle_vec)) or 1.0
-
-    candidates: list[KSUID] = []
+    # Topic-filter candidates first (no embedding needed; the topic
+    # check is cheap). Surviving topic-compatible candidates are the
+    # only rows whose dense vectors we will ever need.
+    candidate_pairs: list[tuple[KSUID, str]] = []
     for rec in records:
         if not rec.payload:
             continue
@@ -909,22 +908,38 @@ async def _find_supersession_candidate(
                 break
         if not candidate_content:
             continue
-        candidate_id = rec.payload.get("object_id")
-        if not isinstance(candidate_id, str) or candidate_id == self_id:
-            continue
         candidate_topics = rec.payload.get("linked_to_topics") or []
         if not any(t in topics for t in candidate_topics):
             continue
-        # Semantic-similarity check: cosine ≥ threshold.
-        candidate_vec = (await embedder.embed_dense([candidate_content]))[0]
+        candidate_pairs.append((candidate_id, candidate_content))
+
+    # ONE batched embed_dense call (discriminator: at most one network
+    # roundtrip per seam invocation). The needle may ride in the same
+    # batch as the topic-surviving candidates, or be embedded
+    # separately — both shapes stay within the single-call contract.
+    if not candidate_pairs:
+        return None
+    batch = [needle] + [c for _, c in candidate_pairs]
+    vectors = await embedder.embed_dense(batch)
+    if len(vectors) != len(batch):
+        # Defensive: the Embedder Protocol promises len(vectors) == len(batch).
+        # Treat a malformed response as no candidate (abstain).
+        return None
+    needle_vec = vectors[0]
+    needle_norm = math.sqrt(sum(x * x for x in needle_vec)) or 1.0
+
+    candidates: list[KSUID] = []
+    for (cid, _), candidate_vec in zip(candidate_pairs, vectors[1:], strict=True):
         candidate_norm = math.sqrt(sum(x * x for x in candidate_vec)) or 1.0
         dot = sum(x * y for x, y in zip(needle_vec, candidate_vec, strict=True))
         similarity = dot / (needle_norm * candidate_norm)
         if similarity < similarity_threshold:
             continue
-        candidates.append(candidate_id)
+        candidates.append(cid)
 
-    # Abstain on zero or multiple matches (ambiguous).
+    # Abstain on zero or two-or-more matches (ambiguous). The seam
+    # never returns a list — a single confident predecessor is the
+    # only verdict.
     if len(candidates) != 1:
         return None
     return candidates[0]
@@ -1030,12 +1045,21 @@ def build_maturation_jobs(
     ollama: OllamaClient,
     cursor: MaturationCursor,
     lock_dir: Path,
+    embedder: Embedder,
     config: MaturationConfig | None = None,
-    embedder: Embedder | None = None,
 ) -> list[Job]:
     """Return :class:`Job` objects matching the lifecycle-scheduler default
     job names that maturation *owns*: ``maturation_episodic``,
     ``provisional_ttl``, and ``concept_maturation``.
+
+    The ``embedder`` parameter is REQUIRED (production-wiring
+    discriminator). A caller that omits ``embedder=`` fails at the
+    Python call site (``TypeError: missing 1 required keyword-only
+    argument``) — there is no silent fallback to :class:`_NoopEmbedder`
+    at the scheduler boundary. Direct test callers that want the
+    conservative seam (abstain on every candidate) must explicitly
+    pass ``_NoopEmbedder()``. Production's :func:`musubi.lifecycle.runner._main_async`
+    passes the real ``ChunkedEmbedder`` wrapping ``_TEICompositeEmbedder``.
 
     Demotion used to live here (``demotion_episodic``, ``demotion_concept``)
     as helper sweeps that predated the dedicated demotion slice. They've
