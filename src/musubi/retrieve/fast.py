@@ -47,6 +47,11 @@ class FastHit:
     payload: dict[str, Any]
     snippet: str
     lineage_summary: dict[str, Any]
+    # DQ-001: silent-truncation fix. Sliced snippets are tagged with the
+    # original (untruncated) character length and a truncated flag so
+    # callers can detect the cut and fetch the full body via ``object_id``.
+    content_truncated: bool = False
+    content_length: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,14 +339,17 @@ def _pack(
             now=now,
             weights=weights,
         )
+        _snippet_str, _ct, _cl = _snippet(payload)
         packed.append(
             FastHit(
                 object_id=hybrid_hit.object_id,
                 score=total,
                 score_components=components,
                 payload=payload,
-                snippet=_snippet(payload),
+                snippet=_snippet_str,
                 lineage_summary=_lineage_summary(payload),
+                content_truncated=_ct,
+                content_length=_cl,
             )
         )
     return sorted(packed, key=lambda hit: (-hit.score, hit.object_id))[:limit]
@@ -375,9 +383,17 @@ def _plane_from_namespace(payload: dict[str, Any]) -> str:
     return "episodic"
 
 
-def _snippet(payload: dict[str, Any]) -> str:
+def _snippet(payload: dict[str, Any]) -> tuple[str, bool, int]:
+    """Return (snippet, content_truncated, content_length).
+
+    The snippet is at most 200 chars (per spec). When the original content
+    is longer than the cap, the snippet is truncated and the original
+    character length is preserved for caller-side detection.
+    """
     content = str(payload.get("content") or payload.get("title") or "")
-    return content[:200]
+    original_length = len(content)
+    truncated = original_length > 200
+    return content[:200], truncated, original_length
 
 
 def _lineage_summary(payload: dict[str, Any]) -> dict[str, Any]:

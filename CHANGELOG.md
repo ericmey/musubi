@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.16.1](https://github.com/ericmey/musubi/compare/v1.16.0...v1.16.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* LIFE-004 promotion retry classification (Issue [#504](https://github.com/ericmey/musubi/issues/504)) ([#506](https://github.com/ericmey/musubi/issues/506)) ([43c5baa](https://github.com/ericmey/musubi/commit/43c5baa5bf6df222eda8653c249c1585683ba2e9))
+
+## [1.16.0](https://github.com/ericmey/musubi/compare/v1.15.2...v1.16.0) (2026-07-15)
+
+
+### Features
+
+* **dq001:** surface silent-truncation metadata on retrieval rows (Tracks [#443](https://github.com/ericmey/musubi/issues/443)) ([#497](https://github.com/ericmey/musubi/issues/497)) ([7447693](https://github.com/ericmey/musubi/commit/74476934fc622161bf5ae1a6ac86a3c98a2f1797))
+
 ## [1.15.2](https://github.com/ericmey/musubi/compare/v1.15.1...v1.15.2) (2026-07-15)
 
 
