@@ -4,10 +4,10 @@ slice_id: slice-ret012-cross-plane-ranking
 issue: 512
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: cowork-tama
 phase: "Retrieval"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/in-review, type/slice]
 updated: 2026-07-15
 reviewed: false
 depends-on: []
