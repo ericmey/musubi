@@ -9,7 +9,7 @@ type: slice
 phase: "Ingestion"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
 reviewed: true

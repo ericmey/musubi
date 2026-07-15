@@ -522,7 +522,7 @@ class EpisodicPlane:
         if isinstance(vectors, dict):
             raw_dense = vectors.get(DENSE_VECTOR_NAME)
             if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
-                existing_dense = raw_dense
+                existing_dense = raw_dense  # type: ignore[assignment]
             raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
             if isinstance(raw_sparse, models.SparseVector):
                 existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))
