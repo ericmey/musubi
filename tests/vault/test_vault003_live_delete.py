@@ -880,3 +880,131 @@ def test_runtime_factory_produces_watcher_construction_inputs() -> None:
 
     with contextlib.suppress(OSError):
         vault_root.rmdir()
+
+
+# --------------------------------------------------------------------------- #
+# VAULT-003 re-review (Yua 2026-07-15 17:06): behavioral command-path
+# discriminator + corrected doc wording.
+# --------------------------------------------------------------------------- #
+
+
+def test_find_by_vault_path_uses_limit_two_for_fail_closed() -> None:
+    """VAULT-003 re-review (Yua 17:06): the production ``find_by_vault_path``
+    MUST use ``limit=2`` (NOT ``limit=1000``) so the second match is
+    sufficient to fail closed without pulling a potentially unbounded
+    row count. The behaviour is: zero -> not_found, one -> Ok, two ->
+    multiple_matches. This test reads the source text of
+    ``CuratedPlane.find_by_vault_path`` and asserts ``limit=2`` is
+    used (not a different value, not a parameterised
+    ``limit=None``/``limit=1000``)."""
+    import inspect
+
+    from musubi.planes.curated import CuratedPlane
+
+    src = inspect.getsource(CuratedPlane.find_by_vault_path)
+    # The bounded contract: limit=2 (the smallest value that still
+    # surfaces the duplicate case).
+    assert "limit=2" in src, (
+        "find_by_vault_path must scroll with limit=2; the second match "
+        "is sufficient to fail closed and a larger value is wasteful. "
+        f"Source:\n{src}"
+    )
+    # And NOT a higher limit (the previous Yua-review fix used 1000).
+    assert "limit=1000" not in src, (
+        "find_by_vault_path must NOT use limit=1000; the bounded contract "
+        "is limit=2. The pre-fix code had limit=1000.\n"
+        f"Source:\n{src}"
+    )
+    assert "limit=None" not in src, (
+        "find_by_vault_path must NOT use limit=None; the in-memory Qdrant "
+        "client rejects it (TypeError) and the bounded contract is "
+        "limit=2.\n"
+        f"Source:\n{src}"
+    )
+
+
+def test_systemd_command_path_reaches_main_behaviorally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VAULT-003 re-review (Yua 17:06): the previous discriminator
+    (``test_systemd_module_command_reaches_construction``) was an
+    AST+import check, NOT behavioral. The PR body claimed "not
+    AST-only" — that wording was misleading. This test provides a
+    TRUE behavioral discriminator.
+
+    Strategy: drive the EXACT systemd ``ExecStart=`` command path
+    (``python -m musubi.vault.watcher``) via ``runpy.run_module``
+    with ``run_name=\"__main__\"``. We monkeypatch
+    :func:`asyncio.run` so the module's ``main()`` (which calls
+    ``asyncio.run(_main_async())``) is captured as a coroutine that
+    we close without ever starting the production runtime. Then we
+    assert that the coroutine exists and was created by the module
+    — proving the exact command path reaches ``main()`` and
+    ``_main_async`` without manual intervention.
+
+    Pre-fix behaviour: the module had no ``__main__`` block and no
+    ``main()`` function, so ``runpy.run_module`` would complete
+    without invoking anything; ``main_called`` would be ``False``.
+    """
+    import runpy
+    import sys
+
+    captured: dict[str, Any] = {}
+
+    def _fake_asyncio_run(coro: Any, *args: Any, **kwargs: Any) -> Any:
+        # Capture the coroutine. Inspect its frame BEFORE closing,
+        # because closing the coroutine releases its cr_frame.
+        captured["coro"] = coro
+        captured["called"] = True
+        # Read the source frame to prove `_main_async` was reached.
+        cr = coro.cr_frame
+        captured["frame_name"] = cr.f_code.co_name if cr is not None else None
+        # Close the coroutine to avoid "coroutine was never awaited"
+        # warnings.
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            coro.close()
+        return None
+
+    monkeypatch.setattr("musubi.vault.watcher.asyncio.run", _fake_asyncio_run)
+    # Also stub the runtime factory so any deeper import path doesn't
+    # try to reach a real Qdrant client. The import is inside
+    # `_main_async`, so the module attribute is read on the first
+    # `from musubi.vault.runtime import build_vault_sync_runtime`.
+    # Monkeypatching `sys.modules` lets the late-bound import resolve
+    # to our stub without the module needing a top-level reference.
+    runtime_stub = type(sys)("musubi.vault.runtime")
+
+    def _stub_factory(**_kw: Any) -> Any:
+        raise AssertionError(
+            "build_vault_sync_runtime must NOT be invoked by the "
+            "behavioural command-path discriminator; main() must "
+            "call asyncio.run with the captured coroutine first."
+        )
+
+    runtime_stub.build_vault_sync_runtime = _stub_factory  # type: ignore[attr-defined]
+    runtime_stub.VaultSyncRuntime = type("VaultSyncRuntime", (), {})  # type: ignore[attr-defined]
+    runtime_stub.VaultRuntimeError = type("VaultRuntimeError", (), {})  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "musubi.vault.runtime", runtime_stub)
+
+    # Drive the exact systemd command path: `python -m
+    # musubi.vault.watcher`. The pre-fix module had no __main__ block,
+    # so this is a no-op; the post-fix module runs main() which calls
+    # asyncio.run(_main_async()).
+    runpy.run_module("musubi.vault.watcher", run_name="__main__")
+
+    assert captured.get("called"), (
+        "the systemd command path did NOT reach asyncio.run; the module "
+        "either lacks a __main__ block or the __main__ block does not "
+        "call main(). Pre-fix modules fail this assertion."
+    )
+    # The captured coroutine is the result of `_main_async()`; the
+    # function name on the coroutine's frame is the direct evidence
+    # that the production entrypoint was reached.
+    assert captured.get("frame_name") == "_main_async", (
+        f"the captured coroutine must come from _main_async (the "
+        f"production entrypoint); got {captured.get('frame_name')!r}. "
+        f"Pre-fix modules never reach this point because they have no "
+        f"main() and no __main__ block."
+    )

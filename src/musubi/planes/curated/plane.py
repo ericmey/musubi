@@ -370,10 +370,14 @@ class CuratedPlane:
           when more than one row matches — the caller MUST refuse to
           take destructive action.
 
-        The scroll is unconstrained (``limit=None`` so the in-memory
-        Qdrant client returns all matches) — the duplicate-row case
-        is rare and the cost of fetching the second match is dwarfed
-        by the cost of archiving the wrong row.
+        The scroll is bounded to ``limit=2`` (Yua VAULT-003 review
+        binding): fetching the second match is sufficient to fail
+        closed, and a limit of 2 is the smallest unconstrained value
+        that still surfaces the duplicate case without pulling a
+        potentially unbounded row count. Zero matches -> not_found;
+        one match -> Ok; two matches -> multiple_matches. Anything
+        more than 2 in the duplicate case is the same bug and the
+        caller fails closed on the second match.
         """
         if not isinstance(vault_path, str) or not vault_path:
             return Err(
@@ -391,7 +395,7 @@ class CuratedPlane:
                     ),
                 ]
             ),
-            limit=1000,
+            limit=2,
             with_payload=True,
         )
         if not records:
@@ -407,8 +411,10 @@ class CuratedPlane:
                 error=FindByVaultPathError(
                     code="multiple_matches",
                     detail=(
-                        f"vault_path={vault_path!r} matched {len(records)} rows; "
-                        "(namespace, vault_path) uniqueness invariant violated"
+                        f"vault_path={vault_path!r} matched >=2 rows; "
+                        "(namespace, vault_path) uniqueness invariant violated. "
+                        "Fetches at most 2 rows because the second match is "
+                        "sufficient to fail closed."
                     ),
                     match_count=len(records),
                     match_object_ids=ids,
