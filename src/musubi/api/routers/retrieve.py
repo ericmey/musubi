@@ -138,6 +138,15 @@ class RetrieveQuery(BaseModel):
         ),
     )
 
+    include_lineage: bool = Field(
+        default=True,
+        description=(
+            "Forwarded verbatim to the orchestration seam. Defaults to true; "
+            "set explicitly to false to disable lineage hydration on the wire. "
+            "Preserved across concrete and fanout namespace shapes."
+        ),
+    )
+
     @model_validator(mode="after")
     def _require_query_text_for_ranked_modes(self) -> RetrieveQuery:
         """Match the orchestration-side rule at the wire boundary.
@@ -430,6 +439,7 @@ async def retrieve(
         query_body["since"] = body.since
     if body.tags is not None:
         query_body["tags"] = body.tags
+    query_body["include_lineage"] = body.include_lineage
 
     orchestration_result = await run_orchestration_retrieve(
         client=qdrant,
