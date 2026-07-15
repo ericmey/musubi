@@ -120,6 +120,30 @@ async def test_reconciler_does_not_archive_present_rows_under_ignored_directorie
 
 
 @pytest.mark.anyio
+async def test_reconciler_normalizes_legacy_windows_path_before_ghost_comparison(
+    vault_root: Path,
+    mock_curated_plane: MagicMock,
+    mock_coordinator: MagicMock,
+) -> None:
+    reconciler = VaultReconciler(vault_root, mock_curated_plane, mock_coordinator)
+    path = vault_root / "eric" / "ghosts" / "present.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("present")
+
+    row = MagicMock()
+    row.vault_path = r"eric\ghosts\present.md"
+    row.state = "matured"
+    row.namespace = "eric/ghosts/curated"
+    row.object_id = "id-windows-path"
+    mock_curated_plane.scan_vault_rows = AsyncMock(return_value=[row])
+    reconciler._reconcile_file = AsyncMock(return_value="unchanged")  # type: ignore
+
+    await reconciler.reconcile()
+
+    mock_curated_plane.transition.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_reconciler_failure_visibility(
     vault_root: Path,
     mock_curated_plane: MagicMock,

@@ -421,10 +421,11 @@ class CuratedPlane:
                 with_vectors=False,
             )
             for point in resp:
-                if point.payload:
-                    row = _curated_from_payload(point.payload)
-                    if row.vault_path:
-                        out.append(row)
+                if point.payload is None:
+                    raise ValueError("curated inventory row is missing its payload")
+                row = _curated_from_payload(point.payload)
+                if row.vault_path:
+                    out.append(row)
             if offset is None:
                 break
         return out

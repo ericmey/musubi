@@ -119,7 +119,10 @@ class VaultReconciler:
 
         inventory = await self.curated_plane.scan_vault_rows()
         for row in inventory:
-            vp = row.vault_path
+            # Vault paths are canonically POSIX-relative.  Normalize legacy
+            # Windows separators before comparing with the on-disk inventory
+            # so a present row cannot be misclassified as a ghost.
+            vp = row.vault_path.replace("\\", "/") if row.vault_path else None
             if not vp or row.state in ("archived", "superseded"):
                 continue
             if vp not in seen_paths:
@@ -172,7 +175,7 @@ class VaultReconciler:
     async def _reconcile_file(
         self, path: Path
     ) -> Literal["upserted", "unchanged", "no_object_id", "error"]:
-        rel_path = str(path.relative_to(self.vault_root))
+        rel_path = path.relative_to(self.vault_root).as_posix()
         try:
             content = path.read_text(encoding="utf-8")
             data, body = parse_frontmatter(content)

@@ -39,8 +39,10 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -715,3 +717,16 @@ async def test_scan_vault_rows_surfaces_validation_failure(
 
     # pydantic validation error
     assert "validation error" in str(excinfo.value).lower()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("payload", [{}, None])
+async def test_scan_vault_rows_rejects_empty_or_missing_payload(
+    plane: CuratedPlane, payload: dict[str, object] | None
+) -> None:
+    point = MagicMock(payload=payload)
+    with (
+        patch.object(plane._client, "scroll", return_value=([point], None)),
+        pytest.raises((ValueError, ValidationError)),
+    ):
+        await plane.scan_vault_rows()
