@@ -709,13 +709,13 @@ async def test_deterministic_model_validation_failure_increments_attempts(
     # We monkeypatch CuratedFrontmatter to just invoke itself with invalid arguments,
     # ensuring a REAL pydantic.ValidationError is emitted, matching the exact
     # production exception shape.
-    def _failing_model(*args, **kwargs):
+    def _failing_model(*args: Any, **kwargs: Any) -> CuratedFrontmatter:
         # Passing an invalid `importance` type (e.g. dict) will reliably throw ValidationError
         return CuratedFrontmatter(
             object_id=c.object_id,
             namespace=c.namespace,
             title=c.title,
-            importance={},
+            importance={},  # type: ignore[arg-type]
             state="matured",
             created=c.created_at,
             updated=c.updated_at,
