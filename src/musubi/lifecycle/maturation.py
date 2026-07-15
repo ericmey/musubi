@@ -62,6 +62,7 @@ from typing import Any, Protocol
 from qdrant_client import QdrantClient, models
 
 from musubi.config import get_settings
+from musubi.embedding.base import Embedder
 from musubi.lifecycle import store
 from musubi.lifecycle.coordinator import (
     LifecycleTransitionCoordinator,
@@ -96,6 +97,7 @@ _LIFECYCLE_ACTOR = "lifecycle-worker"
 # OllamaClient — Protocol + production stub
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class OllamaImportance:
     """Input row for the importance-rescore prompt."""
@@ -104,6 +106,7 @@ class OllamaImportance:
     content: str
     captured_importance: int
 
+
 @dataclass(frozen=True)
 class OllamaTopic:
     """Input row for the topic-inference prompt."""
@@ -111,6 +114,7 @@ class OllamaTopic:
     object_id: KSUID
     content: str
     existing_tags: list[str] = field(default_factory=list)
+
 
 class OllamaClient(Protocol):
     """Minimal shape the maturation sweep needs from an LLM client.
@@ -123,6 +127,7 @@ class OllamaClient(Protocol):
     async def score_importance(self, items: list[OllamaImportance]) -> dict[KSUID, int] | None: ...
 
     async def infer_topics(self, items: list[OllamaTopic]) -> dict[KSUID, list[str]] | None: ...
+
 
 class _NotConfiguredOllama:
     """Production stub. Raises ``NotImplementedError`` on every call.
@@ -150,6 +155,7 @@ class _NotConfiguredOllama:
             "future slice-llm-client). Read Settings.ollama_url and "
             "instantiate a real client."
         )
+
 
 def default_ollama_client() -> OllamaClient:
     """Return the production :class:`OllamaClient`.
@@ -182,9 +188,11 @@ def default_ollama_client() -> OllamaClient:
         debug_dir=debug_dir,
     )
 
+
 # ---------------------------------------------------------------------------
 # Cursor
 # ---------------------------------------------------------------------------
+
 
 class MaturationCursor:
     """Per-sweep cursor persisted to sqlite.
@@ -226,9 +234,11 @@ class MaturationCursor:
             )
             conn.commit()
 
+
 # ---------------------------------------------------------------------------
 # Config + report
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class MaturationConfig:
@@ -253,6 +263,7 @@ class MaturationConfig:
     concept_reinforcement_threshold: int = 3
     tag_aliases: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_TAG_ALIASES))
 
+
 @dataclass(frozen=True)
 class SweepReport:
     """Outcome of one sweep invocation."""
@@ -264,9 +275,11 @@ class SweepReport:
     cursor_advanced_to: float | None = None
     deferred: list[TransitionPending] = field(default_factory=list)
 
+
 # ---------------------------------------------------------------------------
 # Pure helpers
 # ---------------------------------------------------------------------------
+
 
 def normalize_tags(tags: Sequence[str], *, aliases: dict[str, str]) -> list[str]:
     """Lowercase, strip, hyphenate, de-alias, dedupe — all the rules from
@@ -287,12 +300,14 @@ def normalize_tags(tags: Sequence[str], *, aliases: dict[str, str]) -> list[str]
             out.append(canonical)
     return out
 
+
 def detect_supersession_hint(content: str) -> bool:
     """``True`` iff ``content`` starts with one of the supersession hints."""
     if not content:
         return False
     head = content.lstrip().lower()
     return any(head.startswith(hint) for hint in _SUPERSESSION_HINTS)
+
 
 # ---------------------------------------------------------------------------
 # Episodic maturation sweep
@@ -303,6 +318,7 @@ _CURSOR_NAME_EPISODIC = "episodic_maturation"
 _CURSOR_NAME_TTL = "provisional_ttl"
 _CURSOR_NAME_DEMOTION = "episodic_demotion"
 
+
 async def episodic_maturation_sweep(
     *,
     client: QdrantClient,
@@ -312,7 +328,7 @@ async def episodic_maturation_sweep(
     cursor: MaturationCursor,
     config: MaturationConfig | None = None,
     now: datetime | None = None,
-    embedder: "Embedder | None" = None,
+    embedder: Embedder | None = None,
 ) -> SweepReport:
     """One pass of the maturation sweep.
 
@@ -336,7 +352,7 @@ async def episodic_maturation_sweep(
     now_dt = now or utc_now()
     now_epoch = now_dt.timestamp()
     cursor_value = cursor.get(_CURSOR_NAME_EPISODIC)
-    import logging
+
     candidates = _scroll_eligible(
         client,
         collection=_EPISODIC_COLLECTION,
@@ -345,7 +361,6 @@ async def episodic_maturation_sweep(
         cursor_value=cursor_value,
         limit=cfg.batch_size,
     )
-    import logging
 
     if not candidates:
         return SweepReport(selected=0, transitioned=0)
@@ -407,14 +422,14 @@ async def episodic_maturation_sweep(
         superseded_target_id: KSUID | None = None
         _hint = detect_supersession_hint(row.get("content", ""))
         if _hint:
-            import logging
+            seam_embedder: Embedder = embedder if embedder is not None else _NoopEmbedder()
             superseded_target_id = await _find_supersession_candidate(
                 client,
                 collection=_EPISODIC_COLLECTION,
                 namespace=row["namespace"],
                 self_id=object_id,
                 content=row.get("content", ""),
-                embedder=embedder,
+                embedder=seam_embedder,
                 topics=new_topics,
             )
             if superseded_target_id is not None:
@@ -505,9 +520,11 @@ async def episodic_maturation_sweep(
         deferred=deferred,
     )
 
+
 # ---------------------------------------------------------------------------
 # Provisional TTL sweep
 # ---------------------------------------------------------------------------
+
 
 async def provisional_ttl_sweep(
     *,
@@ -566,6 +583,7 @@ async def provisional_ttl_sweep(
         deferred=deferred,
     )
 
+
 # ---------------------------------------------------------------------------
 # First-cut episodic + concept demotion sweeps
 #
@@ -578,6 +596,7 @@ async def provisional_ttl_sweep(
 # are deferred to slice-lifecycle-reflection / slice-lifecycle-promotion
 # follow-ups.
 # ---------------------------------------------------------------------------
+
 
 async def episodic_demotion_sweep(
     *,
@@ -634,6 +653,7 @@ async def episodic_demotion_sweep(
         failed=failed,
         deferred=deferred,
     )
+
 
 async def concept_maturation_sweep(
     *,
@@ -707,6 +727,7 @@ async def concept_maturation_sweep(
         deferred=deferred,
     )
 
+
 async def concept_demotion_sweep(
     *,
     client: QdrantClient,
@@ -757,9 +778,11 @@ async def concept_demotion_sweep(
         deferred=deferred,
     )
 
+
 # ---------------------------------------------------------------------------
 # Internal — Qdrant access helpers
 # ---------------------------------------------------------------------------
+
 
 def _scroll_eligible(
     client: QdrantClient,
@@ -808,6 +831,7 @@ def _scroll_eligible(
             out.append(dict(rec.payload))
     return out
 
+
 async def _find_supersession_candidate(
     client: QdrantClient,
     *,
@@ -815,7 +839,7 @@ async def _find_supersession_candidate(
     namespace: str,
     self_id: KSUID,
     content: str,
-    embedder: "Embedder",
+    embedder: Embedder,
     topics: list[str],
     similarity_threshold: float = 0.88,
     max_candidates: int = 20,
@@ -863,8 +887,6 @@ async def _find_supersession_candidate(
     )
 
     # Embed the needle once; embed each surviving candidate once.
-    import logging
-    log = logging.getLogger(__name__)
     needle_vec = (await embedder.embed_dense([needle]))[0]
     needle_norm = math.sqrt(sum(x * x for x in needle_vec)) or 1.0
 
@@ -873,7 +895,7 @@ async def _find_supersession_candidate(
         if not rec.payload:
             continue
         candidate_id = rec.payload.get("object_id")
-        if candidate_id == self_id:
+        if not isinstance(candidate_id, str) or candidate_id == self_id:
             continue
         candidate_content = (rec.payload.get("content") or "").strip().lower()
         if not candidate_content:
@@ -884,14 +906,13 @@ async def _find_supersession_candidate(
                 break
         if not candidate_content:
             continue
-        # Topic-compatibility check: at least one shared topic.
         candidate_topics = rec.payload.get("linked_to_topics") or []
         if not any(t in topics for t in candidate_topics):
             continue
         # Semantic-similarity check: cosine ≥ threshold.
         candidate_vec = (await embedder.embed_dense([candidate_content]))[0]
         candidate_norm = math.sqrt(sum(x * x for x in candidate_vec)) or 1.0
-        dot = sum(x * y for x, y in zip(needle_vec, candidate_vec))
+        dot = sum(x * y for x, y in zip(needle_vec, candidate_vec, strict=True))
         similarity = dot / (needle_norm * candidate_norm)
         if similarity < similarity_threshold:
             continue
@@ -901,6 +922,7 @@ async def _find_supersession_candidate(
     if len(candidates) != 1:
         return None
     return candidates[0]
+
 
 def _enrichment_changed(
     row: dict[str, Any],
@@ -915,6 +937,7 @@ def _enrichment_changed(
         or int(row.get("importance", 5)) != new_importance
         or list(row.get("linked_to_topics", [])) != new_topics
     )
+
 
 def _apply_enrichment(
     client: QdrantClient,
@@ -941,9 +964,11 @@ def _apply_enrichment(
         ),
     )
 
+
 # ---------------------------------------------------------------------------
 # Internal — LLM batching
 # ---------------------------------------------------------------------------
+
 
 async def _ollama_score_in_batches(
     ollama: OllamaClient,
@@ -952,12 +977,14 @@ async def _ollama_score_in_batches(
     """Call ``score_importance`` in batches; ``None`` on outage."""
     return await _batched_call(items, ollama.score_importance)
 
+
 async def _ollama_topics_in_batches(
     ollama: OllamaClient,
     items: list[OllamaTopic],
 ) -> dict[KSUID, list[str]] | None:
     """Call ``infer_topics`` in batches; ``None`` on outage."""
     return await _batched_call(items, ollama.infer_topics)
+
 
 async def _batched_call[T, R](
     items: list[T],
@@ -983,9 +1010,11 @@ async def _batched_call[T, R](
         merged.update(result)
     return merged
 
+
 # ---------------------------------------------------------------------------
 # Scheduler integration
 # ---------------------------------------------------------------------------
+
 
 def build_maturation_jobs(
     *,
@@ -1075,6 +1104,7 @@ def build_maturation_jobs(
         ),
     ]
 
+
 # Re-export TransitionError for callers that want to type-check sweep
 # failures without reaching into the lifecycle.transitions module.
 __all__ = [
@@ -1096,3 +1126,20 @@ __all__ = [
     "normalize_tags",
     "provisional_ttl_sweep",
 ]
+
+
+class _NoopEmbedder:
+    """Stub embedder used when the runner did not pass one. Returns
+    1024D zero vectors so the seam abstains (the zero vector has
+    cosine 0 with everything)."""
+
+    async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+        from musubi.store.specs import DENSE_SIZE
+
+        return [[0.0] * DENSE_SIZE for _ in texts]
+
+    async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+        return [{} for _ in texts]
+
+    async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+        return [0.0 for _ in candidates]
