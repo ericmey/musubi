@@ -292,10 +292,11 @@ def _to_item(ranked: _RankedCandidate, *, remaining_chars: int) -> ContextPackIt
     if remaining_chars <= 0:
         return None
     text = _display_text(ranked.candidate)
-    # DQ-001: capture the original (pre-cap) character length BEFORE _cap_text
-    # so we can surface the cut state and original length to callers.
-    original_length = len(text)
-    content = _cap_text(text, max_chars=remaining_chars)
+    # DQ-001: `_cap_text` normalizes whitespace before applying its cap. Measure the same
+    # normalized display text so whitespace collapse cannot produce a false truncation signal.
+    display_text = " ".join(text.split())
+    original_length = len(display_text)
+    content = _cap_text(display_text, max_chars=remaining_chars)
     if not content:
         return None
     evidence = f"{ranked.candidate.namespace}/{ranked.candidate.object_id}"

@@ -236,3 +236,29 @@ def test_context_pack_reports_its_actual_display_cap(length: int, expected: bool
     assert item.content_truncated is expected
     assert item.content_length == length
     assert len(item.content) <= 120
+
+
+def test_context_pack_length_uses_normalized_display_text() -> None:
+    raw_content = "word    " * 20
+    normalized = " ".join(raw_content.split())
+    assert len(raw_content) > 120
+    assert len(normalized) < 120
+    candidate = ContextCandidate(
+        object_id="whitespace",
+        namespace="eric/claude-code/episodic",
+        plane="episodic",
+        content=raw_content,
+        state="matured",
+        importance=5,
+        extra={"kind": "decision", "staleness": "durable"},
+    )
+
+    pack = build_context_pack(
+        [candidate],
+        ContextPackQuery(mode="startup", max_items=1, max_chars=120),
+    )
+
+    item = pack.groups[0].items[0]
+    assert item.content == normalized
+    assert item.content_truncated is False
+    assert item.content_length == len(normalized)

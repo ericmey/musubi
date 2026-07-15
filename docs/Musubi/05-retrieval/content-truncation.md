@@ -33,3 +33,4 @@ Every bounded row exposes whether it was truncated, the original character lengt
 5. `test_unicode_cluster_at_ranked_boundary_is_never_silent`
 6. `test_wire_models_keep_backward_compatible_defaults`
 7. `test_context_pack_reports_its_actual_display_cap`
+8. `test_context_pack_length_uses_normalized_display_text`

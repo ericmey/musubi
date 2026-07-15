@@ -5,7 +5,7 @@ issue: 443
 section: _slices
 type: slice
 status: in-review
-owner: minimax-m3
+owner: cowork-tama
 phase: "Retrieval"
 tags: [section/slices, status/in-review, type/slice]
 updated: 2026-07-15
