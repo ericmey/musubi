@@ -1,9 +1,11 @@
 """NDJSON streaming variant of POST /v1/retrieve.
 
 Per [[07-interfaces/canonical-api]] § NDJSON streaming, this endpoint
-emits one JSON object per line so adapters can render results as they
-arrive instead of waiting for the full batch. Useful for large
-``limit`` queries.
+emits one JSON object per line. Note that the envelope is fully materialized
+by orchestration BEFORE serialization begins — this endpoint provides wire
+streaming parity (NDJSON shape and headers) for client parsers, but does
+NOT reduce incremental backend retrieval latency (all hits are fetched before
+the stream starts).
 """
 
 from __future__ import annotations
@@ -13,12 +15,33 @@ from collections.abc import AsyncIterator
 
 from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import StreamingResponse
+from qdrant_client import QdrantClient
 
-from musubi.api.dependencies import get_episodic_plane, get_settings_dep
+from musubi.api.dependencies import (
+    get_embedder,
+    get_qdrant_client,
+    get_reranker,
+    get_settings_dep,
+)
 from musubi.api.errors import APIError, ErrorCode
-from musubi.api.routers.retrieve import RetrieveQuery
-from musubi.auth import AuthRequirement, authenticate_request
-from musubi.planes.episodic import EpisodicPlane
+from musubi.api.responses import (
+    RankedExtra,
+    RankedResultRow,
+    RankedScoreComponents,
+    RecentExtra,
+    RecentResultRow,
+    RecentScoreComponents,
+)
+from musubi.api.routers.retrieve import (
+    _KIND_STATUS_MAP,
+    RetrieveQuery,
+    _expand_wildcard_targets,
+    _resolve_targets,
+)
+from musubi.auth import authenticate_request
+from musubi.auth.scopes import resolve_namespace_scope
+from musubi.embedding import Embedder, TEIRerankerClient
+from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
 from musubi.types.common import Err
 
@@ -33,34 +56,136 @@ async def retrieve_stream(
     request: Request,
     body: RetrieveQuery = Body(...),
     settings: Settings = Depends(get_settings_dep),
-    episodic: EpisodicPlane = Depends(get_episodic_plane),
+    qdrant: QdrantClient = Depends(get_qdrant_client),
+    embedder: Embedder = Depends(get_embedder),
+    reranker: TEIRerankerClient = Depends(get_reranker),
 ) -> StreamingResponse:
-    requirement = AuthRequirement(namespace=body.namespace, access="r")
-    result = authenticate_request(
+    targets, shape_err = _resolve_targets(body.namespace, body.planes)
+    if shape_err is not None:
+        raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
+
+    auth_result = authenticate_request(
         request,  # type: ignore[arg-type]
-        requirement,
+        None,
         settings=settings,
     )
-    if isinstance(result, Err):
-        err = result.error
+    if isinstance(auth_result, Err):
+        err = auth_result.error
         code: ErrorCode = err.code  # type: ignore[assignment]
         raise APIError(status_code=err.status_code, code=code, detail=err.detail)
+    context = auth_result.value
+
+    pattern_had_wildcards = any("*" in ns for ns, _ in targets)
+    targets = _expand_wildcard_targets(qdrant, targets)
+
+    if pattern_had_wildcards and not targets:
+        headers = {
+            "X-Musubi-Mode": body.mode,
+            "X-Musubi-Limit": str(body.limit),
+            "X-Musubi-Warnings": "[]",
+        }
+
+        async def _emit_empty() -> AsyncIterator[bytes]:
+            if False:
+                yield b""
+
+        return StreamingResponse(_emit_empty(), media_type="application/x-ndjson", headers=headers)
+
+    for target_namespace, _plane in targets:
+        scope_result = resolve_namespace_scope(context, namespace=target_namespace, access="r")
+        if isinstance(scope_result, Err):
+            raise APIError(
+                status_code=scope_result.error.status_code,
+                code="FORBIDDEN",
+                detail=scope_result.error.detail,
+            )
+
+    query_body: dict[str, object] = {
+        "namespace": body.namespace,
+        "query_text": body.query_text,
+        "mode": body.mode,
+        "limit": body.limit,
+        "planes": [plane for _, plane in targets],
+        "include_archived": body.include_archived,
+        "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
+    }
+    if body.state_filter is not None:
+        query_body["state_filter"] = body.state_filter
+    if body.since is not None:
+        query_body["since"] = body.since
+    if body.tags is not None:
+        query_body["tags"] = body.tags
+    query_body["include_lineage"] = body.include_lineage
+
+    orchestration_result = await run_orchestration_retrieve(
+        client=qdrant,
+        embedder=embedder,
+        reranker=reranker,
+        query=query_body,
+    )
+
+    if isinstance(orchestration_result, Err):
+        retrieval_err = orchestration_result.error
+        status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
+        raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
+
+    envelope = orchestration_result.value
+    warnings_json = json.dumps([warning.code for warning in envelope.warnings])
+
+    headers = {
+        "X-Musubi-Mode": body.mode,
+        "X-Musubi-Limit": str(body.limit),
+        "X-Musubi-Warnings": warnings_json,
+    }
 
     async def _emit() -> AsyncIterator[bytes]:
-        rows = await episodic.query(
-            namespace=body.namespace, query=body.query_text, limit=body.limit
-        )
-        for mem in rows:
-            row = {
-                "object_id": mem.object_id,
-                "score": 1.0,
-                "plane": "episodic",
-                "content": mem.content,
-                "namespace": mem.namespace,
-            }
-            yield (json.dumps(row) + "\n").encode("utf-8")
+        for hit in envelope.results[: body.limit]:
+            if body.mode == "recent":
+                recent_extra = RecentExtra(
+                    score_components=RecentScoreComponents(),
+                    lineage=hit.lineage,
+                )
+                row_model_recent = RecentResultRow(
+                    object_id=hit.object_id,
+                    score=hit.score,
+                    plane=hit.plane,
+                    content=hit.snippet,
+                    namespace=hit.namespace,
+                    title=hit.title,
+                    state=hit.state,
+                    importance=hit.importance,
+                    score_kind="created_epoch",
+                    provenance_score=hit.provenance_score,
+                    extra=recent_extra,
+                )
+                yield (row_model_recent.model_dump_json(exclude_unset=True) + "\n").encode("utf-8")
+            else:
+                ranked_components = RankedScoreComponents(
+                    relevance=hit.score_components["relevance"],
+                    recency=hit.score_components["recency"],
+                    importance=hit.score_components["importance"],
+                    provenance=hit.score_components["provenance"],
+                    reinforcement=hit.score_components["reinforcement"],
+                )
+                ranked_extra = RankedExtra(
+                    score_components=ranked_components,
+                    lineage=hit.lineage,
+                )
+                row_model_ranked = RankedResultRow(
+                    object_id=hit.object_id,
+                    score=hit.score,
+                    plane=hit.plane,
+                    content=hit.snippet,
+                    namespace=hit.namespace,
+                    title=hit.title,
+                    state=hit.state,
+                    importance=hit.importance,
+                    score_kind="ranked_combined",
+                    extra=ranked_extra,
+                )
+                yield (row_model_ranked.model_dump_json(exclude_unset=True) + "\n").encode("utf-8")
 
-    return StreamingResponse(_emit(), media_type="application/x-ndjson")
+    return StreamingResponse(_emit(), media_type="application/x-ndjson", headers=headers)
 
 
 __all__ = ["router"]

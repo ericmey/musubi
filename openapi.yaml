@@ -770,9 +770,11 @@ paths:
       tags:
       - thoughts
       summary: Thought History
-      description: 'First-cut: history is a namespace scroll. Semantic search will
+      description: |-
+        Return presence-scoped thought history from the namespace scroll.
 
-        land once slice-retrieval-fast wires its dense path through the API.'
+        Semantic search remains a future dense-path integration; this route's
+        current scroll still enforces the requested presence boundary.
       operationId: thought_history_v1_thoughts_history_post
       requestBody:
         content:
@@ -1417,6 +1419,16 @@ components:
           additionalProperties: true
           type: object
           title: Chunk Metadata
+        generation:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Generation
+        owner_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner Token
       additionalProperties: false
       type: object
       required:
@@ -3004,6 +3016,26 @@ components:
           - type: string
           - type: 'null'
           title: Failure Reason
+        committed_generation:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Committed Generation
+        committed_owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Committed Owner
+        index_operation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Index Operation Id
+        publication_version:
+          type: integer
+          minimum: 0.0
+          title: Publication Version
+          default: 0
       additionalProperties: false
       type: object
       required:

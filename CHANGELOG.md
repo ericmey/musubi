@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.15.0](https://github.com/ericmey/musubi/compare/v1.14.3...v1.15.0) (2026-07-15)
+
+
+### Features
+
+* streaming retrieval parity (Issue [#493](https://github.com/ericmey/musubi/issues/493)) ([#494](https://github.com/ericmey/musubi/issues/494)) ([713c32c](https://github.com/ericmey/musubi/commit/713c32c7cb7a05b15d10953c9fd5cd5d19bacb98))
+
+## [1.14.3](https://github.com/ericmey/musubi/compare/v1.14.2...v1.14.3) (2026-07-15)
+
+
+### Bug Fixes
+
+* **thoughts:** THOUGHT-002 production writes use configured embedder ([#487](https://github.com/ericmey/musubi/issues/487)) ([d6a9f19](https://github.com/ericmey/musubi/commit/d6a9f19b20e016b3beb4220afd6b7380c9f6bd0a))
+
+## [1.14.2](https://github.com/ericmey/musubi/compare/v1.14.1...v1.14.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* **thoughts:** THOUGHT-001 check and history presence filtering ([#484](https://github.com/ericmey/musubi/issues/484)) ([850e935](https://github.com/ericmey/musubi/commit/850e935f6f0f1efb4b735c4e85c72463d699ea47))
+
 ## [1.14.1](https://github.com/ericmey/musubi/compare/v1.14.0...v1.14.1) (2026-07-15)
 
 
