@@ -9,5 +9,3 @@ Guidelines:
 - Do not preface with "Here are the themes" or similar narrator prose.
 - Do not apologize, hedge, or include disclaimers.
 
-Items:
-{ITEMS}

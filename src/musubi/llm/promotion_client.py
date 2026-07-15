@@ -24,6 +24,7 @@ import json
 import logging
 from importlib.resources import files
 from typing import Any
+from musubi.llm.prompt_boundary import build_untrusted_data_messages
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -59,15 +60,17 @@ def _load_prompt(name: str, version: str) -> str:
     return resource.read_text(encoding="utf-8")
 
 
-def _render_prompt(*, title: str, content: str, rationale: str, top_memories: list[str]) -> str:
+def _render_prompt(*, title: str, content: str, rationale: str, top_memories: list[str]) -> list[dict[str, str]]:
     tpl = _load_prompt("promotion-render", _PROMPT_VERSION)
-    memories_block = "\n".join(f"  - {m}" for m in top_memories) if top_memories else "  (none)"
-    return (
-        tpl.replace("{TITLE}", title)
-        .replace("{CONTENT}", content)
-        .replace("{RATIONALE}", rationale)
-        .replace("{TOP_MEMORIES}", memories_block)
-    )
+    payload = {
+        "concept": {
+            "title": title,
+            "content": content,
+            "rationale": rationale,
+            "top_memories": top_memories,
+        }
+    }
+    return build_untrusted_data_messages(tpl, payload)
 
 
 def _extract_message_content(body: Any) -> str | None:
@@ -131,7 +134,7 @@ class HttpxPromotionClient:
         except ValidationError as exc:
             raise PromotionPolicyError(f"promotion-render body rejected: {exc}") from exc
 
-    async def _chat(self, prompt: str) -> str:
+    async def _chat(self, messages: list[dict[str, str]]) -> str:
         # Pass the Pydantic-derived JSON Schema as `format` to engage
         # Ollama's structured-output mode (≥0.5.0). Without this, qwen3:4b
         # occasionally emits a response missing `body`, which would
@@ -140,7 +143,7 @@ class HttpxPromotionClient:
         url = f"{self._base_url}/api/chat"
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": False,
             "format": _PROMOTION_SCHEMA,
             "options": {"temperature": 0.2},

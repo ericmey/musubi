@@ -8,5 +8,3 @@ Respond in exactly this JSON shape, with one entry per input id. No commentary, 
 
 {"items": [{"id": "<id>", "topics": ["area/sub", ...]}, ...]}
 
-Items:
-{ITEMS}

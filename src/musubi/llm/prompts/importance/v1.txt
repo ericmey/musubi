@@ -13,5 +13,3 @@ Respond in exactly this JSON shape, with one entry per input id. No commentary, 
 
 {"items": [{"id": "<id>", "importance": <1-10 integer>}, ...]}
 
-Items:
-{ITEMS}
