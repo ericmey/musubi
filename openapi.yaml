@@ -2841,6 +2841,11 @@ components:
           type: boolean
           title: Include Archived
           default: false
+        include_lineage:
+          type: boolean
+          title: Include Lineage
+          default: true
+          description: "Forwarded verbatim to the orchestration seam. Defaults to true; set explicitly to false to disable lineage hydration on the wire. Preserved across concrete and fanout namespace shapes. Strict bool \u2014 non-boolean values (strings, numbers, null) are rejected at the wire boundary."
         since:
           anyOf:
           - type: number
