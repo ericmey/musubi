@@ -701,7 +701,52 @@ async def test_fast_path_defaults_plane_when_namespace_missing(
 def test_fast_path_does_not_call_reranker() -> None:
     source = __import__("pathlib").Path("src/musubi/retrieve/fast.py").read_text()
 
-    assert "rerank" not in source
+    # The fast path must not import or call the rerank module. The
+    # ``raw_rerank_score`` field name (added by RET-012 to thread the
+    # cross-encoder raw input through to the cross-plane seam) is
+    # allowed; it is set to ``None`` for fast mode and never invokes
+    # the reranker. The invariant is "fast mode does not CALL rerank,"
+    # not "the file contains no occurrence of the substring 'rerank'."
+    # Static ``from X import Y`` and ``import X`` forms are forbidden;
+    # an ``ast``-level scan covers those forms, including a parent-module
+    # re-export like ``from musubi.retrieve import rerank``.
+    import ast
+
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "musubi.retrieve.rerank" or alias.name.startswith(
+                    "musubi.retrieve.rerank."
+                ):
+                    raise AssertionError(
+                        f"fast path must not import the rerank module; found `import {alias.name}`"
+                    )
+        elif (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and (
+                node.module == "musubi.retrieve.rerank"
+                or node.module.startswith("musubi.retrieve.rerank.")
+            )
+        ):
+            names = ", ".join(a.name for a in node.names)
+            raise AssertionError(
+                f"fast path must not import from the rerank module; "
+                f"found `from {node.module} import {names}`"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module == "musubi.retrieve":
+            # Parent-module re-export is also forbidden: ``from
+            # musubi.retrieve import rerank`` would let ``rerank(...)``
+            # resolve locally without an explicit rerank-module import.
+            re_exports = [a.name for a in node.names if a.name in {"rerank", "reranker"}]
+            if re_exports:
+                raise AssertionError(
+                    f"fast path must not re-export the rerank module from "
+                    f"musubi.retrieve; found `from {node.module} import "
+                    f"{', '.join(re_exports)}`"
+                )
+    assert "run_rerank" not in source, "fast path must not call run_rerank"
 
 
 @pytest.mark.property

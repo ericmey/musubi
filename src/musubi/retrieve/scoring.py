@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from musubi.types.common import LifecycleState
@@ -88,6 +88,15 @@ class ScoredHit:
     score: float
     score_components: ScoreComponents
     payload: dict[str, Any]
+    # RET-012: the seam at the cross-plane merge re-anchors each hit's
+    # relevance against a single working-set global max, so the
+    # per-leg-scored ``score_components["relevance"]`` (computed against
+    # a local batch max) is no longer load-bearing for cross-plane
+    # ranking. The two raw inputs are propagated here so the seam
+    # (``calibrate_global_relevance``) can recompute relevance from the
+    # canonical source. Internal-only — never projected onto wire models.
+    raw_rrf_score: float | None = None
+    raw_rerank_score: float | None = None
 
 
 _RECENCY_HALF_LIFE_DAYS: dict[str, float] = {
@@ -152,6 +161,13 @@ def score_result(
         score=total,
         score_components=components,
         payload=dict(hit.payload),
+        # RET-012: propagate the raw relevance inputs so the cross-plane
+        # seam can re-anchor against the working-set global max. Both are
+        # intrinsic to the hit (the RRF from the fused hybrid search, the
+        # cross-encoder logit from the reranker) and survive unchanged
+        # through the per-leg scoring path.
+        raw_rrf_score=hit.rrf_score,
+        raw_rerank_score=hit.rerank_score,
     )
 
 
@@ -165,6 +181,137 @@ def rank_hits(
 
     scored = [score_result(hit, now=now, weights=weights) for hit in hits]
     return sorted(scored, key=lambda hit: (-hit.score, hit.object_id, hit.plane))
+
+
+# --------------------------------------------------------------------------- #
+# RET-012 — cross-plane global relevance calibration
+# --------------------------------------------------------------------------- #
+
+
+def calibrate_global_relevance(
+    candidates: list[Any],
+) -> list[Any]:
+    """Re-anchor each candidate's relevance against a single working-set global max.
+
+    Per Issue #512, cross-plane fanout previously normalized relevance against
+    each leg's local batch maximum, so a weak plane's sole hit would reach
+    relevance 1.0 and outrank a materially stronger hit from another plane.
+    This function is the seam at the cross-plane merge: it runs over the FULL
+    pre-dedup candidate list, recomputes each hit's ``relevance`` and
+    ``score`` against a single intrinsic quantity (``max(raw_rrf_score)``
+    across the working set), then the existing ``best_by_id`` dedup picks
+    the highest-recalibrated copy per ``object_id``.
+
+    Three branches per candidate, decided by the raw inputs the per-leg
+    scoring path preserved:
+
+    1. ``raw_rerank_score is not None`` — the leg was reranked (deep /
+       blended). The cross-encoder sigmoid is intrinsic and the seam
+       preserves it (``relevance = _sigmoid(raw_rerank_score)``).
+    2. ``raw_rrf_score is not None`` — the leg is fast mode (no rerank).
+       The seam divides by the working-set max, not the per-leg max
+       (``relevance = rrf / global_max``).
+    3. Neither — recent mode or a non-ranked leg. The candidate is
+       passed through unchanged; recent's existing ``created_epoch``
+       ordering survives.
+
+    ``score`` and ``score_components`` are recomputed from the new
+    relevance plus the existing intrinsic components
+    (``recency``/``importance``/``provenance``/``reinforcement``) so
+    the cross-plane merge sorts on a globally comparable weighted total.
+    The seam is intrinsic: the only input is the working set itself; no
+    corpus scan, no hand-picked weight, no per-plane calibration table.
+
+    The seam takes the duck-typed shape (any object with the fields the
+    seam reads) rather than importing ``RetrievalResult`` to avoid a
+    circular import with ``orchestration``. The cross-plane call site
+    in ``orchestration._retrieve_uncounted`` passes
+    ``list[RetrievalResult]``; tests in ``tests/retrieve/`` can pass
+    any matching object that exposes the seam's required shape:
+
+      - ``raw_rrf_score`` and ``raw_rerank_score`` attributes
+        (both ``float | None``)
+      - ``score`` attribute (float; only re-derived candidates are
+        modified; passthrough candidates keep their original ``score``)
+      - ``score_components`` attribute, either a ``dict[str, float]``
+        (the wire-side shape, used by ``RetrievalResult``) or any
+        object exposing the ``recency``/``importance``/``provenance``/
+        ``reinforce`` (note: ``reinforce``, not ``reinforcement``)
+        attributes (the ``ScoreComponents`` dataclass shape)
+      - ``model_copy(update=...)`` for pydantic candidates, OR
+        ``dataclasses.replace(...)`` for dataclass candidates (the
+        passthrough branch is the identity and does not require
+        either)
+    """
+    raw_rrfs = [
+        c.raw_rrf_score for c in candidates if getattr(c, "raw_rrf_score", None) is not None
+    ]
+    global_max = max(raw_rrfs) if raw_rrfs else 1.0
+    if global_max <= 0.0:
+        global_max = 1.0
+
+    out: list[Any] = []
+    for c in candidates:
+        rerank = getattr(c, "raw_rerank_score", None)
+        rrf = getattr(c, "raw_rrf_score", None)
+        if rerank is not None:
+            new_relevance = _sigmoid(rerank)
+        elif rrf is not None:
+            new_relevance = _clamp01(rrf / global_max)
+        else:
+            # Recent mode (or any non-ranked leg). The leg's existing
+            # score and score_components are the canonical ordering
+            # signal; the seam must not touch them.
+            out.append(c)
+            continue
+
+        comp = c.score_components
+        if isinstance(comp, dict):
+            recency = float(comp.get("recency", 0.0))
+            importance = float(comp.get("importance", 0.0))
+            provenance = float(comp.get("provenance", 0.0))
+            reinforce = float(comp.get("reinforcement", 0.0))
+        else:
+            recency = float(getattr(comp, "recency", 0.0))
+            importance = float(getattr(comp, "importance", 0.0))
+            provenance = float(getattr(comp, "provenance", 0.0))
+            reinforce = float(getattr(comp, "reinforce", 0.0))
+        new_score = SCORE_WEIGHTS.combine(
+            relevance=new_relevance,
+            recency=recency,
+            importance=importance,
+            provenance=provenance,
+            reinforce=reinforce,
+        )
+        if isinstance(comp, dict):
+            new_components: Any = {
+                "relevance": new_relevance,
+                "recency": recency,
+                "importance": importance,
+                "provenance": provenance,
+                "reinforcement": reinforce,
+            }
+        else:
+            new_components = ScoreComponents(
+                relevance=new_relevance,
+                recency=recency,
+                importance=importance,
+                provenance=provenance,
+                reinforce=reinforce,
+            )
+        if hasattr(c, "model_copy"):
+            out.append(
+                c.model_copy(update={"score": new_score, "score_components": new_components})
+            )
+        else:
+            out.append(
+                replace(
+                    c,
+                    score=new_score,
+                    score_components=new_components,
+                )
+            )
+    return out
 
 
 def _relevance(hit: Hit) -> float:
@@ -222,6 +369,7 @@ __all__ = [
     "ScoreComponents",
     "ScoreWeights",
     "ScoredHit",
+    "calibrate_global_relevance",
     "rank_hits",
     "score",
     "score_result",

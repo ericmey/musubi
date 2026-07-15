@@ -177,8 +177,7 @@ def _app(monkeypatch: pytest.MonkeyPatch, api_settings: Settings) -> TestClient:
 def test_context_endpoint_counts_at_shared_boundary(
     monkeypatch: pytest.MonkeyPatch, api_settings: Settings
 ) -> None:
-    """/v1/context runs through the SAME orchestration boundary, so a degraded context request
-    increments the warning counter (it is not a blind spot only /v1/retrieve covers)."""
+    """/v1/context counts one warning per degraded recent/ranked orchestration lane."""
     before = _snapshot("musubi_retrieval_warnings_total")
     client = _app(monkeypatch, api_settings)
     resp = client.post(
@@ -191,7 +190,7 @@ def test_context_endpoint_counts_at_shared_boundary(
         {"warning": "plane_timeout_episodic", "plane": "episodic"}[n]
         for n in _labelnames("musubi_retrieval_warnings_total")
     )
-    assert _moved(before, _snapshot("musubi_retrieval_warnings_total")) == {key: 1.0}
+    assert _moved(before, _snapshot("musubi_retrieval_warnings_total")) == {key: 2.0}
 
 
 def test_retrieve_endpoint_no_double_count(

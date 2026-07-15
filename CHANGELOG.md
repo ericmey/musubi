@@ -1,5 +1,55 @@
 # Changelog
 
+## [1.17.6](https://github.com/ericmey/musubi/compare/v1.17.5...v1.17.6) (2026-07-15)
+
+
+### Bug Fixes
+
+* **lifecycle:** enforce hard-fence semantics rejecting mismatched expected_version mutations ([#568](https://github.com/ericmey/musubi/issues/568)) ([e9319e1](https://github.com/ericmey/musubi/commit/e9319e1be7b3a93d2ce38ff1fc7934e3ae4775ef))
+
+## [1.17.5](https://github.com/ericmey/musubi/compare/v1.17.4...v1.17.5) (2026-07-15)
+
+
+### Documentation
+
+* **life009:** reconcile merged slice status ([#551](https://github.com/ericmey/musubi/issues/551)) ([24281d3](https://github.com/ericmey/musubi/commit/24281d33a78c3f840474c80dd270ded6cb3ba9ee))
+
+## [1.17.4](https://github.com/ericmey/musubi/compare/v1.17.3...v1.17.4) (2026-07-15)
+
+
+### Documentation
+
+* **integrity:** reconcile shipped remediation state ([#561](https://github.com/ericmey/musubi/issues/561)) ([cf4bfd8](https://github.com/ericmey/musubi/commit/cf4bfd82ffb3909363ad379bf05c1f60f4990889))
+
+## [1.17.3](https://github.com/ericmey/musubi/compare/v1.17.2...v1.17.3) (2026-07-15)
+
+
+### CI / Ops
+
+* **evals:** enable workflow_dispatch for the live scheduled gate ([#550](https://github.com/ericmey/musubi/issues/550)) ([d5e057b](https://github.com/ericmey/musubi/commit/d5e057b326f797b4522d856dec6e96dc5c899826))
+
+## [1.17.2](https://github.com/ericmey/musubi/compare/v1.17.1...v1.17.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* DQ-001 complete grapheme-safe and adapter parity (Issue [#443](https://github.com/ericmey/musubi/issues/443)) ([#540](https://github.com/ericmey/musubi/issues/540)) ([1231c93](https://github.com/ericmey/musubi/commit/1231c93a9b43fba0f4d902e548b8687fd691a3b2))
+* **integration:** create host runtime directories ([#545](https://github.com/ericmey/musubi/issues/545)) ([539b16d](https://github.com/ericmey/musubi/commit/539b16d1112f26dd97c88086daaaddcaffd8d226))
+
+## [1.17.1](https://github.com/ericmey/musubi/compare/v1.17.0...v1.17.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* ING-001 semantic dedup strict compatibility bounds (Issue [#534](https://github.com/ericmey/musubi/issues/534)) ([#535](https://github.com/ericmey/musubi/issues/535)) ([dba8f10](https://github.com/ericmey/musubi/commit/dba8f10a12869b87e379e31d0a0f4c879550fcf2))
+
+## [1.17.0](https://github.com/ericmey/musubi/compare/v1.16.2...v1.17.0) (2026-07-15)
+
+
+### Features
+
+* RET-013 bounded recent-memory lane in canonical cross-modality context (Issue [#522](https://github.com/ericmey/musubi/issues/522)) ([#525](https://github.com/ericmey/musubi/issues/525)) ([0e3e1ee](https://github.com/ericmey/musubi/commit/0e3e1eea5b34e4d7a163f30d5292f10638dbdd02))
+
 ## [1.16.2](https://github.com/ericmey/musubi/compare/v1.16.1...v1.16.2) (2026-07-15)
 
 

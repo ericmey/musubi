@@ -167,10 +167,9 @@ def test_unicode_cluster_at_ranked_boundary_is_never_silent(cluster: str) -> Non
 
     rendered, truncated, content_length = _ranked({"content": content})
 
-    # The current core projection is code-point bounded, not a full grapheme segmenter.
-    # DQ-001 therefore remains open for grapheme-safe projection, but the wire must
-    # truthfully disclose that content was cut and preserve the original character count.
-    assert rendered == content[:300]
+    # The entire boundary grapheme is omitted rather than split. The wire still
+    # reports truncation and the original code-point length truthfully.
+    assert rendered == "x" * 299
     assert truncated is True
     assert content_length == len(content)
 

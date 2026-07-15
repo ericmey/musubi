@@ -41,6 +41,7 @@ Design notes:
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -49,10 +50,12 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
+from musubi.store.memory_serialization import memory_update_payload
+from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Result, epoch_of, utc_now
+from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Ok, Result, epoch_of, utc_now
 from musubi.types.curated import CuratedKnowledge
 
 # Distinct from the episodic point-namespace UUID — keeps the two
@@ -94,6 +97,31 @@ def _embed_target(memory: CuratedKnowledge) -> str:
     """
     body = memory.summary if memory.summary else memory.content
     return f"{memory.title}\n\n{body}"
+
+
+@dataclass(frozen=True)
+class FindByVaultPathError:
+    """Typed error from :meth:`CuratedPlane.find_by_vault_path`.
+
+    ``code`` is one of:
+      - ``not_found``        — no row matched the supplied ``vault_path``.
+      - ``multiple_matches`` — more than one row matched (the
+        ``(namespace, vault_path)`` uniqueness invariant was violated).
+        The caller MUST treat this as a visible warning and refuse to
+        take destructive action against an arbitrary match (Yua
+        VAULT-003 binding: fail closed and visibly on >1 matches).
+    """
+
+    code: str
+    detail: str
+    # For ``multiple_matches`` this is the OBSERVED BOUNDED LOWER BOUND, not
+    # the total cardinality: ``find_by_vault_path`` scrolls with ``limit=2``
+    # (the second match is sufficient to fail closed), so ``match_count`` is
+    # capped at 2 and a real duplicate set may be larger. Read it as
+    # "at least this many matched", never as an exact count.
+    match_count: int = 0
+    # Likewise bounded: at most the first two matching object_ids observed.
+    match_object_ids: tuple[str, ...] = ()
 
 
 class CuratedPlane:
@@ -172,23 +200,48 @@ class CuratedPlane:
             # untouched), and any state machine fields the update isn't
             # supposed to mutate in-place. Bump version + refresh
             # updated_at last.
-            updated_data = memory.model_dump()
-            updated_data.update(
-                object_id=existing.object_id,
-                created_at=existing.created_at,
-                created_epoch=existing.created_epoch,
-                supersedes=existing.supersedes,
-                superseded_by=existing.superseded_by,
-                promoted_from=existing.promoted_from,
-                promoted_at=existing.promoted_at,
-                version=existing.version + 1,
-                updated_at=now,
-                updated_epoch=epoch_of(now),
+            dense, sparse = await self._embed_both(_embed_target(memory))
+
+            def plan(current: dict[str, Any]) -> MutationPlan:
+                now_u = utc_now()
+                # Authoritative incoming frontmatter, but the identity + creation timestamps + lineage
+                # come from the FRESH current row (DATA-001 #530) — not the pre-read `existing` — so a
+                # concurrent supersession/promotion/state change is never overwritten. Lease-owned
+                # access fields are excluded (memory_update_payload); version is stamped by the seam.
+                updated = CuratedKnowledge.model_validate(
+                    {
+                        **memory.model_dump(),
+                        "object_id": existing.object_id,
+                        "created_at": current["created_at"],
+                        "created_epoch": current["created_epoch"],
+                        "supersedes": current.get("supersedes", []),
+                        "superseded_by": current.get("superseded_by"),
+                        "promoted_from": current.get("promoted_from"),
+                        "promoted_at": current.get("promoted_at"),
+                        "version": int(current.get("version", 1)),
+                        "updated_at": now_u,
+                        "updated_epoch": epoch_of(now_u),
+                    }
+                )
+                changes = memory_update_payload(updated)
+                changes.pop("version", None)  # the mutation lease owns the version bump.
+                return MutationPlan(
+                    changes=changes,
+                    vectors={
+                        DENSE_VECTOR_NAME: dense,
+                        SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
+                    },
+                )
+
+            published = await owned_update(
+                self._client,
+                self._collection,
+                namespace=str(existing.namespace),
+                object_id=str(existing.object_id),
+                point_id=_point_id(existing.object_id),
+                plan=plan,
             )
-            updated = CuratedKnowledge.model_validate(updated_data)
-            dense, sparse = await self._embed_both(_embed_target(updated))
-            self._upsert(updated, dense=dense, sparse=sparse)
-            return updated
+            return CuratedKnowledge.model_validate(published)
 
         # True supersession path (distinct objects sharing a vault slot).
         # Two writes: insert the new row, mark the old row superseded.
@@ -211,21 +264,33 @@ class CuratedPlane:
         dense, sparse = await self._embed_both(_embed_target(new_row))
         self._upsert(new_row, dense=dense, sparse=sparse)
 
-        old_data = existing.model_dump()
-        old_data.update(
-            state="superseded",
-            superseded_by=new_row.object_id,
-            version=existing.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        superseded = CuratedKnowledge.model_validate(old_data)
-        # Payload-only update keeps the existing vectors; cheaper than a
-        # full upsert and the body didn't change for the superseded row.
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=superseded.model_dump(mode="json"),
-            points=[_point_id(existing.object_id)],
+        # Mark the old row superseded through the attributable mutation lease (DATA-001 #530): a
+        # NARROW change-set (state + superseded_by + updated_at) fenced on the exact version, so a
+        # concurrent unrelated mutation to the old row is never overwritten. No vector change.
+        def supersede_plan(current: dict[str, Any]) -> MutationPlan:
+            now_s = utc_now()
+            superseded = CuratedKnowledge.model_validate(
+                {
+                    **current,
+                    "state": "superseded",
+                    "superseded_by": new_row.object_id,
+                    "updated_at": now_s,
+                    "updated_epoch": epoch_of(now_s),
+                }
+            )
+            dumped = superseded.model_dump(mode="json")
+            changes = {
+                k: dumped[k] for k in ("state", "superseded_by", "updated_at", "updated_epoch")
+            }
+            return MutationPlan(changes=changes)
+
+        await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(existing.namespace),
+            object_id=str(existing.object_id),
+            point_id=_point_id(existing.object_id),
+            plan=supersede_plan,
         )
 
         return new_row
@@ -237,6 +302,8 @@ class CuratedPlane:
         dense: list[float],
         sparse: dict[int, float],
     ) -> None:
+        """CREATE-only full-point upsert (fresh insert / supersession new row). Every UPDATE path
+        publishes through the attributable mutation lease (:mod:`musubi.store.mutation_lease`)."""
         point = models.PointStruct(
             id=_point_id(memory.object_id),
             payload=memory.model_dump(mode="json"),
@@ -282,6 +349,98 @@ class CuratedPlane:
         if not payload:
             return None
         return _curated_from_payload(payload)
+
+    async def find_by_vault_path(
+        self, vault_path: str
+    ) -> Result[CuratedKnowledge, FindByVaultPathError]:
+        """VAULT-003: typed public method that resolves a curated row by its
+        STORED ``vault_path``, no ``namespace`` argument.
+
+        The watcher is the primary caller: when a file is deleted from the
+        vault the frontmatter is gone, so the watcher has no namespace
+        context. This method does a cross-namespace exact-match scroll
+        (Qdrant ``MatchValue``, NOT ``startswith`` / ``prefix`` / regex).
+        Sibling and prefix-collision paths cannot match by construction.
+
+        Uniqueness invariant: ``(namespace, vault_path)`` is unique per
+        slice-vault-sync. ``vault_path`` alone is NOT unique across
+        namespaces — a duplicate ``vault_path`` in two namespaces is a
+        schema bug, but the public API MUST fail closed on it: returning
+        an arbitrary match would let the watcher's archive-by-path
+        target the wrong row. This method:
+
+        - Returns ``Err(FindByVaultPathError(code='not_found'))`` when
+          no row matches (the watcher's clean observable no-op).
+        - Returns ``Ok(row)`` when EXACTLY one row matches.
+        - Returns ``Err(FindByVaultPathError(code='multiple_matches'))``
+          when more than one row matches — the caller MUST refuse to
+          take destructive action.
+
+        The scroll is bounded to ``limit=2`` (Yua VAULT-003 review
+        binding): fetching the second match is sufficient to fail
+        closed, and a limit of 2 is the smallest unconstrained value
+        that still surfaces the duplicate case without pulling a
+        potentially unbounded row count. Zero matches -> not_found;
+        one match -> Ok; two matches -> multiple_matches. Anything
+        more than 2 in the duplicate case is the same bug and the
+        caller fails closed on the second match.
+        """
+        if not isinstance(vault_path, str) or not vault_path:
+            return Err(
+                error=FindByVaultPathError(
+                    code="not_found",
+                    detail="empty or non-string vault_path",
+                )
+            )
+        records, _ = self._client.scroll(
+            collection_name=self._collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="vault_path", match=models.MatchValue(value=vault_path)
+                    ),
+                ]
+            ),
+            limit=2,
+            with_payload=True,
+            # with_payload=True still rehydrates the FULL CuratedKnowledge
+            # payload (this is not a field-selective fetch of object_id/
+            # state). The only optimization here is with_vectors=False: the
+            # resolver never needs the dense+sparse embeddings, so we avoid
+            # shipping them back on every vault delete.
+            with_vectors=False,
+        )
+        if not records:
+            return Err(
+                error=FindByVaultPathError(
+                    code="not_found",
+                    detail=f"no curated row matches vault_path={vault_path!r}",
+                )
+            )
+        if len(records) > 1:
+            ids = tuple(str(rec.payload.get("object_id", "")) for rec in records if rec.payload)
+            return Err(
+                error=FindByVaultPathError(
+                    code="multiple_matches",
+                    detail=(
+                        f"vault_path={vault_path!r} matched >=2 rows; "
+                        "(namespace, vault_path) uniqueness invariant violated. "
+                        "Fetches at most 2 rows because the second match is "
+                        "sufficient to fail closed."
+                    ),
+                    match_count=len(records),
+                    match_object_ids=ids,
+                )
+            )
+        payload = records[0].payload
+        if not payload:
+            return Err(
+                error=FindByVaultPathError(
+                    code="not_found",
+                    detail=f"matched row for vault_path={vault_path!r} has empty payload",
+                )
+            )
+        return Ok(value=_curated_from_payload(payload))
 
     async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
         """Is this row present? Answered WITHOUT deserializing it.
