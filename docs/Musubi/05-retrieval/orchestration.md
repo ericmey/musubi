@@ -184,7 +184,12 @@ lineage was hydrated. One async step in `retrieve()` immediately after `_finaliz
 - Per accountable collection: **one batched read** of current counts + **one batched write**
   (`access_count += 1`, stamp `last_accessed_at`). Never N+1.
 - The same seam covers `POST /v1/retrieve` and `POST /v1/retrieve/stream` — both call
-  `retrieve()`.
+  `retrieve()`, whose delivered set IS the returned envelope.
+- **`/v1/context` delivers a DIFFERENT final set.** It retrieves `candidate_limit` candidates,
+  then `build_context_pack` trims by `max_items`/`max_chars`/filler. So the router passes
+  `retrieve(account_access=False)` and calls `account_delivered` itself on the flattened final
+  pack items (each carries `object_id` + `plane`) — a trimmed candidate is never counted. An
+  empty pack accounts nothing.
 - Concurrency: batched read-modify-write, **not** atomic. True concurrent-counter safety is
   tracked separately (Issue #502). Typed results and warnings are unchanged by this step.
 
@@ -287,3 +292,4 @@ and `tests/api/test_ret002_streaming_access.py`:
 26. `test_delivered_thought_row_is_explicit_noop`
 27. `test_accounting_is_batched_per_collection_not_n_plus_1`
 28. `test_streaming_retrieval_accounts_each_delivered_row_once`
+29. `test_context_accounts_only_surfaced_pack_items_not_dropped_candidates`

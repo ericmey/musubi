@@ -221,15 +221,23 @@ async def retrieve(
     query: RetrievalQuery | dict[str, Any],
     llm: DeepRetrievalLLM | None = None,
     now: float | None = None,
+    account_access: bool = True,
 ) -> Result[RetrievalEnvelope, RetrievalError]:
     """Execute the configured retrieval pipeline, then finalize at the shared boundary (telemetry +
-    fail-closed bounded warnings). This is the ONE place RET-007 warnings/errors are counted."""
+    fail-closed bounded warnings). This is the ONE place RET-007 warnings/errors are counted.
+
+    ``account_access`` (default True) accounts access here over the delivered rows — correct for
+    ``/v1/retrieve`` and ``/v1/retrieve/stream``, whose delivered set IS this envelope. Callers
+    that drop rows AFTER retrieval (``/v1/context`` → ``build_context_pack`` trims by
+    max_items/max_chars/filler) pass ``account_access=False`` and account the FINAL surfaced set
+    themselves, so trimmed candidates are never counted.
+    """
     result = await _retrieve_uncounted(client, embedder, reranker, query=query, llm=llm, now=now)
     finalized = _finalize(result)
-    # RET-002 (#500): account access ONCE, here, over exactly the delivered rows — after
+    # RET-002 (#500): account access ONCE, over exactly the delivered rows — after
     # fanout/dedup/sort/limit — never on a dropped candidate and independent of lineage
     # hydration. Covers HTTP and streaming (both call this seam). Does not touch results/warnings.
-    if isinstance(finalized, Ok):
+    if account_access and isinstance(finalized, Ok):
         await account_delivered(client, finalized.value.results)
     return finalized
 

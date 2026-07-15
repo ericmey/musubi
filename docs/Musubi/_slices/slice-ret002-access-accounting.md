@@ -73,6 +73,7 @@ guards (green before and after) and a streaming proof:
 - `test_delivered_thought_row_is_explicit_noop`
 - `test_accounting_is_batched_per_collection_not_n_plus_1`
 - `test_streaming_retrieval_accounts_each_delivered_row_once` (HTTP+streaming share the seam)
+- `test_context_accounts_only_surfaced_pack_items_not_dropped_candidates` (/v1/context accounts the trimmed final pack, not retrieval candidates)
 
 ## Definition of Done
 - Accounting runs once at the final delivery boundary; hydration no longer accounts.
@@ -87,6 +88,15 @@ guards (green before and after) and a streaming proof:
 - Wrote the discriminating red matrix FIRST; proved 9 RED + 4 correctly-green on base
   `5b53693` before any src change; implemented the decouple + shared batch seam; all green.
 - Concurrent-counter safety deliberately out of scope → Issue #502.
+- Copilot closeout (PR #508): `/v1/context` retrieves `candidate_limit` candidates then trims
+  via `build_context_pack` (max_items/max_chars/filler), so accounting-in-`retrieve()` counted
+  trimmed candidates. Fixed with an `account_access` (default True) kwarg on
+  `orchestration.retrieve`; `/v1/context` passes False and accounts the flattened FINAL pack
+  items itself. `/v1/retrieve` + `/v1/retrieve/stream` unchanged (their delivered set is the
+  envelope). Because accounting consumes the post-build pack, a candidate dropped for ANY
+  reason is unaccounted by construction; the new test discriminates this via the `max_items`
+  trim (max_chars/filler pack-trimming is covered by existing context_pack unit tests, not
+  re-integration-tested here).
 
 ### Out-of-scope: pre-existing `05-retrieval/orchestration` Test Contract bullets
 
