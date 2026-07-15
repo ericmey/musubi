@@ -218,6 +218,64 @@ def test_context_empty_wildcard_still_flows_through_namespace_policy(
     assert res.json()["groups"] == []
 
 
+@pytest.mark.parametrize(
+    ("path", "payload"),
+    [
+        ("/v1/retrieve", {"query_text": "bad plane", "planes": ["unknown"]}),
+        ("/v1/retrieve/stream", {"query_text": "bad plane", "planes": ["unknown"]}),
+        ("/v1/context", {"query_text": "bad plane", "planes": ["unknown"]}),
+    ],
+)
+def test_omitted_namespace_rejects_unknown_plane_as_bad_request(
+    monkeypatch: pytest.MonkeyPatch,
+    client: TestClient,
+    api_settings: Settings,
+    path: str,
+    payload: dict[str, Any],
+) -> None:
+    from tests.api.conftest import mint_token
+
+    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="eric/command-chair")
+    _patch_auth(monkeypatch, ("*/*/*:r",), subject="eric", presence="eric/command-chair")
+
+    res = client.post(path, json=payload, headers={"Authorization": f"Bearer {token}"})
+
+    assert res.status_code == 400
+    assert res.json()["error"]["code"] == "BAD_REQUEST"
+    assert "unknown plane 'unknown'" in res.json()["error"]["detail"]
+
+
+def test_stream_empty_wildcard_still_flows_through_namespace_policy(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
+) -> None:
+    from tests.api.conftest import mint_token
+
+    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="eric/command-chair")
+    _patch_auth(monkeypatch, ("*/*/*:r",), subject="eric", presence="eric/command-chair")
+    monkeypatch.setattr(
+        "musubi.api.routers.writes_retrieve_stream._expand_wildcard_targets", lambda *_args: []
+    )
+    observed: list[list[tuple[str, str]]] = []
+
+    def record_policy(*_args: Any, targets: list[tuple[str, str]], **_kwargs: Any) -> Ok[Any]:
+        observed.append(targets)
+        return Ok(value=[])
+
+    monkeypatch.setattr(
+        "musubi.api.routers.writes_retrieve_stream.enforce_namespace_policy", record_policy
+    )
+
+    res = client.post(
+        "/v1/retrieve/stream",
+        json={"namespace": "eric/*", "query_text": "nothing stored"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 200
+    assert observed == [[]]
+    assert res.content == b""
+
+
 def test_salesai_cannot_be_reenabled_by_empty_settings_override(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:

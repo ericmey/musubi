@@ -37,6 +37,7 @@ from musubi.api.routers.retrieve import (
     RetrieveQuery,
     _expand_wildcard_targets,
     _resolve_targets,
+    _validate_planes,
 )
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import enforce_namespace_policy
@@ -87,23 +88,11 @@ async def retrieve_stream(
 
         family = context.presence.split("/", 1)[0]
         planes = body.planes or ["curated", "concept", "episodic"]
+        if plane_err := _validate_planes(planes):
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=plane_err)
         targets = _enumerate_family_targets(qdrant, family=family, planes=planes)
 
-    pattern_had_wildcards = any("*" in ns for ns, _ in targets)
     targets = _expand_wildcard_targets(qdrant, targets)
-
-    if pattern_had_wildcards and not targets:
-        headers = {
-            "X-Musubi-Mode": body.mode,
-            "X-Musubi-Limit": str(body.limit),
-            "X-Musubi-Warnings": "[]",
-        }
-
-        async def _emit_empty() -> AsyncIterator[bytes]:
-            if False:
-                yield b""
-
-        return StreamingResponse(_emit_empty(), media_type="application/x-ndjson", headers=headers)
 
     # AUTH-001: the shared READ-ONLY enforcement seam.
     policy_result = enforce_namespace_policy(

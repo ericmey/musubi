@@ -228,6 +228,14 @@ def _dedup_planes(planes: list[str]) -> list[str]:
     return out
 
 
+def _validate_planes(planes: list[str]) -> str | None:
+    """Return a request-shape error for the first unsupported plane."""
+    for plane in _dedup_planes(planes):
+        if plane not in _VALID_PLANES:
+            return f"unknown plane '{plane}' in planes list (valid: {sorted(_VALID_PLANES)})"
+    return None
+
+
 def _resolve_targets(
     namespace: str,
     planes: list[str] | None,
@@ -459,6 +467,8 @@ async def retrieve(
     if body.namespace is None:
         family = context.presence.split("/", 1)[0]
         planes = body.planes or ["curated", "concept", "episodic"]
+        if plane_err := _validate_planes(planes):
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=plane_err)
         targets = _enumerate_family_targets(qdrant, family=family, planes=planes)
     else:
         targets, shape_err = _resolve_targets(body.namespace, body.planes)

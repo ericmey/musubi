@@ -15,6 +15,7 @@ from musubi.api.routers.retrieve import (
     _enumerate_family_targets,
     _expand_wildcard_targets,
     _resolve_targets,
+    _validate_planes,
 )
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import enforce_namespace_policy
@@ -96,6 +97,8 @@ async def context_pack(
     if body.namespace is None:
         family = context.presence.split("/", 1)[0]
         planes = body.planes or ["curated", "concept", "episodic"]
+        if plane_err := _validate_planes(planes):
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=plane_err)
         targets = _enumerate_family_targets(qdrant, family=family, planes=planes)
     else:
         targets, shape_err = _resolve_targets(body.namespace, body.planes)
