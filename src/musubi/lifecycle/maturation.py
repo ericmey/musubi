@@ -877,6 +877,13 @@ async def _find_supersession_candidate(
             break
     if not needle:
         return None
+    # Topic compatibility is a hard requirement (the seam's
+    # discriminating contract): a candidate MUST share at least one
+    # `linked_to_topics` entry with the needle. An empty `topics`
+    # list means "no topic is compatible with the needle" — abstain
+    # early without paying for the Qdrant scroll.
+    if not topics:
+        return None
     records, _ = client.scroll(
         collection_name=collection,
         scroll_filter=models.Filter(
@@ -923,7 +930,19 @@ async def _find_supersession_candidate(
     if not candidate_pairs:
         return None
     batch = [needle] + [c for _, c in candidate_pairs]
-    vectors = await embedder.embed_dense(batch)
+    try:
+        vectors = await embedder.embed_dense(batch)
+    except Exception as exc:
+        # Supersession detection is optional: an embedder outage (TEI
+        # unreachable, model OOM, etc.) must not crash the maturation
+        # sweep. Abstain (return None) and log a warning so the
+        # operator can see the failure mode without losing the row.
+        log.warning(
+            "supersession-seam-abstain-embed-failed batch_size=%d exc_type=%s",
+            len(batch),
+            type(exc).__name__,
+        )
+        return None
     if len(vectors) != len(batch):
         # Defensive: the Embedder Protocol promises len(vectors) == len(batch).
         # Treat a malformed response as no candidate (abstain).

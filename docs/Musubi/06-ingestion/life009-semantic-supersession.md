@@ -41,5 +41,6 @@ Supersession promises semantic similarity plus topic compatibility. A candidate 
 11. `test_retry_idempotency_in_sweep`
 12. `test_bounded_candidate_search`
 13. `test_substring_only_does_not_match`
-14. `test_existing_no_predecessor_branch_still_returns_none`
-15. `test_existing_both_sides_of_link_still_set`
+14. `test_seam_makes_exactly_one_embed_dense_call` (call-shape discriminator; close-out add)
+15. `test_existing_no_predecessor_branch_still_returns_none`
+16. `test_existing_both_sides_of_link_still_set`
