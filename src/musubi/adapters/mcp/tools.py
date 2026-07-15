@@ -345,7 +345,8 @@ async def _do_search(
 
         # DQ-001: preserve adapter parity for truncated responses
         if hit.get("content_truncated") is True:
-            length = hit.get("content_length") or "unknown"
+            raw_len = hit.get("content_length")
+            length = raw_len if raw_len is not None else "unknown"
             lines.append(f"... (content truncated, originally {length} characters)")
 
         lines.append("")
@@ -407,7 +408,8 @@ async def _do_recent(
 
         # DQ-001: preserve adapter parity for truncated responses
         if hit.get("content_truncated") is True:
-            length = hit.get("content_length") or "unknown"
+            raw_len = hit.get("content_length")
+            length = raw_len if raw_len is not None else "unknown"
             lines.append(f"... (content truncated, originally {length} characters)")
 
         lines.append("")

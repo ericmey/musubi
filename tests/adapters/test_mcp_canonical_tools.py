@@ -238,8 +238,9 @@ async def test_search_backend_error_returns_tool_error_string() -> None:
 
 
 # --------------------------------------------------------------------------
+@pytest.mark.parametrize("length_val,expected_str", [(2500, "2500"), (0, "0")])
 @pytest.mark.asyncio
-async def test_search_formats_truncation_metadata() -> None:
+async def test_search_formats_truncation_metadata(length_val: int, expected_str: str) -> None:
     mcp, client = _make_server()
     client._retrieve_response = {
         "results": [
@@ -250,19 +251,19 @@ async def test_search_formats_truncation_metadata() -> None:
                 "namespace": "eric/test/episodic",
                 "content": "This is a very long string...",
                 "content_truncated": True,
-                "content_length": 2500,
+                "content_length": length_val,
             }
         ]
     }
     result = await _invoke(mcp, "musubi_search", namespace="eric/test", query="long")
-    # Should include the content and a specific truncation marker
     assert "This is a very long string..." in result
     assert "content truncated" in result.lower()
-    assert "2500" in result
+    assert expected_str in result
 
 
+@pytest.mark.parametrize("length_val,expected_str", [(2500, "2500"), (0, "0")])
 @pytest.mark.asyncio
-async def test_recent_formats_truncation_metadata() -> None:
+async def test_recent_formats_truncation_metadata(length_val: int, expected_str: str) -> None:
     mcp, client = _make_server()
     client._retrieve_response = {
         "results": [
@@ -273,15 +274,14 @@ async def test_recent_formats_truncation_metadata() -> None:
                 "namespace": "eric/test/episodic",
                 "content": "This is a very long string...",
                 "content_truncated": True,
-                "content_length": 2500,
+                "content_length": length_val,
             }
         ]
     }
     result = await _invoke(mcp, "musubi_recent", namespace="eric/test")
-    # Should include the content and a specific truncation marker
     assert "This is a very long string..." in result
     assert "content truncated" in result.lower()
-    assert "2500" in result
+    assert expected_str in result
 
 
 # musubi_get
