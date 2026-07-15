@@ -251,7 +251,7 @@ async def test_selects_only_provisional_older_than_min_age(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(min_age_sec=3600),
     )
@@ -276,7 +276,7 @@ async def test_batch_size_limits_selection(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(batch_size=3),
     )
@@ -299,7 +299,7 @@ async def test_cursor_resumes_across_runs(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(batch_size=2),
     )
@@ -313,7 +313,7 @@ async def test_cursor_resumes_across_runs(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor2,
         config=_config(batch_size=10),
     )
@@ -483,11 +483,42 @@ async def test_supersession_sets_both_sides_of_link(
     sink: LifecycleEventSink,
     cursor: MaturationCursor,
 ) -> None:
-    """Bullet 13 — when supersession is inferred, the new row's
-    ``supersedes`` and the old row's ``superseded_by`` both get set."""
-    # Seed the original "matured" row with content the new one can hint at.
+    """LIFE-009 migration: the seam requires a controlled embedder
+    (cosine >= 0.88 on post-hint content) + topic compatibility (at
+    least one shared linked_to_topics entry). The original test
+    depended on the OLD substring-based heuristic. This test now
+    uses a controlled embedder stub with HIGH cosine and sets
+    linked_to_topics on both rows to share the topic evidence the
+    seam requires."""
+    from qdrant_client import models as qmodels
+
+    from musubi.embedding.base import Embedder
+    from musubi.planes.episodic.plane import episodic_point_id
+    from musubi.store.specs import DENSE_SIZE
+
+    class _CtrlEmbedder(Embedder):
+        def __init__(self, vec: list[float]) -> None:
+            self._v = vec
+
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            return [self._v for _ in texts]
+
+        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+            return [{} for _ in texts]
+
+        async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+            return [0.0 for _ in candidates]
+
+    vec = [1.0, 0.0] + [0.0] * (DENSE_SIZE - 2)
+    plane._embedder = _CtrlEmbedder(vec)
+
+    # Seed the original matured row with content the new one can hint at.
     original = await plane.create(
-        EpisodicMemory(namespace=ns, content="GPU pin: nvidia driver 470")
+        EpisodicMemory(
+            namespace=ns,
+            content="GPU pin: nvidia driver 470",
+            topics=["hardware/gpu"],
+        )
     )
     await plane.transition(
         namespace=ns,
@@ -497,19 +528,33 @@ async def test_supersession_sets_both_sides_of_link(
         reason="seed",
         coordinator=_coordinator(qdrant, sink),
     )
+    # Set linked_to_topics on the original (the seam reads it from the payload).
+    plane._client.set_payload(
+        collection_name="musubi_episodic",
+        payload={"linked_to_topics": ["hardware/gpu"]},
+        points=qmodels.PointIdsList(points=[episodic_point_id(original.object_id)]),
+    )
     # New provisional row hints at supersession.
     new_row = await _seed_provisional(
         plane,
         ns,
-        content="Update: GPU pin: nvidia driver 470",
+        content="Update: GPU pin: nvidia driver 575",
+        tags=["hardware/gpu"],
+    )
+    # Set linked_to_topics on the new row too.
+    plane._client.set_payload(
+        collection_name="musubi_episodic",
+        payload={"linked_to_topics": ["hardware/gpu"]},
+        points=qmodels.PointIdsList(points=[episodic_point_id(new_row.object_id)]),
     )
     await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(),
+        embedder=plane._embedder,
     )
     new_after = await plane.get(namespace=ns, object_id=new_row.object_id)
     old_after = await plane.get(namespace=ns, object_id=original.object_id)
@@ -537,7 +582,7 @@ async def test_state_transitions_to_matured(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(),
     )
@@ -562,7 +607,7 @@ async def test_transition_uses_typed_function(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(),
     )
@@ -590,7 +635,7 @@ async def test_lifecycle_event_emitted(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(),
     )
@@ -771,7 +816,7 @@ async def test_sweep_is_no_op_when_no_eligible_rows(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(),
     )
@@ -1043,7 +1088,7 @@ def test_build_maturation_jobs_registers_documented_names(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         lock_dir=tmp_path / "locks",
         config=_config(),
@@ -1074,7 +1119,7 @@ def test_build_maturation_jobs_runner_skips_when_lock_held(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         lock_dir=tmp_path / "locks",
         config=_config(),
@@ -1109,7 +1154,7 @@ async def test_supersession_no_predecessor_match(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(),
     )

@@ -137,6 +137,10 @@ describes the semantic + topic invariant:
 The slice makes this real. No spec change is needed; the
 slice's work log records the implementation.
 
+## Specs to implement
+
+- [[06-ingestion/maturation#Step 5 — Optional supersession detection]] (spec calls for similarity ≥ 0.88 plus same topic; current code uses bounded substring containment, which the slice replaces)
+
 ## Acceptance
 
 The first contract is bounded to thirteen tests in

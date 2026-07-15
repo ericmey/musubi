@@ -412,14 +412,17 @@ async def episodic_maturation_sweep(
         # Step 5 — supersession inference (LIFE-009: semantic + topic
         # compatibility + abstention on ambiguity; bounded candidate
         # search). The seam requires the embedder; if the runner did
-        # not pass one, fall back to the OLD substring heuristic via a
-        # noop embedder (string identity is its own embedding — both
-        # texts are normalised to lowercase; cosine with the identity
-        # embedding is undefined; the function degrades to the
-        # substring heuristic, which is the conservative fallback).
+        # not pass one (legacy direct caller, or a test that bypasses
+        # the embedder), fall back to a NoopEmbedder. NoopEmbedder
+        # returns 1024D zero vectors so cosine is 0 with everything
+        # and the seam abstains on every candidate — conservative,
+        # not the OLD substring heuristic. The production-wired
+        # ``build_maturation_jobs`` path passes the real
+        # ``_TEICompositeEmbedder`` (LIFE-009 production wiring).
         # ------------------------------------------------------------------
         lineage_updates: LineageUpdates | None = None
         superseded_target_id: KSUID | None = None
+
         _hint = detect_supersession_hint(row.get("content", ""))
         if _hint:
             seam_embedder: Embedder = embedder if embedder is not None else _NoopEmbedder()
@@ -1028,6 +1031,7 @@ def build_maturation_jobs(
     cursor: MaturationCursor,
     lock_dir: Path,
     config: MaturationConfig | None = None,
+    embedder: Embedder | None = None,
 ) -> list[Job]:
     """Return :class:`Job` objects matching the lifecycle-scheduler default
     job names that maturation *owns*: ``maturation_episodic``,
@@ -1091,6 +1095,7 @@ def build_maturation_jobs(
                 ollama=ollama,
                 cursor=cursor,
                 config=cfg,
+                embedder=embedder,
             ),
         ),
         _wrap(
