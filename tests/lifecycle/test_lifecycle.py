@@ -17,7 +17,6 @@ sqlite under ``tmp_path``. No network, no real LLM calls.
 
 from __future__ import annotations
 
-import logging
 import sqlite3
 import threading
 import time
@@ -25,6 +24,7 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from hypothesis import given
@@ -381,18 +381,16 @@ async def test_event_written_for_every_transition(
     assert [e.to_state for e in events_for_object] == ["matured", "demoted", "matured"]
 
 
-async def test_concurrent_transitions_last_writer_wins_with_logged_warning(
+@pytest.mark.anyio
+async def test_concurrent_transitions_stale_expected_version_fence_violation(
     plane: EpisodicPlane,
     qdrant: QdrantClient,
     ns: str,
     sink: LifecycleEventSink,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Bullet 13 — concurrent transitions: last writer wins; warning logged."""
+    """LIFE-010 — concurrent transitions: stale expected_version hard-fenced."""
     saved = await _seed_matured(plane, ns, _coordinator(qdrant, sink), content="concurrent")
-    caplog.set_level(logging.WARNING, logger="musubi.lifecycle.transitions")
-    # Two sequential transitions simulating the race — the second must see the
-    # version bumped by the first and log a concurrent-modification warning.
+
     first = transition(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
@@ -403,24 +401,44 @@ async def test_concurrent_transitions_last_writer_wins_with_logged_warning(
         expected_version=saved.version,
         sink=sink,
     )
-    second = transition(
-        qdrant,
-        coordinator=_coordinator(qdrant, sink),
-        object_id=saved.object_id,
-        target_state="superseded",
-        actor="worker-b",
-        reason="b-supersede",
-        expected_version=saved.version,  # stale!
-        lineage_updates=LineageUpdates(superseded_by="0" * 27),
-        sink=sink,
-    )
-    # Second transition is either (a) rejected and retried internally (Ok with warning),
-    # or (b) wins last-write-wins semantics with a warning record. Either way a
-    # warning must be present in the captured log text.
     assert isinstance(first, Ok)
-    assert isinstance(second, (Ok, Err))
-    captured = caplog.text.lower()
-    assert "concurrent" in captured or "stale version" in captured, captured
+
+    snapshot_events = sink.read_all()
+
+    coordinator = _coordinator(qdrant, sink)
+
+    with (
+        patch.object(coordinator, "transition", wraps=coordinator.transition) as spy_transition,
+        patch.object(sink, "record", wraps=sink.record) as spy_sink,
+    ):
+        second = transition(
+            qdrant,
+            coordinator=coordinator,
+            object_id=saved.object_id,
+            target_state="superseded",
+            actor="worker-b",
+            reason="b-supersede",
+            expected_version=saved.version,  # stale!
+            lineage_updates=LineageUpdates(superseded_by="0" * 27),
+            sink=sink,
+        )
+
+        # Must return version_fence_violation immediately
+        assert isinstance(second, Err)
+        assert second.error.code == "version_fence_violation"
+
+        # Prove zero coordinator dispatches or sink writes
+        spy_transition.assert_not_called()
+        spy_sink.assert_not_called()
+
+        assert sink.read_all() == snapshot_events
+
+        # Prove no mutation to the state, version, and lineage
+        reloaded = await plane.get(namespace=ns, object_id=saved.object_id)
+        assert reloaded is not None
+        assert reloaded.state == "demoted"
+        assert reloaded.version == saved.version + 1
+        assert reloaded.superseded_by is None
 
 
 async def test_event_batch_flushed_within_5s_under_load(

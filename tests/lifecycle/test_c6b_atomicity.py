@@ -6087,8 +6087,11 @@ _R11_REASON = (
     "both mutate and a later one can hide a crash-applied earlier one; R11 needs the second rejected."
 )
 _R12_REASON = (
-    "today expected_version is warn-only (last writer wins), so a stale writer clobbers; R12 needs a hard "
-    "fence: stale expected => Err + ABANDONED, mutation not applied."
+    "pre-LIFE-010 expected_version was warn-only (last writer wins), so a stale writer clobbered. "
+    "LIFE-010 / H7 (Issue #556, slice slice-life010-transition-conflict) shipped the hard "
+    "fence: stale expected_version now returns Err(version_fence_violation) BEFORE legality or "
+    "coordinator.apply, and the coordinator never sees a no-op mutation. R12 still validates "
+    "the historic red; the shipped contract is the green guarantee."
 )
 
 
