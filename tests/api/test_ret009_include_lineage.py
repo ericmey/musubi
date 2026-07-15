@@ -204,10 +204,28 @@ def test_fanout_namespace_preserves_include_lineage(
         raise DefectStillPresent("fanout namespace: include_lineage=False not forwarded")
 
 
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "false",  # truthy non-empty string (must NOT coerce to False)
+        0,  # int zero (must NOT coerce to False)
+        1,  # int one (must NOT coerce to True)
+        "not-a-bool",  # arbitrary non-bool string
+        [],  # empty list
+        {"k": "v"},  # dict
+    ],
+    ids=["str_false", "int_zero", "int_one", "str_garbage", "empty_list", "dict"],
+)
 def test_non_boolean_include_lineage_rejected_at_wire(
-    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+    bad_value: object, monkeypatch: pytest.MonkeyPatch, api_settings: Settings
 ) -> None:
-    """Non-boolean include_lineage must be rejected at the wire boundary (422)."""
+    """Non-boolean include_lineage must be rejected at the wire boundary (422).
+
+    Strict bool — Pydantic must not coerce non-boolean scalars (strings, ints,
+    lists, dicts) to bool. The string ``"false"`` and the int ``0`` are the
+    load-bearing cases: lax bool would silently coerce them to ``True``/``False``
+    and the field would carry the wrong value to orchestration.
+    """
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
         "/v1/retrieve",
@@ -217,12 +235,13 @@ def test_non_boolean_include_lineage_rejected_at_wire(
             "query_text": "x",
             "mode": "fast",
             "limit": 5,
-            "include_lineage": "not-a-bool",
+            "include_lineage": bad_value,
         },
     )
     if response.status_code != 422:
         raise DefectStillPresent(
-            f"non-boolean include_lineage must yield 422, got {response.status_code}"
+            f"non-boolean include_lineage={bad_value!r} must yield 422, got "
+            f"{response.status_code}: {response.text}"
         )
     if _CAPTURED:
         raise DefectStillPresent("orchestration must not be called when the body is invalid")

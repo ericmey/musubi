@@ -36,7 +36,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, Request
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictBool, model_validator
 from qdrant_client import QdrantClient
 
 from musubi.api.dependencies import (
@@ -138,12 +138,14 @@ class RetrieveQuery(BaseModel):
         ),
     )
 
-    include_lineage: bool = Field(
+    include_lineage: StrictBool = Field(
         default=True,
         description=(
             "Forwarded verbatim to the orchestration seam. Defaults to true; "
             "set explicitly to false to disable lineage hydration on the wire. "
-            "Preserved across concrete and fanout namespace shapes."
+            "Preserved across concrete and fanout namespace shapes. "
+            "Strict bool — non-boolean values (strings, numbers, null) are "
+            "rejected at the wire boundary."
         ),
     )
 
