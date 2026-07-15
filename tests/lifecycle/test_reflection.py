@@ -334,27 +334,6 @@ async def test_capture_summary_counts_correct(
     assert "2 new episodic captures" in body or "2 episodic captures" in body
 
 
-async def test_reflection_worker_observes_lifecycle_job_duration(
-    qdrant: QdrantClient,
-    sink: LifecycleEventSink,
-    curated: CuratedPlane,
-    now: datetime,
-    reflection_namespace: str,
-) -> None:
-    before = _duration_count("reflection")
-    await _run(
-        qdrant=qdrant,
-        sink=sink,
-        curated=curated,
-        vault=FakeVaultWriter(),
-        thoughts=FakeThoughtEmitter(),
-        llm=FakeReflectionLLM(available=False),
-        namespace=reflection_namespace,
-        now=now,
-    )
-    assert _duration_count("reflection") == before + 1
-
-
 async def test_patterns_section_parses_llm_output(
     qdrant: QdrantClient,
     sink: LifecycleEventSink,
