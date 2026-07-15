@@ -18,9 +18,10 @@ import json
 import logging
 from importlib.resources import files
 from typing import Any
-from musubi.llm.prompt_boundary import build_untrusted_data_messages
 
 import httpx
+
+from musubi.llm.prompt_boundary import ChatMessage, build_untrusted_data_messages
 
 log = logging.getLogger(__name__)
 
@@ -33,10 +34,10 @@ def _load_prompt(name: str, version: str) -> str:
     return resource.read_text(encoding="utf-8")
 
 
-def _render_prompt(items: list[dict[str, object]]) -> list[dict[str, str]]:
+def _render_prompt(items: list[dict[str, object]]) -> list[ChatMessage]:
     tpl = _load_prompt("reflection", _PROMPT_VERSION)
     payload = {"items": items}
-    return build_untrusted_data_messages(tpl, payload)
+    return build_untrusted_data_messages(tpl, payload)  # type: ignore[arg-type]
 
 
 def _extract_message_content(body: Any) -> str | None:
