@@ -180,12 +180,12 @@ async def context_pack(
         candidates_dict[(c.namespace, c.plane, c.object_id)] = c
 
     candidates = list(candidates_dict.values())
-    combined_warnings = list(
-        set(
-            [warning.code for warning in recent_env.warnings]
-            + [warning.code for warning in fast_env.warnings]
-        )
-    )
+    seen_warnings: set[str] = set()
+    combined_warnings: list[str] = []
+    for warning in list(recent_env.warnings) + list(fast_env.warnings):
+        if warning.code not in seen_warnings:
+            seen_warnings.add(warning.code)
+            combined_warnings.append(warning.code)
 
     # RET-007: thread the bounded degradation codes onto the pack so /v1/context is NOT a surface where
     # degraded context is indistinguishable from healthy.

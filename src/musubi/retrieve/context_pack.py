@@ -188,11 +188,16 @@ def build_context_pack(
     used_items = 0
     query_tokens = _tokenize(query.query_text)
 
+    if len(recent_pool) > 0 and len(ranked_pool) > 0 and query.max_items >= 2:
+        recent_max_chars = query.max_chars // 3
+    else:
+        recent_max_chars = query.max_chars
+
     # 1. Fill recent quota
     for r in recent_pool:
         if used_items >= query.recent_reserve or used_items >= query.max_items:
             break
-        item = _to_item(r, remaining_chars=query.max_chars - used_chars)
+        item = _to_item(r, remaining_chars=recent_max_chars - used_chars)
         if item is None:
             break
         groups[_GROUP_BY_KIND[item.kind]].append(item)

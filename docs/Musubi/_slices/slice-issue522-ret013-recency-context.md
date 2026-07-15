@@ -1,6 +1,6 @@
 ---
 owner: gemini-3-1-shiori
-status: in-progress
+status: in-review
 issue: 522
 title: "Slice: RET-013 bounded recent-memory lane in canonical cross-modality context"
 slice_id: slice-issue522-ret013-recency-context
@@ -33,6 +33,9 @@ Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canoni
 
 ## Test Contract
 - `test_context_endpoint_blends_recent_provisional_with_established_ranked`
+- `test_context_endpoint_max_chars_mix_quota`
+- `test_context_endpoint_single_lane_empty_cases`
+- `test_context_endpoint_custom_state_filter_applies_to_both_lanes`
 
 ## Definition of Done
 - Mixed lane implemented.
