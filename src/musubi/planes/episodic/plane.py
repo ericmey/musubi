@@ -114,6 +114,11 @@ def _memory_from_payload(payload: dict[str, Any]) -> EpisodicMemory:
 
 
 def _is_factually_compatible(existing: EpisodicMemory, new: EpisodicMemory) -> bool:
+    """Return whether a cosine hit is safe to merge.
+
+    Compatibility is fail-closed: normalized content and the complete
+    participants set must both match before dedup may mutate an existing row.
+    """
     import re
     import unicodedata
 

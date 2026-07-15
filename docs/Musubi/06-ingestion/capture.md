@@ -80,6 +80,10 @@ If a near-duplicate was found (dedup triggered, see below), the response is 200 
                                                       total: ~80-100ms
 ```
 
+Here, "factually compatible" means that NFKC/case/whitespace/terminal-punctuation
+normalized content is equal and the complete participants set is equal. A
+semantic paraphrase, correction, or negation is not sufficient for a merge.
+
 Budget: p50 ≤ 100ms, p95 ≤ 250ms.
 
 ## Step detail
