@@ -486,13 +486,12 @@ async def retrieve(
             limit=body.limit,
         )
 
-    # AUTH-001: the shared READ-ONLY enforcement seam. Drops any
-    # target whose namespace is in the configured exclusion list
-    # (the canonical per-agent exclusion list from Settings) and then runs the
-    # per-namespace scope check. Replaces the per-target
-    # ``resolve_namespace_scope`` loop. The seam is the single
-    # source of truth for the exclusion policy; hardcoding route-
-    # specific exclusions is a code-review must-fix.
+    # AUTH-001: the shared READ-ONLY enforcement seam. It first applies
+    # per-namespace scope authorization (rejecting or dropping unauthorized
+    # targets according to ``reject_unauthorized``), then drops namespaces in
+    # the canonical per-agent Settings exclusion list. The seam replaces the
+    # route-local ``resolve_namespace_scope`` loop and is the single source of
+    # truth for exclusion policy; route-specific exclusions are a must-fix.
     policy_result = enforce_namespace_policy(
         context,
         targets=targets,
