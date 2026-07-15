@@ -154,9 +154,15 @@ jobs:
 
 
 def _assert_dispatch_contract(content: str) -> None:
-    """The live scheduled gate must be dispatchable on demand: ``workflow_dispatch`` present, and the
-    step that runs ``musubi.evals scheduled`` fires for it (schedule OR workflow_dispatch) — in
-    whatever job it lives (a step in ``smoke`` today, a dedicated job after the RET-004 merge)."""
+    """The live scheduled gate must be dispatchable on demand AND never run on pull_request.
+
+    - ``workflow_dispatch`` is exposed on the workflow.
+    - EVERY step that runs ``musubi.evals scheduled`` (across ALL jobs — collected, never overwritten,
+      so YAML order can't hide a bad match) carries at least one ``github.event_name`` guard, so the
+      live gate can't fire on a PR.
+    - EVERY applicable event guard (GitHub applies BOTH the job guard and the step guard) permits BOTH
+      schedule AND workflow_dispatch.
+    """
     parsed = yaml.safe_load(content)
     # PyYAML parses the ``on:`` key as the YAML 1.1 boolean True — accept either.
     triggers = parsed.get("on", parsed.get(True, {})) or {}
@@ -165,25 +171,30 @@ def _assert_dispatch_contract(content: str) -> None:
         "be dispatched on demand pre-merge"
     )
 
-    # GitHub applies BOTH the job guard AND the step guard: the gate runs only if EVERY applicable
-    # guard permits the event. So collect ALL non-empty applicable guards (job-level + step-level) on
-    # the scheduled-gate step — checking only one (the old ``step or job``) falsely passes when the
-    # unchecked guard excludes workflow_dispatch (Copilot #550).
-    applicable_guards: list[str] | None = None
+    # Collect EVERY scheduled-gate step across ALL jobs — never overwrite, or a later good match could
+    # hide an earlier bad one. Each match carries its full applicable guard set (job guard + step
+    # guard); GitHub requires every applicable guard to permit the event.
+    matches: list[list[str]] = []
     for job in parsed.get("jobs", {}).values():
         for step in job.get("steps", []):
             run_cmd = step.get("run", "") or ""
             if "musubi.evals scheduled" in run_cmd or "musubi-evals scheduled" in run_cmd:
-                applicable_guards = [guard for guard in (job.get("if"), step.get("if")) if guard]
-    assert applicable_guards is not None, "Workflow must run the live scheduled gate somewhere"
-    for guard in applicable_guards:
-        # A guard that gates on the event (references github.event_name) must permit
-        # workflow_dispatch; a guard that does not gate on the event does not restrict it.
-        if "github.event_name" in guard:
-            assert "workflow_dispatch" in guard, (
-                "every event-gated guard on the scheduled gate (job-level AND step-level) must permit "
-                "workflow_dispatch — a job or step guard that excludes it silently blocks the "
-                "on-demand run"
+                matches.append([guard for guard in (job.get("if"), step.get("if")) if guard])
+    assert matches, "Workflow must run the live scheduled gate somewhere"
+
+    for guards in matches:
+        event_guards = [guard for guard in guards if "github.event_name" in guard]
+        # No event guard ⇒ the live gate would also run on pull_request. It must be event-gated.
+        assert event_guards, (
+            "the scheduled gate must carry a github.event_name guard (job-level or step-level) so it "
+            "never runs on pull_request; gate it on schedule OR workflow_dispatch"
+        )
+        # Every applicable event guard must permit BOTH the nightly cron and the on-demand dispatch.
+        for guard in event_guards:
+            assert "schedule" in guard and "workflow_dispatch" in guard, (
+                "every event guard on the scheduled gate (job-level AND step-level) must permit BOTH "
+                "schedule AND workflow_dispatch — otherwise the on-demand run or the nightly cron is "
+                "silently blocked"
             )
 
 
@@ -212,6 +223,26 @@ jobs:
         _assert_dispatch_contract(no_dispatch)
 
 
+def test_evals_workflow_dispatch_discriminator_no_event_guard() -> None:
+    """Contract (Copilot): a scheduled gate with NO event guard would also run on pull_request. It
+    must be event-gated, never unguarded."""
+    no_guard = """
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * *'
+jobs:
+  smoke:
+    steps:
+      - name: Run Scheduled Baseline Report
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+    """
+    with pytest.raises(AssertionError, match="never runs on pull_request"):
+        _assert_dispatch_contract(no_guard)
+
+
 def test_evals_workflow_dispatch_discriminator_step_guard_excludes() -> None:
     """Contract: workflow_dispatch present but the scheduled gate STEP guard is schedule-only is
     rejected — the on-demand trigger would fire nothing."""
@@ -227,7 +258,7 @@ jobs:
         if: github.event_name == 'schedule'
         run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
     """
-    with pytest.raises(AssertionError, match="must permit workflow_dispatch"):
+    with pytest.raises(AssertionError, match="must permit BOTH schedule AND workflow_dispatch"):
         _assert_dispatch_contract(step_excludes)
 
 
@@ -248,5 +279,30 @@ jobs:
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
     """
-    with pytest.raises(AssertionError, match="must permit workflow_dispatch"):
+    with pytest.raises(AssertionError, match="must permit BOTH schedule AND workflow_dispatch"):
         _assert_dispatch_contract(job_excludes)
+
+
+def test_evals_workflow_dispatch_discriminator_earlier_bad_match_not_hidden() -> None:
+    """Contract (Copilot): the contract must check EVERY scheduled-gate step, not just the last one.
+    An earlier bad match (schedule-only) followed by a later good match must still be rejected — YAML
+    order cannot hide it (proves the collect-all, no-overwrite behavior)."""
+    ordered = """
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+jobs:
+  bad_first:
+    steps:
+      - name: Run Scheduled Baseline Report (bad)
+        if: github.event_name == 'schedule'
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+  good_second:
+    steps:
+      - name: Run Scheduled Baseline Report (good)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+    """
+    with pytest.raises(AssertionError, match="must permit BOTH schedule AND workflow_dispatch"):
+        _assert_dispatch_contract(ordered)
