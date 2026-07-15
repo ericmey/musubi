@@ -52,11 +52,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
-from functools import wraps
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -72,7 +70,6 @@ from musubi.lifecycle.coordinator import (
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.lifecycle.transitions import LineageUpdates, TransitionError, transition
-from musubi.observability import default_registry
 from musubi.types.common import KSUID, Ok, epoch_of, utc_now
 
 log = logging.getLogger(__name__)
@@ -93,35 +90,6 @@ _DEFAULT_LLM_BATCH = 10
 
 _LIFECYCLE_ACTOR = "lifecycle-worker"
 """Actor recorded on every transition this module emits — matches the spec."""
-
-_REG = default_registry()
-_DURATION = _REG.histogram(
-    "musubi_lifecycle_job_duration_seconds",
-    "lifecycle worker tick duration",
-    labelnames=("job",),
-)
-_ERRORS = _REG.counter(
-    "musubi_lifecycle_job_errors_total",
-    "lifecycle worker tick errors",
-    labelnames=("job",),
-)
-
-
-def _instrument_maturation_job[**P, R](
-    func: Callable[P, Awaitable[R]],
-) -> Callable[P, Awaitable[R]]:
-    @wraps(func)
-    async def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
-        start = time.monotonic()
-        try:
-            return await func(*args, **kwargs)
-        except Exception:
-            _ERRORS.labels(job="maturation").inc()
-            raise
-        finally:
-            _DURATION.labels(job="maturation").observe(time.monotonic() - start)
-
-    return _wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -344,14 +312,12 @@ def detect_supersession_hint(content: str) -> bool:
 # Episodic maturation sweep
 # ---------------------------------------------------------------------------
 
-
 _EPISODIC_COLLECTION = "musubi_episodic"
 _CURSOR_NAME_EPISODIC = "episodic_maturation"
 _CURSOR_NAME_TTL = "provisional_ttl"
 _CURSOR_NAME_DEMOTION = "episodic_demotion"
 
 
-@_instrument_maturation_job
 async def episodic_maturation_sweep(
     *,
     client: QdrantClient,
@@ -547,7 +513,6 @@ async def episodic_maturation_sweep(
 # ---------------------------------------------------------------------------
 
 
-@_instrument_maturation_job
 async def provisional_ttl_sweep(
     *,
     client: QdrantClient,
@@ -620,7 +585,6 @@ async def provisional_ttl_sweep(
 # ---------------------------------------------------------------------------
 
 
-@_instrument_maturation_job
 async def episodic_demotion_sweep(
     *,
     client: QdrantClient,
@@ -678,7 +642,6 @@ async def episodic_demotion_sweep(
     )
 
 
-@_instrument_maturation_job
 async def concept_maturation_sweep(
     *,
     client: QdrantClient,
@@ -752,7 +715,6 @@ async def concept_maturation_sweep(
     )
 
 
-@_instrument_maturation_job
 async def concept_demotion_sweep(
     *,
     client: QdrantClient,
