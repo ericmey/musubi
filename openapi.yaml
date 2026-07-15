@@ -1847,6 +1847,7 @@ components:
         namespace:
           anyOf:
           - type: string
+            minLength: 1
           - type: 'null'
           title: Namespace
           description: Optional namespace narrowing, with the same concrete or wildcard

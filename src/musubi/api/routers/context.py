@@ -39,6 +39,7 @@ class ContextQuery(BaseModel):
 
     namespace: str | None = Field(
         default=None,
+        min_length=1,
         description=(
             "Optional namespace narrowing, with the same concrete or wildcard shapes as "
             "/v1/retrieve. Omit or send null to build context across every authorized "

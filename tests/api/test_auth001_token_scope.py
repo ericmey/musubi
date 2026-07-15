@@ -245,6 +245,21 @@ def test_omitted_namespace_rejects_unknown_plane_as_bad_request(
     assert "unknown plane 'unknown'" in res.json()["error"]["detail"]
 
 
+def test_context_empty_namespace_is_rejected_at_request_validation(
+    client: TestClient, api_settings: Settings
+) -> None:
+    from tests.api.conftest import mint_token
+
+    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="eric/command-chair")
+    res = client.post(
+        "/v1/context",
+        json={"namespace": "", "query_text": "invalid empty namespace"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 422
+
+
 def test_stream_empty_wildcard_still_flows_through_namespace_policy(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
