@@ -15,7 +15,7 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
-from musubi.planes.artifact.chunking import get_chunker
+from musubi.planes.artifact.chunking import KNOWN_CHUNKERS, get_chunker
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
@@ -93,13 +93,16 @@ class ArtifactPlane:
         hides the prior tail — the orphaned-chunk bug is gone on the direct-call path too. The async,
         durably-retried, concurrency-safe path is :class:`ArtifactIndexer` via the lifecycle worker;
         this method is the single-writer synchronous equivalent."""
-        chunker = get_chunker(artifact.chunker)
         prior_generation = (
             artifact.committed_generation
         )  # generation this re-index supersedes (or None)
         staged_generation: str | None = None
         try:
-            raw_chunks = chunker.chunk(content)
+            # Deterministic config guard: an unknown chunker is a TERMINAL failure — never a silent
+            # fallback to the default (which would mis-chunk under a name the caller did not intend).
+            if artifact.chunker not in KNOWN_CHUNKERS:
+                raise ValueError(f"unknown chunker: {artifact.chunker!r}")
+            raw_chunks = get_chunker(artifact.chunker).chunk(content)
             if not raw_chunks:
                 raise ValueError("chunking produced no chunks")
 
@@ -149,6 +152,9 @@ class ArtifactPlane:
                 chunk_count=len(raw_chunks),
                 committed_generation=generation,
                 committed_owner=owner,
+                # The sync path has NO async indexing intent — clear any stale op id so the head never
+                # falsely claims a prior async operation committed this generation.
+                index_operation_id=None,
                 publication_version=artifact.publication_version + 1,
                 failure_reason=None,
                 updated_at=now,
@@ -172,7 +178,13 @@ class ArtifactPlane:
             if prior_generation:
                 # RE-INDEX failure (inv #3): the PREVIOUS-GOOD committed generation stays VISIBLE.
                 # Record the failed attempt on the head but keep it indexed at the prior generation.
-                data.update(failure_reason=str(e), updated_at=now, updated_epoch=epoch_of(now))
+                # The sync path has no async intent — clear any stale op id.
+                data.update(
+                    failure_reason=str(e),
+                    index_operation_id=None,
+                    updated_at=now,
+                    updated_epoch=epoch_of(now),
+                )
             else:
                 # FIRST-EVER index failure (inv #4): fail-closed — no committed generation, zero exposed.
                 data.update(
@@ -180,6 +192,7 @@ class ArtifactPlane:
                     failure_reason=str(e),
                     committed_generation=None,
                     committed_owner=None,
+                    index_operation_id=None,
                     updated_at=now,
                     updated_epoch=epoch_of(now),
                 )

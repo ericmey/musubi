@@ -447,3 +447,66 @@ async def test_enqueue_at_capacity_marks_head_failed_visible_terminal(
     assert failed.artifact_state == "failed" and failed.committed_generation is None
     head = await plane.get(namespace=art.namespace, object_id=art.object_id)
     assert head is not None and head.artifact_state == "failed" and head.failure_reason
+
+
+@pytest.mark.asyncio
+async def test_sync_index_unknown_chunker_fails_closed(plane: ArtifactPlane) -> None:
+    """Copilot #1: the SYNC index() rejects an unknown chunker deterministically (no silent default
+    fallback) → terminal failed head, no committed generation, ZERO visible chunks."""
+    art = await plane.create(_artifact().model_copy(update={"chunker": "bogus-sync-chunker-v9"}))
+    result = await plane.index(art, "# A\nsome content to chunk\n")
+    assert result.artifact_state == "failed"
+    assert result.committed_generation is None
+    assert "unknown chunker" in (result.failure_reason or "")
+    assert await plane.chunks_for(namespace=art.namespace, object_id=art.object_id) == []
+
+
+@pytest.mark.asyncio
+async def test_sync_index_clears_stale_index_operation_id(
+    qdrant: QdrantClient, plane: ArtifactPlane
+) -> None:
+    """Copilot #2: EVERY sync head write clears index_operation_id (the sync path has no async intent),
+    so a stale prior op id never lingers — on success, re-index failure (prior preserved), and
+    first-failure fail-closed."""
+    art = await plane.create(_artifact())
+    good = await plane.index(art, "# A\nalpha content\n")
+    assert good.artifact_state == "indexed" and good.index_operation_id is None  # success clears
+    g1 = good.committed_generation
+
+    # stamp a STALE async op id onto the committed head, then re-index (success) → cleared
+    qdrant.set_payload(
+        collection_name="musubi_artifact",
+        payload={"index_operation_id": "stale-opk-success"},
+        points=[_point_id(art.object_id)],
+    )
+    head_stale = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert head_stale is not None and head_stale.index_operation_id == "stale-opk-success"
+    good2 = await plane.index(head_stale, "# A\nalpha v2 content\n")
+    assert good2.committed_generation != g1 and good2.index_operation_id is None
+    g2 = good2.committed_generation
+
+    # re-index FAILURE (empty) on a head with a stale op id → prior preserved + op id cleared
+    qdrant.set_payload(
+        collection_name="musubi_artifact",
+        payload={"index_operation_id": "stale-opk-fail"},
+        points=[_point_id(art.object_id)],
+    )
+    head_stale2 = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert head_stale2 is not None
+    after_fail = await plane.index(
+        head_stale2, ""
+    )  # empty → re-index fails, prior preserved (inv #3)
+    assert after_fail.committed_generation == g2 and after_fail.index_operation_id is None
+
+    # first-ever failure on a fresh head carrying a stale op id → failed + op id None
+    fresh = await plane.create(_artifact())
+    qdrant.set_payload(
+        collection_name="musubi_artifact",
+        payload={"index_operation_id": "stale-opk-first"},
+        points=[_point_id(fresh.object_id)],
+    )
+    fresh_stale = await plane.get(namespace=fresh.namespace, object_id=fresh.object_id)
+    assert fresh_stale is not None
+    failed = await plane.index(fresh_stale, "")  # first-index fail (empty)
+    assert failed.artifact_state == "failed"
+    assert failed.committed_generation is None and failed.index_operation_id is None
