@@ -20,7 +20,6 @@ before any ``set_payload`` call.
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -51,9 +50,6 @@ from musubi.types.lifecycle_event import (
     is_legal_transition,
     legal_next_states,
 )
-
-log = logging.getLogger(__name__)
-
 
 # ---------------------------------------------------------------------------
 # Public surface

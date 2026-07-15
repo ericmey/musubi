@@ -24,6 +24,12 @@ Enforces hard-fence semantic validation for `expected_version` mismatches during
 ## Specs to implement
 - [[06-ingestion/index]]
 
+## Definition of Done
+- [x] Stale supplied `expected_version` immediately returns `version_fence_violation` Err.
+- [x] Zero `coordinator.transition` or `LifecycleEventSink` flushing side-effects.
+- [x] Zero state, version, or lineage mutation on conflicting requests.
+- [x] Focused tests, full `make check`, and documentation gates exactly passing.
+
 ## Files
 - `owns_paths`: 
   - `docs/Musubi/_slices/slice-life010-transition-conflict.md`
