@@ -1,9 +1,11 @@
 """NDJSON streaming variant of POST /v1/retrieve.
 
 Per [[07-interfaces/canonical-api]] § NDJSON streaming, this endpoint
-emits one JSON object per line so adapters can render results as they
-arrive instead of waiting for the full batch. Useful for large
-``limit`` queries.
+emits one JSON object per line. Note that the envelope is fully materialized
+by orchestration BEFORE serialization begins — this endpoint provides wire
+streaming parity (NDJSON shape and headers) for client parsers, but does
+NOT reduce incremental backend retrieval latency (all hits are fetched before
+the stream starts).
 """
 
 from __future__ import annotations
