@@ -248,6 +248,15 @@ Write-log:
 17. `test_file_written_atomically`
 18. `test_watcher_sees_writelog_and_skips_reindex`
 
+Replay identity:
+
+38. `test_idempotent_replay_reuses_existing_vault_object_id`
+39. `test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists`
+40. `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
+41. `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
+42. `test_idempotent_replay_adopts_persisted_qdrant_identity`
+43. `test_idempotent_replay_fails_closed_on_unrelated_lineage`
+
 Qdrant:
 
 19. `test_curated_point_upserted_with_promoted_from`
