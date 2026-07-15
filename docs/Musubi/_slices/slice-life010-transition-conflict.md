@@ -33,5 +33,5 @@ Enforces hard-fence semantic validation for `expected_version` mismatches during
 
 ## Work log
 - Implemented `version_fence_violation` strict enforcement in `transitions.py`.
-- Rebuilt discriminator asserting strict `Err` format and `mocker.spy` confirming completely suppressed target side-effects over state mutation and `LifecycleEventSink` flushing.
+- Rebuilt discriminator asserting strict `Err` format and stdlib `unittest.mock.patch.object` zero-call spies confirming completely suppressed target side-effects over state mutation and `LifecycleEventSink` flushing.
 - Resolved Issue #556 exactly. Issue #556 is an authorized cross-slice correction (transitions.py is owned by slice-lifecycle-engine); the owning slice work log was updated accordingly.
