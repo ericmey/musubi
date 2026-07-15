@@ -234,3 +234,5 @@ Batch:
 30. `test_semantic_dedup_rejects_ambiguity`
 31. `test_semantic_dedup_rejects_language_token_punctuation`
 32. `test_semantic_dedup_compares_content_not_summary`
+33. `test_semantic_dedup_rejects_paraphrase`
+34. `test_semantic_dedup_rejects_participants_change`

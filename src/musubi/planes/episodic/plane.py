@@ -133,7 +133,7 @@ def _is_factually_compatible(existing: EpisodicMemory, new: EpisodicMemory) -> b
     if _normalize(existing.content) != _normalize(new.content):
         return False
 
-    return sorted(existing.participants) == sorted(new.participants)
+    return set(existing.participants) == set(new.participants)
 
 
 class EpisodicPlane:

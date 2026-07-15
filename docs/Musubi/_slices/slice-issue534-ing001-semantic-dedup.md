@@ -42,9 +42,19 @@ Semantic dedup may merge only factually compatible duplicates. Corrections, nega
 - `test_semantic_dedup_rejects_ambiguity`
 - `test_semantic_dedup_rejects_language_token_punctuation`
 - `test_semantic_dedup_compares_content_not_summary`
+- `test_semantic_dedup_rejects_paraphrase`
+- `test_semantic_dedup_rejects_participants_change`
 
 ## Definition of Done
 - Strict factual compatibility evaluated during dedup.
 - `make check` is fully passing.
 
 ## Work log
+
+- 2026-07-15 — Added a fail-closed factual-compatibility gate to single and
+  batch episodic dedup. The labeled corpus in
+  `tests/planes/test_episodic.py` covers every Test Contract bullet, including
+  normalization-equivalent duplicates, corrections, negations, paraphrases,
+  content and structured-participant changes, time and numeric conflicts,
+  ambiguity, punctuation, and content-versus-summary behavior. Focused dedup
+  tests and exact-head CI passed before handoff.
