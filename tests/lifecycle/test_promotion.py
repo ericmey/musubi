@@ -652,6 +652,8 @@ async def test_transient_post_render_failure_leaves_attempts_unchanged(deps: Any
     readback = await failing_deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
     assert readback is not None
     assert readback.promotion_attempts == 0
+    assert readback.promotion_rejected_at is None
+    assert readback.promotion_rejected_reason is None
 
 
 @pytest.mark.asyncio
