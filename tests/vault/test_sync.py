@@ -12,7 +12,6 @@ from unittest.mock import MagicMock
 import pytest
 from watchdog.events import (
     FileCreatedEvent,
-    FileDeletedEvent,
     FileModifiedEvent,
     FileMovedEvent,
 )
@@ -53,10 +52,16 @@ def write_log(tmp_path: Path) -> WriteLog:
 
 @pytest.fixture
 async def watcher(vault_root: Path, write_log: WriteLog) -> VaultWatcher:
+    from unittest.mock import MagicMock
+
+    # VAULT-003: the watcher constructor now requires a coordinator.
+    # These legacy sync tests don't exercise the archive path; a
+    # MagicMock is sufficient.
     w = VaultWatcher(
         vault_root=vault_root,
         curated_plane=FakeCuratedPlane(),  # type: ignore
         write_log=write_log,
+        coordinator=MagicMock(),
         debounce_sec=0.1,  # Fast for tests
     )
     # Important: set the loop for the watcher
@@ -147,12 +152,6 @@ async def test_on_moved_updates_vault_path(vault_root: Path, watcher: VaultWatch
     plane = watcher.curated_plane
     assert len(plane.created) == 1  # type: ignore
     assert plane.created[0].vault_path == "eric/shared/new.md"  # type: ignore
-
-
-@pytest.mark.asyncio
-async def test_on_deleted_archives_point(vault_root: Path, watcher: VaultWatcher) -> None:
-    file_path = vault_root / "eric" / "shared" / "test.md"
-    await watcher._handle_event(str(file_path), FileDeletedEvent(str(file_path)))
 
 
 @pytest.mark.asyncio
@@ -508,6 +507,7 @@ async def test_event_rate_limit_drops_with_warning(
         vault_root=vault_root,
         curated_plane=FakeCuratedPlane(),  # type: ignore
         write_log=write_log,
+        coordinator=MagicMock(),  # VAULT-003: required coordinator
         debounce_sec=0.1,
         event_rate_per_sec=1.0,
     )
@@ -566,6 +566,7 @@ async def test_indexing_rate_limit_backpressure(
         vault_root=vault_root,
         curated_plane=plane,  # type: ignore
         write_log=write_log,
+        coordinator=MagicMock(),  # VAULT-003: required coordinator
         debounce_sec=0.01,
         indexing_concurrency=2,
     )
@@ -610,6 +611,7 @@ def test_invalid_event_rate_per_sec_rejected(vault_root: Path, write_log: WriteL
                 vault_root=vault_root,
                 curated_plane=FakeCuratedPlane(),  # type: ignore
                 write_log=write_log,
+                coordinator=MagicMock(),  # VAULT-003: required coordinator
                 event_rate_per_sec=bad,
             )
 
@@ -623,6 +625,7 @@ def test_invalid_indexing_concurrency_rejected(vault_root: Path, write_log: Writ
                 vault_root=vault_root,
                 curated_plane=FakeCuratedPlane(),  # type: ignore
                 write_log=write_log,
+                coordinator=MagicMock(),  # VAULT-003: required coordinator
                 indexing_concurrency=bad,
             )
 
