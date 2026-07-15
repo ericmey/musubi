@@ -13,6 +13,674 @@ from musubi.types.common import Ok
 from musubi.types.episodic import EpisodicMemory
 
 
+def test_context_candidate_uses_typed_state_and_importance_without_payload() -> None:
+    from musubi.api.routers.context import _candidate_from_hit
+    from musubi.retrieve.orchestration import RetrievalResult
+
+    candidate = _candidate_from_hit(
+        RetrievalResult(
+            object_id="typed-hit",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            snippet="typed lifecycle fields survive brief projection",
+            score=1.0,
+            score_components={},
+            lineage={},
+            payload=None,
+            state="superseded",
+            importance=9,
+        )
+    )
+
+    assert candidate.state == "superseded"
+    assert candidate.importance == 9
+
+
+def test_recent_context_candidate_uses_recent_score_as_created_epoch_without_payload() -> None:
+    from musubi.api.routers.context import _candidate_from_hit
+    from musubi.retrieve.orchestration import RetrievalResult
+
+    candidate = _candidate_from_hit(
+        RetrievalResult(
+            object_id="recent-hit",
+            namespace="eric/claude-code/episodic",
+            plane="episodic",
+            snippet="chronological recent row",
+            score=1_721_234_567.0,
+            score_components={},
+            lineage={},
+            payload=None,
+            state="provisional",
+            importance=5,
+        ),
+        recent=True,
+    )
+
+    assert candidate.created_epoch == 1_721_234_567.0
+    assert candidate.retrieve_score == 0.0
+
+
+def test_context_endpoint_blends_recent_provisional_with_established_ranked(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RET-013: Canonical context returns a blended mix of recent memories
+    and top-ranked established memories.
+
+    The endpoint must:
+    1. Query Qdrant twice: once in `mode="recent"` (fetching the absolute newest memories, explicitly
+       including `provisional`), and once in `mode="fast"` (the standard ranked fetch).
+    2. Dedupe the combined candidates (by composite identity) favoring the ranked score when present.
+    3. Pass the blended candidates into `build_context_pack`.
+    """
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope, RetrievalResult
+    from musubi.retrieve.warnings import RetrievalWarning
+    from musubi.types.common import Ok
+
+    captured_queries = []
+
+    async def mock_retrieve(
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        account_access: bool,
+    ) -> object:
+        captured_queries.append(query)
+
+        if query["mode"] == "recent":
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="recent-prov-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="A brand new provisional thought without any query token match",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                        ),
+                        RetrievalResult(
+                            object_id="overlap-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="Old recent snippet",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="matured",
+                            importance=8,
+                            provenance_score=1.0,
+                        ),
+                        RetrievalResult(
+                            object_id="same-id-diff-namespace-1",
+                            namespace="other/namespace/episodic",
+                            plane="episodic",
+                            snippet="I am from another namespace",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="matured",
+                            importance=5,
+                            provenance_score=1.0,
+                        ),
+                        RetrievalResult(
+                            object_id="suppress-history",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="This is a superseded memory that should be suppressed if include_history=False",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="superseded",
+                            importance=5,
+                            provenance_score=1.0,
+                        ),
+                    ],
+                    warnings=(RetrievalWarning(code="TEI_DENSE_UNAVAILABLE", plane="episodic"),),
+                )
+            )
+        else:
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="overlap-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending Ranked duplicate has DIFFERENT and richer content",
+                            score=0.95,
+                            score_components={
+                                "relevance": 0.95,
+                                "recency": 0.8,
+                                "importance": 0.8,
+                                "provenance": 0.1,
+                                "reinforcement": 0,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=8,
+                        ),
+                        RetrievalResult(
+                            object_id="ranked-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending Old but extremely relevant established memory",
+                            score=0.85,
+                            score_components={
+                                "relevance": 0.9,
+                                "recency": 0.1,
+                                "importance": 0.9,
+                                "provenance": 0.5,
+                                "reinforcement": 1,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=9,
+                        ),
+                        RetrievalResult(
+                            object_id="same-id-diff-namespace-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending I am from THIS namespace",
+                            score=0.85,
+                            score_components={
+                                "relevance": 0.9,
+                                "recency": 0.1,
+                                "importance": 0.9,
+                                "provenance": 0.5,
+                                "reinforcement": 1,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=5,
+                        ),
+                    ],
+                    warnings=(
+                        RetrievalWarning(code="TEI_DENSE_UNAVAILABLE", plane="episodic"),
+                        RetrievalWarning(code="OLLAMA_TIMEOUT", plane="episodic"),
+                    ),
+                )
+            )
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    resp = client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "test blending",
+            "mode": "startup",
+            "max_items": 10,
+            # max_chars=1200
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+
+    recent_query = captured_queries[0]
+    fast_query = captured_queries[1]
+
+    # 3. Default lane-state split explicit and identical namespace_targets
+    assert recent_query["mode"] == "recent"
+    assert recent_query["query_text"] == ""
+    assert recent_query["state_filter"] == ["provisional", "matured", "promoted"]
+    assert fast_query["mode"] == "fast"
+    assert fast_query["state_filter"] == ["matured", "promoted"]
+    assert recent_query["namespace_targets"] == fast_query["namespace_targets"]
+
+    data = resp.json()
+    items = []
+    for group in data["groups"]:
+        items.extend(group["items"])
+
+    # Discriminators:
+    # - zero-overlap provisional + strong established both surfaced
+    # - ranked duplicate truly wins using DIFFERENT content and asserting content
+    # - same object_id across different namespace/plane does NOT collapse
+    # - include_history suppression (suppress-history missing)
+    # - warnings stable+deduped
+
+    ids = [i["object_id"] for i in items]
+
+    assert "recent-prov-1" in ids  # zero-overlap provisional survived
+    assert "overlap-1" in ids
+    assert "ranked-1" in ids  # strong established survived
+    assert "suppress-history" not in ids  # include_history=False
+
+    overlap_item = next(i for i in items if i["object_id"] == "overlap-1")
+    assert (
+        overlap_item["content"] == "test blending Ranked duplicate has DIFFERENT and richer content"
+    )
+
+    # 1. In the composite identity scenario, assert there are EXACTLY TWO surfaced items with object_id same-id-diff-namespace-1
+    # and assert their (namespace,plane) pairs are the two expected distinct identities
+    composite_items = [i for i in items if i["object_id"] == "same-id-diff-namespace-1"]
+    assert len(composite_items) == 2
+    composite_identities = {(i["namespace"], i["plane"]) for i in composite_items}
+    assert composite_identities == {
+        ("other/namespace/episodic", "episodic"),
+        ("eric/claude-code/episodic", "episodic"),
+    }
+
+    assert data["warnings"] == ["TEI_DENSE_UNAVAILABLE", "OLLAMA_TIMEOUT"]
+
+
+def test_context_endpoint_max_items_mix_quota(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guarantee max_items=2 yields exactly one recent and one ranked item."""
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope, RetrievalResult
+    from musubi.types.common import Ok
+
+    async def mock_retrieve(
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        account_access: bool,
+    ) -> object:
+        if query["mode"] == "recent":
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="recent-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="recent first",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                            payload={"staleness": "current"},
+                        ),
+                        RetrievalResult(
+                            object_id="recent-2",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="recent second",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                            payload={"staleness": "current"},
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+        else:
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="ranked-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending highly ranked",
+                            score=0.95,
+                            score_components={
+                                "relevance": 0.95,
+                                "recency": 0.8,
+                                "importance": 0.8,
+                                "provenance": 0.1,
+                                "reinforcement": 0,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=8,
+                        ),
+                        RetrievalResult(
+                            object_id="ranked-2",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending second ranked",
+                            score=0.90,
+                            score_components={
+                                "relevance": 0.90,
+                                "recency": 0.5,
+                                "importance": 0.8,
+                                "provenance": 0.1,
+                                "reinforcement": 0,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=7,
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    resp = client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "test blending",
+            "mode": "startup",
+            "max_items": 2,
+        },
+    )
+    data = resp.json()
+    items = []
+    for group in data["groups"]:
+        items.extend(group["items"])
+
+    assert len(items) == 2
+    object_ids = {i["object_id"] for i in items}
+    assert object_ids == {"recent-1", "ranked-1"}
+
+
+def test_context_endpoint_max_chars_mix_quota(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guarantee the requested MIX under max_chars: when both pools are non-empty and max_items>=2,
+    cap the reserved recent phase to at most one-third of max_chars so at least one ranked item can survive."""
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope, RetrievalResult
+    from musubi.types.common import Ok
+
+    async def mock_retrieve(
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        account_access: bool,
+    ) -> object:
+        if query["mode"] == "recent":
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="long-recent",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="A" * 1000,
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+        else:
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="short-ranked",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending highly ranked",
+                            score=0.95,
+                            score_components={
+                                "relevance": 0.95,
+                                "recency": 0.8,
+                                "importance": 0.8,
+                                "provenance": 0.1,
+                                "reinforcement": 0,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=8,
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    resp = client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "test blending",
+            "mode": "startup",
+            "max_items": 10,
+            "max_chars": 600,
+        },
+    )
+    data = resp.json()
+    items = []
+    for group in data["groups"]:
+        items.extend(group["items"])
+
+    # recent phase capped to max_chars // 3 = 200.
+    # ranked phase gets the rest.
+    assert len(items) == 2
+    recent_item = next(i for i in items if i["object_id"] == "long-recent")
+    ranked_item = next(i for i in items if i["object_id"] == "short-ranked")
+
+    assert recent_item["content_truncated"] is True
+    assert len(recent_item["content"]) <= 200
+    assert ranked_item["content_truncated"] is False
+
+
+@pytest.mark.parametrize("empty_lane", ["recent", "ranked"])
+def test_context_endpoint_single_lane_empty_cases(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+    empty_lane: str,
+) -> None:
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope, RetrievalResult
+    from musubi.types.common import Ok
+
+    async def mock_retrieve(
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        account_access: bool,
+    ) -> object:
+        # If empty_lane is 'ranked', the mode parameter in context.py is 'fast'
+        lane_to_mode = {"recent": "recent", "ranked": "fast"}
+        if query["mode"] == lane_to_mode[empty_lane]:
+            return Ok(value=RetrievalEnvelope(results=[], warnings=()))
+
+        if query["mode"] == "recent":
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="recent-only",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="A brand new provisional thought",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                        )
+                    ],
+                    warnings=(),
+                )
+            )
+        else:
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="ranked-only",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending highly ranked",
+                            score=0.95,
+                            score_components={
+                                "relevance": 0.95,
+                                "recency": 0.8,
+                                "importance": 0.8,
+                                "provenance": 0.1,
+                                "reinforcement": 0,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=8,
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    resp = client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "test blending",
+            "mode": "startup",
+            "max_items": 10,
+        },
+    )
+    data = resp.json()
+    items = []
+    for group in data["groups"]:
+        items.extend(group["items"])
+
+    assert len(items) == 1
+    if empty_lane == "recent":
+        assert items[0]["object_id"] == "ranked-only"
+    else:
+        assert items[0]["object_id"] == "recent-only"
+
+
+def test_context_endpoint_custom_state_filter_applies_to_both_lanes(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope
+    from musubi.types.common import Ok
+
+    captured_queries = []
+
+    async def mock_retrieve(
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        account_access: bool,
+    ) -> object:
+        captured_queries.append(query)
+        return Ok(value=RetrievalEnvelope(results=[], warnings=()))
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "test blending",
+            "mode": "startup",
+            "state_filter": ["archived"],
+        },
+    )
+
+    recent_query = captured_queries[0]
+    fast_query = captured_queries[1]
+
+    assert recent_query["state_filter"] == ["archived"]
+    assert fast_query["state_filter"] == ["archived"]
+
+
+def test_context_endpoint_preserves_explicit_empty_state_filter(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope
+
+    captured_queries: list[dict[str, object]] = []
+
+    async def mock_retrieve(**kwargs: object) -> object:
+        captured_queries.append(kwargs["query"])  # type: ignore[arg-type]
+        return Ok(value=RetrievalEnvelope(results=[], warnings=()))
+
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    response = client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "explicit empty filter",
+            "state_filter": [],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [query["state_filter"] for query in captured_queries] == [[], []]
+
+
 def test_context_endpoint_returns_grouped_server_ranked_pack(
     client: TestClient,
     valid_token: str,

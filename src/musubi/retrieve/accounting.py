@@ -1,4 +1,4 @@
-"""RET-002 / Issue #500 — final-delivery access accounting.
+"""RET-002 / #500 + RET-008 / #502 — final-delivery access accounting, concurrency-safe.
 
 The single seam that records "this stored row was actually delivered to a caller." It runs
 ONCE, at the final retrieval boundary (``orchestration.retrieve``, immediately before
@@ -8,34 +8,38 @@ see the ``bump_access=False`` sites in ``deep._hydrate_one``).
 
 Accountable planes are those whose type carries ``access_count`` — episodic, curated, concept
 (all extend ``MemoryObject``). artifact and thought extend ``MusubiObject`` and intentionally
-lack the field, so their delivered rows are a deliberate, tested no-op. Giving them the field
-is a schema change, out of RET-002 scope.
+lack the field, so their delivered rows are a deliberate, tested no-op.
 
-Concurrency: the increment is a batched read-modify-write (one scroll + one batch write per
-accountable collection), NOT atomic — two concurrent retrievals of the same row can lose an
-increment. This slice preserves the existing RMW semantics; true concurrent-counter safety is
-tracked separately as Issue #502 and is deliberately NOT solved here.
+**Concurrency (RET-008 / #502).** The increment goes through the shared fenced per-record lease
+(:func:`musubi.store.access_lease.lease_increment_access`), so concurrent deliveries lose no
+increment under real parallelism (multiple workers/processes, a future async client, or a
+concurrent cross-process writer). Lease exhaustion is FAIL-LOUD: it raises, and
+``orchestration.retrieve`` normalizes it to a typed ``Err`` (and ``/v1/context`` to an INTERNAL
+APIError). Within a single event loop the synchronous Qdrant client blocks the loop across a whole
+read→write, so same-loop deliveries already serialize (guarded by a unit test); the lease is for
+real cross-thread/-process/-worker parallelism.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from qdrant_client import QdrantClient, models
+from qdrant_client import QdrantClient
 
+from musubi.store.access_lease import lease_increment_access
 from musubi.store.names import collection_for_plane
-from musubi.types.common import utc_now
 
 #: Planes whose type (``MemoryObject``) carries an ``access_count`` field.
 ACCOUNTABLE_PLANES = frozenset({"episodic", "curated", "concept"})
 
 
 async def account_delivered(client: QdrantClient, results: list[Any]) -> None:
-    """Account each delivered row exactly once, batched per accountable collection.
+    """Account each delivered row exactly once, concurrency-safe and batched per collection.
 
-    ``results`` is the finalized delivered list — already deduped/sorted/limited — so a single
-    pass here is exactly-once by construction. Rows on non-accountable planes (artifact/thought)
-    are skipped. Does not mutate ``results``.
+    ``results`` is the finalized delivered list — already deduped/sorted/limited. Rows on
+    non-accountable planes (artifact/thought) are skipped. Does not mutate ``results``. Raises
+    :class:`~musubi.store.access_lease.AccessLeaseExhausted` if lease contention cannot be resolved
+    within the retry budget (fail-loud — the caller finalizes it as a typed error).
     """
     by_plane: dict[str, set[tuple[str, str]]] = {}
     for row in results:
@@ -45,53 +49,8 @@ async def account_delivered(client: QdrantClient, results: list[Any]) -> None:
         if plane in ACCOUNTABLE_PLANES and object_id and namespace:
             by_plane.setdefault(plane, set()).add((namespace, object_id))
 
-    if not by_plane:
-        return
-
-    now_str = utc_now().isoformat().replace("+00:00", "Z")
-
     for plane, pairs in by_plane.items():
-        collection = collection_for_plane(plane)
-        # One batched READ, scoped to the EXACT delivered (namespace, object_id) pairs — the
-        # codebase's tenant-scoping pattern (raw_lookup._by_id), not object_id alone. A point whose
-        # stored namespace differs from a delivered row's is never touched. `should` = OR over the
-        # per-pair `must` (namespace AND object_id); still ONE scroll + ONE write per collection.
-        records, _ = client.scroll(
-            collection_name=collection,
-            scroll_filter=models.Filter(
-                should=[
-                    models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="namespace", match=models.MatchValue(value=ns)
-                            ),
-                            models.FieldCondition(
-                                key="object_id", match=models.MatchValue(value=oid)
-                            ),
-                        ]
-                    )
-                    for ns, oid in pairs
-                ]
-            ),
-            limit=len(pairs),
-            with_payload=True,
-            with_vectors=False,
-        )
-        updates = [
-            models.SetPayloadOperation(
-                set_payload=models.SetPayload(
-                    payload={
-                        "access_count": (record.payload or {}).get("access_count", 0) + 1,
-                        "last_accessed_at": now_str,
-                    },
-                    points=[record.id],
-                )
-            )
-            for record in records
-        ]
-        # One batched WRITE per collection — never N+1.
-        if updates:
-            client.batch_update_points(collection_name=collection, update_operations=updates)
+        await lease_increment_access(client, collection_for_plane(plane), pairs)
 
 
 __all__ = ["ACCOUNTABLE_PLANES", "account_delivered"]
