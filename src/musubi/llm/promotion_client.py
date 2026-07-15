@@ -3,15 +3,14 @@
 Contract differences from :class:`musubi.llm.HttpxOllamaClient`:
 
 - **Failure modes raise** rather than return ``None``. The promotion
-  sweep wraps each render in its own ``try/except`` and records a
-  ``promotion_rejection`` with the error message — silent ``None`` at
-  this layer would be consumed as "rendering succeeded with empty
-  content" which is strictly worse than a loud failure.
+  sweep records explicit content-policy rejection while leaving transient
+  transport and malformed-envelope failures retryable. Silent ``None`` at
+  this layer would be consumed as "rendering succeeded with empty content".
 - **Validation is in the Protocol's dataclass** (``PromotionRender``
   has its own ``model_validator`` that enforces H2 presence and
-  rejects AI-disclaimer strings). On validation failure we re-raise
-  :class:`pydantic.ValidationError` as a :class:`ValueError` so the
-  sweep's rejection reason string reads cleanly.
+  rejects AI-disclaimer strings). Validated-body policy failures become
+  :class:`PromotionPolicyError`; malformed upstream envelopes remain
+  transient :class:`ValueError` failures.
 
 A separate class (rather than another method on ``HttpxOllamaClient``)
 keeps the two Protocol contracts — outage-returns-None for maturation
@@ -29,7 +28,7 @@ from typing import Any
 import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from musubi.lifecycle.promotion import PromotionRender
+from musubi.lifecycle.promotion import PromotionPolicyError, PromotionRender
 
 log = logging.getLogger(__name__)
 
@@ -130,7 +129,7 @@ class HttpxPromotionClient:
                 sections=wire.sections,
             )
         except ValidationError as exc:
-            raise ValueError(f"promotion-render body rejected: {exc}") from exc
+            raise PromotionPolicyError(f"promotion-render body rejected: {exc}") from exc
 
     async def _chat(self, prompt: str) -> str:
         # Pass the Pydantic-derived JSON Schema as `format` to engage
