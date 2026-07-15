@@ -1,0 +1,25 @@
+owner: cowork-tama
+branch: slice/ret-012-cross-plane-ranking
+claimed: 2026-07-15
+worktree: /tmp/ret012/wt
+base: fc05c7e (live origin/main, fast-forwarded from 2637e87; 3 commits behind → 0 behind)
+scope: RET-012 cross-plane ranking globally comparable (Issue #512) — tests-first slice
+  (zero src in this commit). 8 acceptance tests (4 strict RED discriminating + 4 GREEN
+  preservation guards) added in tests/retrieve/test_ret012_cross_plane_ranking.py.
+  Implementation (single post-fanout calibration function in scoring.py, the seam call
+  in orchestration.py, the two optional raw fields on RetrievalResult, the deterministic
+  -score+object_id+plane sort key) lands in a follow-up commit after the test contract
+  is accepted.
+authorization: Yua (lane assignment 2026-07-15T07:13:35, design ACK with binding
+  corrections: working-set global max; cross-encoder sigmoid untouched; deterministic
+  object_id then plane tie-break; raw fields on internal RetrievalResult only; pre-dedup
+  calibration not post-dedup; test assertion on global relevance ratio/order and final
+  rank not final-score margin; eight tests not ten; owner cowork-tama; Issue #512 left
+  unassigned due to GraphQL `Could not resolve to a user or bot with the login
+  'minimax-m3'` on `gh issue edit 512 --add-assignee minimax-m3`).
+open-defects: Issue #512 assignee resolution (org-admin follow-up; not a block on the
+  slice).
+second-reader: yua; acceptance: yua.
+forbidden: any src/musubi/** change in this commit; any production code edit before
+  Yua's next ACK. The 4 RED tests are RED (will fail against the current main) and
+  that is expected; the seam implementation lands in a follow-up commit.
