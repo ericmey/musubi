@@ -102,19 +102,7 @@ async def context_pack(
         if shape_err is not None:
             raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
 
-    pattern_had_wildcards = any("*" in ns for ns, _ in targets)
     targets = _expand_wildcard_targets(qdrant, targets)
-    if pattern_had_wildcards and not targets:
-        return build_context_pack(
-            [],
-            ContextPackQuery(
-                query_text=body.query_text,
-                mode=body.mode,
-                max_items=body.max_items,
-                max_chars=body.max_chars,
-                include_history=body.include_history,
-            ),
-        )
 
     policy_result = enforce_namespace_policy(
         context,

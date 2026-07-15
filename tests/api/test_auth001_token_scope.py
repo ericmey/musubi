@@ -190,6 +190,34 @@ def test_context_omitted_namespace_spans_non_excluded_authorized_namespaces(
     assert "eric/salesai/episodic" not in namespaces
 
 
+def test_context_empty_wildcard_still_flows_through_namespace_policy(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
+) -> None:
+    from tests.api.conftest import mint_token
+
+    token = mint_token(api_settings, scopes=["*/*/*:r"], presence="eric/command-chair")
+    _patch_auth(monkeypatch, ("*/*/*:r",), subject="eric", presence="eric/command-chair")
+    monkeypatch.setattr("musubi.api.routers.context._expand_wildcard_targets", lambda *_args: [])
+
+    observed: list[list[tuple[str, str]]] = []
+
+    def record_policy(*_args: Any, targets: list[tuple[str, str]], **_kwargs: Any) -> Ok[Any]:
+        observed.append(targets)
+        return Ok(value=[])
+
+    monkeypatch.setattr("musubi.api.routers.context.enforce_namespace_policy", record_policy)
+
+    res = client.post(
+        "/v1/context",
+        json={"namespace": "eric/*", "query_text": "nothing stored"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 200
+    assert observed == [[]]
+    assert res.json()["groups"] == []
+
+
 def test_salesai_cannot_be_reenabled_by_empty_settings_override(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
