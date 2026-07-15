@@ -86,8 +86,11 @@ async def thought_history(
     thoughts_plane: ThoughtsPlane = Depends(get_thoughts_plane),
     settings: Settings = Depends(get_settings_dep),
 ) -> ThoughtListResponse:
-    """First-cut: history is a namespace scroll. Semantic search will
-    land once slice-retrieval-fast wires its dense path through the API."""
+    """Return presence-scoped thought history from the namespace scroll.
+
+    Semantic search remains a future dense-path integration; this route's
+    current scroll still enforces the requested presence boundary.
+    """
     _check_body_scope(request, body.namespace, settings)
     thoughts = await thoughts_plane.history_scroll(
         namespace=body.namespace,
