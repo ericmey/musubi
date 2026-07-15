@@ -11,6 +11,7 @@ from typing import Any
 from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
+from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
 from musubi.retrieve.hybrid import (
     HybridHit,
     HybridSearchResult,
@@ -395,6 +396,8 @@ def _plane_from_namespace(payload: dict[str, Any]) -> str:
     return "episodic"
 
 
+
+
 def _snippet(payload: dict[str, Any]) -> tuple[str, bool, int]:
     """Return (snippet, content_truncated, content_length).
 
@@ -405,7 +408,9 @@ def _snippet(payload: dict[str, Any]) -> tuple[str, bool, int]:
     content = str(payload.get("content") or payload.get("title") or "")
     original_length = len(content)
     truncated = original_length > 200
-    return content[:200], truncated, original_length
+    if not truncated:
+        return content, False, original_length
+    return truncate_grapheme_safe(content, max_chars=200), True, original_length
 
 
 def _lineage_summary(payload: dict[str, Any]) -> dict[str, Any]:

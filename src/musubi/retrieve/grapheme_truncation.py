@@ -4,8 +4,8 @@ import regex
 def truncate_grapheme_safe(text: str, max_chars: int) -> str:
     r"""Truncate text safely at grapheme cluster boundaries.
 
-    Python's native `text[:max_chars]` slices by unicode codepoints. This yields valid Unicode 
-    but can bisect extended graphemes (like family groups, ZWJ sequences, regional indicators, 
+    Python's native `text[:max_chars]` slices by unicode codepoints. This yields valid Unicode
+    but can bisect extended graphemes (like family groups, ZWJ sequences, regional indicators,
     or combined diacritics) resulting in a semantically broken glyph.
 
     This uses the PCRE `\X` grapheme cluster matcher from the `regex` package to step through
@@ -34,7 +34,7 @@ def truncate_grapheme_safe(text: str, max_chars: int) -> str:
         result.append(grapheme)
         current_codepoint_len += grapheme_len
 
-    truncated_str = "".join(result).rstrip()
+    truncated_str = "".join(result)
 
     if max_chars <= 3:
         return truncated_str
