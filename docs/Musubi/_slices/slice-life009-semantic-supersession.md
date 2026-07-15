@@ -178,8 +178,12 @@ existing behavior):
 15. `test_existing_no_predecessor_branch_still_returns_none` — GREEN
 16. `test_existing_both_sides_of_link_still_set` — GREEN
 
-15 tests total. The first commit (slice doc + spec + lock + test
-file) is tests-only; the seam impl is a follow-up commit.
+16 tests total (15 acceptance + 1 call-shape discriminator; the
+slice doc + spec + lock + test file are the first commit; the
+seam impl + production wiring are subsequent commits; the
+close-out commit re-merges origin/main and tightens the call
+shape). The test file's module docstring tracks the 16-bullet
+Test Contract.
 
 ## Issue #532 assignment path (work-log audit trail)
 
@@ -231,9 +235,9 @@ follow-up action, not a block on the slice.
   ``status:in-progress``; assignee add failed with the same
   ``minimax-m3`` GraphQL error; logged as a non-blocking
   open-defect in the slice doc.
-- **Test contract.** 15 tests, bounded per AGENTS.md Closure
-  Rule: 11 RED discriminating + 2 GREEN preservation + 2 RED
-  structural.
+- **Test contract.** 16 tests, bounded per AGENTS.md Closure
+  Rule: 13 RED discriminating + 2 GREEN preservation + 1
+  RED→GREEN call-shape discriminator (close-out add).
 
 ## Out of scope (NOT closed by this slice)
 

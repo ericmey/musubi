@@ -10,7 +10,10 @@ alone is never sufficient.
 
 The first contract is bounded to sixteen tests in this file:
 
-    13 RED discriminating tests   (currently failing under live code)
+    13 RED discriminating tests   (RED against the OLD substring
+                                  heuristic; GREEN against the new
+                                  semantic + topic + abstention
+                                  seam)
     2 GREEN preservation guards  (passing under live code; the seam
                                   must not break them)
     1 RED→GREEN call-shape discriminator (close-out add: seam makes
@@ -249,17 +252,18 @@ async def _seed_provisional(
 async def test_paraphrase_supersession(qdrant: QdrantClient, ns: str) -> None:
     """Paraphrase supersession: high semantic similarity with
     different wording. The OLD substring logic would NOT match."""
+    # The seam embeds the post-hint (lowercased, "Update:" stripped)
+    # text of the needle and the candidate's actual content. Set the
+    # embedder's map to the EXACT texts the seam will look up:
+    # - needle: "today's meeting starts at 2pm" (after stripping "Update: ")
+    # - candidate: "the meeting is at 2pm" (the actual seeded content)
+    # Both vectors are close to the high-similarity meeting vector so
+    # cosine ≥ 0.88; the OLD substring logic would not have matched.
     embedder = _ControlledEmbedder(
         {
-            "the meeting is at 2pm today": _vec_high_sim_to_meeting_2pm(),
+            "today's meeting starts at 2pm": _vec_high_sim_to_meeting_2pm(),
+            "the meeting is at 2pm": _vec_high_sim_to_meeting_2pm(),
         }
-    )
-    # The needle is "today's meeting starts at 2pm" (after stripping
-    # "Update:"). Give it an explicit vector so the cosine with the
-    # candidate's "the meeting is at 2pm today" vector is high.
-    embedder.set(
-        "Update: today's meeting starts at 2pm",
-        [math.cos(0.10), math.sin(0.10)],
     )
     plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     predecessor = await _seed_matured(
