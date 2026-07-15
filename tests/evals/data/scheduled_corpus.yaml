@@ -45,47 +45,78 @@ documents:
   - {key: splade-sparse, plane: episodic, state: matured, content: "SPLADE-v3 produces the sparse lexical embeddings for retrieval, expanding each token into a weighted term vector for the sparse channel."}
   - {key: dense-model-trap, plane: episodic, state: matured, content: "The model that turns text into dense vectors is BGE-M3; it makes the dense semantic embeddings, a different channel than the sparse lexical one."}
 
+  # 9. deep procedural — what the deep path adds over fast (ordinary; natural fast-path distractor)
+  - {key: deep-path-adds, plane: episodic, state: matured, content: "Beyond fast search, the deep retrieval path reranks the hybrid candidates with a cross-encoder and can expand the query — the extra quality work the fast path deliberately skips."}
+  - {key: fast-path-note, plane: episodic, state: matured, content: "The fast retrieval path returns the hybrid results directly and skips reranking to stay inside its latency budget on the fast path."}
+
+  # 10. deep provisional immediate recall — a payload index just added this session (ordinary)
+  - {key: index-added-fresh, plane: episodic, state: provisional, content: "This session we added a payload index on the namespace field so scoped scans run faster; that index is live on the collection now."}
+  - {key: index-spec-note, plane: episodic, state: matured, content: "The qdrant collection's payload index configuration and its vector params are documented in the store spec for reference."}
+
 queries:
+  # -- 5 fast --
   - id: q-livekit-restart
     text: "how do I restart the livekit voice agent after a deploy"
     mode: fast
+    behavior: procedural
     relevant:
       - {key: livekit-restart, relevance: 3}
       - {key: livekit-arch, relevance: 1}
   - id: q-bring-bot-online
     text: "how do I bring the voice bot back online"
     mode: fast
+    behavior: semantic-paraphrase
     relevant:
       - {key: agent-recover, relevance: 3}
   - id: q-token-current
     text: "is the presence token current after this session's rotation"
     mode: fast
+    behavior: provisional-recall
     relevant:
       - {key: token-current, relevance: 3}
-  - id: q-latency-recall
-    text: "how do I trade query latency for better recall on long-tail searches"
-    mode: deep
-    relevant:
-      - {key: ef-search, relevance: 3}
-      - {key: prefetch-related, relevance: 1}
   - id: q-vault-write
     text: "should we sync the vault on every write event"
     mode: fast
+    behavior: correction-negation
     relevant:
       - {key: vault-close-sync, relevance: 3}
+  - id: q-sparse-model
+    text: "which model produces the sparse lexical embeddings"
+    mode: fast
+    behavior: semantic-paraphrase
+    relevant:
+      - {key: splade-sparse, relevance: 3}
+  # -- 5 deep --
+  - id: q-latency-recall
+    text: "how do I trade query latency for better recall on long-tail searches"
+    mode: deep
+    behavior: rare-lexical
+    relevant:
+      - {key: ef-search, relevance: 3}
+      - {key: prefetch-related, relevance: 1}
   - id: q-curated-enter
     text: "what makes a memory eligible to enter curated knowledge"
     mode: deep
+    behavior: semantic-paraphrase
     relevant:
       - {key: promotion-rule, relevance: 3}
   - id: q-revert-deploy
     text: "walk me through reverting a bad musubi-core deploy"
     mode: deep
+    behavior: procedural
     relevant:
       - {key: rollback-runbook, relevance: 3}
       - {key: deploy-general, relevance: 1}
-  - id: q-sparse-model
-    text: "which model produces the sparse lexical embeddings"
-    mode: fast
+  - id: q-deep-path
+    text: "what does the deep retrieval path add on top of the fast path"
+    mode: deep
+    behavior: procedural
     relevant:
-      - {key: splade-sparse, relevance: 3}
+      - {key: deep-path-adds, relevance: 3}
+      - {key: fast-path-note, relevance: 1}
+  - id: q-index-added
+    text: "did we just add a payload index to the qdrant collection this session"
+    mode: deep
+    behavior: provisional-recall
+    relevant:
+      - {key: index-added-fresh, relevance: 3}

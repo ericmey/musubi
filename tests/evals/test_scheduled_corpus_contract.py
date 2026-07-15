@@ -54,10 +54,27 @@ def _load() -> ScheduledCorpus:
 # --- structural requirements ----------------------------------------------------------------------
 
 
-def test_corpus_has_enough_graded_queries_across_modes() -> None:
+_REQUIRED_BEHAVIORS = {
+    "procedural",
+    "semantic-paraphrase",
+    "provisional-recall",
+    "rare-lexical",
+    "correction-negation",
+}
+
+
+def test_corpus_has_at_least_five_queries_per_mode_and_all_behaviors() -> None:
     corpus = _load()
-    assert len(corpus.queries) >= 8, "need >= 8 graded queries"
-    assert {"fast", "deep"} <= {q.mode for q in corpus.queries}, "must cover fast AND deep"
+    from collections import Counter
+
+    mode_counts = Counter(q.mode for q in corpus.queries)
+    assert mode_counts["fast"] >= 5 and mode_counts["deep"] >= 5, (
+        f">= 5 graded queries per measured mode; got {dict(mode_counts)}"
+    )
+    behaviors = {q.behavior for q in corpus.queries}
+    assert behaviors >= _REQUIRED_BEHAVIORS, (
+        f"missing behavior coverage: {_REQUIRED_BEHAVIORS - behaviors}"
+    )
     for query in corpus.queries:
         targets = [ref for ref in query.relevant if ref.relevance == 3]
         assert len(targets) == 1, f"query {query.id!r} needs exactly one relevance-3 target"
@@ -137,8 +154,11 @@ def test_contract_rejects_a_verbatim_corpus_via_structural_and_naive_checks() ->
     """A corpus where every query is verbatim its target (and there are too few queries) must be
     rejected: too few queries, all near-verbatim, and a naive ranker clears it."""
     corpus = _VERBATIM_CORPUS
-    # too few queries
-    assert not len(corpus.queries) >= 8
+    # too few queries per mode (3 total, not the required >= 5 fast / >= 5 deep)
+    from collections import Counter
+
+    mode_counts = Counter(q.mode for q in corpus.queries)
+    assert mode_counts["fast"] < 5 or mode_counts["deep"] < 5
     # all near-verbatim (query tokens fully cover the target)
     docs = {d.key: d.content for d in corpus.documents}
     verbatim = sum(

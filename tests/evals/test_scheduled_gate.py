@@ -214,7 +214,7 @@ def test_scheduled_seeded_gate_full_mechanism_local() -> None:
         for metrics in by_mode.values():
             assert {"ndcg@10", "mrr", "recall@20", "p@1"} <= set(metrics)
         # Per-query attribution is present (Yua requires per-query, not only aggregates).
-        assert len(result["per_query"]) == 8
+        assert len(result["per_query"]) == 10
         assert all({"id", "mode", "metrics"} <= set(row) for row in result["per_query"])
     finally:
         # Teardown ran in the gate's finally; the run namespace must be empty.

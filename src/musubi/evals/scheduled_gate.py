@@ -57,6 +57,10 @@ class CorpusQuery(BaseModel):
     id: str = Field(min_length=1)
     text: str = Field(min_length=1)
     mode: str = Field(min_length=1)
+    # The retrieval behavior this query exercises (procedural, semantic-paraphrase, provisional-recall,
+    # rare-lexical, correction-negation, ...). The corpus-discrimination contract requires full
+    # behavior coverage. Optional so unrelated test fixtures need not set it.
+    behavior: str = ""
     relevant: list[GradedRef] = Field(min_length=1)
 
 
