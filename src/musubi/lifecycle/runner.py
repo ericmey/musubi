@@ -490,6 +490,7 @@ async def _main_async() -> None:
         ollama=ollama,
         cursor=cursor,
         lock_dir=lock_dir,
+        embedder=embedder,
     )
     from musubi.planes.artifact.indexer import ArtifactIndexer
     from musubi.planes.artifact.plane import ArtifactPlane
