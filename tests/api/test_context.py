@@ -211,9 +211,6 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
     assert "recent-prov-1" in ids  # zero-overlap provisional survived
     assert "overlap-1" in ids
     assert "ranked-1" in ids  # strong established survived
-    assert (
-        "same-id-diff-namespace-1" in ids
-    )  # composite identity means BOTH survive if we included both namespaces (wait, we didn't authorize other namespace, but if it was in the envelope it shouldn't collapse. We'll check length)
     assert "suppress-history" not in ids  # include_history=False
 
     overlap_item = next(i for i in items if i["object_id"] == "overlap-1")
@@ -221,7 +218,139 @@ def test_context_endpoint_blends_recent_provisional_with_established_ranked(
         overlap_item["content"] == "test blending Ranked duplicate has DIFFERENT and richer content"
     )
 
+    # 1. In the composite identity scenario, assert there are EXACTLY TWO surfaced items with object_id same-id-diff-namespace-1
+    # and assert their (namespace,plane) pairs are the two expected distinct identities
+    composite_items = [i for i in items if i["object_id"] == "same-id-diff-namespace-1"]
+    assert len(composite_items) == 2
+    composite_identities = {(i["namespace"], i["plane"]) for i in composite_items}
+    assert composite_identities == {
+        ("other/namespace/episodic", "episodic"),
+        ("eric/claude-code/episodic", "episodic"),
+    }
+
     assert data["warnings"] == ["TEI_DENSE_UNAVAILABLE", "OLLAMA_TIMEOUT"]
+
+
+def test_context_endpoint_max_items_mix_quota(
+    client: TestClient,
+    valid_token: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guarantee max_items=2 yields exactly one recent and one ranked item."""
+    import musubi.api.routers.context as ctx_router
+    from musubi.retrieve.orchestration import RetrievalEnvelope, RetrievalResult
+    from musubi.types.common import Ok
+
+    async def mock_retrieve(
+        client: object,
+        embedder: object,
+        reranker: object,
+        query: dict[str, object],
+        account_access: bool,
+    ) -> object:
+        if query["mode"] == "recent":
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="recent-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="recent first",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                            payload={"staleness": "current"},
+                        ),
+                        RetrievalResult(
+                            object_id="recent-2",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="recent second",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                            payload={"staleness": "current"},
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+        else:
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="ranked-1",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending highly ranked",
+                            score=0.95,
+                            score_components={
+                                "relevance": 0.95,
+                                "recency": 0.8,
+                                "importance": 0.8,
+                                "provenance": 0.1,
+                                "reinforcement": 0,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=8,
+                        ),
+                        RetrievalResult(
+                            object_id="ranked-2",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="test blending second ranked",
+                            score=0.90,
+                            score_components={
+                                "relevance": 0.90,
+                                "recency": 0.5,
+                                "importance": 0.8,
+                                "provenance": 0.1,
+                                "reinforcement": 0,
+                            },
+                            lineage={},
+                            state="matured",
+                            importance=7,
+                        ),
+                    ],
+                    warnings=(),
+                )
+            )
+
+    monkeypatch.setattr(ctx_router, "run_orchestration_retrieve", mock_retrieve)
+
+    async def mock_account_delivered(*args: object, **kwargs: object) -> None:
+        pass
+
+    monkeypatch.setattr(ctx_router, "account_delivered", mock_account_delivered)
+
+    resp = client.post(
+        "/v1/context",
+        headers={"Authorization": f"Bearer {valid_token}"},
+        json={
+            "namespace": "eric/claude-code/episodic",
+            "planes": ["episodic"],
+            "query_text": "test blending",
+            "mode": "startup",
+            "max_items": 2,
+        },
+    )
+    data = resp.json()
+    items = []
+    for group in data["groups"]:
+        items.extend(group["items"])
+
+    assert len(items) == 2
+    object_ids = {i["object_id"] for i in items}
+    assert object_ids == {"recent-1", "ranked-1"}
 
 
 def test_context_endpoint_max_chars_mix_quota(
@@ -323,10 +452,12 @@ def test_context_endpoint_max_chars_mix_quota(
     assert ranked_item["content_truncated"] is False
 
 
+@pytest.mark.parametrize("empty_lane", ["recent", "ranked"])
 def test_context_endpoint_single_lane_empty_cases(
     client: TestClient,
     valid_token: str,
     monkeypatch: pytest.MonkeyPatch,
+    empty_lane: str,
 ) -> None:
     import musubi.api.routers.context as ctx_router
     from musubi.retrieve.orchestration import RetrievalEnvelope, RetrievalResult
@@ -339,8 +470,31 @@ def test_context_endpoint_single_lane_empty_cases(
         query: dict[str, object],
         account_access: bool,
     ) -> object:
-        if query["mode"] == "recent":
+        # If empty_lane is 'ranked', the mode parameter in context.py is 'fast'
+        lane_to_mode = {"recent": "recent", "ranked": "fast"}
+        if query["mode"] == lane_to_mode[empty_lane]:
             return Ok(value=RetrievalEnvelope(results=[], warnings=()))
+
+        if query["mode"] == "recent":
+            return Ok(
+                value=RetrievalEnvelope(
+                    results=[
+                        RetrievalResult(
+                            object_id="recent-only",
+                            namespace="eric/claude-code/episodic",
+                            plane="episodic",
+                            snippet="A brand new provisional thought",
+                            score=1.0,
+                            score_components={},
+                            lineage={},
+                            state="provisional",
+                            importance=5,
+                            provenance_score=1.0,
+                        )
+                    ],
+                    warnings=(),
+                )
+            )
         else:
             return Ok(
                 value=RetrievalEnvelope(
@@ -389,8 +543,12 @@ def test_context_endpoint_single_lane_empty_cases(
     items = []
     for group in data["groups"]:
         items.extend(group["items"])
+
     assert len(items) == 1
-    assert items[0]["object_id"] == "ranked-only"
+    if empty_lane == "recent":
+        assert items[0]["object_id"] == "ranked-only"
+    else:
+        assert items[0]["object_id"] == "recent-only"
 
 
 def test_context_endpoint_custom_state_filter_applies_to_both_lanes(
