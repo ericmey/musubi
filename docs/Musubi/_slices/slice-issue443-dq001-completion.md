@@ -26,9 +26,15 @@ Complete DQ-001 requirements (Issue #443). Replace codepoint slicing in fast/rec
 - Issue #443
 
 ## Owned paths
-- `src/musubi/retrieve/orchestration.py`
+- `docs/Musubi/13-decisions/0037-grapheme-safe-truncation-dependency.md`
 - `src/musubi/retrieve/context_pack.py`
+- `src/musubi/retrieve/fast.py`
+- `src/musubi/retrieve/grapheme_truncation.py`
+- `src/musubi/retrieve/orchestration.py`
+- `src/musubi/retrieve/recent.py`
 - `tests/retrieve/test_dq001_truncation.py`
+- `pyproject.toml`
+- `uv.lock`
 
 ## Forbidden paths
 - Renaming `content` to `snippet` in API responses.

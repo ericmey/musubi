@@ -40,4 +40,3 @@ It will **never** alter the internal whitespace or perform secondary normalizati
 - **Positive:** Terminal users and downstream LLM contexts will never receive fractured visual characters or corrupted emoji modifiers.
 - **Positive:** We avoid adopting a heavy bespoke library (like `grapheme` or `uniseg`) by using a library (`regex`) that solves multiple potential future parsing needs.
 - **Negative:** Addition of a compiled third-party C-extension dependency (`regex`) to the core environment, adding slight overhead to the environment installation.
-
