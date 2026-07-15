@@ -20,10 +20,7 @@ retries, bypass paths, and long-term operation. Zero source until the red contra
 
 ## The gap (verified against `src/musubi/lifecycle/transitions.py` + the plane layer)
 
-`transition()` mutates Qdrant FIRST (`set_payload`, l.252-256) then records the audit (l.267-268) — two
-failure/crash windows: mutation-without-audit, and `expected_version` is warn-only "last writer wins"
-(l.180-187). C6 durable-on-accept closes neither. **And `transitions.py` is not the only mutation path
-(correction G).**
+`transition()` delegates the mutation + audit to `LifecycleTransitionCoordinator.transition(intent)` (in `src/musubi/lifecycle/coordinator.py`); the seam itself no longer calls `set_payload` directly. The coordinator owns the durable-intent outbox (S2 admit / S3 conditional apply + readback / S4 reconcile) and emits a single `LifecycleEvent` on finalize, so the pre-coordinator failure window (mutation-without-audit) is closed by the outbox. `expected_version` is hard-fenced (LIFE-010 transition hard fence): the seam returns `Err(version_fence_violation)` BEFORE legality or coordinator.apply, so no mutation, no event, no version bump on a stale write. **The earlier C6 durable-on-accept proposal alone would not have closed either gap; the current coordinator/outbox + LIFE-010 hard fence does.** **And `transitions.py` is not the only mutation path (correction G).**
 
 ## Fork rulings (Yua 2026-07-13)
 
