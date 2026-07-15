@@ -484,6 +484,27 @@ def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_d
             }
         )
 
+    # Wait for the freshly-seeded rows to become queryable before measuring — otherwise both hybrid
+    # and dense retrieve nothing (the 0.0/0.0 the first real x86 run showed). Bounded; fail loud.
+    total_seeded = 4 * len(groups)  # one answer + three distractors per group
+    for _attempt in range(60):
+        records, _ = backends.client.scroll(
+            collection_name=collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
+                ]
+            ),
+            limit=10_000,
+            with_payload=["object_id"],
+            with_vectors=False,
+        )
+        if len({(r.payload or {}).get("object_id") for r in records}) >= total_seeded:
+            break
+        time.sleep(0.5)
+    else:
+        raise AssertionError(f"BEIR corpus never became visible ({total_seeded} rows expected)")
+
     async def search(query: dict[str, Any], hybrid: bool) -> list[str]:
         result = await hybrid_search(
             backends.client,
