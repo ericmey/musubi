@@ -323,7 +323,6 @@ async def test_idempotent_replay_reuses_existing_vault_object_id(deps: Any) -> N
 
     # Execute the replay
     res = await _promote_concept(deps, c)
-    print("Promote result:", res)
 
     # 1. Concept's promoted_to MUST match the pre-existing ID
     readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
@@ -413,7 +412,6 @@ async def test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists(deps: A
 
     # Execute the replay
     res = await _promote_concept(deps, c)
-    print("Promote result:", res)
 
     # All assertions hold identity consistency
     readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
@@ -482,9 +480,6 @@ async def test_idempotent_replay_adopts_persisted_qdrant_identity(deps: Any) -> 
     )
     await deps.curated_plane.create(memory)
 
-    # Let promotion run normally.
-    # It will generate a new KSUID for the vault file, but curated_plane.create()
-    # will return the existing row based on namespace/path.
     await _promote_concept(deps, c)
 
     # Target invariant: returned persisted.object_id == final vault frontmatter object_id == concept.promoted_to
@@ -514,6 +509,73 @@ async def test_idempotent_replay_adopts_persisted_qdrant_identity(deps: Any) -> 
     assert len(res) == 1
 
 
+@pytest.mark.asyncio
+async def test_idempotent_replay_fails_closed_on_unrelated_lineage(deps: Any) -> None:
+    from musubi.lifecycle.promotion import _promote_concept, compute_path
+    from musubi.store import collection_for_plane
+    from musubi.types.common import generate_ksuid, utc_now
+    from musubi.types.curated import CuratedKnowledge
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+
+    path_str = compute_path(c)
+
+    # Preseed Qdrant with DIFFERENT object_id, same namespace/vault_path/body_hash
+    # BUT DIFFERENT promoted_from
+    existing_id = str(generate_ksuid())
+    memory = CuratedKnowledge(
+        object_id=existing_id,
+        namespace=c.namespace,
+        vault_path=path_str,
+        body_hash="f675f346623d23fd92cb92f670c7189b0f2626b4583d6e2a43992ab692682f9d",
+        title=c.title,
+        content="Body",
+        state="matured",
+        importance=c.importance,
+        promoted_from=generate_ksuid(),  # Different lineage!
+        promoted_at=utc_now(),
+    )
+    await deps.curated_plane.create(memory)
+
+    res = await _promote_concept(deps, c)
+    assert res is False
+
+    # Concept remains matured, promoted_to is None
+    readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback_concept.promoted_to is None
+    assert readback_concept.state == "matured"
+    assert readback_concept.promotion_attempts == 1
+
+    # Vault path must be absent (not overwritten)
+    full_path = deps.vault_writer.vault_root / path_str
+    assert not full_path.exists()
+
+    # No additional curated row is created (only 1 exists, the preseeded one)
+    from qdrant_client.http import models as rest
+
+    qdrant = deps.qdrant
+    res, _ = qdrant.scroll(
+        collection_name=collection_for_plane("curated"),
+        scroll_filter=rest.Filter(
+            must=[
+                rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
+            ]
+        ),
+        limit=10,
+    )
+    assert len(res) == 1
+
+
+@pytest.mark.asyncio
 async def test_idempotent_replay_fails_closed_on_missing_vault_object_id(deps: Any) -> None:
     from musubi.lifecycle.promotion import _promote_concept
     from musubi.types.common import utc_now
@@ -547,11 +609,7 @@ Body"""
     # Execute the replay, it must not blindly generate a new ID, nor should it crash silently.
     # The production rule says CuratedFrontmatter validation will fail and raise PromotionPolicyError.
 
-    # Wait, the production implementation parses the frontmatter. Since `object_id` is None, `fm_obj.object_id` is None.
-    # The production code requires a valid KSUID for object_id during `CuratedFrontmatter` construction.
-    # Let's see if _promote_concept handles it gracefully as False without raising.
-    result = res = await _promote_concept(deps, c)
-    print("Promote result:", res)
+    result = await _promote_concept(deps, c)
     assert result is False
 
     readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
@@ -591,7 +649,6 @@ Body"""
     full_path.write_text(raw_yaml)
 
     result = res = await _promote_concept(deps, c)
-    print("Promote result:", res)
     assert result is False
 
     readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
@@ -645,8 +702,7 @@ async def test_path_conflict_with_same_concept_rewrites_in_place(deps: Any) -> N
     full_path.write_text(dump_frontmatter(fm, "Body"))
 
     # Should not raise
-    res = await _promote_concept(deps, c)
-    print("Promote result:", res)
+    await _promote_concept(deps, c)
 
 
 @pytest.mark.asyncio
@@ -676,8 +732,7 @@ async def test_path_conflict_with_other_concept_writes_sibling(deps: Any) -> Non
     }
     full_path.write_text(dump_frontmatter(fm, "Body"))
 
-    res = await _promote_concept(deps, c)
-    print("Promote result:", res)
+    await _promote_concept(deps, c)
     # The sibling logic in _promote_concept writes to vault_writer, which doesn't
     # actually write to disk in our Fake, but it should succeed without errors.
 
@@ -709,8 +764,7 @@ async def test_path_conflict_with_human_file_writes_sibling_and_logs(deps: Any) 
     }
     full_path.write_text(dump_frontmatter(fm, "Body"))
 
-    res = await _promote_concept(deps, c)
-    print("Promote result:", res)
+    await _promote_concept(deps, c)
 
 
 # Write-log:

@@ -353,9 +353,6 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         except (ValueError, TypeError) as e:
             raise PromotionPolicyError(f"Invalid frontmatter fields: {e}") from e
 
-        # Write to vault
-        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
-
         # Create Qdrant point
         body_hash = hashlib.sha256(render.body.encode("utf-8")).hexdigest()
         try:
@@ -386,7 +383,9 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
                 )
             curated_id = str(persisted.object_id)
             fm_obj = fm_obj.model_copy(update={"object_id": curated_id})
-            deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
+
+        # Write to vault ONCE after identity is validated
+        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
 
         # Transition concept
         result = await deps.concept_plane.transition(

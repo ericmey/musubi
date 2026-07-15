@@ -255,6 +255,7 @@ Replay identity:
 40. `test_idempotent_replay_fails_closed_on_missing_vault_object_id`
 41. `test_idempotent_replay_fails_closed_on_invalid_vault_object_id`
 42. `test_idempotent_replay_adopts_persisted_qdrant_identity`
+43. `test_idempotent_replay_fails_closed_on_unrelated_lineage`
 
 Qdrant:
 
