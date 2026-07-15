@@ -9,16 +9,11 @@ from qdrant_client import models
 from musubi.api.dependencies import get_qdrant_client, get_thoughts_plane
 from musubi.embedding.base import Embedder
 from musubi.planes.thoughts import ThoughtsPlane
-from musubi.store.specs import DENSE_VECTOR_NAME
+from musubi.store.specs import DENSE_SIZE, DENSE_VECTOR_NAME
 
 
-def _expected_dense(text: str) -> list[float]:
-    return [1.0, float((sum(map(ord, text)) % 7) + 1)] + [0.0] * 1022
-
-
-def _expected_stored_dense(text: str) -> list[float]:
-    """Qdrant cosine collections normalize dense vectors at storage."""
-    vector = _expected_dense(text)
+def _expected_unit_dense(text: str) -> list[float]:
+    vector = [1.0, float((sum(map(ord, text)) % 7) + 1)] + [0.0] * (DENSE_SIZE - 2)
     norm = sum(value * value for value in vector) ** 0.5
     return [value / norm for value in vector]
 
@@ -27,7 +22,7 @@ class DummyEmbedder(Embedder):
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         # deterministic non-zero, different from FakeEmbedder
         # Embeds content-dependent vectors to discriminate different content directionally
-        return [_expected_dense(text) for text in texts]
+        return [_expected_unit_dense(text) for text in texts]
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         return [{} for _ in texts]
@@ -91,7 +86,7 @@ def test_thought_send_uses_configured_plane_and_embedder(
     vector = points[0].vector
     assert isinstance(vector, dict)
     assert DENSE_VECTOR_NAME in vector
-    assert vector[DENSE_VECTOR_NAME] == pytest.approx(_expected_stored_dense("hello world"))
+    assert vector[DENSE_VECTOR_NAME] == pytest.approx(_expected_unit_dense("hello world"))
 
     # Assert second distinct content produces distinct vector
     r2 = client.post(
@@ -132,7 +127,7 @@ def test_thought_send_uses_configured_plane_and_embedder(
     assert isinstance(vector2, dict)
     assert DENSE_VECTOR_NAME in vector2
     assert vector2[DENSE_VECTOR_NAME] == pytest.approx(
-        _expected_stored_dense("different length content")
+        _expected_unit_dense("different length content")
     )
     assert vector[DENSE_VECTOR_NAME] != vector2[DENSE_VECTOR_NAME]
 
@@ -151,7 +146,7 @@ def test_thought_read_uses_configured_plane(
     app_factory.dependency_overrides[get_thoughts_plane] = lambda: spy_plane
 
     # First ID raises LookupError, second succeeds
-    async def mock_read(*args: Any, **kwargs: Any) -> None:
+    def mock_read(*args: Any, **kwargs: Any) -> None:
         if kwargs.get("object_id") == "invalid-id":
             raise LookupError("Not found")
         # second call succeeds (does nothing)
@@ -179,7 +174,10 @@ def test_thought_read_uses_configured_plane(
 def test_production_router_has_no_fake_embedder() -> None:
     import pathlib
 
-    src_file = pathlib.Path("src/musubi/api/routers/writes_thoughts.py").read_text()
+    import musubi.api.routers.writes_thoughts as writes_thoughts
+
+    assert writes_thoughts.__file__ is not None
+    src_file = pathlib.Path(writes_thoughts.__file__).read_text()
     assert "FakeEmbedder" not in src_file
 
 
