@@ -226,8 +226,22 @@ def calibrate_global_relevance(
     seam reads) rather than importing ``RetrievalResult`` to avoid a
     circular import with ``orchestration``. The cross-plane call site
     in ``orchestration._retrieve_uncounted`` passes
-    ``list[RetrievalResult]``; tests in ``tests/retrieve/`` can pass any
-    matching object.
+    ``list[RetrievalResult]``; tests in ``tests/retrieve/`` can pass
+    any matching object that exposes the seam's required shape:
+
+      - ``raw_rrf_score`` and ``raw_rerank_score`` attributes
+        (both ``float | None``)
+      - ``score`` attribute (float; only re-derived candidates are
+        modified; passthrough candidates keep their original ``score``)
+      - ``score_components`` attribute, either a ``dict[str, float]``
+        (the wire-side shape, used by ``RetrievalResult``) or any
+        object exposing the ``recency``/``importance``/``provenance``/
+        ``reinforce`` (note: ``reinforce``, not ``reinforcement``)
+        attributes (the ``ScoreComponents`` dataclass shape)
+      - ``model_copy(update=...)`` for pydantic candidates, OR
+        ``dataclasses.replace(...)`` for dataclass candidates (the
+        passthrough branch is the identity and does not require
+        either)
     """
     raw_rrfs = [
         c.raw_rrf_score for c in candidates if getattr(c, "raw_rrf_score", None) is not None

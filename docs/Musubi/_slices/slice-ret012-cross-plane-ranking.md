@@ -126,8 +126,9 @@ must not become maximally relevant merely by being alone.
 
 ## Acceptance
 
-The first contract is bounded to eight tests in
-``tests/retrieve/test_ret012_cross_plane_ranking.py``: four RED
+The first contract is bounded to nine bullets (ten items; bullet 5 is
+parametrized over gather order) in
+``tests/retrieve/test_ret012_cross_plane_ranking.py``: five RED
 discriminating tests, four GREEN preservation guards. Test function
 names transcribe the Test Contract bullets verbatim per the AGENTS.md
 Test Contract Closure Rule.
@@ -149,8 +150,12 @@ Test Contract Closure Rule.
 At handoff, every bullet above is in state 1 (passing test whose name
 transcribes the bullet text verbatim) per the AGENTS.md Closure Rule.
 The first commit on the branch shows the RED / guard evidence: the
-four RED tests fail under current behaviour, the four GREEN guards
-pass. The seam-impl commit flips the four RED to green.
+four RED tests (the original test contract) fail under current
+behaviour, the four GREEN guards pass. The follow-up seam-impl and
+dedup-fix commits flip the RED to green. A fifth RED bullet
+(`test_dedup_equal_score_prefers_lower_plane`, parametrized over
+gather order) was added in response to exact-head review feedback;
+both parametrizations pass after the dedup fix.
 
 ### Discriminating proof
 
@@ -219,7 +224,9 @@ follow-up action, not a block on the slice.
   ``RetrievalResult``). Critical correction: calibrate **before**
   ``best_by_id`` dedup, not after. Test correction: assert global
   relevance ratio / order and final rank, not final-score margin.
-- **Test contract:** 8 tests, 4 RED + 4 GREEN. Bounded to
+- **Test contract:** 9 bullets (10 items; bullet 5 is parametrized over
+  gather order: `curated_first`, `episodic_first`); 5 RED
+  discriminating tests + 4 GREEN preservation guards. Bounded to
   cross-plane ranking only.
 - **Issue claim path:** Issue #512 left unassigned due to GraphQL
   ``replaceActorsForAssignable`` failure on the ``minimax-m3`` login.

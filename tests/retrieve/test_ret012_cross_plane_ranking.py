@@ -10,9 +10,10 @@ each hit's relevance against a single working-set global max BEFORE
 the ``best_by_id`` dedup, then sort by ``(-score, object_id, plane)``
 so cross-plane ordering is deterministic.
 
-The first contract is bounded to eight tests:
+The first contract is bounded to nine bullets (ten items; bullet 5 is
+parametrized over gather order):
 
-    4 RED discriminating tests   (currently failing under live code)
+    5 RED discriminating tests   (currently failing under live code)
     4 GREEN preservation guards  (passing under live code; the seam
                                   must not break them)
 
