@@ -173,3 +173,19 @@ async def test_reconciler_handles_pending_transition(
         await reconciler.reconcile()
 
     assert "Ghost row archive pending for eric/ghosts/pending.md" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_reconciler_surfaces_scan_failure(
+    vault_root: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
+) -> None:
+    from unittest.mock import AsyncMock
+
+    reconciler = VaultReconciler(vault_root, mock_curated_plane, mock_coordinator)
+
+    mock_curated_plane.scan_vault_rows = AsyncMock(
+        side_effect=Exception("Validation Error in scan")
+    )
+
+    with pytest.raises(Exception, match="Validation Error in scan"):
+        await reconciler.reconcile()

@@ -653,3 +653,72 @@ async def test_query_respects_limit(plane: CuratedPlane, ns: str) -> None:
         )
     results = await plane.query(namespace=ns, query="limit-fixture", limit=3)
     assert len(results) <= 3
+
+
+@pytest.mark.anyio
+async def test_scan_vault_rows_paginates_and_validates(
+    plane: CuratedPlane, ns: str, qdrant: QdrantClient
+) -> None:
+
+    # We create 3 separate objects so they get unique IDs and row representations
+    await plane.create(_make(namespace=ns, title="row1", vault_path="path1.md"))
+    await plane.create(_make(namespace=ns, title="row2", vault_path="path2.md"))
+    await plane.create(_make(namespace=ns, title="row3", vault_path="path3.md"))
+
+    # To test pagination directly through the API, we can mock _client.scroll to return in chunks
+    from unittest.mock import patch
+
+    # Actually _client.scroll is sync in the real code, not async!
+    # Wait, in the source code it's `resp, offset = self._client.scroll(...)`
+    # Let's mock it to return pages
+
+    original_scroll = plane._client.scroll
+
+    # Let's get the real points
+    all_records, _ = original_scroll(
+        collection_name=plane._collection, limit=10, with_payload=True, with_vectors=False
+    )
+
+    # Mock to paginate
+    from typing import Any
+    def mock_scroll(*args: Any, offset: Any = None, **kwargs: Any) -> tuple[list[Any], int | None]:
+        if offset is None:
+            return all_records[:2], 2  # return first 2, next offset is 2
+        else:
+            return all_records[2:], None  # return remaining, offset None
+
+    with patch.object(plane._client, "scroll", side_effect=mock_scroll):
+        rows = await plane.scan_vault_rows()
+
+    assert len(rows) == 3
+    paths = [r.vault_path for r in rows]
+    assert "path1.md" in paths
+    assert "path2.md" in paths
+    assert "path3.md" in paths
+
+
+@pytest.mark.anyio
+async def test_scan_vault_rows_surfaces_validation_failure(
+    plane: CuratedPlane, ns: str, qdrant: QdrantClient
+) -> None:
+    from qdrant_client.models import PointStruct
+
+    from musubi.store.specs import DENSE_VECTOR_NAME
+
+    # Seed a row missing required schema fields
+    qdrant.upsert(
+        collection_name="musubi_curated",
+        points=[
+            PointStruct(
+                id="00000000-0000-0000-0000-000000000000",
+                vector={DENSE_VECTOR_NAME: [0.0] * 1024},
+                payload={"vault_path": "bad.md", "invalid_schema": "missing_required_fields"},
+            )
+        ],
+    )
+
+    with pytest.raises(Exception) as excinfo:
+        await plane.scan_vault_rows()
+
+    # pydantic validation error
+    assert "validation error" in str(excinfo.value).lower()

@@ -77,7 +77,6 @@ async def test_reconcile_upserts_stamped_file(
     tmp_path: Path, mock_curated_plane: MagicMock
 ) -> None:
     _seed_md(tmp_path, "note.md", object_id=_ksuid())
-    from unittest.mock import MagicMock
 
     rec = VaultReconciler(
         vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=MagicMock()
@@ -92,7 +91,6 @@ async def test_reconcile_skips_files_without_object_id(
     tmp_path: Path, mock_curated_plane: MagicMock
 ) -> None:
     _seed_md(tmp_path, "no-id.md", object_id=None)
-    from unittest.mock import MagicMock
 
     rec = VaultReconciler(
         vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=MagicMock()
@@ -110,7 +108,6 @@ async def test_reconcile_skips_unchanged_on_second_pass(
     of the musubi#345 cleanup — without this, every 6h tick re-embeds
     the entire vault."""
     _seed_md(tmp_path, "stable.md", object_id=_ksuid(), body="unchanged body")
-    from unittest.mock import MagicMock
 
     rec = VaultReconciler(
         vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=MagicMock()
@@ -129,7 +126,6 @@ async def test_reconcile_reupserts_when_body_changes(
 ) -> None:
     obj_id = _ksuid()
     _seed_md(tmp_path, "evolving.md", object_id=obj_id, body="first body")
-    from unittest.mock import MagicMock
 
     rec = VaultReconciler(
         vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=MagicMock()
@@ -150,7 +146,6 @@ async def test_reconcile_excludes_hidden_and_underscore_dirs(
     _seed_md(tmp_path, "_secrets/keychain.md", object_id=_ksuid())
     _seed_md(tmp_path, ".obsidian/workspace.md", object_id=_ksuid())
     _seed_md(tmp_path, "normal.md", object_id=_ksuid())
-    from unittest.mock import MagicMock
 
     rec = VaultReconciler(
         vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=MagicMock()
@@ -165,7 +160,6 @@ async def test_reconcile_non_md_files_ignored(
 ) -> None:
     (tmp_path / "note.txt").write_text("not markdown")
     (tmp_path / "image.png").write_bytes(b"binary")
-    from unittest.mock import MagicMock
 
     rec = VaultReconciler(
         vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=MagicMock()
@@ -179,7 +173,6 @@ async def test_reconcile_missing_root_returns_zero(
     tmp_path: Path, mock_curated_plane: MagicMock
 ) -> None:
     nonexistent = tmp_path / "does-not-exist"
-    from unittest.mock import MagicMock
 
     rec = VaultReconciler(
         vault_root=nonexistent, curated_plane=mock_curated_plane, coordinator=MagicMock()
@@ -199,7 +192,6 @@ async def test_reconcile_individual_failure_doesnt_abort_pass(
     (tmp_path / "broken.md").write_text(
         "---\n[not valid yaml because: of: this\n---\n\nbody\n", encoding="utf-8"
     )
-    from unittest.mock import MagicMock
 
     rec = VaultReconciler(
         vault_root=tmp_path, curated_plane=mock_curated_plane, coordinator=MagicMock()
