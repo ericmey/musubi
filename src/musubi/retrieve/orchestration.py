@@ -805,21 +805,20 @@ def _dedup_prefers(candidate: RetrievalResult, incumbent: RetrievalResult) -> bo
     produces the same chosen copy, regardless of which leg's result
     arrived first in the gather.
 
-    Tie-break order (load-bearing for cross-plane merge):
+    Both candidates come from the same ``best_by_id[object_id]`` slot,
+    so their ``object_id`` is by construction equal. The tie-break is
+    therefore:
+
       1. higher ``score`` wins
-      2. on equal ``score``, lexicographically smaller ``object_id`` wins
-      3. on further tie, lexicographically smaller ``plane`` wins (defense
-         in depth; equal ``object_id`` is impossible after dedup)
+      2. on equal ``score``, lexicographically smaller ``plane`` wins
 
     A strict ``candidate.score > incumbent.score`` check would let the
-    first-seen copy win on equal scores — the gathered order would leak
+    first-seen copy win on equal scores — the gather order would leak
     into the final result, and the deterministic final sort could not
     repair it because one copy was already discarded.
     """
     if candidate.score != incumbent.score:
         return candidate.score > incumbent.score
-    if candidate.object_id != incumbent.object_id:
-        return candidate.object_id < incumbent.object_id
     return candidate.plane < incumbent.plane
 
 
