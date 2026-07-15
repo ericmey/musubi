@@ -770,9 +770,11 @@ paths:
       tags:
       - thoughts
       summary: Thought History
-      description: 'First-cut: history is a namespace scroll. Semantic search will
+      description: |-
+        Return presence-scoped thought history from the namespace scroll.
 
-        land once slice-retrieval-fast wires its dense path through the API.'
+        Semantic search remains a future dense-path integration; this route's
+        current scroll still enforces the requested presence boundary.
       operationId: thought_history_v1_thoughts_history_post
       requestBody:
         content:
