@@ -113,7 +113,7 @@ def test_reinforce_composes_concurrent_access_increment(
     reinforce still lands (reinforcement_count bumps)."""
     plane = EpisodicPlane(client=real_qdrant, embedder=FakeEmbedder())
     ns, oid = _seed(real_qdrant)
-    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})  # access_count -> 1
+    asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))  # access_count -> 1
     assert _row(real_qdrant, oid).get("access_count") == 1
     rc_before = int(_row(real_qdrant, oid).get("reinforcement_count", 0))
 
