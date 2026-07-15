@@ -375,8 +375,3 @@ def test_hypothesis_swapping_weights_reorders_results_consistently_with_the_math
 
     assert relevance_order == (relevance_a >= relevance_b)
     assert recency_order == (recency_a >= recency_b)
-
-
-@pytest.mark.skip(reason="deferred to slice-retrieval-evals: golden query set lives there")
-def test_eval_golden_query_set_mrr_ge_0_7_with_default_weights() -> None:
-    raise AssertionError("covered by retrieval eval suite")
