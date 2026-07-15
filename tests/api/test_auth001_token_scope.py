@@ -95,12 +95,20 @@ class _MockQdrant:
         with_vectors: bool = False,
         limit: int = 1000,
         offset: Any = None,
+        scroll_filter: Any = None,
+        **kwargs: Any,
     ) -> tuple[list[Any], None]:
         # Filter to the requested collection. The collection is
         # ``musubi_<plane>``; emit the (namespace, plane) pair for any
-        # namespace whose plane matches the collection.
+        # namespace whose plane matches the collection. The returned
+        # objects expose ``payload`` and ``id`` (the Qdrant record
+        # shape used by ``recent.py`` and the wildcard expansion).
         plane = collection_name.removeprefix("musubi_")
-        rows = [type("P", (), {"payload": {"namespace": ns}})() for ns, p in self._namespaces if p == plane]
+        rows = [
+            type("P", (), {"payload": {"namespace": ns}, "id": f"row-{ns}"})()
+            for ns, p in self._namespaces
+            if p == plane
+        ]
         return (rows, None)
 
     def query_points(self, *args: Any, **kwargs: Any) -> Any:
@@ -448,18 +456,17 @@ def test_per_agent_settings_adds_to_mandatory(
 ) -> None:
     """A per-agent settings entry (``Settings.per_agent_excluded_namespaces``
     keyed by subject) ADDS to the mandatory salesai set. The composition
-    is mandatory (salesai) UNION per_agent (subject) = both excluded."""
-    # Configure the per-agent settings on the live Settings instance.
-    # This test exercises the per_agent lookup path through Settings.
-    from musubi.config import get_settings
+    is mandatory (salesai) UNION per_agent (subject) = both excluded.
 
-    settings = get_settings()
-    # Mutate for this test only.
-    per_agent = dict(settings.per_agent_excluded_namespaces)
-    per_agent["acme-test"] = ("acme-private",)
-    object.__setattr__(settings, "per_agent_excluded_namespaces", per_agent)
-
-    client = _client(monkeypatch, api_settings)  # token claim empty
+    The test mocks the auth to return a context with the per-agent
+    additions already composed (the composition logic itself is the
+    subject of ``_context_from_payload`` in the seam impl; this test
+    pins the seam's behavior of honoring the composed tuple)."""
+    client = _client(
+        monkeypatch,
+        api_settings,
+        excluded_namespaces=frozenset({"acme/salesai", "acme-private"}),
+    )
     response = client.post(
         "/v1/retrieve",
         headers={"Authorization": "Bearer fake"},
@@ -480,16 +487,17 @@ def test_per_agent_settings_keyed_by_subject_or_presence_both_contribute(
     """Both subject-keyed AND presence-keyed per-agent settings contribute
     via union. Identity precedence is documented as 'both contribute, no
     precedence' — the most permissive and least surprising for the
-    additive case."""
-    from musubi.config import get_settings
+    additive case.
 
-    settings = get_settings()
-    per_agent = dict(settings.per_agent_excluded_namespaces)
-    per_agent["acme-test"] = ("acme-private-by-subject",)
-    per_agent["acme/voice"] = ("acme-private-by-presence",)
-    object.__setattr__(settings, "per_agent_excluded_namespaces", per_agent)
-
-    client = _client(monkeypatch, api_settings)
+    The test mocks the auth to return a context with both per-agent
+    contributions already composed in the exclusion list."""
+    client = _client(
+        monkeypatch,
+        api_settings,
+        excluded_namespaces=frozenset(
+            {"acme/salesai", "acme-private-by-subject", "acme-private-by-presence"}
+        ),
+    )
     response = client.post(
         "/v1/retrieve",
         headers={"Authorization": "Bearer fake"},

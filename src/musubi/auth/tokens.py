@@ -39,7 +39,17 @@ class ExpiredTokenError:
 
 
 class AuthContext(BaseModel):
-    """Validated auth claims carried by route handlers and plane calls."""
+    """Validated auth claims carried by route handlers and plane calls.
+
+    The ``excluded_namespaces`` field is the canonical per-agent
+    exclusion list composed at token-validation time: mandatory
+    baseline (``salesai``) UNION per-agent settings (subject OR
+    presence, both contribute) UNION token claim additions. The
+    field is read by ``auth.scopes.enforce_namespace_policy`` and
+    applied centrally to every recall path. The composition is
+    additive: the token claim cannot subtract from the mandatory
+    baseline.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -49,6 +59,7 @@ class AuthContext(BaseModel):
     scopes: tuple[str, ...]
     presence: str
     token_id: str | None = None
+    excluded_namespaces: frozenset[str] = frozenset()
 
 
 type TokenValidationError = InvalidTokenError | ExpiredTokenError
@@ -87,7 +98,7 @@ def validate_token(
     except jwt.PyJWTError as exc:
         return Err(error=InvalidTokenError(detail=str(exc)))
 
-    context_result = _context_from_payload(payload)
+    context_result = _context_from_payload(payload, settings=active_settings)
     if isinstance(context_result, Err):
         return Err(error=context_result.error)
     return context_result
@@ -152,13 +163,18 @@ def _fetch_jwks(settings: Settings) -> Result[dict[str, Any], InvalidTokenError]
     return Ok(value=cast(dict[str, Any], body))
 
 
-def _context_from_payload(payload: dict[str, Any]) -> Result[AuthContext, InvalidTokenError]:
+def _context_from_payload(
+    payload: dict[str, Any],
+    *,
+    settings: Settings | None = None,
+) -> Result[AuthContext, InvalidTokenError]:
     subject = payload.get("sub")
     issuer = payload.get("iss")
     audience = payload.get("aud")
     scopes = payload.get("scope")
     presence = payload.get("presence")
     token_id = payload.get("jti")
+    excluded = payload.get("excluded_namespaces")
 
     if not isinstance(subject, str) or not subject:
         return Err(error=InvalidTokenError(detail="token missing sub claim"))
@@ -175,6 +191,18 @@ def _context_from_payload(payload: dict[str, Any]) -> Result[AuthContext, Invali
     if parsed_scopes is None:
         return Err(error=InvalidTokenError(detail="token scope claim must be a string list"))
 
+    # AUTH-001: compose the per-agent exclusion list. The mandatory
+    # baseline (salesai by default) is always present. The token
+    # claim is ADDITIVE only — it cannot subtract from the baseline.
+    # The per-agent settings (subject or presence) add to the union.
+    # Composition is read by auth.scopes.enforce_namespace_policy.
+    composed_excluded = _compose_excluded_namespaces(
+        subject=subject,
+        presence=presence,
+        token_excluded=excluded,
+        settings=settings,
+    )
+
     return Ok(
         value=AuthContext(
             subject=subject,
@@ -183,6 +211,7 @@ def _context_from_payload(payload: dict[str, Any]) -> Result[AuthContext, Invali
             scopes=parsed_scopes,
             presence=presence,
             token_id=token_id,
+            excluded_namespaces=composed_excluded,
         )
     )
 
@@ -193,6 +222,49 @@ def _parse_scopes(scopes: object) -> tuple[str, ...] | None:
     if isinstance(scopes, list) and all(isinstance(item, str) for item in scopes):
         return tuple(scopes)
     return None
+
+
+def _compose_excluded_namespaces(
+    *,
+    subject: str,
+    presence: str,
+    token_excluded: object,
+    settings: Settings | None = None,
+) -> frozenset[str]:
+    """Compose the per-agent exclusion list (AUTH-001).
+
+    Composition (additive union):
+        mandatory   = Settings.default_excluded_namespaces
+                    # default: frozenset({"salesai"}); always present.
+        per_agent  = frozenset(Settings.per_agent_excluded_namespaces.get(subject, ()))
+                    | frozenset(Settings.per_agent_excluded_namespaces.get(presence, ()))
+                    # both contribute; no precedence
+        token_add  = frozenset(token_excluded) if token_excluded else frozenset()
+                    # additive only; cannot subtract mandatory
+        excluded   = mandatory | per_agent | token_add
+    """
+    if settings is None:
+        from musubi.config import get_settings
+
+        settings = get_settings()
+    mandatory = settings.default_excluded_namespaces
+    per_agent = frozenset(settings.per_agent_excluded_namespaces.get(subject, ())) | frozenset(
+        settings.per_agent_excluded_namespaces.get(presence, ())
+    )
+    if token_excluded is None:
+        token_add: frozenset[str] = frozenset()
+    elif isinstance(token_excluded, (list, tuple, set, frozenset)) and all(
+        isinstance(item, str) for item in token_excluded
+    ):
+        token_add = frozenset(token_excluded)
+    elif isinstance(token_excluded, str):
+        token_add = frozenset(token_excluded.split())
+    else:
+        # Malformed token claim; ignore (the read-side seam will
+        # not see an exclusion from this claim; the mandatory
+        # baseline still applies).
+        token_add = frozenset()
+    return mandatory | per_agent | token_add
 
 
 def _issuer(settings: Settings) -> str:

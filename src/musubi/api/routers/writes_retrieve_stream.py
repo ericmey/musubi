@@ -60,9 +60,16 @@ async def retrieve_stream(
     embedder: Embedder = Depends(get_embedder),
     reranker: TEIRerankerClient = Depends(get_reranker),
 ) -> StreamingResponse:
-    targets, shape_err = _resolve_targets(body.namespace, body.planes)
-    if shape_err is not None:
-        raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
+    # AUTH-001: when the body omits ``namespace``, defer the target
+    # resolution until after auth so we can derive the caller's
+    # identity_family.
+    if body.namespace is None:
+        targets: list[tuple[str, str]] = []
+        shape_err: str | None = None
+    else:
+        targets, shape_err = _resolve_targets(body.namespace, body.planes)
+        if shape_err is not None:
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
 
     auth_result = authenticate_request(
         request,  # type: ignore[arg-type]
@@ -74,6 +81,12 @@ async def retrieve_stream(
         code: ErrorCode = err.code  # type: ignore[assignment]
         raise APIError(status_code=err.status_code, code=code, detail=err.detail)
     context = auth_result.value
+
+    if body.namespace is None:
+        from musubi.api.routers.retrieve import _enumerate_authorized_targets
+        family = context.presence.split("/", 1)[0]
+        planes = body.planes or ["curated", "concept", "episodic"]
+        targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
 
     pattern_had_wildcards = any("*" in ns for ns, _ in targets)
     targets = _expand_wildcard_targets(qdrant, targets)
@@ -91,17 +104,19 @@ async def retrieve_stream(
 
         return StreamingResponse(_emit_empty(), media_type="application/x-ndjson", headers=headers)
 
-    for target_namespace, _plane in targets:
-        scope_result = resolve_namespace_scope(context, namespace=target_namespace, access="r")
-        if isinstance(scope_result, Err):
-            raise APIError(
-                status_code=scope_result.error.status_code,
-                code="FORBIDDEN",
-                detail=scope_result.error.detail,
-            )
+    # AUTH-001: the shared READ-ONLY enforcement seam.
+    from musubi.auth.scopes import enforce_namespace_policy
+    policy_result = enforce_namespace_policy(context, targets=targets, access="r")
+    if isinstance(policy_result, Err):
+        raise APIError(
+            status_code=policy_result.error.status_code,
+            code="FORBIDDEN",
+            detail=policy_result.error.detail,
+        )
+    targets = policy_result.value
 
     query_body: dict[str, object] = {
-        "namespace": body.namespace,
+        "namespace": body.namespace or "",
         "query_text": body.query_text,
         "mode": body.mode,
         "limit": body.limit,

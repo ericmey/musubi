@@ -79,7 +79,7 @@ class AsyncMusubiClient:
     async def retrieve(
         self,
         *,
-        namespace: str,
+        namespace: str | None = None,
         query_text: str = "",
         mode: str = "fast",
         limit: int = 10,
@@ -122,7 +122,7 @@ class AsyncMusubiClient:
     async def retrieve_stream(
         self,
         *,
-        namespace: str,
+        namespace: str | None = None,
         query_text: str,
         mode: str = "fast",
         limit: int = 10,

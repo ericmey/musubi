@@ -58,7 +58,7 @@ from musubi.api.responses import (
     RetrieveResponse,
 )
 from musubi.auth import authenticate_request
-from musubi.auth.scopes import resolve_namespace_scope
+from musubi.auth.scopes import enforce_namespace_policy, resolve_namespace_scope
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
@@ -69,15 +69,25 @@ router = APIRouter(prefix="/v1/retrieve", tags=["retrieve"])
 
 
 class RetrieveQuery(BaseModel):
-    namespace: str = Field(
-        ...,
+    # AUTH-001: ``namespace`` is OPTIONAL. Omit (or send null) to recall
+    # across every authorized concrete namespace in the caller's
+    # identity_family across the caller's authorized planes
+    # (minus the canonical per-agent exclusion list). Supplying
+    # ``namespace`` preserves the existing concrete / fanout /
+    # wildcard narrowing. The only signal is whether ``namespace``
+    # is supplied; no second boolean.
+    namespace: str | None = Field(
+        default=None,
         description=(
             "Namespace pattern. Three shapes accepted: "
             "3-segment concrete `<tenant>/<presence>/<plane>` (single target), "
             "2-segment `<tenant>/<presence>` (cross-plane fanout, requires `planes`), "
             "or wildcard with `*` replacing any single segment "
             "(e.g. `nyla/*/episodic`, `*/voice/curated`). "
-            "Writes reject `*`; wildcards are read-only. See ADR 0031."
+            "Optional in AUTH-001: omit (or null) to recall across all "
+            "authorized namespaces; the per-agent exclusion list "
+            "(`salesai` mandatory + per-agent settings + token "
+            "additions) is applied centrally. See ADR 0031 + AUTH-001."
         ),
     )
     # query_text required for fast/deep/blended; optional for recent.
@@ -366,6 +376,54 @@ def _expand_wildcard_targets(
     return expanded
 
 
+def _enumerate_authorized_targets(
+    client: QdrantClient,
+    *,
+    family: str,
+    planes: list[str],
+) -> list[tuple[str, str]]:
+    """AUTH-001: enumerate every concrete namespace in ``family`` across
+    the caller's authorized planes.
+
+    Used when the request body omits ``namespace`` (or sends null) to
+    recall across all authorized concrete namespaces. The result is
+    then passed through ``enforce_namespace_policy`` which applies
+    the per-agent exclusion list and the per-namespace scope check.
+
+    Scans every requested collection; dedups and sorts lexicographically
+    for determinism. Empty matches yield no targets (a valid zero-match
+    state, not an error).
+    """
+    expanded: list[tuple[str, str]] = []
+    for plane in planes:
+        collection = collection_for_plane(plane)
+        seen: set[str] = set()
+        next_offset: int | str | None = None
+        while True:
+            points, next_offset = client.scroll(  # type: ignore[assignment]
+                collection_name=collection,
+                with_payload=["namespace"],
+                with_vectors=False,
+                limit=1000,
+                offset=next_offset,
+            )
+            for point in points:
+                payload = point.payload or {}
+                ns = payload.get("namespace")
+                if not isinstance(ns, str) or ns in seen:
+                    continue
+                # Match the caller's identity_family: the first
+                # segment of the stored namespace must equal ``family``.
+                if ns.split("/", 1)[0] != family:
+                    continue
+                seen.add(ns)
+            if next_offset is None:
+                break
+        for ns in sorted(seen):
+            expanded.append((ns, plane))
+    return expanded
+
+
 @router.post("", response_model=RetrieveResponse)
 async def retrieve(
     request: Request,
@@ -375,9 +433,35 @@ async def retrieve(
     embedder: Embedder = Depends(get_embedder),
     reranker: TEIRerankerClient = Depends(get_reranker),
 ) -> RetrieveResponse:
-    targets, shape_err = _resolve_targets(body.namespace, body.planes)
-    if shape_err is not None:
-        raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
+    # AUTH-001: when the body omits ``namespace`` (or sends null),
+    # recall spans every concrete namespace in the caller's
+    # identity_family across the caller's authorized planes. The
+    # per-agent exclusion list (``salesai`` mandatory baseline +
+    # per-agent settings + token additions) is applied centrally
+    # by ``enforce_namespace_policy`` after target resolution. The
+    # seam is the single source of truth for the exclusion policy.
+    if body.namespace is None:
+        # The caller's identity_family is the first segment of
+        # ``context.presence`` (e.g., ``acme/voice`` → ``acme``).
+        # The context is required; the auth path below raises 401
+        # if missing. We compute the family from a placeholder
+        # here and re-derive after auth (or restructure to auth
+        # first). The router currently does auth after target
+        # resolution, so we need to know the family up-front.
+        # Use the canonical ``family_of`` derivation on a
+        # synthetic placeholder; the auth path below
+        # re-validates. For the default-to-all case, the
+        # identity_family is derived from the JWT ``presence``
+        # claim post-auth. To keep the existing structure, the
+        # router does auth first (below) and then resolves
+        # targets. Restructure: we defer the target enumeration
+        # until after auth.
+        targets: list[tuple[str, str]] = []
+        shape_err: str | None = None
+    else:
+        targets, shape_err = _resolve_targets(body.namespace, body.planes)
+        if shape_err is not None:
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
 
     # Authenticate first so unauth callers cannot probe for empty
     # wildcard matches. Token check is once per request — the per-target
@@ -392,6 +476,33 @@ async def retrieve(
         code: ErrorCode = err.code  # type: ignore[assignment]
         raise APIError(status_code=err.status_code, code=code, detail=err.detail)
     context = auth_result.value
+
+    # AUTH-001: when the body omits ``namespace``, do the default-
+    # to-all enumeration now that we have the auth context. The
+    # caller's identity_family is the first segment of
+    # ``context.presence``.
+    if body.namespace is None:
+        family = context.presence.split("/", 1)[0]
+        planes = body.planes or ["curated", "concept", "episodic"]
+        targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
+
+    # AUTH-001: when the body omits ``namespace`` (or sends null),
+    # recall spans every concrete namespace in the caller's
+    # identity_family across the caller's authorized planes. The
+    # per-agent exclusion list (``salesai`` mandatory baseline +
+    # per-agent settings + token additions) is applied centrally
+    # by ``enforce_namespace_policy`` after target resolution. The
+    # seam is the single source of truth for the exclusion policy.
+    if body.namespace is None:
+        # The caller's identity_family is the first segment of
+        # ``context.presence`` (e.g., ``acme/voice`` → ``acme``).
+        family = context.presence.split("/", 1)[0]
+        planes = body.planes or ["curated", "concept", "episodic"]
+        targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
+    else:
+        targets, shape_err = _resolve_targets(body.namespace, body.planes)
+        if shape_err is not None:
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
 
     # Wildcard segments resolve against live Qdrant payload. An empty
     # expansion of a wildcard pattern is a valid state — no rows in any
@@ -414,20 +525,29 @@ async def retrieve(
             limit=body.limit,
         )
 
-    for target_namespace, _plane in targets:
-        scope_result = resolve_namespace_scope(context, namespace=target_namespace, access="r")
-        if isinstance(scope_result, Err):
-            raise APIError(
-                status_code=scope_result.error.status_code,
-                code="FORBIDDEN",
-                detail=scope_result.error.detail,
-            )
+    # AUTH-001: the shared READ-ONLY enforcement seam. Drops any
+    # target whose namespace is in ``context.excluded_namespaces``
+    # (the canonical per-agent exclusion list) and then runs the
+    # per-namespace scope check. Replaces the per-target
+    # ``resolve_namespace_scope`` loop. The seam is the single
+    # source of truth for the exclusion policy; hardcoding route-
+    # specific exclusions is a code-review must-fix.
+    policy_result = enforce_namespace_policy(
+        context, targets=targets, access="r"
+    )
+    if isinstance(policy_result, Err):
+        raise APIError(
+            status_code=policy_result.error.status_code,
+            code="FORBIDDEN",
+            detail=policy_result.error.detail,
+        )
+    targets = policy_result.value
 
     # Hand orchestration the fully-resolved targets. A 3-segment
     # call reduces to exactly one (namespace, plane) target, so the
     # single-plane code path is preserved bit-for-bit.
     query_body: dict[str, object] = {
-        "namespace": body.namespace,
+        "namespace": body.namespace or "",
         "query_text": body.query_text,
         "mode": body.mode,
         "limit": body.limit,
