@@ -83,7 +83,7 @@ def enforce_namespace_policy(
                     excluded = True
                     break
             else:
-                if parts[:len(ex_parts)] == ex_parts:
+                if parts[: len(ex_parts)] == ex_parts:
                     print(f"DEBUG: excluded by prefix {ex}")
                     excluded = True
                     break

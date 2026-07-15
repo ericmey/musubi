@@ -225,6 +225,7 @@ def test_settings_exclusions_add_to_mandatory_not_subtract(
         return Settings(**args)
 
     from musubi.api.dependencies import get_settings_dep
+
     client.app.dependency_overrides[get_settings_dep] = mock_get_settings
 
     _seed_qdrant(client, token, "eric/salesai/episodic", "hello salesai")
@@ -260,6 +261,7 @@ def test_per_agent_settings_adds_to_mandatory(
         return Settings(**args)
 
     from musubi.api.dependencies import get_settings_dep
+
     client.app.dependency_overrides[get_settings_dep] = mock_get_settings
 
     _seed_qdrant(client, token, "eric/custom1/episodic", "hello")
@@ -293,6 +295,7 @@ def test_per_agent_settings_keyed_by_subject_or_presence_both_contribute(
         return Settings(**args)
 
     from musubi.api.dependencies import get_settings_dep
+
     client.app.dependency_overrides[get_settings_dep] = mock_get_settings
 
     _seed_qdrant(client, token, "eric/custom1/episodic", "hello")
@@ -347,6 +350,7 @@ def test_canonical_config_source_is_single_no_scattered_exceptions(
         return Settings(**args)
 
     from musubi.api.dependencies import get_settings_dep
+
     client.app.dependency_overrides[get_settings_dep] = mock_get_settings
 
     # Using context to prove the single seam propagates cleanly to all routes
