@@ -38,6 +38,7 @@ from typing import Literal
 from fastapi import APIRouter, Body, Depends, Request
 from pydantic import BaseModel, Field, StrictBool, model_validator
 from qdrant_client import QdrantClient
+from qdrant_client.http import models
 
 from musubi.api.dependencies import (
     get_embedder,
@@ -66,6 +67,8 @@ from musubi.store import collection_for_plane
 from musubi.types.common import Err
 
 router = APIRouter(prefix="/v1/retrieve", tags=["retrieve"])
+
+_NAMESPACE_FACET_LIMIT = 10_000
 
 
 class RetrieveQuery(BaseModel):
@@ -390,35 +393,34 @@ def _enumerate_authorized_targets(
     then passed through ``enforce_namespace_policy`` which applies
     the per-agent exclusion list and the per-namespace scope check.
 
-    Scans every requested collection; dedups and sorts lexicographically
-    for determinism. Empty matches yield no targets (a valid zero-match
-    state, not an error).
+    Uses Qdrant's server-side facet operation over the indexed namespace
+    field, filtered by the indexed identity-family field. This transfers
+    distinct namespace values rather than every stored point. The hard cap
+    fails loudly instead of silently narrowing default recall.
     """
     expanded: list[tuple[str, str]] = []
     for plane in planes:
         collection = collection_for_plane(plane)
-        seen: set[str] = set()
-        next_offset: int | str | None = None
-        while True:
-            points, next_offset = client.scroll(  # type: ignore[assignment]
-                collection_name=collection,
-                with_payload=["namespace"],
-                with_vectors=False,
-                limit=1000,
-                offset=next_offset,
+        response = client.facet(
+            collection_name=collection,
+            key="namespace",
+            facet_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="identity_family",
+                        match=models.MatchValue(value=family),
+                    )
+                ]
+            ),
+            limit=_NAMESPACE_FACET_LIMIT,
+            exact=True,
+        )
+        if len(response.hits) >= _NAMESPACE_FACET_LIMIT:
+            raise RuntimeError(
+                f"namespace enumeration reached safety cap {_NAMESPACE_FACET_LIMIT} "
+                f"for collection {collection!r}"
             )
-            for point in points:
-                payload = point.payload or {}
-                ns = payload.get("namespace")
-                if not isinstance(ns, str) or ns in seen:
-                    continue
-                # Match the caller's identity_family: the first
-                # segment of the stored namespace must equal ``family``.
-                if ns.split("/", 1)[0] != family:
-                    continue
-                seen.add(ns)
-            if next_offset is None:
-                break
+        seen = {hit.value for hit in response.hits if isinstance(hit.value, str)}
         for ns in sorted(seen):
             expanded.append((ns, plane))
     return expanded
@@ -491,7 +493,12 @@ async def retrieve(
     # ``resolve_namespace_scope`` loop. The seam is the single
     # source of truth for the exclusion policy; hardcoding route-
     # specific exclusions is a code-review must-fix.
-    policy_result = enforce_namespace_policy(context, targets=targets, settings=settings)
+    policy_result = enforce_namespace_policy(
+        context,
+        targets=targets,
+        settings=settings,
+        reject_unauthorized=body.namespace is not None,
+    )
     if isinstance(policy_result, Err):
         raise APIError(
             status_code=policy_result.error.status_code,

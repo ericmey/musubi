@@ -42,10 +42,14 @@ def enforce_namespace_policy(
     *,
     targets: list[tuple[str, str]],
     settings: Settings,
+    reject_unauthorized: bool = True,
 ) -> Result[list[tuple[str, str]], ScopeError]:
     """AUTH-001: the shared READ-ONLY enforcement seam.
 
-    FIRST runs resolve_namespace_scope on every concrete target. If any is unauthorized, it must fail (403).
+    FIRST runs resolve_namespace_scope on every concrete target. Explicitly
+    requested targets fail the whole request on any unauthorized namespace.
+    Implicit default-all discovery sets ``reject_unauthorized=False`` so its
+    result is exactly the authorized subset rather than a probe-dependent 403.
     THEN filters the authorized set using Settings mandatory + subject/presence additive roots with parsed segment matching.
     Direct authorized-but-excluded exact target may return 200 empty.
     """
@@ -55,7 +59,9 @@ def enforce_namespace_policy(
     for ns, plane in targets:
         result = resolve_namespace_scope(context, namespace=ns, access="r")
         if isinstance(result, Err):
-            return Err(error=result.error)
+            if reject_unauthorized:
+                return Err(error=result.error)
+            continue
         authorized.append((ns, plane))
 
     if not authorized:

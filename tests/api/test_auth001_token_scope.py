@@ -7,6 +7,7 @@ The single canonical source of exclusions is Settings.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -16,6 +17,41 @@ from fastapi.testclient import TestClient
 from musubi.auth.tokens import AuthContext
 from musubi.settings import Settings
 from musubi.types.common import Ok
+
+
+def test_default_discovery_uses_server_side_namespace_facet_not_point_scroll() -> None:
+    from qdrant_client.http import models
+
+    from musubi.api.routers.retrieve import _enumerate_authorized_targets
+
+    class _FacetOnlyClient:
+        def scroll(self, **_kwargs: Any) -> Any:
+            raise AssertionError("default namespace discovery must not transfer every stored point")
+
+        def facet(self, **kwargs: Any) -> Any:
+            assert kwargs["collection_name"] == "musubi_episodic"
+            assert kwargs["key"] == "namespace"
+            assert kwargs["exact"] is True
+            assert kwargs["limit"] == 10_000
+            facet_filter = kwargs["facet_filter"]
+            assert isinstance(facet_filter, models.Filter)
+            condition = cast(list[models.FieldCondition], facet_filter.must)[0]
+            assert condition.key == "identity_family"
+            assert condition.match == models.MatchValue(value="eric")
+            return SimpleNamespace(
+                hits=[
+                    SimpleNamespace(value="eric/other/episodic"),
+                    SimpleNamespace(value="eric/chair/episodic"),
+                    SimpleNamespace(value=7),
+                ]
+            )
+
+    assert _enumerate_authorized_targets(
+        cast(Any, _FacetOnlyClient()), family="eric", planes=["episodic"]
+    ) == [
+        ("eric/chair/episodic", "episodic"),
+        ("eric/other/episodic", "episodic"),
+    ]
 
 
 def _patch_auth(
@@ -76,6 +112,63 @@ def test_default_read_spans_at_least_two_non_excluded_namespaces(
     assert res.status_code == 200
     namespaces = [r["namespace"] for r in res.json()["results"]]
 
+    assert "eric/command-chair/episodic" in namespaces
+    assert "eric/other/episodic" in namespaces
+    assert "eric/salesai/episodic" not in namespaces
+
+
+def test_default_read_returns_authorized_subset_instead_of_failing_on_other_targets(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
+) -> None:
+    from tests.api.conftest import mint_token
+
+    seed_token = mint_token(
+        api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair"
+    )
+    _seed_qdrant(client, seed_token, "eric/command-chair/episodic", "allowed memory")
+    _seed_qdrant(client, seed_token, "eric/other/episodic", "unauthorized memory")
+
+    _patch_auth(
+        monkeypatch,
+        ("eric/command-chair/*:r",),
+        subject="eric",
+        presence="eric/command-chair",
+    )
+    res = client.post(
+        "/v1/retrieve",
+        json={"mode": "fast", "query_text": "memory"},
+        headers={"Authorization": f"Bearer {seed_token}"},
+    )
+
+    assert res.status_code == 200
+    namespaces = {row["namespace"] for row in res.json()["results"]}
+    assert namespaces == {"eric/command-chair/episodic"}
+
+
+def test_context_omitted_namespace_spans_non_excluded_authorized_namespaces(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
+) -> None:
+    from tests.api.conftest import mint_token
+
+    token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
+    _patch_auth(
+        monkeypatch,
+        ("*/*/*:r", "*/*/*:w"),
+        subject="eric",
+        presence="eric/command-chair",
+    )
+    _seed_qdrant(client, token, "eric/command-chair/episodic", "chair continuity memory")
+    _seed_qdrant(client, token, "eric/other/episodic", "other continuity memory")
+    _seed_qdrant(client, token, "eric/salesai/episodic", "sales continuity memory")
+
+    res = client.post(
+        "/v1/context",
+        json={"planes": ["episodic"], "query_text": "continuity memory", "max_items": 8},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert res.status_code == 200
+    namespaces = {item["namespace"] for group in res.json()["groups"] for item in group["items"]}
     assert "eric/command-chair/episodic" in namespaces
     assert "eric/other/episodic" in namespaces
     assert "eric/salesai/episodic" not in namespaces

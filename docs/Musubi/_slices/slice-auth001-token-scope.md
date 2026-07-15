@@ -252,7 +252,12 @@ follow-up action, not a block on the slice.
   string.
 - **Test contract.** 15 tests, bounded per AGENTS.md Closure
   Rule: 13 RED discriminating + 2 GREEN preservation guards.
-  Every proof point Yua named is covered.
+  Every original proof point Yua named is covered. Three additional
+  post-review discriminators pin the repaired contract: implicit recall
+  returns the authorized subset instead of failing on unrelated stored
+  namespaces, default discovery uses a server-side namespace facet rather
+  than transferring every point, and ``/v1/context`` genuinely supports
+  omitted-namespace recall.
 
 ## Out of scope (NOT closed by this slice)
 
@@ -284,8 +289,7 @@ follow-up action, not a block on the slice.
   to the ``AuthContext`` for finer-grained per-presence recall
   restrictions (e.g., a per-presence quota). The seam is
   designed to accept this without architectural change.
-- The default-to-all enumeration scans the caller's
-  ``identity_family`` across all collections. A tenant with very
-  large numbers of namespaces may want a paginated enumeration;
-  that is a follow-up (the seam is a single function, the
-  pagination surface is orthogonal).
+- The default-to-all enumeration uses Qdrant's server-side ``namespace``
+  facet filtered by indexed ``identity_family``. It transfers distinct
+  namespace values rather than every stored point and fails loudly at the
+  10,000-namespace safety cap instead of silently narrowing recall.

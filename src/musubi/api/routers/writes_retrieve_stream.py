@@ -106,7 +106,12 @@ async def retrieve_stream(
         return StreamingResponse(_emit_empty(), media_type="application/x-ndjson", headers=headers)
 
     # AUTH-001: the shared READ-ONLY enforcement seam.
-    policy_result = enforce_namespace_policy(context, targets=targets, settings=settings)
+    policy_result = enforce_namespace_policy(
+        context,
+        targets=targets,
+        settings=settings,
+        reject_unauthorized=body.namespace is not None,
+    )
     if isinstance(policy_result, Err):
         raise APIError(
             status_code=policy_result.error.status_code,

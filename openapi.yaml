@@ -1845,9 +1845,13 @@ components:
     ContextQuery:
       properties:
         namespace:
-          type: string
+          anyOf:
+          - type: string
+          - type: 'null'
           title: Namespace
-          description: Two- or three-segment namespace, same shape as /v1/retrieve.
+          description: Optional namespace narrowing, with the same concrete or wildcard
+            shapes as /v1/retrieve. Omit or send null to build context across every
+            authorized namespace after applying the configured exclusion policy.
         query_text:
           type: string
           minLength: 1
@@ -1895,7 +1899,6 @@ components:
           title: State Filter
       type: object
       required:
-      - namespace
       - query_text
       title: ContextQuery
       description: Build a small, grouped context pack for a presence.

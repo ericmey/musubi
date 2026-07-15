@@ -10,7 +10,12 @@ from qdrant_client import QdrantClient
 
 from musubi.api.dependencies import get_embedder, get_qdrant_client, get_reranker, get_settings_dep
 from musubi.api.errors import APIError, ErrorCode
-from musubi.api.routers.retrieve import _KIND_STATUS_MAP, _expand_wildcard_targets, _resolve_targets
+from musubi.api.routers.retrieve import (
+    _KIND_STATUS_MAP,
+    _enumerate_authorized_targets,
+    _expand_wildcard_targets,
+    _resolve_targets,
+)
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
@@ -31,9 +36,13 @@ router = APIRouter(prefix="/v1/context", tags=["context"])
 class ContextQuery(BaseModel):
     """Build a small, grouped context pack for a presence."""
 
-    namespace: str = Field(
-        ...,
-        description="Two- or three-segment namespace, same shape as /v1/retrieve.",
+    namespace: str | None = Field(
+        default=None,
+        description=(
+            "Optional namespace narrowing, with the same concrete or wildcard shapes as "
+            "/v1/retrieve. Omit or send null to build context across every authorized "
+            "namespace after applying the configured exclusion policy."
+        ),
     )
     query_text: str = Field(min_length=1)
     mode: Literal["startup"] = "startup"
@@ -73,10 +82,6 @@ async def context_pack(
     rehydrate payload metadata or maintain their own essence heuristics.
     """
 
-    targets, shape_err = _resolve_targets(body.namespace, body.planes)
-    if shape_err is not None:
-        raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
-
     auth_result = authenticate_request(
         request,  # type: ignore[arg-type]
         None,
@@ -87,6 +92,15 @@ async def context_pack(
         code: ErrorCode = err.code  # type: ignore[assignment]
         raise APIError(status_code=err.status_code, code=code, detail=err.detail)
     context = auth_result.value
+
+    if body.namespace is None:
+        family = context.presence.split("/", 1)[0]
+        planes = body.planes or ["curated", "concept", "episodic"]
+        targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
+    else:
+        targets, shape_err = _resolve_targets(body.namespace, body.planes)
+        if shape_err is not None:
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
 
     pattern_had_wildcards = any("*" in ns for ns, _ in targets)
     targets = _expand_wildcard_targets(qdrant, targets)
@@ -102,7 +116,12 @@ async def context_pack(
             ),
         )
 
-    policy_result = enforce_namespace_policy(context, targets=targets, settings=settings)
+    policy_result = enforce_namespace_policy(
+        context,
+        targets=targets,
+        settings=settings,
+        reject_unauthorized=body.namespace is not None,
+    )
     if isinstance(policy_result, Err):
         raise APIError(
             status_code=policy_result.error.status_code,
@@ -125,7 +144,7 @@ async def context_pack(
 
     # RET-013: Query Qdrant twice for a blended recent/ranked mix.
     recent_query_body: dict[str, object] = {
-        "namespace": body.namespace,
+        "namespace": body.namespace or "",
         # Recent retrieval is chronological and intentionally ignores query text.
         # Passing it would produce an accept-and-ignore warning on every context call.
         "query_text": "",
@@ -143,7 +162,7 @@ async def context_pack(
     }
 
     fast_query_body: dict[str, object] = {
-        "namespace": body.namespace,
+        "namespace": body.namespace or "",
         "query_text": body.query_text,
         "mode": "fast",
         "limit": body.candidate_limit,
