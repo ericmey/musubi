@@ -18,11 +18,11 @@ issue: 456
 
 The source implementation that flips the accepted C6b tests-only red contract
 (Issue #437, red contract at commit `c7b95da` on branch
-`slice/c6-lifecycle-event-loss-red`, PR #434 draft) green, following the
+`slice/c6-lifecycle-event-loss-red`, PR #434 draft) to green, following the
 corrected source-commit series in the source-cut plan ADR §F (S1-S7). Authorized by Yua
 (2026-07-14) as a SEPARATE implementation branch/slice, preserving the accepted
-contract. **G1 stays strict-RED throughout Phase 1** (flips only under H5,
-PR #473). Independently reviewed and merged via PR #455 at `dd0f971`; G1/H5 closure via PR #473 at `7e5864d`.
+contract. **G1 remained strict-RED throughout Phase 1** and flipped only under H5 via
+PR #473. Independently reviewed and merged via PR #455 at `dd0f971`; G1/H5 closure via PR #473 at `7e5864d`.
 
 ## Specs to implement
 
