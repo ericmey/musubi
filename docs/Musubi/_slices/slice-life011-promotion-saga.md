@@ -2,7 +2,7 @@
 title: "Slice: LIFE-011 — Promotion Saga Invariants"
 slice_id: slice-life011-promotion-saga
 status: in-review
-owner: gemini-3-1-pro
+owner: gemini-3-1-shiori
 phase: "Lifecycle"
 section: _slices
 type: slice
@@ -15,10 +15,10 @@ blocks: []
 
 # Slice: LIFE-011 — Promotion Saga Invariants
 
-Closes #532.
+Tracks #555.
 
 ## What
-Restructures the promotion path executing deterministic data persistence across failure domains, enabling `LIFE-004`/`LIFE-005` to automatically resolve partial infrastructure interruptions safely.
+Closes the remaining write-before-create recovery and post-commit notification classification gaps. Restructures the promotion path to guarantee deterministic data persistence sequence, ensuring `LIFE-004` safely resolves partial failures while `LIFE-005` natively maintains the established identity-reuse guarantees.
 
 ## Specs to implement
 - [[06-ingestion/promotion]]
