@@ -31,6 +31,7 @@ from musubi.retrieve.deep import (
 )
 from musubi.retrieve.fast import run_fast_retrieve
 from musubi.retrieve.recent import _provenance_score_for, run_recent_retrieve
+from musubi.retrieve.scoring import calibrate_global_relevance
 from musubi.retrieve.warnings import (
     RetrievalWarning,
     dedupe,
@@ -146,6 +147,16 @@ class RetrievalResult(BaseModel):
     # Ranked does NOT use this; ranked uses `score_components["provenance"]`
     # which may legitimately be 0.1 from `_LOW_PROVENANCE_STATES`.
     provenance_score: float | None = None
+    # RET-012: the raw relevance inputs that feed the cross-plane seam
+    # (``scoring.calibrate_global_relevance``). Per-leg relevance is
+    # normalised against a per-leg local batch max, so the baked
+    # ``score_components["relevance"]`` and ``score`` are not globally
+    # comparable. The two raw inputs are preserved here so the seam
+    # can re-anchor them against a single working-set global max BEFORE
+    # the ``best_by_id`` dedup. Internal-only — not projected onto wire
+    # models (``RankedResultRow``, ``RecentResultRow``, ``ContextPackItem``).
+    raw_rrf_score: float | None = None
+    raw_rerank_score: float | None = None
 
 
 class RetrievalError(BaseModel):
@@ -332,11 +343,14 @@ async def _retrieve_uncounted(
             return_exceptions=True,
         )
 
-        # Merge dedup keeps the **highest-scoring** hit per object_id.
-        # First-seen dedup would drop a stronger match purely because
-        # it arrived from a later target in the gather order. Build a
-        # {object_id → best hit} map, then materialise once at the end.
-        best_by_id: dict[str, RetrievalResult] = {}
+        # RET-012: collect every leg's hits into a flat list FIRST, then
+        # run the cross-plane calibration seam on the full working set,
+        # then dedup by object_id. Calibrating after dedup can permanently
+        # discard the better copy using the bad per-leg score — the seam
+        # must see every copy before the dedup chooses. The single-target
+        # fast path above (``len(targets) == 1``) is unchanged; it does
+        # not call the seam and preserves the per-leg result bit-for-bit.
+        all_hits: list[RetrievalResult] = []
         warnings: list[RetrievalWarning] = []
         transient_any = False
         internal_err: RetrievalError | None = None
@@ -364,10 +378,10 @@ async def _retrieve_uncounted(
                 continue
             if isinstance(outcome, Ok):
                 warnings.extend(outcome.value.warnings)
-                for hit in outcome.value.results:
-                    current = best_by_id.get(hit.object_id)
-                    if current is None or hit.score > current.score:
-                        best_by_id[hit.object_id] = hit
+                # Every leg's hit is added to the flat list; the dedup
+                # runs AFTER the seam has re-anchored relevance against
+                # the working-set global max.
+                all_hits.extend(outcome.value.results)
                 continue
             if isinstance(outcome, Exception):
                 logger.warning("cross-plane retrieve per-plane exception: %r", outcome)
@@ -376,10 +390,37 @@ async def _retrieve_uncounted(
 
         if internal_err is not None:
             return Err(error=internal_err)
-        if not best_by_id and transient_any:
+        if not all_hits and transient_any:
             return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
 
-        merged = sorted(best_by_id.values(), key=lambda r: r.score, reverse=True)
+        # RET-012: pre-dedup cross-plane global relevance calibration. The
+        # seam re-anchors every candidate's relevance against a single
+        # working-set global max (``max(raw_rrf_score)`` across the flat
+        # list), preserves the cross-encoder sigmoid for reranked legs,
+        # and passes recent / non-ranked rows through unchanged. Single-
+        # target fast path bit-for-bit preserved (seam does not run).
+        calibrated = calibrate_global_relevance(all_hits)
+
+        # Merge dedup keeps the **highest-recalibrated** hit per
+        # object_id. First-seen dedup would drop a stronger match purely
+        # because it arrived from a later target in the gather order.
+        # Build a {object_id → best hit} map, then materialise once at
+        # the end.
+        best_by_id: dict[str, RetrievalResult] = {}
+        for hit in calibrated:
+            current = best_by_id.get(hit.object_id)
+            if current is None or hit.score > current.score:
+                best_by_id[hit.object_id] = hit
+
+        # RET-012: deterministic final sort key is (-score, object_id,
+        # plane). The object_id primary key gives stable cross-plane
+        # ordering on score ties; the plane secondary key is defense-
+        # in-depth for the (impossible-after-dedup) case where two rows
+        # share both score and object_id.
+        merged = sorted(
+            best_by_id.values(),
+            key=lambda r: (-r.score, r.object_id, r.plane),
+        )
         # Dedupe warnings to distinct (code, plane) ONLY at the final request boundary.
         return Ok(
             value=RetrievalEnvelope(
@@ -654,6 +695,12 @@ async def _run_single(
                             "provenance": hit.score_components.provenance,
                             "reinforcement": hit.score_components.reinforce,
                         },
+                        # RET-012: forward the raw relevance inputs from the
+                        # fast leg so the cross-plane seam can re-anchor
+                        # against the working-set global max. Fast mode
+                        # never reranks, so ``raw_rerank_score`` is ``None``.
+                        raw_rrf_score=hit.raw_rrf_score,
+                        raw_rerank_score=hit.raw_rerank_score,
                         lineage=hit.lineage_summary,
                         payload=hit.payload,
                         state=raw_state if raw_state is not None else None,
@@ -708,6 +755,14 @@ def _pack_scored_hits(hits: Sequence[Any], include_payload: bool) -> list[Retrie
                 payload=payload if include_payload else None,
                 state=raw_state if raw_state is not None else None,
                 importance=raw_importance if raw_importance is not None else None,
+                # RET-012: forward the raw relevance inputs from the
+                # deep / blended leg so the cross-plane seam can
+                # re-anchor against the working-set global max. The
+                # ``getattr`` defaults preserve the seam's passthrough
+                # branch for any older ``ScoredHit`` constructed
+                # without the new fields.
+                raw_rrf_score=getattr(hit, "raw_rrf_score", None),
+                raw_rerank_score=getattr(hit, "raw_rerank_score", None),
             )
         )
     return results

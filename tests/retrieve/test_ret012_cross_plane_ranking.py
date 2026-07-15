@@ -89,10 +89,12 @@ def _mk_leg_result(
     """Construct one per-leg ``RetrievalResult`` exactly as the current per-leg code would produce
     it for a sole hit (per-leg ``batch_max_rrf == raw_rrf`` ⇒ per-leg relevance is 1.0).
 
-    This represents the BROKEN per-leg behavior the seam is designed to
-    correct. The marker is the audit handle for which leg produced the
-    hit; ``raw_rrf`` is the audit handle for the leg's pre-normalization
-    relevance input.
+    The seam at the cross-plane merge re-anchors relevance against the
+    working-set global max using the ``raw_rrf_score`` propagated from
+    the per-leg ``Hit`` (and from there through ``FastHit`` /
+    ``ScoredHit``). Tests must populate it here so the seam has the raw
+    input to recompute against — without it the seam's passthrough
+    branch fires and the contract is not exercised.
     """
     relevance = 1.0 if relevance_override is None else relevance_override
     components = {
@@ -118,6 +120,10 @@ def _mk_leg_result(
         score_components=components,
         lineage={},
         payload={"_ret012_marker": marker, "_ret012_raw_rrf": raw_rrf},
+        # RET-012: the raw inputs the seam reads. ``raw_rerank_score``
+        # stays ``None`` for fast-mode (no rerank) hits.
+        raw_rrf_score=raw_rrf,
+        raw_rerank_score=None,
     )
 
 
@@ -143,7 +149,8 @@ def _mk_rerank_result(
     *, object_id: str, plane: str, rerank_score: float, marker: str
 ) -> RetrievalResult:
     """Construct one deep-mode ``RetrievalResult`` as the current per-leg code would produce it:
-    per-leg relevance is ``_sigmoid(rerank_score)`` (intrinsic, not divided by batch_max)."""
+    per-leg relevance is ``_sigmoid(rerank_score)`` (intrinsic, not divided by batch_max). The
+    seam's sigmoid branch fires on ``raw_rerank_score`` and preserves the per-leg value."""
     relevance = _sigmoid(rerank_score)
     components = {
         "relevance": relevance,
@@ -168,6 +175,11 @@ def _mk_rerank_result(
         score_components=components,
         lineage={},
         payload={"_ret012_marker": marker, "_ret012_rerank_score": rerank_score},
+        # RET-012: the raw inputs the seam reads. Deep / blended
+        # carries a ``raw_rerank_score`` (cross-encoder logit) and
+        # also a ``raw_rrf_score`` (the hybrid RRF before rerank).
+        raw_rrf_score=None,
+        raw_rerank_score=rerank_score,
     )
 
 

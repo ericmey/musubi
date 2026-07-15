@@ -217,10 +217,67 @@ follow-up action, not a block on the slice.
   Issue label flipped to ``status:in-progress``; slice frontmatter
   ``owner: cowork-tama`` is the authoritative work-assignment record.
   Assignment reconciliation is an org-admin follow-up.
-- **This commit (slice doc + test file only):** no production edits.
-  Test contract is the 8 tests named above; the four RED fail under
-  current code, the four GREEN pass. Seam implementation commit
-  follows in the same PR after the slice + tests are reviewed.
+- **First bounded commit (this branch):** slice doc + spec + claim
+  lock + test file (4 files, 763 insertions, zero src). The four
+  RED tests fail under current code, the four GREEN guards pass.
+
+### 2026-07-15 — cowork-tama (seam impl: pre-dedup global calibration, deterministic sort key, raw fields)
+
+- **Seam impl commit (this branch, follow-up):** 3 src files + 2 test
+  files (238 insertions, 18 deletions). All 8 ret012 tests now
+  pass; full suite 2092 passed, 194 skipped, 4 xfailed, zero
+  regressions.
+- **Files touched:**
+  - `src/musubi/retrieve/scoring.py` — added two optional raw fields
+    on `ScoredHit` (`raw_rrf_score`, `raw_rerank_score`); propagated
+    through `score_result`; added `calibrate_global_relevance` (the
+    seam) as a free function with duck-typed input (any object with
+    the raw fields and `score_components`). Imported `replace` from
+    `dataclasses`.
+  - `src/musubi/retrieve/fast.py` — added the two raw fields on
+    `FastHit`; populated in `_pack` (`raw_rrf_score=hybrid_hit.score`,
+    `raw_rerank_score=None` for fast mode).
+  - `src/musubi/retrieve/orchestration.py` — added the two raw fields
+    on `RetrievalResult` (internal-only, never on wire models);
+    populated at the three leg boundaries (fast branch, deep / blended
+    `_pack_scored_hits`, recent branch is default `None` / `None`);
+    restructured the multi-target branch in `_retrieve_uncounted` to
+    (1) collect every leg's hits into a flat list, (2) call
+    `calibrate_global_relevance` on the flat list BEFORE `best_by_id`,
+    (3) build `best_by_id` from the calibrated list, (4) sort by
+    `(-score, object_id, plane)` for deterministic cross-plane
+    ordering. Single-target fast path bit-for-bit preserved.
+  - `tests/retrieve/test_ret012_cross_plane_ranking.py` — updated the
+    per-leg mocks to populate `raw_rrf_score` (and
+    `raw_rerank_score` for the rerank case) on the constructed
+    `RetrievalResult`s. The seam needs the raw inputs to recompute
+    relevance; without them the seam's passthrough branch fires and
+    the RED contracts are not exercised.
+  - `tests/retrieve/test_fast.py` — **concrete invariant conflict fix:**
+    `test_fast_path_does_not_call_reranker` grepped for the literal
+    substring "rerank" in `fast.py`, which now matches the new
+    `raw_rerank_score` field name and its docstrings / comments.
+    The seam impl does not call the rerank function — it only adds
+    the field, set to `None` for fast mode. Tightened the assertion
+    to check the actual invariant: no `musubi.retrieve.rerank` import
+    and no `run_rerank` call. This is a test correctness fix, not a
+    scope expansion.
+- **Gates:** `make check` exit 0 (ruff format, ruff check, mypy
+  strict, pytest 2092 passed, coverage ≥ 85%); `make tc-coverage
+  SLICE=slice-ret012-cross-plane-ranking` exit 0 (8/8 bullets
+  passing, ✓ Closure Rule satisfied); `make agent-check` exit 0
+  (warnings only, all pre-existing; the only ret012-specific warning
+  is the same "no GH Issue titled 'slice: …'" meta-issue gap that
+  affects every slice in the repo).
+- **Spec drift:** none. The slice doc, the spec
+  (`05-retrieval/cross-plane-ranking.md`), and the impl are
+  consistent. The function signature is
+  `calibrate_global_relevance(candidates: list[RetrievalResult])`
+  (no `now` parameter — the seam is purely intrinsic on the working
+  set, with no time-dependent logic).
+- **No PR open yet.** The seam impl commit is review-ready; the
+  draft PR will be opened after this commit, with the body linking
+  Issue #512 and the first commit's test evidence.
 
 ## Out-of-band continuation
 

@@ -701,7 +701,14 @@ async def test_fast_path_defaults_plane_when_namespace_missing(
 def test_fast_path_does_not_call_reranker() -> None:
     source = __import__("pathlib").Path("src/musubi/retrieve/fast.py").read_text()
 
-    assert "rerank" not in source
+    # The fast path must not import or call the rerank module. The
+    # ``raw_rerank_score`` field name (added by RET-012 to thread the
+    # cross-encoder raw input through to the cross-plane seam) is
+    # allowed; it is set to ``None`` for fast mode and never invokes
+    # the reranker. The invariant is "fast mode does not CALL rerank,"
+    # not "the file contains no occurrence of the substring 'rerank'."
+    assert "from musubi.retrieve.rerank import" not in source
+    assert "run_rerank" not in source
 
 
 @pytest.mark.property
