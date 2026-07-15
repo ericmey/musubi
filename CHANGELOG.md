@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/ericmey/musubi/compare/v1.13.5...v1.14.0) (2026-07-15)
+
+
+### Features
+
+* **ret009:** forward include_lineage through RetrieveQuery to orchestration ([#481](https://github.com/ericmey/musubi/issues/481)) ([4ea6761](https://github.com/ericmey/musubi/commit/4ea67610e6e654ae06e0169fd0b27ad1306fa6ba))
+
 ## [1.13.5](https://github.com/ericmey/musubi/compare/v1.13.4...v1.13.5) (2026-07-15)
 
 
