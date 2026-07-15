@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.15.1](https://github.com/ericmey/musubi/compare/v1.15.0...v1.15.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* lifecycle job metrics and failure visibility (Issue [#368](https://github.com/ericmey/musubi/issues/368)) ([#498](https://github.com/ericmey/musubi/issues/498)) ([ee5ef6d](https://github.com/ericmey/musubi/commit/ee5ef6d7b866f6ad5b3cf67f2ff15cd34b9116ed))
+
 ## [1.15.0](https://github.com/ericmey/musubi/compare/v1.14.3...v1.15.0) (2026-07-15)
 
 
