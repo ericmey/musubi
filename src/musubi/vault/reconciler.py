@@ -120,6 +120,9 @@ class VaultReconciler:
         ghosts_archived = 0
         ghosts_pending = 0
 
+        # Inventory validation and pagination failures intentionally propagate:
+        # without a complete, trustworthy inventory, archiving any row would be
+        # unsafe. Per-row transition failures are isolated below.
         inventory = await self.curated_plane.scan_vault_rows()
         for row in inventory:
             # Vault paths are canonically POSIX-relative.  Normalize legacy

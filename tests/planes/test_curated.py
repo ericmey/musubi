@@ -667,8 +667,6 @@ async def test_scan_vault_rows_paginates_and_validates(
     await plane.create(_make(namespace=ns, title="row2", vault_path="path2.md"))
     await plane.create(_make(namespace=ns, title="row3", vault_path="path3.md"))
 
-    from unittest.mock import patch
-
     # Patch the synchronous scroll seam to return two deterministic pages.
     original_scroll = plane._client.scroll
 
