@@ -1,7 +1,7 @@
 """RET-002 / Issue #500 — final-delivery access accounting.
 
 The single seam that records "this stored row was actually delivered to a caller." It runs
-ONCE, at the final retrieval boundary (``orchestration.retrieve``, immediately after
+ONCE, at the final retrieval boundary (``orchestration.retrieve``, immediately before
 ``_finalize``), over exactly the delivered rows — after fanout, dedup, sorting, and limit.
 Never a dropped candidate, and independent of lineage hydration (which no longer accounts;
 see the ``bump_access=False`` sites in ``deep._hydrate_one``).
@@ -75,6 +75,7 @@ async def account_delivered(client: QdrantClient, results: list[Any]) -> None:
             ),
             limit=len(pairs),
             with_payload=True,
+            with_vectors=False,
         )
         updates = [
             models.SetPayloadOperation(

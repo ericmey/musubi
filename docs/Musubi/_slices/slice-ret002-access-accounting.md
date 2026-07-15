@@ -52,7 +52,8 @@ true concurrent-counter safety is tracked separately as **Issue #502** and is NO
 
 ## Modified (owned by shipped slices — coordinated via the lock)
 - `src/musubi/retrieve/orchestration.py` (slice-retrieval-orchestration, done) — one async
-  accounting step in `retrieve()` immediately after `_finalize`.
+  accounting step in `retrieve()` immediately before `_finalize`, with failures finalized as
+  typed errors through that shared telemetry boundary.
 - `src/musubi/retrieve/deep.py` (slice-retrieval-deep, done) — `bump_access=False` at both
   hydration and lineage-walk episodic `get()` sites (decouple accounting from hydration).
 - `docs/Musubi/05-retrieval/orchestration.md` (slice-retrieval-orchestration, done) — new

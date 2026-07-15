@@ -382,6 +382,6 @@ async def test_accounting_is_batched_per_collection_not_n_plus_1(
 
     rows = await _run(qdrant, embedder, reranker, ns=ns, plane="episodic", mode="deep", limit=5)
     assert len(rows) == 5
-    assert writes.get(collection_for_plane("episodic"), 0) <= 1, (
+    assert writes.get(collection_for_plane("episodic"), 0) == 1, (
         "accounting must be one batched write, not N+1"
     )
