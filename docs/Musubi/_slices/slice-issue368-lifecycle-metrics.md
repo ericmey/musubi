@@ -1,6 +1,6 @@
 ---
 owner: gemini-3-1-shiori
-status: in-review
+status: done
 issue: 368
 title: "Slice: METRICS-001 lifecycle job metrics visibility"
 slice_id: slice-issue368-lifecycle-metrics
@@ -9,10 +9,10 @@ type: slice
 phase: "Observability"
 tags:
   - section/slices
-  - status/in-review
+  - status/done
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -52,6 +52,8 @@ Fix lifecycle job metrics and failure visibility (Issue #368). Implement central
 - Alerts updated if necessary.
 
 ## Work log
+- 2026-07-15 — Independently reviewed by `codex-gpt5`; exact-head CI and
+  repository gates passed. Merged as PR #498 at `ee5ef6d`; Issue #368 closed.
 - 2026-07-15 — Centralized lifecycle duration and error metrics in
   `LifecycleRunner._dispatch`, keyed by the exact registered `Job.name`.
   Removed per-sweep wrappers so each dispatched job records one duration and a
