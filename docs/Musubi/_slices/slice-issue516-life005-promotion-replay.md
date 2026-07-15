@@ -1,6 +1,6 @@
 ---
 owner: gemini-3-1-shiori
-status: in-progress
+status: in-review
 issue: 516
 title: "Slice: LIFE-005 promotion replay identity consistency"
 slice_id: slice-issue516-life005-promotion-replay
