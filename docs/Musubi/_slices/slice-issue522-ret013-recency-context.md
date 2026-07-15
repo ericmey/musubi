@@ -27,6 +27,7 @@ Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canoni
 ## Owned paths
 - `src/musubi/api/routers/context.py`
 - `tests/api/test_context.py`
+- `tests/api/test_ret007_telemetry_boundary.py` (RET-013 compatibility assertion only)
 
 ## Forbidden paths
 - Scattered authorization exceptions (Issue #523 is out of scope).
@@ -42,3 +43,7 @@ Implement a bounded recent-memory lane inside `/v1/context` (Issue #522). Canoni
 - `make check` is fully passing.
 
 ## Work log
+- 2026-07-15: RET-013 now invokes the shared orchestration boundary once for the
+  recent lane and once for the ranked lane. Updated the existing RET-007 context
+  telemetry assertion to require one warning-counter increment per degraded lane
+  (two total), while the response continues to deduplicate the warning code.
