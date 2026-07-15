@@ -24,7 +24,6 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 import pytest
 import pytest_mock
@@ -382,6 +381,7 @@ async def test_event_written_for_every_transition(
     assert [e.to_state for e in events_for_object] == ["matured", "demoted", "matured"]
 
 
+@pytest.mark.anyio
 async def test_concurrent_transitions_stale_expected_version_fence_violation(
     plane: EpisodicPlane,
     qdrant: QdrantClient,
