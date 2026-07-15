@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.2](https://github.com/ericmey/musubi/compare/v1.14.1...v1.14.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* **thoughts:** THOUGHT-001 check and history presence filtering ([#484](https://github.com/ericmey/musubi/issues/484)) ([850e935](https://github.com/ericmey/musubi/commit/850e935f6f0f1efb4b735c4e85c72463d699ea47))
+
 ## [1.14.1](https://github.com/ericmey/musubi/compare/v1.14.0...v1.14.1) (2026-07-15)
 
 
