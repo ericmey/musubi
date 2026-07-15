@@ -13,7 +13,11 @@ from watchdog.observers import Observer
 
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.types.common import generate_ksuid, utc_now
-from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter, curated_knowledge_from_frontmatter
+from musubi.vault.frontmatter import (
+    CuratedFrontmatter,
+    curated_knowledge_from_frontmatter,
+    parse_frontmatter,
+)
 from musubi.vault.namespacing import infer_namespace
 from musubi.vault.writelog import WriteLog
 from musubi.vault.writer import VaultWriter
@@ -292,9 +296,9 @@ class VaultWatcher:
             logger.error("Missing object_id or namespace for %s after validation", rel_path)
             return
 
-        from typing import Literal, cast
-
-        memory = curated_knowledge_from_frontmatter(fm, vault_path=rel_path, body_hash=body_hash, content=body)
+        memory = curated_knowledge_from_frontmatter(
+            fm, vault_path=rel_path, body_hash=body_hash, content=body
+        )
         await self.curated_plane.create(memory)
 
     async def _bootstrap_id(self, rel_path: str, data: dict[str, Any], body: str) -> None:
@@ -355,8 +359,6 @@ class VaultWatcher:
             import hashlib
 
             from watchdog.events import FileSystemEvent
-
-            from musubi.vault.frontmatter import parse_frontmatter, curated_knowledge_from_frontmatter
 
             for path in self.vault_root.rglob("*.md"):
                 try:

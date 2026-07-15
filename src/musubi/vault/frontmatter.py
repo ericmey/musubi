@@ -6,12 +6,13 @@ import re
 from collections.abc import Mapping
 from datetime import datetime
 from io import StringIO
-from typing import Any
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ruamel.yaml import YAML
 
-from musubi.types.common import KSUID, LifecycleState
+from musubi.types.common import KSUID, ArtifactRef, LifecycleState
+from musubi.types.curated import CuratedKnowledge
 
 
 class ArtifactRefFrontmatter(BaseModel):
@@ -151,9 +152,6 @@ def _yaml_loader() -> YAML:
     )
     return yaml
 
-from typing import Literal, cast
-from musubi.types.curated import CuratedKnowledge
-from musubi.types.common import ArtifactRef
 
 def curated_knowledge_from_frontmatter(
     fm: CuratedFrontmatter, *, vault_path: str, body_hash: str, content: str
@@ -161,13 +159,15 @@ def curated_knowledge_from_frontmatter(
     """Convert parsed CuratedFrontmatter into the canonical CuratedKnowledge core model."""
     if fm.read_by:
         raise ValueError("read_by is unsupported on CuratedKnowledge and cannot be non-empty.")
-    
+    if fm.model_extra:
+        raise ValueError(f"Unsupported frontmatter fields detected: {list(fm.model_extra.keys())}")
+
     # Convert ArtifactRefFrontmatter to core ArtifactRef explicitly
     supported_by = [
         ArtifactRef(artifact_id=ref.artifact_id, chunk_id=ref.chunk_id, quote=ref.quote)
         for ref in fm.supported_by
     ]
-    
+
     return CuratedKnowledge(
         object_id=fm.object_id,  # type: ignore[arg-type]
         namespace=fm.namespace,  # type: ignore[arg-type]
