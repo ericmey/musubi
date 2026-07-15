@@ -914,9 +914,12 @@ async def _find_supersession_candidate(
         candidate_pairs.append((candidate_id, candidate_content))
 
     # ONE batched embed_dense call (discriminator: at most one network
-    # roundtrip per seam invocation). The needle may ride in the same
-    # batch as the topic-surviving candidates, or be embedded
-    # separately — both shapes stay within the single-call contract.
+    # roundtrip per seam invocation). The needle rides in the SAME
+    # batch as the topic-surviving candidates (`[needle] + contents`).
+    # This is the single-call contract: zero per-candidate network
+    # roundtrips, regardless of how many topic-compatible candidates
+    # the namespace has. The Embedder Protocol contract is
+    # `len(vectors) == len(batch)`; we defensively check it below.
     if not candidate_pairs:
         return None
     batch = [needle] + [c for _, c in candidate_pairs]
@@ -930,6 +933,19 @@ async def _find_supersession_candidate(
 
     candidates: list[KSUID] = []
     for (cid, _), candidate_vec in zip(candidate_pairs, vectors[1:], strict=True):
+        # The Embedder Protocol doesn't guarantee fixed-length vectors.
+        # A misbehaving embedder returning a different-length candidate
+        # vector would let the strict-zip below raise and abort the
+        # whole sweep; we abstain on the malformed pair instead.
+        if len(candidate_vec) != len(needle_vec):
+            log.warning(
+                "supersession-seam-abstain-skipped-candidate candidate_id=%s "
+                "len(needle_vec)=%d len(candidate_vec)=%d",
+                cid,
+                len(needle_vec),
+                len(candidate_vec),
+            )
+            continue
         candidate_norm = math.sqrt(sum(x * x for x in candidate_vec)) or 1.0
         dot = sum(x * y for x, y in zip(needle_vec, candidate_vec, strict=True))
         similarity = dot / (needle_norm * candidate_norm)

@@ -8,11 +8,14 @@ existing ``Embedder``) AND shares at least one ``linked_to_topics``
 entry with the new memory. Ambiguity abstains. Substring overlap
 alone is never sufficient.
 
-The first contract is bounded to fifteen tests in this file:
+The first contract is bounded to sixteen tests in this file:
 
     13 RED discriminating tests   (currently failing under live code)
     2 GREEN preservation guards  (passing under live code; the seam
                                   must not break them)
+    1 RED→GREEN call-shape discriminator (close-out add: seam makes
+                                  exactly one batched embed_dense
+                                  call, regardless of candidate count)
 
 Test function names transcribe the slice doc's Test Contract bullets
 verbatim per the AGENTS.md Test Contract Closure Rule. The tests

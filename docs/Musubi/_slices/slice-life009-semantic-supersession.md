@@ -169,14 +169,14 @@ Closure Rule.
 13. `test_substring_only_does_not_match` — RED (the OLD substring
     logic would have matched these; the NEW semantic logic does
     not)
-14. `test_seam_makes_exactly_one_embed_dense_call` — RED→GREEN call-shape discriminator (close-out add)
+14. `test_seam_makes_exactly_one_embed_dense_call` — RED→GREEN call-shape discriminator (close-out add: seam makes exactly one batched `embed_dense` call, regardless of candidate count)
 
 GREEN preservation guards (the seam must not break the existing
 correctness contract; the slice adds GREEN guards that pin the
 existing behavior):
 
-14. `test_existing_no_predecessor_branch_still_returns_none` — GREEN
-15. `test_existing_both_sides_of_link_still_set` — GREEN
+15. `test_existing_no_predecessor_branch_still_returns_none` — GREEN
+16. `test_existing_both_sides_of_link_still_set` — GREEN
 
 15 tests total. The first commit (slice doc + spec + lock + test
 file) is tests-only; the seam impl is a follow-up commit.
