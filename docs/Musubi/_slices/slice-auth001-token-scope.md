@@ -203,7 +203,7 @@ on ``gh issue edit 523 --add-assignee minimax-m3``. The owner
 frontmatter on this slice is ``cowork-tama`` per the design
 ACK; the GitHub-side assignee is an org-admin / repo-owner
 action that is out of scope for the slice work. The Issue label
-is flipped to ``status:in-progress`` so the work is visibly
+is flipped to ``status:in-review`` so the work is visibly
 claimed, and the slice frontmatter is the authoritative intent
 record per the AGENTS.md Dual-update rule.
 
