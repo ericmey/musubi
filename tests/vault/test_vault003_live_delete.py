@@ -653,6 +653,16 @@ async def test_two_namespaces_same_vault_path_neither_archives(
     joined = " ".join(r.getMessage() for r in warnings)
     assert row_a.object_id in joined, f"warning must list row_a object_id, got: {joined!r}"
     assert row_b.object_id in joined, f"warning must list row_b object_id, got: {joined!r}"
+    # The count must be presented as a truthful bounded LOWER BOUND, never as
+    # an exact cardinality — the resolver caps its scroll at limit=2.
+    assert "match_count_at_least=" in joined, (
+        f"warning must present the count as a lower bound (match_count_at_least=), "
+        f"not an exact match_count; got: {joined!r}"
+    )
+    assert "match_count=" not in joined, (
+        f"warning must NOT present an exact 'match_count=' (it is capped at 2, a "
+        f"lower bound); got: {joined!r}"
+    )
 
 
 @pytest.mark.asyncio

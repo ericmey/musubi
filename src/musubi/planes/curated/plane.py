@@ -114,7 +114,13 @@ class FindByVaultPathError:
 
     code: str
     detail: str
+    # For ``multiple_matches`` this is the OBSERVED BOUNDED LOWER BOUND, not
+    # the total cardinality: ``find_by_vault_path`` scrolls with ``limit=2``
+    # (the second match is sufficient to fail closed), so ``match_count`` is
+    # capped at 2 and a real duplicate set may be larger. Read it as
+    # "at least this many matched", never as an exact count.
     match_count: int = 0
+    # Likewise bounded: at most the first two matching object_ids observed.
     match_object_ids: tuple[str, ...] = ()
 
 

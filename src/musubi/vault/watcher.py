@@ -378,8 +378,12 @@ class VaultWatcher:
         lookup = await self.curated_plane.find_by_vault_path(rel_path)
         if isinstance(lookup, Err):
             if lookup.error.code == "multiple_matches":
+                # match_count is a BOUNDED LOWER BOUND (the resolver caps its
+                # scroll at limit=2), so present it truthfully — the real
+                # duplicate set may be larger. Same for the object_ids.
                 logger.warning(
-                    "vault-delete-failed-multiple-matches path=%s match_count=%d match_object_ids=%s",
+                    "vault-delete-failed-multiple-matches path=%s match_count_at_least=%d "
+                    "match_object_ids_observed=%s",
                     rel_path,
                     lookup.error.match_count,
                     ",".join(lookup.error.match_object_ids),
