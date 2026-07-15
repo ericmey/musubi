@@ -21,8 +21,7 @@ retries, bypass paths, and long-term operation. Zero source until the red contra
 ## The gap (verified against `src/musubi/lifecycle/transitions.py` + the plane layer)
 
 `transition()` mutates Qdrant FIRST (`set_payload`, l.252-256) then records the audit (l.267-268) — two
-failure/crash windows: mutation-without-audit, and `expected_version` is hard-fenced (LIFE-010 supersession)
-(l.180-187). C6 durable-on-accept closes neither. **And `transitions.py` is not the only mutation path
+failure/crash windows: mutation-without-audit, and `expected_version` is hard-fenced (LIFE-010 transition hard fence). C6 durable-on-accept closes neither. **And `transitions.py` is not the only mutation path
 (correction G).**
 
 ## Fork rulings (Yua 2026-07-13)

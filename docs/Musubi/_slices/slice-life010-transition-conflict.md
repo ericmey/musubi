@@ -2,7 +2,7 @@
 title: "Slice: LIFE-010 — Transition Conflict Hard Fence"
 slice_id: slice-life010-transition-conflict
 status: in-review
-owner: shiori@home
+owner: gemini-3-1-pro
 phase: "Lifecycle"
 section: 06-ingestion
 type: slice
@@ -26,16 +26,12 @@ Enforces hard-fence semantic validation for `expected_version` mismatches during
 
 ## Files
 - `owns_paths`: 
-  - `src/musubi/lifecycle/transitions.py`
-  - `tests/lifecycle/test_lifecycle.py`
-  - `docs/Musubi/13-decisions/c6b-lifecycle-atomicity-design.md`
-  - `docs/Musubi/_slices/slice-lifecycle-engine.md`
   - `docs/Musubi/_slices/slice-life010-transition-conflict.md`
 
 ## Test Contract
 1. `test_concurrent_transitions_stale_expected_version_fence_violation`
 
-## Work Log
+## Work log
 - Implemented `version_fence_violation` strict enforcement in `transitions.py`.
 - Rebuilt discriminator asserting strict `Err` format and `mocker.spy` confirming completely suppressed target side-effects over state mutation and `LifecycleEventSink` flushing.
-- Resolved Issue #556 exactly.
+- Resolved Issue #556 exactly. Issue #556 is an authorized cross-slice correction (transitions.py is owned by slice-lifecycle-engine); the owning slice work log was updated accordingly.
