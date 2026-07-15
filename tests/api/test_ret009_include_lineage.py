@@ -1,0 +1,279 @@
+"""RET-009 — public retrieval forwards include_lineage.
+
+The public ``POST /v1/retrieve`` model declares ``include_lineage: bool = True``
+and the router forwards the caller value verbatim through the existing canonical
+orchestration seam. These tests prove the wire contract end-to-end:
+
+- omitted field forwards the default ``True`` (backward-compatible)
+- explicit ``true``/``false`` reach orchestration with the caller's value
+- concrete and fanout namespace shapes both preserve the value
+- non-boolean scalars (strings, ints, lists, dicts) are rejected at the wire (422)
+- the generated OpenAPI exposes the field with default ``True``
+
+The field is ``StrictBool`` so non-boolean scalars (strings, ints, null)
+are rejected at the wire boundary (422) rather than accepted.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pytest
+
+from musubi.settings import Settings
+from musubi.types.common import Ok
+
+
+class DefectStillPresent(Exception):
+    """Raised when the current code does not exhibit the contract-required behavior."""
+
+
+# Module-level capture list. Each test appends the forwarded query dict here.
+_CAPTURED: list[dict[str, Any]] = []
+
+
+def _make_app(monkeypatch: pytest.MonkeyPatch, api_settings: Settings) -> Any:
+    """Build a TestClient with the orchestration seam captured to module-level list."""
+    from fastapi.testclient import TestClient
+
+    from musubi.api.app import create_app
+    from musubi.api.dependencies import (
+        get_embedder,
+        get_qdrant_client,
+        get_reranker,
+        get_settings_dep,
+    )
+    from musubi.auth.tokens import AuthContext
+
+    def mock_auth(*args: Any, **kwargs: Any) -> Any:
+        return Ok(
+            value=AuthContext(
+                subject="test",
+                scopes=("**:rw",),
+                presence="test",
+                issuer="test",
+                audience="test",
+                token_id="t",
+            )
+        )
+
+    async def mock_run_orchestration(*args: Any, **kwargs: Any) -> Any:
+        # Router calls ``run_orchestration_retrieve(client=..., embedder=..., reranker=...,
+        # query=...)`` — query is always a keyword. Accept it positionally too (args[3]) so
+        # the mock survives a future router refactor that switches to positional.
+        query = kwargs.get("query")
+        if query is None and len(args) >= 4:
+            query = args[3]
+        if isinstance(query, dict):
+            _CAPTURED.append(query)
+
+        class MockOrchResult:
+            def __init__(self) -> None:
+                self.results: list[Any] = []
+                self.warnings: list[Any] = []
+
+            def __iter__(self) -> Any:
+                return iter(self.results)
+
+        return Ok(value=MockOrchResult())
+
+    monkeypatch.setattr("musubi.api.routers.retrieve.authenticate_request", mock_auth)
+    monkeypatch.setattr(
+        "musubi.api.routers.retrieve.run_orchestration_retrieve", mock_run_orchestration
+    )
+
+    app = create_app(settings=api_settings)
+    app.dependency_overrides[get_settings_dep] = lambda: api_settings
+    app.dependency_overrides[get_qdrant_client] = lambda: None
+    app.dependency_overrides[get_embedder] = lambda: None
+    app.dependency_overrides[get_reranker] = lambda: None
+
+    return TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _clear_capture() -> None:
+    """Clear the module-level capture list before each test."""
+    _CAPTURED.clear()
+
+
+def test_omitted_include_lineage_forwards_true(
+    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+) -> None:
+    """Omitting include_lineage must forward the default ``True`` to orchestration."""
+    client = _make_app(monkeypatch, api_settings)
+    response = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": "Bearer fake"},
+        json={"namespace": "nyla/test/episodic", "query_text": "x", "mode": "fast", "limit": 5},
+    )
+    assert response.status_code == 200, response.text
+    if not _CAPTURED:
+        raise DefectStillPresent("orchestration was not called")
+    q = _CAPTURED[-1]
+    if "include_lineage" not in q:
+        raise DefectStillPresent("include_lineage missing from forwarded query dict")
+    if q["include_lineage"] is not True:
+        raise DefectStillPresent(
+            f"omitted include_lineage must forward True, got {q['include_lineage']!r}"
+        )
+
+
+def test_explicit_include_lineage_false_forwards_false(
+    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+) -> None:
+    """Explicit ``include_lineage: false`` must reach orchestration as ``False``."""
+    client = _make_app(monkeypatch, api_settings)
+    response = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": "Bearer fake"},
+        json={
+            "namespace": "nyla/test/episodic",
+            "query_text": "x",
+            "mode": "fast",
+            "limit": 5,
+            "include_lineage": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    if not _CAPTURED or _CAPTURED[-1].get("include_lineage") is not False:
+        raise DefectStillPresent(
+            f"explicit include_lineage=False must forward False, got "
+            f"{(_CAPTURED[-1].get('include_lineage', '<missing>') if _CAPTURED else '<not-called>')!r}"
+        )
+
+
+def test_explicit_include_lineage_true_forwards_true(
+    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+) -> None:
+    """Explicit ``include_lineage: true`` must reach orchestration as ``True``."""
+    client = _make_app(monkeypatch, api_settings)
+    response = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": "Bearer fake"},
+        json={
+            "namespace": "nyla/test/episodic",
+            "query_text": "x",
+            "mode": "fast",
+            "limit": 5,
+            "include_lineage": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    if not _CAPTURED or _CAPTURED[-1].get("include_lineage") is not True:
+        raise DefectStillPresent(
+            f"explicit include_lineage=True must forward True, got "
+            f"{(_CAPTURED[-1].get('include_lineage', '<missing>') if _CAPTURED else '<not-called>')!r}"
+        )
+
+
+def test_concrete_namespace_preserves_include_lineage(
+    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+) -> None:
+    """3-segment concrete namespace must preserve the include_lineage value."""
+    client = _make_app(monkeypatch, api_settings)
+    response = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": "Bearer fake"},
+        json={
+            "namespace": "nyla/test/episodic",
+            "query_text": "x",
+            "mode": "fast",
+            "limit": 5,
+            "include_lineage": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    if not _CAPTURED or _CAPTURED[-1].get("include_lineage") is not False:
+        raise DefectStillPresent("concrete namespace: include_lineage=False not forwarded")
+
+
+def test_fanout_namespace_preserves_include_lineage(
+    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+) -> None:
+    """2-segment fanout namespace must preserve the include_lineage value."""
+    client = _make_app(monkeypatch, api_settings)
+    response = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": "Bearer fake"},
+        json={
+            "namespace": "nyla/test",
+            "query_text": "x",
+            "mode": "fast",
+            "limit": 5,
+            "planes": ["episodic", "curated"],
+            "include_lineage": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    if not _CAPTURED or _CAPTURED[-1].get("include_lineage") is not False:
+        raise DefectStillPresent("fanout namespace: include_lineage=False not forwarded")
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "false",  # non-empty string
+        0,  # int zero
+        1,  # int one
+        "not-a-bool",  # arbitrary non-bool string
+        [],  # empty list
+        {"k": "v"},  # dict
+        None,  # JSON null
+    ],
+    ids=["str_false", "int_zero", "int_one", "str_garbage", "empty_list", "dict", "null"],
+)
+def test_non_boolean_include_lineage_rejected_at_wire(
+    bad_value: object, monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+) -> None:
+    """Non-boolean include_lineage must be rejected at the wire boundary (422).
+
+    Strict bool — non-boolean scalars (strings, ints, lists, dicts) must be
+    rejected at the wire (422). The string ``"false"`` and the ints ``0``/``1`` are
+    the load-bearing cases for the strict-bool contract.
+    """
+    client = _make_app(monkeypatch, api_settings)
+    response = client.post(
+        "/v1/retrieve",
+        headers={"Authorization": "Bearer fake"},
+        json={
+            "namespace": "nyla/test/episodic",
+            "query_text": "x",
+            "mode": "fast",
+            "limit": 5,
+            "include_lineage": bad_value,
+        },
+    )
+    if response.status_code != 422:
+        raise DefectStillPresent(
+            f"non-boolean include_lineage={bad_value!r} must yield 422, got "
+            f"{response.status_code}: {response.text}"
+        )
+    if _CAPTURED:
+        raise DefectStillPresent("orchestration must not be called when the body is invalid")
+
+
+def test_openapi_exposes_include_lineage_with_default_true(
+    monkeypatch: pytest.MonkeyPatch, api_settings: Settings
+) -> None:
+    """The generated OpenAPI must expose include_lineage with default True."""
+    client = _make_app(monkeypatch, api_settings)
+    response = client.get("/v1/openapi.json")
+    assert response.status_code == 200, response.text
+    schema = response.json()
+    components = schema.get("components", {}).get("schemas", {})
+    retrieve_query = components.get("RetrieveQuery")
+    if retrieve_query is None:
+        raise DefectStillPresent("RetrieveQuery schema missing from OpenAPI components")
+    props = retrieve_query.get("properties", {})
+    if "include_lineage" not in props:
+        raise DefectStillPresent("include_lineage missing from RetrieveQuery OpenAPI schema")
+    field = props["include_lineage"]
+    if field.get("type") != "boolean":
+        raise DefectStillPresent(
+            f"include_lineage must be a boolean in OpenAPI, got {field.get('type')!r}"
+        )
+    if field.get("default") is not True:
+        raise DefectStillPresent(
+            f"include_lineage must default to True in OpenAPI, got {field.get('default')!r}"
+        )

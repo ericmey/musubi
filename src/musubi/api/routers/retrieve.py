@@ -36,7 +36,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, Request
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictBool, model_validator
 from qdrant_client import QdrantClient
 
 from musubi.api.dependencies import (
@@ -135,6 +135,17 @@ class RetrieveQuery(BaseModel):
             "In `mode='deep'` and `mode='blended'`, `include_archived` is "
             "currently ignored — pass `state_filter` explicitly when those "
             "modes need archive-side states."
+        ),
+    )
+
+    include_lineage: StrictBool = Field(
+        default=True,
+        description=(
+            "Forwarded verbatim to the orchestration seam. Defaults to true; "
+            "set explicitly to false to disable lineage hydration on the wire. "
+            "Preserved across concrete and fanout namespace shapes. "
+            "Strict bool — non-boolean values (strings, numbers, null) are "
+            "rejected at the wire boundary."
         ),
     )
 
@@ -430,6 +441,7 @@ async def retrieve(
         query_body["since"] = body.since
     if body.tags is not None:
         query_body["tags"] = body.tags
+    query_body["include_lineage"] = body.include_lineage
 
     orchestration_result = await run_orchestration_retrieve(
         client=qdrant,
