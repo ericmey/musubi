@@ -1,6 +1,6 @@
 ---
 owner: claude-code-opus48
-status: in-progress
+status: in-review
 issue: 530
 title: "Slice: DATA-001 concurrency-safe full-object updates"
 slice_id: slice-data001-concurrent-full-object-update
@@ -9,10 +9,10 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: [slice-ret008-concurrent-accounting]
 blocks: []
 ---
