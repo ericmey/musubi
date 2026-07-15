@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.16.2](https://github.com/ericmey/musubi/compare/v1.16.1...v1.16.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* LIFE-005 promotion replay identity consistency (Issue [#516](https://github.com/ericmey/musubi/issues/516)) ([#520](https://github.com/ericmey/musubi/issues/520)) ([4e7147e](https://github.com/ericmey/musubi/commit/4e7147e8bbabba08e244dbe3dadca8db0877260d))
+
 ## [1.16.1](https://github.com/ericmey/musubi/compare/v1.16.0...v1.16.1) (2026-07-15)
 
 
