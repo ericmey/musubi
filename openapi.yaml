@@ -1712,6 +1712,15 @@ components:
         score:
           type: number
           title: Score
+        content_truncated:
+          default: false
+          title: Content Truncated
+          type: boolean
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
       type: object
       required:
       - object_id
@@ -2560,6 +2569,15 @@ components:
           type: string
           const: ranked_combined
           title: Score Kind
+        content_truncated:
+          default: false
+          title: Content Truncated
+          type: boolean
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
         extra:
           $ref: '#/components/schemas/RankedExtra'
         title:
@@ -2736,6 +2754,15 @@ components:
             minimum: 0.0
           - type: 'null'
           title: Provenance Score
+        content_truncated:
+          default: false
+          title: Content Truncated
+          type: boolean
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
         extra:
           $ref: '#/components/schemas/RecentExtra'
         title:
