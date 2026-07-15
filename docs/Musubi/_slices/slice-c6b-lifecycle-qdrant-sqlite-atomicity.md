@@ -8,7 +8,7 @@ owner: aoi
 phase: "Lifecycle-audit 2026-07-13 — C6b atomicity design + red contract"
 tags: [section/slices, status/done, type/slice, lifecycle, audit, atomicity]
 updated: 2026-07-14
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: ["[[_slices/slice-c6-lifecycle-event-loss]]", "[[_slices/slice-h5-unify-state-mutation]]", "[[_slices/slice-c6b-phase1-source-impl]]"]
 issue: 437
