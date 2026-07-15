@@ -17,13 +17,11 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Header, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from qdrant_client import QdrantClient
 
-from musubi.api.dependencies import get_qdrant_client, get_settings_dep, get_thoughts_plane
+from musubi.api.dependencies import get_settings_dep, get_thoughts_plane
 from musubi.api.errors import APIError, ErrorCode
 from musubi.api.events import Subscription, broker
 from musubi.api.responses import ThoughtListResponse
-from musubi.api.routers._scroll import scroll_namespace
 from musubi.auth import AuthRequirement, authenticate_request
 from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
@@ -68,17 +66,16 @@ def _check_body_scope(request: Request, namespace: str, settings: Settings) -> N
 async def check_thoughts(
     request: Request,
     body: ThoughtCheckRequest = Body(...),
-    qdrant: QdrantClient = Depends(get_qdrant_client),
+    thoughts_plane: ThoughtsPlane = Depends(get_thoughts_plane),
     settings: Settings = Depends(get_settings_dep),
 ) -> ThoughtListResponse:
     _check_body_scope(request, body.namespace, settings)
-    items, _ = scroll_namespace(
-        qdrant,
-        collection="musubi_thought",
+    thoughts = await thoughts_plane.check(
         namespace=body.namespace,
+        my_presence=body.presence,
         limit=body.limit,
-        cursor=None,
     )
+    items = [t.model_dump(mode="json") for t in thoughts]
     return ThoughtListResponse(items=items)
 
 
@@ -86,19 +83,18 @@ async def check_thoughts(
 async def thought_history(
     request: Request,
     body: ThoughtHistoryRequest = Body(...),
-    qdrant: QdrantClient = Depends(get_qdrant_client),
+    thoughts_plane: ThoughtsPlane = Depends(get_thoughts_plane),
     settings: Settings = Depends(get_settings_dep),
 ) -> ThoughtListResponse:
     """First-cut: history is a namespace scroll. Semantic search will
     land once slice-retrieval-fast wires its dense path through the API."""
     _check_body_scope(request, body.namespace, settings)
-    items, _ = scroll_namespace(
-        qdrant,
-        collection="musubi_thought",
+    thoughts = await thoughts_plane.history_scroll(
         namespace=body.namespace,
+        presence=body.presence,
         limit=body.limit,
-        cursor=None,
     )
+    items = [t.model_dump(mode="json") for t in thoughts]
     return ThoughtListResponse(items=items)
 
 
