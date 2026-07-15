@@ -816,9 +816,7 @@ async def test_concurrent_archive_race_is_idempotent_not_warned(
     )
 
     # A visible DEBUG breadcrumb records the race for anyone reading logs.
-    debug_msgs = " ".join(
-        r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG
-    )
+    debug_msgs = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG)
     assert "vault-delete-idempotent-race" in debug_msgs, (
         f"race must log a 'vault-delete-idempotent-race' debug breadcrumb; got: {debug_msgs!r}"
     )
