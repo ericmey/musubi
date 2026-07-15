@@ -23,15 +23,13 @@ catches ONLY ``TransitionError(code='illegal_transition', to_state=
 logged at ``warning`` level with structured fields and the handler
 returns — no in-handler retry, to avoid unbounded recursion.
 
-The first contract is bounded to ten tests in this file:
-
-    8 RED discriminating tests   (currently failing under live code;
-                                  the seam must implement the contract)
-    2 GREEN preservation guards  (passing under live code; the seam
-                                  must not break them)
-
-Test function names transcribe the slice doc's Test Contract bullets
-verbatim per the AGENTS.md Test Contract Closure Rule.
+The tests in this file transcribe the slice's Test Contract bullets
+verbatim — RED discriminators that must fail under pre-slice code, plus
+GREEN preservation guards that must keep passing — per the AGENTS.md
+Test Contract Closure Rule. The slice doc's Test Contract is the single
+source of truth for the enumerated cases and their count; this docstring
+deliberately does not restate a number that would drift as the contract
+evolves (later review rounds have already added cases).
 
     uv run pytest tests/vault/test_vault003_live_delete.py -v
 """
@@ -593,6 +591,7 @@ async def test_dotfile_ignored(
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.asyncio
 async def test_two_namespaces_same_vault_path_neither_archives(
     plane: CuratedPlane,
     coordinator: LifecycleTransitionCoordinator,
@@ -656,6 +655,7 @@ async def test_two_namespaces_same_vault_path_neither_archives(
     assert row_b.object_id in joined, f"warning must list row_b object_id, got: {joined!r}"
 
 
+@pytest.mark.asyncio
 async def test_superseded_row_delete_emits_visible_warning(
     plane: CuratedPlane,
     ns: str,

@@ -150,7 +150,7 @@ and exercise the canonical seam end-to-end.
   discovered during test design, REPORT a separate ticket before
   expanding scope.
 
-## Test Contract (10 bullets, state 1 = passing at handoff)
+## Test Contract (state 1 = passing at handoff)
 
 1. `test_delete_archives_matching_row_via_canonical_transition`
    — RED. Delete resolves to exact stored `vault_path`; the row's
@@ -213,10 +213,10 @@ remain out of scope for this slice and are tracked in the parent
 slice's contract:
 
 - `test_on_deleted_archives_point` — the vacuous parent test was
-  removed in this slice; the 8 RED bullets in this slice's Test
-  Contract are the discriminating replacement (covers all parent
-  concerns: archive-via-canonical, default-retrieval exclusion,
-  audit, idempotency, sibling/prefix safety, missing-row no-op,
+  removed in this slice; the RED discriminating bullets in this slice's
+  Test Contract are the replacement (covers all parent concerns:
+  archive-via-canonical, default-retrieval exclusion, audit,
+  idempotency, sibling/prefix safety, missing-row no-op,
   transition-failure visibility).
 - `test_boot_scan_archives_removed_files` — VAULT-001 periodic
   ghost reconciliation (closed, Issue #446); not the live-delete

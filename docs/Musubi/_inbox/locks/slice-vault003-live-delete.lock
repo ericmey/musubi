@@ -6,9 +6,10 @@ base: 9a9f209 (live origin/main, no drift on this lane)
 scope: VAULT-003 / H12 P0 — live VaultWatcher delete event through
   canonical LifecycleTransitionCoordinator archive transition
   (Issue #552). Tests-first slice; zero src in this commit.
-  10-bullet Test Contract at tests/vault/test_vault003_live_delete.py:
-  8 RED discriminating + 2 GREEN preservation guards. Implementation
-  commits follow (CuratedPlane.find_by_vault_path typed public
+  Test Contract at tests/vault/test_vault003_live_delete.py
+  (RED discriminating + GREEN preservation guards; the file and the
+  slice doc are the source of truth for the enumerated cases and count).
+  Implementation commits follow (CuratedPlane.find_by_vault_path typed public
   method; VaultWatcher.__init__ required coordinator parameter;
   _handle_deleted canonical-transition wiring with the idempotency
   carve-out for archived->archived only).
