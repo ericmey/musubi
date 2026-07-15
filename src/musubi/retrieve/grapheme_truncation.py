@@ -1,7 +1,7 @@
 import regex
 
 
-def truncate_grapheme_safe(text: str, max_chars: int) -> str:
+def truncate_grapheme_safe(text: str, max_chars: int, suffix: str = "") -> str:
     r"""Truncate text safely at grapheme cluster boundaries.
 
     Python's native `text[:max_chars]` slices by unicode codepoints. This yields valid Unicode
@@ -14,18 +14,15 @@ def truncate_grapheme_safe(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
 
-    # We need to find the string up to max_chars CODEPOINTS that does not split a grapheme.
-    # The requirement: "preserve the existing cap unit as a maximum CODEPOINT budget...
-    # choose the last complete grapheme whose end <= budget (or <= max_chars-3 before appending '...')".
-
+    # Subtract suffix length from budget
+    suffix_len = len(suffix)
     budget = max_chars
-    if max_chars > 3:
-        budget = max_chars - 3
+    if max_chars > suffix_len:
+        budget = max_chars - suffix_len
 
     result = []
     current_codepoint_len = 0
 
-    # regex.finditer(r'\X', text) yields full grapheme clusters
     for match in regex.finditer(r"\X", text):
         grapheme = match.group()
         grapheme_len = len(grapheme)
@@ -36,7 +33,7 @@ def truncate_grapheme_safe(text: str, max_chars: int) -> str:
 
     truncated_str = "".join(result)
 
-    if max_chars <= 3:
+    if max_chars <= suffix_len:
         return truncated_str
 
-    return truncated_str + "..."
+    return truncated_str + suffix

@@ -323,12 +323,13 @@ def _to_item(ranked: _RankedCandidate, *, remaining_chars: int) -> ContextPackIt
     if remaining_chars <= 0:
         return None
     text = _display_text(ranked.candidate)
-    # DQ-001: whitespace collapse removed. Measure the exact display text.
-    display_text = text
+    # DQ-001: `_cap_text` normalizes whitespace before applying its cap. Measure the same
+    # normalized display text so whitespace collapse cannot produce a false truncation signal.
+    display_text = " ".join(text.split())
     original_length = len(display_text)
     from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
 
-    content = truncate_grapheme_safe(display_text, max_chars=remaining_chars)
+    content = truncate_grapheme_safe(display_text, max_chars=remaining_chars, suffix="...")
     if not content:
         return None
     evidence = f"{ranked.candidate.namespace}/{ranked.candidate.object_id}"

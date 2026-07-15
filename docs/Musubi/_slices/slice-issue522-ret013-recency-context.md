@@ -1,6 +1,6 @@
 ---
 owner: gemini-3-1-shiori
-status: in-review
+status: done
 issue: 522
 title: "Slice: RET-013 bounded recent-memory lane in canonical cross-modality context"
 slice_id: slice-issue522-ret013-recency-context
@@ -9,7 +9,7 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-review
+  - status/done
   - type/slice
 updated: 2026-07-15
 reviewed: true

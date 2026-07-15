@@ -9,10 +9,10 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

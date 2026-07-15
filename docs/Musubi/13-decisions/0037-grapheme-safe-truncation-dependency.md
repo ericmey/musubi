@@ -1,7 +1,8 @@
 ---
 title: "0037: Grapheme-Safe Truncation Dependency"
 section: 13-decisions
-tags: [architecture, python, retrieval, dependencies]
+tags: [architecture, python, retrieval, dependencies, type/adr, status/accepted]
+type: adr
 updated: 2026-07-15
 status: accepted
 ---

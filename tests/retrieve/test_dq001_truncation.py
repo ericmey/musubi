@@ -13,12 +13,11 @@ def test_truncation_cuts_at_grapheme_boundaries_safely() -> None:
     text = "This is a long sentence."
     # Budget 10. `10 - 3 = 7` chars before padding.
     # "This is" is 7 chars.
-    assert truncate_grapheme_safe(text, max_chars=10) == "This is..."
+    assert truncate_grapheme_safe(text, max_chars=10, suffix="...") == "This is..."
 
 
 def test_truncation_respects_max_chars_lte_3() -> None:
     text = "Hello"
-    # No room for padding, just exact slice up to boundary
     assert truncate_grapheme_safe(text, max_chars=3) == "Hel"
 
 
@@ -31,19 +30,19 @@ def test_truncation_prevents_emoji_zwj_bisection() -> None:
     # Our budget is 9. The pad takes 3 -> 6.
     # "Here: " is 6. The next grapheme is 7 codepoints. 6 + 7 = 13 > 6.
     # It must drop the emoji entirely to stay under budget.
-    assert truncate_grapheme_safe(text, max_chars=9) == "Here: ..."
+    assert truncate_grapheme_safe(text, max_chars=9, suffix="...") == "Here: ..."
 
 
 def test_truncation_preserves_single_emoji() -> None:
     text = "Hello 🚀 world"  # len = 6 + 1 + 6 = 13.
     # budget = 12. Pad = 3 -> 9.
     # "Hello " (6) + "🚀" (1) + " " (1) + "w" (1) = 9.
-    assert truncate_grapheme_safe(text, max_chars=12) == "Hello 🚀 w..."
+    assert truncate_grapheme_safe(text, max_chars=12, suffix="...") == "Hello 🚀 w..."
 
 
 def test_truncation_prevents_combined_diacritic_bisection() -> None:
     text = "Café"  # len = 5
-    assert truncate_grapheme_safe(text, max_chars=4) == "C..."
+    assert truncate_grapheme_safe(text, max_chars=4, suffix="...") == "C..."
 
 
 def test_truncation_prevents_regional_indicator_bisection() -> None:
@@ -51,29 +50,26 @@ def test_truncation_prevents_regional_indicator_bisection() -> None:
     text = "Flag 🇺🇸"  # len = 5 + 2 = 7
     # Budget = 6. Pad = 3 -> 3.
     # "F" (1), "l" (1), "a" (1)
-    assert truncate_grapheme_safe(text, max_chars=6) == "Fla..."
+    assert truncate_grapheme_safe(text, max_chars=6, suffix="...") == "Fla..."
 
 
 def test_truncation_preserves_internal_whitespace() -> None:
     text = "A   B   C"
-    # budget = 8. pad = 3 -> 5.
-    # "A" (1) + " " (1) + " " (1) + " " (1) + "B" (1) = 5.
-    assert truncate_grapheme_safe(text, max_chars=8) == "A   B..."
+    # budget = 8. No pad.
+    assert truncate_grapheme_safe(text, max_chars=8) == "A   B   "
 
 
 def test_truncation_preserves_trailing_whitespace_if_within_budget() -> None:
     text = "A   B   C "
     # To drop C but keep trailing whitespace: budget = 9. pad = 3 -> 6.
     # "A   B " is 6.
-    assert truncate_grapheme_safe(text, max_chars=9) == "A   B ..."
+    assert truncate_grapheme_safe(text, max_chars=9, suffix="...") == "A   B ..."
 
 
 def test_truncation_prevents_skin_tone_modifier_bisection() -> None:
-    # Wave (👋) + Medium Skin Tone (🏽) = 👋🏽 (2 codepoints)
     text = "Hi 👋🏽!"  # len = 3 + 2 + 1 = 6 codepoints
-    # Budget = 5. Pad = 3 -> 2.
-    # "H" (1), "i" (1) -> 2. Next is " ".
-    assert truncate_grapheme_safe(text, max_chars=5) == "Hi..."
+    # Budget = 5. No pad.
+    assert truncate_grapheme_safe(text, max_chars=4) == "Hi "
 
 
 @pytest.mark.asyncio
@@ -86,7 +82,8 @@ async def test_fast_retrieval_uses_grapheme_truncation_for_long_content() -> Non
     assert trunc is True
     assert length == 202
     assert not snippet.endswith("👨")
-    assert snippet.endswith("...")
+    assert len(snippet) == 195
+    assert snippet == "A" * 195
 
 
 @pytest.mark.asyncio
