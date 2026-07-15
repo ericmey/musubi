@@ -15,22 +15,22 @@ documents:
   - {key: livekit-restart, plane: episodic, state: matured, content: "To restart the livekit voice agent after a deploy: stop the systemd unit, clear the session cache, then start the unit and confirm it re-registers with the room server."}
   - {key: livekit-arch, plane: episodic, state: matured, content: "Background on the livekit voice agent architecture: how rooms are allocated across regions and how the agent connects."}
 
-  # 2. bring the bot online (paraphrase of restart) — TRAP echoes "bring voice bot online"
-  - {key: agent-recover, plane: episodic, state: matured, content: "Recovering a downed agent: stop the failed process, clear its cache, and start a fresh one so it re-registers."}
-  - {key: livekit-scale-trap, plane: episodic, state: matured, content: "To bring more voice bots online, bring up additional voice bot replicas online and raise the replica count — this brings voice bots online by scaling out, it does not recover a downed one."}
+  # 2. bring the voice bot online — target OWNS "voice bot recovery"; trap is natural scaling prose
+  - {key: agent-recover, plane: episodic, state: matured, content: "Recovering a crashed voice bot: stop the dead voice worker, clear its session state, then launch a fresh voice runtime so the voice bot re-registers and is serving again."}
+  - {key: livekit-scale-trap, plane: episodic, state: matured, content: "Running more voice bots in parallel is a capacity change: raise the replica count so additional voice-bot workers come up alongside the existing ones. Scaling out adds throughput, it does not restart a bot that has fallen over."}
 
-  # 3. presence token current this session (provisional immediate recall) — TRAP echoes "presence token rotation session"
-  - {key: token-current, plane: episodic, state: provisional, content: "Yes — the credential just changed and is live now; the new value took effect a moment ago in this working context."}
-  - {key: token-rotation-history-trap, plane: episodic, state: matured, content: "The presence token rotation history for this session review lists every presence token rotation; this session's presence token rotation audit is archived, not current."}
+  # 3. presence token current this session — target OWNS the live credential; trap is a natural audit record
+  - {key: token-current, plane: episodic, state: provisional, content: "Yes — the presence token was rotated this session and the new presence credential is the value in use right now; the current live presence token is the freshly rotated one."}
+  - {key: token-rotation-history-trap, plane: episodic, state: matured, content: "Presence token rotation audit log: every prior presence token rotation is recorded here with its timestamp. These presence token rotations are historical records from earlier sessions, not the value live right now."}
 
-  # 4. trade latency for recall on long-tail (rare lexical: ef_search) — TRAP echoes "trade latency recall long-tail"
-  - {key: ef-search, plane: episodic, state: matured, content: "Raising the HNSW ef_search parameter widens the search beam so more true neighbors are considered before ranking; set it higher per collection when answers are being missed."}
+  # 4. trade latency for recall on long-tail — target SEMANTICALLY answers (ef_search); trap is a natural caution
+  - {key: ef-search, plane: episodic, state: matured, content: "When long-tail answers are being missed, widen the search so many more candidate neighbors are scored before ranking: raise the HNSW ef_search parameter. You accept a little more query time in exchange for surfacing the harder matches."}
   - {key: prefetch-related, plane: episodic, state: matured, content: "The hybrid prefetch limit controls how many candidates each channel returns before fusion."}
-  - {key: latency-recall-tradeoff-trap, plane: episodic, state: matured, content: "You cannot trade latency for recall on long-tail queries for free; trading latency for recall on long-tail search usually hurts both, so avoid trading latency for recall blindly."}
+  - {key: latency-recall-tradeoff-trap, plane: episodic, state: matured, content: "A caution on the query-latency versus recall tradeoff for long-tail searches: measure it honestly before shipping, because a recall gain that blows the latency budget is rarely worth it. This is guidance on judging the tradeoff, not a recipe for raising recall."}
 
-  # 5. sync the vault on every write (correction/negation) — TRAP echoes "sync vault every write"
-  - {key: vault-close-sync, plane: episodic, state: matured, content: "The vault now flushes to the store only when a file is closed, to stop the embedder from thrashing on partial edits. That is the current behaviour."}
-  - {key: vault-write-sync-trap, plane: episodic, state: matured, content: "Sync the vault on every write event: sync vault on every write, syncing the vault on every write event writes on every write. This sync-on-every-write approach is the retired one."}
+  # 5. sync the vault on every write — correction/negation; target is close-only; trap is a natural legacy note
+  - {key: vault-close-sync, plane: episodic, state: matured, content: "No — the vault deliberately flushes to the store only when a file is closed, never on every write, because per-write flushing thrashed the embedder. Close-time flushing is the current policy."}
+  - {key: vault-write-sync-trap, plane: episodic, state: matured, content: "The retired legacy policy flushed the vault to the store on every write event; it was dropped after it overloaded the embedder during rapid edits. Syncing on every write is no longer done."}
 
   # 6. eligible to enter curated knowledge (semantic paraphrase) — TRAP echoes "enter curated knowledge"
   - {key: promotion-rule, plane: episodic, state: matured, content: "A memory qualifies for the curated tier once it has matured, been corroborated across two or more sessions, and cleared synthesis review."}
