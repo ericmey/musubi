@@ -72,8 +72,8 @@ If a near-duplicate was found (dedup triggered, see below), the response is 200 
  2. pydantic validate                                  ~1ms
  3. embed content (dense + sparse, parallel)           ~40ms warm
  4. dedup probe (cosine ≥ 0.92 within namespace)       ~20ms
-   ├─ hit:  update existing (merge tags, refresh)
-   └─ miss: upsert new point
+   ├─ hit + factually compatible: update existing (merge tags, refresh)
+   └─ miss or incompatible:       upsert new point
  5. upsert to Qdrant                                    ~20ms
  6. emit LifecycleEvent(provisional → created)         <1ms (batched)
  7. return 202
