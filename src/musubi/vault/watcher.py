@@ -6,18 +6,25 @@ import asyncio
 import hashlib
 import logging
 from pathlib import Path
-from typing import Any
+
+# VAULT-003: the watcher now requires a LifecycleTransitionCoordinator.
+# Imported lazily (TYPE_CHECKING) to keep the runtime import graph small
+# and avoid a circular import between vault.watcher and lifecycle.coordinator.
+from typing import TYPE_CHECKING, Any
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from musubi.planes.curated.plane import CuratedPlane
-from musubi.types.common import generate_ksuid, utc_now
+from musubi.types.common import Ok, generate_ksuid, utc_now
 from musubi.types.curated import CuratedKnowledge
 from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
 from musubi.vault.namespacing import infer_namespace
 from musubi.vault.writelog import WriteLog
 from musubi.vault.writer import VaultWriter
+
+if TYPE_CHECKING:
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +117,7 @@ class VaultWatcher:
         vault_root: Path,
         curated_plane: CuratedPlane,
         write_log: WriteLog,
+        coordinator: LifecycleTransitionCoordinator,
         debounce_sec: float = 2.0,
         event_rate_per_sec: float = _DEFAULT_EVENT_RATE_PER_SEC,
         indexing_concurrency: int = _DEFAULT_INDEXING_CONCURRENCY,
@@ -122,6 +130,11 @@ class VaultWatcher:
         self.vault_root = vault_root
         self.curated_plane = curated_plane
         self.write_log = write_log
+        # VAULT-003: the canonical archive path requires the
+        # LifecycleTransitionCoordinator. Required keyword-only param
+        # is the production-wiring discriminator — a caller that
+        # omits the argument fails at the Python call site.
+        self.coordinator = coordinator
         self.debounce_sec = debounce_sec
         self.writer = VaultWriter(vault_root, write_log)
 
@@ -333,8 +346,66 @@ class VaultWatcher:
         logger.info("Bootstrapped object_id for %s", rel_path)
 
     async def _handle_deleted(self, rel_path: str) -> None:
-        # TODO: Implement archival flow
-        logger.info("File deleted: %s", rel_path)
+        """VAULT-003: archive the curated row matching ``rel_path`` through the
+        canonical ``LifecycleTransitionCoordinator`` seam.
+
+        The file is gone, so we do NOT re-read the frontmatter. Identity
+        comes from the STORED ``vault_path`` on the existing row
+        (exact match via :meth:`CuratedPlane.find_by_vault_path`).
+
+        Outcomes:
+          - No matching row -> log ``info`` (clean observable no-op) and return.
+          - ``Ok(TransitionFinal | TransitionPending)`` -> log ``info``
+            (archive committed).
+          - ``Err(TransitionError(code='illegal_transition', to_state='archived'))``
+            on an already-archived row -> idempotent success; log ``debug``,
+            no warning, no retry.
+          - Any other ``Err(TransitionError)`` -> log structured ``warning``
+            with ``code``, ``message``, ``path``. NO IN-HANDLER RETRY (per
+            Yua binding): a later filesystem event or periodic reconcile
+            may retry naturally; an in-handler retry loop risks unbounded
+            recursion.
+        """
+        current = await self.curated_plane.find_by_vault_path(rel_path)
+        if current is None:
+            logger.info("vault-delete-noop path=%s reason=no-matching-row", rel_path)
+            return
+
+        result = await self.curated_plane.transition(
+            namespace=current.namespace,
+            object_id=current.object_id,
+            to_state="archived",
+            actor="vault-watcher",
+            reason=f"vault file deleted: {rel_path}",
+            coordinator=self.coordinator,
+        )
+
+        if isinstance(result, Ok):
+            logger.info(
+                "vault-delete-archived path=%s object_id=%s outcome=ok",
+                rel_path,
+                current.object_id,
+            )
+            return
+
+        # Err(TransitionError) — discriminate the only idempotent case.
+        err = result.error
+        if err.code == "illegal_transition" and getattr(err, "to_state", None) == "archived":
+            logger.debug(
+                "vault-delete-idempotent path=%s object_id=%s",
+                rel_path,
+                current.object_id,
+            )
+            return
+
+        # All other failures: structured warning, no retry, no mask.
+        logger.warning(
+            "vault-delete-failed path=%s object_id=%s code=%s message=%s",
+            rel_path,
+            current.object_id,
+            err.code,
+            err.message,
+        )
 
     def boot_scan(self) -> None:
         """Run a background scan over the vault to catch missed edits."""

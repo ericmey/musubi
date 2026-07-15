@@ -41,11 +41,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import sqlite3
-import time
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
-from unittest.mock import MagicMock
+from typing import Any
 
 import pytest
 from qdrant_client import QdrantClient
@@ -54,10 +52,10 @@ from watchdog.events import FileCreatedEvent, FileDeletedEvent
 from musubi.embedding import FakeEmbedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.events import LifecycleEventSink
+from musubi.lifecycle.transitions import TransitionError
 from musubi.planes.curated import CuratedPlane
-from musubi.types.common import Err, LifecycleState, Ok
+from musubi.types.common import Err
 from musubi.types.curated import CuratedKnowledge
-from musubi.lifecycle.transitions import TransitionError, TransitionResult
 from musubi.vault.frontmatter import CuratedFrontmatter, dump_frontmatter
 from musubi.vault.watcher import VaultWatcher
 from musubi.vault.writelog import WriteLog
@@ -134,7 +132,9 @@ def write_log(tmp_path: Path) -> WriteLog:
 
 @pytest.fixture
 def sink(tmp_path: Path) -> LifecycleEventSink:
-    return LifecycleEventSink(db_path=tmp_path / "events.db")
+    """A sink that reads the SAME sqlite DB the coordinator writes to
+    (``lifecycle_events`` lives in the coordinator's db file)."""
+    return LifecycleEventSink(db_path=tmp_path / "coord.db")
 
 
 @pytest.fixture
@@ -186,7 +186,7 @@ async def test_delete_archives_matching_row_via_canonical_transition(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/eric/shared/deleted-target.md",
+            vault_path="eric/shared/deleted-target.md",
             content="This file's vault_path will be deleted.",
         )
     )
@@ -211,7 +211,7 @@ async def test_archived_row_excluded_from_default_retrieval(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/eric/shared/default-excluded.md",
+            vault_path="eric/shared/default-excluded.md",
             content="Default retrieval should not surface this row after archive.",
         )
     )
@@ -252,7 +252,7 @@ async def test_audit_and_history_retain_archived_row(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/eric/shared/audit-target.md",
+            vault_path="eric/shared/audit-target.md",
             content="This row's delete should produce a lifecycle_events row.",
         )
     )
@@ -265,7 +265,7 @@ async def test_audit_and_history_retain_archived_row(
     matching = [
         e
         for e in events
-        if e.target_state == "archived"
+        if e.to_state == "archived"
         and e.object_id == saved.object_id
         and e.actor == "vault-watcher"
         and e.reason == f"vault file deleted: {rel_path}"
@@ -290,7 +290,7 @@ async def test_repeat_delete_is_idempotent(
     saved = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/eric/shared/idempotent.md",
+            vault_path="eric/shared/idempotent.md",
             content="Repeat delete should not log a warning or re-archive.",
         )
     )
@@ -326,21 +326,21 @@ async def test_sibling_path_does_not_archive_target(
     target = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/foo/bar.md",
+            vault_path="foo/bar.md",
             content="Exact target.",
         )
     )
     sibling_dash = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/foo/bar-2.md",
+            vault_path="foo/bar-2.md",
             content="Sibling with dash suffix.",
         )
     )
     sibling_dot = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/foo/bar.md.bak",
+            vault_path="foo/bar.md.bak",
             content="Sibling with .bak suffix.",
         )
     )
@@ -368,21 +368,21 @@ async def test_prefix_collision_does_not_archive(
     target = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/dir/sub/file.md",
+            vault_path="dir/sub/file.md",
             content="Deep target.",
         )
     )
     sibling_no_slash = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/dir/subfile.md",
+            vault_path="dir/subfile.md",
             content="Sibling without separator.",
         )
     )
     sibling_deeper_dir = await plane.create(
         _make_curated(
             namespace=ns,
-            vault_path="curated/dir/sub2/file.md",
+            vault_path="dir/sub2/file.md",
             content="Sibling in adjacent dir.",
         )
     )
@@ -392,18 +392,10 @@ async def test_prefix_collision_does_not_archive(
 
     target_after = await plane.get(namespace=ns, object_id=target.object_id)
     sibling_no_slash_after = await plane.get(namespace=ns, object_id=sibling_no_slash.object_id)
-    sibling_deeper_dir_after = await plane.get(
-        namespace=ns, object_id=sibling_deeper_dir.object_id
-    )
+    sibling_deeper_dir_after = await plane.get(namespace=ns, object_id=sibling_deeper_dir.object_id)
     assert target_after is not None and target_after.state == "archived"
-    assert (
-        sibling_no_slash_after is not None
-        and sibling_no_slash_after.state == "matured"
-    )
-    assert (
-        sibling_deeper_dir_after is not None
-        and sibling_deeper_dir_after.state == "matured"
-    )
+    assert sibling_no_slash_after is not None and sibling_no_slash_after.state == "matured"
+    assert sibling_deeper_dir_after is not None and sibling_deeper_dir_after.state == "matured"
 
 
 @pytest.mark.asyncio
@@ -417,31 +409,18 @@ async def test_missing_row_is_observable_noop(
     records the path; no mutation, no error, no warning."""
     rel_path = "eric/shared/never-existed.md"
     abs_path = str(watcher.vault_root / rel_path)
-    info_records: list[logging.LogRecord] = []
-    warning_records: list[logging.LogRecord] = []
-
-    class _Filter(logging.Filter):
-        def filter(self, record: logging.LogRecord) -> bool:
-            if record.levelno == logging.INFO:
-                info_records.append(record)
-            elif record.levelno == logging.WARNING:
-                warning_records.append(record)
-            return True
-
-    flt = _Filter()
-    logging.getLogger("musubi.vault.watcher").addFilter(flt)
-    try:
+    with caplog.at_level(logging.DEBUG, logger="musubi.vault.watcher"):
         await watcher._handle_event(abs_path, FileDeletedEvent(abs_path))
-    finally:
-        logging.getLogger("musubi.vault.watcher").removeFilter(flt)
 
     # At least one info-level record mentions the missing path so operators
     # see the event landed.
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
     info_paths = [r.getMessage() for r in info_records]
     assert any(rel_path in m for m in info_paths), (
         f"expected info log mentioning {rel_path!r}, got: {info_paths}"
     )
     # No warning on the missing-row path (no fence failure, no error).
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert not warning_records, (
         f"missing-row no-op must not emit warnings, got: "
         f"{[r.getMessage() for r in warning_records]}"
@@ -488,7 +467,7 @@ async def test_transition_failure_remains_visible(
         saved = await plane.create(
             _make_curated(
                 namespace=ns,
-                vault_path="curated/eric/shared/fenced.md",
+                vault_path="eric/shared/fenced.md",
                 content="This row's transition will fail.",
             )
         )
@@ -502,7 +481,7 @@ async def test_transition_failure_remains_visible(
         w._loop = asyncio.get_running_loop()
 
         rel_path = "eric/shared/fenced.md"
-        abs_path = str(watcher_vault_root := vault_root / rel_path)
+        abs_path = str(vault_root / rel_path)
 
         with caplog.at_level(logging.WARNING, logger="musubi.vault.watcher"):
             await w._handle_event(abs_path, FileDeletedEvent(abs_path))
@@ -549,7 +528,10 @@ async def test_on_created_indexes_new_file(
             "updated": now,
         }
     )
-    file_path.write_text(dump_frontmatter(fm, "Body content."), encoding="utf-8")
+    file_path.write_text(
+        dump_frontmatter(fm.model_dump(mode="json", exclude_none=True), "Body content."),
+        encoding="utf-8",
+    )
 
     w = VaultWatcher(
         vault_root=vault_root,

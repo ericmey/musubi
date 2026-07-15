@@ -324,6 +324,44 @@ class CuratedPlane:
             return None
         return _curated_from_payload(payload)
 
+    async def find_by_vault_path(self, vault_path: str) -> CuratedKnowledge | None:
+        """VAULT-003: typed public method that resolves a curated row by its
+        STORED ``vault_path``, no ``namespace`` argument.
+
+        The watcher is the primary caller: when a file is deleted from the
+        vault the frontmatter is gone, so the watcher has no namespace
+        context. This method does a cross-namespace exact-match scroll
+        (Qdrant ``MatchValue``, NOT ``startswith`` / ``prefix`` / regex).
+        Sibling and prefix-collision paths cannot match by construction.
+
+        ``vault_path`` is unique by slice-vault-sync invariant. We
+        defensively return the first match and let the watcher
+        idempotency + audit handle the rest.
+
+        Returns ``None`` when no row matches. The caller treats that as
+        a clean observable no-op, NOT an error.
+        """
+        if not isinstance(vault_path, str) or not vault_path:
+            return None
+        records, _ = self._client.scroll(
+            collection_name=self._collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="vault_path", match=models.MatchValue(value=vault_path)
+                    ),
+                ]
+            ),
+            limit=1,
+            with_payload=True,
+        )
+        if not records:
+            return None
+        payload = records[0].payload
+        if not payload:
+            return None
+        return _curated_from_payload(payload)
+
     async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
         """Is this row present? Answered WITHOUT deserializing it.
 
