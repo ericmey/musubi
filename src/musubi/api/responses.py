@@ -179,6 +179,11 @@ class RankedResultRow(BaseModel):
     score_kind: Literal["ranked_combined"]
     extra: RankedExtra
     title: str | None = None
+    # DQ-001: silent-truncation fix. Sliced content is tagged with the original
+    # (untruncated) character length and a truncated flag so callers can detect
+    # the cut and fetch the full body via object_id. Both default to no-truncation.
+    content_truncated: bool = False
+    content_length: int | None = None
 
 
 class RecentResultRow(BaseModel):
@@ -207,6 +212,11 @@ class RecentResultRow(BaseModel):
     # `StrictInt` rejects str/bool per Yua 12:45:46 #2.
     importance: Annotated[StrictInt | None, Field(ge=1, le=10)]
     score_kind: Literal["created_epoch"]
+    # DQ-001: silent-truncation fix. Sliced content is tagged with the original
+    # (untruncated) character length and a truncated flag so callers can detect
+    # the cut and fetch the full body via object_id. Both default to no-truncation.
+    content_truncated: bool = False
+    content_length: int | None = None
     # provenance_score: required-nullable float in [0.0, 1.0] when
     # present. `StrictFloat` rejects str/bool per Yua 12:45:46 #2:
     # "bound recent provenance_score 0..1 if non-null".
