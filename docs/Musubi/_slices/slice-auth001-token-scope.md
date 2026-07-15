@@ -4,7 +4,7 @@ slice_id: slice-auth001-token-scope
 issue: 523
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: cowork-tama
 phase: "Auth"
 tags: [section/slices, status/in-progress, type/slice]
@@ -28,9 +28,6 @@ adapter paths cannot bypass exclusions. Writes remain bound to the
 active canonical namespace.
 
 This slice is bounded to:
-
-- ``src/musubi/auth/tokens.py`` — add ``excluded_namespaces`` to
-  ``AuthContext``; compose at token-validation time.
 - ``src/musubi/auth/scopes.py`` — add ``enforce_namespace_policy`` (the
   shared READ-only enforcement seam) and
   ``enumerate_authorized_namespaces`` (the default-to-all target
@@ -49,7 +46,7 @@ This slice is bounded to:
   ``namespace: str`` to ``namespace: str | None = None`` in
   ``retrieve()`` and ``retrieve_stream()`` so internal non-HTTP
   callers can express the default.
-- ``tests/api/test_auth001_token_scope.py`` — 15-test contract (13
+- ``tests/api/test_auth001_token_scope.py`` — 16-test contract (14
   RED discriminating + 2 GREEN preservation guards).
 
 ## Why
@@ -78,8 +75,8 @@ enforced centrally before fanout for every entry point.
 
 2. **Salesai is a mandatory baseline exclusion.** The default
    ``excluded_namespaces`` is ``frozenset({"salesai"})``, set in
-   ``Settings.default_excluded_namespaces``. A token claim
-   ``excluded_namespaces`` ADDS to the mandatory set; it cannot
+   ``Settings.default_excluded_namespaces``. Settings
+   ADD to the mandatory set; they cannot
    subtract ``salesai``. The composition:
 
    ```
@@ -90,14 +87,12 @@ enforced centrally before fanout for every entry point.
               | frozenset(Settings.per_agent_excluded_namespaces
                           .get(presence, ()))
               # both contribute, no precedence
-   token_add = frozenset(payload.get("excluded_namespaces") or ())
               # additive only; cannot subtract mandatory
-   excluded  = mandatory | per_agent | token_add
+   excluded  = mandatory | per_agent
    ```
 
-   The composed ``excluded_namespaces`` is frozen on
-   ``AuthContext`` and is the single canonical source the
-   enforcement seam reads.
+   The composed exclusions are derived directly from ``Settings``
+   and are the single canonical source the enforcement seam reads.
 
 3. **Per-agent settings are one canonical ``Settings`` mapping**
    (``Settings.per_agent_excluded_namespaces: dict[str, tuple[str, ...]]``)
@@ -169,7 +164,7 @@ dict forwarded to the HTTP endpoint includes the value as-is
 ## Acceptance
 
 The first contract is bounded to fifteen tests in
-``tests/api/test_auth001_token_scope.py``: thirteen RED
+``tests/api/test_auth001_token_scope.py``: sixteen RED
 discriminating tests, two GREEN preservation guards. Test
 function names transcribe the Test Contract bullets verbatim per
 the AGENTS.md Test Contract Closure Rule.
@@ -177,8 +172,8 @@ the AGENTS.md Test Contract Closure Rule.
 ### Test Contract (15 bullets, state 1 = passing at handoff)
 
 1. `test_default_read_spans_at_least_two_non_excluded_namespaces` — RED
-2. `test_salesai_cannot_be_reenabled_by_empty_token_claim` — RED
-3. `test_salesai_cannot_be_reenabled_by_token_claim_subtract` — RED
+2. `test_salesai_cannot_be_reenabled_by_empty_settings_override` — RED
+3. `test_salesai_cannot_be_reenabled_by_settings_subtract` — RED
 4. `test_salesai_cannot_be_reenabled_by_direct_target` — RED
 5. `test_salesai_cannot_be_reenabled_by_wildcard` — RED
 6. `test_salesai_cannot_be_reenabled_by_recent_lane` — RED
@@ -195,7 +190,7 @@ the AGENTS.md Test Contract Closure Rule.
 At handoff, every bullet above is in state 1 (passing test whose
 name transcribes the bullet text verbatim) per the AGENTS.md
 Closure Rule. The first commit on the branch shows the RED /
-guard evidence: the thirteen RED tests fail under current
+guard evidence: the sixteen RED tests fail under current
 behaviour, the two GREEN guards pass. The seam impl commit
 flips the RED to green.
 
@@ -243,7 +238,7 @@ follow-up action, not a block on the slice.
 - **Design review (three binding corrections + final API shape).**
   Yua's three binding corrections all applied: READS ONLY;
   salesai mandatory, additive composition
-  (mandatory | per_agent | token_add, no subtraction); default
+  (mandatory | per_agent, no subtraction); default
   spans all authorized namespaces. Final API shape (after Yua's
   WITHHOLD on the ``expand_to_all`` flag): make the formerly
   required read field ``namespace`` optional; the only signal is
@@ -269,8 +264,8 @@ follow-up action, not a block on the slice.
 - Backfill of historical call sites that use the old API. The
   contract change is additive (``namespace`` becomes optional);
   existing clients that send ``namespace`` are unaffected.
-- Token claim may NOT subtract from mandatory ``salesai`` (per
-  design ACK). A token can only ADD exclusions.
+- Settings may NOT subtract from mandatory ``salesai`` (per
+  design ACK). Settings can only ADD exclusions.
 - The default-to-all enumeration is scoped to the caller's
   ``identity_family`` (a tenant-scoped fanout). It does NOT
   cross tenants; that is a separate ``family_of`` boundary

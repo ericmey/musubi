@@ -73,18 +73,15 @@ def enforce_namespace_policy(
     for ns, plane in authorized:
         parts = ns.split("/")
         excluded = False
-        print(f"DEBUG: checking ns={ns} against exclusions={exclusions}")
         for ex in exclusions:
             ex_parts = ex.split("/")
 
             if len(ex_parts) == 1:
                 if len(parts) > 1 and parts[1] == ex_parts[0]:
-                    print(f"DEBUG: excluded by 1-segment {ex}")
                     excluded = True
                     break
             else:
                 if parts[: len(ex_parts)] == ex_parts:
-                    print(f"DEBUG: excluded by prefix {ex}")
                     excluded = True
                     break
 

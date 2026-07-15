@@ -81,10 +81,10 @@ def test_default_read_spans_at_least_two_non_excluded_namespaces(
     assert "eric/salesai/episodic" not in namespaces
 
 
-def test_salesai_cannot_be_reenabled_by_empty_token_claim(
+def test_salesai_cannot_be_reenabled_by_empty_settings_override(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
-    # A token explicitly claiming no exclusions still cannot bypass the mandatory baseline.
+    # A request with no per-agent exclusions configured still cannot bypass the mandatory baseline.
     from tests.api.conftest import mint_token
 
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")
@@ -100,10 +100,10 @@ def test_salesai_cannot_be_reenabled_by_empty_token_claim(
     assert res.json()["results"] == []
 
 
-def test_salesai_cannot_be_reenabled_by_token_claim_subtract(
+def test_salesai_cannot_be_reenabled_by_settings_subtract(
     monkeypatch: pytest.MonkeyPatch, client: TestClient, api_settings: Settings
 ) -> None:
-    # Used to test that claims cannot subtract. With Settings-only, it just serves as a negative proof
+    # Settings-only validation: mandatory exclusions cannot be subtracted.
     from tests.api.conftest import mint_token
 
     token = mint_token(api_settings, scopes=["*/*/*:r", "*/*/*:w"], presence="eric/command-chair")

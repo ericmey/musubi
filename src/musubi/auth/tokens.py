@@ -87,7 +87,7 @@ def validate_token(
     except jwt.PyJWTError as exc:
         return Err(error=InvalidTokenError(detail=str(exc)))
 
-    context_result = _context_from_payload(payload, settings=active_settings)
+    context_result = _context_from_payload(payload)
     if isinstance(context_result, Err):
         return Err(error=context_result.error)
     return context_result
@@ -154,8 +154,6 @@ def _fetch_jwks(settings: Settings) -> Result[dict[str, Any], InvalidTokenError]
 
 def _context_from_payload(
     payload: dict[str, Any],
-    *,
-    settings: Settings | None = None,
 ) -> Result[AuthContext, InvalidTokenError]:
     subject = payload.get("sub")
     issuer = payload.get("iss")

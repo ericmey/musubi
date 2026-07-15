@@ -26,8 +26,8 @@ A token's recall authorization is not restricted to a single namespace. By defau
 ## Test Contract
 
 1. `test_default_read_spans_at_least_two_non_excluded_namespaces`
-2. `test_salesai_cannot_be_reenabled_by_empty_token_claim`
-3. `test_salesai_cannot_be_reenabled_by_token_claim_subtract`
+2. `test_salesai_cannot_be_reenabled_by_empty_settings_override`
+3. `test_salesai_cannot_be_reenabled_by_settings_subtract`
 4. `test_salesai_cannot_be_reenabled_by_direct_target`
 5. `test_salesai_cannot_be_reenabled_by_wildcard`
 6. `test_salesai_cannot_be_reenabled_by_recent_lane`
