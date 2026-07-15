@@ -35,17 +35,34 @@ So this is a single-row, two-phase **attributable owner lease** on the dedicated
 5. **Attribute publish** — read back; the update landed iff the token is cleared and the version
    advanced. Else a stall/takeover raced us → retry, never a silent overwrite.
 
-Crash safety: an expired token means the owner died mid-update. Because the fenced publish is the
-only commit point, a crash before it leaves the payload/version untouched (the whole update is
-abandoned — no partial commit) and the row is taken over on its exact expired token by the next
-writer, which re-derives its change from the committed current state. A crash between the vector
-publish and the payload publish can leave vectors ahead of a not-yet-committed payload under a held
-token; the next owner re-derives vectors from the committed content, converging. Bounded retry +
-jitter; exhaustion is FAIL-LOUD (raises :class:`MutationLeaseConflict`).
+**Scope — DATA-001 Phase 1 (this module): PAYLOAD-only concurrency safety.** The narrow fenced
+``set_payload`` publish is concurrency-safe and crash-safe: it is the only commit point, it never
+touches lease-owned access fields (so it composes with the RET-008 access lease), and unrelated
+fields compose because the write set is narrow.
+
+**The vector publish (phase 3) is NOT concurrency-safe or crash-atomic, and this is a KNOWN OPEN
+ITEM (Phase 2 / #530).** Verified against the deployed Qdrant (server 1.15): ``update_vectors``'
+``update_filter`` is **silently ignored** — a non-matching filter still overwrites the vector — so
+a vector write **cannot be token-fenced**. Consequences that Phase 1 does NOT solve:
+
+- a crash between the vector write and the payload publish leaves vectors mismatched with the
+  committed content, and an unrelated takeover does not repair it;
+- a stalled old owner's late ``update_vectors`` can land after a newer content+vector committed,
+  corrupting it.
+
+An earlier version of this docstring claimed the next owner "re-derives vectors from committed
+content, converging." **That was false** — nothing here reconciles vectors. Only two call paths
+change vectors (episodic reinforce with new content, curated same-id body change); their vector
+atomicity is deferred to Phase 2 (immutable new point + fenced live-point pointer), which is the
+completion gate for #530. Phase 1 preserves their current best-effort vector behavior and does not
+claim it safe. Bounded retry + jitter; exhaustion is FAIL-LOUD (:class:`MutationLeaseConflict`);
+a vanished row raises :class:`MutationRowVanished` (a ``LookupError``) so callers keep plane
+not-found semantics.
 """
 
 from __future__ import annotations
 
+import asyncio
 import secrets
 import time
 from collections.abc import Callable
@@ -65,6 +82,11 @@ _SEAM_OWNED = frozenset({"version", "update_lease_token"})
 
 class MutationLeaseConflict(RuntimeError):
     """A full-object update could not acquire/publish within the bounded round budget — fail loud."""
+
+
+class MutationRowVanished(LookupError):
+    """The row disappeared before the update could publish. Subclasses ``LookupError`` so callers
+    that already raise ``LookupError`` on not-found keep their plane semantics without translation."""
 
 
 @dataclass(frozen=True)
@@ -112,7 +134,7 @@ def _read(client: QdrantClient, collection: str, namespace: str, object_id: str)
     return dict(records[0].payload or {}) if records else {}
 
 
-def owned_update(
+async def owned_update(
     client: QdrantClient,
     collection: str,
     *,
@@ -127,16 +149,20 @@ def owned_update(
     :class:`MutationPlan` (intended-change fields + optional new vectors) for that snapshot — so a
     retry always recomputes against the current state. ``point_id`` is the row's deterministic Qdrant
     point id (each plane derives it from ``object_id``); it addresses the ``update_vectors`` write.
-    Returns the published payload (or the current payload if the plan is ``skip`` or the row has
-    vanished). Raises :class:`MutationLeaseConflict` on bounded-retry exhaustion.
+    Async so the retry backoff does not block the event loop. Returns the published payload (or the
+    current payload if the plan is ``skip``). Raises :class:`MutationLeaseConflict` on bounded-retry
+    exhaustion and :class:`MutationRowVanished` (a ``LookupError``) if the row disappears.
     """
     for round_index in range(_MAX_ROUNDS):
         if round_index:
-            time.sleep(secrets.randbelow(_MAX_BACKOFF_US) / 1_000_000)
+            await asyncio.sleep(secrets.randbelow(_MAX_BACKOFF_US) / 1_000_000)
 
         current = _read(client, collection, namespace, object_id)
         if not current:
-            return current  # a vanished row has nothing to update — nothing to lose.
+            # Preserve each plane's not-found semantics: a LookupError, never a model_validate({}).
+            raise MutationRowVanished(
+                f"row ({namespace!r}, {object_id!r}) vanished before the update could publish"
+            )
 
         read_version = int(current.get("version", 1))
         stored_token = current.get("update_lease_token")
@@ -189,7 +215,15 @@ def owned_update(
                     ]
                 ),
             )
-            return {**held, "update_lease_token": None}  # reflect the released state, not the hold.
+            # Verify the release by exact-token readback — never assume the fenced write landed.
+            after = _read(client, collection, namespace, object_id)
+            if not after:
+                raise MutationRowVanished(
+                    f"row ({namespace!r}, {object_id!r}) vanished during skip-release"
+                )
+            if after.get("update_lease_token") != token:
+                return after  # released (or taken over) — no change was made; return current truth.
+            continue  # our token is somehow still held — retry the release, fail loud on exhaustion.
         _reject_seam_fields(mutation.changes)
 
         # ---- phase 3: proven owner publishes vectors (update_vectors is unfenced; safe ONLY here) -

@@ -185,7 +185,7 @@ class EpisodicPlane:
         found = self._find_dedup_candidate(memory.namespace, dense)
         if found is not None:
             existing, existing_dense, existing_sparse = found
-            return self._reinforce(
+            return await self._reinforce(
                 existing=existing,
                 existing_dense=existing_dense,
                 existing_sparse=existing_sparse,
@@ -277,7 +277,7 @@ class EpisodicPlane:
             if found is not None:
                 existing, existing_dense, existing_sparse = found
                 finalised.append(
-                    self._reinforce(
+                    await self._reinforce(
                         existing=existing,
                         existing_dense=existing_dense,
                         existing_sparse=existing_sparse,
@@ -365,7 +365,7 @@ class EpisodicPlane:
             },
         )
 
-    def _reinforce(
+    async def _reinforce(
         self,
         *,
         existing: EpisodicMemory,
@@ -406,7 +406,7 @@ class EpisodicPlane:
             )
             return MutationPlan(changes=changes, vectors=vectors)
 
-        published = owned_update(
+        published = await owned_update(
             self._client,
             self._collection,
             namespace=str(existing.namespace),
@@ -650,7 +650,7 @@ class EpisodicPlane:
                 keys.append("importance")
             return MutationPlan(changes={k: dumped[k] for k in keys})
 
-        published = owned_update(
+        published = await owned_update(
             self._client,
             self._collection,
             namespace=str(namespace),

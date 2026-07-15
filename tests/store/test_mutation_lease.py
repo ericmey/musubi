@@ -32,6 +32,11 @@ from musubi.types.episodic import EpisodicMemory
 _COLL = collection_for_plane("episodic")
 
 
+def _run_owned(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """Sync test shim: owned_update is async; drive it to completion."""
+    return asyncio.run(owned_update(*args, **kwargs))
+
+
 @pytest.fixture
 def real_qdrant() -> Iterator[QdrantClient]:
     port = int(os.environ.get("MUSUBI_TEST_QDRANT_PORT", "6339"))
@@ -92,7 +97,7 @@ def _set_token(client: QdrantClient, oid: str, token: str) -> None:
 @pytest.mark.integration
 def test_owned_update_publishes_narrow_change_and_bumps_version(real_qdrant: QdrantClient) -> None:
     ns, oid = _seed(real_qdrant, importance=5)
-    published = owned_update(
+    published = _run_owned(
         real_qdrant,
         _COLL,
         namespace=ns,
@@ -119,7 +124,7 @@ def test_unrelated_concurrent_field_composes(real_qdrant: QdrantClient) -> None:
             must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
         ),
     )
-    published = owned_update(
+    published = _run_owned(
         real_qdrant,
         _COLL,
         namespace=ns,
@@ -142,7 +147,7 @@ def test_two_writers_same_next_version_both_land_attributably(real_qdrant: Qdran
 
     def writer(field: str, value: Any) -> None:
         barrier.wait()
-        owned_update(
+        _run_owned(
             real_qdrant,
             _COLL,
             namespace=ns,
@@ -180,7 +185,7 @@ def test_loser_cannot_change_vector(real_qdrant: QdrantClient) -> None:
 
     different = [0.5] * 1024
     with pytest.raises(MutationLeaseConflict):
-        owned_update(
+        _run_owned(
             real_qdrant,
             _COLL,
             namespace=ns,
@@ -201,7 +206,7 @@ def test_expired_owner_token_takeover_recovers(real_qdrant: QdrantClient) -> Non
     ns, oid = _seed(real_qdrant, importance=5)
     expired = f"own:{int(time.time() * 1_000_000) - 10_000_000}:crashedowner"  # 10s ago → expired
     _set_token(real_qdrant, oid, expired)
-    published = owned_update(
+    published = _run_owned(
         real_qdrant,
         _COLL,
         namespace=ns,
@@ -217,7 +222,7 @@ def test_expired_owner_token_takeover_recovers(real_qdrant: QdrantClient) -> Non
 @pytest.mark.integration
 def test_skip_plan_is_noop_and_releases(real_qdrant: QdrantClient) -> None:
     ns, oid = _seed(real_qdrant, importance=5)
-    published = owned_update(
+    published = _run_owned(
         real_qdrant,
         _COLL,
         namespace=ns,
@@ -234,13 +239,42 @@ def test_skip_plan_is_noop_and_releases(real_qdrant: QdrantClient) -> None:
 def test_seam_owned_field_in_changes_is_rejected(real_qdrant: QdrantClient) -> None:
     ns, oid = _seed(real_qdrant)
     with pytest.raises(ValueError, match="seam-owned"):
-        owned_update(
+        _run_owned(
             real_qdrant,
             _COLL,
             namespace=ns,
             object_id=oid,
             point_id=episodic_point_id(oid),
             plan=lambda cur: MutationPlan(changes={"version": 99}),
+        )
+
+
+@pytest.mark.integration
+def test_vanished_row_raises_lookup_error(real_qdrant: QdrantClient) -> None:
+    """Review #4: a row that never existed (or vanished) raises MutationRowVanished — a LookupError
+    — so callers keep their plane's not-found semantics instead of a model_validate({}) crash."""
+    from musubi.store.mutation_lease import MutationRowVanished
+
+    ns = f"ml-{generate_ksuid()[:8].lower()}/main/episodic"
+    missing = generate_ksuid()
+    with pytest.raises(LookupError):
+        _run_owned(
+            real_qdrant,
+            _COLL,
+            namespace=ns,
+            object_id=missing,
+            point_id=episodic_point_id(missing),
+            plan=lambda cur: MutationPlan(changes={"tags": ["x"]}),
+        )
+    # And it is the typed subclass, so callers can distinguish it if they want.
+    with pytest.raises(MutationRowVanished):
+        _run_owned(
+            real_qdrant,
+            _COLL,
+            namespace=ns,
+            object_id=missing,
+            point_id=episodic_point_id(missing),
+            plan=lambda cur: MutationPlan(changes={"tags": ["x"]}),
         )
 
 
@@ -270,7 +304,7 @@ class _AlwaysLiveOwnerClient:
 
 def test_exhaustion_is_fail_loud() -> None:
     with pytest.raises(MutationLeaseConflict):
-        owned_update(
+        _run_owned(
             cast(Any, _AlwaysLiveOwnerClient()),
             _COLL,
             namespace="n/n/episodic",

@@ -207,7 +207,7 @@ class CuratedPlane:
                     },
                 )
 
-            published = owned_update(
+            published = await owned_update(
                 self._client,
                 self._collection,
                 namespace=str(existing.namespace),
@@ -258,7 +258,7 @@ class CuratedPlane:
             }
             return MutationPlan(changes=changes)
 
-        owned_update(
+        await owned_update(
             self._client,
             self._collection,
             namespace=str(existing.namespace),

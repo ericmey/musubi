@@ -102,14 +102,62 @@ no prior row to lose.
 - `src/musubi/planes/episodic/plane.py`, `.../curated/plane.py`, `.../concept/plane.py` — every
   full-object UPDATE path routed through `owned_update`; `_upsert`/`_make_point` are CREATE-only.
 
-## Definition of Done
-- Every full-object UPDATE routes through the attributable mutation lease; no full-payload bypass.
-- Unrelated-field updates compose; same-field conflicts are explicit + retryable; a loser cannot
-  change a vector.
+## Delivery split (Yua, 2026-07-15) — #530 is NOT complete until BOTH phases merge
+
+DATA-001 ships in two phases. **This PR (#539) is Phase 1 only** and `Tracks #530` — it does not
+close it.
+
+**Verified Qdrant constraint (real server 1.15):** `update_vectors`' `update_filter` is silently
+ignored — a non-matching filter still overwrites the vector — so a **vector write cannot be
+token-fenced** on the deployed Qdrant. Therefore an in-place vector update cannot be made
+concurrency-safe or crash-atomic, and no `update_vectors`-based protocol (fence / TTL / readback /
+vpend) closes it.
+
+**Phase 1 — payload-only mutation safety (this PR):** every full-object UPDATE publishes its
+intended fields through the attributable mutation lease's narrow fenced `set_payload`. Unrelated
+fields compose; same-field conflicts are explicit + retryable; the narrow write never touches the
+RET-008 access fields. The two vector-CHANGING paths (episodic reinforce with new content, curated
+same-id body change) keep their current best-effort vector behavior — their vector atomicity is
+**explicitly OUT of Phase 1 and unproven**; the module docstring and `owned_update` say so plainly.
+
+**Phase 2 — the completion gate for #530 (separate ADR + slice, not this PR):** immutable new point
+for a content/vector change + fenced live-point pointer publication; all reads follow only the
+committed pointer; loser cleanup scoped by owner/generation. Required proofs: old-owner-late-write,
+crash-before-pointer, crash-after-pointer, concurrent access-lease, no-future-mutation recovery.
+
+## Definition of Done (Phase 1)
+- Every full-object payload UPDATE routes through the attributable mutation lease's narrow fenced
+  write; unrelated fields compose; same-field conflicts are explicit + retryable; access-lease
+  composition preserved.
 - Single internal field only (`update_lease_token`, exclude=True); wire/OpenAPI additive.
+- `owned_update` is async (non-blocking backoff); skip-release is exact-token-readback verified;
+  a vanished row raises `MutationRowVanished` (a `LookupError`).
+- The two vector-changing paths' vector atomicity is disclosed as Phase-2 open, NOT claimed safe.
 - Full gate green; real-Qdrant proofs green; exact-head CI; independent review; no self-merge.
+- `Tracks #530` (NOT `Closes`); #530 stays open until Phase 2 merges.
 
 ## Work log
+
+### 2026-07-15 — Phase-1 narrowing + review repairs (Yua #539 review)
+
+Yua's exact-head CI passed but review found a real P0 (my crash-safety docstring claimed a vector
+convergence that does not happen) + five bounded items. Repaired under the delivery split:
+- **#3** curated same-id update binds one `utc_now()` per plan round (was two calls → skewed
+  updated_at/updated_epoch).
+- **#5** removed a `_set_token` bare-name no-op in a test.
+- **#1** `owned_update` is now `async` (non-blocking `asyncio.sleep` backoff); all six plane call
+  sites + `EpisodicPlane._reinforce` (and its `create`/`batch_create` callers) await it.
+- **#2** skip-release does an exact-token readback and retries / fails loud — never assumes the
+  fenced clear landed.
+- **#4** a vanished row raises `MutationRowVanished` (subclass of `LookupError`) instead of returning
+  `{}` into a `model_validate({})` crash — preserves each plane's not-found semantics.
+- **P0 (#6)** the false crash-convergence docstring is replaced with the honest, verified truth:
+  `update_vectors` is unfenceable on server 1.15, so the vector publish is best-effort and its
+  atomicity is deferred to Phase 2 (immutable point + fenced pointer). The two vector-changing
+  paths keep current behavior; nothing claims them safe. New test
+  `test_vanished_row_raises_lookup_error`. Verified: mutation_lease + data001 + access_lease + plane
+  + capture suites green; `make check` green.
+
 
 ### Out-of-scope: pre-existing `05-retrieval/orchestration` Test Contract bullets
 

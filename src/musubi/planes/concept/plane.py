@@ -361,7 +361,7 @@ class ConceptPlane:
             )
             return MutationPlan(changes={k: dumped[k] for k in keys})
 
-        published = owned_update(
+        published = await owned_update(
             self._client,
             self._collection,
             namespace=str(namespace),
@@ -518,7 +518,7 @@ class ConceptPlane:
             )
             return MutationPlan(changes={k: dumped[k] for k in keys})
 
-        published = owned_update(
+        published = await owned_update(
             self._client,
             self._collection,
             namespace=str(namespace),
