@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.13.5](https://github.com/ericmey/musubi/compare/v1.13.4...v1.13.5) (2026-07-15)
+
+
+### Documentation
+
+* **c6b:** fix slice status drift — body matches frontmatter (done) ([#475](https://github.com/ericmey/musubi/issues/475)) ([b335ad9](https://github.com/ericmey/musubi/commit/b335ad93d0023f8c524343345539e4ee3fcf5ab7))
+
 ## [1.13.4](https://github.com/ericmey/musubi/compare/v1.13.3...v1.13.4) (2026-07-14)
 
 
