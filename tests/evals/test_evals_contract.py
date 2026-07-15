@@ -799,11 +799,6 @@ def _assert_pr_smoke_fixed_embeddings(
         raise ValueError("Ranking non-deterministic q2")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: PR Smoke Gate with fixed embeddings missing",
-)
 def test_eval_pr_smoke_fixed_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     try:
         from musubi.evals.runner import run_smoke_gate

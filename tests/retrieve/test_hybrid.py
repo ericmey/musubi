@@ -400,9 +400,6 @@ def test_hypothesis_increasing_prefetch_limit_never_reduces_recall_on_fixed_quer
     assert len(corpus) >= small
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-retrieval-evals: BEIR evaluation requires benchmark corpus"
-)
 class DefectStillPresent(Exception):
     pass
 

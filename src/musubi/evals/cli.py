@@ -4,10 +4,15 @@ import sys
 from pathlib import Path
 
 import yaml
+from pydantic import ValidationError
 
 from musubi.evals.corpus import verify_manifest
 from musubi.evals.runner import run_smoke_gate
-from musubi.evals.schema import GoldenQuery
+from musubi.evals.schema import GoldenQuery, SmokeFixture
+
+
+def _write(message: str) -> None:
+    sys.stdout.write(f"{message}\n")
 
 
 def main() -> None:
@@ -19,11 +24,13 @@ def main() -> None:
     data_dir = args.data_dir
     manifest_path = data_dir / "manifest.json"
     corpus_path = data_dir / "corpus.yaml"
+    smoke_fixture_path = data_dir / "smoke_fixture.json"
     baseline_path = data_dir / "baseline.json"
 
-    if not manifest_path.exists() or not corpus_path.exists():
-        print("Missing corpus or manifest.")
-        sys.exit(1)
+    required_input = smoke_fixture_path if args.command == "smoke" else corpus_path
+    if not manifest_path.exists() or not required_input.exists():
+        _write("Missing corpus or manifest.")
+        raise SystemExit(1)
 
     with open(manifest_path) as f:
         manifest = json.load(f)
@@ -32,15 +39,37 @@ def main() -> None:
     try:
         verify_manifest(manifest, data_dir)
     except ValueError as e:
-        print(f"Manifest verification failed: {e}")
-        sys.exit(1)
+        _write(f"Manifest verification failed: {e}")
+        raise SystemExit(1) from e
 
-    with open(corpus_path) as f:
-        docs = list(yaml.safe_load_all(f))
+    if args.command == "smoke":
+        try:
+            fixture = SmokeFixture.model_validate_json(smoke_fixture_path.read_text())
+        except (OSError, ValidationError, ValueError) as exc:
+            _write(f"Schema validation failed: {exc}")
+            raise SystemExit(1) from exc
 
-    corpus = []
-    # Validate schema
+        result = run_smoke_gate(
+            [document.model_dump(mode="json") for document in fixture.corpus],
+            query_embedding=list(fixture.query_embedding),
+        )
+        ndcg = result.metrics.get("ndcg@10", 0.0)
+        if ndcg < 0.5:
+            _write(f"Smoke gate failed threshold: ndcg@10={ndcg} < 0.5")
+            raise SystemExit(1)
+        if baseline_path.exists():
+            with open(baseline_path) as f:
+                baseline = json.load(f)
+            if ndcg < baseline.get("ndcg@10", 0.0) - 0.02:
+                _write(f"Regression detected: ndcg@10={ndcg} vs baseline {baseline.get('ndcg@10')}")
+                raise SystemExit(1)
+        _write(f"Smoke gate passed. ndcg@10={ndcg}")
+        raise SystemExit(0)
+
+    corpus: list[dict[str, object]] = []
     try:
+        with open(corpus_path) as f:
+            docs = list(yaml.safe_load_all(f))
         for doc in docs:
             # We assume GoldenQuery schema
             if doc:
@@ -50,40 +79,14 @@ def main() -> None:
                 # But here we just prove schema is validated
                 # Let's rebuild a simple mock dictionary for run_smoke_gate
                 corpus.append({"id": q.id, "text": q.text, "relevance": 1 if q.relevant else 0})
-    except Exception as e:
-        print(f"Schema validation failed: {e}")
-        sys.exit(1)
+    except (OSError, yaml.YAMLError, ValidationError, ValueError, TypeError) as exc:
+        _write(f"Schema validation failed: {exc}")
+        raise SystemExit(1) from exc
 
-    if not corpus:
-        corpus = [{"id": "doc1", "text": "alpha", "relevance": 1}]
-
-    if args.command == "smoke":
-        # No network in PR smoke
-        # run deterministic runner
-        res = run_smoke_gate(corpus)
-        ndcg = res.metrics.get("ndcg@10", 0.0)
-
-        # Simple threshold test for the workflow
-        # The prompt says: "fails on threshold or baseline regression"
-        if ndcg < 0.5:
-            print(f"Smoke gate failed threshold: ndcg@10={ndcg} < 0.5")
-            sys.exit(1)
-
-        # Baseline regression
-        if baseline_path.exists():
-            with open(baseline_path) as f:
-                baseline = json.load(f)
-            if ndcg < baseline.get("ndcg@10", 0.0) - 0.02:
-                print(f"Regression detected: ndcg@10={ndcg} vs baseline {baseline.get('ndcg@10')}")
-                sys.exit(1)
-
-        print(f"Smoke gate passed. ndcg@10={ndcg}")
-        sys.exit(0)
-
-    elif args.command == "scheduled":
+    if args.command == "scheduled":
         # Scheduled live gate stays explicit
-        print("Scheduled gate running...")
-        sys.exit(0)
+        _write("Scheduled gate running...")
+        raise SystemExit(0)
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ blocks: []
 
 > Defines the versioned corpus, executable quality metrics, CI pipelines, and explicit behavior thresholds required to replace the skipped retrieval testing placeholders.
 
-**Phase:** Retrieval · **Status:** `in-progress` · **Owner:** `gemini-3-1`
+**Phase:** Retrieval · **Status:** `in-review` · **Owner:** `gemini-3-1`
 
 ## Specs to implement
 
@@ -69,7 +69,7 @@ Before implementing the CLI and runner source, the following CLI/workflow seam c
 ## Test Accounting
 The `tests/evals/` test suite holds the structural contracts for the bootstrap and seam:
 - `tests/evals/test_evals_contract.py`: Holds the discrimination tests for `run_smoke_gate` behavior.
-- `tests/evals/test_cli.py`: Holds the PR-Smoke Seam CLI behavior and `SmokeFixture` structural validation strict reds (29 tests: 6 passes, 23 strict xfails).
+- `tests/evals/test_cli.py`: Holds the passing PR-Smoke Seam CLI behavior and strict `SmokeFixture` structural validation (29 passing tests).
 - `tests/evals/test_ci_bootstrap_contract.py`: Holds the `.github/workflows/evals.yml` exact structural bootstrap validations.
 
 ## Work log
@@ -97,10 +97,10 @@ Closure gap under frozen RET-004 scope (no new metrics/corpus/redesign):
 Gates green: `make check` (ruff format+check, mypy strict, pytest, coverage ≥85), focused eval + PR smoke,
 `make tc-coverage SLICE=slice-ret004-evals` → Closure Rule satisfied (7/7 harness bullets passing).
 
-**Scope of this PR — harness FOUNDATION, not the complete quality gate.** `tests/evals/` is
-**39 passed / 24 strict-xfail**. Only the **7 spec harness bullets** are closed here. The **24 explicit
-strict reds** (SmokeFixture / CLI-seam validation, the scheduled/nightly real-gate, abstention-FPR,
-contradiction/cross-plane blending, provisional recall, etc.) and the `@pytest.mark.evals` **integration
-stage remain OPEN** and are NOT implemented in this PR. Issue #430 stays **open**; the slice stays
-`in-review` (→ `in-progress`/further slices after merge). This PR does not claim the full RET-004 quality
-gate or all 14 contracts are complete.
+**Scope of this PR — harness FOUNDATION, not the complete live quality gate.** `tests/evals/` is
+**63 passed / 0 xfail**. The seven harness bullets, strict fixed-embedding `SmokeFixture`, deterministic
+PR-smoke ranking/checksum, CLI projection, and unit-level behavior gates are closed here. The real
+scheduled/nightly Qdrant+TEI corpus run and live performance stage remain OPEN; the BEIR-style hybrid
+integration placeholder remains strict-xfail and the reference-host latency gate remains skipped.
+Issue #430 stays **open**; the slice stays `in-review` (→ `in-progress`/further slices after merge).
+This PR does not claim the live RET-004 quality gate is operationally complete.

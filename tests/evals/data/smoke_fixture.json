@@ -1,0 +1,17 @@
+{
+  "query_embedding": [1.0, 0.0],
+  "corpus": [
+    {
+      "id": "doc-relevant",
+      "text": "healthy query relevant document",
+      "relevance": 3,
+      "embedding": [1.0, 0.0]
+    },
+    {
+      "id": "doc-irrelevant",
+      "text": "unrelated document",
+      "relevance": 0,
+      "embedding": [0.0, 1.0]
+    }
+  ]
+}

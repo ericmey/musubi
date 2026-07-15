@@ -86,9 +86,6 @@ def _run_cli_and_catch_legacy_defect(
     return runner_calls
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: CLI exits on missing corpus.yaml"
-)
 def test_eval_cli_seam_fixed_embeddings_red(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -105,11 +102,6 @@ def test_eval_cli_seam_fixed_embeddings_red(
     _assert_verbatim_projection(runner_calls, fixture)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: CLI schema validation drops unlisted fields",
-)
 def test_eval_cli_seam_invalid_dimension_mismatch_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -141,11 +133,6 @@ def test_eval_cli_seam_invalid_dimension_mismatch_fails_closed(
         raise AssertionError(f"CLI raised unexpected exception: {e}")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=DefectStillPresent,
-    reason="RET-004: CLI schema validation ignores unknown nested fields",
-)
 def test_eval_cli_seam_invalid_unknown_field_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -264,9 +251,6 @@ def _get_smoke_fixture_schema() -> Any:
         raise DefectStillPresent("SmokeFixture schema is not yet implemented")
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_valid_fixture() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
@@ -280,9 +264,6 @@ def test_schema_valid_fixture() -> None:
     assert obj.model_dump(mode="json") == payload
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_invalid_dimension_mismatch() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
@@ -296,9 +277,6 @@ def test_schema_invalid_dimension_mismatch() -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 @pytest.mark.parametrize("bad_val", [float("inf"), float("-inf"), float("nan"), "0.1"])
 def test_schema_invalid_non_finite_query_vector(bad_val: Any) -> None:
     SmokeFixture = _get_smoke_fixture_schema()
@@ -314,9 +292,6 @@ def test_schema_invalid_non_finite_query_vector(bad_val: Any) -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 @pytest.mark.parametrize("bad_val", [float("inf"), float("-inf"), float("nan"), "0.1"])
 def test_schema_invalid_non_finite_doc_vector(bad_val: Any) -> None:
     SmokeFixture = _get_smoke_fixture_schema()
@@ -332,9 +307,6 @@ def test_schema_invalid_non_finite_doc_vector(bad_val: Any) -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_invalid_not_enough_docs() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
@@ -345,9 +317,6 @@ def test_schema_invalid_not_enough_docs() -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_invalid_duplicate_ids() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
@@ -361,9 +330,6 @@ def test_schema_invalid_duplicate_ids() -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_invalid_extra_fields() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
@@ -378,9 +344,6 @@ def test_schema_invalid_extra_fields() -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_invalid_empty_query_vector() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
@@ -394,9 +357,6 @@ def test_schema_invalid_empty_query_vector() -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_invalid_empty_id() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
@@ -410,9 +370,6 @@ def test_schema_invalid_empty_id() -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 @pytest.mark.parametrize("bad_relevance", [1.5, True, "1"])
 def test_schema_invalid_non_integer_relevance(bad_relevance: Any) -> None:
     SmokeFixture = _get_smoke_fixture_schema()
@@ -427,9 +384,6 @@ def test_schema_invalid_non_integer_relevance(bad_relevance: Any) -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_invalid_missing_required_field() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
@@ -443,9 +397,6 @@ def test_schema_invalid_missing_required_field() -> None:
         SmokeFixture.model_validate(payload)
 
 
-@pytest.mark.xfail(
-    strict=True, raises=DefectStillPresent, reason="RET-004: SmokeFixture not implemented"
-)
 def test_schema_invalid_unknown_doc_field() -> None:
     SmokeFixture = _get_smoke_fixture_schema()
     payload = {
