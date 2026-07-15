@@ -80,6 +80,8 @@ from musubi.lifecycle.transitions import (
     TransitionResult,
     transition,
 )
+from musubi.store.access_lease import lease_increment_access
+from musubi.store.memory_serialization import memory_update_payload
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
@@ -347,7 +349,7 @@ class ConceptPlane:
         updated = SynthesizedConcept.model_validate(data)
         self._client.set_payload(
             collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
+            payload=memory_update_payload(updated),
             points=[_point_id(object_id)],
         )
         return updated
@@ -363,21 +365,14 @@ class ConceptPlane:
         current = await self.get(namespace=namespace, object_id=object_id)
         if current is None:
             raise LookupError(f"concept {object_id!r} not found in namespace {namespace!r}")
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            access_count=current.access_count + 1,
-            last_accessed_at=now,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
+        # RET-008 (#502): route the access_count bump through the shared fenced lease so it never
+        # races a concurrent leased increment (or resets one). The lease owns access_count +
+        # last_accessed_at; re-read to return the post-bump row.
+        await lease_increment_access(
+            self._client, self._collection, {(str(namespace), str(object_id))}
         )
-        updated = SynthesizedConcept.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated
+        refreshed = await self.get(namespace=namespace, object_id=object_id)
+        return refreshed if refreshed is not None else current
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -488,7 +483,7 @@ class ConceptPlane:
         updated = SynthesizedConcept.model_validate(data)
         self._client.set_payload(
             collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
+            payload=memory_update_payload(updated),
             points=[_point_id(object_id)],
         )
         return updated

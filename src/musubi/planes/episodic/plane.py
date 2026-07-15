@@ -4,8 +4,10 @@ Responsibilities (from [[04-data-model/episodic-memory]]):
 
 - **Create** — always ``state = "provisional"``, ``version = 1``. Auto-embed
   dense + sparse. Dedup against existing points in the same namespace via
-  dense cosine similarity; on hit, merge tags, bump ``reinforcement_count``
-  and ``version``, replace content with new text.
+  dense cosine similarity; on hit, merges ONLY when factual compatibility passes
+  (rejecting negations, corrections, specific participant or time changes).
+  On compatible hit, merges tags, bumps ``reinforcement_count`` and ``version``,
+  and decides content retention based on ``merge_strategy``.
 - **Get** — fetch by namespace + ``object_id``. Namespace scoping is
   enforced so a caller asking for the wrong namespace sees ``None``.
 - **Query** — dense retrieval filtered to the caller's namespace. Default
@@ -38,6 +40,8 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
+from musubi.store.access_lease import lease_increment_access
+from musubi.store.memory_serialization import memory_update_payload, preserve_lease_fields
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
@@ -109,6 +113,29 @@ def _memory_from_payload(payload: dict[str, Any]) -> EpisodicMemory:
     return EpisodicMemory.model_validate(payload)
 
 
+def _is_factually_compatible(existing: EpisodicMemory, new: EpisodicMemory) -> bool:
+    """Return whether a cosine hit is safe to merge.
+
+    Compatibility is fail-closed: normalized content and the complete
+    participants set must both match before dedup may mutate an existing row.
+    """
+    import re
+    import unicodedata
+
+    def _normalize(text: str) -> str:
+        text = unicodedata.normalize("NFKC", text)
+        text = text.casefold()
+        text = re.sub(r"\s+", " ", text)
+        text = text.strip()
+        text = re.sub(r"[.!?]+$", "", text)
+        return text.rstrip()
+
+    if _normalize(existing.content) != _normalize(new.content):
+        return False
+
+    return set(existing.participants) == set(new.participants)
+
+
 class EpisodicPlane:
     """CRUD + lifecycle transitions for the episodic plane."""
 
@@ -137,9 +164,15 @@ class EpisodicPlane:
     ) -> EpisodicMemory:
         """Write ``memory`` to Qdrant, deduping against the same namespace.
 
-        On a dedup hit, merges tags + bumps ``reinforcement_count`` and
+        Dedup evaluates dense cosine similarity, but merges ONLY if the
+        candidate passes strict factual compatibility (rejecting semantic
+        near-matches like negations or participant alterations). If incompatible,
+        inserts a fresh distinct row.
+
+        On a compatible dedup hit, merges tags + bumps ``reinforcement_count`` and
         ``version`` on the existing row instead of inserting. ``content``
-        is kept vs replaced based on ``merge_strategy``:
+        is kept vs replaced based on ``merge_strategy`` ONLY after compatibility
+        authorizes the merge:
 
         - ``longer-wins`` (default, matches spec §06-ingestion/capture):
           keep whichever of existing / new content is strictly longer.
@@ -183,15 +216,16 @@ class EpisodicPlane:
         found = self._find_dedup_candidate(memory.namespace, dense)
         if found is not None:
             existing, existing_dense, existing_sparse = found
-            return self._reinforce(
-                existing=existing,
-                existing_dense=existing_dense,
-                existing_sparse=existing_sparse,
-                new=memory,
-                dense=dense,
-                sparse=sparse,
-                merge_strategy=merge_strategy,
-            )
+            if _is_factually_compatible(existing, memory):
+                return self._reinforce(
+                    existing=existing,
+                    existing_dense=existing_dense,
+                    existing_sparse=existing_sparse,
+                    new=memory,
+                    dense=dense,
+                    sparse=sparse,
+                    merge_strategy=merge_strategy,
+                )
 
         data = memory.model_dump()
         data.update(
@@ -223,12 +257,13 @@ class EpisodicPlane:
         one for sparse, then one atomic Qdrant upsert at the end.
 
         Dedup probes are per-row because Qdrant doesn't have a
-        "batch query_points" shape we can use today — but every dedup
-        hit writes via the same single terminal upsert (reinforce
-        updates + fresh inserts land in one call).
+        "batch query_points" shape we can use today. Each dedup probe must pass
+        factual compatibility to authorize the hit; incompatible candidates
+        resolve to fresh inserts. Every compatible dedup hit and fresh insert
+        write via the same single terminal upsert.
 
         Returns the final row for each input position in input order,
-        same as ``create`` (existing row on dedup hit, fresh row
+        same as ``create`` (existing row on compatible dedup hit, fresh row
         otherwise).
         """
         if not memories:
@@ -270,13 +305,28 @@ class EpisodicPlane:
         finalised: list[EpisodicMemory] = []
         for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
             found = self._find_dedup_candidate(memory.namespace, dense)
+
+            compatible = False
             if found is not None:
+                existing, existing_dense, existing_sparse = found
+                compatible = _is_factually_compatible(existing, memory)
+
+            if found is not None and compatible:
                 existing, existing_dense, existing_sparse = found
                 updated, existing_content_won = self._merge_row(
                     existing=existing,
                     new=memory,
                     merge_strategy=merge_strategy,
                     now=now,
+                )
+                # UPDATE of an existing row via a full-point upsert — read the stored lease-owned
+                # fields and carry them forward so a concurrent leased increment is never reset
+                # (RET-008 #502). Same bypass as the single-row create() dedup-merge path.
+                stored_lease = raw_payload(
+                    self._client,
+                    self._collection,
+                    namespace=str(updated.namespace),
+                    object_id=str(updated.object_id),
                 )
                 # Preserve existing vectors when existing content won
                 # (otherwise we'd overwrite them with the new text's
@@ -287,10 +337,19 @@ class EpisodicPlane:
                     and existing_sparse is not None
                 ):
                     points.append(
-                        self._make_point(updated, dense=existing_dense, sparse=existing_sparse)
+                        self._make_point(
+                            updated,
+                            dense=existing_dense,
+                            sparse=existing_sparse,
+                            stored_lease=stored_lease,
+                        )
                     )
                 else:
-                    points.append(self._make_point(updated, dense=dense, sparse=sparse))
+                    points.append(
+                        self._make_point(
+                            updated, dense=dense, sparse=sparse, stored_lease=stored_lease
+                        )
+                    )
                 finalised.append(updated)
             else:
                 data = memory.model_dump()
@@ -355,13 +414,26 @@ class EpisodicPlane:
         *,
         dense: list[float],
         sparse: dict[int, float],
+        stored_lease: dict[str, Any] | None = None,
     ) -> models.PointStruct:
         """Build a Qdrant PointStruct for ``memory``. Kept out of
         ``_upsert`` so ``batch_create`` can collect points without
-        calling upsert per row."""
+        calling upsert per row.
+
+        ``stored_lease`` is the row's currently-stored payload on an UPDATE
+        (dedup-merge reinforce). A full-point upsert would otherwise write the
+        in-memory model's STALE ``access_count`` / ``last_accessed_at`` /
+        ``access_lease_token`` and reset a concurrent leased increment (RET-008
+        #502). When given, :func:`preserve_lease_fields` carries the stored
+        lease-owned values forward. ``None`` on a CREATE keeps the model's
+        ``access_count = 0`` (lifecycle demotion keys on a fresh row having
+        ``access_count == 0``)."""
+        payload = memory.model_dump(mode="json")
+        if stored_lease is not None:
+            payload = preserve_lease_fields(payload, stored_lease)
         return models.PointStruct(
             id=_point_id(memory.object_id),
-            payload=memory.model_dump(mode="json"),
+            payload=payload,
             vector={
                 DENSE_VECTOR_NAME: dense,
                 SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
@@ -391,10 +463,12 @@ class EpisodicPlane:
         updated, existing_content_won = self._merge_row(
             existing=existing, new=new, merge_strategy=merge_strategy, now=now
         )
+        # UPDATE of an existing row via a full-point upsert — preserve the lease-owned fields so a
+        # concurrent retrieval-delivery increment is never reset (RET-008 #502).
         if existing_content_won and existing_dense is not None and existing_sparse is not None:
-            self._upsert(updated, dense=existing_dense, sparse=existing_sparse)
+            self._upsert(updated, dense=existing_dense, sparse=existing_sparse, preserve_lease=True)
         else:
-            self._upsert(updated, dense=dense, sparse=sparse)
+            self._upsert(updated, dense=dense, sparse=sparse, preserve_lease=True)
         return updated
 
     def _upsert(
@@ -403,15 +477,21 @@ class EpisodicPlane:
         *,
         dense: list[float],
         sparse: dict[int, float],
+        preserve_lease: bool = False,
     ) -> None:
-        point = models.PointStruct(
-            id=_point_id(memory.object_id),
-            payload=memory.model_dump(mode="json"),
-            vector={
-                DENSE_VECTOR_NAME: dense,
-                SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
-            },
-        )
+        stored_lease: dict[str, Any] | None = None
+        if preserve_lease:
+            # UPDATE path: read the lease-owned fields FRESH and carry them forward so the
+            # full-point upsert never resets a concurrent leased access_count. This narrows the
+            # read->upsert window to one round-trip; a full-point upsert cannot be server-fenced
+            # the way a filtered set_payload can, so a residual window remains (RET-008 PR notes).
+            stored_lease = raw_payload(
+                self._client,
+                self._collection,
+                namespace=str(memory.namespace),
+                object_id=str(memory.object_id),
+            )
+        point = self._make_point(memory, dense=dense, sparse=sparse, stored_lease=stored_lease)
         self._client.upsert(collection_name=self._collection, points=[point])
 
     # ------------------------------------------------------------------
@@ -519,22 +599,29 @@ class EpisodicPlane:
             return None
 
         if bump_access:
-            access_count = payload.get("access_count", 0) + 1
-            now = utc_now()
-            now_str = now.isoformat().replace("+00:00", "Z")
-            self._client.batch_update_points(
-                collection_name=self._collection,
-                update_operations=[
-                    models.SetPayloadOperation(
-                        set_payload=models.SetPayload(
-                            payload={"access_count": access_count, "last_accessed_at": now_str},
-                            points=[_point_id(object_id)],
-                        )
-                    )
-                ],
+            # RET-008 (#502): route the direct-fetch bump through the SHARED fenced lease so it
+            # never races a concurrent retrieval-delivery increment (or another get) on the same
+            # row under multi-worker/cross-process parallelism. Re-read to return the post-bump row.
+            await lease_increment_access(
+                self._client, self._collection, {(str(namespace), str(object_id))}
             )
-            payload["access_count"] = access_count
-            payload["last_accessed_at"] = now_str
+            refreshed, _ = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=namespace)
+                        ),
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=object_id)
+                        ),
+                    ]
+                ),
+                limit=1,
+                with_payload=True,
+            )
+            if refreshed and refreshed[0].payload:
+                payload = refreshed[0].payload
 
         return _memory_from_payload(payload)
 
@@ -574,31 +661,17 @@ class EpisodicPlane:
             with_payload=True,
         )
         out: list[EpisodicMemory] = []
-        updates = []
-        now = utc_now()
-        now_str = now.isoformat().replace("+00:00", "Z")
-
+        pairs: set[tuple[str, str]] = set()
         for point in resp.points:
             if point.payload:
                 payload = dict(point.payload)
-                ac = payload.get("access_count", 0) + 1
-                updates.append(
-                    models.SetPayloadOperation(
-                        set_payload=models.SetPayload(
-                            payload={"access_count": ac, "last_accessed_at": now_str},
-                            points=[point.id],
-                        )
-                    )
-                )
-                payload["access_count"] = ac
-                payload["last_accessed_at"] = now_str
                 out.append(_memory_from_payload(payload))
+                pairs.add((str(payload.get("namespace")), str(payload.get("object_id"))))
 
-        if updates:
-            self._client.batch_update_points(
-                collection_name=self._collection,
-                update_operations=updates,
-            )
+        # RET-008 (#502): route the batched access bump through the shared fenced lease (never a
+        # bare RMW that would race/lose a concurrent leased increment).
+        if pairs:
+            await lease_increment_access(self._client, self._collection, pairs)
         return out
 
     # ------------------------------------------------------------------
@@ -660,7 +733,7 @@ class EpisodicPlane:
 
         self._client.set_payload(
             collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
+            payload=memory_update_payload(updated),
             points=[_point_id(object_id)],
         )
         return updated, event
