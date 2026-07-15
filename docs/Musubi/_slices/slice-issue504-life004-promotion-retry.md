@@ -25,6 +25,7 @@ Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure
 - [[06-ingestion/promotion]]
 
 ## Owned paths
+- `docs/Musubi/06-ingestion/promotion.md`
 - `src/musubi/lifecycle/promotion.py`
 - `tests/lifecycle/test_promotion.py`
 
@@ -43,6 +44,7 @@ Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure
 - `make check` is fully passing.
 
 ## Work log
+- Integration and property bullets 30-33 are pre-existing downstream test requirements explicitly out-of-scope for the LIFE-004 fix boundary.
 - Updated `promotion.py` to differentiate ValueError (deterministic) from generic Exception (transient) during LLM rendering.
 - Updated post-render pipeline to catch PromotionPolicyError as deterministic, while broad exceptions (OSError, RuntimeError, TypeError, unclassified infra issues) remain explicitly transient.
 - Converted single failing test into four distinct tests covering transient vs deterministic cases for both stages.

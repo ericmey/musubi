@@ -257,7 +257,10 @@ Notification:
 Failure:
 
 24. `test_promotion_rejected_after_3_attempts_stops_retrying`
-25. `test_rendering_failure_increments_attempts_not_promotes`
+25. `test_deterministic_rendering_failure_increments_attempts`
+26. `test_transient_rendering_failure_leaves_attempts_unchanged`
+27. `test_deterministic_post_render_failure_increments_attempts`
+28. `test_transient_post_render_failure_leaves_attempts_unchanged`
 
 Concurrency:
 

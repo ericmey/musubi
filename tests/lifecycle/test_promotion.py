@@ -628,6 +628,33 @@ class _TransientFailingVault:
 
 
 @pytest.mark.asyncio
+async def test_transient_post_render_failure_leaves_attempts_unchanged(deps: Any) -> None:
+    from dataclasses import replace
+
+    from musubi.lifecycle.promotion import run_promotion_sweep
+
+    failing_deps = replace(deps, vault_writer=_TransientFailingVault())
+    c = _concept()
+    await failing_deps.concept_plane.create(c)
+    await failing_deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=failing_deps.coordinator,
+    )
+    _set_old(failing_deps, "concept", str(c.object_id))
+
+    promoted_count = await run_promotion_sweep(failing_deps)
+    assert promoted_count == 0
+
+    readback = await failing_deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback is not None
+    assert readback.promotion_attempts == 0
+
+
+@pytest.mark.asyncio
 async def test_deterministic_post_render_failure_increments_attempts(
     deps: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
