@@ -906,6 +906,9 @@ async def _find_supersession_candidate(
                 break
         if not candidate_content:
             continue
+        candidate_id = rec.payload.get("object_id")
+        if not isinstance(candidate_id, str) or candidate_id == self_id:
+            continue
         candidate_topics = rec.payload.get("linked_to_topics") or []
         if not any(t in topics for t in candidate_topics):
             continue

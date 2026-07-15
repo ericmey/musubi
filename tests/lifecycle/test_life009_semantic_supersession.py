@@ -29,7 +29,6 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 import pytest
 from qdrant_client import QdrantClient, models
@@ -50,7 +49,6 @@ from musubi.lifecycle.maturation import (
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
 from musubi.types.episodic import EpisodicMemory
-
 
 # --------------------------------------------------------------------------- #
 # Controlled embedder
@@ -76,7 +74,8 @@ class _ControlledEmbedder(Embedder):
         self._vectors[text] = _pad_to_1024(vector)
 
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
-        return [self._vectors.get(t, self._default) for t in texts]
+
+        return [_pad_to_1024(self._vectors.get(t, self._default)) for t in texts]
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         return [{} for _ in texts]
@@ -259,13 +258,13 @@ async def test_paraphrase_supersession(qdrant: QdrantClient, ns: str) -> None:
         "Update: today's meeting starts at 2pm",
         [math.cos(0.10), math.sin(0.10)],
     )
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
     )
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -287,13 +286,13 @@ async def test_correction_supersession_links_to_right_predecessor(
             "the meeting is at 3pm": _vec_meeting_3pm(),
         }
     )
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
     )
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -317,13 +316,11 @@ async def test_negation_supersession_links_to_right_predecessor(
             ],
         }
     )
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
-    predecessor = await _seed_matured(
-        plane, ns, content="the sky is green", topics=["world/color"]
-    )
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
+    predecessor = await _seed_matured(plane, ns, content="the sky is green", topics=["world/color"])
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -342,7 +339,7 @@ async def test_participant_change_supersession(qdrant: QdrantClient, ns: str) ->
             "bob said the meeting is at 2pm": _vec_bob_said_meeting_2pm(),
         }
     )
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     predecessor = await _seed_matured(
         plane,
         ns,
@@ -351,7 +348,7 @@ async def test_participant_change_supersession(qdrant: QdrantClient, ns: str) ->
     )
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -369,13 +366,13 @@ async def test_time_change_supersession(qdrant: QdrantClient, ns: str) -> None:
             "the meeting is at 3pm": _vec_meeting_3pm(),
         }
     )
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
     )
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -396,7 +393,7 @@ async def test_unrelated_substring_overlap_does_not_supersede(
             "the meeting is at 5pm tomorrow": _vec_meeting_5pm_tomorrow(),
         }
     )
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     await _seed_matured(
         plane,
         ns,
@@ -405,7 +402,7 @@ async def test_unrelated_substring_overlap_does_not_supersede(
     )
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -426,11 +423,11 @@ async def test_ambiguous_candidates_abstain(qdrant: QdrantClient, ns: str) -> No
             "the meeting is at 2pm tomorrow": _vec_meeting_3pm(),
         }
     )
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
-    cand_a = await _seed_matured(
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
+    await _seed_matured(
         plane, ns, content="the meeting is at 2pm today", topics=["calendar/meeting"]
     )
-    cand_b = await _seed_matured(
+    await _seed_matured(
         plane, ns, content="the meeting is at 2pm tomorrow", topics=["calendar/meeting"]
     )
     # The needle and its update both point at meeting_2pm-ish content;
@@ -438,7 +435,7 @@ async def test_ambiguous_candidates_abstain(qdrant: QdrantClient, ns: str) -> No
     embedder.set("the meeting is at 2pm this week", _vec_high_sim_to_meeting_2pm())
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -467,13 +464,11 @@ async def test_no_candidates_abstain(qdrant: QdrantClient, ns: str) -> None:
         }
     )
     embedder.set("Update: the meeting is at 2pm", _vec_high_sim_to_meeting_2pm())
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
-    await _seed_matured(
-        plane, ns, content="the sky is green", topics=["world/color"]
-    )
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
+    await _seed_matured(plane, ns, content="the sky is green", topics=["world/color"])
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -491,13 +486,11 @@ async def test_threshold_below_minimum_abstains(qdrant: QdrantClient, ns: str) -
             "the meeting is at 2pm ish": [math.cos(math.pi / 3), math.sin(math.pi / 3)],
         }
     )
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
-    await _seed_matured(
-        plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
-    )
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
+    await _seed_matured(plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"])
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -520,7 +513,7 @@ async def test_predecessor_and_back_link_correctness_in_sweep(
         }
     )
     embedder.set("Correction: the meeting is at 3pm", _vec_meeting_3pm())
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
     )
@@ -530,14 +523,12 @@ async def test_predecessor_and_back_link_correctness_in_sweep(
         content="Correction: the meeting is at 3pm",
         topics=["calendar/meeting"],
     )
-    ollama = _FakeOllama(
-        topic_map={"Correction: the meeting is at 3pm": ["calendar/meeting"]}
-    )
+    ollama = _FakeOllama(topic_map={"Correction: the meeting is at 3pm": ["calendar/meeting"]})
     await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=ollama,  # type: ignore[arg-type]
+        ollama=ollama,
         cursor=cursor,
         config=MaturationConfig(
             min_age_sec=3600,
@@ -549,7 +540,7 @@ async def test_predecessor_and_back_link_correctness_in_sweep(
             concept_reinforcement_threshold=3,
             tag_aliases={},
         ),
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
     )
     refreshed_predecessor = await plane.get(namespace=ns, object_id=predecessor.object_id)
     refreshed_new = await plane.get(namespace=ns, object_id=new_row.object_id)
@@ -570,7 +561,7 @@ async def test_retry_idempotency_in_sweep(
         }
     )
     embedder.set("Correction: the meeting is at 3pm", _vec_meeting_3pm())
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
     )
@@ -580,9 +571,7 @@ async def test_retry_idempotency_in_sweep(
         content="Correction: the meeting is at 3pm",
         topics=["calendar/meeting"],
     )
-    ollama = _FakeOllama(
-        topic_map={"Correction: the meeting is at 3pm": ["calendar/meeting"]}
-    )
+    ollama = _FakeOllama(topic_map={"Correction: the meeting is at 3pm": ["calendar/meeting"]})
     cfg = MaturationConfig(
         min_age_sec=3600,
         batch_size=500,
@@ -597,10 +586,10 @@ async def test_retry_idempotency_in_sweep(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=ollama,  # type: ignore[arg-type]
+        ollama=ollama,
         cursor=cursor,
         config=cfg,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
     )
     refreshed_after_first = await plane.get(namespace=ns, object_id=predecessor.object_id)
     assert refreshed_after_first is not None
@@ -610,10 +599,10 @@ async def test_retry_idempotency_in_sweep(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=ollama,  # type: ignore[arg-type]
+        ollama=ollama,
         cursor=cursor,
         config=cfg,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
     )
     refreshed_after_second = await plane.get(namespace=ns, object_id=predecessor.object_id)
     assert refreshed_after_second is not None
@@ -626,14 +615,14 @@ async def test_bounded_candidate_search(qdrant: QdrantClient, ns: str) -> None:
         {f"the meeting is at {h}pm": _vec_high_sim_to_meeting_2pm() for h in range(25)}
     )
     embedder.set("Update: the meeting is at 2pm", _vec_high_sim_to_meeting_2pm())
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     for h in range(25):
         await _seed_matured(
             plane, ns, content=f"the meeting is at {h}pm", topics=["calendar/meeting"]
         )
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -655,7 +644,7 @@ async def test_substring_only_does_not_match(qdrant: QdrantClient, ns: str) -> N
         }
     )
     embedder.set("Update: the meeting is at 2pm", _vec_high_sim_to_meeting_2pm())
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     await _seed_matured(
         plane,
         ns,
@@ -664,7 +653,7 @@ async def test_substring_only_does_not_match(qdrant: QdrantClient, ns: str) -> N
     )
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -682,10 +671,10 @@ async def test_existing_no_predecessor_branch_still_returns_none(
 ) -> None:
     """GREEN guard: the no-predecessor branch still returns None."""
     embedder = _ControlledEmbedder()
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     result = await seam_candidate(
         qdrant,
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
         collection="musubi_episodic",
         namespace=ns,
         self_id="new",
@@ -710,21 +699,19 @@ async def test_existing_both_sides_of_link_still_set(
     # Give it an explicit vector so the cosine with the candidate's
     # meeting_2pm vector is high.
     embedder.set("Update: the meeting is at 3pm", _vec_meeting_3pm())
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)  # type: ignore[arg-type]
+    plane = EpisodicPlane(client=qdrant, embedder=embedder, dedup_threshold=1.01)
     predecessor = await _seed_matured(
         plane, ns, content="the meeting is at 2pm", topics=["calendar/meeting"]
     )
     new_row = await _seed_provisional(
         plane, ns, content="Update: the meeting is at 3pm", topics=["calendar/meeting"]
     )
-    ollama = _FakeOllama(
-        topic_map={"Update: the meeting is at 3pm": ["calendar/meeting"]}
-    )
+    ollama = _FakeOllama(topic_map={"Update: the meeting is at 3pm": ["calendar/meeting"]})
     await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
         coordinator=_coordinator(qdrant, sink),
-        ollama=ollama,  # type: ignore[arg-type]
+        ollama=ollama,
         cursor=cursor,
         config=MaturationConfig(
             min_age_sec=3600,
@@ -736,7 +723,7 @@ async def test_existing_both_sides_of_link_still_set(
             concept_reinforcement_threshold=3,
             tag_aliases={},
         ),
-        embedder=embedder,  # type: ignore[arg-type]
+        embedder=embedder,
     )
     refreshed_predecessor = await plane.get(namespace=ns, object_id=predecessor.object_id)
     refreshed_new = await plane.get(namespace=ns, object_id=new_row.object_id)
