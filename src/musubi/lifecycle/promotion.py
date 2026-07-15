@@ -304,7 +304,7 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
                 # If an existing file exists at the expected path, but its frontmatter is broken,
                 # we must not silently ignore it and overwrite it or spin forever.
                 raise PromotionPolicyError(
-                    f"Corrupt frontmatter at existing vault path: {e}"
+                    f"Corrupt frontmatter at existing vault path '{rel_path}': {e}"
                 ) from e
 
             if fm.musubi_managed and fm.promoted_from == concept.object_id:
