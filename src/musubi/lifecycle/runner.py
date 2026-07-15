@@ -48,7 +48,7 @@ _REG = default_registry()
 _DURATION = _REG.histogram(
     "musubi_lifecycle_job_duration_seconds",
     "lifecycle worker tick duration",
-    buckets=[0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0],
+    buckets=(0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0),
     labelnames=("job",),
 )
 _ERRORS = _REG.counter(
