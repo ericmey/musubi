@@ -39,7 +39,7 @@ from musubi.api.routers.retrieve import (
     _resolve_targets,
 )
 from musubi.auth import authenticate_request
-from musubi.auth.scopes import resolve_namespace_scope
+from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
@@ -84,6 +84,7 @@ async def retrieve_stream(
 
     if body.namespace is None:
         from musubi.api.routers.retrieve import _enumerate_authorized_targets
+
         family = context.presence.split("/", 1)[0]
         planes = body.planes or ["curated", "concept", "episodic"]
         targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
@@ -105,7 +106,6 @@ async def retrieve_stream(
         return StreamingResponse(_emit_empty(), media_type="application/x-ndjson", headers=headers)
 
     # AUTH-001: the shared READ-ONLY enforcement seam.
-    from musubi.auth.scopes import enforce_namespace_policy
     policy_result = enforce_namespace_policy(context, targets=targets, access="r")
     if isinstance(policy_result, Err):
         raise APIError(

@@ -31,7 +31,6 @@ tests are RED until that commit lands.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -39,10 +38,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from musubi.api.app import create_app
-from musubi.auth.tokens import AuthContext
 from musubi.settings import Settings
 from musubi.types.common import Ok
-
 
 # --------------------------------------------------------------------------- #
 # Test double for the auth context. Mirrors AuthContext + the new
@@ -196,7 +193,6 @@ def _client(
         get_reranker,
         get_settings_dep,
     )
-    from musubi.api.routers.retrieve import authenticate_request
     from musubi.embedding.fake import FakeEmbedder
 
     app = create_app(settings=api_settings)
@@ -370,6 +366,7 @@ def test_salesai_cannot_be_reenabled_by_streaming(
         _make_auth(),
     )
 
+    from musubi.api.app import create_app
     from musubi.api.dependencies import (
         get_embedder,
         get_qdrant_client,
@@ -377,7 +374,6 @@ def test_salesai_cannot_be_reenabled_by_streaming(
         get_settings_dep,
     )
     from musubi.embedding.fake import FakeEmbedder
-    from musubi.api.app import create_app
 
     app = create_app(settings=api_settings)
     app.dependency_overrides[get_settings_dep] = lambda: api_settings
@@ -526,6 +522,7 @@ def test_unauthorized_namespaces_remain_denied_not_silently_broadened(
         _make_auth(),
     )
     client = _client(monkeypatch, api_settings)  # this uses broad auth; reset
+    from musubi.api.app import create_app
     from musubi.api.dependencies import (
         get_embedder,
         get_qdrant_client,
@@ -533,7 +530,6 @@ def test_unauthorized_namespaces_remain_denied_not_silently_broadened(
         get_settings_dep,
     )
     from musubi.embedding.fake import FakeEmbedder
-    from musubi.api.app import create_app
 
     def narrow_auth(_req: Any, _n: Any, *, settings: Settings) -> Any:
         context = _AuthContextDouble(
@@ -550,14 +546,6 @@ def test_unauthorized_namespaces_remain_denied_not_silently_broadened(
         "musubi.api.routers.retrieve.authenticate_request",
         narrow_auth,
     )
-    from musubi.api.dependencies import (
-        get_embedder,
-        get_qdrant_client,
-        get_reranker,
-        get_settings_dep,
-    )
-    from musubi.embedding.fake import FakeEmbedder
-    from musubi.api.app import create_app
 
     app = create_app(settings=api_settings)
     app.dependency_overrides[get_settings_dep] = lambda: api_settings

@@ -58,7 +58,7 @@ from musubi.api.responses import (
     RetrieveResponse,
 )
 from musubi.auth import authenticate_request
-from musubi.auth.scopes import enforce_namespace_policy, resolve_namespace_scope
+from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
@@ -532,9 +532,7 @@ async def retrieve(
     # ``resolve_namespace_scope`` loop. The seam is the single
     # source of truth for the exclusion policy; hardcoding route-
     # specific exclusions is a code-review must-fix.
-    policy_result = enforce_namespace_policy(
-        context, targets=targets, access="r"
-    )
+    policy_result = enforce_namespace_policy(context, targets=targets, access="r")
     if isinstance(policy_result, Err):
         raise APIError(
             status_code=policy_result.error.status_code,
