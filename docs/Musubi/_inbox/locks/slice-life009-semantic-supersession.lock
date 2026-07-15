@@ -1,0 +1,31 @@
+owner: cowork-tama
+branch: slice/life009-semantic-supersession
+claimed: 2026-07-15
+worktree: /tmp/life009/wt
+base: 815ce45 (live origin/main, no drift on this lane)
+scope: LIFE-009 semantic supersession with abstention (Issue #532) —
+  tests-first slice (zero src in this commit). 15 acceptance tests
+  (13 RED discriminating + 2 GREEN preservation guards) at
+  tests/lifecycle/test_life009_semantic_supersession.py. Implementation
+  (semantic + topic match in _find_supersession_candidate, abstention
+  on ambiguity, bounded candidate search, no new subsystem) lands in
+  a follow-up commit after the test contract is accepted.
+authorization: Yua (lane assignment 2026-07-15T10:50:35, LIFE-009
+  tests-first lane is Tama's; the four freeze invariants ACK'd:
+  semantic similarity + topic compatibility, correction and negation
+  must link to the right predecessor, ambiguous candidates abstain,
+  substring overlap alone is never sufficient). Spec source-of-truth:
+  Issue #532 acceptance; maturation.md § Step 5 ("semantic
+  similarity ≥ 0.88 plus same topic"). Use existing
+  _TEICompositeEmbedder; no new subsystem.
+open-defects: Issue #532 assignee resolution (org-admin follow-up;
+  not a block on the slice). The GraphQL `replaceActorsForAssignable`
+  failure on `minimax-m3` is logged in the slice doc as a
+  non-blocking open-defect; the slice frontmatter owner=cowork-tama
+  is the authoritative work-assignment record.
+second-reader: yua; acceptance: yua.
+forbidden: any src/musubi/** change in this commit; any production
+  code edit before Yua's next ACK. The 13 RED tests are RED (will
+  fail against the current main) and that is expected; the seam
+  implementation lands in a follow-up slice after the test
+  contract is accepted.
