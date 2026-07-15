@@ -57,21 +57,33 @@ public method:
 class CuratedPlane:
     async def find_by_vault_path(
         self, vault_path: str
-    ) -> CuratedKnowledge | None:
-        """Exact-match scroll on payload.vault_path; returns the row or None.
+    ) -> Result[CuratedKnowledge, FindByVaultPathError]:
+        """Exact-match scroll on payload.vault_path; returns a typed
+        Result. Fetches at most 2 rows because the second match is
+        sufficient to fail closed.
 
         Uses Qdrant FieldCondition equality, NOT startswith/regex/prefix.
         Sibling and prefix-collision paths cannot match by construction.
-        Returns None when no row matches (callers must treat as a
-        clean observable no-op, not an error).
+
+        Outcomes:
+          - Err(code='not_found') when no row matches (callers must
+            treat as a clean observable no-op, not an error).
+          - Ok(row) when EXACTLY one row matches.
+          - Err(code='multiple_matches') when more than one row
+            matches — callers MUST refuse destructive action.
         """
 ```
 
 The watcher's delete handler does:
 
-1. `current = await self.curated_plane.find_by_vault_path(rel_path)`
-2. If `current is None`: log at `info` level, return cleanly.
-3. Otherwise: `result = await self.curated_plane.transition(
+1. `lookup = await self.curated_plane.find_by_vault_path(rel_path)`
+2. If `lookup is Err(code='not_found')`: log at `info` level, return cleanly.
+3. If `lookup is Err(code='multiple_matches')`: log a structured
+   warning naming both `match_object_ids`, refuse to archive (fail
+   closed + visibly), return.
+4. If `lookup is Ok(current)` and `current.state == 'archived'`:
+   log at `debug` level (idempotent no-op repeat delete), return.
+5. Otherwise: `result = await self.curated_plane.transition(
        namespace=current.namespace,
        object_id=current.object_id,
        to_state='archived',
@@ -118,8 +130,12 @@ call site (`TypeError: missing 1 required keyword-only argument`)
 — there is no silent fallback to a no-op coordinator.
 
 The existing `tests/vault/test_sync.py` watcher fixture is updated
-to construct a real `LifecycleTransitionCoordinator` with the
-in-memory SQLite path; tests exercise the canonical seam end-to-end.
+to pass a `MagicMock()` coordinator (these legacy sync tests do
+NOT exercise the archive path; a `MagicMock` is sufficient as the
+required-keyword seam parameter). The focused VAULT-003 tests in
+`tests/vault/test_vault003_live_delete.py` construct a real
+`LifecycleTransitionCoordinator` against the in-memory SQLite path
+and exercise the canonical seam end-to-end.
 
 ### Out of scope
 

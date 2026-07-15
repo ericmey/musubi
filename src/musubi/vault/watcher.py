@@ -575,7 +575,10 @@ async def _main_async() -> None:
     Builds the canonical runtime, constructs the watcher, runs the
     one-time boot scan, starts the watchdog observer, and stays
     alive until SIGTERM/SIGINT. On exit, the observer is stopped
-    cleanly and the runtime is closed (sink + write log).
+    cleanly and the runtime's sink is closed. ``WriteLog`` has no
+    ``close()`` — it opens sqlite connections per call, so each
+    ``record_write`` / ``consume_if_exists`` is its own transaction;
+    there is no per-process connection to release.
     """
     from musubi.observability import configure_logging
     from musubi.vault.runtime import build_vault_sync_runtime

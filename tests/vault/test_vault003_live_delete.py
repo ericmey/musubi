@@ -793,13 +793,27 @@ def test_systemd_module_command_reaches_construction() -> None:
         )
 
 
-def test_runtime_factory_produces_watcher_construction_inputs() -> None:
+def test_runtime_factory_produces_watcher_construction_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """VAULT-003 Blocker 1 (deeper): with a stubbed settings object the
     runtime factory must produce a bundle that successfully
     constructs a ``VaultWatcher`` (i.e. the field names match the
     new required-keyword-only ``coordinator`` parameter). This
     proves the production wiring is end-to-end constructable, not
-    just importable."""
+    just importable.
+
+    All module-level stubs go through ``monkeypatch`` so the
+    ``musubi.vault.runtime`` namespace is restored after the test
+    and the suite stays order-independent. The ``bootstrap`` import
+    in ``runtime.py`` is patched at the actual seam
+    (``musubi.store.bootstrap``), NOT via a dangling
+    ``runtime_mod.bootstrap_collections`` attribute that the factory
+    never resolves through (the factory does an in-function
+    ``from musubi.store import bootstrap as bootstrap_collections``,
+    so the symbol's source is ``musubi.store``, not
+    ``musubi.vault.runtime``).
+    """
     import inspect
     from pathlib import Path as _Path
 
@@ -831,17 +845,43 @@ def test_runtime_factory_produces_watcher_construction_inputs() -> None:
         lifecycle_sqlite_busy_timeout_ms=5000,
     )
     # The factory calls build_qdrant_client etc. that need real
-    # network. Stub them to no-ops; we only need the field-shape
-    # match to construct the watcher.
-    import musubi.vault.runtime as runtime_mod
-
-    runtime_mod.build_qdrant_client = lambda **_kw: MagicMock(name="qdrant")  # type: ignore[attr-defined]
-    runtime_mod.bootstrap_collections = lambda _qdrant: None  # type: ignore[attr-defined]
-    runtime_mod.ChunkedEmbedder = lambda _composite: MagicMock(name="embedder")  # type: ignore[attr-defined, misc, assignment]
-    runtime_mod.LifecycleTransitionCoordinator = lambda **_kw: MagicMock(name="coordinator")  # type: ignore[attr-defined, assignment]
-    runtime_mod.LifecycleEventSink = lambda **_kw: MagicMock(name="sink")  # type: ignore[attr-defined, assignment]
-    runtime_mod.WriteLog = lambda **_kw: MagicMock(name="write_log")  # type: ignore[attr-defined, assignment]
-    runtime_mod.CuratedPlane = lambda **_kw: MagicMock(name="curated_plane")  # type: ignore[attr-defined, assignment]
+    # network. Stub each via monkeypatch so the namespace is
+    # restored on teardown — the suite stays order-independent.
+    # Patch the ACTUAL import seam the factory resolves through:
+    # `from musubi.vault.runtime import build_qdrant_client` ->
+    # `musubi.vault.runtime.build_qdrant_client`; similarly for
+    # bootstrap (resolved via `from musubi.store import bootstrap`
+    # inside the factory, but monkeypatch on the attribute the
+    # factory binds to is the seam).
+    monkeypatch.setattr(
+        "musubi.vault.runtime.build_qdrant_client",
+        lambda **_kw: MagicMock(name="qdrant"),
+    )
+    monkeypatch.setattr(
+        "musubi.vault.runtime.ChunkedEmbedder",
+        lambda _composite: MagicMock(name="embedder"),
+    )
+    monkeypatch.setattr(
+        "musubi.vault.runtime.LifecycleTransitionCoordinator",
+        lambda **_kw: MagicMock(name="coordinator"),
+    )
+    monkeypatch.setattr(
+        "musubi.vault.runtime.LifecycleEventSink",
+        lambda **_kw: MagicMock(name="sink"),
+    )
+    monkeypatch.setattr(
+        "musubi.vault.runtime.WriteLog",
+        lambda **_kw: MagicMock(name="write_log"),
+    )
+    monkeypatch.setattr(
+        "musubi.vault.runtime.CuratedPlane",
+        lambda **_kw: MagicMock(name="curated_plane"),
+    )
+    # bootstrap is imported lazily inside the factory as
+    # `from musubi.store import bootstrap as bootstrap_collections`.
+    # Patch `musubi.store.bootstrap` (the actual symbol the import
+    # binds to) so the factory's call resolves to a no-op.
+    monkeypatch.setattr("musubi.store.bootstrap", lambda _qdrant: None)
 
     runtime: VaultSyncRuntime = build_vault_sync_runtime(settings=settings)  # type: ignore[arg-type]
     assert isinstance(runtime, VaultSyncRuntime)

@@ -10,10 +10,19 @@ a second dependency graph.
 The lifecycle worker (``src/musubi/lifecycle/runner.py``) inlines a
 similar graph today; the small extraction here intentionally does NOT
 generalise that — the watcher needs a smaller subset (no Ollama, no
-synthesis/promotion/reflection jobs, no scrape server, no
-``_TEICompositeEmbedder`` glue), and the right refactor is a future
-``musubi.runtime`` module that all three entrypoints consume. This
-file is the smallest change that closes the live-reachability gap.
+synthesis/promotion/reflection jobs, no scrape server), and the right
+refactor is a future ``musubi.runtime`` module that all three
+entrypoints consume. This file is the smallest change that closes
+the live-reachability gap.
+
+The TEI composite glue (``_TEICompositeEmbedder``, defined in
+``src/musubi/vault/watcher.py``) IS imported and used here: the
+factory wraps it in ``ChunkedEmbedder`` so sparse inputs > 510
+tokens are sliding-window-chunked + max-pooled before they hit
+tei-sparse (SPLADE-v3 has a hard 512-token model cap). The same
+adapter class is duplicated in ``src/musubi/api/bootstrap.py`` and
+``src/musubi/lifecycle/runner.py``; promoting to a shared home is the
+natural extraction point when a fourth caller needs it.
 """
 
 from __future__ import annotations
