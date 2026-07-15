@@ -47,7 +47,7 @@ Fix `promotion_attempts` logic (Issue #504). Currently, transient infrastructure
 - `make check` is fully passing.
 
 ## Work log
-- Integration and property bullets 30-33 are pre-existing downstream test requirements explicitly out-of-scope for the LIFE-004 fix boundary.
+- Property and integration bullets 34-37 are pre-existing downstream test requirements explicitly out-of-scope for the LIFE-004 fix boundary.
 - Updated the render boundary so only explicit `PromotionPolicyError` is deterministic; transport/envelope `ValueError` and other infrastructure exceptions remain transient.
 - Updated `HttpxPromotionClient` to raise `PromotionPolicyError` only for validated-body policy rejection, while malformed upstream envelopes remain transient.
 - Updated post-render model construction to wrap local `ValueError`/`TypeError` validation as `PromotionPolicyError`; vault, Qdrant, transition, and other infrastructure failures remain transient.

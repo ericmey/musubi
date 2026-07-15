@@ -270,20 +270,20 @@ Failure:
 
 Concurrency:
 
-26. `test_concurrent_promotion_of_different_concepts_ok`
-27. `test_concurrent_promotion_of_same_concept_one_wins`
+30. `test_concurrent_promotion_of_different_concepts_ok`
+31. `test_concurrent_promotion_of_same_concept_one_wins`
 
 Human override:
 
-28. `test_cli_force_promote_with_custom_body`
-29. `test_cli_reject_sets_rejected_fields_and_demotes`
+32. `test_cli_force_promote_with_custom_body`
+33. `test_cli_reject_sets_rejected_fields_and_demotes`
 
 Property:
 
-30. `hypothesis: every successful promotion produces exactly one curated file and one Qdrant point`
+34. `hypothesis: every successful promotion produces exactly one curated file and one Qdrant point`
 
 Integration:
 
-31. `integration: happy path — 1 concept → 1 file in vault/, 1 point in musubi_curated, both linked, ops-alert present`
-32. `integration: path conflict with human file — sibling created, no human file modified`
-33. `integration: rollback flow — promote then archive, vault file in _archive/, Qdrant state=archived`
+35. `integration: happy path — 1 concept → 1 file in vault/, 1 point in musubi_curated, both linked, ops-alert present`
+36. `integration: path conflict with human file — sibling created, no human file modified`
+37. `integration: rollback flow — promote then archive, vault file in _archive/, Qdrant state=archived`
