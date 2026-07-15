@@ -18,6 +18,7 @@ from musubi.lifecycle.promotion import PromotionRender, _is_eligible, compute_pa
 from musubi.observability import default_registry, render_text_format
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
+from musubi.store import collection_for_plane
 from musubi.store.bootstrap import bootstrap
 from musubi.types.common import epoch_of, generate_ksuid, utc_now
 from musubi.types.concept import SynthesizedConcept
@@ -44,7 +45,17 @@ class FakeVaultWriter:
         return self._vault_root
 
     def write_curated(self, vault_relative_path: str, frontmatter: Any, body: str) -> Path:
-        return self._vault_root / vault_relative_path
+        from musubi.vault.frontmatter import dump_frontmatter
+
+        full_path = self._vault_root / vault_relative_path
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        # Handle dict or Pydantic model
+        if hasattr(frontmatter, "model_dump"):
+            data = frontmatter.model_dump(by_alias=True, exclude_none=True, mode="json")
+        else:
+            data = frontmatter
+        full_path.write_text(dump_frontmatter(data, body))
+        return full_path
 
 
 class FakeThoughtEmitter:
@@ -276,6 +287,394 @@ def test_vault_writer_rejects_path_escape(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_idempotent_replay_reuses_existing_vault_object_id(deps: Any) -> None:
+    from musubi.lifecycle.promotion import _promote_concept
+    from musubi.types.common import generate_ksuid
+    from musubi.vault.frontmatter import dump_frontmatter
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+
+    # Simulate a partially-completed promotion from a prior sweep (Vault write succeeded, Qdrant/Concept failed)
+    existing_id = str(generate_ksuid())
+    from musubi.lifecycle.promotion import compute_path
+    from musubi.types.common import utc_now
+
+    path_str = compute_path(c)
+    full_path = deps.vault_writer.vault_root / path_str
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    fm = {
+        "object_id": existing_id,
+        "title": "Title",
+        "created": utc_now().isoformat(),
+        "updated": utc_now().isoformat(),
+        "musubi-managed": True,
+        "promoted_from": str(c.object_id),
+    }
+    full_path.write_text(dump_frontmatter(fm, "Body"))
+
+    # Execute the replay
+    res = await _promote_concept(deps, c)
+
+    # 1. Concept's promoted_to MUST match the pre-existing ID
+    readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert str(readback_concept.promoted_to) == existing_id
+
+    # 2. Persisted Curated Row MUST match the pre-existing ID
+    readback_curated = await deps.curated_plane.get(namespace=c.namespace, object_id=existing_id)
+    assert readback_curated is not None
+    assert str(readback_curated.object_id) == existing_id
+
+    # 3. Vault frontmatter MUST match the pre-existing ID (not overwritten with a new one)
+    from musubi.vault.frontmatter import parse_frontmatter
+
+    data, _ = parse_frontmatter(full_path.read_text())
+    assert data["object_id"] == existing_id
+
+    # 4. Assert NO second curated row was created (count total points in namespace)
+    from qdrant_client.http import models as rest
+
+    qdrant = deps.qdrant
+    res, _ = qdrant.scroll(
+        collection_name=collection_for_plane("curated"),
+        scroll_filter=rest.Filter(
+            must=[
+                rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
+                rest.FieldCondition(
+                    key="promoted_from", match=rest.MatchValue(value=str(c.object_id))
+                ),
+            ]
+        ),
+        limit=10,
+    )
+    assert len(res) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotent_replay_reuses_vault_id_when_qdrant_also_exists(deps: Any) -> None:
+    from musubi.lifecycle.promotion import _promote_concept
+    from musubi.types.common import generate_ksuid, utc_now
+    from musubi.types.curated import CuratedKnowledge
+    from musubi.vault.frontmatter import dump_frontmatter
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+
+    # Simulate partial completion: Vault + Qdrant succeeded, Concept transition failed
+    existing_id = str(generate_ksuid())
+    from musubi.lifecycle.promotion import compute_path
+
+    path_str = compute_path(c)
+    full_path = deps.vault_writer.vault_root / path_str
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    fm = {
+        "object_id": existing_id,
+        "title": "Title",
+        "created": utc_now().isoformat(),
+        "updated": utc_now().isoformat(),
+        "musubi-managed": True,
+        "promoted_from": str(c.object_id),
+    }
+    full_path.write_text(dump_frontmatter(fm, "Body"))
+
+    memory = CuratedKnowledge(
+        object_id=existing_id,
+        namespace=c.namespace,
+        vault_path=path_str,
+        body_hash="f675f346623d23fd92cb92f670c7189b0f2626b4583d6e2a43992ab692682f9d",
+        title=c.title,
+        content="Body",
+        summary=c.summary,
+        state="matured",
+        importance=c.importance,
+        topics=[],
+        tags=[],
+        promoted_from=c.object_id,
+        promoted_at=utc_now(),
+    )
+    await deps.curated_plane.create(memory)
+
+    # Execute the replay
+    res = await _promote_concept(deps, c)
+
+    # All assertions hold identity consistency
+    readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert str(readback_concept.promoted_to) == existing_id
+
+    readback_curated = await deps.curated_plane.get(namespace=c.namespace, object_id=existing_id)
+    assert readback_curated is not None
+
+    from musubi.vault.frontmatter import parse_frontmatter
+
+    data, _ = parse_frontmatter(full_path.read_text())
+    assert data["object_id"] == existing_id
+
+    from qdrant_client.http import models as rest
+
+    qdrant = deps.qdrant
+    res, _ = qdrant.scroll(
+        collection_name=collection_for_plane("curated"),
+        scroll_filter=rest.Filter(
+            must=[
+                rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
+                rest.FieldCondition(
+                    key="promoted_from", match=rest.MatchValue(value=str(c.object_id))
+                ),
+            ]
+        ),
+        limit=10,
+    )
+    assert len(res) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotent_replay_adopts_persisted_qdrant_identity(deps: Any) -> None:
+    from musubi.lifecycle.promotion import _promote_concept, compute_path
+    from musubi.store import collection_for_plane
+    from musubi.types.common import generate_ksuid, utc_now
+    from musubi.types.curated import CuratedKnowledge
+    from musubi.vault.frontmatter import parse_frontmatter
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+
+    path_str = compute_path(c)
+
+    # Preseed Qdrant with a DIFFERENT object_id but same namespace/vault_path
+    existing_id = str(generate_ksuid())
+    memory = CuratedKnowledge(
+        object_id=existing_id,
+        namespace=c.namespace,
+        vault_path=path_str,
+        body_hash="f675f346623d23fd92cb92f670c7189b0f2626b4583d6e2a43992ab692682f9d",
+        title=c.title,
+        content="Body",
+        state="matured",
+        importance=c.importance,
+        promoted_from=c.object_id,
+        promoted_at=utc_now(),
+    )
+    await deps.curated_plane.create(memory)
+
+    await _promote_concept(deps, c)
+
+    # Target invariant: returned persisted.object_id == final vault frontmatter object_id == concept.promoted_to
+    readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert str(readback_concept.promoted_to) == existing_id
+
+    # The vault file must have been updated to adopt the existing_id
+    full_path = deps.vault_writer.vault_root / path_str
+    data, _ = parse_frontmatter(full_path.read_text())
+    assert data["object_id"] == existing_id
+
+    # And there should be exactly one row matching this namespace & promoted_from
+    from qdrant_client.http import models as rest
+
+    res, _ = deps.qdrant.scroll(
+        collection_name=collection_for_plane("curated"),
+        scroll_filter=rest.Filter(
+            must=[
+                rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
+                rest.FieldCondition(
+                    key="promoted_from", match=rest.MatchValue(value=str(c.object_id))
+                ),
+            ]
+        ),
+        limit=10,
+    )
+    assert len(res) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotent_replay_fails_closed_on_unrelated_lineage(deps: Any) -> None:
+    from musubi.lifecycle.promotion import _promote_concept, compute_path
+    from musubi.store import collection_for_plane
+    from musubi.types.common import generate_ksuid, utc_now
+    from musubi.types.curated import CuratedKnowledge
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+
+    path_str = compute_path(c)
+
+    # Preseed Qdrant with DIFFERENT object_id, same namespace/vault_path/body_hash
+    # BUT DIFFERENT promoted_from
+    existing_id = str(generate_ksuid())
+    memory = CuratedKnowledge(
+        object_id=existing_id,
+        namespace=c.namespace,
+        vault_path=path_str,
+        body_hash="f675f346623d23fd92cb92f670c7189b0f2626b4583d6e2a43992ab692682f9d",
+        title=c.title,
+        content="Body",
+        state="matured",
+        importance=c.importance,
+        promoted_from=generate_ksuid(),  # Different lineage!
+        promoted_at=utc_now(),
+    )
+    await deps.curated_plane.create(memory)
+
+    res = await _promote_concept(deps, c)
+    assert res is False
+
+    # Concept remains matured, promoted_to is None
+    readback_concept = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback_concept.promoted_to is None
+    assert readback_concept.state == "matured"
+    assert readback_concept.promotion_attempts == 1
+
+    # Vault path must be absent (not overwritten)
+    full_path = deps.vault_writer.vault_root / path_str
+    assert not full_path.exists()
+
+    # No additional curated row is created (only 1 exists, the preseeded one)
+    from qdrant_client.http import models as rest
+
+    qdrant = deps.qdrant
+    res, _ = qdrant.scroll(
+        collection_name=collection_for_plane("curated"),
+        scroll_filter=rest.Filter(
+            must=[
+                rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
+            ]
+        ),
+        limit=10,
+    )
+    assert len(res) == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotent_replay_fails_closed_on_missing_vault_object_id(deps: Any) -> None:
+    from musubi.lifecycle.promotion import _promote_concept
+    from musubi.types.common import utc_now
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+
+    from musubi.lifecycle.promotion import compute_path
+
+    path_str = compute_path(c)
+    full_path = deps.vault_writer.vault_root / path_str
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_yaml2 = f"""---
+title: Title
+created: {utc_now().isoformat()}
+updated: {utc_now().isoformat()}
+musubi-managed: true
+promoted_from: {c.object_id!s}
+---
+Body"""
+    full_path.write_text(raw_yaml2)
+
+    # Execute the replay, it must not blindly generate a new ID, nor should it crash silently.
+    # The production rule says CuratedFrontmatter validation will fail and raise PromotionPolicyError.
+
+    result = await _promote_concept(deps, c)
+    assert result is False
+
+    readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback.promotion_attempts == 1
+
+
+@pytest.mark.asyncio
+async def test_idempotent_replay_fails_closed_on_invalid_vault_object_id(deps: Any) -> None:
+    from musubi.lifecycle.promotion import _promote_concept
+    from musubi.types.common import utc_now
+
+    c = _concept()
+    await deps.concept_plane.create(c)
+    await deps.concept_plane.transition(
+        namespace=c.namespace,
+        object_id=c.object_id,
+        to_state="matured",
+        actor="sys",
+        reason="test",
+        coordinator=deps.coordinator,
+    )
+
+    from musubi.lifecycle.promotion import compute_path
+
+    path_str = compute_path(c)
+    full_path = deps.vault_writer.vault_root / path_str
+    full_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_yaml = f"""---
+object_id: not_a_valid_ksuid
+title: Title
+created: {utc_now().isoformat()}
+updated: {utc_now().isoformat()}
+musubi-managed: true
+promoted_from: {c.object_id!s}
+---
+Body"""
+    full_path.write_text(raw_yaml)
+
+    result = res = await _promote_concept(deps, c)
+    assert result is False
+
+    readback = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
+    assert readback.promotion_attempts == 1
+    assert readback.promoted_to is None
+    assert readback.state == "matured"
+
+    # Vault bytes unchanged
+    assert full_path.read_text() == raw_yaml
+
+    # No curated row created
+    from qdrant_client.http import models as rest
+
+    qdrant = deps.qdrant
+    res, _ = qdrant.scroll(
+        collection_name=collection_for_plane("curated"),
+        scroll_filter=rest.Filter(
+            must=[
+                rest.FieldCondition(key="namespace", match=rest.MatchValue(value=c.namespace)),
+            ]
+        ),
+        limit=10,
+    )
+    assert len(res) == 0
+
+
 async def test_path_conflict_with_same_concept_rewrites_in_place(deps: Any) -> None:
     from musubi.lifecycle.promotion import _promote_concept
     from musubi.vault.frontmatter import dump_frontmatter
@@ -425,14 +824,13 @@ async def test_curated_point_upserted_with_promoted_from(deps: Any) -> None:
     await run_promotion_sweep(deps)
 
     curated_points = deps.qdrant.scroll(
-        collection_name="musubi_curated",
+        collection_name=collection_for_plane("curated"),
         with_payload=True,
     )
     assert len(curated_points[0]) == 1
     assert curated_points[0][0].payload["promoted_from"] == str(c.object_id)
 
 
-@pytest.mark.asyncio
 @pytest.mark.asyncio
 async def test_concept_state_set_to_promoted(deps: Any) -> None:
     from musubi.lifecycle.promotion import run_promotion_sweep
@@ -479,7 +877,7 @@ async def test_bidirectional_links_set_in_single_batch(deps: Any) -> None:
 
     p = await deps.concept_plane.get(namespace=c.namespace, object_id=c.object_id)
     curated_points = deps.qdrant.scroll(
-        collection_name="musubi_curated",
+        collection_name=collection_for_plane("curated"),
         with_payload=True,
     )
     assert str(p.promoted_to) == curated_points[0][0].payload["object_id"]

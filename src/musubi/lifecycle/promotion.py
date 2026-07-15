@@ -291,41 +291,49 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         except ValueError as e:
             raise PromotionPolicyError(f"Path computation failed: {e}") from e
 
+        curated_id: str | None = None
         # Check conflict
         full_path = deps.vault_writer.vault_root / rel_path
         if full_path.exists():
+            # Let OSError propagate as transient
+            content_str = full_path.read_text(encoding="utf-8")
+            data, _ = parse_frontmatter(content_str)
             try:
-                content = full_path.read_text(encoding="utf-8")
-                data, _ = parse_frontmatter(content)
                 fm = CuratedFrontmatter.model_validate(data)
+            except (ValueError, TypeError) as e:
+                # If an existing file exists at the expected path, but its frontmatter is broken,
+                # we must not silently ignore it and overwrite it or spin forever.
+                raise PromotionPolicyError(
+                    f"Corrupt frontmatter at existing vault path '{rel_path}': {e}"
+                ) from e
 
-                if fm.musubi_managed and fm.promoted_from == concept.object_id:
-                    # Idempotent rewrite allowed
-                    pass
-                elif fm.musubi_managed and fm.promoted_from != concept.object_id:
-                    # Sibling
-                    slug = slugify(concept.title)
-                    rel_path = rel_path.replace(f"{slug}.md", f"{slug}-v2.md")
-                    await deps.thoughts.emit(
-                        "ops-alerts",
-                        f"Path conflict handled with sibling: {rel_path}",
-                        "Path Conflict",
-                    )
-                else:
-                    # Human authored
-                    slug = slugify(concept.title)
-                    short_id = str(concept.object_id)[:8]
-                    rel_path = rel_path.replace(f"{slug}.md", f"{slug}-promoted-{short_id}.md")
-                    await deps.thoughts.emit(
-                        "ops-alerts",
-                        f"Path conflict with human file handled with sibling: {rel_path}",
-                        "Path Conflict",
-                    )
+            if fm.musubi_managed and fm.promoted_from == concept.object_id:
+                # Idempotent rewrite allowed. We must reuse the existing object_id.
+                if not fm.object_id:
+                    raise PromotionPolicyError(f"Existing vault path {rel_path} lacks an object_id")
+                curated_id = fm.object_id
+            elif fm.musubi_managed and fm.promoted_from != concept.object_id:
+                # Sibling
+                slug = slugify(concept.title)
+                rel_path = rel_path.replace(f"{slug}.md", f"{slug}-v2.md")
+                await deps.thoughts.emit(
+                    "ops-alerts",
+                    f"Path conflict handled with sibling: {rel_path}",
+                    "Path Conflict",
+                )
+            else:
+                # Human authored
+                slug = slugify(concept.title)
+                short_id = str(concept.object_id)[:8]
+                rel_path = rel_path.replace(f"{slug}.md", f"{slug}-promoted-{short_id}.md")
+                await deps.thoughts.emit(
+                    "ops-alerts",
+                    f"Path conflict with human file handled with sibling: {rel_path}",
+                    "Path Conflict",
+                )
 
-            except Exception as e:
-                log.warning("Path conflict resolution failed for %s: %s", rel_path, e)
-
-        curated_id = generate_ksuid()
+        if curated_id is None:
+            curated_id = generate_ksuid()
 
         try:
             fm_obj = CuratedFrontmatter(  # type: ignore
@@ -344,9 +352,6 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             )
         except (ValueError, TypeError) as e:
             raise PromotionPolicyError(f"Invalid frontmatter fields: {e}") from e
-
-        # Write to vault
-        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
 
         # Create Qdrant point
         body_hash = hashlib.sha256(render.body.encode("utf-8")).hexdigest()
@@ -369,7 +374,18 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         except (ValueError, TypeError) as e:
             raise PromotionPolicyError(f"Invalid curated memory fields: {e}") from e
 
-        await deps.curated_plane.create(memory)
+        persisted = await deps.curated_plane.create(memory)
+
+        if str(persisted.object_id) != curated_id:
+            if persisted.promoted_from != concept.object_id:
+                raise PromotionPolicyError(
+                    f"Qdrant returned existing row with unrelated lineage: {persisted.promoted_from}"
+                )
+            curated_id = str(persisted.object_id)
+            fm_obj = fm_obj.model_copy(update={"object_id": curated_id})
+
+        # Write to vault ONCE after identity is validated
+        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
 
         # Transition concept
         result = await deps.concept_plane.transition(
