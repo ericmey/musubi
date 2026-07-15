@@ -37,12 +37,32 @@ def _assert_ndcg_at_k(ndcg_impl: Callable[[list[int], list[int], int], float]) -
     assert ndcg_impl([0, 0], [0, 0], 10) == 0.0
 
 
-def test_eval_metric_formula_correctness() -> None:
+def _assert_rr(rr_impl: Callable[[list[int]], float]) -> None:
+    # First relevant at rank 3 -> reciprocal rank 1/3
+    assert round(rr_impl([0, 0, 1, 0]), 4) == 0.3333
+    # First relevant at rank 1 -> 1.0
+    assert rr_impl([2, 0, 0]) == 1.0
+    # No relevant item -> 0.0
+    assert rr_impl([0, 0, 0]) == 0.0
+
+
+def _assert_recall_at_k(recall_impl: Callable[[list[int], int, int], float]) -> None:
+    # 2 of 4 relevant items retrieved within the top-3
+    assert recall_impl([1, 0, 1, 0], 4, 3) == 0.5
+    # All relevant items retrieved
+    assert recall_impl([1, 1], 2, 10) == 1.0
+    # Zero total relevant -> 0.0 (no division by zero)
+    assert recall_impl([0, 0], 0, 5) == 0.0
+
+
+def test_metric_functions_reproduce_known_values() -> None:
     try:
-        from musubi.evals.metrics import ndcg_at_k
+        from musubi.evals.metrics import ndcg_at_k, recall_at_k, rr
     except ImportError:
         raise DefectStillPresent("musubi.evals.metrics module does not exist")
     _assert_ndcg_at_k(ndcg_at_k)
+    _assert_rr(rr)
+    _assert_recall_at_k(recall_at_k)
 
 
 def test_discrimination_ndcg_at_k() -> None:
@@ -102,7 +122,7 @@ def _assert_schema_validation(model_class: Any) -> None:
         pass
 
 
-def test_eval_corpus_schema_validation() -> None:
+def test_golden_query_file_schema_validates() -> None:
     try:
         from musubi.evals.schema import GoldenQuery
     except ImportError:
@@ -155,7 +175,7 @@ def _assert_manifest_checksum(
         pass
 
 
-def test_eval_corpus_manifest_checksum(tmp_path: Path) -> None:
+def test_corpus_snapshot_checksum_verified_before_run(tmp_path: Path) -> None:
     try:
         from musubi.evals.corpus import verify_manifest
     except ImportError:
@@ -215,7 +235,7 @@ def _assert_deterministic_rerun(
     )
 
 
-def test_eval_deterministic_rerun() -> None:
+def test_eval_run_deterministic_across_reruns() -> None:
     try:
         from musubi.evals.runner import run_eval
     except ImportError:
@@ -433,7 +453,7 @@ def _assert_baseline_delta_gate(
         pass
 
 
-def test_eval_baseline_delta_gate_unit() -> None:
+def test_ci_gate_fails_on_ndcg_regression() -> None:
     try:
         from musubi.evals.gates import check_delta_tolerances
     except ImportError:
@@ -560,7 +580,7 @@ def _assert_per_query_top_hit_drop(
     assert check_func(baseline, candidate_pass) is True
 
 
-def test_eval_per_query_top_hit_drop() -> None:
+def test_eval_compare_reports_per_query_diffs() -> None:
     try:
         from musubi.evals.gates import check_top_hit_drops
     except ImportError:
@@ -628,7 +648,7 @@ def _assert_holdout_isolation(
     assert "test_l2" not in trained_labels, "Holdout leakage: Trainer saw test labels"
 
 
-def test_eval_holdout_isolation() -> None:
+def test_holdout_split_excluded_from_tuning_runs() -> None:
     try:
         from musubi.evals.runner import run_isolated_eval
     except ImportError:
