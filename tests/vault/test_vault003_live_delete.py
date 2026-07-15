@@ -23,15 +23,13 @@ catches ONLY ``TransitionError(code='illegal_transition', to_state=
 logged at ``warning`` level with structured fields and the handler
 returns — no in-handler retry, to avoid unbounded recursion.
 
-The first contract is bounded to ten tests in this file:
-
-    8 RED discriminating tests   (currently failing under live code;
-                                  the seam must implement the contract)
-    2 GREEN preservation guards  (passing under live code; the seam
-                                  must not break them)
-
-Test function names transcribe the slice doc's Test Contract bullets
-verbatim per the AGENTS.md Test Contract Closure Rule.
+The tests in this file transcribe the slice's Test Contract bullets
+verbatim — RED discriminators that must fail under pre-slice code, plus
+GREEN preservation guards that must keep passing — per the AGENTS.md
+Test Contract Closure Rule. The slice doc's Test Contract is the single
+source of truth for the enumerated cases and their count; this docstring
+deliberately does not restate a number that would drift as the contract
+evolves (later review rounds have already added cases).
 
     uv run pytest tests/vault/test_vault003_live_delete.py -v
 """
@@ -54,7 +52,7 @@ from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.transitions import TransitionError
 from musubi.planes.curated import CuratedPlane
-from musubi.types.common import Err
+from musubi.types.common import Err, Ok
 from musubi.types.curated import CuratedKnowledge
 from musubi.vault.frontmatter import CuratedFrontmatter, dump_frontmatter
 from musubi.vault.watcher import VaultWatcher
@@ -174,7 +172,7 @@ async def watcher(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_delete_archives_matching_row_via_canonical_transition(
     plane: CuratedPlane,
     ns: str,
@@ -200,7 +198,7 @@ async def test_delete_archives_matching_row_via_canonical_transition(
     assert after.state == "archived"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_archived_row_excluded_from_default_retrieval(
     plane: CuratedPlane,
     ns: str,
@@ -255,7 +253,7 @@ async def test_archived_row_excluded_from_default_retrieval(
     assert fetched.object_id == saved.object_id
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_audit_and_history_retain_archived_row(
     plane: CuratedPlane,
     ns: str,
@@ -292,7 +290,7 @@ async def test_audit_and_history_retain_archived_row(
     )
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_repeat_delete_is_idempotent(
     plane: CuratedPlane,
     ns: str,
@@ -331,7 +329,7 @@ async def test_repeat_delete_is_idempotent(
     assert after_second.version == after_first.version, "version must not bump on idempotent repeat"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_sibling_path_does_not_archive_target(
     plane: CuratedPlane,
     ns: str,
@@ -372,7 +370,7 @@ async def test_sibling_path_does_not_archive_target(
     assert sibling_dot_after is not None and sibling_dot_after.state == "matured"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_prefix_collision_does_not_archive(
     plane: CuratedPlane,
     ns: str,
@@ -414,7 +412,7 @@ async def test_prefix_collision_does_not_archive(
     assert sibling_deeper_dir_after is not None and sibling_deeper_dir_after.state == "matured"
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_missing_row_is_observable_noop(
     plane: CuratedPlane,
     ns: str,
@@ -443,7 +441,7 @@ async def test_missing_row_is_observable_noop(
     )
     # No mutation: the curated plane still has zero rows.
     records, _ = plane._client.scroll(
-        collection_name="musubi_curated",
+        collection_name=plane._collection,
         limit=10,
         with_payload=["object_id"],
         with_vectors=False,
@@ -451,7 +449,7 @@ async def test_missing_row_is_observable_noop(
     assert records == []
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_transition_failure_remains_visible(
     plane: CuratedPlane,
     ns: str,
@@ -523,7 +521,7 @@ async def test_transition_failure_remains_visible(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_on_created_indexes_new_file(
     vault_root: Path,
     plane: CuratedPlane,
@@ -563,7 +561,7 @@ async def test_on_created_indexes_new_file(
     await w._handle_event(str(file_path), FileCreatedEvent(str(file_path)))
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_dotfile_ignored(
     vault_root: Path,
     plane: CuratedPlane,
@@ -593,7 +591,7 @@ async def test_dotfile_ignored(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_two_namespaces_same_vault_path_neither_archives(
     plane: CuratedPlane,
     coordinator: LifecycleTransitionCoordinator,
@@ -655,9 +653,19 @@ async def test_two_namespaces_same_vault_path_neither_archives(
     joined = " ".join(r.getMessage() for r in warnings)
     assert row_a.object_id in joined, f"warning must list row_a object_id, got: {joined!r}"
     assert row_b.object_id in joined, f"warning must list row_b object_id, got: {joined!r}"
+    # The count must be presented as a truthful bounded LOWER BOUND, never as
+    # an exact cardinality — the resolver caps its scroll at limit=2.
+    assert "match_count_at_least=" in joined, (
+        f"warning must present the count as a lower bound (match_count_at_least=), "
+        f"not an exact match_count; got: {joined!r}"
+    )
+    assert "match_count=" not in joined, (
+        f"warning must NOT present an exact 'match_count=' (it is capped at 2, a "
+        f"lower bound); got: {joined!r}"
+    )
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_superseded_row_delete_emits_visible_warning(
     plane: CuratedPlane,
     ns: str,
@@ -748,6 +756,150 @@ async def test_superseded_row_delete_emits_visible_warning(
     )
 
 
+@pytest.mark.asyncio
+async def test_concurrent_archive_race_is_idempotent_not_warned(
+    plane: CuratedPlane,
+    ns: str,
+    watcher: VaultWatcher,
+    coordinator: LifecycleTransitionCoordinator,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """H12 Copilot round-3 (Yua ruling 1): the concurrent-archive race.
+
+    ``find_by_vault_path`` reads a non-archived row, but before the
+    watcher issues its transition another actor archives the SAME row.
+    The canonical transition then rejects ``archived -> archived`` with
+    ``illegal_transition(from_state='archived')``. The end state is
+    exactly what this delete wanted, so it MUST be an idempotent no-op
+    (debug, NO warning) — the same outcome as the pre-read
+    archived-state carve-out, just resolved one layer down.
+
+    Discriminator vs test_superseded_row_delete_emits_visible_warning:
+    identical rejection shape EXCEPT ``from_state``. superseded -> WARN
+    (real anomaly); archived -> DEBUG no-op (benign race). The pre-fix
+    watcher warned on BOTH, so this test is RED before the fix.
+    """
+    saved = await plane.create(
+        _make_curated(
+            namespace=ns,
+            vault_path="eric/shared/race-archived.md",
+            content="Row archived by a concurrent actor mid-delete.",
+        )
+    )
+
+    real_transition = plane.transition
+    called: dict[str, Any] = {}
+
+    async def _archived_race_transition(*args: Any, **kwargs: Any) -> Any:
+        called["kwargs"] = kwargs
+        from musubi.lifecycle.transitions import TransitionError
+
+        return Err(
+            error=TransitionError(
+                code="illegal_transition",
+                message="simulated race: archived -> archived is not permitted",
+                from_state="archived",
+                to_state="archived",
+            )
+        )
+
+    plane.transition = _archived_race_transition  # type: ignore[method-assign]
+    try:
+        rel_path = "eric/shared/race-archived.md"
+        abs_path = str(watcher.vault_root / rel_path)
+        with caplog.at_level(logging.DEBUG, logger="musubi.vault.watcher"):
+            await watcher._handle_event(abs_path, FileDeletedEvent(abs_path))
+    finally:
+        plane.transition = real_transition  # type: ignore[method-assign]
+
+    # The seam was actually invoked — the row was NOT short-circuited by
+    # the archived-state pre-check (it was 'matured' at find time here),
+    # so the idempotency decision came from the from_state='archived'
+    # transition result, which is exactly the race path.
+    assert called, f"the canonical transition seam must have been invoked; called={called!r}"
+
+    # NO warning: the benign race must not page an operator.
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert not warnings, (
+        f"concurrent archived->archived race must NOT warn (idempotent no-op); got: "
+        f"{[r.getMessage() for r in warnings]!r}"
+    )
+
+    # A visible DEBUG breadcrumb records the race for anyone reading logs.
+    debug_msgs = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG)
+    assert "vault-delete-idempotent-race" in debug_msgs, (
+        f"race must log a 'vault-delete-idempotent-race' debug breadcrumb; got: {debug_msgs!r}"
+    )
+    # Sanity: the saved row still exists (the simulated reject committed
+    # nothing; the real race would have it already archived by the peer).
+    assert saved.object_id
+
+
+@pytest.mark.asyncio
+async def test_delete_success_log_distinguishes_pending_from_finalized(
+    plane: CuratedPlane,
+    ns: str,
+    watcher: VaultWatcher,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """H12 Copilot round-4 (Yua ruling 3): the watcher success log must not
+    conflate ``Ok(TransitionPending)`` (durable-accept admitted, NOT yet
+    finalized) with a finalized ``TransitionResult``. Pending -> truthful
+    ``outcome=pending`` carrying the stable operation_key + event_id;
+    finalized -> ``outcome=finalized`` carrying the event_id. The pre-fix log
+    emitted ``outcome=ok`` for BOTH, so the pending assertions are RED before
+    the fix."""
+    from musubi.lifecycle.coordinator import TransitionPending
+
+    # --- Case A: durable-accept pending (simulated seam result) ---
+    await plane.create(
+        _make_curated(namespace=ns, vault_path="eric/shared/pending.md", content="pending row")
+    )
+
+    async def _pending_transition(*args: Any, **kwargs: Any) -> Any:
+        return Ok(
+            value=TransitionPending(operation_key="op-pending-001", event_id="ev-pending-001")
+        )
+
+    real_transition = plane.transition
+    plane.transition = _pending_transition  # type: ignore[method-assign]
+    try:
+        rel = "eric/shared/pending.md"
+        with caplog.at_level(logging.INFO, logger="musubi.vault.watcher"):
+            await watcher._handle_event(
+                str(watcher.vault_root / rel), FileDeletedEvent(str(watcher.vault_root / rel))
+            )
+    finally:
+        plane.transition = real_transition  # type: ignore[method-assign]
+
+    pending_logs = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.INFO)
+    assert "outcome=pending" in pending_logs, (
+        f"durable-accept must log outcome=pending (not outcome=ok); got {pending_logs!r}"
+    )
+    assert "op-pending-001" in pending_logs, "pending log must carry the stable operation_key"
+    assert "ev-pending-001" in pending_logs, "pending log must carry the stable event_id"
+    assert "outcome=ok" not in pending_logs, "the conflated pre-fix 'outcome=ok' must be gone"
+
+    caplog.clear()
+
+    # --- Case B: real finalized archive (through the live coordinator) ---
+    saved = await plane.create(
+        _make_curated(namespace=ns, vault_path="eric/shared/finalized.md", content="finalized row")
+    )
+    rel2 = "eric/shared/finalized.md"
+    with caplog.at_level(logging.INFO, logger="musubi.vault.watcher"):
+        await watcher._handle_event(
+            str(watcher.vault_root / rel2), FileDeletedEvent(str(watcher.vault_root / rel2))
+        )
+    final_logs = " ".join(r.getMessage() for r in caplog.records if r.levelno == logging.INFO)
+    assert "outcome=finalized" in final_logs, (
+        f"a finalized archive must log outcome=finalized; got {final_logs!r}"
+    )
+    # And the finalized path actually committed the archive.
+    after = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert after is not None and after.state == "archived"
+
+
 # --------------------------------------------------------------------------- #
 # VAULT-003 Blocker 1: LIVE REACHABILITY discriminator
 # --------------------------------------------------------------------------- #
@@ -794,7 +946,21 @@ def test_systemd_module_command_reaches_construction() -> None:
         "watcher.py must have an `if __name__ == '__main__':` block "
         "for `python -m musubi.vault.watcher` to actually call main()"
     )
-    assert "main()" in src, "the __main__ block must call main() (not just exit silently)"
+    # The __main__ block must actually CALL main(), not merely define it.
+    # A bare ``"main()" in src`` is a false positive: it matches the
+    # ``def main()`` definition above the guard even if the guard body never
+    # calls it. Capture the guard's indented body and assert a main() call
+    # lives inside it (Copilot PR #562).
+    import re
+
+    guard_match = re.search(
+        r"if\s+__name__\s*==\s*['\"]__main__['\"]\s*:(?P<body>(?:\n[ \t]+.*)+)",
+        src,
+    )
+    assert guard_match is not None and re.search(r"\bmain\(\)", guard_match.group("body")), (
+        "the `if __name__ == '__main__':` block must actually CALL main() "
+        "(not just define it above the guard, which would exit silently)"
+    )
     # 3. The runtime factory module is importable and exposes the
     # canonical production seam.
     runtime_module = importlib.import_module("musubi.vault.runtime")
@@ -959,38 +1125,88 @@ def test_runtime_factory_produces_watcher_construction_inputs(
 # --------------------------------------------------------------------------- #
 
 
-def test_find_by_vault_path_uses_limit_two_for_fail_closed() -> None:
-    """VAULT-003 re-review (Yua 17:06): the production ``find_by_vault_path``
-    MUST use ``limit=2`` (NOT ``limit=1000``) so the second match is
-    sufficient to fail closed without pulling a potentially unbounded
-    row count. The behaviour is: zero -> not_found, one -> Ok, two ->
-    multiple_matches. This test reads the source text of
-    ``CuratedPlane.find_by_vault_path`` and asserts ``limit=2`` is
-    used (not a different value, not a parameterised
-    ``limit=None``/``limit=1000``)."""
-    import inspect
+@pytest.mark.asyncio
+async def test_find_by_vault_path_uses_limit_two_for_fail_closed(
+    plane: CuratedPlane,
+    ns: str,
+) -> None:
+    """VAULT-003 re-review (Yua 17:06) + H12 Copilot round-4: the production
+    ``find_by_vault_path`` MUST scroll with ``limit=2`` — the smallest value
+    that still surfaces the duplicate case (zero -> not_found, one -> Ok,
+    two -> multiple_matches) without pulling an unbounded row count.
 
-    from musubi.planes.curated import CuratedPlane
+    This spies the EXACT scroll request against the real client. The earlier
+    ``inspect.getsource`` assertion was false-positive-prone: the method's own
+    docstring contains the literal ``limit=2``, so the source check would pass
+    even if the actual scroll call regressed."""
+    await plane.create(
+        _make_curated(
+            namespace=ns,
+            vault_path="eric/shared/limit-two.md",
+            content="Row whose lookup must scroll bounded at limit=2.",
+        )
+    )
 
-    src = inspect.getsource(CuratedPlane.find_by_vault_path)
-    # The bounded contract: limit=2 (the smallest value that still
-    # surfaces the duplicate case).
-    assert "limit=2" in src, (
-        "find_by_vault_path must scroll with limit=2; the second match "
-        "is sufficient to fail closed and a larger value is wasteful. "
-        f"Source:\n{src}"
+    captured: dict[str, Any] = {}
+    real_scroll = plane._client.scroll
+
+    def _spy_scroll(*args: Any, **kwargs: Any) -> Any:
+        captured.clear()
+        captured.update(kwargs)
+        return real_scroll(*args, **kwargs)
+
+    plane._client.scroll = _spy_scroll  # type: ignore[method-assign]
+    try:
+        result = await plane.find_by_vault_path("eric/shared/limit-two.md")
+    finally:
+        plane._client.scroll = real_scroll  # type: ignore[method-assign]
+
+    assert isinstance(result, Ok), f"expected Ok resolution, got {result!r}"
+    assert captured.get("limit") == 2, (
+        "find_by_vault_path must scroll with limit=2: the second match is "
+        "sufficient to fail closed, a larger value is wasteful, and limit=1 "
+        f"would hide duplicates. captured scroll kwargs={captured!r}"
     )
-    # And NOT a higher limit (the previous Yua-review fix used 1000).
-    assert "limit=1000" not in src, (
-        "find_by_vault_path must NOT use limit=1000; the bounded contract "
-        "is limit=2. The pre-fix code had limit=1000.\n"
-        f"Source:\n{src}"
+
+
+@pytest.mark.asyncio
+async def test_find_by_vault_path_scroll_requests_payload_only(
+    plane: CuratedPlane,
+    ns: str,
+) -> None:
+    """H12 Copilot round-3 (Yua ruling 2): ``find_by_vault_path`` rehydrates
+    the full payload but never needs the dense + sparse vectors, so it must
+    ask Qdrant for ``with_vectors=False`` to avoid shipping the embeddings
+    back on every vault delete. This spies the EXACT scroll request against
+    the real client rather than reading source text."""
+    await plane.create(
+        _make_curated(
+            namespace=ns,
+            vault_path="eric/shared/payload-only.md",
+            content="Row whose lookup must not pull vectors back.",
+        )
     )
-    assert "limit=None" not in src, (
-        "find_by_vault_path must NOT use limit=None; the in-memory Qdrant "
-        "client rejects it (TypeError) and the bounded contract is "
-        "limit=2.\n"
-        f"Source:\n{src}"
+
+    captured: dict[str, Any] = {}
+    real_scroll = plane._client.scroll
+
+    def _spy_scroll(*args: Any, **kwargs: Any) -> Any:
+        # Record the LAST scroll's kwargs (find_by_vault_path issues one).
+        captured.clear()
+        captured.update(kwargs)
+        return real_scroll(*args, **kwargs)
+
+    plane._client.scroll = _spy_scroll  # type: ignore[method-assign]
+    try:
+        result = await plane.find_by_vault_path("eric/shared/payload-only.md")
+    finally:
+        plane._client.scroll = real_scroll  # type: ignore[method-assign]
+
+    # The lookup resolved (sanity: the spy delegated to the real scroll).
+    assert isinstance(result, Ok), f"expected Ok resolution, got {result!r}"
+    assert captured.get("with_vectors") is False, (
+        "find_by_vault_path must scroll with with_vectors=False (payload-only); "
+        f"captured scroll kwargs={captured!r}"
     )
 
 
@@ -1130,6 +1346,11 @@ def test_runtime_module_does_not_import_watcher() -> None:
         capture_output=True,
         text=True,
         cwd=repo_root,
+        # Bound the child so an import deadlock / environment hang fails fast
+        # instead of stalling CI. 30s matches the nearby test_c6_event_loss.py
+        # precedent and is ample for a cold-start import that normally completes
+        # in a few seconds (Copilot PR #562).
+        timeout=30,
     )
     assert result.returncode == 0, f"cold-start subprocess failed: stderr={result.stderr!r}"
     mods = json.loads(result.stdout.strip())
@@ -1212,6 +1433,11 @@ def test_runtime_factory_does_not_import_watcher(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         cwd=repo_root,
+        # Bound the child so an import deadlock / environment hang fails fast
+        # instead of stalling CI. 30s matches the nearby test_c6_event_loss.py
+        # precedent and is ample for a cold-start import that normally completes
+        # in a few seconds (Copilot PR #562).
+        timeout=30,
     )
     assert result.returncode == 0, f"cold-start subprocess failed: stderr={result.stderr!r}"
     mods = json.loads(result.stdout.strip())

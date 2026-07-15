@@ -18,11 +18,16 @@ from watchdog.observers import Observer
 
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.types.common import Err, Ok, generate_ksuid, utc_now
+<<<<<<< HEAD
 from musubi.vault.frontmatter import (
     CuratedFrontmatter,
     curated_knowledge_from_frontmatter,
     parse_frontmatter,
 )
+=======
+from musubi.types.curated import CuratedKnowledge
+from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
+>>>>>>> a21b15ee5e9ed23766eb92fb4b19be58c0a1d26f
 from musubi.vault.namespacing import infer_namespace
 from musubi.vault.writelog import WriteLog
 from musubi.vault.writer import VaultWriter
@@ -366,8 +371,17 @@ class VaultWatcher:
         lookup = await self.curated_plane.find_by_vault_path(rel_path)
         if isinstance(lookup, Err):
             if lookup.error.code == "multiple_matches":
+<<<<<<< HEAD
                 logger.warning(
                     "vault-delete-failed-multiple-matches path=%s match_count=%d match_object_ids=%s",
+=======
+                # match_count is a BOUNDED LOWER BOUND (the resolver caps its
+                # scroll at limit=2), so present it truthfully — the real
+                # duplicate set may be larger. Same for the object_ids.
+                logger.warning(
+                    "vault-delete-failed-multiple-matches path=%s match_count_at_least=%d "
+                    "match_object_ids_observed=%s",
+>>>>>>> a21b15ee5e9ed23766eb92fb4b19be58c0a1d26f
                     rel_path,
                     lookup.error.match_count,
                     ",".join(lookup.error.match_object_ids),
@@ -408,18 +422,71 @@ class VaultWatcher:
         )
 
         if isinstance(result, Ok):
+<<<<<<< HEAD
             logger.info(
                 "vault-delete-archived path=%s object_id=%s outcome=ok",
+=======
+            # The canonical seam returns Ok in two distinct shapes and the
+            # log must not conflate them: TransitionPending (durable-accept
+            # admitted, NOT yet finalized) vs a finalized TransitionResult.
+            # Lazy import keeps coordinator out of the module import graph
+            # (see the TYPE_CHECKING note at the top of this file).
+            from musubi.lifecycle.coordinator import TransitionPending
+
+            value = result.value
+            if isinstance(value, TransitionPending):
+                logger.info(
+                    "vault-delete-archived path=%s object_id=%s outcome=pending "
+                    "operation_key=%s event_id=%s",
+                    rel_path,
+                    current.object_id,
+                    value.operation_key,
+                    value.event_id,
+                )
+            else:
+                logger.info(
+                    "vault-delete-archived path=%s object_id=%s outcome=finalized "
+                    "event_id=%s version=%s",
+                    rel_path,
+                    current.object_id,
+                    value.event.event_id,
+                    value.version,
+                )
+            return
+
+        err = result.error
+
+        # Concurrent-archive race: between our find_by_vault_path read
+        # (which saw a non-archived row) and this transition, another
+        # actor archived the SAME row. The canonical transition then
+        # sees state=archived and rejects archived -> archived as an
+        # illegal_transition with from_state=archived. The end state is
+        # exactly what this delete wanted, so it is an idempotent no-op —
+        # the same outcome as the pre-read archived-state check above,
+        # just resolved one layer down. We do NOT warn. Every OTHER
+        # illegal from_state (superseded/demoted/etc) is a real anomaly
+        # and stays a fail-closed warning.
+        if err.code == "illegal_transition" and getattr(err, "from_state", None) == "archived":
+            logger.debug(
+                "vault-delete-idempotent-race path=%s object_id=%s from_state=archived",
+>>>>>>> a21b15ee5e9ed23766eb92fb4b19be58c0a1d26f
                 rel_path,
                 current.object_id,
             )
             return
 
         # Err(TransitionError) — every code here is a real anomaly now
+<<<<<<< HEAD
         # that we've pre-filtered the common repeat-delete case. Log
         # the from_state so operators can see WHY it failed (e.g.
         # superseded -> archived is illegal in the curated state table).
         err = result.error
+=======
+        # that we've pre-filtered the common repeat-delete case AND the
+        # concurrent archived->archived race. Log the from_state so
+        # operators can see WHY it failed (e.g. superseded -> archived is
+        # illegal in the curated state table).
+>>>>>>> a21b15ee5e9ed23766eb92fb4b19be58c0a1d26f
         logger.warning(
             "vault-delete-failed path=%s object_id=%s code=%s from_state=%s to_state=%s message=%s",
             rel_path,
@@ -533,9 +600,16 @@ async def _main_async() -> None:
     ``python -m musubi.vault.watcher`` (per
     ``deploy/systemd/musubi-vault-sync.service``).
 
+<<<<<<< HEAD
     Builds the canonical runtime, constructs the watcher, runs the
     one-time boot scan, starts the watchdog observer, and stays
     alive until SIGTERM/SIGINT. On exit, the observer is stopped
+=======
+    Builds the canonical runtime, constructs the watcher, starts the
+    watchdog observer, then runs the one-time boot scan (the observer
+    is up first so no filesystem event is missed during the scan), and
+    stays alive until SIGTERM/SIGINT. On exit, the observer is stopped
+>>>>>>> a21b15ee5e9ed23766eb92fb4b19be58c0a1d26f
     cleanly and the runtime's sink is closed. ``WriteLog`` has no
     ``close()`` — it opens sqlite connections per call, so each
     ``record_write`` / ``consume_if_exists`` is its own transaction;
