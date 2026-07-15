@@ -8,9 +8,10 @@ STALE copy of these fields and silently overwrite a concurrent leased increment.
 - **CREATE** writes them explicitly (``access_count = 0`` — lifecycle demotion keys on a fresh
   row having ``access_count == 0``).
 - **UPDATE** must NOT write them: use :func:`memory_update_payload` (a ``set_payload`` merge, which
-  only overwrites the keys it is given, leaving the lease-owned fields untouched) or, for a
-  full-point ``upsert`` that cannot merge, :func:`preserve_lease_fields` to carry the STORED values
-  forward.
+  only overwrites the keys it is given, leaving the lease-owned fields untouched). A legacy
+  full-point ``upsert`` can use :func:`preserve_lease_fields` to refresh the STORED values and
+  narrow the stale window, but that refresh and the upsert are not atomic; DATA-001 / #530 owns
+  removal of that residual cross-mutation race.
 
 A full-payload write that bypasses this boundary invalidates the lease mechanism.
 """
@@ -35,8 +36,10 @@ def memory_update_payload(model: Any) -> dict[str, Any]:
 
 def preserve_lease_fields(payload: dict[str, Any], stored: dict[str, Any] | None) -> dict[str, Any]:
     """For a full-point ``upsert`` UPDATE that cannot merge: carry the STORED lease-owned values
-    into ``payload`` (dropping the in-memory model's stale copies), so the upsert does not reset a
-    leased increment. ``stored`` is the row's current Qdrant payload (``None`` → treat as absent)."""
+    into ``payload`` (dropping the in-memory model's earlier stale copies). This narrows but cannot
+    close the refresh-to-upsert race because the two operations are not atomic; DATA-001 / #530
+    owns that remaining correction. ``stored`` is the row's current Qdrant payload (``None`` →
+    treat as absent)."""
     out = {k: v for k, v in payload.items() if k not in LEASE_OWNED_FIELDS}
     for field in LEASE_OWNED_FIELDS:
         if stored and field in stored:

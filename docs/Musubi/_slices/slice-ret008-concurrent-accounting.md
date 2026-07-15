@@ -1,6 +1,6 @@
 ---
 owner: claude-code-opus48
-status: in-progress
+status: in-review
 issue: 502
 title: "Slice: RET-008 concurrency-safe access accounting"
 slice_id: slice-ret008-concurrent-accounting
@@ -9,10 +9,10 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -31,8 +31,9 @@ exposure is cross-process + future multi-worker/async. Fix: #502.
 
 ## Invariant (Yua, 2026-07-15)
 
-Concurrent deliveries must not lose increments; exactly-final-delivered semantics for HTTP,
-stream, context; exact namespace+object identity; no N+1; fail-loud on exhaustion.
+Concurrent access-accounting writers must not lose increments; exactly-final-delivered semantics
+for HTTP, stream, and context; exact namespace+object identity; no N+1; fail-loud on exhaustion.
+The broader full-object read-to-upsert lost-update race is tracked separately as DATA-001 / #530.
 
 ## Mechanism — fenced per-record lease (single internal field, no other schema)
 
@@ -115,20 +116,21 @@ Every active production `access_count` writer, verified:
   zero-matched fenced commit retries and lands exactly once; (2) crash-after-done-before-clear —
   expired `done` token takeover, no double-count; (3) episodic dedup-merge and (4) curated same-id
   update — full-point upserts now read the lease-owned fields FRESH and carry them forward
-  (`preserve_lease_fields`) so a concurrent leased increment is never reset. Proofs 3 + 4a verified
+  (`preserve_lease_fields`) so the stale value observed at the earlier business read is not reused.
+  This narrows but does not eliminate the final refresh-to-upsert race. Proofs 3 + 4a verified
   RED without the wiring, GREEN with. Transition path proven safe by construction — the lifecycle
   `_intended_patch` is a narrow set_payload merge that structurally cannot carry a lease-owned field
   (`test_transition_patch_never_carries_lease_owned_fields`).
 - Full-payload bypass inventory (2026-07-15): every `_upsert`/`set_payload`/`model_dump` write across
   episodic/curated/concept audited. Every CREATE keeps `access_count=0` (demotion); every full-point
   UPDATE preserves lease fields; every set_payload UPDATE uses `memory_update_payload` exclusion.
-  **Zero unaccounted bypasses remain.**
-- Known residual (documented, not a gate): a full-point upsert cannot be server-fenced the way a
+  **Zero un-inventoried full-payload paths remain.**
+- Known residual, routed to DATA-001 / #530: a full-point upsert cannot be server-fenced the way a
   filtered set_payload can, so `preserve_lease_fields(payload, fresh-read)` narrows the read→upsert
   window to one round-trip but does not fully close it. Fully closing would require splitting the
   upsert into `set_vectors` + a lease-excluding `set_payload` merge — a write-shape change out of
-  this slice's fix-forward scope. The dedup-merge/update paths (ingestion) race the lease
-  (retrieval-delivery) only rarely; flagged for a follow-up if the residual is ever observed.
+  this slice's access-writer scope. The defect is known rather than hypothetical, so #530 owns the
+  deterministic cross-mutation race and the merge/vector or version-fenced correction.
 
 ### Out-of-scope: pre-existing `05-retrieval/orchestration` Test Contract bullets
 
