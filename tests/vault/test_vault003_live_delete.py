@@ -1112,7 +1112,13 @@ def test_runtime_module_does_not_import_watcher() -> None:
 
     repo_root = _Path(__file__).resolve().parents[2]
     script = (
-        "import sys, json; "
+        # pytest's ``pythonpath = ["src"]`` does NOT propagate into a
+        # ``python -c`` subprocess, so put the src-layout root on
+        # sys.path explicitly — otherwise this cold-start import is
+        # brittle in any environment where musubi isn't installed
+        # editable (Copilot review, PR #562).
+        f"import sys; sys.path.insert(0, {str(repo_root / 'src')!r}); "
+        "import json; "
         "import musubi.vault.runtime; "
         "mods = sorted(k for k in sys.modules if k.startswith('musubi.vault')); "
         "sys.stdout.write(json.dumps(mods) + chr(10))"
@@ -1166,7 +1172,13 @@ def test_runtime_factory_does_not_import_watcher(tmp_path: Path) -> None:
     # call doesn't need a real Qdrant / TEI / coordinator. We embed
     # the stubs as a Python heredoc.
     script = (
-        "import json, sys; "
+        # pytest's ``pythonpath = ["src"]`` does NOT propagate into a
+        # ``python -c`` subprocess; put the src-layout root on sys.path
+        # explicitly so this cold-start factory call imports musubi
+        # even when the package isn't installed editable (Copilot
+        # review, PR #562).
+        f"import sys; sys.path.insert(0, {str(repo_root / 'src')!r}); "
+        "import json; "
         "from types import SimpleNamespace; "
         "from unittest.mock import MagicMock; "
         "import musubi.vault.runtime as rt; "
