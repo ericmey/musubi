@@ -660,26 +660,19 @@ async def test_scan_vault_rows_paginates_and_validates(
     plane: CuratedPlane, ns: str, qdrant: QdrantClient
 ) -> None:
 
-    # We create 3 separate objects so they get unique IDs and row representations
+    # Create separate objects so each page contains distinct validated rows.
     await plane.create(_make(namespace=ns, title="row1", vault_path="path1.md"))
     await plane.create(_make(namespace=ns, title="row2", vault_path="path2.md"))
     await plane.create(_make(namespace=ns, title="row3", vault_path="path3.md"))
 
-    # To test pagination directly through the API, we can mock _client.scroll to return in chunks
     from unittest.mock import patch
 
-    # Actually _client.scroll is sync in the real code, not async!
-    # Wait, in the source code it's `resp, offset = self._client.scroll(...)`
-    # Let's mock it to return pages
-
+    # Patch the synchronous scroll seam to return two deterministic pages.
     original_scroll = plane._client.scroll
 
-    # Let's get the real points
     all_records, _ = original_scroll(
         collection_name=plane._collection, limit=10, with_payload=True, with_vectors=False
     )
-
-    # Mock to paginate
 
     def mock_scroll(*args: Any, offset: Any = None, **kwargs: Any) -> tuple[list[Any], int | None]:
         if offset is None:

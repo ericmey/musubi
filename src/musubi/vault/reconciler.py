@@ -5,21 +5,20 @@ every 6 hours. It walks the vault filesystem, parses frontmatter, and
 upserts any markdown file with a non-empty ``object_id`` into the
 curated plane.
 
-Scope of this slice (musubi#345, partial):
+Current responsibilities:
 
 - Clean up debug-print code, add structured logging at INFO/DEBUG.
 - Skip-on-unchanged: body-hash compare so unchanged files don't churn
   embeddings on every 6h tick.
 - Wire into the lifecycle scheduler so the job runs.
+- Reconcile validated curated inventory against disk and archive missing-file
+  rows through the canonical lifecycle coordinator (VAULT-001).
 
 Out of scope (separate session per the issue):
 
 - ``musubi-vault-watcher`` real-time process — needs an architecture
   decision on where the vault lives relative to the musubi host
   (mounted, NAS-shared, git-synced).
-- Deletion handling — currently the reconciler is upsert-only; vault
-  files that disappear leave their qdrant rows behind. Requires a
-  "what's in qdrant but not on disk" pass + a deletion contract.
 """
 
 from __future__ import annotations
@@ -90,17 +89,16 @@ class VaultReconciler:
             if not file_path.is_file() or file_path.suffix.lower() != ".md":
                 continue
             try:
-                rel_parts = file_path.relative_to(self.vault_root).parts
+                rel_path = file_path.relative_to(self.vault_root)
             except ValueError:
                 continue
             # Hidden dirs (`.obsidian`, `.git`), Markdown-Obsidian
             # scratch dirs (`_sketch`, `_secrets`), and similar.
-            if any(p.startswith(".") or p.startswith("_") for p in rel_parts):
+            if any(p.startswith(".") or p.startswith("_") for p in rel_path.parts):
                 continue
 
             scanned += 1
-            rel_str = str(file_path.relative_to(self.vault_root))
-            seen_paths.add(rel_str)
+            seen_paths.add(rel_path.as_posix())
             outcome = await self._reconcile_file(file_path)
             if outcome == "upserted":
                 upserted += 1
@@ -150,8 +148,8 @@ class VaultReconciler:
                         else:
                             logger.info("Archived ghost row missing from disk: %s", vp)
                             ghosts_archived += 1
-                except Exception as exc:
-                    logger.error("Error archiving ghost row %s: %s", vp, exc)
+                except Exception:
+                    logger.exception("Error archiving ghost row %s", vp)
                     errored += 1
 
         logger.info(
