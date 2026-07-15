@@ -621,7 +621,8 @@ async def test_transient_rendering_failure_leaves_attempts_unchanged(deps: Any) 
 
 
 class _TransientFailingVault:
-    vault_root: Any = Path("/tmp")
+    def __init__(self, vault_root: Path) -> None:
+        self.vault_root = vault_root
 
     def write_curated(self, path: str, frontmatter: Any, body: str) -> None:
         raise OSError("Disk full")
@@ -633,7 +634,10 @@ async def test_transient_post_render_failure_leaves_attempts_unchanged(deps: Any
 
     from musubi.lifecycle.promotion import run_promotion_sweep
 
-    failing_deps = replace(deps, vault_writer=_TransientFailingVault())
+    failing_deps = replace(
+        deps,
+        vault_writer=_TransientFailingVault(deps.vault_writer.vault_root),
+    )
     c = _concept()
     await failing_deps.concept_plane.create(c)
     await failing_deps.concept_plane.transition(
