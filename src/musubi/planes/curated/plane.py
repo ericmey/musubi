@@ -177,6 +177,7 @@ class CuratedPlane:
             dense, sparse = await self._embed_both(_embed_target(memory))
 
             def plan(current: dict[str, Any]) -> MutationPlan:
+                now_u = utc_now()
                 # Authoritative incoming frontmatter, but the identity + creation timestamps + lineage
                 # come from the FRESH current row (DATA-001 #530) — not the pre-read `existing` — so a
                 # concurrent supersession/promotion/state change is never overwritten. Lease-owned
@@ -192,8 +193,8 @@ class CuratedPlane:
                         "promoted_from": current.get("promoted_from"),
                         "promoted_at": current.get("promoted_at"),
                         "version": int(current.get("version", 1)),
-                        "updated_at": utc_now(),
-                        "updated_epoch": epoch_of(utc_now()),
+                        "updated_at": now_u,
+                        "updated_epoch": epoch_of(now_u),
                     }
                 )
                 changes = memory_update_payload(updated)

@@ -111,7 +111,6 @@ def test_unrelated_concurrent_field_composes(real_qdrant: QdrantClient) -> None:
     """The DATA-001 invariant at the seam: a narrow owned_update writes ONLY its intended field, so
     an unrelated field set by another writer is never in the write set and survives."""
     ns, oid = _seed(real_qdrant, importance=5)
-    _set_token  # (kept for symmetry with other tests)
     # An unrelated writer changed importance out from under us.
     real_qdrant.set_payload(
         collection_name=_COLL,
