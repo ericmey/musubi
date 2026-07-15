@@ -46,7 +46,7 @@ This slice is bounded to:
   ``namespace: str`` to ``namespace: str | None = None`` in
   ``retrieve()`` and ``retrieve_stream()`` so internal non-HTTP
   callers can express the default.
-- ``tests/api/test_auth001_token_scope.py`` — 16-test contract (14
+- ``tests/api/test_auth001_token_scope.py`` — 15-test contract (13
   RED discriminating + 2 GREEN preservation guards).
 
 ## Why
@@ -164,12 +164,12 @@ dict forwarded to the HTTP endpoint includes the value as-is
 ## Acceptance
 
 The first contract is bounded to fifteen tests in
-``tests/api/test_auth001_token_scope.py``: sixteen RED
+``tests/api/test_auth001_token_scope.py``: thirteen RED
 discriminating tests, two GREEN preservation guards. Test
 function names transcribe the Test Contract bullets verbatim per
 the AGENTS.md Test Contract Closure Rule.
 
-### Test Contract (16 bullets, state 1 = passing at handoff)
+### Test Contract (15 bullets, state 1 = passing at handoff)
 
 1. `test_default_read_spans_at_least_two_non_excluded_namespaces` — RED
 2. `test_salesai_cannot_be_reenabled_by_empty_settings_override` — RED
@@ -190,7 +190,7 @@ the AGENTS.md Test Contract Closure Rule.
 At handoff, every bullet above is in state 1 (passing test whose
 name transcribes the bullet text verbatim) per the AGENTS.md
 Closure Rule. The first commit on the branch shows the RED /
-guard evidence: the sixteen RED tests fail under current
+guard evidence: the thirteen RED tests fail under current
 behaviour, the two GREEN guards pass. The seam impl commit
 flips the RED to green.
 
@@ -232,7 +232,7 @@ follow-up action, not a block on the slice.
   are bound to a specific presence and inherit the canonical
   enforcement through the HTTP path.
 - **Issue claim path.** Issue #523 label flipped to
-  ``status:in-progress``; assignee add failed with the same
+  ``status:in-review``; assignee add failed with the same
   ``minimax-m3`` GraphQL error as #512; logged in the slice doc
   as a non-blocking open-defect.
 - **Design review (three binding corrections + final API shape).**
@@ -250,7 +250,7 @@ follow-up action, not a block on the slice.
   ``namespace: str | None = None``. All other internal callers
   are bound to a specific presence and continue to pass a
   string.
-- **Test contract.** 16 tests, bounded per AGENTS.md Closure
+- **Test contract.** 15 tests, bounded per AGENTS.md Closure
   Rule: 13 RED discriminating + 2 GREEN preservation guards.
   Every proof point Yua named is covered.
 
