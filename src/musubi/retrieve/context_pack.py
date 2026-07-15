@@ -327,7 +327,9 @@ def _to_item(ranked: _RankedCandidate, *, remaining_chars: int) -> ContextPackIt
     # normalized display text so whitespace collapse cannot produce a false truncation signal.
     display_text = " ".join(text.split())
     original_length = len(display_text)
-    content = _cap_text(display_text, max_chars=remaining_chars)
+    from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
+
+    content = truncate_grapheme_safe(display_text, max_chars=remaining_chars, suffix="...")
     if not content:
         return None
     evidence = f"{ranked.candidate.namespace}/{ranked.candidate.object_id}"
@@ -444,15 +446,6 @@ def _recency_hint(candidate: ContextCandidate) -> float:
     # Only a tiebreaker: newer records should not outrank durable rules
     # solely by being fresh.
     return min(0.5, math.log10(max(epoch, 1.0)) / 20.0)
-
-
-def _cap_text(text: str, *, max_chars: int) -> str:
-    clean = " ".join(text.split())
-    if len(clean) <= max_chars:
-        return clean
-    if max_chars <= 3:
-        return clean[:max_chars]
-    return clean[: max_chars - 3].rstrip() + "..."
 
 
 def _why(ranked: _RankedCandidate) -> str:
