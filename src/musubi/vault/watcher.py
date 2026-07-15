@@ -18,8 +18,11 @@ from watchdog.observers import Observer
 
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.types.common import Err, Ok, generate_ksuid, utc_now
-from musubi.types.curated import CuratedKnowledge
-from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
+from musubi.vault.frontmatter import (
+    CuratedFrontmatter,
+    curated_knowledge_from_frontmatter,
+    parse_frontmatter,
+)
 from musubi.vault.namespacing import infer_namespace
 from musubi.vault.writelog import WriteLog
 from musubi.vault.writer import VaultWriter
@@ -311,22 +314,7 @@ class VaultWatcher:
 
         from typing import Literal, cast
 
-        memory = CuratedKnowledge(
-            object_id=fm.object_id,
-            namespace=fm.namespace,
-            vault_path=rel_path,
-            body_hash=body_hash,
-            title=fm.title,
-            content=body,
-            summary=fm.summary,
-            state=cast(Literal["matured", "superseded", "archived"], fm.state),
-            importance=fm.importance,
-            topics=fm.topics,
-            tags=fm.tags,
-            version=fm.version,
-            created_at=fm.created,
-            updated_at=fm.updated,
-        )
+        memory = curated_knowledge_from_frontmatter(fm, vault_path=rel_path, body_hash=body_hash, content=body)
         await self.curated_plane.create(memory)
 
     async def _bootstrap_id(self, rel_path: str, data: dict[str, Any], body: str) -> None:
@@ -523,7 +511,7 @@ class VaultWatcher:
 
             from watchdog.events import FileSystemEvent
 
-            from musubi.vault.frontmatter import parse_frontmatter
+            from musubi.vault.frontmatter import parse_frontmatter, curated_knowledge_from_frontmatter
 
             for path in self.vault_root.rglob("*.md"):
                 try:
