@@ -14,6 +14,8 @@ from typing import Any
 import pytest
 
 from musubi.evals.live_gate import (
+    LiveGateUnavailable,
+    _hits_or_raise,
     aggregate,
     enforce_thresholds,
     evaluate_query,
@@ -85,6 +87,49 @@ def test_run_live_gate_groups_by_mode_and_enforce_catches_subthreshold() -> None
 def test_enforce_thresholds_rejects_no_metrics() -> None:
     with pytest.raises(ValueError, match="no metrics"):
         enforce_thresholds({})
+
+
+class _Hit:
+    def __init__(self, object_id: str) -> None:
+        self.object_id = object_id
+
+
+class _OkResult:
+    """Mirrors musubi.types.common.Ok: is_ok/is_err are METHODS, `.value` holds the payload."""
+
+    def __init__(self, hits: list[_Hit]) -> None:
+        self.results = hits
+
+    @property
+    def value(self) -> _OkResult:
+        return self
+
+    def is_ok(self) -> bool:
+        return True
+
+    def is_err(self) -> bool:
+        return False
+
+
+class _ErrResult:
+    """Mirrors musubi.types.common.Err: is_err() is True, `.error` holds the failure (no `.value`)."""
+
+    def __init__(self, error: str) -> None:
+        self.error = error
+
+    def is_ok(self) -> bool:
+        return False
+
+    def is_err(self) -> bool:
+        return True
+
+
+def test_hits_or_raise_extracts_ok_and_fails_loud_on_err() -> None:
+    """Regression for the bug the first live x86 run caught: is_ok/is_err are METHODS. An Err must
+    raise LiveGateUnavailable (fail loud), never fall through to `.value` and AttributeError."""
+    assert _hits_or_raise(_OkResult([_Hit("a"), _Hit("b")]), "q1") == ["a", "b"]
+    with pytest.raises(LiveGateUnavailable, match="retrieval failed for query 'q1'"):
+        _hits_or_raise(_ErrResult("empty_query"), "q1")
 
 
 def test_measure_hybrid_vs_dense_computes_delta() -> None:

@@ -199,6 +199,17 @@ def build_settings_backends() -> LiveBackends:
     return LiveBackends(client=client, embedder=embedder, reranker=reranker)
 
 
+def _hits_or_raise(result: Any, query_id: Any) -> list[str]:
+    """Extract the ranked ``object_id`` list from a retrieval ``Result``, failing loud on ``Err``.
+
+    ``Ok``/``Err`` expose ``is_ok`` / ``is_err`` as METHODS — they must be CALLED. A bare
+    ``result.is_ok`` is a truthy bound method, so ``if not result.is_ok`` never fired and an ``Err``
+    fell through to ``result.value`` — the AttributeError the first live x86 run caught."""
+    if result.is_err():
+        raise LiveGateUnavailable(f"retrieval failed for query {query_id!r}: {result.error}")
+    return [hit.object_id for hit in result.value.results]
+
+
 def build_settings_retriever() -> Retriever:
     """A retriever backed by the real Qdrant + TEI backends (fast/deep by query mode), for the live
     scheduled gate. CI-exercised path."""
@@ -228,11 +239,7 @@ def build_settings_retriever() -> Retriever:
                 )
         except EmbeddingError as exc:
             raise LiveGateUnavailable(f"TEI unavailable mid-run: {exc}") from exc
-        if not result.is_ok:
-            raise LiveGateUnavailable(
-                f"retrieval failed for query {query.get('id')!r}: {result.error}"
-            )
-        return [hit.object_id for hit in result.value.results]
+        return _hits_or_raise(result, query.get("id"))
 
     return retrieve
 
