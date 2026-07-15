@@ -374,6 +374,9 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         except (ValueError, TypeError) as e:
             raise PromotionPolicyError(f"Invalid curated memory fields: {e}") from e
 
+        # Write to vault FIRST (fail-forward: watcher/reconciler can repair this if qdrant create fails)
+        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
+
         persisted = await deps.curated_plane.create(memory)
 
         if str(persisted.object_id) != curated_id:
@@ -383,9 +386,8 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
                 )
             curated_id = str(persisted.object_id)
             fm_obj = fm_obj.model_copy(update={"object_id": curated_id})
-
-        # Write to vault ONCE after identity is validated
-        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
+            # Idempotency rewrite: update vault file with the Qdrant-adopted identity
+            deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
 
         # Transition concept
         result = await deps.concept_plane.transition(
@@ -411,11 +413,19 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             return False
 
         # Notification Thought
-        await deps.thoughts.emit(
-            "ops-alerts",
-            f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
-            "Concept Promoted",
-        )
+        try:
+            await deps.thoughts.emit(
+                "ops-alerts",
+                f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
+                "Concept Promoted",
+            )
+        except Exception as e:
+            log.warning(
+                "Notification emit failed after successful promotion of %s: %s",
+                concept.object_id,
+                e,
+            )
+
         return True
     except PromotionPolicyError as e:
         log.warning(
