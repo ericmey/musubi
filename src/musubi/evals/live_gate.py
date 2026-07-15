@@ -168,12 +168,11 @@ def build_settings_backends() -> LiveBackends:
     Mirrors the wiring in :mod:`musubi.api.bootstrap`. CI-exercised path."""
     import asyncio
 
-    from qdrant_client import QdrantClient
-
     from musubi.embedding import TEIDenseClient, TEIRerankerClient, TEISparseClient
     from musubi.embedding.base import EmbeddingError
     from musubi.embedding.chunked import ChunkedEmbedder
     from musubi.settings import Settings
+    from musubi.storage.qdrant_factory import build_qdrant_client
 
     try:
         settings = Settings()  # type: ignore[call-arg]
@@ -184,10 +183,13 @@ def build_settings_backends() -> LiveBackends:
     sparse = TEISparseClient(base_url=str(settings.tei_sparse_url))
     reranker = TEIRerankerClient(base_url=str(settings.tei_reranker_url))
     embedder = ChunkedEmbedder(_TEIComposite(dense=dense, sparse=sparse, reranker=reranker))
-    client = QdrantClient(
+    # Use the PRODUCTION Qdrant factory (not a raw client): passing api_key to QdrantClient defaults
+    # https=True, which SSL-fails against the plaintext test stack — the bug the first seeded run hit.
+    client = build_qdrant_client(
         host=settings.qdrant_host,
         port=settings.qdrant_port,
         api_key=settings.qdrant_api_key.get_secret_value(),
+        https=not settings.musubi_allow_plaintext,
     )
 
     # Fail loud NOW if TEI is unreachable — never begin a run that would emit fabricated numbers.

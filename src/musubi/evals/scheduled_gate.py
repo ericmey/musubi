@@ -15,6 +15,7 @@ attribution, never a tuned-to-green pass.
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from pathlib import Path
 from typing import Any, cast
@@ -269,7 +270,16 @@ async def run_scheduled_seeded_gate(
         await _wait_visible(set(key_to_object_id.values()), count_visible=_count_visible)
         return await _measure(corpus, key_to_object_id, retrieve=_retrieve)
     finally:
-        _teardown(backends.client, collection, namespace)
+        # Best-effort teardown: a cleanup failure must NEVER mask the original gate error (or a real
+        # measurement). Surface it as a log line and let the original propagate.
+        try:
+            _teardown(backends.client, collection, namespace)
+        except Exception as teardown_exc:
+            logging.getLogger(__name__).warning(
+                "scheduled-gate teardown failed for %s: %r — original result/error preserved",
+                namespace,
+                teardown_exc,
+            )
 
 
 def _episodic_plane_factory(backends: Any) -> Any:
