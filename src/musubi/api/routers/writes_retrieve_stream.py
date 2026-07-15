@@ -83,11 +83,11 @@ async def retrieve_stream(
     context = auth_result.value
 
     if body.namespace is None:
-        from musubi.api.routers.retrieve import _enumerate_authorized_targets
+        from musubi.api.routers.retrieve import _enumerate_family_targets
 
         family = context.presence.split("/", 1)[0]
         planes = body.planes or ["curated", "concept", "episodic"]
-        targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
+        targets = _enumerate_family_targets(qdrant, family=family, planes=planes)
 
     pattern_had_wildcards = any("*" in ns for ns, _ in targets)
     targets = _expand_wildcard_targets(qdrant, targets)

@@ -22,7 +22,7 @@ from musubi.types.common import Ok
 def test_default_discovery_uses_server_side_namespace_facet_not_point_scroll() -> None:
     from qdrant_client.http import models
 
-    from musubi.api.routers.retrieve import _enumerate_authorized_targets
+    from musubi.api.routers.retrieve import _enumerate_family_targets
 
     class _FacetOnlyClient:
         def scroll(self, **_kwargs: Any) -> Any:
@@ -46,12 +46,28 @@ def test_default_discovery_uses_server_side_namespace_facet_not_point_scroll() -
                 ]
             )
 
-    assert _enumerate_authorized_targets(
+    assert _enumerate_family_targets(
         cast(Any, _FacetOnlyClient()), family="eric", planes=["episodic"]
     ) == [
         ("eric/chair/episodic", "episodic"),
         ("eric/other/episodic", "episodic"),
     ]
+
+
+def test_direct_orchestration_rejects_empty_namespace_without_resolved_targets() -> None:
+    from pydantic import ValidationError
+
+    from musubi.retrieve.orchestration import NamespaceTarget, RetrievalQuery
+
+    with pytest.raises(ValidationError, match="namespace must be non-empty"):
+        RetrievalQuery(namespace="", mode="recent")
+
+    query = RetrievalQuery(
+        namespace="",
+        mode="recent",
+        namespace_targets=[NamespaceTarget(namespace="eric/chair/episodic", plane="episodic")],
+    )
+    assert query.namespace_targets is not None
 
 
 def _patch_auth(

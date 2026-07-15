@@ -106,6 +106,8 @@ class RetrievalQuery(BaseModel):
             raise ValueError(
                 f"query_text is required for mode={self.mode!r} (only mode='recent' may omit it)"
             )
+        if not self.namespace and not self.namespace_targets:
+            raise ValueError("namespace must be non-empty when namespace_targets is not provided")
         return self
 
 

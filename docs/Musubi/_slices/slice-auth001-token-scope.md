@@ -29,9 +29,10 @@ active canonical namespace.
 
 This slice is bounded to:
 - ``src/musubi/auth/scopes.py`` — add ``enforce_namespace_policy`` (the
-  shared READ-only enforcement seam) and
-  ``enumerate_authorized_namespaces`` (the default-to-all target
-  resolution).
+  shared READ-only enforcement seam).
+- ``src/musubi/api/routers/retrieve.py`` — add
+  ``_enumerate_family_targets`` for server-side default-to-all candidate
+  discovery; authorization remains in ``enforce_namespace_policy``.
 - ``src/musubi/settings.py`` — add
   ``default_excluded_namespaces`` (default ``frozenset({"salesai"})``)
   and ``per_agent_excluded_namespaces`` (default ``{}``; identity
@@ -66,7 +67,7 @@ enforced centrally before fanout for every entry point.
 
 1. **Default recall spans all authorized namespaces.** When the
    caller does not narrow (HTTP body ``namespace`` is omitted or
-   ``null``; SDK ``retrieve(namespace=None)``), the orchestrator
+   ``null``; SDK ``retrieve(namespace=None)``), the HTTP router
    enumerates every concrete namespace in the caller's
    ``identity_family`` across the caller's authorized planes,
    then runs the exclusion + scope check. The legacy narrowing

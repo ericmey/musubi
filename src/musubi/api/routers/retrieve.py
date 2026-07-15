@@ -379,19 +379,19 @@ def _expand_wildcard_targets(
     return expanded
 
 
-def _enumerate_authorized_targets(
+def _enumerate_family_targets(
     client: QdrantClient,
     *,
     family: str,
     planes: list[str],
 ) -> list[tuple[str, str]]:
-    """AUTH-001: enumerate every concrete namespace in ``family`` across
-    the caller's authorized planes.
+    """AUTH-001: enumerate every stored concrete namespace in ``family``
+    across the requested planes.
 
-    Used when the request body omits ``namespace`` (or sends null) to
-    recall across all authorized concrete namespaces. The result is
-    then passed through ``enforce_namespace_policy`` which applies
-    the per-agent exclusion list and the per-namespace scope check.
+    Used when the request body omits ``namespace`` (or sends null). This
+    function discovers family candidates only; authorization and the
+    per-agent exclusion list are applied afterwards by
+    ``enforce_namespace_policy``.
 
     Uses Qdrant's server-side facet operation over the indexed namespace
     field, filtered by the indexed identity-family field. This transfers
@@ -459,7 +459,7 @@ async def retrieve(
     if body.namespace is None:
         family = context.presence.split("/", 1)[0]
         planes = body.planes or ["curated", "concept", "episodic"]
-        targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
+        targets = _enumerate_family_targets(qdrant, family=family, planes=planes)
     else:
         targets, shape_err = _resolve_targets(body.namespace, body.planes)
         if shape_err is not None:

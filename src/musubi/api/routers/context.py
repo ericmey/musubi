@@ -12,7 +12,7 @@ from musubi.api.dependencies import get_embedder, get_qdrant_client, get_reranke
 from musubi.api.errors import APIError, ErrorCode
 from musubi.api.routers.retrieve import (
     _KIND_STATUS_MAP,
-    _enumerate_authorized_targets,
+    _enumerate_family_targets,
     _expand_wildcard_targets,
     _resolve_targets,
 )
@@ -96,7 +96,7 @@ async def context_pack(
     if body.namespace is None:
         family = context.presence.split("/", 1)[0]
         planes = body.planes or ["curated", "concept", "episodic"]
-        targets = _enumerate_authorized_targets(qdrant, family=family, planes=planes)
+        targets = _enumerate_family_targets(qdrant, family=family, planes=planes)
     else:
         targets, shape_err = _resolve_targets(body.namespace, body.planes)
         if shape_err is not None:
