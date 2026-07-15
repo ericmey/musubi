@@ -441,7 +441,7 @@ async def test_missing_row_is_observable_noop(
     )
     # No mutation: the curated plane still has zero rows.
     records, _ = plane._client.scroll(
-        collection_name="musubi_curated",
+        collection_name=plane._collection,
         limit=10,
         with_payload=["object_id"],
         with_vectors=False,

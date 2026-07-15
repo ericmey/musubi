@@ -592,9 +592,10 @@ async def _main_async() -> None:
     ``python -m musubi.vault.watcher`` (per
     ``deploy/systemd/musubi-vault-sync.service``).
 
-    Builds the canonical runtime, constructs the watcher, runs the
-    one-time boot scan, starts the watchdog observer, and stays
-    alive until SIGTERM/SIGINT. On exit, the observer is stopped
+    Builds the canonical runtime, constructs the watcher, starts the
+    watchdog observer, then runs the one-time boot scan (the observer
+    is up first so no filesystem event is missed during the scan), and
+    stays alive until SIGTERM/SIGINT. On exit, the observer is stopped
     cleanly and the runtime's sink is closed. ``WriteLog`` has no
     ``close()`` — it opens sqlite connections per call, so each
     ``record_write`` / ``consume_if_exists`` is its own transaction;

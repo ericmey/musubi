@@ -91,7 +91,7 @@ The watcher's delete handler does:
        reason=f'vault file deleted: {rel_path}',
        coordinator=self.coordinator,
    )`
-4. Handle the result:
+6. Handle the result:
    - `Ok(TransitionFinal | TransitionPending)` — log `info` (success).
    - `Err(TransitionError)` with `code='illegal_transition'` AND
      `to_state='archived'` AND current row already `archived` —
