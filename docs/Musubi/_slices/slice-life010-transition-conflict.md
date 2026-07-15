@@ -4,7 +4,7 @@ slice_id: slice-life010-transition-conflict
 status: in-review
 owner: gemini-3-1-pro
 phase: "Lifecycle"
-section: 06-ingestion
+section: _slices
 type: slice
 tags: [section/slices, status/in-review, type/slice]
 updated: 2026-07-15
