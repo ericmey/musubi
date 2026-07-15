@@ -10,8 +10,8 @@ orchestration seam. These tests prove the wire contract end-to-end:
 - non-boolean scalars (strings, ints, lists, dicts) are rejected at the wire (422)
 - the generated OpenAPI exposes the field with default ``True``
 
-The field is ``StrictBool`` so Pydantic does not silently coerce non-boolean scalars
-(e.g. ``"false"`` → ``True``, ``0`` → ``False``).
+The field is ``StrictBool`` so non-boolean scalars (strings, ints, null)
+are rejected at the wire boundary (422) rather than accepted.
 """
 
 from __future__ import annotations
@@ -112,9 +112,7 @@ def test_omitted_include_lineage_forwards_true(
         raise DefectStillPresent("orchestration was not called")
     q = _CAPTURED[-1]
     if "include_lineage" not in q:
-        raise DefectStillPresent(
-            "include_lineage missing from forwarded query dict (Pydantic dropped the unknown key)"
-        )
+        raise DefectStillPresent("include_lineage missing from forwarded query dict")
     if q["include_lineage"] is not True:
         raise DefectStillPresent(
             f"omitted include_lineage must forward True, got {q['include_lineage']!r}"
@@ -215,9 +213,9 @@ def test_fanout_namespace_preserves_include_lineage(
 @pytest.mark.parametrize(
     "bad_value",
     [
-        "false",  # truthy non-empty string (must NOT coerce to False)
-        0,  # int zero (must NOT coerce to False)
-        1,  # int one (must NOT coerce to True)
+        "false",  # non-empty string
+        0,  # int zero
+        1,  # int one
         "not-a-bool",  # arbitrary non-bool string
         [],  # empty list
         {"k": "v"},  # dict
@@ -230,10 +228,9 @@ def test_non_boolean_include_lineage_rejected_at_wire(
 ) -> None:
     """Non-boolean include_lineage must be rejected at the wire boundary (422).
 
-    Strict bool — Pydantic must not coerce non-boolean scalars (strings, ints,
-    lists, dicts) to bool. The string ``"false"`` and the int ``0`` are the
-    load-bearing cases: lax bool would silently coerce them to ``True``/``False``
-    and the field would carry the wrong value to orchestration.
+    Strict bool — non-boolean scalars (strings, ints, lists, dicts) must be
+    rejected at the wire (422). The string ``"false"`` and the ints ``0``/``1`` are
+    the load-bearing cases for the strict-bool contract.
     """
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
