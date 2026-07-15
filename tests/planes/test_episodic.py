@@ -204,8 +204,14 @@ async def test_create_dedup_hit_updates_content_with_new_text(
         embedder=plane._embedder,
         dedup_threshold=-1.0,
     )
-    first = await low_plane.create(_make("first version.", "eric/claude-code/episodic"))
-    second = await low_plane.create(_make("  FIRST version !!!  ", "eric/claude-code/episodic"))
+    first_cand = _make("first version.", "eric/claude-code/episodic")
+    first_cand.summary = "first version"
+    first = await low_plane.create(first_cand)
+
+    second_cand = _make("  FIRST version !!!  ", "eric/claude-code/episodic")
+    second_cand.summary = "first version"
+    second = await low_plane.create(second_cand)
+
     assert second.object_id == first.object_id
     assert second.content == "  FIRST version !!!  "
 
