@@ -47,12 +47,15 @@ from typing import Any
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
+from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
+from musubi.store.memory_serialization import memory_update_payload
+from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
+from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Result, epoch_of, utc_now
 from musubi.types.curated import CuratedKnowledge
-from musubi.types.lifecycle_event import LifecycleEvent
 
 # Distinct from the episodic point-namespace UUID — keeps the two
 # collections' point IDs in disjoint UUID spaces even when KSUIDs collide
@@ -171,23 +174,48 @@ class CuratedPlane:
             # untouched), and any state machine fields the update isn't
             # supposed to mutate in-place. Bump version + refresh
             # updated_at last.
-            updated_data = memory.model_dump()
-            updated_data.update(
-                object_id=existing.object_id,
-                created_at=existing.created_at,
-                created_epoch=existing.created_epoch,
-                supersedes=existing.supersedes,
-                superseded_by=existing.superseded_by,
-                promoted_from=existing.promoted_from,
-                promoted_at=existing.promoted_at,
-                version=existing.version + 1,
-                updated_at=now,
-                updated_epoch=epoch_of(now),
+            dense, sparse = await self._embed_both(_embed_target(memory))
+
+            def plan(current: dict[str, Any]) -> MutationPlan:
+                now_u = utc_now()
+                # Authoritative incoming frontmatter, but the identity + creation timestamps + lineage
+                # come from the FRESH current row (DATA-001 #530) — not the pre-read `existing` — so a
+                # concurrent supersession/promotion/state change is never overwritten. Lease-owned
+                # access fields are excluded (memory_update_payload); version is stamped by the seam.
+                updated = CuratedKnowledge.model_validate(
+                    {
+                        **memory.model_dump(),
+                        "object_id": existing.object_id,
+                        "created_at": current["created_at"],
+                        "created_epoch": current["created_epoch"],
+                        "supersedes": current.get("supersedes", []),
+                        "superseded_by": current.get("superseded_by"),
+                        "promoted_from": current.get("promoted_from"),
+                        "promoted_at": current.get("promoted_at"),
+                        "version": int(current.get("version", 1)),
+                        "updated_at": now_u,
+                        "updated_epoch": epoch_of(now_u),
+                    }
+                )
+                changes = memory_update_payload(updated)
+                changes.pop("version", None)  # the mutation lease owns the version bump.
+                return MutationPlan(
+                    changes=changes,
+                    vectors={
+                        DENSE_VECTOR_NAME: dense,
+                        SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
+                    },
+                )
+
+            published = await owned_update(
+                self._client,
+                self._collection,
+                namespace=str(existing.namespace),
+                object_id=str(existing.object_id),
+                point_id=_point_id(existing.object_id),
+                plan=plan,
             )
-            updated = CuratedKnowledge.model_validate(updated_data)
-            dense, sparse = await self._embed_both(_embed_target(updated))
-            self._upsert(updated, dense=dense, sparse=sparse)
-            return updated
+            return CuratedKnowledge.model_validate(published)
 
         # True supersession path (distinct objects sharing a vault slot).
         # Two writes: insert the new row, mark the old row superseded.
@@ -210,21 +238,33 @@ class CuratedPlane:
         dense, sparse = await self._embed_both(_embed_target(new_row))
         self._upsert(new_row, dense=dense, sparse=sparse)
 
-        old_data = existing.model_dump()
-        old_data.update(
-            state="superseded",
-            superseded_by=new_row.object_id,
-            version=existing.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        superseded = CuratedKnowledge.model_validate(old_data)
-        # Payload-only update keeps the existing vectors; cheaper than a
-        # full upsert and the body didn't change for the superseded row.
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=superseded.model_dump(mode="json"),
-            points=[_point_id(existing.object_id)],
+        # Mark the old row superseded through the attributable mutation lease (DATA-001 #530): a
+        # NARROW change-set (state + superseded_by + updated_at) fenced on the exact version, so a
+        # concurrent unrelated mutation to the old row is never overwritten. No vector change.
+        def supersede_plan(current: dict[str, Any]) -> MutationPlan:
+            now_s = utc_now()
+            superseded = CuratedKnowledge.model_validate(
+                {
+                    **current,
+                    "state": "superseded",
+                    "superseded_by": new_row.object_id,
+                    "updated_at": now_s,
+                    "updated_epoch": epoch_of(now_s),
+                }
+            )
+            dumped = superseded.model_dump(mode="json")
+            changes = {
+                k: dumped[k] for k in ("state", "superseded_by", "updated_at", "updated_epoch")
+            }
+            return MutationPlan(changes=changes)
+
+        await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(existing.namespace),
+            object_id=str(existing.object_id),
+            point_id=_point_id(existing.object_id),
+            plan=supersede_plan,
         )
 
         return new_row
@@ -236,6 +276,8 @@ class CuratedPlane:
         dense: list[float],
         sparse: dict[int, float],
     ) -> None:
+        """CREATE-only full-point upsert (fresh insert / supersession new row). Every UPDATE path
+        publishes through the attributable mutation lease (:mod:`musubi.store.mutation_lease`)."""
         point = models.PointStruct(
             id=_point_id(memory.object_id),
             payload=memory.model_dump(mode="json"),
@@ -405,6 +447,30 @@ class CuratedPlane:
                 out.append(_curated_from_payload(point.payload))
         return out
 
+    async def scan_vault_rows(self) -> list[CuratedKnowledge]:
+        """Return a snapshot of all validated curated rows.
+        Used by the vault reconciler to detect ghost rows.
+        """
+        out: list[CuratedKnowledge] = []
+        offset = None
+        while True:
+            resp, offset = self._client.scroll(
+                collection_name=self._collection,
+                limit=1000,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in resp:
+                if point.payload is None:
+                    raise ValueError("curated inventory row is missing its payload")
+                row = _curated_from_payload(point.payload)
+                if row.vault_path:
+                    out.append(row)
+            if offset is None:
+                break
+        return out
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -417,41 +483,27 @@ class CuratedPlane:
         to_state: LifecycleState,
         actor: str,
         reason: str,
-    ) -> tuple[CuratedKnowledge, LifecycleEvent]:
-        """Mutate ``state`` and emit a :class:`LifecycleEvent`.
-
-        Raises :class:`LookupError` when the object doesn't exist in the
-        given namespace (write-side namespace isolation). The
-        :class:`LifecycleEvent` validator raises :class:`ValueError` for
-        transitions outside the curated table.
-        """
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> Result[TransitionResult | TransitionPending, TransitionError]:
+        """Delegate the namespace-scoped state change to the canonical coordinator."""
         current = await self.get(namespace=namespace, object_id=object_id)
         if current is None:
-            raise LookupError(f"curated object {object_id!r} not found in namespace {namespace!r}")
-        event = LifecycleEvent(
+            return Err(
+                error=TransitionError(
+                    code="not_found",
+                    message=(f"curated object {object_id!r} not found in namespace {namespace!r}"),
+                    to_state=to_state,
+                )
+            )
+        return transition(
+            self._client,
+            coordinator=coordinator,
             object_id=object_id,
-            object_type="curated",
-            namespace=namespace,
-            from_state=current.state,
-            to_state=to_state,
+            target_state=to_state,
             actor=actor,
             reason=reason,
+            expected_version=current.version,
         )
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            state=to_state,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        updated = CuratedKnowledge.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated, event
 
     # ------------------------------------------------------------------
     # Helpers

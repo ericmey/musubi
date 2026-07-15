@@ -9,8 +9,15 @@ from pydantic import BaseModel
 from qdrant_client import QdrantClient
 
 from musubi.api.auth import authorize_namespace, require_auth
-from musubi.api.dependencies import get_artifact_plane, get_qdrant_client, get_settings_dep
+from musubi.api.dependencies import (
+    get_artifact_plane,
+    get_lifecycle_service,
+    get_qdrant_client,
+    get_settings_dep,
+)
 from musubi.api.errors import APIError
+from musubi.api.lifecycle_responses import TransitionPendingBody, pending_response
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, is_transition_pending
 from musubi.lifecycle.transitions import transition
 from musubi.planes.artifact import ArtifactPlane
 from musubi.settings import Settings
@@ -44,6 +51,7 @@ async def upload_artifact(
     file: UploadFile = File(...),
     plane: ArtifactPlane = Depends(get_artifact_plane),
     settings: Settings = Depends(get_settings_dep),
+    coordinator: LifecycleTransitionCoordinator = Depends(get_lifecycle_service),
 ) -> ArtifactCreateResponse:
     # SEC-003: the namespace arrives via Form, which require_auth cannot see (it reads the
     # query string). Authorize the parsed Form namespace with route-native shared authz so a
@@ -70,9 +78,20 @@ async def upload_artifact(
     blob_path = settings.artifact_blob_path / saved.namespace / saved.object_id
     blob_path.parent.mkdir(parents=True, exist_ok=True)
     blob_path.write_bytes(raw)
+    # C4/ART-001: the canonical blob + head are durable — admit a durable indexing intent. The
+    # lifecycle worker's ArtifactIndexer then chunks/embeds/stages/publishes a committed generation.
+    admission = coordinator.enqueue_index_intent(
+        object_id=saved.object_id, namespace=saved.namespace
+    )
+    if admission == "at_capacity":
+        # Backpressure: the outbox is at capacity. Record a VISIBLE terminal disposition (failed) so
+        # the artifact is never silently stuck `indexing` forever; re-upload to retry.
+        saved = await plane.mark_index_unadmitted(saved)
+    # The 202 `state` is the INDEXING axis (`indexing`, or `failed` at capacity), NOT the lifecycle
+    # state — that is the artifact-upload contract.
     return ArtifactCreateResponse(
         object_id=saved.object_id,
-        state=saved.state,
+        state=saved.artifact_state,
         size_bytes=saved.size_bytes,
         sha256=saved.sha256,
     )
@@ -82,12 +101,14 @@ async def upload_artifact(
     "/{object_id}/archive",
     operation_id="archive_artifact.bucket=default",
     dependencies=[Depends(require_auth(access="w"))],
+    responses={202: {"model": TransitionPendingBody, "description": "Transition durably pending."}},
 )
 async def archive_artifact(
     object_id: str,
     namespace: str = Query(...),
     qdrant: QdrantClient = Depends(get_qdrant_client),
     plane: ArtifactPlane = Depends(get_artifact_plane),
+    coordinator: LifecycleTransitionCoordinator = Depends(get_lifecycle_service),
 ) -> Response:
     # exists(), not get(): the transition below goes by object_id and never uses the
     # deserialized row, so a corrupted payload must not be able to block removal.
@@ -100,6 +121,7 @@ async def archive_artifact(
         )
     result = transition(
         qdrant,
+        coordinator=coordinator,
         object_id=object_id,
         target_state="archived",
         actor="api-archive",
@@ -111,6 +133,8 @@ async def archive_artifact(
             code="BAD_REQUEST",
             detail=f"archive transition rejected: {result.error.message}",
         )
+    if is_transition_pending(result.value):
+        return pending_response(result.value)
     return Response(
         status_code=200, content=b'{"status":"archived"}', media_type="application/json"
     )

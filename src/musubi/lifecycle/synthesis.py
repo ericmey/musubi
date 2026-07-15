@@ -9,18 +9,15 @@ import logging
 import sqlite3
 import time
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from functools import wraps
 from pathlib import Path
 from typing import Any, Protocol, cast
 
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
-from musubi.lifecycle import LifecycleEventSink
+from musubi.lifecycle import LifecycleEventSink, store
 from musubi.lifecycle.scheduler import Job, file_lock
-from musubi.observability import default_registry
 from musubi.planes.concept import ConceptPlane
 from musubi.store.names import collection_for_plane
 from musubi.store.specs import DENSE_VECTOR_NAME
@@ -28,35 +25,6 @@ from musubi.types.concept import SynthesizedConcept
 from musubi.types.episodic import EpisodicMemory
 
 logger = logging.getLogger(__name__)
-
-_REG = default_registry()
-_DURATION = _REG.histogram(
-    "musubi_lifecycle_job_duration_seconds",
-    "lifecycle worker tick duration",
-    labelnames=("job",),
-)
-_ERRORS = _REG.counter(
-    "musubi_lifecycle_job_errors_total",
-    "lifecycle worker tick errors",
-    labelnames=("job",),
-)
-
-
-def _instrument_synthesis_job[**P, R](
-    func: Callable[P, Awaitable[R]],
-) -> Callable[P, Awaitable[R]]:
-    @wraps(func)
-    async def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
-        start = time.monotonic()
-        try:
-            return await func(*args, **kwargs)
-        except Exception:
-            _ERRORS.labels(job="synthesis").inc()
-            raise
-        finally:
-            _DURATION.labels(job="synthesis").observe(time.monotonic() - start)
-
-    return _wrapped
 
 
 # ---------------------------------------------------------------------------
@@ -173,40 +141,6 @@ def _threshold_cluster(
 # Cursor
 # ---------------------------------------------------------------------------
 
-_CURSOR_SCHEMA = """
--- v1 cursor: per-namespace high-water mark. Left in place for any code
--- that still consults it, but new code (v1.5.5+) uses
--- `synthesis_family_cursor` keyed on identity_family.
-CREATE TABLE IF NOT EXISTS synthesis_cursor (
-    namespace TEXT PRIMARY KEY,
-    last_processed_epoch REAL NOT NULL
-);
-
--- v2 cursor: per-identity-family. Federates synthesis across substrates
--- (aoi/voice + aoi/command-chair share one cursor for identity_family="aoi").
-CREATE TABLE IF NOT EXISTS synthesis_family_cursor (
-    identity_family TEXT PRIMARY KEY,
-    last_processed_epoch REAL NOT NULL
-);
-
--- Candidate pool: memories that have been seen but haven't yet
--- participated in a successful cluster. Carried forward across runs
--- (within a TTL window) so slow-accumulating patterns can eventually
--- cluster as more peer memories arrive — fixing the cursor-skip flaw
--- where memories that didn't cluster on first pass were lost forever.
-CREATE TABLE IF NOT EXISTS synthesis_candidates (
-    identity_family TEXT NOT NULL,
-    memory_object_id TEXT NOT NULL,
-    first_seen_epoch REAL NOT NULL,
-    last_attempt_epoch REAL NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (identity_family, memory_object_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_candidates_age
-    ON synthesis_candidates(identity_family, first_seen_epoch);
-"""
-
 
 class SynthesisCursor:
     """Tracks synthesis state across runs.
@@ -233,14 +167,17 @@ class SynthesisCursor:
     `<tenant>/<presence>` reduce to `<tenant>` for cursor lookup.
     """
 
-    def __init__(self, *, db_path: Path) -> None:
+    def __init__(
+        self, *, db_path: Path, busy_timeout_ms: int = store.DEFAULT_BUSY_TIMEOUT_MS
+    ) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._busy_timeout_ms = busy_timeout_ms
         with self._connect() as conn:
-            conn.executescript(_CURSOR_SCHEMA)
+            store.ensure_schema(conn)
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(str(self._db_path))
+        return store.connect(self._db_path, busy_timeout_ms=self._busy_timeout_ms)
 
     @staticmethod
     def _family_of(value: str) -> str:
@@ -436,7 +373,6 @@ class SynthesisReport:
 # The Job
 # ---------------------------------------------------------------------------
 
-
 _FAMILY_SYNTHESIS_PRESENCE = "shared"
 """Convention: family-level synthesis writes concepts to
 ``<family>/shared/concept``. The `shared` presence already means
@@ -445,7 +381,6 @@ which carries Aoi's joy entry, visual identity, codeword authority
 — all identity-wide things)."""
 
 
-@_instrument_synthesis_job
 async def synthesis_run(
     client: QdrantClient,
     sink: LifecycleEventSink,

@@ -18,11 +18,12 @@ from ksuid import Ksuid
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
+from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
-from musubi.types.lifecycle_event import LifecycleEvent
+from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Result, epoch_of, utc_now
 from musubi.types.thought import Thought
 
 # Dedicated UUID namespace for thoughts.
@@ -169,7 +170,9 @@ class ThoughtsPlane:
     # Check Unread
     # ------------------------------------------------------------------
 
-    async def check(self, *, namespace: Namespace, my_presence: str) -> list[Thought]:
+    async def check(
+        self, *, namespace: Namespace, my_presence: str, limit: int = 1000
+    ) -> list[Thought]:
         """Returns unread thoughts for `my_presence`."""
         resp, _ = self._client.scroll(
             collection_name=self._collection,
@@ -192,7 +195,43 @@ class ThoughtsPlane:
                     ),
                 ],
             ),
-            limit=1000,
+            limit=limit,
+            with_payload=True,
+        )
+        out: list[Thought] = []
+        for point in resp:
+            if point.payload:
+                out.append(_thought_from_payload(point.payload))
+        return out
+
+    async def history_scroll(
+        self,
+        *,
+        namespace: Namespace,
+        presence: str,
+        limit: int = 50,
+    ) -> list[Thought]:
+        """Return presence-scoped history via scroll (no semantic search)."""
+        resp, _ = self._client.scroll(
+            collection_name=self._collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=namespace)
+                    ),
+                    models.Filter(
+                        should=[
+                            models.FieldCondition(
+                                key="from_presence", match=models.MatchValue(value=presence)
+                            ),
+                            models.FieldCondition(
+                                key="to_presence", match=models.MatchAny(any=[presence, "all"])
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+            limit=limit,
             with_payload=True,
         )
         out: list[Thought] = []
@@ -462,35 +501,26 @@ class ThoughtsPlane:
         to_state: LifecycleState,
         actor: str,
         reason: str,
-    ) -> tuple[Thought, LifecycleEvent]:
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> Result[TransitionResult | TransitionPending, TransitionError]:
         current = await self.get(namespace=namespace, object_id=object_id)
         if current is None:
-            raise LookupError(f"thought {object_id!r} not found in namespace {namespace!r}")
-
-        event = LifecycleEvent(
+            return Err(
+                error=TransitionError(
+                    code="not_found",
+                    message=f"thought {object_id!r} not found in namespace {namespace!r}",
+                    to_state=to_state,
+                )
+            )
+        return transition(
+            self._client,
+            coordinator=coordinator,
             object_id=object_id,
-            object_type="thought",
-            namespace=namespace,
-            from_state=current.state,
-            to_state=to_state,
+            target_state=to_state,
             actor=actor,
             reason=reason,
+            expected_version=current.version,
         )
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            state=to_state,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        updated = Thought.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated, event
 
     # ------------------------------------------------------------------
     # Helpers

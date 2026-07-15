@@ -106,6 +106,15 @@ Priority order:
 4. Importance.
 5. Recency as a final tiebreak.
 
+RET-013 adds a bounded recent lane alongside the ranked lane so a newly written
+provisional memory can carry context across modalities before maturation. The
+recent lane is capped, deduplicated against ranked results by
+`(namespace, plane, object_id)`, and cannot consume the entire item or character
+budget when both lanes have candidates. Ranked metadata wins for duplicates.
+Caller-provided state filters apply to both lanes; otherwise recent includes
+`provisional`, `matured`, and `promoted`, while ranked includes `matured` and
+`promoted`.
+
 `superseded` and `correction/suppression` records are suppressed by default.
 They are retrievable when the caller sets `include_history=true`.
 
@@ -128,30 +137,39 @@ The tests encode the Adoption Day acceptance criteria:
 
 ## Test Contract
 
-- `test_vice_lora_startup_surfaces_v049_v053_and_identity_layer_not_old_drift`
+1. `test_vice_lora_startup_surfaces_v049_v053_and_identity_layer_not_old_drift`
   proves the v1 startup pack surfaces the Vice memory spine, compiler route, and
   LoRA identity-layer lessons while suppressing superseded drift.
-- `test_adoption_day_surfaces_canonical_comms_and_suppresses_retired_agent_msg`
+2. `test_adoption_day_surfaces_canonical_comms_and_suppresses_retired_agent_msg`
   proves canonical comms and no-wrapper rules surface while retired agent-msg
   practice stays hidden.
-- `test_presence_moment_surfaces_wanted_before_needed_without_pm_habits` proves
+3. `test_presence_moment_surfaces_wanted_before_needed_without_pm_habits` proves
   relationship/care-cue memories outrank project-management filler.
-- `test_legacy_rows_default_to_episode_and_history_can_retrieve_superseded`
+4. `test_legacy_rows_default_to_episode_and_history_can_retrieve_superseded`
   proves legacy untyped rows remain readable and superseded rows require
   explicit history mode.
-- `test_durable_rule_beats_shallow_overlap_episode` proves durable boundaries
+5. `test_durable_rule_beats_shallow_overlap_episode` proves durable boundaries
   beat shallow lexical overlap.
-- `test_context_endpoint_returns_grouped_server_ranked_pack` proves the API
+6. `test_context_endpoint_returns_grouped_server_ranked_pack` proves the API
   returns the server-ranked grouped pack through `/v1/context`.
-- `test_context_endpoint_can_include_history_when_explicitly_requested` proves
+7. `test_context_endpoint_can_include_history_when_explicitly_requested` proves
   the API history mode includes superseded rows.
-- `test_capture_rejects_unknown_typed_kind_tag` proves typed-write minimum
+8. `test_context_endpoint_blends_recent_provisional_with_established_ranked`
+  proves the final pack reserves bounded room for newly written provisional
+  memories without displacing established ranked context.
+9. `test_context_endpoint_max_chars_mix_quota` proves the recent lane cannot
+  consume the full character budget when both lanes have candidates.
+10. `test_context_endpoint_single_lane_empty_cases` proves either lane can be
+  empty without suppressing valid results from the other lane.
+11. `test_context_endpoint_custom_state_filter_applies_to_both_lanes` proves an
+  explicit caller state filter governs both orchestration requests.
+12. `test_capture_rejects_unknown_typed_kind_tag` proves typed-write minimum
   rejects unknown `kind:` tags.
-- `test_capture_allows_legacy_untyped_tags` proves legacy tags are still
+13. `test_capture_allows_legacy_untyped_tags` proves legacy tags are still
   accepted.
-- `test_context_posts_to_api_and_renders_grouped_output` proves the CLI calls
+14. `test_context_posts_to_api_and_renders_grouped_output` proves the CLI calls
   the deployed API and renders grouped output.
-- `test_context_json_flag_emits_raw_response` proves the CLI can emit the raw JSON
+15. `test_context_json_flag_emits_raw_response` proves the CLI can emit the raw JSON
   contract.
 
 ## CLI

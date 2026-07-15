@@ -14,6 +14,7 @@ from musubi.api.routers.retrieve import _KIND_STATUS_MAP, _expand_wildcard_targe
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import resolve_namespace_scope
 from musubi.embedding import Embedder, TEIRerankerClient
+from musubi.retrieve.accounting import account_delivered
 from musubi.retrieve.context_pack import (
     ContextCandidate,
     ContextPack,
@@ -110,7 +111,26 @@ async def context_pack(
                 detail=scope_result.error.detail,
             )
 
-    query_body: dict[str, object] = {
+    # RET-013: Query Qdrant twice for a blended recent/ranked mix.
+    recent_query_body: dict[str, object] = {
+        "namespace": body.namespace,
+        # Recent retrieval is chronological and intentionally ignores query text.
+        # Passing it would produce an accept-and-ignore warning on every context call.
+        "query_text": "",
+        "mode": "recent",
+        # Cap recent to a sensible limit to avoid swamping ranked results
+        "limit": min(10, body.candidate_limit),
+        "planes": [plane for _, plane in targets],
+        "include_archived": body.include_history,
+        "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
+        "state_filter": (
+            body.state_filter
+            if body.state_filter is not None
+            else ["provisional", "matured", "promoted"]
+        ),
+    }
+
+    fast_query_body: dict[str, object] = {
         "namespace": body.namespace,
         "query_text": body.query_text,
         "mode": "fast",
@@ -118,24 +138,67 @@ async def context_pack(
         "planes": [plane for _, plane in targets],
         "include_archived": body.include_history,
         "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
-        "state_filter": body.state_filter or ["provisional", "matured", "promoted"],
+        "state_filter": (
+            body.state_filter if body.state_filter is not None else ["matured", "promoted"]
+        ),
     }
-    orchestration_result = await run_orchestration_retrieve(
+
+    # RET-002 (#500): /v1/context's DELIVERED set is the final pack, not the retrieval
+    # candidates — build_context_pack trims by max_items/max_chars/filler below. Defer access
+    # accounting (account_access=False) and account the surfaced pack items ourselves, so a
+    # trimmed candidate is never counted.
+    recent_result = await run_orchestration_retrieve(
         client=qdrant,
         embedder=embedder,
         reranker=reranker,
-        query=query_body,
+        query=recent_query_body,
+        account_access=False,
     )
-    if isinstance(orchestration_result, Err):
-        retrieval_err = orchestration_result.error
+    if isinstance(recent_result, Err):
+        retrieval_err = recent_result.error
         status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
         raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
 
-    envelope = orchestration_result.value
-    candidates = [_candidate_from_hit(hit) for hit in envelope.results]
+    fast_result = await run_orchestration_retrieve(
+        client=qdrant,
+        embedder=embedder,
+        reranker=reranker,
+        query=fast_query_body,
+        account_access=False,
+    )
+    if isinstance(fast_result, Err):
+        retrieval_err = fast_result.error
+        status, error_code = _KIND_STATUS_MAP.get(retrieval_err.kind, (500, "INTERNAL"))
+        raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
+
+    recent_env = recent_result.value
+    fast_env = fast_result.value
+
+    # Deduplicate recent + fast results by (namespace, plane, object_id), favoring
+    # the ranked hit if it appears in both.
+    candidates_dict = {}
+    for hit in recent_env.results:
+        c = _candidate_from_hit(hit, recent=True)
+        c.lane = "recent"
+        candidates_dict[(c.namespace, c.plane, c.object_id)] = c
+
+    for hit in fast_env.results:
+        c = _candidate_from_hit(hit)
+        c.lane = "ranked"
+        candidates_dict[(c.namespace, c.plane, c.object_id)] = c
+
+    candidates = list(candidates_dict.values())
+    seen_warnings: set[str] = set()
+    combined_warnings: list[str] = []
+    for warning in list(recent_env.warnings) + list(fast_env.warnings):
+        if warning.code not in seen_warnings:
+            seen_warnings.add(warning.code)
+            combined_warnings.append(warning.code)
+
     # RET-007: thread the bounded degradation codes onto the pack so /v1/context is NOT a surface where
     # degraded context is indistinguishable from healthy.
-    return build_context_pack(
+    recent_reserve = min(2, max(1, body.max_items // 4))
+    pack = build_context_pack(
         candidates,
         ContextPackQuery(
             query_text=body.query_text,
@@ -143,13 +206,26 @@ async def context_pack(
             max_items=body.max_items,
             max_chars=body.max_chars,
             include_history=body.include_history,
+            recent_reserve=recent_reserve,
         ),
-        warnings=[warning.code for warning in envelope.warnings],
+        warnings=combined_warnings,
     )
+    # Account exactly the FINAL surfaced items (each carries namespace + object_id + plane), once.
+    # An empty pack accounts nothing. Fail-loud but bounded: an accounting failure becomes an
+    # INTERNAL APIError, never a raw exception leaked to the caller.
+    try:
+        await account_delivered(qdrant, [item for group in pack.groups for item in group.items])
+    except Exception:
+        raise APIError(
+            status_code=500, code="INTERNAL", detail="access accounting failed"
+        ) from None
+    return pack
 
 
-def _candidate_from_hit(hit: Any) -> ContextCandidate:
+def _candidate_from_hit(hit: Any, *, recent: bool = False) -> ContextCandidate:
     payload = hit.payload if isinstance(hit.payload, dict) else {}
+    state = hit.state if hit.state is not None else payload.get("state")
+    importance = hit.importance if hit.importance is not None else payload.get("importance")
     return ContextCandidate(
         object_id=str(hit.object_id),
         namespace=str(payload.get("namespace") or hit.namespace),
@@ -158,11 +234,16 @@ def _candidate_from_hit(hit: Any) -> ContextCandidate:
         summary=_optional_str(payload.get("summary")),
         title=_optional_str(payload.get("title") or hit.title),
         tags=_string_list(payload.get("tags")),
-        state=str(payload.get("state") or "matured"),
-        created_epoch=_optional_float(payload.get("created_epoch")) or 0.0,
+        state=str(state or "matured"),
+        created_epoch=(
+            _optional_float(payload.get("created_epoch")) or (float(hit.score) if recent else 0.0)
+        ),
         updated_epoch=_optional_float(payload.get("updated_epoch")),
-        importance=int(payload.get("importance") or 5),
-        retrieve_score=float(hit.score),
+        importance=int(importance or 5),
+        # Recent orchestration uses ``score`` as a chronological epoch, not
+        # relevance.  Keep that signal in ``created_epoch`` without feeding a
+        # timestamp into the context-pack rank formula.
+        retrieve_score=0.0 if recent else float(hit.score),
         extra={key: value for key, value in payload.items() if key in {"kind", "staleness"}},
     )
 

@@ -180,36 +180,43 @@ async def test_rrf_fusion_requested_server_side() -> None:
 
 
 @pytest.mark.asyncio
-async def test_identity_family_filter_applied_not_namespace() -> None:
-    """Hybrid retrieval filters on `identity_family` (the federation key),
-    not on the exact namespace. The caller passes "tenant/presence/plane"
-    but the filter scopes to "tenant" so every substrate under that
-    identity is visible to the search. See `_build_filter` in
-    musubi.retrieve.hybrid for the rationale."""
+async def test_namespace_filter_applied_not_identity_family() -> None:
+    """RET-011 / #510 (supersedes #332 for a CONCRETE target): hybrid retrieval filters on the
+    EXACT namespace, not `identity_family`. A concrete "tenant/presence/plane" target returns only
+    that presence's rows; cross-presence federation now requires an explicit wildcard that resolves
+    multiple concrete `namespace_targets`, never an implicit family-wide filter. The scope is
+    enforced on BOTH the top-level filter and each prefetch sub-query (the prefetch is where an
+    unfiltered vector search would otherwise surface a sibling presence)."""
     spy, _result = await _call()
 
-    from musubi.types.common import family_of
-
     conditions = _filter_conditions(spy.calls[0])
-    # Identity-family filter IS present — coupled to family_of() so this
-    # test exercises the same derivation logic the runtime uses, not a
-    # hard-coded expected value that would silently rot if NAMESPACE
-    # changes.
-    expected_family = family_of(NAMESPACE)
+    # Exact-namespace filter IS present.
     assert any(
         isinstance(condition, models.FieldCondition)
-        and condition.key == "identity_family"
+        and condition.key == "namespace"
         and isinstance(condition.match, models.MatchValue)
-        and condition.match.value == expected_family
+        and condition.match.value == NAMESPACE
         for condition in conditions
-    ), "filter must scope to identity_family for cross-substrate federation"
+    ), "top-level filter must scope to the exact namespace"
 
-    # Exact-namespace filter is GONE — federation means we no longer
-    # gate retrieval at substrate granularity.
+    # identity_family filter is GONE for concrete-target retrieval.
     assert not any(
-        isinstance(condition, models.FieldCondition) and condition.key == "namespace"
+        isinstance(condition, models.FieldCondition) and condition.key == "identity_family"
         for condition in conditions
-    ), "namespace filter should not be present — identity_family is the scope"
+    ), "identity_family scoping is superseded (#510) for a concrete target"
+
+    # Each prefetch sub-query carries the exact-namespace scope — the actual leak fix.
+    prefetches = _prefetches(spy.calls[0])
+    assert prefetches, "expected at least one prefetch"
+    for prefetch in prefetches:
+        pf_conditions = list(prefetch.filter.must or []) if prefetch.filter else []
+        assert any(
+            isinstance(condition, models.FieldCondition)
+            and condition.key == "namespace"
+            and isinstance(condition.match, models.MatchValue)
+            and condition.match.value == NAMESPACE
+            for condition in pf_conditions
+        ), "each prefetch must be namespace-scoped so a vector sub-query cannot cross presences"
 
 
 @pytest.mark.asyncio
@@ -400,13 +407,19 @@ def test_hypothesis_increasing_prefetch_limit_never_reduces_recall_on_fixed_quer
     assert len(corpus) >= small
 
 
-@pytest.mark.skip(
-    reason="deferred to slice-retrieval-evals: BEIR evaluation requires benchmark corpus"
+class DefectStillPresent(Exception):
+    pass
+
+
+@pytest.mark.xfail(
+    strict=True,
+    raises=DefectStillPresent,
+    reason="RET-004: BEIR synthetic hybrid evaluation unmeasured",
 )
 def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points() -> (
     None
 ):
-    raise AssertionError("covered by retrieval eval suite")
+    raise DefectStillPresent("BEIR synthetic hybrid evaluation unmeasured")
 
 
 @pytest.mark.skip(reason="deferred to slice-ops-gpu: live TEI/Qdrant p95 requires reference host")

@@ -11,6 +11,7 @@ from typing import Any
 from qdrant_client import QdrantClient
 
 from musubi.embedding.base import Embedder
+from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
 from musubi.retrieve.hybrid import (
     HybridHit,
     HybridSearchResult,
@@ -47,6 +48,18 @@ class FastHit:
     payload: dict[str, Any]
     snippet: str
     lineage_summary: dict[str, Any]
+    # DQ-001: silent-truncation fix. Sliced snippets are tagged with the
+    # original (untruncated) character length and a truncated flag so
+    # callers can detect the cut and fetch the full body via ``object_id``.
+    content_truncated: bool = False
+    content_length: int | None = None
+    # RET-012: the raw RRF that fed the per-leg ``_to_score_hit`` call.
+    # Propagated to ``RetrievalResult.raw_rrf_score`` so the cross-plane
+    # seam (``scoring.calibrate_global_relevance``) can re-anchor the
+    # leg's relevance against the working-set global max instead of the
+    # per-leg local max. Internal-only — not on wire models.
+    raw_rrf_score: float | None = None
+    raw_rerank_score: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,14 +347,22 @@ def _pack(
             now=now,
             weights=weights,
         )
+        _snippet_str, _ct, _cl = _snippet(payload)
         packed.append(
             FastHit(
                 object_id=hybrid_hit.object_id,
                 score=total,
                 score_components=components,
                 payload=payload,
-                snippet=_snippet(payload),
+                snippet=_snippet_str,
                 lineage_summary=_lineage_summary(payload),
+                content_truncated=_ct,
+                content_length=_cl,
+                # RET-012: forward the raw RRF to the cross-plane seam.
+                # Fast mode never reranks, so ``raw_rerank_score`` stays
+                # ``None`` and the seam's sigmoid branch is skipped.
+                raw_rrf_score=hybrid_hit.score,
+                raw_rerank_score=None,
             )
         )
     return sorted(packed, key=lambda hit: (-hit.score, hit.object_id))[:limit]
@@ -375,9 +396,19 @@ def _plane_from_namespace(payload: dict[str, Any]) -> str:
     return "episodic"
 
 
-def _snippet(payload: dict[str, Any]) -> str:
+def _snippet(payload: dict[str, Any]) -> tuple[str, bool, int]:
+    """Return (snippet, content_truncated, content_length).
+
+    The snippet is at most 200 chars (per spec). When the original content
+    is longer than the cap, the snippet is truncated and the original
+    character length is preserved for caller-side detection.
+    """
     content = str(payload.get("content") or payload.get("title") or "")
-    return content[:200]
+    original_length = len(content)
+    truncated = original_length > 200
+    if not truncated:
+        return content, False, original_length
+    return truncate_grapheme_safe(content, 200), True, original_length
 
 
 def _lineage_summary(payload: dict[str, Any]) -> dict[str, Any]:
@@ -398,19 +429,16 @@ def _cache_key(
     limit: int,
     state_filter: Sequence[LifecycleState],
 ) -> tuple[Any, ...]:
-    """Cache key scoped to identity family, not exact namespace.
+    """Cache key scoped to the EXACT deployment namespace (RET-011 / #510).
 
-    Retrieval federates at the identity level (see
-    ``musubi.retrieve.hybrid._build_filter``), so two queries from
-    different presences of the same identity — e.g. caller namespaces
-    ``aoi/command-chair/episodic`` vs ``aoi/voice/episodic`` — produce
-    identical results and SHOULD share a cache entry. Keying on the
-    full namespace would split that cache and miss on every cross-
-    substrate query.
+    Retrieval of a concrete target is presence-exact (see
+    ``musubi.retrieve.hybrid._build_filter``), so two queries from different presences of the
+    same identity — e.g. ``aoi/command-chair/episodic`` vs ``aoi/voice/episodic`` — resolve
+    DIFFERENT rows and must NOT share a cache entry. Keying on ``family_of`` here was the
+    second half of the cross-presence leak: even with an exact query filter, fast mode would
+    serve one presence's cached rows to another presence's query.
     """
-    from musubi.types.common import family_of
-
-    return (family_of(namespace), query, tuple(collections), limit, tuple(state_filter))
+    return (namespace, query, tuple(collections), limit, tuple(state_filter))
 
 
 __all__ = [

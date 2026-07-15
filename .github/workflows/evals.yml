@@ -1,0 +1,32 @@
+name: Evals
+
+on:
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 0 * * *'
+  # On-demand: workflow_dispatch must exist on the default branch to be callable pre-merge, so the
+  # RET-004 successor (#549) can dispatch the live scheduled gate against its ref before it merges.
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Run PR Smoke Gate
+        if: github.event_name == 'pull_request'
+        run: |
+          uv run python -m musubi.evals smoke --data-dir tests/evals/data
+      - name: Run Scheduled Baseline Report
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          uv run python -m musubi.evals scheduled --data-dir tests/evals/data

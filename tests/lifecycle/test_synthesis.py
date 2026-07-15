@@ -17,6 +17,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.embedding import FakeEmbedder
 from musubi.lifecycle import LifecycleEventSink
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.synthesis import (
     ContradictionInput,
     ContradictionOutput,
@@ -120,6 +121,10 @@ def _ns(base: str, plane: str) -> str:
     return f"{base}/{plane}"
 
 
+def _coordinator(qdrant: QdrantClient, sink: LifecycleEventSink) -> LifecycleTransitionCoordinator:
+    return LifecycleTransitionCoordinator(client=qdrant, db_path=sink._db_path)
+
+
 def _duration_count(job: str) -> int:
     text = render_text_format(default_registry())
     prefix = f'musubi_lifecycle_job_duration_seconds_count{{job="{job}"}} '
@@ -213,19 +218,6 @@ async def test_skips_when_fewer_than_3_new_memories(
     report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
     assert report.memories_selected == 2
     assert report.clusters_formed == 0
-
-
-async def test_synthesis_worker_observes_lifecycle_job_duration(
-    qdrant: QdrantClient,
-    ns: str,
-    sink: LifecycleEventSink,
-    cursor: SynthesisCursor,
-    embedder: FakeEmbedder,
-) -> None:
-    before = _duration_count("synthesis")
-    report = await synthesis_run(qdrant, sink, FakeSynthesisOllama(), embedder, cursor, ns)
-    assert report.memories_selected == 0
-    assert _duration_count("synthesis") == before + 1
 
 
 async def test_cursor_per_namespace_tracked_separately(
@@ -596,6 +588,7 @@ async def test_high_similarity_match_reinforces_existing(
         to_state="matured",
         actor="test",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
 
     for i in range(3):
@@ -760,6 +753,7 @@ async def test_synthesized_matures_after_24h_without_contradiction(
     report = await concept_maturation_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         config=MaturationConfig(concept_min_age_sec=24 * 3600, concept_reinforcement_threshold=3),
     )
     assert report.transitioned == 1
@@ -805,6 +799,7 @@ async def test_synthesized_blocked_from_maturing_with_contradiction(
     report = await concept_maturation_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         config=MaturationConfig(concept_min_age_sec=24 * 3600, concept_reinforcement_threshold=3),
     )
     assert report.transitioned == 0
@@ -836,6 +831,7 @@ async def test_concept_demotes_after_30d_no_reinforcement(
         to_state="matured",
         actor="test",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
 
     backdate = utc_now() - timedelta(days=31)
@@ -852,7 +848,10 @@ async def test_concept_demotes_after_30d_no_reinforcement(
     )
 
     report = await concept_demotion_sweep(
-        client=qdrant, sink=sink, config=MaturationConfig(demotion_inactivity_sec=30 * 24 * 3600)
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        config=MaturationConfig(demotion_inactivity_sec=30 * 24 * 3600),
     )
     assert report.transitioned == 1
 

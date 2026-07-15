@@ -1,5 +1,160 @@
 # Changelog
 
+## [1.17.6](https://github.com/ericmey/musubi/compare/v1.17.5...v1.17.6) (2026-07-15)
+
+
+### Bug Fixes
+
+* **lifecycle:** enforce hard-fence semantics rejecting mismatched expected_version mutations ([#568](https://github.com/ericmey/musubi/issues/568)) ([e9319e1](https://github.com/ericmey/musubi/commit/e9319e1be7b3a93d2ce38ff1fc7934e3ae4775ef))
+
+## [1.17.5](https://github.com/ericmey/musubi/compare/v1.17.4...v1.17.5) (2026-07-15)
+
+
+### Documentation
+
+* **life009:** reconcile merged slice status ([#551](https://github.com/ericmey/musubi/issues/551)) ([24281d3](https://github.com/ericmey/musubi/commit/24281d33a78c3f840474c80dd270ded6cb3ba9ee))
+
+## [1.17.4](https://github.com/ericmey/musubi/compare/v1.17.3...v1.17.4) (2026-07-15)
+
+
+### Documentation
+
+* **integrity:** reconcile shipped remediation state ([#561](https://github.com/ericmey/musubi/issues/561)) ([cf4bfd8](https://github.com/ericmey/musubi/commit/cf4bfd82ffb3909363ad379bf05c1f60f4990889))
+
+## [1.17.3](https://github.com/ericmey/musubi/compare/v1.17.2...v1.17.3) (2026-07-15)
+
+
+### CI / Ops
+
+* **evals:** enable workflow_dispatch for the live scheduled gate ([#550](https://github.com/ericmey/musubi/issues/550)) ([d5e057b](https://github.com/ericmey/musubi/commit/d5e057b326f797b4522d856dec6e96dc5c899826))
+
+## [1.17.2](https://github.com/ericmey/musubi/compare/v1.17.1...v1.17.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* DQ-001 complete grapheme-safe and adapter parity (Issue [#443](https://github.com/ericmey/musubi/issues/443)) ([#540](https://github.com/ericmey/musubi/issues/540)) ([1231c93](https://github.com/ericmey/musubi/commit/1231c93a9b43fba0f4d902e548b8687fd691a3b2))
+* **integration:** create host runtime directories ([#545](https://github.com/ericmey/musubi/issues/545)) ([539b16d](https://github.com/ericmey/musubi/commit/539b16d1112f26dd97c88086daaaddcaffd8d226))
+
+## [1.17.1](https://github.com/ericmey/musubi/compare/v1.17.0...v1.17.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* ING-001 semantic dedup strict compatibility bounds (Issue [#534](https://github.com/ericmey/musubi/issues/534)) ([#535](https://github.com/ericmey/musubi/issues/535)) ([dba8f10](https://github.com/ericmey/musubi/commit/dba8f10a12869b87e379e31d0a0f4c879550fcf2))
+
+## [1.17.0](https://github.com/ericmey/musubi/compare/v1.16.2...v1.17.0) (2026-07-15)
+
+
+### Features
+
+* RET-013 bounded recent-memory lane in canonical cross-modality context (Issue [#522](https://github.com/ericmey/musubi/issues/522)) ([#525](https://github.com/ericmey/musubi/issues/525)) ([0e3e1ee](https://github.com/ericmey/musubi/commit/0e3e1eea5b34e4d7a163f30d5292f10638dbdd02))
+
+## [1.16.2](https://github.com/ericmey/musubi/compare/v1.16.1...v1.16.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* LIFE-005 promotion replay identity consistency (Issue [#516](https://github.com/ericmey/musubi/issues/516)) ([#520](https://github.com/ericmey/musubi/issues/520)) ([4e7147e](https://github.com/ericmey/musubi/commit/4e7147e8bbabba08e244dbe3dadca8db0877260d))
+
+## [1.16.1](https://github.com/ericmey/musubi/compare/v1.16.0...v1.16.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* LIFE-004 promotion retry classification (Issue [#504](https://github.com/ericmey/musubi/issues/504)) ([#506](https://github.com/ericmey/musubi/issues/506)) ([43c5baa](https://github.com/ericmey/musubi/commit/43c5baa5bf6df222eda8653c249c1585683ba2e9))
+
+## [1.16.0](https://github.com/ericmey/musubi/compare/v1.15.2...v1.16.0) (2026-07-15)
+
+
+### Features
+
+* **dq001:** surface silent-truncation metadata on retrieval rows (Tracks [#443](https://github.com/ericmey/musubi/issues/443)) ([#497](https://github.com/ericmey/musubi/issues/497)) ([7447693](https://github.com/ericmey/musubi/commit/74476934fc622161bf5ae1a6ac86a3c98a2f1797))
+
+## [1.15.2](https://github.com/ericmey/musubi/compare/v1.15.1...v1.15.2) (2026-07-15)
+
+
+### Documentation
+
+* **lifecycle:** record metrics slice completion ([#505](https://github.com/ericmey/musubi/issues/505)) ([09a4ea2](https://github.com/ericmey/musubi/commit/09a4ea2b2a99babb11a48b8dad74acdaaa8de2bd))
+
+## [1.15.1](https://github.com/ericmey/musubi/compare/v1.15.0...v1.15.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* lifecycle job metrics and failure visibility (Issue [#368](https://github.com/ericmey/musubi/issues/368)) ([#498](https://github.com/ericmey/musubi/issues/498)) ([ee5ef6d](https://github.com/ericmey/musubi/commit/ee5ef6d7b866f6ad5b3cf67f2ff15cd34b9116ed))
+
+## [1.15.0](https://github.com/ericmey/musubi/compare/v1.14.3...v1.15.0) (2026-07-15)
+
+
+### Features
+
+* streaming retrieval parity (Issue [#493](https://github.com/ericmey/musubi/issues/493)) ([#494](https://github.com/ericmey/musubi/issues/494)) ([713c32c](https://github.com/ericmey/musubi/commit/713c32c7cb7a05b15d10953c9fd5cd5d19bacb98))
+
+## [1.14.3](https://github.com/ericmey/musubi/compare/v1.14.2...v1.14.3) (2026-07-15)
+
+
+### Bug Fixes
+
+* **thoughts:** THOUGHT-002 production writes use configured embedder ([#487](https://github.com/ericmey/musubi/issues/487)) ([d6a9f19](https://github.com/ericmey/musubi/commit/d6a9f19b20e016b3beb4220afd6b7380c9f6bd0a))
+
+## [1.14.2](https://github.com/ericmey/musubi/compare/v1.14.1...v1.14.2) (2026-07-15)
+
+
+### Bug Fixes
+
+* **thoughts:** THOUGHT-001 check and history presence filtering ([#484](https://github.com/ericmey/musubi/issues/484)) ([850e935](https://github.com/ericmey/musubi/commit/850e935f6f0f1efb4b735c4e85c72463d699ea47))
+
+## [1.14.1](https://github.com/ericmey/musubi/compare/v1.14.0...v1.14.1) (2026-07-15)
+
+
+### Bug Fixes
+
+* **vault:** VAULT-001 ghost row reconciliation via CuratedPlane transition ([#482](https://github.com/ericmey/musubi/issues/482)) ([ff5c1a6](https://github.com/ericmey/musubi/commit/ff5c1a6492fe92f4430218f677713d301adeff56))
+
+## [1.14.0](https://github.com/ericmey/musubi/compare/v1.13.5...v1.14.0) (2026-07-15)
+
+
+### Features
+
+* **ret009:** forward include_lineage through RetrieveQuery to orchestration ([#481](https://github.com/ericmey/musubi/issues/481)) ([4ea6761](https://github.com/ericmey/musubi/commit/4ea67610e6e654ae06e0169fd0b27ad1306fa6ba))
+
+## [1.13.5](https://github.com/ericmey/musubi/compare/v1.13.4...v1.13.5) (2026-07-15)
+
+
+### Documentation
+
+* **c6b:** fix slice status drift — body matches frontmatter (done) ([#475](https://github.com/ericmey/musubi/issues/475)) ([b335ad9](https://github.com/ericmey/musubi/commit/b335ad93d0023f8c524343345539e4ee3fcf5ab7))
+
+## [1.13.4](https://github.com/ericmey/musubi/compare/v1.13.3...v1.13.4) (2026-07-14)
+
+
+### Bug Fixes
+
+* **c6:** make lifecycle event acceptance durable ([#470](https://github.com/ericmey/musubi/issues/470)) ([acf97dd](https://github.com/ericmey/musubi/commit/acf97ddf65d0fc00a5c8e184982bf16ca1e04173))
+
+## [1.13.3](https://github.com/ericmey/musubi/compare/v1.13.2...v1.13.3) (2026-07-14)
+
+
+### Bug Fixes
+
+* **deps:** clear fixed-version high findings ([#466](https://github.com/ericmey/musubi/issues/466)) ([17c002f](https://github.com/ericmey/musubi/commit/17c002f110858b11048f1509fc69613632c72f33))
+
+## [1.13.2](https://github.com/ericmey/musubi/compare/v1.13.1...v1.13.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **livekit:** preserve LiveKit transcript content on fallback write path ([#462](https://github.com/ericmey/musubi/issues/462)) ([bb282ed](https://github.com/ericmey/musubi/commit/bb282ed643049ac56d28a5eaaea9e8ccfda00030))
+
+## [1.13.1](https://github.com/ericmey/musubi/compare/v1.13.0...v1.13.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **tc-coverage:** resolve module variable xfail reasons ([#458](https://github.com/ericmey/musubi/issues/458)) ([b29f99b](https://github.com/ericmey/musubi/commit/b29f99b37e52c94c4fd555dd03f0c2dbf8dbdff6))
+
 ## [1.13.0](https://github.com/ericmey/musubi/compare/v1.12.0...v1.13.0) (2026-07-13)
 
 

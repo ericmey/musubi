@@ -10,19 +10,16 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import time
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from functools import wraps
 from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field, model_validator
 from qdrant_client import QdrantClient, models
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
-from musubi.observability import default_registry
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.store.names import collection_for_plane
@@ -38,34 +35,9 @@ PROMOTION_REINFORCEMENT_THRESHOLD = 3
 PROMOTION_IMPORTANCE_THRESHOLD = 6
 PROMOTION_MAX_ATTEMPTS = 3
 
-_REG = default_registry()
-_DURATION = _REG.histogram(
-    "musubi_lifecycle_job_duration_seconds",
-    "lifecycle worker tick duration",
-    labelnames=("job",),
-)
-_ERRORS = _REG.counter(
-    "musubi_lifecycle_job_errors_total",
-    "lifecycle worker tick errors",
-    labelnames=("job",),
-)
 
-
-def _instrument_promotion_job[**P, R](
-    func: Callable[P, Awaitable[R]],
-) -> Callable[P, Awaitable[R]]:
-    @wraps(func)
-    async def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
-        start = time.monotonic()
-        try:
-            return await func(*args, **kwargs)
-        except Exception:
-            _ERRORS.labels(job="promotion").inc()
-            raise
-        finally:
-            _DURATION.labels(job="promotion").observe(time.monotonic() - start)
-
-    return _wrapped
+class PromotionPolicyError(Exception):
+    """Deterministic business logic/policy rejection that burns a strike."""
 
 
 class PromotionRender(BaseModel):
@@ -143,6 +115,7 @@ class _NotConfiguredThoughtEmitter:
 @dataclass
 class PromotionDeps:
     qdrant: QdrantClient
+    coordinator: LifecycleTransitionCoordinator
     concept_plane: ConceptPlane
     curated_plane: CuratedPlane
     events: LifecycleEventSink
@@ -209,7 +182,6 @@ def _is_eligible(concept: SynthesizedConcept, now_epoch: float) -> bool:
     return concept.promoted_to is None
 
 
-@_instrument_promotion_job
 async def run_promotion_sweep(
     deps: PromotionDeps,
     batch_size: int = 1,
@@ -279,13 +251,13 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
     """Attempt to promote one concept. Returns True iff it actually shipped
     a curated row + vault file.
 
-    Any failure — render, vault write, curated-plane create, concept
-    transition, thought emit — records a rejection via
+    Explicit deterministic failures (render policy rejection, path/frontmatter validation
+    via PromotionPolicyError) record a rejection via
     :meth:`ConceptPlane.record_promotion_rejection`, which bumps
     `promotion_attempts`. The three-strikes gate then locks the concept
-    out after three consecutive failures. Transient infra issues (e.g.
-    Qdrant briefly down) do burn an attempt — accepted cost for making
-    a genuinely broken concept stop poisoning every sweep."""
+    out after three consecutive failures. Transient infra issues (vault
+    write, Qdrant briefly down, etc.) do NOT burn an attempt and are
+    left for the next sweep."""
     now = utc_now()
 
     # Render markdown via LLM
@@ -296,94 +268,127 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             rationale=concept.synthesis_rationale,
             top_memories=[],
         )
-    except Exception as e:
-        log.warning("Rendering failed for concept %s: %s", concept.object_id, e)
+    except PromotionPolicyError as e:
+        log.warning("Rendering failed deterministically for concept %s: %s", concept.object_id, e)
         await _record_rejection(deps, concept, reason=f"Rendering failed: {e}")
         return False
+    except Exception as e:
+        log.warning(
+            "Transient infrastructure failure during render for concept %s: %s",
+            concept.object_id,
+            e,
+            exc_info=True,
+        )
+        return False
 
-    # Post-render path. Any exception below bumps promotion_attempts via
-    # `record_promotion_rejection` so a broken concept can't poison every
-    # sweep indefinitely; the three-strikes gate will lock it out for
-    # operator attention after three consecutive failures.
+    # Post-render path. Explicit PromotionPolicyError (path computation,
+    # frontmatter validation) bumps promotion_attempts via
+    # `record_promotion_rejection`. Transient infra failures (vault,
+    # Qdrant) are caught but do not burn attempts.
     try:
-        rel_path = compute_path(concept)
+        try:
+            rel_path = compute_path(concept)
+        except ValueError as e:
+            raise PromotionPolicyError(f"Path computation failed: {e}") from e
 
+        curated_id: str | None = None
         # Check conflict
         full_path = deps.vault_writer.vault_root / rel_path
         if full_path.exists():
+            # Let OSError propagate as transient
+            content_str = full_path.read_text(encoding="utf-8")
+            data, _ = parse_frontmatter(content_str)
             try:
-                content = full_path.read_text(encoding="utf-8")
-                data, _ = parse_frontmatter(content)
                 fm = CuratedFrontmatter.model_validate(data)
+            except (ValueError, TypeError) as e:
+                # If an existing file exists at the expected path, but its frontmatter is broken,
+                # we must not silently ignore it and overwrite it or spin forever.
+                raise PromotionPolicyError(
+                    f"Corrupt frontmatter at existing vault path '{rel_path}': {e}"
+                ) from e
 
-                if fm.musubi_managed and fm.promoted_from == concept.object_id:
-                    # Idempotent rewrite allowed
-                    pass
-                elif fm.musubi_managed and fm.promoted_from != concept.object_id:
-                    # Sibling
-                    slug = slugify(concept.title)
-                    rel_path = rel_path.replace(f"{slug}.md", f"{slug}-v2.md")
-                    await deps.thoughts.emit(
-                        "ops-alerts",
-                        f"Path conflict handled with sibling: {rel_path}",
-                        "Path Conflict",
-                    )
-                else:
-                    # Human authored
-                    slug = slugify(concept.title)
-                    short_id = str(concept.object_id)[:8]
-                    rel_path = rel_path.replace(f"{slug}.md", f"{slug}-promoted-{short_id}.md")
-                    await deps.thoughts.emit(
-                        "ops-alerts",
-                        f"Path conflict with human file handled with sibling: {rel_path}",
-                        "Path Conflict",
-                    )
+            if fm.musubi_managed and fm.promoted_from == concept.object_id:
+                # Idempotent rewrite allowed. We must reuse the existing object_id.
+                if not fm.object_id:
+                    raise PromotionPolicyError(f"Existing vault path {rel_path} lacks an object_id")
+                curated_id = fm.object_id
+            elif fm.musubi_managed and fm.promoted_from != concept.object_id:
+                # Sibling
+                slug = slugify(concept.title)
+                rel_path = rel_path.replace(f"{slug}.md", f"{slug}-v2.md")
+                await deps.thoughts.emit(
+                    "ops-alerts",
+                    f"Path conflict handled with sibling: {rel_path}",
+                    "Path Conflict",
+                )
+            else:
+                # Human authored
+                slug = slugify(concept.title)
+                short_id = str(concept.object_id)[:8]
+                rel_path = rel_path.replace(f"{slug}.md", f"{slug}-promoted-{short_id}.md")
+                await deps.thoughts.emit(
+                    "ops-alerts",
+                    f"Path conflict with human file handled with sibling: {rel_path}",
+                    "Path Conflict",
+                )
 
-            except Exception as e:
-                log.warning("Path conflict resolution failed for %s: %s", rel_path, e)
+        if curated_id is None:
+            curated_id = generate_ksuid()
 
-        curated_id = generate_ksuid()
-
-        fm_obj = CuratedFrontmatter(  # type: ignore
-            object_id=curated_id,
-            namespace=concept.namespace,
-            title=concept.title,
-            topics=concept.topics or concept.linked_to_topics,
-            tags=concept.tags,
-            importance=concept.importance,
-            state="matured",
-            musubi_managed=True,
-            created=now,
-            updated=now,
-            promoted_from=concept.object_id,
-            promoted_at=now,
-        )
-
-        # Write to vault
-        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
+        try:
+            fm_obj = CuratedFrontmatter(  # type: ignore
+                object_id=curated_id,
+                namespace=concept.namespace,
+                title=concept.title,
+                topics=concept.topics or concept.linked_to_topics,
+                tags=concept.tags,
+                importance=concept.importance,
+                state="matured",
+                musubi_managed=True,
+                created=now,
+                updated=now,
+                promoted_from=concept.object_id,
+                promoted_at=now,
+            )
+        except (ValueError, TypeError) as e:
+            raise PromotionPolicyError(f"Invalid frontmatter fields: {e}") from e
 
         # Create Qdrant point
         body_hash = hashlib.sha256(render.body.encode("utf-8")).hexdigest()
-        memory = CuratedKnowledge(
-            object_id=curated_id,
-            namespace=concept.namespace,
-            vault_path=rel_path,
-            body_hash=body_hash,
-            title=concept.title,
-            content=render.body,
-            summary=concept.summary,
-            state="matured",
-            importance=concept.importance,
-            topics=concept.topics or concept.linked_to_topics,
-            tags=concept.tags,
-            promoted_from=concept.object_id,
-            promoted_at=now,
-        )
+        try:
+            memory = CuratedKnowledge(
+                object_id=curated_id,
+                namespace=concept.namespace,
+                vault_path=rel_path,
+                body_hash=body_hash,
+                title=concept.title,
+                content=render.body,
+                summary=concept.summary,
+                state="matured",
+                importance=concept.importance,
+                topics=concept.topics or concept.linked_to_topics,
+                tags=concept.tags,
+                promoted_from=concept.object_id,
+                promoted_at=now,
+            )
+        except (ValueError, TypeError) as e:
+            raise PromotionPolicyError(f"Invalid curated memory fields: {e}") from e
 
-        await deps.curated_plane.create(memory)
+        persisted = await deps.curated_plane.create(memory)
+
+        if str(persisted.object_id) != curated_id:
+            if persisted.promoted_from != concept.object_id:
+                raise PromotionPolicyError(
+                    f"Qdrant returned existing row with unrelated lineage: {persisted.promoted_from}"
+                )
+            curated_id = str(persisted.object_id)
+            fm_obj = fm_obj.model_copy(update={"object_id": curated_id})
+
+        # Write to vault ONCE after identity is validated
+        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
 
         # Transition concept
-        await deps.concept_plane.transition(
+        result = await deps.concept_plane.transition(
             namespace=concept.namespace,
             object_id=concept.object_id,
             to_state="promoted",
@@ -391,7 +396,19 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             reason="lifecycle-promotion-sweep",
             promoted_to=curated_id,
             promoted_at=now,
+            coordinator=deps.coordinator,
         )
+        if result.kind == "err":
+            raise RuntimeError(result.error.message)
+        outcome = result.value
+        if isinstance(outcome, TransitionPending):
+            log.info(
+                "Promotion transition deferred for concept %s: operation=%s event=%s",
+                concept.object_id,
+                outcome.operation_key,
+                outcome.event_id,
+            )
+            return False
 
         # Notification Thought
         await deps.thoughts.emit(
@@ -400,9 +417,19 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             "Concept Promoted",
         )
         return True
-    except Exception as e:
-        log.warning("Post-render promotion failed for concept %s: %s", concept.object_id, e)
+    except PromotionPolicyError as e:
+        log.warning(
+            "Deterministic post-render promotion failed for concept %s: %s", concept.object_id, e
+        )
         await _record_rejection(deps, concept, reason=f"Post-render failed: {e}")
+        return False
+    except Exception as e:
+        log.warning(
+            "Transient infrastructure failure during post-render for concept %s: %s",
+            concept.object_id,
+            e,
+            exc_info=True,
+        )
         return False
 
 
@@ -484,6 +511,7 @@ def build_promotion_jobs(
 __all__ = [
     "PromotionDeps",
     "PromotionLLM",
+    "PromotionPolicyError",
     "PromotionRender",
     "ThoughtEmitter",
     "VaultWriter",

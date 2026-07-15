@@ -7,7 +7,7 @@ status: done
 owner: aoi
 phase: "Security audit 2026-07-12/13 — Phase A src (Yua-authorized REQ 2026-07-12T22:51)"
 tags: [section/slices, status/done, type/slice, security, p0, auth]
-updated: 2026-07-13
+updated: 2026-07-15
 reviewed: true
 depends-on: [slice-auth-boundary-red-contract, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
 blocks: [slice-idempotency-phase-b]
@@ -22,9 +22,9 @@ makes. It exists as a **docs-only spec repair** (Yua stack rulings 2026-07-13T02
 source changes had NO owning slice. This slice is that owner. Stacked on the red contract (#402) +
 the accepted ADR (`ADR-auth-boundary-consolidation`).
 
-Closed by **PR #403**. Tracking Issue #410. `status: done` is the pre-merge closure state the Vault
-check requires when a PR `Closes` a slice's Issue — the PR and Issue are still OPEN, NOT merged.
-**Production remains vulnerable to SEC-003/004 until this stack is merged AND deployed.**
+Closed by **PR #403** (`0def0df`) and shipped on `main`; tracking Issue #410 is closed. Production
+Phase B shipped separately through replacement PR #414 (`8167202`) after the historical stacked PR
+#404 closed without merge. SEC-003/004 are no longer open production-vulnerability claims.
 
 ## Specs to implement
 
@@ -81,10 +81,9 @@ REQ-10 — single-worker fail-closed:
 
 ## Status
 
-**`done`** (2026-07-13) — Phase A src implemented and independently accepted; closed by PR #403.
-`done` is the pre-merge closure state (Vault check: a PR that `Closes` a slice Issue requires the
-slice to be `done`). PR #403 + Issue #410 are OPEN, NOT merged/deployed. Production stays vulnerable
-until merge + deploy.
+**`done`** (2026-07-13) — Phase A src implemented, independently accepted, and merged through PR
+#403 (`0def0df`). Issue #410 is closed. Deployed releases include this fix; only the explicit
+deferrals in the auth-boundary ADR remain open.
 
 spec-update: slice-auth-boundary-phase-a — NEW canonical Phase A src slice (repairs the missing
 owner for #403's src, which the red-contract slice forbids). App.py ownership scoped to the REQ-10

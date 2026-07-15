@@ -73,12 +73,20 @@ from typing import Any
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
+from musubi.lifecycle.transitions import (
+    LineageUpdates,
+    TransitionError,
+    TransitionResult,
+    transition,
+)
+from musubi.store.access_lease import lease_increment_access
+from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import KSUID, LifecycleState, Namespace, epoch_of, utc_now
+from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Result, epoch_of, utc_now
 from musubi.types.concept import SynthesizedConcept
-from musubi.types.lifecycle_event import LifecycleEvent
 
 # Distinct from episodic's ...01 and curated's ...02 — three collections,
 # three disjoint point-ID namespaces.
@@ -324,27 +332,44 @@ class ConceptPlane:
         current = await self.get(namespace=namespace, object_id=object_id)
         if current is None:
             raise LookupError(f"concept {object_id!r} not found in namespace {namespace!r}")
-        now = utc_now()
-        merged_from = list(current.merged_from)
-        if additional_source is not None and additional_source not in merged_from:
-            merged_from.append(additional_source)
-        data = current.model_dump()
-        data.update(
-            reinforcement_count=current.reinforcement_count + 1,
-            last_reinforced_at=now,
-            last_reinforced_epoch=epoch_of(now),
-            merged_from=merged_from,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
+
+        # Publish the reinforcement through the attributable mutation lease (DATA-001 #530): a NARROW
+        # change-set recomputed against the FRESH row each round (merged_from deduped against current),
+        # fenced on version — a concurrent unrelated mutation is never overwritten.
+        def plan(cur: dict[str, Any]) -> MutationPlan:
+            now2 = utc_now()
+            merged = list(cur.get("merged_from", []))
+            if additional_source is not None and additional_source not in merged:
+                merged.append(additional_source)
+            data = {
+                **cur,
+                "reinforcement_count": int(cur.get("reinforcement_count", 0)) + 1,
+                "last_reinforced_at": now2,
+                "last_reinforced_epoch": epoch_of(now2),
+                "merged_from": merged,
+                "updated_at": now2,
+                "updated_epoch": epoch_of(now2),
+            }
+            dumped = SynthesizedConcept.model_validate(data).model_dump(mode="json")
+            keys = (
+                "reinforcement_count",
+                "last_reinforced_at",
+                "last_reinforced_epoch",
+                "merged_from",
+                "updated_at",
+                "updated_epoch",
+            )
+            return MutationPlan(changes={k: dumped[k] for k in keys})
+
+        published = await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            point_id=_point_id(object_id),
+            plan=plan,
         )
-        updated = SynthesizedConcept.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated
+        return SynthesizedConcept.model_validate(published)
 
     async def mark_accessed(self, *, namespace: Namespace, object_id: KSUID) -> SynthesizedConcept:
         """Bump ``access_count`` + ``last_accessed_at`` only.
@@ -357,21 +382,14 @@ class ConceptPlane:
         current = await self.get(namespace=namespace, object_id=object_id)
         if current is None:
             raise LookupError(f"concept {object_id!r} not found in namespace {namespace!r}")
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            access_count=current.access_count + 1,
-            last_accessed_at=now,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
+        # RET-008 (#502): route the access_count bump through the shared fenced lease so it never
+        # races a concurrent leased increment (or resets one). The lease owns access_count +
+        # last_accessed_at; re-read to return the post-bump row.
+        await lease_increment_access(
+            self._client, self._collection, {(str(namespace), str(object_id))}
         )
-        updated = SynthesizedConcept.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated
+        refreshed = await self.get(namespace=namespace, object_id=object_id)
+        return refreshed if refreshed is not None else current
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -387,12 +405,9 @@ class ConceptPlane:
         reason: str,
         promoted_to: KSUID | None = None,
         promoted_at: datetime | None = None,
-    ) -> tuple[SynthesizedConcept, LifecycleEvent]:
-        """Mutate ``state`` and emit a :class:`LifecycleEvent`.
-
-        Raises :class:`LookupError` when the object doesn't exist in the
-        given namespace. The :class:`LifecycleEvent` validator raises
-        :class:`ValueError` for transitions outside the concept table.
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> Result[TransitionResult | TransitionPending, TransitionError]:
+        """Delegate the namespace-scoped transition and atomic promotion receipt.
 
         - Transitions to ``"promoted"`` require both ``promoted_to`` and
           ``promoted_at`` (the type model also enforces this on the
@@ -403,42 +418,47 @@ class ConceptPlane:
         """
         if to_state == "promoted":
             if promoted_to is None or promoted_at is None:
-                raise ValueError("transition to 'promoted' requires promoted_to and promoted_at")
+                return Err(
+                    error=TransitionError(
+                        code="invariant_violation",
+                        message="transition to 'promoted' requires promoted_to and promoted_at",
+                        to_state=to_state,
+                    )
+                )
         elif promoted_to is not None or promoted_at is not None:
-            raise ValueError(
-                f"promoted_to/promoted_at may only be set when transitioning to "
-                f"'promoted'; got to_state={to_state!r}"
+            return Err(
+                error=TransitionError(
+                    code="invariant_violation",
+                    message=(
+                        "promoted_to/promoted_at may only be set when transitioning to "
+                        f"'promoted'; got to_state={to_state!r}"
+                    ),
+                    to_state=to_state,
+                )
             )
 
         current = await self.get(namespace=namespace, object_id=object_id)
         if current is None:
-            raise LookupError(f"concept {object_id!r} not found in namespace {namespace!r}")
-        event = LifecycleEvent(
+            return Err(
+                error=TransitionError(
+                    code="not_found",
+                    message=f"concept {object_id!r} not found in namespace {namespace!r}",
+                    to_state=to_state,
+                )
+            )
+        return transition(
+            self._client,
+            coordinator=coordinator,
             object_id=object_id,
-            object_type="concept",
-            namespace=namespace,
-            from_state=current.state,
-            to_state=to_state,
+            target_state=to_state,
             actor=actor,
             reason=reason,
+            expected_version=current.version,
+            lineage_updates=LineageUpdates(
+                promoted_to=promoted_to,
+                promoted_at=promoted_at,
+            ),
         )
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            state=to_state,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        if to_state == "promoted":
-            data.update(promoted_to=promoted_to, promoted_at=promoted_at)
-        updated = SynthesizedConcept.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated, event
 
     async def record_promotion_rejection(
         self,
@@ -467,23 +487,46 @@ class ConceptPlane:
                 "carries promoted_to/promoted_at — the two outcomes are "
                 "mutually exclusive"
             )
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            promotion_rejected_at=now,
-            promotion_rejected_reason=reason,
-            promotion_attempts=current.promotion_attempts + 1,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
+
+        # Publish through the attributable mutation lease (DATA-001 #530): NARROW change-set fenced on
+        # version, promotion_attempts incremented against the FRESH row. The mutual-exclusivity guard
+        # is re-checked on the current row so a concurrent promotion cannot slip a rejection past it.
+        def plan(cur: dict[str, Any]) -> MutationPlan:
+            fresh = SynthesizedConcept.model_validate(cur)
+            if _has_promoted_fields(fresh):
+                raise ValueError(
+                    "promotion_rejected_* cannot be set on a row that already "
+                    "carries promoted_to/promoted_at — the two outcomes are "
+                    "mutually exclusive"
+                )
+            now2 = utc_now()
+            data = {
+                **cur,
+                "promotion_rejected_at": now2,
+                "promotion_rejected_reason": reason,
+                "promotion_attempts": int(cur.get("promotion_attempts", 0)) + 1,
+                "updated_at": now2,
+                "updated_epoch": epoch_of(now2),
+            }
+            dumped = SynthesizedConcept.model_validate(data).model_dump(mode="json")
+            keys = (
+                "promotion_rejected_at",
+                "promotion_rejected_reason",
+                "promotion_attempts",
+                "updated_at",
+                "updated_epoch",
+            )
+            return MutationPlan(changes={k: dumped[k] for k in keys})
+
+        published = await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            point_id=_point_id(object_id),
+            plan=plan,
         )
-        updated = SynthesizedConcept.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated
+        return SynthesizedConcept.model_validate(published)
 
     # ------------------------------------------------------------------
     # Helpers

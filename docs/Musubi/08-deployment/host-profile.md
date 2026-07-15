@@ -47,7 +47,7 @@ The 10 GB VRAM is the constraint that shapes everything in [[08-deployment/gpu-i
   qdrant/                   # Qdrant storage
   vault/                    # vault (bind-mount into Core container)
   artifact-blobs/           # content-addressed artifact blobs
-  lifecycle-work.sqlite     # write-log, schedule locks, cursors
+  lifecycle/                # lifecycle DB work.sqlite + write-log, schedule locks, cursors
 /var/log/musubi/            # Core logs rotated daily
 /opt/musubi/                # source clones + binaries
 /mnt/snapshots/             # snapshot target (SATA SSD)

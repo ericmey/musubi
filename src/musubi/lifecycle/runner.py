@@ -35,16 +35,68 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from collections.abc import Iterable, Mapping
+import time
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from musubi.lifecycle.scheduler import Job
+from musubi.observability.registry import default_registry
+
+_REG = default_registry()
+_DURATION = _REG.histogram(
+    "musubi_lifecycle_job_duration_seconds",
+    "lifecycle worker tick duration",
+    buckets=(0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0),
+    labelnames=("job",),
+)
+_ERRORS = _REG.counter(
+    "musubi_lifecycle_job_errors_total",
+    "lifecycle worker tick errors",
+    labelnames=("job",),
+)
 
 log = logging.getLogger(__name__)
 
 _DAYS_OF_WEEK = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+_COORDINATOR_READY = default_registry().gauge(
+    "musubi_lifecycle_coordinator_ready",
+    "1 when lifecycle shared storage is open and reconciliation can safely participate.",
+)
+
+
+class _ReconcileDriver:
+    """Worker-only reconciliation, cleanup, and bounded readiness state."""
+
+    def __init__(
+        self,
+        *,
+        reconcile: Callable[[], object],
+        ready: Callable[[], bool],
+        cleanup: Callable[[float], object],
+        max_failures: int,
+    ) -> None:
+        self._reconcile = reconcile
+        self._ready = ready
+        self._cleanup = cleanup
+        self._max_failures = max_failures
+        self._failures = 0
+        _COORDINATOR_READY.set(0)
+
+    def run(self) -> None:
+        try:
+            if not self._ready():
+                raise RuntimeError("lifecycle coordinator is not ready to reconcile")
+            self._reconcile()
+            self._cleanup(datetime.now(UTC).timestamp())
+        except Exception:
+            self._failures += 1
+            if self._failures >= self._max_failures:
+                _COORDINATOR_READY.set(0)
+            raise
+        self._failures = 0
+        _COORDINATOR_READY.set(1)
 
 
 def _cron_matches(trigger_kwargs: Mapping[str, Any], now: datetime) -> bool:
@@ -157,7 +209,7 @@ class LifecycleRunner:
             self.tick_seconds,
         )
         while not self._stopping.is_set():
-            now = _utc_now().replace(second=0, microsecond=0)
+            now = _utc_now()
             await self._tick(now)
             try:
                 await asyncio.wait_for(self._stopping.wait(), timeout=self.tick_seconds)
@@ -182,9 +234,10 @@ class LifecycleRunner:
     def _should_fire(self, job: Job, now: datetime) -> bool:
         """True if ``job`` should fire at ``now`` and hasn't already fired this minute."""
         last = self._last_fired.get(job.name)
-        if last == now:
-            return False  # dedupe: already fired at this minute
         if job.trigger_kind == "cron":
+            minute = now.replace(second=0, microsecond=0)
+            if last is not None and last.replace(second=0, microsecond=0) == minute:
+                return False
             return _cron_matches(job.trigger_kwargs, now)
         if job.trigger_kind == "interval":
             return _interval_due(job.trigger_kwargs, last, now)
@@ -206,14 +259,18 @@ class LifecycleRunner:
         with tracer.start_as_current_span(f"lifecycle.job.{job.name}") as span:
             span.set_attribute("lifecycle.job.name", job.name)
             span.set_attribute("lifecycle.job.trigger_kind", job.trigger_kind)
+            start = time.monotonic()
             try:
                 await asyncio.to_thread(job.func)
             except Exception as exc:
+                _ERRORS.labels(job=job.name).inc()
                 log.exception("lifecycle-job-crashed name=%s", job.name)
                 if span.is_recording():
                     span.set_attribute("lifecycle.job.crashed", True)
                     span.record_exception(exc)
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
+            finally:
+                _DURATION.labels(job=job.name).observe(time.monotonic() - start)
 
 
 def _utc_now() -> datetime:
@@ -229,6 +286,7 @@ def build_lifecycle_jobs(
     promotion_jobs: Iterable[Job] | None = None,
     reflection_jobs: Iterable[Job] | None = None,
     vault_reconcile_jobs: Iterable[Job] | None = None,
+    reconcile_jobs: Iterable[Job] | None = None,
 ) -> list[Job]:
     """Compose the full job list the production worker drives.
 
@@ -252,6 +310,7 @@ def build_lifecycle_jobs(
         promotion_jobs,
         reflection_jobs,
         vault_reconcile_jobs,
+        reconcile_jobs,
     ):
         if group is not None:
             real_jobs.extend(group)
@@ -294,6 +353,7 @@ async def _main_async() -> None:
     from musubi.config import get_settings
     from musubi.embedding.chunked import ChunkedEmbedder
     from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
     from musubi.lifecycle.demotion import DemotionDeps, build_demotion_jobs
     from musubi.lifecycle.emitters import (
         ReflectionThoughtsEmitter,
@@ -362,9 +422,39 @@ async def _main_async() -> None:
         api_key=settings.qdrant_api_key.get_secret_value(),
         https=not settings.musubi_allow_plaintext,
     )
-    sink = LifecycleEventSink(db_path=settings.lifecycle_sqlite_path)
-    cursor = MaturationCursor(db_path=settings.lifecycle_sqlite_path)
-    synth_cursor = SynthesisCursor(db_path=settings.lifecycle_sqlite_path)
+    coordinator = LifecycleTransitionCoordinator(
+        client=qdrant,
+        db_path=settings.lifecycle_sqlite_path,
+        pending_cap=settings.lifecycle_pending_cap,
+        lease_ttl=settings.lifecycle_lease_ttl_s,
+        backoff_base_s=settings.lifecycle_backoff_base_s,
+        backoff_max_s=settings.lifecycle_backoff_max_s,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    reconcile_driver = _ReconcileDriver(
+        reconcile=coordinator.reconcile_once,
+        ready=coordinator.readiness_check,
+        cleanup=lambda now_epoch: coordinator.cleanup_terminal(
+            cutoff_epoch=now_epoch - settings.lifecycle_cleanup_retention_s,
+            batch_limit=settings.lifecycle_cleanup_batch,
+        ),
+        max_failures=settings.lifecycle_readiness_max_reconcile_failures,
+    )
+    # A synchronous boot pass proves the shared schema and reconciler before
+    # readiness can rise. The interval job below is the only ongoing reconciler.
+    reconcile_driver.run()
+    sink = LifecycleEventSink(
+        db_path=settings.lifecycle_sqlite_path,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    cursor = MaturationCursor(
+        db_path=settings.lifecycle_sqlite_path,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    synth_cursor = SynthesisCursor(
+        db_path=settings.lifecycle_sqlite_path,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
     # One HttpxOllamaClient satisfies both the maturation + synthesis
     # Protocols — see src/musubi/llm/ollama.py.
     ollama = default_ollama_client()
@@ -396,16 +486,25 @@ async def _main_async() -> None:
     mat_jobs = build_maturation_jobs(
         client=qdrant,
         sink=sink,
+        coordinator=coordinator,
         ollama=ollama,
         cursor=cursor,
         lock_dir=lock_dir,
+        embedder=embedder,
     )
+    from musubi.planes.artifact.indexer import ArtifactIndexer
     from musubi.planes.artifact.plane import ArtifactPlane
 
     artifact_plane = ArtifactPlane(client=qdrant, embedder=embedder)
+    # C4/ART-001: register the committed-generation indexer as the coordinator's 'artifact_index'
+    # handler so the reconcile job drives upload-enqueued indexing intents to a committed head.
+    ArtifactIndexer(
+        client=qdrant, embedder=embedder, blob_root=settings.artifact_blob_path
+    ).register(coordinator)
     dem_jobs = build_demotion_jobs(
         deps=DemotionDeps(
             qdrant=qdrant,
+            coordinator=coordinator,
             episodic_plane=episodic_plane,
             concept_plane=concept_plane,
             events=sink,
@@ -442,6 +541,7 @@ async def _main_async() -> None:
     prom_jobs = build_promotion_jobs(
         deps=PromotionDeps(
             qdrant=qdrant,
+            coordinator=coordinator,
             concept_plane=concept_plane,
             curated_plane=curated_plane,
             events=sink,
@@ -488,6 +588,7 @@ async def _main_async() -> None:
         vault_root=Path(settings.vault_path),
         curated_plane=curated_plane,
         lock_dir=lock_dir,
+        coordinator=coordinator,
     )
     jobs = build_lifecycle_jobs(
         maturation_jobs=mat_jobs,
@@ -496,9 +597,21 @@ async def _main_async() -> None:
         promotion_jobs=prom_jobs,
         reflection_jobs=ref_jobs,
         vault_reconcile_jobs=vault_reconcile_jobs,
+        reconcile_jobs=[
+            Job(
+                name="lifecycle_reconcile",
+                trigger_kind="interval",
+                trigger_kwargs={"seconds": settings.lifecycle_reconcile_interval_s},
+                func=reconcile_driver.run,
+                grace_time_s=settings.lifecycle_reconcile_interval_s,
+            )
+        ],
     )
 
-    runner = LifecycleRunner(jobs=jobs)
+    runner = LifecycleRunner(
+        jobs=jobs,
+        tick_seconds=min(60, settings.lifecycle_reconcile_interval_s),
+    )
     runner.install_signal_handlers()
     await runner.run()
 

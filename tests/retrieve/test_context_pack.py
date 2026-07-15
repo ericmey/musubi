@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+from pydantic import ValidationError
+
 from musubi.retrieve.context_pack import ContextCandidate, ContextPackQuery, build_context_pack
 
 
@@ -208,3 +211,36 @@ def test_durable_rule_beats_shallow_overlap_episode() -> None:
     first = pack.groups[0].items[0]
     assert first.object_id == "durable"
     assert first.why_surfaced.startswith("durable boundary")
+
+
+def test_recent_lane_uses_full_capacity_when_ranked_lane_is_empty() -> None:
+    candidates = [
+        ContextCandidate(
+            object_id=f"recent-{index}",
+            lane="recent",
+            namespace="yua/command-chair/episodic",
+            plane="episodic",
+            content=f"recent context item {index}",
+            state="provisional",
+            created_epoch=2000.0 + index,
+        )
+        for index in range(4)
+    ]
+
+    pack = build_context_pack(
+        candidates,
+        ContextPackQuery(
+            query_text="context",
+            max_items=4,
+            max_chars=1200,
+            recent_reserve=1,
+        ),
+    )
+
+    assert len([item for group in pack.groups for item in group.items]) == 4
+
+
+@pytest.mark.parametrize("recent_reserve", [-1, 51])
+def test_recent_reserve_is_bounded(recent_reserve: int) -> None:
+    with pytest.raises(ValidationError):
+        ContextPackQuery(recent_reserve=recent_reserve)

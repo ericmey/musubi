@@ -119,7 +119,7 @@ Implemented all three owned modules:
 
 - `src/musubi/lifecycle/transitions.py` — canonical `transition()`. Concurrent-
   modification check (`expected_version`) runs before the legality gate so the
-  last-writer-wins warning fires on stale version per spec bullet 13. Cycle
+  hard-fence `version_fence_violation` failure fires on stale version per LIFE-010. Cycle
   walk bounded at 64 hops.
 - `src/musubi/lifecycle/events.py` — `LifecycleEventSink`, thread-safe,
   batched sqlite persistence, <=5s or 100-event flush, context-manager +

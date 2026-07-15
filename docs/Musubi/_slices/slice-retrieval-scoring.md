@@ -26,7 +26,7 @@ blocks: ["[[_slices/slice-retrieval-fast]]", "[[_slices/slice-retrieval-deep]]",
 ## Owned paths (you MAY write here)
 
 - `musubi/retrieve/scoring.py`
-- `tests/retrieve/test_scoring.py`
+*(Note: `tests/retrieve/test_scoring.py` ownership was transferred to [[_slices/slice-ret004-evals]] / Issue 430 on 2026-07-13).*
 
 ## Forbidden paths (you MUST NOT write here — open a cross-slice ticket if needed)
 

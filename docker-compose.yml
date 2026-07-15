@@ -120,7 +120,7 @@ services:
     volumes:
       - /var/lib/musubi/vault:/var/lib/musubi/vault
       - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
-      - /var/lib/musubi/lifecycle-work.sqlite:/var/lib/musubi/lifecycle-work.sqlite
+      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
       - /var/log/musubi:/var/log/musubi
     networks: [musubi-net]
     ports:
@@ -134,6 +134,35 @@ services:
     healthcheck:
       <<: *health-defaults
       test: ["CMD", "curl", "-f", "http://localhost:8100/v1/ops/health"]
+      start_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # Lifecycle worker. Shares the core image — same code, different entrypoint.
+  # Drives the lifecycle job schedule and exposes /metrics on :8101 for the
+  # Prometheus scrape (see docs/Musubi/06-ingestion/lifecycle-engine.md
+  # § Job registry). Shares the core+worker DIR unit /var/lib/musubi/lifecycle
+  # (parity with the ansible template).
+  lifecycle-worker:
+    image: ghcr.io/ericmey/musubi-core:v1.0.0@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    env_file:
+      - path: /etc/musubi/.env.production
+        required: false
+    command: ["python", "-m", "musubi.lifecycle.runner"]
+    volumes:
+      - /var/lib/musubi/vault:/var/lib/musubi/vault
+      - /var/lib/musubi/artifact-blobs:/var/lib/musubi/artifact-blobs
+      - /var/lib/musubi/lifecycle:/var/lib/musubi/lifecycle
+      - /var/log/musubi:/var/log/musubi
+    networks: [musubi-net]
+    expose:
+      - "8101"
+    depends_on:
+      qdrant: {condition: service_healthy}
+      ollama: {condition: service_healthy}
+    healthcheck:
+      <<: *health-defaults
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8101/metrics', timeout=2).status == 200 else 1)"]
       start_period: 30s
     restart: unless-stopped
     logging: *default-logging

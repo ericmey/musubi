@@ -1,0 +1,8 @@
+owner: yua
+branch: slice/c6-durable-on-accept-main
+worktree: /Users/ericmey/Projects/musubi-worktrees/yua-c6-main-promotion
+claimed: 2026-07-14
+scope: C6 lifecycle audit-event-loss Option-A source successor plus its accepted red contract.
+authorization: Yua (C6 implementation lane 2026-07-14) — synchronous durable-on-accept only.
+second-reader: Tama, with Shiori available for an additional independent read.
+forbidden: C6b coordinator/store changes; RET/ART source; host/deploy state; merge before C6b reviewable.

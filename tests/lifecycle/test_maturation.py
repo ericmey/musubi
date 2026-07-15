@@ -45,6 +45,7 @@ with warnings.catch_warnings():
 
 from musubi.embedding import FakeEmbedder
 from musubi.lifecycle import LifecycleEventSink, file_lock
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.maturation import (
     DEFAULT_TAG_ALIASES,
     MaturationConfig,
@@ -57,7 +58,6 @@ from musubi.lifecycle.maturation import (
     normalize_tags,
     provisional_ttl_sweep,
 )
-from musubi.observability import default_registry, render_text_format
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
 from musubi.types.episodic import EpisodicMemory
@@ -101,6 +101,10 @@ def sink(tmp_path: Path) -> Iterator[LifecycleEventSink]:
 @pytest.fixture
 def cursor(tmp_path: Path) -> MaturationCursor:
     return MaturationCursor(db_path=tmp_path / "cursor.db")
+
+
+def _coordinator(qdrant: QdrantClient, sink: LifecycleEventSink) -> LifecycleTransitionCoordinator:
+    return LifecycleTransitionCoordinator(client=qdrant, db_path=sink._db_path)
 
 
 # ---------------------------------------------------------------------------
@@ -211,15 +215,6 @@ def _config(**overrides: object) -> MaturationConfig:
     return MaturationConfig(**base)  # type: ignore[arg-type]
 
 
-def _duration_count(job: str) -> int:
-    text = render_text_format(default_registry())
-    prefix = f'musubi_lifecycle_job_duration_seconds_count{{job="{job}"}} '
-    for line in text.splitlines():
-        if line.startswith(prefix):
-            return int(line.removeprefix(prefix))
-    return 0
-
-
 def _read_state(plane: EpisodicPlane, ns: str, object_id: str) -> str | None:
     mem = asyncio.get_event_loop().run_until_complete(plane.get(namespace=ns, object_id=object_id))
     return mem.state if mem else None
@@ -249,12 +244,14 @@ async def test_selects_only_provisional_older_than_min_age(
         to_state="matured",
         actor="test",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
 
     report = await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
-        ollama=FakeOllama(),
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(min_age_sec=3600),
     )
@@ -278,7 +275,8 @@ async def test_batch_size_limits_selection(
     report = await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
-        ollama=FakeOllama(),
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(batch_size=3),
     )
@@ -300,7 +298,8 @@ async def test_cursor_resumes_across_runs(
     first = await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
-        ollama=FakeOllama(),
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(batch_size=2),
     )
@@ -313,7 +312,8 @@ async def test_cursor_resumes_across_runs(
     second = await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
-        ollama=FakeOllama(),
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor2,
         config=_config(batch_size=10),
     )
@@ -339,7 +339,12 @@ async def test_importance_rescored_via_llm(
     seeded = await _seed_provisional(plane, ns, content="rescore-me")
     ollama = FakeOllama(importance=9)
     await episodic_maturation_sweep(
-        client=qdrant, sink=sink, ollama=ollama, cursor=cursor, config=_config()
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=ollama,
+        cursor=cursor,
+        config=_config(),
     )
     refreshed = await plane.get(namespace=ns, object_id=seeded.object_id)
     assert refreshed is not None
@@ -361,6 +366,7 @@ async def test_importance_fallback_on_ollama_unavailable(
     await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         ollama=FakeOllama(available=False),
         cursor=cursor,
         config=_config(),
@@ -413,7 +419,12 @@ async def test_topics_inferred_from_llm(
     seeded = await _seed_provisional(plane, ns, content="gpu-setup-content")
     ollama = FakeOllama(topic_map={"gpu-setup-content": ["infrastructure/gpu", "projects/musubi"]})
     await episodic_maturation_sweep(
-        client=qdrant, sink=sink, ollama=ollama, cursor=cursor, config=_config()
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=ollama,
+        cursor=cursor,
+        config=_config(),
     )
     refreshed = await plane.get(namespace=ns, object_id=seeded.object_id)
     assert refreshed is not None
@@ -434,6 +445,7 @@ async def test_topics_empty_on_unknown(
     await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         ollama=FakeOllama(topic_map={}),
         cursor=cursor,
         config=_config(),
@@ -471,11 +483,42 @@ async def test_supersession_sets_both_sides_of_link(
     sink: LifecycleEventSink,
     cursor: MaturationCursor,
 ) -> None:
-    """Bullet 13 — when supersession is inferred, the new row's
-    ``supersedes`` and the old row's ``superseded_by`` both get set."""
-    # Seed the original "matured" row with content the new one can hint at.
+    """LIFE-009 migration: the seam requires a controlled embedder
+    (cosine >= 0.88 on post-hint content) + topic compatibility (at
+    least one shared linked_to_topics entry). The original test
+    depended on the OLD substring-based heuristic. This test now
+    uses a controlled embedder stub with HIGH cosine and sets
+    linked_to_topics on both rows to share the topic evidence the
+    seam requires."""
+    from qdrant_client import models as qmodels
+
+    from musubi.embedding.base import Embedder
+    from musubi.planes.episodic.plane import episodic_point_id
+    from musubi.store.specs import DENSE_SIZE
+
+    class _CtrlEmbedder(Embedder):
+        def __init__(self, vec: list[float]) -> None:
+            self._v = vec
+
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            return [self._v for _ in texts]
+
+        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+            return [{} for _ in texts]
+
+        async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+            return [0.0 for _ in candidates]
+
+    vec = [1.0, 0.0] + [0.0] * (DENSE_SIZE - 2)
+    plane._embedder = _CtrlEmbedder(vec)
+
+    # Seed the original matured row with content the new one can hint at.
     original = await plane.create(
-        EpisodicMemory(namespace=ns, content="GPU pin: nvidia driver 470")
+        EpisodicMemory(
+            namespace=ns,
+            content="GPU pin: nvidia driver 470",
+            topics=["hardware/gpu"],
+        )
     )
     await plane.transition(
         namespace=ns,
@@ -483,19 +526,35 @@ async def test_supersession_sets_both_sides_of_link(
         to_state="matured",
         actor="test",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    # Set linked_to_topics on the original (the seam reads it from the payload).
+    plane._client.set_payload(
+        collection_name="musubi_episodic",
+        payload={"linked_to_topics": ["hardware/gpu"]},
+        points=qmodels.PointIdsList(points=[episodic_point_id(original.object_id)]),
     )
     # New provisional row hints at supersession.
     new_row = await _seed_provisional(
         plane,
         ns,
-        content="Update: GPU pin: nvidia driver 470",
+        content="Update: GPU pin: nvidia driver 575",
+        tags=["hardware/gpu"],
+    )
+    # Set linked_to_topics on the new row too.
+    plane._client.set_payload(
+        collection_name="musubi_episodic",
+        payload={"linked_to_topics": ["hardware/gpu"]},
+        points=qmodels.PointIdsList(points=[episodic_point_id(new_row.object_id)]),
     )
     await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
-        ollama=FakeOllama(),
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(),
+        embedder=plane._embedder,
     )
     new_after = await plane.get(namespace=ns, object_id=new_row.object_id)
     old_after = await plane.get(namespace=ns, object_id=original.object_id)
@@ -520,7 +579,12 @@ async def test_state_transitions_to_matured(
     """Bullet 14 — eligible provisional rows reach ``state = "matured"``."""
     seeded = await _seed_provisional(plane, ns, content="state-check")
     await episodic_maturation_sweep(
-        client=qdrant, sink=sink, ollama=FakeOllama(), cursor=cursor, config=_config()
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
+        cursor=cursor,
+        config=_config(),
     )
     refreshed = await plane.get(namespace=ns, object_id=seeded.object_id)
     assert refreshed is not None
@@ -540,7 +604,12 @@ async def test_transition_uses_typed_function(
     Direct ``client.set_payload`` would not produce a sink entry."""
     seeded = await _seed_provisional(plane, ns, content="typed-transition")
     await episodic_maturation_sweep(
-        client=qdrant, sink=sink, ollama=FakeOllama(), cursor=cursor, config=_config()
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
+        cursor=cursor,
+        config=_config(),
     )
     sink.flush()
     events = sink.read_all()
@@ -563,7 +632,12 @@ async def test_lifecycle_event_emitted(
     transitioned row."""
     seeded = await _seed_provisional(plane, ns, content="ledger-check")
     await episodic_maturation_sweep(
-        client=qdrant, sink=sink, ollama=FakeOllama(), cursor=cursor, config=_config()
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
+        cursor=cursor,
+        config=_config(),
     )
     sink.flush()
     events = sink.read_all()
@@ -591,6 +665,7 @@ async def test_ollama_outage_still_matures_without_enrichment(
     await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         ollama=FakeOllama(available=False),
         cursor=cursor,
         config=_config(),
@@ -621,6 +696,7 @@ async def test_provisional_older_than_7d_archived(
     report = await provisional_ttl_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         config=_config(provisional_ttl_sec=7 * 86400),
     )
     assert report.transitioned == 1
@@ -642,6 +718,7 @@ async def test_archival_emits_lifecycle_event(
     await provisional_ttl_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         config=_config(provisional_ttl_sec=7 * 86400),
     )
     sink.flush()
@@ -736,7 +813,12 @@ async def test_sweep_is_no_op_when_no_eligible_rows(
 ) -> None:
     """An empty plane is a clean no-op — no ledger entries, no failures."""
     report = await episodic_maturation_sweep(
-        client=qdrant, sink=sink, ollama=FakeOllama(), cursor=cursor, config=_config()
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
+        cursor=cursor,
+        config=_config(),
     )
     assert report.selected == 0
     assert report.transitioned == 0
@@ -752,6 +834,7 @@ async def test_ttl_sweep_is_no_op_when_nothing_aged(
     report = await provisional_ttl_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         config=_config(provisional_ttl_sec=7 * 86400),
     )
     assert report.transitioned == 0
@@ -783,6 +866,7 @@ async def test_episodic_demotion_sweep_demotes_inactive_matured_rows(
         to_state="matured",
         actor="seed",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
     backdate = datetime.now(UTC) - timedelta(days=40)
     qdrant.set_payload(
@@ -806,11 +890,13 @@ async def test_episodic_demotion_sweep_demotes_inactive_matured_rows(
         to_state="matured",
         actor="seed",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
 
     report = await episodic_demotion_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         config=_config(demotion_inactivity_sec=30 * 86400),
     )
     assert report.transitioned == 1
@@ -825,7 +911,12 @@ async def test_episodic_demotion_sweep_no_op_when_empty(
 ) -> None:
     from musubi.lifecycle.maturation import episodic_demotion_sweep
 
-    report = await episodic_demotion_sweep(client=qdrant, sink=sink, config=_config())
+    report = await episodic_demotion_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        config=_config(),
+    )
     assert report.selected == 0
 
 
@@ -878,6 +969,7 @@ async def test_concept_maturation_sweep_promotes_eligible(
     report = await concept_maturation_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         config=_config(concept_min_age_sec=24 * 3600, concept_reinforcement_threshold=3),
     )
     assert report.transitioned == 1
@@ -917,6 +1009,7 @@ async def test_concept_demotion_sweep_demotes_inactive(
         to_state="matured",
         actor="seed",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
     backdate = datetime.now(UTC) - timedelta(days=40)
     qdrant.set_payload(
@@ -936,6 +1029,7 @@ async def test_concept_demotion_sweep_demotes_inactive(
     report = await concept_demotion_sweep(
         client=qdrant,
         sink=sink,
+        coordinator=_coordinator(qdrant, sink),
         config=_config(demotion_inactivity_sec=30 * 86400),
     )
     assert report.transitioned == 1
@@ -948,18 +1042,13 @@ async def test_concept_maturation_sweep_no_op_when_empty(
 ) -> None:
     from musubi.lifecycle.maturation import concept_maturation_sweep
 
-    report = await concept_maturation_sweep(client=qdrant, sink=sink, config=_config())
+    report = await concept_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        config=_config(),
+    )
     assert report.selected == 0
-
-
-async def test_maturation_worker_observes_lifecycle_job_duration(
-    qdrant: QdrantClient, sink: LifecycleEventSink
-) -> None:
-    from musubi.lifecycle.maturation import concept_maturation_sweep
-
-    before = _duration_count("maturation")
-    await concept_maturation_sweep(client=qdrant, sink=sink, config=_config())
-    assert _duration_count("maturation") == before + 1
 
 
 async def test_concept_demotion_sweep_no_op_when_empty(
@@ -967,7 +1056,12 @@ async def test_concept_demotion_sweep_no_op_when_empty(
 ) -> None:
     from musubi.lifecycle.maturation import concept_demotion_sweep
 
-    report = await concept_demotion_sweep(client=qdrant, sink=sink, config=_config())
+    report = await concept_demotion_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        config=_config(),
+    )
     assert report.selected == 0
 
 
@@ -988,14 +1082,16 @@ def test_build_maturation_jobs_registers_documented_names(
     scheduler's default-job registry. Demotion moved to the dedicated
     `demotion.py` module after slice-lifecycle-demotion-builder landed;
     maturation retains the three sweeps that still live here."""
-    from musubi.lifecycle.maturation import build_maturation_jobs
+    from musubi.lifecycle.maturation import _NoopEmbedder, build_maturation_jobs
 
     jobs = build_maturation_jobs(
         client=qdrant,
         sink=sink,
-        ollama=FakeOllama(),
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         lock_dir=tmp_path / "locks",
+        embedder=_NoopEmbedder(),
         config=_config(),
     )
     names = {j.name for j in jobs}
@@ -1018,14 +1114,16 @@ def test_build_maturation_jobs_runner_skips_when_lock_held(
     """Wrapped jobs acquire the per-job file lock before running. We
     verify by holding the lock externally and confirming the job's
     runner returns cleanly without doing work."""
-    from musubi.lifecycle.maturation import build_maturation_jobs
+    from musubi.lifecycle.maturation import _NoopEmbedder, build_maturation_jobs
 
     jobs = build_maturation_jobs(
         client=qdrant,
         sink=sink,
-        ollama=FakeOllama(),
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         lock_dir=tmp_path / "locks",
+        embedder=_NoopEmbedder(),
         config=_config(),
     )
     by_name = {j.name: j for j in jobs}
@@ -1057,7 +1155,8 @@ async def test_supersession_no_predecessor_match(
     await episodic_maturation_sweep(
         client=qdrant,
         sink=sink,
-        ollama=FakeOllama(),
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"Update: GPU pin: nvidia driver 575": ["hardware/gpu"]}),
         cursor=cursor,
         config=_config(),
     )

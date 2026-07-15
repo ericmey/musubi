@@ -181,6 +181,23 @@ def test_parse_env_file_handles_inline_equals(tmp_path: Path) -> None:
     assert harness._parse_env_file(p) == {"KEY": "base64=value=with=equals"}
 
 
+def test_prepare_runtime_dirs_creates_host_path_preconditions(tmp_path: Path) -> None:
+    """The host uvicorn can open SQLite and write all configured test paths."""
+    env = {
+        "LIFECYCLE_SQLITE_PATH": str(tmp_path / "runtime" / "db" / "lifecycle.sqlite"),
+        "VAULT_PATH": str(tmp_path / "runtime" / "vault"),
+        "ARTIFACT_BLOB_PATH": str(tmp_path / "runtime" / "artifacts"),
+        "LOG_DIR": str(tmp_path / "runtime" / "logs"),
+    }
+
+    harness._prepare_runtime_dirs(env)
+
+    assert (tmp_path / "runtime" / "db").is_dir()
+    assert (tmp_path / "runtime" / "vault").is_dir()
+    assert (tmp_path / "runtime" / "artifacts").is_dir()
+    assert (tmp_path / "runtime" / "logs").is_dir()
+
+
 def test_mint_operator_token_returns_valid_hs256(monkeypatch: pytest.MonkeyPatch) -> None:
     import jwt
 

@@ -266,7 +266,7 @@ def test_dedup_keeps_longer_content(plane: EpisodicPlane, ns: str) -> None:
         existing_dense = (await plane._embedder.embed_dense([first_text]))[0]
         existing_sparse = (await plane._embedder.embed_sparse([first_text]))[0]
         new = EpisodicMemory(namespace=ns, content=second_text)
-        return plane._reinforce(
+        return await plane._reinforce(
             existing=existing,
             existing_dense=existing_dense,
             existing_sparse=existing_sparse,
@@ -296,7 +296,7 @@ def test_reinforce_replace_strategy_preserves_new_content(plane: EpisodicPlane, 
         existing_dense = (await plane._embedder.embed_dense([long_content]))[0]
         existing_sparse = (await plane._embedder.embed_sparse([long_content]))[0]
         new = EpisodicMemory(namespace=ns, content=short_content)
-        return plane._reinforce(
+        return await plane._reinforce(
             existing=existing,
             existing_dense=existing_dense,
             existing_sparse=existing_sparse,

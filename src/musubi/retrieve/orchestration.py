@@ -18,6 +18,7 @@ from musubi.observability.retrieval_metrics import (
     RETRIEVAL_ERRORS_TOTAL,
     RETRIEVAL_WARNINGS_TOTAL,
 )
+from musubi.retrieve.accounting import account_delivered
 from musubi.retrieve.blended import (
     BlendedRetrievalQuery,
     run_blended_retrieve,
@@ -30,7 +31,9 @@ from musubi.retrieve.deep import (
     RetrievalQuery as DeepRetrievalQuery,
 )
 from musubi.retrieve.fast import run_fast_retrieve
+from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
 from musubi.retrieve.recent import _provenance_score_for, run_recent_retrieve
+from musubi.retrieve.scoring import calibrate_global_relevance
 from musubi.retrieve.warnings import (
     RetrievalWarning,
     dedupe,
@@ -125,6 +128,11 @@ class RetrievalResult(BaseModel):
     plane: str
     title: str | None = None
     snippet: str
+    # DQ-001: silent-truncation fix. Sliced snippets are tagged with the
+    # original (untruncated) character length and a truncated flag so
+    # callers can detect the cut and fetch the full body via ``object_id``.
+    content_truncated: bool = False
+    content_length: int | None = None
     score: float
     score_components: dict[str, float]
     lineage: dict[str, Any]
@@ -141,6 +149,16 @@ class RetrievalResult(BaseModel):
     # Ranked does NOT use this; ranked uses `score_components["provenance"]`
     # which may legitimately be 0.1 from `_LOW_PROVENANCE_STATES`.
     provenance_score: float | None = None
+    # RET-012: the raw relevance inputs that feed the cross-plane seam
+    # (``scoring.calibrate_global_relevance``). Per-leg relevance is
+    # normalised against a per-leg local batch max, so the baked
+    # ``score_components["relevance"]`` and ``score`` are not globally
+    # comparable. The two raw inputs are preserved here so the seam
+    # can re-anchor them against a single working-set global max BEFORE
+    # the ``best_by_id`` dedup. Internal-only — not projected onto wire
+    # models (``RankedResultRow``, ``RecentResultRow``, ``ContextPackItem``).
+    raw_rrf_score: float | None = None
+    raw_rerank_score: float | None = None
 
 
 class RetrievalError(BaseModel):
@@ -220,10 +238,35 @@ async def retrieve(
     query: RetrievalQuery | dict[str, Any],
     llm: DeepRetrievalLLM | None = None,
     now: float | None = None,
+    account_access: bool = True,
 ) -> Result[RetrievalEnvelope, RetrievalError]:
     """Execute the configured retrieval pipeline, then finalize at the shared boundary (telemetry +
-    fail-closed bounded warnings). This is the ONE place RET-007 warnings/errors are counted."""
+    fail-closed bounded warnings). This is the ONE place RET-007 warnings/errors are counted.
+
+    ``account_access`` (default True) accounts access here over the delivered rows — correct for
+    ``/v1/retrieve`` and ``/v1/retrieve/stream``, whose delivered set IS this envelope. Callers
+    that drop rows AFTER retrieval (``/v1/context`` → ``build_context_pack`` trims by
+    max_items/max_chars/filler) pass ``account_access=False`` and account the FINAL surfaced set
+    themselves, so trimmed candidates are never counted.
+    """
     result = await _retrieve_uncounted(client, embedder, reranker, query=query, llm=llm, now=now)
+    # RET-002 (#500): account access ONCE, over exactly the delivered rows — after
+    # fanout/dedup/sort/limit — never on a dropped candidate and independent of lineage
+    # hydration. Covers HTTP and streaming (both call this seam). Accounting runs before
+    # _finalize so telemetry records the actual terminal outcome exactly once.
+    if account_access and isinstance(result, Ok):
+        # Fail-LOUD (access accounting drives lifecycle; it must never silently vanish) but honor
+        # the Result contract: normalize an accounting failure to a typed Err, never a raw raise.
+        try:
+            await account_delivered(client, result.value.results)
+        except Exception as exc:
+            return _finalize(
+                Err(
+                    error=RetrievalError(
+                        kind="internal", detail=f"access accounting failed: {type(exc).__name__}"
+                    )
+                )
+            )
     return _finalize(result)
 
 
@@ -327,11 +370,14 @@ async def _retrieve_uncounted(
             return_exceptions=True,
         )
 
-        # Merge dedup keeps the **highest-scoring** hit per object_id.
-        # First-seen dedup would drop a stronger match purely because
-        # it arrived from a later target in the gather order. Build a
-        # {object_id → best hit} map, then materialise once at the end.
-        best_by_id: dict[str, RetrievalResult] = {}
+        # RET-012: collect every leg's hits into a flat list FIRST, then
+        # run the cross-plane calibration seam on the full working set,
+        # then dedup by object_id. Calibrating after dedup can permanently
+        # discard the better copy using the bad per-leg score — the seam
+        # must see every copy before the dedup chooses. The single-target
+        # fast path above (``len(targets) == 1``) is unchanged; it does
+        # not call the seam and preserves the per-leg result bit-for-bit.
+        all_hits: list[RetrievalResult] = []
         warnings: list[RetrievalWarning] = []
         transient_any = False
         internal_err: RetrievalError | None = None
@@ -359,10 +405,10 @@ async def _retrieve_uncounted(
                 continue
             if isinstance(outcome, Ok):
                 warnings.extend(outcome.value.warnings)
-                for hit in outcome.value.results:
-                    current = best_by_id.get(hit.object_id)
-                    if current is None or hit.score > current.score:
-                        best_by_id[hit.object_id] = hit
+                # Every leg's hit is added to the flat list; the dedup
+                # runs AFTER the seam has re-anchored relevance against
+                # the working-set global max.
+                all_hits.extend(outcome.value.results)
                 continue
             if isinstance(outcome, Exception):
                 logger.warning("cross-plane retrieve per-plane exception: %r", outcome)
@@ -371,10 +417,40 @@ async def _retrieve_uncounted(
 
         if internal_err is not None:
             return Err(error=internal_err)
-        if not best_by_id and transient_any:
+        if not all_hits and transient_any:
             return Err(error=RetrievalError(kind="timeout", detail="all planes timed out"))
 
-        merged = sorted(best_by_id.values(), key=lambda r: r.score, reverse=True)
+        # RET-012: pre-dedup cross-plane global relevance calibration. The
+        # seam re-anchors every candidate's relevance against a single
+        # working-set global max (``max(raw_rrf_score)`` across the flat
+        # list), preserves the cross-encoder sigmoid for reranked legs,
+        # and passes recent / non-ranked rows through unchanged. Single-
+        # target fast path bit-for-bit preserved (seam does not run).
+        calibrated = cast(list[RetrievalResult], calibrate_global_relevance(all_hits))
+
+        # Merge dedup keeps the **highest-recalibrated** hit per
+        # object_id. First-seen dedup would drop a stronger match purely
+        # because it arrived from a later target in the gather order.
+        # Build a {object_id → best hit} map, then materialise once at
+        # the end. The dedup key MUST match the final sort key — the
+        # final sort runs on what survived dedup, so an equal-score
+        # copy of the same ``object_id`` from a different leg would be
+        # invisible to the sort if dedup kept the wrong one.
+        best_by_id: dict[str, RetrievalResult] = {}
+        for hit in calibrated:
+            current = best_by_id.get(hit.object_id)
+            if current is None or _dedup_prefers(hit, current):
+                best_by_id[hit.object_id] = hit
+
+        # RET-012: deterministic final sort key is (-score, object_id,
+        # plane). The object_id primary key gives stable cross-plane
+        # ordering on score ties; the plane secondary key is defense-
+        # in-depth for the (impossible-after-dedup) case where two rows
+        # share both score and object_id.
+        merged = sorted(
+            best_by_id.values(),
+            key=lambda r: (-r.score, r.object_id, r.plane),
+        )
         # Dedupe warnings to distinct (code, plane) ONLY at the final request boundary.
         return Ok(
             value=RetrievalEnvelope(
@@ -578,6 +654,12 @@ async def _run_single(
                         state=raw_state if raw_state is not None else None,
                         importance=raw_importance if raw_importance is not None else None,
                         provenance_score=prov_score,
+                        # DQ-001: silent-truncation fix. Forward the slice
+                        # truncation state and original character length from
+                        # the hit so the router can surface a truthful
+                        # truncation signal in the wire response.
+                        content_truncated=recent_hit.content_truncated,
+                        content_length=recent_hit.content_length,
                     )
                 )
             return Ok(value=RetrievalEnvelope(results=recent_results, warnings=tuple(warnings)))
@@ -630,6 +712,12 @@ async def _run_single(
                         title=hit.payload.get("title"),
                         snippet=hit.snippet,
                         score=hit.score,
+                        # DQ-001: silent-truncation fix. Forward the slice
+                        # truncation state and original character length from
+                        # the hit so the router can surface a truthful
+                        # truncation signal in the wire response.
+                        content_truncated=hit.content_truncated,
+                        content_length=hit.content_length,
                         score_components={
                             "relevance": hit.score_components.relevance,
                             "recency": hit.score_components.recency,
@@ -637,6 +725,12 @@ async def _run_single(
                             "provenance": hit.score_components.provenance,
                             "reinforcement": hit.score_components.reinforce,
                         },
+                        # RET-012: forward the raw relevance inputs from the
+                        # fast leg so the cross-plane seam can re-anchor
+                        # against the working-set global max. Fast mode
+                        # never reranks, so ``raw_rerank_score`` is ``None``.
+                        raw_rrf_score=hit.raw_rrf_score,
+                        raw_rerank_score=hit.raw_rerank_score,
                         lineage=hit.lineage_summary,
                         payload=hit.payload,
                         state=raw_state if raw_state is not None else None,
@@ -667,14 +761,17 @@ def _pack_scored_hits(hits: Sequence[Any], include_payload: bool) -> list[Retrie
         payload = hit.payload
         raw_state = payload.get("state")
         raw_importance = payload.get("importance")
+        _snippet_str, _ct, _cl = _snippet(payload, max_chars=300)
         results.append(
             RetrievalResult(
                 object_id=hit.object_id,
+                score=hit.score,
                 namespace=payload.get("namespace", ""),
                 plane=hit.plane,
                 title=payload.get("title"),
-                snippet=_snippet(payload, max_chars=300),
-                score=hit.score,
+                snippet=_snippet_str,
+                content_truncated=_ct,
+                content_length=_cl,
                 score_components={
                     "relevance": hit.score_components.relevance,
                     "recency": hit.score_components.recency,
@@ -688,14 +785,57 @@ def _pack_scored_hits(hits: Sequence[Any], include_payload: bool) -> list[Retrie
                 payload=payload if include_payload else None,
                 state=raw_state if raw_state is not None else None,
                 importance=raw_importance if raw_importance is not None else None,
+                # RET-012: forward the raw relevance inputs from the
+                # deep / blended leg so the cross-plane seam can
+                # re-anchor against the working-set global max. The
+                # ``getattr`` defaults preserve the seam's passthrough
+                # branch for any older ``ScoredHit`` constructed
+                # without the new fields.
+                raw_rrf_score=getattr(hit, "raw_rrf_score", None),
+                raw_rerank_score=getattr(hit, "raw_rerank_score", None),
             )
         )
     return results
 
 
-def _snippet(payload: dict[str, Any], max_chars: int) -> str:
+def _dedup_prefers(candidate: RetrievalResult, incumbent: RetrievalResult) -> bool:
+    """Return True if ``candidate`` should replace ``incumbent`` in ``best_by_id``.
+
+    Mirrors the final sort key ``(-score, object_id, plane)`` so the
+    dedup is gather-order-independent: the same input set always
+    produces the same chosen copy, regardless of which leg's result
+    arrived first in the gather.
+
+    Both candidates come from the same ``best_by_id[object_id]`` slot,
+    so their ``object_id`` is by construction equal. The tie-break is
+    therefore:
+
+      1. higher ``score`` wins
+      2. on equal ``score``, lexicographically smaller ``plane`` wins
+
+    A strict ``candidate.score > incumbent.score`` check would let the
+    first-seen copy win on equal scores — the gather order would leak
+    into the final result, and the deterministic final sort could not
+    repair it because one copy was already discarded.
+    """
+    if candidate.score != incumbent.score:
+        return candidate.score > incumbent.score
+    return candidate.plane < incumbent.plane
+
+
+def _snippet(payload: dict[str, Any], max_chars: int) -> tuple[str, bool, int]:
+    """Return (snippet, content_truncated, content_length).
+
+    The snippet is at most ``max_chars`` chars. When the original content
+    is longer than the cap, the snippet is truncated and the original
+    character length is preserved for caller-side detection.
+    """
     content = str(payload.get("content") or payload.get("title") or "")
-    return content[:max_chars]
+    original_length = len(content)
+    truncated = original_length > max_chars
+    if not truncated:
+        return content, False, original_length
+    return truncate_grapheme_safe(content, max_chars), True, original_length
 
 
 def _summarize_lineage(payload: dict[str, Any]) -> dict[str, Any]:

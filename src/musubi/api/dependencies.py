@@ -22,6 +22,7 @@ from qdrant_client import QdrantClient
 
 from musubi.config import get_settings
 from musubi.embedding import Embedder, TEIRerankerClient
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.concept import ConceptPlane
 from musubi.planes.curated import CuratedPlane
@@ -113,12 +114,11 @@ def get_reranker() -> TEIRerankerClient:
     )
 
 
-def get_lifecycle_service() -> object:
-    """Per-process lifecycle handle for the /v1/lifecycle/* endpoints.
+def get_lifecycle_service() -> LifecycleTransitionCoordinator:
+    """Required app-lifetime lifecycle transition coordinator.
 
-    The lifecycle worker runs out-of-band (slice-lifecycle-*); the API
-    just needs a queryable handle for status surfacing. The bootstrap
-    supplies a uniform dict-shaped handle.
+    The worker owns reconciliation; API processes only admit and apply
+    caller transitions through this injected durable boundary.
     """
     raise NotImplementedError(
         "lifecycle service is not configured. Override via "

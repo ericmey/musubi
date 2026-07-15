@@ -18,6 +18,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
+from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
 from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,11 @@ class RecentHit:
     payload: dict[str, Any]
     snippet: str
     created_epoch: float
+    # DQ-001: silent-truncation fix. Sliced snippets are tagged with the
+    # original (untruncated) character length and a truncated flag so
+    # callers can detect the cut and fetch the full body via ``object_id``.
+    content_truncated: bool = False
+    content_length: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,21 +206,34 @@ async def run_recent_retrieve(
             created_epoch = 0.0
         else:
             created_epoch = float(raw_ce)
+        _snippet_str, _ct, _cl = _snippet(payload)
         hits.append(
             RecentHit(
                 object_id=str(payload.get("object_id") or record.id),
                 payload=payload,
-                snippet=_snippet(payload),
+                snippet=_snippet_str,
                 created_epoch=created_epoch,
+                content_truncated=_ct,
+                content_length=_cl,
             )
         )
 
     return Ok(value=RecentRetrieveResult(results=hits))
 
 
-def _snippet(payload: dict[str, Any], max_chars: int = 300) -> str:
+def _snippet(payload: dict[str, Any], max_chars: int = 300) -> tuple[str, bool, int]:
+    """Return (snippet, content_truncated, content_length).
+
+    The snippet is at most ``max_chars`` chars (default 300 per spec). When
+    the original content is longer than the cap, the snippet is truncated
+    and the original character length is preserved for caller-side detection.
+    """
     content = str(payload.get("content") or payload.get("title") or "")
-    return content[:max_chars]
+    original_length = len(content)
+    truncated = original_length > max_chars
+    if not truncated:
+        return content, False, original_length
+    return truncate_grapheme_safe(content, max_chars), True, original_length
 
 
 __all__ = [

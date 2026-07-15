@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import AnyHttpUrl, Field, SecretStr
+from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -100,6 +100,80 @@ class Settings(BaseSettings):
     vault_path: Path = Field(description="Host path to the Obsidian vault mount.")
     artifact_blob_path: Path = Field(description="Host path to content-addressed blobs.")
     lifecycle_sqlite_path: Path = Field(description="Host path to lifecycle-work sqlite.")
+    lifecycle_sqlite_busy_timeout_ms: int = Field(
+        default=5000,
+        ge=0,
+        le=600_000,
+        description=(
+            "SQLite busy_timeout (ms) for every shared lifecycle-store connection "
+            "(WAL). Default 5000. A value of 0 disables waiting — SQLite returns "
+            "SQLITE_BUSY immediately on contention; a deliberate operator override, "
+            "not a fail-closed guard."
+        ),
+    )
+    lifecycle_pending_cap: int = Field(
+        default=10_000,
+        gt=0,
+        description=(
+            "Global cap on non-terminal (PENDING/APPLIED) lifecycle_outbox rows. The "
+            "coordinator's atomic admission rejects a new transition with cap_exceeded "
+            "once the backlog reaches this cap. Positive int; there is no unbounded option."
+        ),
+    )
+    lifecycle_lease_ttl_s: float = Field(
+        default=30.0,
+        gt=0,
+        description=(
+            "Reconciler lease TTL (seconds). A claim stamps lease_expires_epoch = now + this; a "
+            "row whose lease has expired is reclaimable by another worker. Positive finite float."
+        ),
+    )
+    lifecycle_reconcile_interval_s: int = Field(
+        default=5,
+        gt=0,
+        description=(
+            "Interval (seconds) between reconcile_once passes in the lifecycle worker. Positive "
+            "int (accepted source-cut §G)."
+        ),
+    )
+    lifecycle_backoff_base_s: float = Field(
+        default=1.0,
+        gt=0,
+        description=(
+            "Base of the reconciler's bounded exponential retry backoff (seconds). A transient/"
+            "unknown apply reschedules next_attempt_epoch = now + min(base * 2**attempts, max). "
+            "Positive finite float."
+        ),
+    )
+    lifecycle_backoff_max_s: float = Field(
+        default=300.0,
+        gt=0,
+        description=(
+            "Ceiling of the reconciler's retry backoff (seconds); must be >= "
+            "lifecycle_backoff_base_s. Positive finite float."
+        ),
+    )
+    lifecycle_cleanup_retention_s: int = Field(
+        default=30 * 86400,
+        gt=0,
+        description=(
+            "Retention window (seconds) for terminal lifecycle outbox rows. "
+            "The worker deletes only rows strictly older than this window."
+        ),
+    )
+    lifecycle_cleanup_batch: int = Field(
+        default=1000,
+        gt=0,
+        description="Maximum terminal lifecycle outbox rows deleted per reconcile pass.",
+    )
+    lifecycle_readiness_max_reconcile_failures: int = Field(
+        default=3,
+        gt=0,
+        description=(
+            "Consecutive reconcile failures tolerated before the lifecycle-worker "
+            "readiness gauge is forced to zero."
+        ),
+    )
     log_dir: Path = Field(description="Host path for structured log output.")
 
     # ------------------------------------------------------------------
@@ -208,6 +282,16 @@ class Settings(BaseSettings):
         description="Resource `service.version` attribute. Typically set "
         "by the deploy pipeline to the git sha or tag of the running image.",
     )
+
+    @model_validator(mode="after")
+    def _validate_backoff_bounds(self) -> Settings:
+        """The reconciler's retry backoff ceiling must not be below its base."""
+        if self.lifecycle_backoff_max_s < self.lifecycle_backoff_base_s:
+            raise ValueError(
+                f"lifecycle_backoff_max_s ({self.lifecycle_backoff_max_s}) must be >= "
+                f"lifecycle_backoff_base_s ({self.lifecycle_backoff_base_s})"
+            )
+        return self
 
     # ------------------------------------------------------------------
     # repr: pydantic-settings already masks SecretStr as ``**********``;

@@ -51,6 +51,7 @@ with warnings.catch_warnings():
 
 from musubi.embedding import FakeEmbedder
 from musubi.lifecycle import LifecycleEventSink
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.reflection import (
     ReflectionConfig,
     ReflectionLLM,
@@ -119,6 +120,10 @@ def reflection_namespace() -> str:
 @pytest.fixture
 def episodic_namespace() -> str:
     return "eric/claude-code/episodic"
+
+
+def _coordinator(qdrant: QdrantClient, sink: LifecycleEventSink) -> LifecycleTransitionCoordinator:
+    return LifecycleTransitionCoordinator(client=qdrant, db_path=sink._db_path)
 
 
 # ---------------------------------------------------------------------------
@@ -329,27 +334,6 @@ async def test_capture_summary_counts_correct(
     assert "2 new episodic captures" in body or "2 episodic captures" in body
 
 
-async def test_reflection_worker_observes_lifecycle_job_duration(
-    qdrant: QdrantClient,
-    sink: LifecycleEventSink,
-    curated: CuratedPlane,
-    now: datetime,
-    reflection_namespace: str,
-) -> None:
-    before = _duration_count("reflection")
-    await _run(
-        qdrant=qdrant,
-        sink=sink,
-        curated=curated,
-        vault=FakeVaultWriter(),
-        thoughts=FakeThoughtEmitter(),
-        llm=FakeReflectionLLM(available=False),
-        namespace=reflection_namespace,
-        now=now,
-    )
-    assert _duration_count("reflection") == before + 1
-
-
 async def test_patterns_section_parses_llm_output(
     qdrant: QdrantClient,
     sink: LifecycleEventSink,
@@ -502,6 +486,7 @@ async def test_demotion_section_includes_at_risk(
         to_state="matured",
         actor="seed",
         reason="seed",
+        coordinator=_coordinator(qdrant, sink),
     )
     from qdrant_client import models as qmodels
 

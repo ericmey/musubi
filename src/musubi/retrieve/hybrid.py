@@ -15,7 +15,7 @@ from musubi.config import get_settings
 from musubi.embedding.base import Embedder
 from musubi.retrieve.warnings import RetrievalWarning, sparse_embedding_failed
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, collection_has_sparse
-from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result, family_of
+from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
 
 HYBRID_PREFETCH_LIMIT = 50
 _DEFAULT_VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured", "promoted")
@@ -162,6 +162,7 @@ async def hybrid_search(
         limit=resolved_prefetch_limit,
         dense_enabled=dense_enabled,
         sparse_enabled=sparse_enabled,
+        namespace_filter=_namespace_filter(namespace),
     )
     if not prefetch:
         return Err(
@@ -341,13 +342,34 @@ async def _encode_query(
     return Ok(value=embedding)
 
 
+def _namespace_condition(namespace: Namespace) -> models.FieldCondition:
+    """RET-011: the exact-deployment-namespace match. A concrete target is presence-exact; the
+    old ``identity_family`` scoping is superseded by #510 for concrete-target retrieval."""
+    return models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
+
+
+def _namespace_filter(namespace: Namespace) -> models.Filter:
+    """Namespace-only filter for the prefetch stage (state visibility stays on the top-level
+    query_filter, unchanged by this slice)."""
+    return models.Filter(must=[_namespace_condition(namespace)])
+
+
 def _build_prefetch(
     embedding: _QueryEmbedding,
     *,
     limit: int,
     dense_enabled: bool,
     sparse_enabled: bool,
+    namespace_filter: models.Filter,
 ) -> list[models.Prefetch]:
+    # RET-011: DEFENSE-IN-DEPTH + local-mode parity. The PRODUCTION namespace correction is the
+    # exact-namespace top-level `query_filter` (real Qdrant applies it to candidate generation, so
+    # exact scoping there stops the cross-presence leak on its own — verified against real Qdrant).
+    # But the in-memory (`:memory:`) Qdrant test client does NOT apply the top-level fusion filter
+    # to prefetch+fusion results, so unit tests can only observe the scope if it also rides on each
+    # prefetch. Scoping the prefetch makes `:memory:` faithful to production and is harmless
+    # belt-and-suspenders on a real server. NAMESPACE-ONLY on purpose: state visibility stays on the
+    # top-level query_filter, so this slice does not touch lifecycle-state semantics.
     prefetch: list[models.Prefetch] = []
     if dense_enabled and embedding.dense:
         prefetch.append(
@@ -355,6 +377,7 @@ def _build_prefetch(
                 query=embedding.dense,
                 using=DENSE_VECTOR_NAME,
                 limit=limit,
+                filter=namespace_filter,
             )
         )
     if sparse_enabled and embedding.sparse:
@@ -366,6 +389,7 @@ def _build_prefetch(
                 ),
                 using=SPARSE_VECTOR_NAME,
                 limit=limit,
+                filter=namespace_filter,
             )
         )
     return prefetch
@@ -379,38 +403,26 @@ def _build_filter(
 ) -> models.Filter:
     """Build the Qdrant filter for a hybrid search.
 
-    Federates at the identity level: the filter scopes to
-    ``identity_family`` (derived from the namespace's first path
-    component) rather than the exact namespace. Every presence of one
-    identity — e.g. ``aoi/command-chair/episodic``,
-    ``aoi/voice/episodic``, ``aoi/shared/episodic`` — carries
-    ``identity_family="aoi"`` and is therefore visible to retrieval
-    from any of the others. Per-substrate forensic queries can
-    post-filter on ``payload["namespace"]`` from the result set; for
-    semantic retrieval, identity is the right scope.
+    Scopes to the EXACT deployment namespace (``tenant/presence/plane``), never the
+    identity family. A concrete target returns only that presence's rows.
 
-    **Migration contract.** This filter assumes every persisted point
-    carries ``identity_family`` in its payload. New writes get the
-    field automatically via the ``MusubiObject`` validator; existing
-    points are populated by ``scripts/backfill_identity_family.py``.
-    The deploy order is therefore:
+    **Decision (RET-011 / #510 supersedes #332, for retrieval of a CONCRETE target
+    only).** This filter previously scoped to ``identity_family`` (the namespace's first
+    path component), making every presence of one identity — e.g.
+    ``aoi/command-chair/episodic`` vs ``aoi/voice/episodic`` — visible from any other. With
+    similar vectors that silently crossed presences. Cross-presence (identity-family)
+    retrieval is now authorized ONLY when the request explicitly resolves multiple concrete
+    targets: a wildcard like ``aoi/*/episodic`` is expanded to concrete per-presence
+    ``namespace_targets`` upstream (``retrieve._expand_wildcard_targets``), each of which is
+    exact-filtered here and unioned. Synthesis family federation
+    (``lifecycle/synthesis.py``) is unchanged and out of scope.
 
-        1. Deploy the version that adds the field + validator (#332).
-        2. Run the backfill script — confirm 100% updated.
-        3. Deploy this version (the retrieval change).
+    No backfill needed: every persisted point already carries the exact ``namespace``
+    payload field (``MusubiObject``), so switching the filter key is safe with existing data.
 
-    Steps 1 and 3 can be the same release if step 2 runs in between.
-    Skipping step 2 will silently exclude pre-deploy points from
-    retrieval until backfill catches up.
-
-    See ``family_of`` in ``musubi.types.common``.
+    See ``family_of`` in ``musubi.types.common`` (still used by synthesis + payload writes).
     """
-    must: list[models.Condition] = [
-        models.FieldCondition(
-            key="identity_family",
-            match=models.MatchValue(value=family_of(namespace)),
-        )
-    ]
+    must: list[models.Condition] = [_namespace_condition(namespace)]
     states = state_filter
     if states is None and not include_archived:
         states = _DEFAULT_VISIBLE_STATES

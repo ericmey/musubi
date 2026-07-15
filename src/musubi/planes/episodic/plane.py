@@ -4,8 +4,10 @@ Responsibilities (from [[04-data-model/episodic-memory]]):
 
 - **Create** — always ``state = "provisional"``, ``version = 1``. Auto-embed
   dense + sparse. Dedup against existing points in the same namespace via
-  dense cosine similarity; on hit, merge tags, bump ``reinforcement_count``
-  and ``version``, replace content with new text.
+  dense cosine similarity; on hit, merges ONLY when factual compatibility passes
+  (rejecting negations, corrections, specific participant or time changes).
+  On compatible hit, merges tags, bumps ``reinforcement_count`` and ``version``,
+  and decides content retention based on ``merge_strategy``.
 - **Get** — fetch by namespace + ``object_id``. Namespace scoping is
   enforced so a caller asking for the wrong namespace sees ``None``.
 - **Query** — dense retrieval filtered to the caller's namespace. Default
@@ -36,13 +38,19 @@ from typing import Any, Literal, cast, get_args
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
+from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
+from musubi.store.access_lease import lease_increment_access
+from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.common import (
     KSUID,
+    Err,
     LifecycleState,
     Namespace,
+    Result,
     epoch_of,
     utc_now,
     validate_namespace,
@@ -105,6 +113,29 @@ def _memory_from_payload(payload: dict[str, Any]) -> EpisodicMemory:
     return EpisodicMemory.model_validate(payload)
 
 
+def _is_factually_compatible(existing: EpisodicMemory, new: EpisodicMemory) -> bool:
+    """Return whether a cosine hit is safe to merge.
+
+    Compatibility is fail-closed: normalized content and the complete
+    participants set must both match before dedup may mutate an existing row.
+    """
+    import re
+    import unicodedata
+
+    def _normalize(text: str) -> str:
+        text = unicodedata.normalize("NFKC", text)
+        text = text.casefold()
+        text = re.sub(r"\s+", " ", text)
+        text = text.strip()
+        text = re.sub(r"[.!?]+$", "", text)
+        return text.rstrip()
+
+    if _normalize(existing.content) != _normalize(new.content):
+        return False
+
+    return set(existing.participants) == set(new.participants)
+
+
 class EpisodicPlane:
     """CRUD + lifecycle transitions for the episodic plane."""
 
@@ -133,9 +164,15 @@ class EpisodicPlane:
     ) -> EpisodicMemory:
         """Write ``memory`` to Qdrant, deduping against the same namespace.
 
-        On a dedup hit, merges tags + bumps ``reinforcement_count`` and
+        Dedup evaluates dense cosine similarity, but merges ONLY if the
+        candidate passes strict factual compatibility (rejecting semantic
+        near-matches like negations or participant alterations). If incompatible,
+        inserts a fresh distinct row.
+
+        On a compatible dedup hit, merges tags + bumps ``reinforcement_count`` and
         ``version`` on the existing row instead of inserting. ``content``
-        is kept vs replaced based on ``merge_strategy``:
+        is kept vs replaced based on ``merge_strategy`` ONLY after compatibility
+        authorizes the merge:
 
         - ``longer-wins`` (default, matches spec §06-ingestion/capture):
           keep whichever of existing / new content is strictly longer.
@@ -179,15 +216,16 @@ class EpisodicPlane:
         found = self._find_dedup_candidate(memory.namespace, dense)
         if found is not None:
             existing, existing_dense, existing_sparse = found
-            return self._reinforce(
-                existing=existing,
-                existing_dense=existing_dense,
-                existing_sparse=existing_sparse,
-                new=memory,
-                dense=dense,
-                sparse=sparse,
-                merge_strategy=merge_strategy,
-            )
+            if _is_factually_compatible(existing, memory):
+                return await self._reinforce(
+                    existing=existing,
+                    existing_dense=existing_dense,
+                    existing_sparse=existing_sparse,
+                    new=memory,
+                    dense=dense,
+                    sparse=sparse,
+                    merge_strategy=merge_strategy,
+                )
 
         data = memory.model_dump()
         data.update(
@@ -219,12 +257,14 @@ class EpisodicPlane:
         one for sparse, then one atomic Qdrant upsert at the end.
 
         Dedup probes are per-row because Qdrant doesn't have a
-        "batch query_points" shape we can use today — but every dedup
-        hit writes via the same single terminal upsert (reinforce
-        updates + fresh inserts land in one call).
+        "batch query_points" shape we can use today. Each dedup probe must pass
+        factual compatibility to authorize the hit; incompatible candidates
+        resolve to fresh inserts. Compatible dedup hits publish individually
+        through the DATA-001 mutation lease; fresh inserts share one terminal
+        upsert.
 
         Returns the final row for each input position in input order,
-        same as ``create`` (existing row on dedup hit, fresh row
+        same as ``create`` (existing row on compatible dedup hit, fresh row
         otherwise).
         """
         if not memories:
@@ -260,34 +300,33 @@ class EpisodicPlane:
 
         now = utc_now()
 
-        # Walk the batch, decide fresh-insert vs reinforce, collect all
-        # final rows + their vectors, then do a SINGLE terminal upsert.
+        # Walk the batch: fresh inserts are collected into one terminal upsert (new rows, no race);
+        # dedup hits are reinforced individually through the attributable mutation lease (DATA-001
+        # #530) so a concurrent unrelated mutation is never overwritten. The TEI embed stays batched;
+        # only the WRITE for reinforced rows is per-row (dedup hits are the minority).
         points: list[models.PointStruct] = []
         finalised: list[EpisodicMemory] = []
         for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
             found = self._find_dedup_candidate(memory.namespace, dense)
+
+            compatible = False
             if found is not None:
                 existing, existing_dense, existing_sparse = found
-                updated, existing_content_won = self._merge_row(
-                    existing=existing,
-                    new=memory,
-                    merge_strategy=merge_strategy,
-                    now=now,
-                )
-                # Preserve existing vectors when existing content won
-                # (otherwise we'd overwrite them with the new text's
-                # embeddings — a payload/vector drift bug).
-                if (
-                    existing_content_won
-                    and existing_dense is not None
-                    and existing_sparse is not None
-                ):
-                    points.append(
-                        self._make_point(updated, dense=existing_dense, sparse=existing_sparse)
+                compatible = _is_factually_compatible(existing, memory)
+
+            if found is not None and compatible:
+                existing, existing_dense, existing_sparse = found
+                finalised.append(
+                    await self._reinforce(
+                        existing=existing,
+                        existing_dense=existing_dense,
+                        existing_sparse=existing_sparse,
+                        new=memory,
+                        dense=dense,
+                        sparse=sparse,
+                        merge_strategy=merge_strategy,
                     )
-                else:
-                    points.append(self._make_point(updated, dense=dense, sparse=sparse))
-                finalised.append(updated)
+                )
             else:
                 data = memory.model_dump()
                 data.update(
@@ -303,8 +342,9 @@ class EpisodicPlane:
                 points.append(self._make_point(fresh, dense=dense, sparse=sparse))
                 finalised.append(fresh)
 
-        # Single Qdrant upsert for the whole batch.
-        self._client.upsert(collection_name=self._collection, points=points)
+        # Single Qdrant upsert for the fresh inserts (if any).
+        if points:
+            self._client.upsert(collection_name=self._collection, points=points)
         return finalised
 
     def _merge_row(
@@ -352,9 +392,10 @@ class EpisodicPlane:
         dense: list[float],
         sparse: dict[int, float],
     ) -> models.PointStruct:
-        """Build a Qdrant PointStruct for ``memory``. Kept out of
-        ``_upsert`` so ``batch_create`` can collect points without
-        calling upsert per row."""
+        """Build a Qdrant PointStruct for ``memory``. Kept out of ``_upsert`` so ``batch_create``
+        can collect points without calling upsert per row. CREATE-only: every UPDATE path publishes
+        through the attributable mutation lease (:mod:`musubi.store.mutation_lease`), never a
+        full-point upsert."""
         return models.PointStruct(
             id=_point_id(memory.object_id),
             payload=memory.model_dump(mode="json"),
@@ -364,7 +405,7 @@ class EpisodicPlane:
             },
         )
 
-    def _reinforce(
+    async def _reinforce(
         self,
         *,
         existing: EpisodicMemory,
@@ -377,21 +418,43 @@ class EpisodicPlane:
     ) -> EpisodicMemory:
         """Merge ``new`` into ``existing`` and re-upsert under the same id.
 
-        ``existing_dense`` / ``existing_sparse`` are the vectors Qdrant
-        already has for the matched point (fetched by the dedup probe).
-        When ``merge_strategy="longer-wins"`` keeps the existing content,
-        we rewrite the payload but retain those existing vectors so the
-        embeddings stay aligned with what the row actually says. When
-        new content wins we swap in the new vectors."""
-        now = utc_now()
-        updated, existing_content_won = self._merge_row(
-            existing=existing, new=new, merge_strategy=merge_strategy, now=now
+        Published through the attributable mutation lease (DATA-001 #530): the merge is recomputed
+        against the FRESH stored row each retry round and written as a NARROW change-set (content +
+        tags + reinforcement_count + updated_at), so a concurrent unrelated mutation — or a leased
+        access increment — is never overwritten. Vectors are republished only when new content wins,
+        and only by the proven owner (``update_vectors`` is unfenced); when existing content wins we
+        leave the stored vectors untouched. ``existing_dense`` / ``existing_sparse`` (the probe's
+        vectors) are no longer needed and are ignored — retained for call-site stability."""
+        del existing_dense, existing_sparse  # superseded by the fresh-read mutation lease.
+
+        def plan(current: dict[str, Any]) -> MutationPlan:
+            merged, existing_content_won = self._merge_row(
+                existing=EpisodicMemory.model_validate(current),
+                new=new,
+                merge_strategy=merge_strategy,
+                now=utc_now(),
+            )
+            dumped = merged.model_dump(mode="json")
+            changes = {
+                k: dumped[k]
+                for k in ("content", "tags", "reinforcement_count", "updated_at", "updated_epoch")
+            }
+            vectors = (
+                None
+                if existing_content_won
+                else {DENSE_VECTOR_NAME: dense, SPARSE_VECTOR_NAME: _sparse_to_model(sparse)}
+            )
+            return MutationPlan(changes=changes, vectors=vectors)
+
+        published = await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(existing.namespace),
+            object_id=str(existing.object_id),
+            point_id=_point_id(existing.object_id),
+            plan=plan,
         )
-        if existing_content_won and existing_dense is not None and existing_sparse is not None:
-            self._upsert(updated, dense=existing_dense, sparse=existing_sparse)
-        else:
-            self._upsert(updated, dense=dense, sparse=sparse)
-        return updated
+        return EpisodicMemory.model_validate(published)
 
     def _upsert(
         self,
@@ -400,14 +463,9 @@ class EpisodicPlane:
         dense: list[float],
         sparse: dict[int, float],
     ) -> None:
-        point = models.PointStruct(
-            id=_point_id(memory.object_id),
-            payload=memory.model_dump(mode="json"),
-            vector={
-                DENSE_VECTOR_NAME: dense,
-                SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
-            },
-        )
+        """CREATE-only full-point upsert (fresh insert). Every UPDATE path publishes through the
+        attributable mutation lease (:mod:`musubi.store.mutation_lease`)."""
+        point = self._make_point(memory, dense=dense, sparse=sparse)
         self._client.upsert(collection_name=self._collection, points=[point])
 
     # ------------------------------------------------------------------
@@ -515,22 +573,29 @@ class EpisodicPlane:
             return None
 
         if bump_access:
-            access_count = payload.get("access_count", 0) + 1
-            now = utc_now()
-            now_str = now.isoformat().replace("+00:00", "Z")
-            self._client.batch_update_points(
-                collection_name=self._collection,
-                update_operations=[
-                    models.SetPayloadOperation(
-                        set_payload=models.SetPayload(
-                            payload={"access_count": access_count, "last_accessed_at": now_str},
-                            points=[_point_id(object_id)],
-                        )
-                    )
-                ],
+            # RET-008 (#502): route the direct-fetch bump through the SHARED fenced lease so it
+            # never races a concurrent retrieval-delivery increment (or another get) on the same
+            # row under multi-worker/cross-process parallelism. Re-read to return the post-bump row.
+            await lease_increment_access(
+                self._client, self._collection, {(str(namespace), str(object_id))}
             )
-            payload["access_count"] = access_count
-            payload["last_accessed_at"] = now_str
+            refreshed, _ = self._client.scroll(
+                collection_name=self._collection,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=namespace)
+                        ),
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=object_id)
+                        ),
+                    ]
+                ),
+                limit=1,
+                with_payload=True,
+            )
+            if refreshed and refreshed[0].payload:
+                payload = refreshed[0].payload
 
         return _memory_from_payload(payload)
 
@@ -570,31 +635,17 @@ class EpisodicPlane:
             with_payload=True,
         )
         out: list[EpisodicMemory] = []
-        updates = []
-        now = utc_now()
-        now_str = now.isoformat().replace("+00:00", "Z")
-
+        pairs: set[tuple[str, str]] = set()
         for point in resp.points:
             if point.payload:
                 payload = dict(point.payload)
-                ac = payload.get("access_count", 0) + 1
-                updates.append(
-                    models.SetPayloadOperation(
-                        set_payload=models.SetPayload(
-                            payload={"access_count": ac, "last_accessed_at": now_str},
-                            points=[point.id],
-                        )
-                    )
-                )
-                payload["access_count"] = ac
-                payload["last_accessed_at"] = now_str
                 out.append(_memory_from_payload(payload))
+                pairs.add((str(payload.get("namespace")), str(payload.get("object_id"))))
 
-        if updates:
-            self._client.batch_update_points(
-                collection_name=self._collection,
-                update_operations=updates,
-            )
+        # RET-008 (#502): route the batched access bump through the shared fenced lease (never a
+        # bare RMW that would race/lose a concurrent leased increment).
+        if pairs:
+            await lease_increment_access(self._client, self._collection, pairs)
         return out
 
     # ------------------------------------------------------------------
@@ -620,21 +671,34 @@ class EpisodicPlane:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
 
         now = utc_now()
-        data = current.model_dump()
 
-        if tags is not None:
-            merged = sorted(set(current.tags) | set(tags))
-            data["tags"] = merged
+        # Publish ONLY the patched fields through the attributable mutation lease (DATA-001 #530):
+        # tags are re-merged against the FRESH current row and importance is set, fenced on version,
+        # so a concurrent unrelated mutation (or a leased access increment) is never overwritten.
+        def plan(cur: dict[str, Any]) -> MutationPlan:
+            now2 = utc_now()
+            data = {**cur, "updated_at": now2, "updated_epoch": epoch_of(now2)}
+            if tags is not None:
+                data["tags"] = sorted(set(cur.get("tags", [])) | set(tags))
+            if importance is not None:
+                data["importance"] = importance
+            dumped = EpisodicMemory.model_validate(data).model_dump(mode="json")
+            keys = ["updated_at", "updated_epoch"]
+            if tags is not None:
+                keys.append("tags")
+            if importance is not None:
+                keys.append("importance")
+            return MutationPlan(changes={k: dumped[k] for k in keys})
 
-        if importance is not None:
-            data["importance"] = importance
-
-        data.update(
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
+        published = await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            point_id=_point_id(object_id),
+            plan=plan,
         )
-        updated = EpisodicMemory.model_validate(data)
+        updated = EpisodicMemory.model_validate(published)
 
         from musubi.types.common import generate_ksuid
 
@@ -654,11 +718,6 @@ class EpisodicPlane:
             correlation_id="",
         )
 
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
         return updated, event
 
     async def delete(
@@ -778,43 +837,27 @@ class EpisodicPlane:
         to_state: LifecycleState,
         actor: str,
         reason: str,
-    ) -> tuple[EpisodicMemory, LifecycleEvent]:
-        """Mutate ``state`` and emit a :class:`LifecycleEvent`.
-
-        Raises :class:`LookupError` if the object doesn't exist in the given
-        namespace (this enforces write-side namespace isolation). Raises
-        :class:`ValueError` if the transition is illegal per the episodic
-        transition table.
-        """
+        coordinator: LifecycleTransitionCoordinator,
+    ) -> Result[TransitionResult | TransitionPending, TransitionError]:
+        """Delegate the namespace-scoped state change to the canonical coordinator."""
         current = await self.get(namespace=namespace, object_id=object_id, bump_access=False)
         if current is None:
-            raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
-        # LifecycleEvent's own validator raises ValueError on illegal
-        # transitions — that's the single source of truth for legality.
-        event = LifecycleEvent(
+            return Err(
+                error=TransitionError(
+                    code="not_found",
+                    message=(f"episodic object {object_id!r} not found in namespace {namespace!r}"),
+                    to_state=to_state,
+                )
+            )
+        return transition(
+            self._client,
+            coordinator=coordinator,
             object_id=object_id,
-            object_type="episodic",
-            namespace=namespace,
-            from_state=current.state,
-            to_state=to_state,
+            target_state=to_state,
             actor=actor,
             reason=reason,
+            expected_version=current.version,
         )
-        now = utc_now()
-        data = current.model_dump()
-        data.update(
-            state=to_state,
-            version=current.version + 1,
-            updated_at=now,
-            updated_epoch=epoch_of(now),
-        )
-        updated = EpisodicMemory.model_validate(data)
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
-            points=[_point_id(object_id)],
-        )
-        return updated, event
 
     # ------------------------------------------------------------------
     # Helpers

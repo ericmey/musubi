@@ -14,6 +14,7 @@ from typing import Any, Protocol, cast
 
 from qdrant_client import QdrantClient, models
 
+from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.planes.artifact.plane import ArtifactPlane
@@ -40,6 +41,7 @@ class ThoughtEmitter(Protocol):
 @dataclass
 class DemotionDeps:
     qdrant: QdrantClient
+    coordinator: LifecycleTransitionCoordinator
     episodic_plane: EpisodicPlane
     concept_plane: ConceptPlane
     events: LifecycleEventSink
@@ -89,13 +91,20 @@ async def demotion_episodic(deps: DemotionDeps, batch_size: int = 100) -> int:
             try:
                 namespace = point.payload.get("namespace")
                 object_id_str = point.payload.get("object_id")
-                await deps.episodic_plane.transition(
+                result = await deps.episodic_plane.transition(
                     namespace=cast(Any, namespace),
                     object_id=cast(Any, object_id_str),
                     to_state="demoted",
                     actor=_LIFECYCLE_ACTOR,
                     reason="decay-rule:untouched-low-importance",
+                    coordinator=deps.coordinator,
                 )
+                if result.kind == "err":
+                    raise RuntimeError(result.error.message)
+                outcome = result.value
+                if isinstance(outcome, TransitionPending):
+                    log.info("Episodic demotion deferred for %s", object_id_str)
+                    continue
                 demoted_count += 1
             except Exception as e:
                 log.error(
@@ -177,13 +186,20 @@ async def demotion_concept(deps: DemotionDeps, batch_size: int = 100) -> int:
             try:
                 namespace = point.payload.get("namespace")
                 object_id_str = point.payload.get("object_id")
-                await deps.concept_plane.transition(
+                result = await deps.concept_plane.transition(
                     namespace=cast(Any, namespace),
                     object_id=cast(Any, object_id_str),
                     to_state="demoted",
                     actor=_LIFECYCLE_ACTOR,
                     reason="decay-rule:no-reinforcement",
+                    coordinator=deps.coordinator,
                 )
+                if result.kind == "err":
+                    raise RuntimeError(result.error.message)
+                outcome = result.value
+                if isinstance(outcome, TransitionPending):
+                    log.info("Concept demotion deferred for %s", object_id_str)
+                    continue
                 await deps.thoughts.emit(
                     "ops-alerts", f"Concept {object_id_str} demoted; reinforcement tapered off"
                 )
@@ -276,13 +292,20 @@ async def demotion_artifact(deps: DemotionDeps, batch_size: int = 100) -> int:
                 continue
 
             try:
-                _, _event = await deps.artifact_plane.transition(
+                result = await deps.artifact_plane.transition(
                     namespace=cast(Any, namespace),
                     object_id=cast(Any, object_id_str),
                     to_state="archived",
                     actor=_LIFECYCLE_ACTOR,
                     reason="decay-rule:unreferenced-expired",
+                    coordinator=deps.coordinator,
                 )
+                if result.kind == "err":
+                    raise RuntimeError(result.error.message)
+                outcome = result.value
+                if isinstance(outcome, TransitionPending):
+                    log.info("Artifact archival deferred for %s", object_id_str)
+                    continue
                 archived_count += 1
             except Exception as e:
                 log.error(
@@ -344,13 +367,18 @@ async def reinstate(deps: DemotionDeps, namespace: str, object_id: str, reason: 
     try:
         e_mem = await deps.episodic_plane.get(namespace=cast(Any, namespace), object_id=obj_ksuid)
         if e_mem:
-            await deps.episodic_plane.transition(
+            result = await deps.episodic_plane.transition(
                 namespace=cast(Any, namespace),
                 object_id=obj_ksuid,
                 to_state="matured",
                 actor=_LIFECYCLE_ACTOR,
                 reason=f"reinstatement: {reason}",
+                coordinator=deps.coordinator,
             )
+            if result.kind == "err":
+                raise RuntimeError(result.error.message)
+            if isinstance(result.value, TransitionPending):
+                log.info("Episodic reinstatement deferred for %s", object_id)
             return
     except LookupError:
         pass
@@ -359,13 +387,19 @@ async def reinstate(deps: DemotionDeps, namespace: str, object_id: str, reason: 
     try:
         c_mem = await deps.concept_plane.get(namespace=cast(Any, namespace), object_id=obj_ksuid)
         if c_mem:
-            await deps.concept_plane.transition(
+            result = await deps.concept_plane.transition(
                 namespace=cast(Any, namespace),
                 object_id=obj_ksuid,
                 to_state="matured",
                 actor=_LIFECYCLE_ACTOR,
                 reason=f"reinstatement: {reason}",
+                coordinator=deps.coordinator,
             )
+            if result.kind == "err":
+                raise RuntimeError(result.error.message)
+            if isinstance(result.value, TransitionPending):
+                log.info("Concept reinstatement deferred for %s", object_id)
+                return
             # Reset the reinforcement clock — otherwise the concept's
             # old `last_reinforced_epoch` (which triggered demotion in
             # the first place) still sits below the cutoff and the

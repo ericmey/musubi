@@ -209,6 +209,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -375,6 +381,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -504,6 +516,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -752,9 +770,11 @@ paths:
       tags:
       - thoughts
       summary: Thought History
-      description: 'First-cut: history is a namespace scroll. Semantic search will
+      description: |-
+        Return presence-scoped thought history from the namespace scroll.
 
-        land once slice-retrieval-fast wires its dense path through the API.'
+        Semantic search remains a future dense-path integration; this route's
+        current scroll still enforces the requested presence boundary.
       operationId: thought_history_v1_thoughts_history_post
       requestBody:
         content:
@@ -1140,6 +1160,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SynthesizedConcept'
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -1209,6 +1235,12 @@ paths:
           content:
             application/json:
               schema: {}
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -1321,6 +1353,12 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransitionResponseBody'
+        '202':
+          description: Transition durably pending.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransitionPendingBody'
         '422':
           description: Validation Error
           content:
@@ -1381,6 +1419,16 @@ components:
           additionalProperties: true
           type: object
           title: Chunk Metadata
+        generation:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Generation
+        owner_token:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Owner Token
       additionalProperties: false
       type: object
       required:
@@ -1664,6 +1712,15 @@ components:
         score:
           type: number
           title: Score
+        content_truncated:
+          default: false
+          title: Content Truncated
+          type: boolean
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
       type: object
       required:
       - object_id
@@ -2512,6 +2569,15 @@ components:
           type: string
           const: ranked_combined
           title: Score Kind
+        content_truncated:
+          default: false
+          title: Content Truncated
+          type: boolean
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
         extra:
           $ref: '#/components/schemas/RankedExtra'
         title:
@@ -2688,6 +2754,15 @@ components:
             minimum: 0.0
           - type: 'null'
           title: Provenance Score
+        content_truncated:
+          default: false
+          title: Content Truncated
+          type: boolean
+        content_length:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Content Length
         extra:
           $ref: '#/components/schemas/RecentExtra'
         title:
@@ -2805,6 +2880,11 @@ components:
           type: boolean
           title: Include Archived
           default: false
+        include_lineage:
+          type: boolean
+          title: Include Lineage
+          default: true
+          description: "Forwarded verbatim to the orchestration seam. Defaults to true; set explicitly to false to disable lineage hydration on the wire. Preserved across concrete and fanout namespace shapes. Strict bool \u2014 non-boolean values (strings, numbers, null) are rejected at the wire boundary."
         since:
           anyOf:
           - type: number
@@ -2936,6 +3016,26 @@ components:
           - type: string
           - type: 'null'
           title: Failure Reason
+        committed_generation:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Committed Generation
+        committed_owner:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Committed Owner
+        index_operation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Index Operation Id
+        publication_version:
+          type: integer
+          minimum: 0.0
+          title: Publication Version
+          default: 0
       additionalProperties: false
       type: object
       required:
@@ -3305,6 +3405,28 @@ components:
       - object_id
       - state
       title: ThoughtSendResponse
+    TransitionPendingBody:
+      properties:
+        status:
+          type: string
+          const: pending
+          title: Status
+          default: pending
+        operation_key:
+          type: string
+          minLength: 1
+          title: Operation Key
+        event_id:
+          type: string
+          minLength: 1
+          title: Event Id
+      additionalProperties: false
+      type: object
+      required:
+      - operation_key
+      - event_id
+      title: TransitionPendingBody
+      description: A transition accepted for reconciler completion, never fabricated as final.
     TransitionRequest:
       properties:
         object_id:
