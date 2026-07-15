@@ -183,6 +183,17 @@ def test_corpus_snapshot_checksum_verified_before_run(tmp_path: Path) -> None:
     _assert_manifest_checksum(verify_manifest, tmp_path)
 
 
+def test_manifest_verification_fails_closed_for_missing_or_malformed_files(
+    tmp_path: Path,
+) -> None:
+    from musubi.evals.corpus import verify_manifest
+
+    with pytest.raises(ValueError, match="non-empty mapping"):
+        verify_manifest({"files": []}, tmp_path)
+    with pytest.raises(ValueError, match="unavailable"):
+        verify_manifest({"files": {"missing.yaml": "0" * 64}}, tmp_path)
+
+
 def test_discrimination_manifest_checksum(tmp_path: Path) -> None:
     import hashlib
 
