@@ -170,7 +170,9 @@ class ThoughtsPlane:
     # Check Unread
     # ------------------------------------------------------------------
 
-    async def check(self, *, namespace: Namespace, my_presence: str) -> list[Thought]:
+    async def check(
+        self, *, namespace: Namespace, my_presence: str, limit: int = 1000
+    ) -> list[Thought]:
         """Returns unread thoughts for `my_presence`."""
         resp, _ = self._client.scroll(
             collection_name=self._collection,
@@ -193,7 +195,43 @@ class ThoughtsPlane:
                     ),
                 ],
             ),
-            limit=1000,
+            limit=limit,
+            with_payload=True,
+        )
+        out: list[Thought] = []
+        for point in resp:
+            if point.payload:
+                out.append(_thought_from_payload(point.payload))
+        return out
+
+    async def history_scroll(
+        self,
+        *,
+        namespace: Namespace,
+        presence: str,
+        limit: int = 50,
+    ) -> list[Thought]:
+        """Return presence-scoped history via scroll (no semantic search)."""
+        resp, _ = self._client.scroll(
+            collection_name=self._collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=namespace)
+                    ),
+                    models.Filter(
+                        should=[
+                            models.FieldCondition(
+                                key="from_presence", match=models.MatchValue(value=presence)
+                            ),
+                            models.FieldCondition(
+                                key="to_presence", match=models.MatchAny(any=[presence, "all"])
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+            limit=limit,
             with_payload=True,
         )
         out: list[Thought] = []
