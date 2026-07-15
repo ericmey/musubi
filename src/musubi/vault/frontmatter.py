@@ -171,6 +171,7 @@ def curated_knowledge_from_frontmatter(
     return CuratedKnowledge(
         object_id=fm.object_id,  # type: ignore[arg-type]
         namespace=fm.namespace,  # type: ignore[arg-type]
+        schema_version=fm.schema_version,
         vault_path=vault_path,
         body_hash=body_hash,
         title=fm.title,

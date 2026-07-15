@@ -24,6 +24,7 @@ def test_vault004_fidelity_round_trip() -> None:
     yaml_text = f"""---
 object_id: {fid}
 namespace: aoi/knowledge/curated
+schema_version: 4
 title: "The Binding Contract"
 summary: "Full fidelity proof"
 topics:
@@ -68,6 +69,7 @@ Body text."""
 
     assert memory.object_id == fid
     assert memory.namespace == "aoi/knowledge/curated"
+    assert memory.schema_version == 4
     assert memory.title == "The Binding Contract"
     assert memory.summary == "Full fidelity proof"
     assert memory.topics == ["architecture", "decisions"]
