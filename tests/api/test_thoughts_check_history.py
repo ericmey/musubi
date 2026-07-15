@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from qdrant_client import QdrantClient
@@ -17,13 +18,12 @@ def _upsert_thought(
     read_by: list[str] | None = None,
 ) -> str:
     obj_id = generate_ksuid()
-    from musubi.planes.thoughts.plane import _point_id
 
     qdrant.upsert(
         collection_name="musubi_thought",
         points=[
             PointStruct(
-                id=_point_id(obj_id),
+                id=str(uuid4()),
                 vector={},
                 payload={
                     "object_id": obj_id,
