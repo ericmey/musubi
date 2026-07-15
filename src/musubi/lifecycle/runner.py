@@ -35,13 +35,27 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from musubi.lifecycle.scheduler import Job
-from musubi.observability import default_registry
+from musubi.observability.registry import default_registry
+
+_REG = default_registry()
+_DURATION = _REG.histogram(
+    "musubi_lifecycle_job_duration_seconds",
+    "lifecycle worker tick duration",
+    buckets=(0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0),
+    labelnames=("job",),
+)
+_ERRORS = _REG.counter(
+    "musubi_lifecycle_job_errors_total",
+    "lifecycle worker tick errors",
+    labelnames=("job",),
+)
 
 log = logging.getLogger(__name__)
 
@@ -245,14 +259,18 @@ class LifecycleRunner:
         with tracer.start_as_current_span(f"lifecycle.job.{job.name}") as span:
             span.set_attribute("lifecycle.job.name", job.name)
             span.set_attribute("lifecycle.job.trigger_kind", job.trigger_kind)
+            start = time.monotonic()
             try:
                 await asyncio.to_thread(job.func)
             except Exception as exc:
+                _ERRORS.labels(job=job.name).inc()
                 log.exception("lifecycle-job-crashed name=%s", job.name)
                 if span.is_recording():
                     span.set_attribute("lifecycle.job.crashed", True)
                     span.record_exception(exc)
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
+            finally:
+                _DURATION.labels(job=job.name).observe(time.monotonic() - start)
 
 
 def _utc_now() -> datetime:

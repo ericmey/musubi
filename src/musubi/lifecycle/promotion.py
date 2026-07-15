@@ -10,10 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import time
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from functools import wraps
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -23,7 +20,6 @@ from qdrant_client import QdrantClient, models
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
-from musubi.observability import default_registry
 from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.store.names import collection_for_plane
@@ -38,35 +34,6 @@ _LIFECYCLE_ACTOR = "lifecycle-worker"
 PROMOTION_REINFORCEMENT_THRESHOLD = 3
 PROMOTION_IMPORTANCE_THRESHOLD = 6
 PROMOTION_MAX_ATTEMPTS = 3
-
-_REG = default_registry()
-_DURATION = _REG.histogram(
-    "musubi_lifecycle_job_duration_seconds",
-    "lifecycle worker tick duration",
-    labelnames=("job",),
-)
-_ERRORS = _REG.counter(
-    "musubi_lifecycle_job_errors_total",
-    "lifecycle worker tick errors",
-    labelnames=("job",),
-)
-
-
-def _instrument_promotion_job[**P, R](
-    func: Callable[P, Awaitable[R]],
-) -> Callable[P, Awaitable[R]]:
-    @wraps(func)
-    async def _wrapped(*args: P.args, **kwargs: P.kwargs) -> R:
-        start = time.monotonic()
-        try:
-            return await func(*args, **kwargs)
-        except Exception:
-            _ERRORS.labels(job="promotion").inc()
-            raise
-        finally:
-            _DURATION.labels(job="promotion").observe(time.monotonic() - start)
-
-    return _wrapped
 
 
 class PromotionRender(BaseModel):
@@ -211,7 +178,6 @@ def _is_eligible(concept: SynthesizedConcept, now_epoch: float) -> bool:
     return concept.promoted_to is None
 
 
-@_instrument_promotion_job
 async def run_promotion_sweep(
     deps: PromotionDeps,
     batch_size: int = 1,
