@@ -15,11 +15,17 @@ and stop for a fresh context. This is the ground truth; trust it over memory.
 Worktrees: `musubi-worktrees/yua-data001-main-integration` (Phase-1, here),
 `musubi-worktrees/aoi-ret004-quality-gate` (RET-004).
 
-## DATA-001 Phase 1 — NOT done: ONE merge-blocker remaining (do this FIRST)
+## DATA-001 Phase 1 — done-token attribution: FIXED (2026-07-15, this session)
 
-Yua's second #539 review (2026-07-15) found a real payload-attribution hole. **#539 must not merge
-until it is fixed** with an exact done-token proof. This is bounded and is the RET-008 access-lease
-pattern (I built that correctly; I missed it here).
+Yua's second #539 review found the payload-attribution hole below. It is now **REPAIRED** — the
+`owned_update` commit uses the RET-008 two-phase done-token: commit stamps `done:<nonce>` fenced on
+`own`, the EXACT `done` readback is the only success signal, clear is fenced on exact `done`, and an
+expired `done` self-heals on takeover. Proven: `test_stalled_owner_does_not_falsely_attribute_a_takeover_commit`
+(the A-stall/B-takeover discriminator — verified RED on the old attribution, GREEN now) and
+`test_crash_after_done_before_clear_recovers_without_reapply`. The prior description is kept below as
+the record of what was fixed.
+
+### (record) the bug that was fixed
 
 **The bug (mutation_lease phase 4/5):** the commit clears the token and attributes success on
 `{update_lease_token==None AND version==read+1}`. That is NOT attributable. Scenario: A acquires at

@@ -278,6 +278,103 @@ def test_vanished_row_raises_lookup_error(real_qdrant: QdrantClient) -> None:
         )
 
 
+class _CommitRacer:
+    """Wraps a real client. On the FIRST commit (the ``set_payload`` whose payload carries
+    ``version`` — i.e. the phase-4 commit), it first runs ``race_fn`` via the raw inner client, then
+    lets the wrapped commit proceed. Models a takeover landing BETWEEN our acquire and our commit."""
+
+    def __init__(self, inner: QdrantClient, race_fn: Any) -> None:
+        self._inner = inner
+        self._race_fn = race_fn
+        self._raced = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def set_payload(
+        self, *, collection_name: str, payload: dict[str, Any], points: Any, **kw: Any
+    ) -> Any:
+        if "version" in payload and not self._raced:
+            self._raced = True
+            self._race_fn()
+        return self._inner.set_payload(
+            collection_name=collection_name, payload=payload, points=points, **kw
+        )
+
+
+@pytest.mark.integration
+def test_stalled_owner_does_not_falsely_attribute_a_takeover_commit(
+    real_qdrant: QdrantClient,
+) -> None:
+    """Yua #539 discriminator: A acquires at v1 and stalls; B takes over, publishes a DIFFERENT field
+    at v2 and clears; A resumes. With the exact done-token, A's commit (fenced on its own token)
+    matches zero, its attribution requires its OWN done token (absent), so A does NOT falsely claim
+    B's commit — it retries, recomputes against the fresh row, and lands at v3. BOTH changes survive.
+    RED on the old {token==None AND version==read+1} attribution (A would return success, losing its
+    change); GREEN with the done-token."""
+    ns, oid = _seed(real_qdrant, importance=5)  # v1, tags=[], importance=5
+
+    def b_takes_over() -> None:
+        # B's completed takeover: a DIFFERENT field (tags) published at v2, token cleared.
+        real_qdrant.set_payload(
+            collection_name=_COLL,
+            payload={"tags": ["from-b"], "version": 2, "update_lease_token": None},
+            points=models.Filter(
+                must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+            ),
+        )
+
+    racer = cast(QdrantClient, _CommitRacer(real_qdrant, b_takes_over))
+    _run_owned(
+        racer,
+        _COLL,
+        namespace=ns,
+        object_id=oid,
+        point_id=episodic_point_id(oid),
+        plan=lambda cur: MutationPlan(changes={"importance": 9}),  # A's change
+    )
+
+    row = _payload(real_qdrant, oid)
+    assert row["tags"] == ["from-b"], "B's takeover change was lost"
+    assert row["importance"] == 9, "A falsely attributed B's commit and lost its own change"
+    assert row["version"] == 3, "expected two serialized commits (B at v2, A at v3)"
+    assert row.get("update_lease_token") is None
+
+
+@pytest.mark.integration
+def test_crash_after_done_before_clear_recovers_without_reapply(real_qdrant: QdrantClient) -> None:
+    """A committed (version bumped, done token stamped) then crashed before clearing. The stale
+    EXPIRED done token is taken over by the next writer, which applies ITS change at the next version
+    — the committed change is preserved (not lost), not re-applied, and the stale done is cleared."""
+    ns, oid = _seed(real_qdrant, importance=5)  # v1
+    # Model A's post-commit crash: A's change (tags) committed at v2, done token stamped, never cleared.
+    expired_done = f"done:{int(time.time() * 1_000_000) - 10_000_000}:crashedA"
+    real_qdrant.set_payload(
+        collection_name=_COLL,
+        payload={"tags": ["from-a"], "version": 2, "update_lease_token": expired_done},
+        points=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+        ),
+    )
+
+    _run_owned(
+        real_qdrant,
+        _COLL,
+        namespace=ns,
+        object_id=oid,
+        point_id=episodic_point_id(oid),
+        plan=lambda cur: MutationPlan(changes={"importance": 9}),  # B's change
+    )
+
+    row = _payload(real_qdrant, oid)
+    assert row["tags"] == [
+        "from-a"
+    ]  # A's committed change preserved (not lost, not double-applied)
+    assert row["importance"] == 9  # B's change applied on top
+    assert row["version"] == 3  # B committed at the next version — no regression
+    assert row.get("update_lease_token") is None  # the stale done token was cleared
+
+
 class _AlwaysLiveOwnerClient:
     """Fake client whose row always shows a FRESH foreign owner token → acquire can never win."""
 

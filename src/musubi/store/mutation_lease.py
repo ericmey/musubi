@@ -29,17 +29,20 @@ So this is a single-row, two-phase **attributable owner lease** on the dedicated
    This is NOT safe (``update_vectors`` is unfenceable on the deployed Qdrant); it is best-effort and
    its atomicity is Phase-2 (see the scope note below). A loser never *reaches* it, but a stalled old
    owner's late write can still corrupt a newer vector.
-4. **Publish payload + bump version, fenced on ``update_lease_token == ours``** — ``set_payload`` of
-   ONLY the intended-change fields plus ``version = read_version + 1``. Narrow write ⇒ unrelated
-   fields compose; a same-field conflict retries.
-5. **Attribute publish** — **KNOWN PHASE-1 BUG (Yua #539 review, pending fix):** this currently
-   clears the token and attributes on ``{token==None AND version==read+1}``, which is NOT
-   attributable — a takeover that published a different change at the same next version is falsely
-   claimed as ours, silently losing our change. The sound fix mirrors the RET-008 access lease's
-   two-phase token: publish ``token=done:<nonce>`` fenced on ``own``, read back the EXACT ``done``
-   token as the only success signal, then clear ``done`` fenced on exact ``done`` (plus
-   crash-after-done recovery). Tracked in ``DATA001-PHASE2-HANDOFF.md``; #539 must not merge until
-   it lands with an exact done-token proof.
+4. **Commit — publish narrow changes + bump version + stamp a ``done`` token, in ONE ``set_payload``
+   fenced on ``update_lease_token == our own``** — of ONLY the intended-change fields plus
+   ``version = read_version + 1`` and ``update_lease_token = "done:<issued>:<nonce>"``. A
+   stale/taken-over writer matches zero and cannot commit. Narrow write ⇒ unrelated fields compose;
+   a same-field conflict retries against the fresh row.
+5. **Attribute — our change landed IFF our EXACT ``done`` token is read back.** This is the ONLY
+   success signal (mirrors ``store/access_lease.py``): ``{token==None AND version==read+1}`` is NOT
+   attributable — a takeover that published a different change at the same next version would be
+   falsely claimed as ours, silently losing our change. Absent/other ``done`` ⇒ retry.
+6. **Clear** — ``set_payload(update_lease_token=None)`` fenced on our exact ``done`` token. A crash
+   after the commit (expired ``done``) is self-healing: the change already committed (version bumped),
+   so the next writer takes over the exact expired token and applies ITS change on top at the next
+   version — the committed change is never re-applied or lost. An orphaned ``done`` token (no future
+   writer) is inert operational plumbing (``exclude=True``, never surfaced).
 
 **Scope — DATA-001 Phase 1 (this module): PAYLOAD-only concurrency safety.** The narrow fenced
 ``set_payload`` publish is concurrency-safe and crash-safe: it is the only commit point, it never
@@ -118,8 +121,10 @@ def _conditions(namespace: str, object_id: str) -> list[models.Condition]:
     ]
 
 
-def _token(issued_us: int) -> str:
-    return f"own:{issued_us}:{secrets.token_hex(12)}"
+def _token(phase: str, issued_us: int) -> str:
+    """A unique never-reused token ``"<phase>:<issued_us>:<nonce>"``. Phase ∈ {``own``, ``done``}
+    (mirrors ``store/access_lease.py``'s ``held``/``done``)."""
+    return f"{phase}:{issued_us}:{secrets.token_hex(12)}"
 
 
 def _issued_us(token: str) -> int:
@@ -186,7 +191,7 @@ async def owned_update(
         else:
             continue  # a live owner holds this row — retry next round.
 
-        token = _token(now_us)
+        token = _token("own", now_us)
         client.set_payload(
             collection_name=collection,
             payload={"update_lease_token": token},
@@ -243,18 +248,18 @@ async def owned_update(
                 points=[models.PointVectors(id=point_id, vector=mutation.vectors)],
             )
 
-        # ---- phase 4: publish narrow payload + bump version + release, fenced on OUR token ----
-        # KNOWN PHASE-1 BUG (Yua #539 review, pending done-token fix — see DATA001-PHASE2-HANDOFF.md):
-        # clearing the token here and attributing on {token==None AND version==read+1} is NOT
-        # attributable — a takeover that published a DIFFERENT change at the same next version and
-        # cleared the token makes phase-5 FALSELY attribute the takeover's commit to us, silently
-        # losing our change. The fix (mirror the RET-008 access lease): publish token=done:<nonce>
-        # fenced on own, read back that EXACT done token as the only success signal, then clear done
-        # fenced on exact done. Not yet applied — do not rely on this attribution.
+        # ---- phase 4: COMMIT — publish narrow changes + version+1 + token=done, fenced on OUR own --
+        # Mirrors store/access_lease.py's two-phase attributable lease: the commit stamps a UNIQUE
+        # ``done`` token (not ``None``), fenced on our exact ``own`` token, so a stale/taken-over
+        # writer matches zero and cannot commit. The EXACT ``done`` token read back is the ONLY
+        # success signal — ``{token==None AND version==read+1}`` is NOT attributable (a takeover that
+        # published a different change at the same next version and cleared the token would be falsely
+        # claimed as ours, silently losing our change).
+        done = _token("done", int(time.time() * 1_000_000))
         publish = {
             **mutation.changes,
             "version": read_version + 1,
-            "update_lease_token": None,
+            "update_lease_token": done,
         }
         client.set_payload(
             collection_name=collection,
@@ -269,14 +274,25 @@ async def owned_update(
             ),
         )
 
-        # ---- phase 5: attribute the publish (see KNOWN BUG above — version+cleared is not sound) --
-        published = _read(client, collection, namespace, object_id)
-        if (
-            published.get("update_lease_token") is None
-            and int(published.get("version", 0)) == read_version + 1
-        ):
-            return published
-        continue  # a stall/takeover raced the publish — retry, never a silent overwrite.
+        # ---- phase 5: ATTRIBUTE — our change landed IFF our EXACT done token is stored ----
+        committed = _read(client, collection, namespace, object_id)
+        if committed.get("update_lease_token") != done:
+            continue  # a stall/takeover raced the commit — retry, never falsely attribute.
+
+        # ---- phase 6: CLEAR — release, fenced on our EXACT done token ----
+        client.set_payload(
+            collection_name=collection,
+            payload={"update_lease_token": None},
+            points=models.Filter(
+                must=[
+                    *_conditions(namespace, object_id),
+                    models.FieldCondition(
+                        key="update_lease_token", match=models.MatchValue(value=done)
+                    ),
+                ]
+            ),
+        )
+        return {**committed, "update_lease_token": None}  # our change is durably committed.
 
     raise MutationLeaseConflict(
         f"full-object update for ({namespace!r}, {object_id!r}) in {collection} unresolved "

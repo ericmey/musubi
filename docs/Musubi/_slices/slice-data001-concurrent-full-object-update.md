@@ -158,6 +158,20 @@ convergence that does not happen) + five bounded items. Repaired under the deliv
   `test_vanished_row_raises_lookup_error`. Verified: mutation_lease + data001 + access_lease + plane
   + capture suites green; `make check` green.
 
+### 2026-07-15 — done-token attribution repair (Yua #539 review 2)
+
+Review 2 found a real payload-attribution hole: phase 5 attributed on `{token==None AND
+version==read+1}`, which is NOT attributable — a takeover that published a different change at the
+same next version was falsely claimed as ours, silently losing our change (violating this module's
+own stated "version+1 is not attributable" invariant). **Repaired** by mirroring the RET-008 access
+lease's two-phase token: commit stamps `done:<issued>:<nonce>` fenced on the exact `own` token; the
+EXACT `done` readback is the ONLY success signal; clear is fenced on exact `done`; an expired `done`
+(crash-after-commit) self-heals on takeover (the next writer applies its change at the next version,
+never re-applying or losing the committed change). Proofs:
+`test_stalled_owner_does_not_falsely_attribute_a_takeover_commit` (A-stall/B-takeover discriminator,
+verified RED on the old attribution, GREEN now) and
+`test_crash_after_done_before_clear_recovers_without_reapply`. Vector paths remain Phase-2 open.
+
 
 ### Out-of-scope: pre-existing `05-retrieval/orchestration` Test Contract bullets
 
