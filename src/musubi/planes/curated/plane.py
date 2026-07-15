@@ -49,6 +49,7 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
+from musubi.store.memory_serialization import memory_update_payload
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
@@ -224,7 +225,7 @@ class CuratedPlane:
         # full upsert and the body didn't change for the superseded row.
         self._client.set_payload(
             collection_name=self._collection,
-            payload=superseded.model_dump(mode="json"),
+            payload=memory_update_payload(superseded),
             points=[_point_id(existing.object_id)],
         )
 

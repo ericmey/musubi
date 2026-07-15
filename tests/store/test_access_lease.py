@@ -82,7 +82,7 @@ def test_update_and_release_atomic_readback(real_qdrant: QdrantClient) -> None:
 @pytest.mark.integration
 def test_nonexpired_lease_cannot_be_stolen(real_qdrant: QdrantClient) -> None:
     ns, oid = _seed(real_qdrant)
-    fresh = f"{int(time.time() * 1_000_000)}:heldbyanother"  # issued NOW → live
+    fresh = f"held:{int(time.time() * 1_000_000)}:heldbyanother"  # issued NOW → live
     _set_token(real_qdrant, ns, oid, fresh)
     # A live foreign lease must never be stolen — the increment can't proceed and fails loud
     # rather than corrupting the counter.
@@ -98,7 +98,7 @@ def test_expired_lease_exact_token_takeover_recovers(real_qdrant: QdrantClient) 
     """A crashed holder leaves an EXPIRED token; the next writer takes over that exact token and
     completes the increment (crash-between-acquire-and-update recovery)."""
     ns, oid = _seed(real_qdrant)
-    expired = f"{int(time.time() * 1_000_000) - 10_000_000}:crashedholder"  # 10s ago → expired
+    expired = f"held:{int(time.time() * 1_000_000) - 10_000_000}:crashedholder"  # 10s ago → expired
     _set_token(real_qdrant, ns, oid, expired)
     lease_increment_access(real_qdrant, _COLL, {(ns, oid)})
     row = _row(real_qdrant, oid)
@@ -111,7 +111,7 @@ def test_old_holder_fenced_after_takeover(real_qdrant: QdrantClient) -> None:
     """After an expired token is taken over, the OLD holder's fenced write (on its old token) must
     match zero points — it can never corrupt the counter post-takeover."""
     ns, oid = _seed(real_qdrant)
-    old = f"{int(time.time() * 1_000_000) - 10_000_000}:oldholder"
+    old = f"held:{int(time.time() * 1_000_000) - 10_000_000}:oldholder"
     _set_token(real_qdrant, ns, oid, old)
     lease_increment_access(real_qdrant, _COLL, {(ns, oid)})  # takes over `old`, count → 1, released
     # The old holder resumes and tries its fenced increment+release on its stale token:
@@ -133,7 +133,7 @@ class _AlwaysLiveLeaseClient:
     """Fake client whose rows always show a FRESH foreign lease → acquire can never win."""
 
     def scroll(self, *_a: Any, **_k: Any) -> Any:
-        token = f"{int(time.time() * 1_000_000)}:foreign"
+        token = f"held:{int(time.time() * 1_000_000)}:foreign"
         rec = type(
             "R",
             (),
@@ -151,6 +151,31 @@ class _AlwaysLiveLeaseClient:
 
     def batch_update_points(self, *_a: Any, **_k: Any) -> Any:
         return None
+
+
+@pytest.mark.integration
+def test_full_payload_update_cannot_reset_leased_increment(real_qdrant: QdrantClient) -> None:
+    """Gap-2 arbiter: a full-payload UPDATE that carries a STALE access_count (a concurrent
+    transition/patch that read the row before the lease bump) must NOT reset the leased value.
+    `memory_update_payload` excludes the lease-owned fields; the set_payload merge leaves them
+    exactly as the lease last wrote them."""
+    from musubi.store.memory_serialization import memory_update_payload
+
+    ns, oid = _seed(real_qdrant)  # access_count starts at 0
+    stale = _row(real_qdrant, oid)  # snapshot with access_count == 0 (pre-bump)
+    lease_increment_access(real_qdrant, _COLL, {(ns, oid)})  # → access_count = 1
+    assert _row(real_qdrant, oid).get("access_count") == 1
+
+    # Simulate a concurrent transition/patch writing back its STALE (count==0) model.
+    stale_model = EpisodicMemory.model_validate(stale)  # carries access_count = 0
+    real_qdrant.set_payload(
+        collection_name=_COLL,
+        payload=memory_update_payload(stale_model),  # excludes access_count / last_accessed_at
+        points=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+        ),
+    )
+    assert _row(real_qdrant, oid).get("access_count") == 1  # leased increment survived
 
 
 def test_lease_exhaustion_is_fail_loud() -> None:

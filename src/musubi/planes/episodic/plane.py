@@ -39,6 +39,7 @@ from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.store.access_lease import lease_increment_access
+from musubi.store.memory_serialization import memory_update_payload
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
@@ -582,31 +583,17 @@ class EpisodicPlane:
             with_payload=True,
         )
         out: list[EpisodicMemory] = []
-        updates = []
-        now = utc_now()
-        now_str = now.isoformat().replace("+00:00", "Z")
-
+        pairs: set[tuple[str, str]] = set()
         for point in resp.points:
             if point.payload:
                 payload = dict(point.payload)
-                ac = payload.get("access_count", 0) + 1
-                updates.append(
-                    models.SetPayloadOperation(
-                        set_payload=models.SetPayload(
-                            payload={"access_count": ac, "last_accessed_at": now_str},
-                            points=[point.id],
-                        )
-                    )
-                )
-                payload["access_count"] = ac
-                payload["last_accessed_at"] = now_str
                 out.append(_memory_from_payload(payload))
+                pairs.add((str(payload.get("namespace")), str(payload.get("object_id"))))
 
-        if updates:
-            self._client.batch_update_points(
-                collection_name=self._collection,
-                update_operations=updates,
-            )
+        # RET-008 (#502): route the batched access bump through the shared fenced lease (never a
+        # bare RMW that would race/lose a concurrent leased increment).
+        if pairs:
+            lease_increment_access(self._client, self._collection, pairs)
         return out
 
     # ------------------------------------------------------------------
@@ -668,7 +655,7 @@ class EpisodicPlane:
 
         self._client.set_payload(
             collection_name=self._collection,
-            payload=updated.model_dump(mode="json"),
+            payload=memory_update_payload(updated),
             points=[_point_id(object_id)],
         )
         return updated, event
