@@ -60,5 +60,25 @@ Complete DQ-001 requirements (Issue #443). Replace codepoint slicing in fast/rec
 - `make check` is fully passing.
 
 ## Work log
-- Base orchestration integration details (fast/deep skips and timeouts, bullets 1-12) are pre-existing out-of-scope conditions tracked elsewhere.
-- Base orchestration integration details (fast/deep skips and timeouts, bullets 1-12) are pre-existing out-of-scope conditions tracked elsewhere.
+
+### Out-of-scope: pre-existing orchestration contract bullets
+
+This slice cites `[[05-retrieval/orchestration]]` only for its grapheme-safe
+projection bullets. The spec's earlier orchestration gaps are pre-existing and
+tracked by Issue #509; they are not implemented or claimed here:
+
+- `test_fast_mode_skips_rerank` — pre-existing, out-of-scope; follow-up #509.
+- `test_deep_mode_invokes_rerank` — pre-existing, out-of-scope; follow-up #509.
+- `test_fast_mode_skips_lineage_hydrate` — pre-existing, out-of-scope; follow-up #509.
+- `test_deep_mode_hydrates_when_flag_true` — pre-existing, out-of-scope; follow-up #509.
+- `test_steps_run_in_documented_order` — pre-existing, out-of-scope; follow-up #509.
+- `test_planes_run_in_parallel` — pre-existing, out-of-scope; follow-up #509.
+- `test_hydrate_fetches_run_in_parallel` — pre-existing, out-of-scope; follow-up #509.
+- `test_whole_call_timeout_fast_400ms` — pre-existing, out-of-scope; follow-up #509.
+- `test_per_plane_timeout_deep_1500ms` — pre-existing, out-of-scope; follow-up #509.
+- `test_rerank_timeout_returns_with_warning` — pre-existing, out-of-scope; follow-up #509.
+- `test_deterministic_for_fixed_inputs` — pre-existing, out-of-scope; follow-up #509.
+- `test_tiebreak_on_object_id` — pre-existing, out-of-scope; follow-up #509.
+- `integration: end-to-end fast-path on 10K corpus with real TEI + Qdrant, p95 ≤ 400ms` — integration, out-of-scope; follow-up #509.
+- `integration: end-to-end deep-path with rerank, NDCG@10 on golden set ≥ threshold` — integration, out-of-scope; follow-up #509.
+- `integration: kill TEI mid-request, pipeline returns with documented degradation` — integration, out-of-scope; follow-up #509.

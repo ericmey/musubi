@@ -90,22 +90,24 @@ async def test_fast_retrieval_uses_grapheme_truncation_for_long_content() -> Non
 async def test_recent_retrieval_uses_grapheme_truncation_for_long_content() -> None:
     from musubi.retrieve.recent import _snippet
 
-    text = "A" * 195 + "👨‍👩‍👧‍👦"
+    text = "A" * 299 + "👨‍👩‍👧‍👦"
     payload = {"content": text}
-    _snippet_val, trunc, length = _snippet(payload, max_chars=200)
+    snippet, trunc, length = _snippet(payload)
     assert trunc is True
-    assert length == 202
+    assert length == 306
+    assert snippet == "A" * 299
 
 
 @pytest.mark.asyncio
 async def test_orchestration_uses_grapheme_truncation_for_long_content() -> None:
     from musubi.retrieve.orchestration import _snippet
 
-    text = "A" * 195 + "👨‍👩‍👧‍👦"
+    text = "A" * 1499 + "👨‍👩‍👧‍👦"
     payload = {"content": text}
-    _snippet_val, trunc, length = _snippet(payload, max_chars=200)
+    snippet, trunc, length = _snippet(payload, max_chars=1500)
     assert trunc is True
-    assert length == 202
+    assert length == 1506
+    assert snippet == "A" * 1499
 
 
 @pytest.mark.asyncio
