@@ -9,7 +9,7 @@ phase: "Lifecycle 2026-07-14 — C6b Phase-1 source cut S1-S7"
 tags: [section/slices, status/done, type/slice, lifecycle, atomicity, source]
 updated: 2026-07-14
 reviewed: true
-depends-on: ["[[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]]"]
+depends-on: []
 blocks: []
 issue: 456
 ---
@@ -17,13 +17,12 @@ issue: 456
 # Slice: C6b Phase-1 source cut (S1-S7 implementation)
 
 The source implementation that flips the accepted C6b tests-only red contract
-([[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]], Issue #437) green,
-following the corrected source-commit series in
-[[13-decisions/c6b-phase1-source-cut-plan]] §F (S1-S7). Authorized by Yua
+(Issue #437, red contract at commit `c7b95da` on branch
+`slice/c6-lifecycle-event-loss-red`, PR #434 draft) to green, following the
+corrected source-commit series in the source-cut plan ADR §F (S1-S7). Authorized by Yua
 (2026-07-14) as a SEPARATE implementation branch/slice, preserving the accepted
-contract. **G1 stays strict-RED throughout Phase 1** (flips only under H5,
-[[_slices/slice-h5-unify-state-mutation]]). No merge/deploy until independent
-review.
+contract. **G1 remained strict-RED throughout Phase 1** and flipped only under H5 via
+PR #473. Independently reviewed and merged via PR #455 at `dd0f971`; G1/H5 closure via PR #473 at `7e5864d`.
 
 ## Specs to implement
 
@@ -111,8 +110,8 @@ overlap is with a `done` slice — advisory only, no active-lane conflict.)*
 
 ## Red-contract provenance (accepted, immutable) vs successor (mechanical flips)
 
-The **red contract at `c7b95da`** ([[_slices/slice-c6b-lifecycle-qdrant-sqlite-atomicity]],
-Issue #437, PR434) is the ACCEPTED, IMMUTABLE red provenance — the 22-red + 3-guard
+The **red contract at `c7b95da`** (Issue #437, PR #434 draft,
+on branch `slice/c6-lifecycle-event-loss-red`) is the ACCEPTED, IMMUTABLE red provenance — the 22-red + 3-guard
 tests-only contract, Yua + Shiori + Tama approved. This successor owns ONLY the
 **mechanical decorator flips** of those reds in `tests/lifecycle/test_c6b_atomicity.py`:
 each owned red's strict-xfail marker is removed as source/config makes it pass, and
@@ -147,7 +146,7 @@ Yua-authorized narrow).
 > (R19's `_observe_pending` guard was REMOVED at S5; all three R20 `rollback` guards were REMOVED at
 > S6). **S7 flips R21, G2a, G3, and the P0c injection/worker/readiness/settings wiring while reducing
 > the pinned G1 denominator from six bypasses to five. G1 is closure-only and flips ONLY under H5**
-> ([[_slices/slice-h5-unify-state-mutation]]).
+> via PR #473.
 > Direct real-source proofs: `test_s2_coordinator_admission.py` (admission, client-free) +
 > `test_s3_coordinator_apply.py` (apply/finalize + wrong-shape + parity) + `test_s4_reconcile.py`
 > (reconcile: leases, backoff, crash matrix, exact-owner no-op). See the **Guard-removal checklist** below.
@@ -299,7 +298,7 @@ Yua-authorized narrow).
 
 **Cross-slice regression gate (NOT part of this parsed Test Contract):**
 `tests/lifecycle/test_c6_event_loss.py` (1 passed / 8 xfailed, frozen) is owned by the active C6 slice
-[[_slices/slice-c6-lifecycle-event-loss]]. This source cut keeps its disposition byte-for-byte unchanged
+the C6 lock at `slice-c6-lifecycle-event-loss.lock` (PR #470, `acf97dd`). This source cut keeps its disposition byte-for-byte unchanged
 (verified every gate) but does not implement or own it, so it is excluded from the parsed denominator.
 
 ## Guard-removal checklist (so no `_require_real_stage` xfail masks a regression)
@@ -328,6 +327,20 @@ whose real semantics are now load-bearing — never leave a guard on a red that 
 
 ## Status
 
-**`in-progress`** (2026-07-14) — Deliverable-0 (config-drift §E resolution) in
-flight. G1 held strict-RED. Blocked-by nothing; consumes the accepted #437 red
-contract. No merge/deploy until independent review.
+**`done`** (2026-07-14) — C6b Phase-1 core implementation complete. S1-S7 merged to
+`main` in PR #455 at `dd0f971` (coordinator wiring, Pending semantics, S6 rollback,
+maintenance barrier, exact-head CI + Vault check + Publish + Release Please all green).
+H5/G1 closure merged in PR #473 at `7e5864d` (canonical coordinator boundary, five
+plane writers migrated, eight production callers consume Final/Pending/Err). G1 exact
+denominator moved from six to zero. Issue #437 red contract (commit `c7b95da`, PR #434
+draft on `slice/c6-lifecycle-event-loss-red`) is the ACCEPTED, IMMUTABLE red provenance;
+this slice preserves it byte-for-byte.
+
+The separate legacy FILE-to-DIR lifecycle storage migration utility is **preserved and
+deferred** in **Issue #474** ("Deferred: legacy lifecycle SQLite FILE-to-DIR migration
+utility"). It is **not a C6b completion gate**: C6b core (coordinator/atomicity) is
+landed via PRs #455 and #473; the FILE-to-DIR utility is a separate legacy-layout
+maintenance item, deferred by Eric on 2026-07-14 until after the active code-fix ledger
+is complete. Current production is already DIR-only; the legacy FILE path is absent;
+the utility is not required to complete C6b or the current code-fix closeout. Resume only
+after Eric explicitly reprioritizes.
