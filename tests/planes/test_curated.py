@@ -707,7 +707,7 @@ async def test_scan_vault_rows_surfaces_validation_failure(
 
     # Seed a row missing required schema fields
     qdrant.upsert(
-        collection_name="musubi_curated",
+        collection_name=plane._collection,
         points=[
             PointStruct(
                 id="00000000-0000-0000-0000-000000000000",

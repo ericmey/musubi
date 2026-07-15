@@ -15,6 +15,7 @@ from musubi.planes.curated.plane import CuratedPlane
 from musubi.types.common import generate_ksuid, utc_now
 from musubi.types.curated import CuratedKnowledge
 from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
+from musubi.vault.namespacing import infer_namespace
 from musubi.vault.writelog import WriteLog
 from musubi.vault.writer import VaultWriter
 
@@ -99,15 +100,6 @@ class WatcherHandler(FileSystemEventHandler):
     def on_deleted(self, event: FileSystemEvent) -> None:
         if not event.is_directory:
             self.loop.call_soon_threadsafe(self.watcher.enqueue_event, event)
-
-
-def infer_namespace(rel_path: str) -> str:
-    parts = Path(rel_path).parts
-    if len(parts) >= 2:
-        tenant = parts[0]
-        presence = parts[1]
-        return f"{tenant}/{presence}/curated"
-    return "system/internal/curated"
 
 
 class VaultWatcher:

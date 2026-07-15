@@ -34,7 +34,7 @@ from musubi.planes.curated.plane import CuratedPlane
 from musubi.types.common import Err
 from musubi.types.curated import CuratedKnowledge
 from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
-from musubi.vault.watcher import infer_namespace
+from musubi.vault.namespacing import infer_namespace
 
 logger = logging.getLogger(__name__)
 
