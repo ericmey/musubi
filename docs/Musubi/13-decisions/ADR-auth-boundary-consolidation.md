@@ -8,28 +8,35 @@ discoverer: eric
 reviewed_by: yua
 phase: "Security audit 2026-07-12/13"
 tags: [type/adr, status/accepted, security, auth, idempotency]
-updated: 2026-07-13
+updated: 2026-07-15
 supersedes: []
 ---
 
 # ADR: consolidated auth boundary — SEC-002/003/004 + IDEM-001
 
 **Discoverer of all four defects: Eric.** Source-confirmed and routed by Yua. Design: Aoi.
-**Status: ACCEPTED (rev 4).** The decision is accepted. The implementation is **accepted-for-merge,
-NOT shipped**: it lives in the UNMERGED stacked PRs #403 (Phase A) and #404 (Phase B, independently
-accepted). **It is NOT merged to `main` and NOT deployed — production remains vulnerable to
-SEC-002/003/004 + IDEM-001 until this stack lands.** Every "accepted" claim below describes the
-accepted stack state, not production.
+**Status: ACCEPTED AND SHIPPED (rev 5).** Phase A merged in PR #403 (`0def0df`); the original
+stacked Phase B PR #404 was superseded and closed, and its production implementation merged in
+replacement PR #414 (`8167202`). Both are on `main` and have been included in deployed releases
+since v1.11.7; the production pin verified during the 2026-07-15 remediation closeout was v1.17.2.
+SEC-002/003/004 and IDEM-001 Phase 0 are therefore shipped, not an open production-vulnerability
+claim. The only work still open from this ADR is listed under **Deferred** below.
 
-## Rev 4 — reconciled to the accepted-for-merge implementation (PR #403 + accepted PR #404)
+## Rev 5 — shipped-state reconciliation (PR #403 + replacement PR #414)
+
+Rev 5 changes delivery truth only. The accepted design below remains the design that shipped.
+References to the historical #403/#404 stack describe the review-time evidence; production Phase B
+landed through replacement PR #414 after #404 closed without merge.
+
+## Rev 4 — reconciled to the accepted-for-merge implementation (historical #403/#404 stack)
 
 Rev 1–3 were the pre-implementation design. **Git history preserves Rev 1–3 in full; Rev 4 REWRITES
 the superseded Decision sections (D1–D6, sequences, matrix) IN PLACE** — the Rev1–3 rev-note blocks
 remain below, but their Decision bodies are replaced, not kept verbatim. Rev 4 corrects the doc to
-the code that was actually implemented and independently accepted in the unmerged stack, SEPARATES
+the code that was actually implemented and independently accepted in the then-unmerged stack, SEPARATES
 the accepted subset from the still-deferred work, and removes the "no src until approved" gating —
 src was narrowly authorized by the router (Yua) and Phase B accepted at `fafca2c`. The design shape
-DID change during implementation and this Rev records the shape that landed in the PRs (unmerged),
+DID change during implementation and this Rev records the shape accepted in the historical stack,
 not the Rev3 sketch:
 
 - **Accepted subset:** D1 (authn co-located in the authz dependency), D2 (route-native authz on the
@@ -40,7 +47,8 @@ not the Rev3 sketch:
   implementation not started); REQ7 (identity tuple-consistency validation — xfail); REQ8 (public
   absent-vs-invalid bearer — xfail).
 
-Reminder throughout: "accepted" = the accepted stack state (PR #403/#404, unmerged), NOT production.
+Historical reminder: in the Rev 4 sections, "accepted" names the review-time stack state. Rev 5
+supersedes every old delivery-status claim: Phase A and replacement Phase B are now shipped.
 
 ## Rev 3 — split pipeline (Yua's "option 1 MODIFIED"), every step PROVEN executable
 
@@ -358,8 +366,8 @@ which does not exist today.
 
 ## Test closure matrix
 
-Column = the ACCEPTED STACK state (PR #403/#404, unmerged), NOT production. "accepted" here means the
-red flipped green at that PR's head; production stays vulnerable until merge.
+Column records the acceptance evidence from the historical #403/#404 stack. The same contracts
+shipped through PR #403 and replacement PR #414 and are now production behavior.
 
 | test | accepted-stack state | closed by |
 | --- | --- | --- |
@@ -381,10 +389,9 @@ red flipped green at that PR's head; production stays vulnerable until merge.
 
 ## Ownership / process (Yua's proposal, adopted)
 
-- **Implementation owner:** Aoi — implemented and accepted-for-merge on `slice-auth-boundary-phase-a`
-  (Phase A src, PR #403) and `slice-idempotency-phase-b` (Phase B src, PR #404, accepted), NOT this
-  red-tests-only slice. (The Rev1–3 note that impl belongs on a separate slice is the reason the
-  canonical `slice-auth-boundary-phase-a` was added in #403.)
+- **Implementation owner:** Aoi — Phase A shipped through PR #403; Phase B was accepted on the
+  historical #404 stack and shipped through replacement PR #414. This ADR/red-contract slice is
+  not the implementation owner.
 - **Acceptance gate:** Yua.
 - **Security / runtime re-review:** Tama + Shiori.
 - **Merger:** a different party than the implementer.
@@ -398,15 +405,16 @@ red flipped green at that PR's head; production stays vulnerable until merge.
 ## Deferred (flagged, not decided here)
 
 Exact deferrals carried forward from the accepted stack:
-- **D4 Phase 1** — durable cross-process idempotency (`slice-api-v0-write-distributed-idempotency`).
+- **D4 Phase 1** — durable cross-process idempotency, tracked by #558. Reopen before any
+  multi-worker or horizontally replicated API deployment.
 - **D5 Phase C** — multipart ingress-cap + streamed digest; design PROVEN @239029a, impl not started.
-- **REQ7** — identity tuple internal-consistency validation (`test_req7_*`, strict-xfail).
-- **REQ8** — public route absent-vs-invalid bearer (`test_req8_*`, strict-xfail).
+- **REQ7** — identity tuple internal-consistency validation, deferred under #412.
+- **REQ8** — public route absent-vs-invalid bearer, deferred under #413.
 
 Pre-existing (different root cause / different ADR): `_operator_scope_hint` rate-tier read; DQ-001
 projection/summary; LIFE-007/008 / DATA-001 atomicity.
 
 ---
 
-**Status: ACCEPTED (rev 4).** Implementation is accepted-for-merge in the unmerged stack (#403/#404),
-NOT merged and NOT deployed — production remains vulnerable until the stack lands.
+**Status: ACCEPTED AND SHIPPED (rev 5).** PR #403 and replacement Phase B PR #414 are on `main` and
+deployed. True deferrals are D4 Phase 1 (#558), D5 Phase C, REQ7 (#412), and REQ8 (#413).
