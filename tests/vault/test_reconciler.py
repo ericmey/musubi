@@ -180,6 +180,24 @@ async def test_reconcile_missing_root_returns_zero(
     assert upserted == 0
 
 
+@pytest.mark.anyio
+async def test_reconcile_file_root_returns_zero_without_scanning_inventory(
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock
+) -> None:
+    vault_root = tmp_path / "not-a-vault"
+    vault_root.write_text("not a directory", encoding="utf-8")
+    rec = VaultReconciler(
+        vault_root=vault_root,
+        curated_plane=mock_curated_plane,
+        coordinator=mock_coordinator,
+    )
+
+    upserted = await rec.reconcile()
+
+    assert upserted == 0
+    mock_curated_plane.scan_vault_rows.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_reconcile_individual_failure_doesnt_abort_pass(
     tmp_path: Path, mock_curated_plane: MagicMock, mock_coordinator: MagicMock

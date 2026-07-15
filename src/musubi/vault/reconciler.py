@@ -77,6 +77,9 @@ class VaultReconciler:
         if not self.vault_root.exists():
             logger.warning("vault-reconcile root does not exist: %s", self.vault_root)
             return 0
+        if not self.vault_root.is_dir():
+            logger.error("vault-reconcile root is not a directory: %s", self.vault_root)
+            return 0
 
         scanned = 0
         upserted = 0
