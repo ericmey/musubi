@@ -40,6 +40,15 @@ class _MockQdrant:
     def query_points(self, *args: Any, **kwargs: Any) -> Any:
         return type("R", (), {"points": []})()
 
+    # RET-002: retrieve() now accounts delivered rows at the final boundary (scroll → batch write).
+    # These warning-aggregation tests deliver mocked hits with no backing store, so accounting
+    # resolves to a no-op: an empty scroll yields no writes.
+    def scroll(self, *args: Any, **kwargs: Any) -> Any:
+        return ([], None)
+
+    def batch_update_points(self, *args: Any, **kwargs: Any) -> Any:
+        return None
+
 
 class _OkReranker:
     async def rerank(

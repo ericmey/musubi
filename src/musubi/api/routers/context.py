@@ -14,6 +14,7 @@ from musubi.api.routers.retrieve import _KIND_STATUS_MAP, _expand_wildcard_targe
 from musubi.auth import authenticate_request
 from musubi.auth.scopes import resolve_namespace_scope
 from musubi.embedding import Embedder, TEIRerankerClient
+from musubi.retrieve.accounting import account_delivered
 from musubi.retrieve.context_pack import (
     ContextCandidate,
     ContextPack,
@@ -120,11 +121,16 @@ async def context_pack(
         "namespace_targets": [{"namespace": ns, "plane": plane} for ns, plane in targets],
         "state_filter": body.state_filter or ["provisional", "matured", "promoted"],
     }
+    # RET-002 (#500): /v1/context's DELIVERED set is the final pack, not the retrieval
+    # candidates — build_context_pack trims by max_items/max_chars/filler below. Defer access
+    # accounting (account_access=False) and account the surfaced pack items ourselves, so a
+    # trimmed candidate is never counted.
     orchestration_result = await run_orchestration_retrieve(
         client=qdrant,
         embedder=embedder,
         reranker=reranker,
         query=query_body,
+        account_access=False,
     )
     if isinstance(orchestration_result, Err):
         retrieval_err = orchestration_result.error
@@ -135,7 +141,7 @@ async def context_pack(
     candidates = [_candidate_from_hit(hit) for hit in envelope.results]
     # RET-007: thread the bounded degradation codes onto the pack so /v1/context is NOT a surface where
     # degraded context is indistinguishable from healthy.
-    return build_context_pack(
+    pack = build_context_pack(
         candidates,
         ContextPackQuery(
             query_text=body.query_text,
@@ -146,6 +152,16 @@ async def context_pack(
         ),
         warnings=[warning.code for warning in envelope.warnings],
     )
+    # Account exactly the FINAL surfaced items (each carries namespace + object_id + plane), once.
+    # An empty pack accounts nothing. Fail-loud but bounded: an accounting failure becomes an
+    # INTERNAL APIError, never a raw exception leaked to the caller.
+    try:
+        await account_delivered(qdrant, [item for group in pack.groups for item in group.items])
+    except Exception:
+        raise APIError(
+            status_code=500, code="INTERNAL", detail="access accounting failed"
+        ) from None
+    return pack
 
 
 def _candidate_from_hit(hit: Any) -> ContextCandidate:
