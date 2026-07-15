@@ -1237,11 +1237,25 @@ class LifecycleTransitionCoordinator:
                 release=True,
             )
             counts["abandoned"] += 1
-        else:  # 'retry' — transient; keep PENDING + bounded backoff, never abandoned by uncertainty
+        elif outcome == "retry":  # transient; keep PENDING + bounded backoff
             self._persist_attempt(
                 opk, reschedule=True, failure_class="transient", owner=token, release=True
             )
             counts["pending"] += 1
+        else:
+            # A handler that returns an outcome outside the documented set
+            # {'confirmed','fence','retry'} is a programming error — fail FAST/terminally (ABANDON),
+            # never an infinite retry loop that masks the bug behind endless backoff.
+            self._observe_failure("terminal")
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
 
     def _finalize_custom(self, opk: str, *, owner: str) -> None:
         """Terminal FINAL for a custom intent whose handler already committed its external effect (the

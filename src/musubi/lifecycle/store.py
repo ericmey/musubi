@@ -278,7 +278,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     # a NULL intent_kind is read as the default lifecycle-transition kind.
     cols = {row[1] for row in conn.execute("PRAGMA table_info(lifecycle_outbox)").fetchall()}
     if "intent_kind" not in cols:
-        conn.execute("ALTER TABLE lifecycle_outbox ADD COLUMN intent_kind TEXT")
+        try:
+            conn.execute("ALTER TABLE lifecycle_outbox ADD COLUMN intent_kind TEXT")
+        except sqlite3.OperationalError as exc:
+            # Two-process race: another process ADD COLUMN'd intent_kind between our PRAGMA read and
+            # this ALTER. Tolerate ONLY the duplicate-column error; NEVER mask any other
+            # OperationalError (a genuine schema/lock fault must still surface).
+            if "duplicate column name" not in str(exc).lower():
+                raise
     conn.commit()
 
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from qdrant_client import QdrantClient, models
@@ -510,3 +511,262 @@ async def test_sync_index_clears_stale_index_operation_id(
     failed = await plane.index(fresh_stale, "")  # first-index fail (empty)
     assert failed.artifact_state == "failed"
     assert failed.committed_generation is None and failed.index_operation_id is None
+
+
+@pytest.mark.asyncio
+async def test_async_replay_after_first_index_failure_is_idempotent_no_pv_bump(
+    qdrant: QdrantClient, plane: ArtifactPlane, tmp_path: Path
+) -> None:
+    """Copilot #1: replay of a PUBLISHED first-index deterministic failure recognizes the same
+    operation_key as terminal → confirms WITHOUT re-publishing or bumping publication_version."""
+    from musubi.lifecycle.coordinator import CustomIntentContext
+
+    indexer = ArtifactIndexer(client=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path)
+    art = await plane.create(_artifact())
+    (tmp_path / art.namespace).mkdir(parents=True, exist_ok=True)
+    (tmp_path / art.namespace / art.object_id).write_bytes(b"")  # empty -> deterministic failure
+    ctx = CustomIntentContext(
+        operation_key="op-replay-first",
+        object_id=art.object_id,
+        collection="musubi_artifact",
+        namespace=art.namespace,
+        owner_token="owner-a",
+    )
+    assert await indexer._apply_async(ctx) == "confirmed"
+    h1 = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert h1 is not None and h1.artifact_state == "failed"
+    assert h1.index_operation_id == "op-replay-first"
+    pv1 = h1.publication_version
+
+    assert await indexer._apply_async(ctx) == "confirmed"  # REPLAY same op
+    h2 = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert h2 is not None and h2.publication_version == pv1  # NOT bumped
+    assert h2.artifact_state == "failed"
+
+
+@pytest.mark.asyncio
+async def test_async_replay_after_reindex_keeps_prior_failure_is_idempotent(
+    qdrant: QdrantClient, plane: ArtifactPlane, tmp_path: Path
+) -> None:
+    """Copilot #1: replay of a PUBLISHED re-index failure (prior generation kept visible) is idempotent
+    — confirms, no pv bump, prior generation still visible."""
+    from musubi.lifecycle.coordinator import CustomIntentContext
+
+    indexer = ArtifactIndexer(client=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path)
+    art = await plane.create(_artifact())
+    _write_blob(tmp_path, art, "# A\ngood content\n")
+    ctx1 = CustomIntentContext(
+        operation_key="op1",
+        object_id=art.object_id,
+        collection="musubi_artifact",
+        namespace=art.namespace,
+        owner_token="owner1",
+    )
+    assert await indexer._apply_async(ctx1) == "confirmed"
+    _h = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert _h is not None
+    g1 = _h.committed_generation
+
+    (tmp_path / art.namespace / art.object_id).write_bytes(
+        b""
+    )  # empty -> re-index deterministic fail
+    ctx2 = CustomIntentContext(
+        operation_key="op2",
+        object_id=art.object_id,
+        collection="musubi_artifact",
+        namespace=art.namespace,
+        owner_token="owner2",
+    )
+    assert await indexer._apply_async(ctx2) == "confirmed"
+    h2 = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert h2 is not None and h2.committed_generation == g1 and h2.index_operation_id == "op2"
+    pv2 = h2.publication_version
+
+    assert await indexer._apply_async(ctx2) == "confirmed"  # REPLAY op2
+    h3 = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert h3 is not None and h3.publication_version == pv2 and h3.committed_generation == g1
+
+
+@pytest.mark.asyncio
+async def test_async_success_clears_stale_failure_reason(
+    qdrant: QdrantClient, plane: ArtifactPlane, tmp_path: Path
+) -> None:
+    """Copilot #2: a successful async publish clears a stale prior failure_reason."""
+    coord = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+    ArtifactIndexer(client=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path).register(coord)
+    art = await plane.create(_artifact())
+    qdrant.set_payload(
+        collection_name="musubi_artifact",
+        payload={"failure_reason": "an old failure that must not survive"},
+        points=[_point_id(art.object_id)],
+    )
+    _write_blob(tmp_path, art, "# A\ngood content now\n")
+    coord.enqueue_index_intent(object_id=art.object_id, namespace=art.namespace)
+    coord.reconcile_once()
+    head = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert head is not None and head.artifact_state == "indexed" and head.failure_reason is None
+
+
+@pytest.mark.asyncio
+async def test_sync_index_partial_upsert_raises_gc_staged_generation(
+    qdrant: QdrantClient, plane: ArtifactPlane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Copilot #4: staged_generation is set BEFORE the chunk upsert, so a timeout/partial server-side
+    success still GCs the exact staged generation (no orphan tail)."""
+    art = await plane.create(_artifact())
+    real_upsert_any = cast(Any, qdrant.upsert)
+
+    def partial_then_raise(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("collection_name") == "musubi_artifact_chunks":
+            real_upsert_any(*args, **kwargs)  # partial server-side write
+            raise RuntimeError("timeout AFTER partial upsert")
+        return real_upsert_any(*args, **kwargs)
+
+    monkeypatch.setattr(qdrant, "upsert", partial_then_raise)
+    result = await plane.index(art, "# A\ncontent to stage\n")
+    monkeypatch.undo()
+    assert result.artifact_state == "failed"  # first-index failure, fail-closed
+    left, _ = qdrant.scroll(
+        collection_name="musubi_artifact_chunks",
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="artifact_id", match=models.MatchValue(value=art.object_id)
+                )
+            ]
+        ),
+        limit=100,
+    )
+    assert left == []  # the partially-upserted staged generation was cleaned (blocker 4)
+
+
+def test_ensure_schema_tolerates_two_process_duplicate_intent_kind_race(tmp_path: Path) -> None:
+    """Copilot #5: a two-process duplicate-column race on the intent_kind ALTER is tolerated, but any
+    OTHER OperationalError still surfaces (never masked). (sqlite3.Connection.execute is read-only, so a
+    thin proxy models process A: PRAGMA reports the column ABSENT while the ALTER hits it already
+    present.)"""
+    import sqlite3
+
+    from musubi.lifecycle import store
+
+    class _FakeCursor:
+        def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+            self._rows = rows
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return self._rows
+
+    class _ProxyConn:
+        def __init__(self, real: sqlite3.Connection, alter_error: Exception) -> None:
+            self._real = real
+            self._alter_error = alter_error
+
+        def execute(self, *args: Any, **kwargs: Any) -> Any:
+            sql = str(args[0]) if args else str(kwargs.get("sql", ""))
+            if "PRAGMA table_info(lifecycle_outbox)" in sql:
+                return _FakeCursor([(0, "operation_key", "TEXT", 0, None, 1)])  # no intent_kind row
+            if sql.strip().upper().startswith("ALTER TABLE"):
+                raise self._alter_error
+            return self._real.execute(*args, **kwargs)
+
+        def executescript(self, sql: str) -> Any:
+            return self._real.executescript(sql)
+
+        def commit(self) -> None:
+            self._real.commit()
+
+    real = store.connect(tmp_path / "race.db")
+    store.ensure_schema(real)  # intent_kind now exists
+
+    # RACE: PRAGMA reports absent → ensure_schema ALTERs an existing column → duplicate → TOLERATED.
+    dup = sqlite3.OperationalError("duplicate column name: intent_kind")
+    store.ensure_schema(_ProxyConn(real, dup))  # type: ignore[arg-type]  # must NOT raise
+
+    # DISCRIMINATION: a NON-duplicate OperationalError must propagate, never be swallowed.
+    locked = sqlite3.OperationalError("database is locked")
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        store.ensure_schema(_ProxyConn(real, locked))  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_unknown_handler_outcome_abandons_not_infinite_retry(
+    qdrant: QdrantClient, plane: ArtifactPlane, tmp_path: Path
+) -> None:
+    """Copilot #6: a handler returning an outcome outside {confirmed,fence,retry} fails FAST (ABANDONED),
+    never an infinite retry."""
+    coord = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+    coord.register_intent_handler("artifact_index", lambda ctx: "not-a-valid-outcome")
+    art = await plane.create(_artifact())
+    coord.enqueue_index_intent(object_id=art.object_id, namespace=art.namespace)
+    report = coord.reconcile_once()
+    assert report.abandoned == 1 and report.pending == 0  # terminal, not retried
+    report2 = coord.reconcile_once()
+    assert report2.claimed == 0  # ABANDONED intent is terminal — never re-claimed
+
+
+def _winner_injecting_set_payload(qdrant: QdrantClient, object_id: str) -> object:
+    """Wrap the test client's set_payload so the FIRST filtered head publish is preceded by a concurrent
+    winner advancing publication_version + committing a different generation — forcing a fence loss in
+    the reread->write window. Returns the wrapper; caller installs it via monkeypatch."""
+    real = qdrant.set_payload
+    state = {"injected": False}
+
+    def racing(*args: Any, **kwargs: Any) -> Any:
+        if (
+            kwargs.get("collection_name") == "musubi_artifact"
+            and isinstance(kwargs.get("points"), models.Filter)
+            and not state["injected"]
+        ):
+            state["injected"] = True
+            real(
+                collection_name="musubi_artifact",
+                payload={
+                    "publication_version": 99,
+                    "committed_generation": "winner-gen",
+                    "committed_owner": "winner-owner",
+                    "artifact_state": "indexed",
+                    "chunk_count": 1,
+                },
+                points=[_point_id(object_id)],
+            )
+        return real(*args, **kwargs)
+
+    return racing
+
+
+@pytest.mark.asyncio
+async def test_sync_index_success_fence_loss_preserves_winner(
+    qdrant: QdrantClient, plane: ArtifactPlane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Copilot #3: a stale-caller SUCCESS publish loses the publication_version fence to a concurrent
+    winner — it deletes only its own generation, preserves the winner, and returns the winner's head."""
+    art = await plane.create(_artifact())
+    base = await plane.index(art, "# A\nbase content\n")  # pv=1, G1
+    monkeypatch.setattr(qdrant, "set_payload", _winner_injecting_set_payload(qdrant, art.object_id))
+    result = await plane.index(base, "# A\nour losing content\n")
+    monkeypatch.undo()
+    assert result.committed_generation == "winner-gen"  # returned the winner, not our attempt
+    head = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert head is not None and head.committed_generation == "winner-gen"
+    assert head.publication_version == 99  # winner's pv preserved, never regressed
+    chunks = await plane.chunks_for(namespace=art.namespace, object_id=art.object_id)
+    assert all(c.generation == "winner-gen" for c in chunks)  # our losing generation was cleaned
+
+
+@pytest.mark.asyncio
+async def test_sync_index_failure_fence_loss_preserves_winner(
+    qdrant: QdrantClient, plane: ArtifactPlane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Copilot #3 (failure path): a stale-caller FAILURE write also loses the fence to a concurrent
+    winner — it never clobbers the winner or regresses publication_version."""
+    art = await plane.create(_artifact())
+    base = await plane.index(art, "# A\nbase content\n")  # pv=1, G1
+    monkeypatch.setattr(qdrant, "set_payload", _winner_injecting_set_payload(qdrant, art.object_id))
+    result = await plane.index(
+        base, ""
+    )  # empty -> FAILS -> fenced failure write loses to the winner
+    monkeypatch.undo()
+    assert result.committed_generation == "winner-gen"
+    head = await plane.get(namespace=art.namespace, object_id=art.object_id)
+    assert head is not None and head.committed_generation == "winner-gen"
+    assert head.publication_version == 99 and head.artifact_state == "indexed"  # winner intact

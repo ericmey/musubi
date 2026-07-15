@@ -93,9 +93,6 @@ class ArtifactPlane:
         hides the prior tail — the orphaned-chunk bug is gone on the direct-call path too. The async,
         durably-retried, concurrency-safe path is :class:`ArtifactIndexer` via the lifecycle worker;
         this method is the single-writer synchronous equivalent."""
-        prior_generation = (
-            artifact.committed_generation
-        )  # generation this re-index supersedes (or None)
         staged_generation: str | None = None
         try:
             # Deterministic config guard: an unknown chunker is a TERMINAL failure — never a silent
@@ -141,71 +138,126 @@ class ArtifactPlane:
                         },
                     )
                 )
-            self._client.upsert(collection_name=self._chunks_collection, points=points)
+            # Mark the staged generation BEFORE the upsert, so a timeout / partial server-side success
+            # still triggers exact-generation cleanup in the except path (never an orphan tail).
             staged_generation = generation
+            self._client.upsert(collection_name=self._chunks_collection, points=points)
 
-            # Publish the committed head naming this generation+owner.
+            # Reread the CURRENT head (never trust a possibly-stale caller) and publish
+            # publication_version-FENCED + exact readback — a stale caller / concurrent winner matches
+            # ZERO points and loses, instead of a blind by-point-id overwrite that could clobber a winner.
+            current = self._get_sync(namespace=artifact.namespace, object_id=artifact.object_id)
+            if current is None:
+                raise ValueError("artifact head vanished during index")
+            expected_pv = current.publication_version
             now = utc_now()
-            data = artifact.model_dump()
-            data.update(
-                artifact_state="indexed",
-                chunk_count=len(raw_chunks),
-                committed_generation=generation,
-                committed_owner=owner,
-                # The sync path has NO async indexing intent — clear any stale op id so the head never
-                # falsely claims a prior async operation committed this generation.
-                index_operation_id=None,
-                publication_version=artifact.publication_version + 1,
-                failure_reason=None,
-                updated_at=now,
-                updated_epoch=epoch_of(now),
-            )
-            updated = SourceArtifact.model_validate(data)
             self._client.set_payload(
                 collection_name=self._collection,
-                payload=updated.model_dump(mode="json"),
-                points=[_point_id(artifact.object_id)],
+                payload={
+                    "artifact_state": "indexed",
+                    "chunk_count": len(raw_chunks),
+                    "committed_generation": generation,
+                    "committed_owner": owner,
+                    # The sync path has NO async indexing intent — clear any stale op id.
+                    "index_operation_id": None,
+                    "failure_reason": None,
+                    "publication_version": expected_pv + 1,
+                    "updated_at": now.isoformat(),
+                    "updated_epoch": epoch_of(now),
+                },
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=artifact.object_id)
+                        ),
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=artifact.namespace)
+                        ),
+                        models.FieldCondition(
+                            key="publication_version", match=models.MatchValue(value=expected_pv)
+                        ),
+                    ]
+                ),
             )
-            # Scoped GC: remove ONLY the SUPERSEDED prior generation's chunks — never a concurrent
-            # attempt's fresh generation. Storage-only; reads are already fail-closed on the head.
-            if prior_generation and prior_generation != generation:
-                self._delete_generation(artifact.object_id, prior_generation)
-            return updated
+            published = self._get_sync(namespace=artifact.namespace, object_id=artifact.object_id)
+            if (
+                published is not None
+                and published.committed_generation == generation
+                and published.committed_owner == owner
+            ):
+                # Winner: scoped GC of ONLY the SUPERSEDED prior generation the CURRENT head named —
+                # never a concurrent attempt's fresh generation. Storage-only; reads are fail-closed.
+                if current.committed_generation and current.committed_generation != generation:
+                    self._delete_generation(artifact.object_id, current.committed_generation)
+                return published
+            # Fence loss (a concurrent winner advanced publication_version): delete ONLY this attempt's
+            # own staged generation, preserve the winner, and return the current committed head.
+            self._delete_generation(artifact.object_id, generation)
+            return published if published is not None else current
 
         except Exception as e:
-            now = utc_now()
-            data = artifact.model_dump()
-            if prior_generation:
-                # RE-INDEX failure (inv #3): the PREVIOUS-GOOD committed generation stays VISIBLE.
-                # Record the failed attempt on the head but keep it indexed at the prior generation.
-                # The sync path has no async intent — clear any stale op id.
-                data.update(
-                    failure_reason=str(e),
-                    index_operation_id=None,
-                    updated_at=now,
-                    updated_epoch=epoch_of(now),
-                )
-            else:
-                # FIRST-EVER index failure (inv #4): fail-closed — no committed generation, zero exposed.
+            # Cleanup THIS attempt's own staged generation regardless (never a winner's).
+            if staged_generation is not None:
+                self._delete_generation(artifact.object_id, staged_generation)
+            # Reread the LIVE head (never trust a stale caller) and FENCE the failure write too, so a
+            # concurrent winner is never clobbered and publication_version never regresses.
+            live = self._get_sync(namespace=artifact.namespace, object_id=artifact.object_id)
+            if live is None:
+                # The head vanished concurrently — nothing to publish. Return a best-effort (unpersisted)
+                # failed view of the caller. NOTE: this is the one return-semantics choice on this path.
+                data = artifact.model_dump()
                 data.update(
                     artifact_state="failed",
                     failure_reason=str(e),
                     committed_generation=None,
                     committed_owner=None,
                     index_operation_id=None,
-                    updated_at=now,
-                    updated_epoch=epoch_of(now),
                 )
-            result = SourceArtifact.model_validate(data)
+                return SourceArtifact.model_validate(data)
+            expected_pv = live.publication_version
+            now = utc_now()
+            failure_payload: dict[str, object]
+            if live.committed_generation:
+                # RE-INDEX failure (inv #3): preserve the LIVE prior committed pair; record the attempt.
+                failure_payload = {
+                    "failure_reason": str(e),
+                    "index_operation_id": None,
+                    "publication_version": expected_pv + 1,
+                    "updated_at": now.isoformat(),
+                    "updated_epoch": epoch_of(now),
+                }
+            else:
+                # FIRST-EVER failure (inv #4): fail-closed — clear the committed pair (live has none).
+                failure_payload = {
+                    "artifact_state": "failed",
+                    "failure_reason": str(e),
+                    "committed_generation": None,
+                    "committed_owner": None,
+                    "index_operation_id": None,
+                    "publication_version": expected_pv + 1,
+                    "updated_at": now.isoformat(),
+                    "updated_epoch": epoch_of(now),
+                }
             self._client.set_payload(
                 collection_name=self._collection,
-                payload=result.model_dump(mode="json"),
-                points=[_point_id(artifact.object_id)],
+                payload=failure_payload,
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=artifact.object_id)
+                        ),
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=artifact.namespace)
+                        ),
+                        models.FieldCondition(
+                            key="publication_version", match=models.MatchValue(value=expected_pv)
+                        ),
+                    ]
+                ),
             )
-            # Scoped GC: remove ONLY this failed attempt's own staged generation (if it staged any).
-            if staged_generation is not None:
-                self._delete_generation(artifact.object_id, staged_generation)
-            return result
+            # Readback — on fence loss (a concurrent winner advanced pv) this returns the winner's head.
+            result = self._get_sync(namespace=artifact.namespace, object_id=artifact.object_id)
+            return result if result is not None else live
 
     async def mark_index_unadmitted(self, artifact: SourceArtifact) -> SourceArtifact:
         """Record a VISIBLE terminal disposition when an indexing intent could not be admitted (the

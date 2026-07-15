@@ -129,8 +129,11 @@ class ArtifactIndexer:
         # Capture the EXACT superseded pair from the old head, so a confirmed publish reclaims only it.
         prior_generation, prior_owner = head.committed_generation, head.committed_owner
 
-        # Idempotent re-drive: a prior attempt of THIS intent already published a committed head.
-        if head.artifact_state == "indexed" and head.index_operation_id == ctx.operation_key:
+        # Idempotent replay: THIS operation already wrote its TERMINAL head — indexed (success or
+        # reindex-keeps-prior) OR failed (a first-index deterministic failure). Confirm WITHOUT
+        # re-publishing or bumping publication_version. (enqueue seeds only the outbox row, never the
+        # head's index_operation_id, so a fresh intent can never false-positive here.)
+        if head.index_operation_id == ctx.operation_key:
             return "confirmed"
 
         blob = self._blob_root / namespace / object_id
@@ -199,6 +202,8 @@ class ArtifactIndexer:
                 "committed_generation": generation,
                 "committed_owner": owner,
                 "index_operation_id": ctx.operation_key,
+                # A successful publish clears any stale failure_reason from a prior failed attempt.
+                "failure_reason": None,
                 "publication_version": expected_pv + 1,
                 "updated_at": now.isoformat(),
                 "updated_epoch": epoch_of(now),
