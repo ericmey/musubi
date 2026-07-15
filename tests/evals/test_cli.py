@@ -237,6 +237,32 @@ def test_discrimination_unrelated_exception_not_swallowed(
         _run_cli_and_catch_legacy_defect(monkeypatch, capsys, data_dir)
 
 
+def test_scheduled_command_fails_closed_until_live_gate_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    corpus = data_dir / "corpus.yaml"
+    corpus.write_text(
+        "id: q1\ntext: query\nrelevant: [doc1]\nmode: hybrid\nnamespace: test/default\n",
+        encoding="utf-8",
+    )
+
+    import hashlib
+
+    checksum = hashlib.sha256(corpus.read_bytes()).hexdigest()
+    (data_dir / "manifest.json").write_text(
+        json.dumps({"name": "scheduled", "files": {"corpus.yaml": checksum}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(sys, "argv", ["musubi-evals", "scheduled", "--data-dir", str(data_dir)])
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+    assert exc_info.value.code != 0
+    assert "not implemented" in capsys.readouterr().out.lower()
+
+
 # --- Schema Validation Invariants ---
 
 

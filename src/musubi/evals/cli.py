@@ -84,9 +84,8 @@ def main() -> None:
         raise SystemExit(1) from exc
 
     if args.command == "scheduled":
-        # Scheduled live gate stays explicit
-        _write("Scheduled gate running...")
-        raise SystemExit(0)
+        _write("Scheduled live Qdrant+TEI quality gate is not implemented; see Issue #430.")
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

@@ -194,6 +194,24 @@ def test_manifest_verification_fails_closed_for_missing_or_malformed_files(
         verify_manifest({"files": {"missing.yaml": "0" * 64}}, tmp_path)
 
 
+def test_manifest_verification_rejects_paths_outside_data_directory(tmp_path: Path) -> None:
+    import hashlib
+
+    from musubi.evals.corpus import verify_manifest
+
+    outside = tmp_path.parent / "outside.yaml"
+    outside.write_text("outside", encoding="utf-8")
+    checksum = hashlib.sha256(outside.read_bytes()).hexdigest()
+
+    with pytest.raises(ValueError, match="outside data directory"):
+        verify_manifest({"files": {"../outside.yaml": checksum}}, tmp_path)
+
+    link = tmp_path / "linked.yaml"
+    link.symlink_to(outside)
+    with pytest.raises(ValueError, match="outside data directory"):
+        verify_manifest({"files": {"linked.yaml": checksum}}, tmp_path)
+
+
 def test_discrimination_manifest_checksum(tmp_path: Path) -> None:
     import hashlib
 
@@ -213,6 +231,18 @@ def test_discrimination_manifest_checksum(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeError, match="Failed to raise checksum error"):
         _assert_manifest_checksum(wrong_verify, tmp_path)
+
+
+def test_legacy_run_eval_validates_input_and_bounds_ndcg() -> None:
+    from musubi.evals.runner import run_eval
+
+    with pytest.raises(ValueError, match="non-empty"):
+        run_eval([], "fixed", 1)
+    with pytest.raises(ValueError, match="query"):
+        run_eval([{}], "fixed", 1)
+
+    result = run_eval([{"query": "known"}], "fixed", 1)
+    assert 0.0 <= result.metrics["ndcg@10"] <= 1.0
 
 
 # ---------------------------------------------------------------------------
