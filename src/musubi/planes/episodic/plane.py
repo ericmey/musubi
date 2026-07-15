@@ -4,8 +4,10 @@ Responsibilities (from [[04-data-model/episodic-memory]]):
 
 - **Create** — always ``state = "provisional"``, ``version = 1``. Auto-embed
   dense + sparse. Dedup against existing points in the same namespace via
-  dense cosine similarity; on hit, merge tags, bump ``reinforcement_count``
-  and ``version``, replace content with new text.
+  dense cosine similarity; on hit, merges ONLY when factual compatibility passes
+  (rejecting negations, corrections, specific participant or time changes).
+  On compatible hit, merges tags, bumps ``reinforcement_count`` and ``version``,
+  and decides content retention based on ``merge_strategy``.
 - **Get** — fetch by namespace + ``object_id``. Namespace scoping is
   enforced so a caller asking for the wrong namespace sees ``None``.
 - **Query** — dense retrieval filtered to the caller's namespace. Default
@@ -111,6 +113,29 @@ def _memory_from_payload(payload: dict[str, Any]) -> EpisodicMemory:
     return EpisodicMemory.model_validate(payload)
 
 
+def _is_factually_compatible(existing: EpisodicMemory, new: EpisodicMemory) -> bool:
+    """Return whether a cosine hit is safe to merge.
+
+    Compatibility is fail-closed: normalized content and the complete
+    participants set must both match before dedup may mutate an existing row.
+    """
+    import re
+    import unicodedata
+
+    def _normalize(text: str) -> str:
+        text = unicodedata.normalize("NFKC", text)
+        text = text.casefold()
+        text = re.sub(r"\s+", " ", text)
+        text = text.strip()
+        text = re.sub(r"[.!?]+$", "", text)
+        return text.rstrip()
+
+    if _normalize(existing.content) != _normalize(new.content):
+        return False
+
+    return set(existing.participants) == set(new.participants)
+
+
 class EpisodicPlane:
     """CRUD + lifecycle transitions for the episodic plane."""
 
@@ -139,9 +164,15 @@ class EpisodicPlane:
     ) -> EpisodicMemory:
         """Write ``memory`` to Qdrant, deduping against the same namespace.
 
-        On a dedup hit, merges tags + bumps ``reinforcement_count`` and
+        Dedup evaluates dense cosine similarity, but merges ONLY if the
+        candidate passes strict factual compatibility (rejecting semantic
+        near-matches like negations or participant alterations). If incompatible,
+        inserts a fresh distinct row.
+
+        On a compatible dedup hit, merges tags + bumps ``reinforcement_count`` and
         ``version`` on the existing row instead of inserting. ``content``
-        is kept vs replaced based on ``merge_strategy``:
+        is kept vs replaced based on ``merge_strategy`` ONLY after compatibility
+        authorizes the merge:
 
         - ``longer-wins`` (default, matches spec §06-ingestion/capture):
           keep whichever of existing / new content is strictly longer.
@@ -185,15 +216,16 @@ class EpisodicPlane:
         found = self._find_dedup_candidate(memory.namespace, dense)
         if found is not None:
             existing, existing_dense, existing_sparse = found
-            return self._reinforce(
-                existing=existing,
-                existing_dense=existing_dense,
-                existing_sparse=existing_sparse,
-                new=memory,
-                dense=dense,
-                sparse=sparse,
-                merge_strategy=merge_strategy,
-            )
+            if _is_factually_compatible(existing, memory):
+                return self._reinforce(
+                    existing=existing,
+                    existing_dense=existing_dense,
+                    existing_sparse=existing_sparse,
+                    new=memory,
+                    dense=dense,
+                    sparse=sparse,
+                    merge_strategy=merge_strategy,
+                )
 
         data = memory.model_dump()
         data.update(
@@ -225,12 +257,13 @@ class EpisodicPlane:
         one for sparse, then one atomic Qdrant upsert at the end.
 
         Dedup probes are per-row because Qdrant doesn't have a
-        "batch query_points" shape we can use today — but every dedup
-        hit writes via the same single terminal upsert (reinforce
-        updates + fresh inserts land in one call).
+        "batch query_points" shape we can use today. Each dedup probe must pass
+        factual compatibility to authorize the hit; incompatible candidates
+        resolve to fresh inserts. Every compatible dedup hit and fresh insert
+        write via the same single terminal upsert.
 
         Returns the final row for each input position in input order,
-        same as ``create`` (existing row on dedup hit, fresh row
+        same as ``create`` (existing row on compatible dedup hit, fresh row
         otherwise).
         """
         if not memories:
@@ -272,7 +305,13 @@ class EpisodicPlane:
         finalised: list[EpisodicMemory] = []
         for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
             found = self._find_dedup_candidate(memory.namespace, dense)
+
+            compatible = False
             if found is not None:
+                existing, existing_dense, existing_sparse = found
+                compatible = _is_factually_compatible(existing, memory)
+
+            if found is not None and compatible:
                 existing, existing_dense, existing_sparse = found
                 updated, existing_content_won = self._merge_row(
                     existing=existing,

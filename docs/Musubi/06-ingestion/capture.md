@@ -72,13 +72,17 @@ If a near-duplicate was found (dedup triggered, see below), the response is 200 
  2. pydantic validate                                  ~1ms
  3. embed content (dense + sparse, parallel)           ~40ms warm
  4. dedup probe (cosine ≥ 0.92 within namespace)       ~20ms
-   ├─ hit:  update existing (merge tags, refresh)
-   └─ miss: upsert new point
+   ├─ hit + factually compatible: update existing (merge tags, refresh)
+   └─ miss or incompatible:       upsert new point
  5. upsert to Qdrant                                    ~20ms
  6. emit LifecycleEvent(provisional → created)         <1ms (batched)
  7. return 202
                                                       total: ~80-100ms
 ```
+
+Here, "factually compatible" means that NFKC/case/whitespace/terminal-punctuation
+normalized content is equal and the complete participants set is equal. A
+semantic paraphrase, correction, or negation is not sufficient for a merge.
 
 Budget: p50 ≤ 100ms, p95 ≤ 250ms.
 
@@ -90,10 +94,15 @@ Parallel call to TEI for dense + sparse. See [[06-ingestion/embedding-strategy]]
 
 ### Step 4 — Dedup
 
-Same as POC: query Qdrant for cosine similarity ≥ `DUPLICATE_THRESHOLD` (0.92 default) within the same `namespace`. If hit:
+Query Qdrant for cosine similarity ≥ `DUPLICATE_THRESHOLD` (0.92 default) within the same
+`namespace`. A probe hit is eligible to merge only when strict factual compatibility also passes:
+normalized content must match and structured participants must be identical. Corrections,
+negations, participant or time changes, conflicting numbers, and other incompatible near-matches
+are inserted as new points. For a compatible hit:
 
 - Merge tags (set union).
-- Update content if the new content is strictly longer (more detail wins).
+- Update content if the new content is strictly longer (more detail wins). This `longer-wins`
+  policy applies only after factual compatibility authorizes the merge.
 - Bump `updated_at`, `updated_epoch`, `version`.
 - Increment `reinforcement_count`.
 - Emit LifecycleEvent(dedup-merged).
@@ -213,3 +222,17 @@ Batch:
 20. `test_batch_capture_single_tei_embed_call` (instrumented)
 21. `test_batch_capture_single_qdrant_upsert` (instrumented)
 22. `test_batch_capture_100_items_under_1s` (benchmark)
+
+
+23. `test_semantic_dedup_merges_exact_duplicate`
+24. `test_semantic_dedup_merges_normalized_duplicate`
+25. `test_semantic_dedup_rejects_correction`
+26. `test_semantic_dedup_rejects_negation`
+27. `test_semantic_dedup_rejects_participant_change`
+28. `test_semantic_dedup_rejects_time_change`
+29. `test_semantic_dedup_rejects_conflicting_numbers`
+30. `test_semantic_dedup_rejects_ambiguity`
+31. `test_semantic_dedup_rejects_language_token_punctuation`
+32. `test_semantic_dedup_compares_content_not_summary`
+33. `test_semantic_dedup_rejects_paraphrase`
+34. `test_semantic_dedup_rejects_participants_change`
