@@ -4,12 +4,12 @@ slice_id: slice-life009-semantic-supersession
 issue: 532
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: cowork-tama
 phase: "Lifecycle"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
