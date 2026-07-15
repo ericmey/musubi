@@ -14,8 +14,11 @@ class MockVaultWriter:
     def __init__(self, tmp_path: Path) -> None:
         self.vault_root = tmp_path
         self.written: dict[str, tuple[Any, str]] = {}
+        self.should_fail = False
 
     def write_curated(self, rel_path: str, fm_obj: Any, body: str) -> None:
+        if self.should_fail:
+            raise OSError("vault write failed")
         self.written[rel_path] = (fm_obj, body)
 
 
@@ -29,6 +32,13 @@ class MockCuratedPlane:
         self.create_calls.append(str(memory.object_id))
         if self.should_fail:
             raise RuntimeError("curated_plane.create failed")
+        for row in self.rows.values():
+            if (
+                row.namespace == memory.namespace
+                and row.vault_path == memory.vault_path
+                and row.promoted_from == memory.promoted_from
+            ):
+                return row
         self.rows[str(memory.object_id)] = memory
         return memory
 
@@ -86,41 +96,35 @@ def make_concept() -> SynthesizedConcept:
     )
 
 
-@pytest.mark.anyio
-async def test_life011_saga_recovers_curated_create_failure(tmp_path: Path) -> None:
+@pytest.mark.asyncio
+async def test_life011_saga_recovers_vault_write_failure(tmp_path: Path) -> None:
     deps = MockDeps(tmp_path)
     concept = make_concept()
 
-    deps.curated_plane.should_fail = True
+    deps.vault_writer.should_fail = True
 
     res1 = await _promote_concept(deps, concept)  # type: ignore[arg-type]
     assert res1 is False
-    assert len(deps.vault_writer.written) == 1
+    assert deps.vault_writer.written == {}
+    assert len(deps.curated_plane.rows) == 1
+    first_row_id = next(iter(deps.curated_plane.rows))
 
-    # Write the file to disk so the next run finds it
-    rel_path = next(iter(deps.vault_writer.written.keys()))
-    fm_obj, body = deps.vault_writer.written[rel_path]
-    file_path = tmp_path / rel_path
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    from musubi.vault.frontmatter import dump_frontmatter
-
-    file_path.write_text(
-        dump_frontmatter(fm_obj.model_dump(by_alias=True, exclude_none=True), body)
-    )
-
-    deps.curated_plane.should_fail = False
+    deps.vault_writer.should_fail = False
 
     res2 = await _promote_concept(deps, concept)  # type: ignore[arg-type]
     assert res2 is True
 
-    # file ID == persisted row ID == successful transition promoted_to
+    # Retry proposed a fresh ID, but CuratedPlane re-adopted the existing
+    # row.  The vault file and transition must use that canonical ID.
     assert len(deps.curated_plane.rows) == 1
-    row_id = next(iter(deps.curated_plane.rows.keys()))
-    assert str(fm_obj.object_id) == row_id
-    assert deps.concept_plane.transition_calls[-1].get("promoted_to") == row_id
+    assert len(deps.curated_plane.create_calls) == 2
+    assert deps.curated_plane.create_calls[0] != deps.curated_plane.create_calls[1]
+    written_fm = next(iter(deps.vault_writer.written.values()))[0]
+    assert str(written_fm.object_id) == first_row_id
+    assert deps.concept_plane.transition_calls[-1].get("promoted_to") == first_row_id
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_life011_saga_recovers_concept_transition_failure(tmp_path: Path) -> None:
     deps = MockDeps(tmp_path)
     concept = make_concept()
@@ -158,7 +162,7 @@ async def test_life011_saga_recovers_concept_transition_failure(tmp_path: Path) 
     assert deps.concept_plane.transition_calls[-1].get("promoted_to") == first_curated_id
 
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_life011_saga_absorbs_thought_emit_failure_without_rejection(tmp_path: Path) -> None:
     deps = MockDeps(tmp_path)
     concept = make_concept()

@@ -374,9 +374,6 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
         except (ValueError, TypeError) as e:
             raise PromotionPolicyError(f"Invalid curated memory fields: {e}") from e
 
-        # Write to vault FIRST (fail-forward: watcher/reconciler can repair this if qdrant create fails)
-        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
-
         persisted = await deps.curated_plane.create(memory)
 
         if str(persisted.object_id) != curated_id:
@@ -386,8 +383,13 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
                 )
             curated_id = str(persisted.object_id)
             fm_obj = fm_obj.model_copy(update={"object_id": curated_id})
-            # Idempotency rewrite: update vault file with the Qdrant-adopted identity
-            deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
+
+        # Write only after CuratedPlane has validated or re-adopted the
+        # canonical identity.  A retry after a failed vault write is safe:
+        # CuratedPlane.create returns the existing row, whose object_id is
+        # written into the file below.  Writing earlier would overwrite a
+        # vault path before an unrelated-lineage conflict can fail closed.
+        deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
 
         # Transition concept
         result = await deps.concept_plane.transition(
