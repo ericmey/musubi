@@ -123,21 +123,36 @@ def build_vault_sync_runtime(*, settings: Settings | None = None) -> VaultSyncRu
 
     Raises:
         VaultRuntimeError: only when ``settings.vault_path`` is
-            missing or invalid (the watcher must refuse to start
-            without a vault root). Dependency construction errors
-            (Qdrant unreachable, TEI probe failure, coordinator /
-            sink construction failure, etc.) propagate typed and
-            AS-IS so the caller can decide whether to retry,
-            restart the supervisor, or surface a typed failure to
-            the systemd journal without a wrapped ``VaultRuntimeError``
-            hiding the underlying exception type.
+            missing OR points at a non-directory (a regular file,
+            socket, symlink to a non-directory, etc.). The watcher
+            must refuse to start without a vault root;
+            ``build_qdrant_client`` and friends would happily boot
+            against an empty/dangling path and silently no-op.
+            Dependency construction errors (Qdrant unreachable,
+            TEI probe failure, coordinator / sink construction
+            failure, etc.) propagate typed and AS-IS so the caller
+            can decide whether to retry, restart the supervisor, or
+            surface a typed failure to the systemd journal without
+            a wrapped ``VaultRuntimeError`` hiding the underlying
+            exception type.
     """
     if settings is None:
         settings = get_settings()
     vault_root = Path(settings.vault_path).expanduser()
-    if not vault_root.exists():
+    if not vault_root.exists() or not vault_root.is_dir():
+        # Fail closed + visibly when ``settings.vault_path`` is
+        # missing or points at a non-directory (regular file, socket,
+        # etc.). The watcher must refuse to start without a vault
+        # root; ``build_qdrant_client`` and friends would happily
+        # boot against an empty/dangling path and silently no-op.
+        if not vault_root.exists():
+            raise VaultRuntimeError(
+                f"vault_path={vault_root!r} does not exist; refusing to start watcher"
+            )
         raise VaultRuntimeError(
-            f"vault_path={vault_root!r} does not exist; refusing to start watcher"
+            f"vault_path={vault_root!r} is not a directory "
+            f"(exists but is {('a regular file' if vault_root.is_file() else 'not a directory')}); "
+            "refusing to start watcher"
         )
 
     qdrant = build_qdrant_client(

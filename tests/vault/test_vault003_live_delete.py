@@ -798,18 +798,28 @@ def test_systemd_module_command_reaches_construction() -> None:
     runtime_module = importlib.import_module("musubi.vault.runtime")
     assert hasattr(runtime_module, "build_vault_sync_runtime")
     assert hasattr(runtime_module, "VaultSyncRuntime")
-    # 4. The systemd service file points at the canonical module path.
+    # 4. The repository-owned systemd service file must exist
+    # UNCONDITIONALLY (no ``if service_path.exists()`` skip) and must
+    # exec the canonical ``python -m musubi.vault.watcher`` module
+    # path. A missing or renamed service file would silently let
+    # production ship without the live-delete fix wired to the
+    # supervisor; this assertion makes that drift visible at PR time.
     service_path = (
         Path(__file__).resolve().parents[2] / "deploy" / "systemd" / "musubi-vault-sync.service"
     )
-    if service_path.exists():
-        text = service_path.read_text()
-        assert "musubi.vault.watcher" in text, (
-            f"systemd unit {service_path} must exec `python -m musubi.vault.watcher`; got: {text!r}"
-        )
+    assert service_path.exists(), (
+        f"repository-owned systemd unit {service_path} must exist; "
+        "the live-delete fix is unreachable without it. If the file "
+        "was renamed, update this assertion."
+    )
+    text = service_path.read_text()
+    assert "musubi.vault.watcher" in text, (
+        f"systemd unit {service_path} must exec `python -m musubi.vault.watcher`; got: {text!r}"
+    )
 
 
 def test_runtime_factory_produces_watcher_construction_inputs(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """VAULT-003 Blocker 1 (deeper): with a stubbed settings object the
@@ -831,19 +841,22 @@ def test_runtime_factory_produces_watcher_construction_inputs(
     ``musubi.vault.runtime``).
     """
     import inspect
-    from pathlib import Path as _Path
 
     # Build a stub settings object with the minimum fields the
     # factory reads. We use SimpleNamespace to avoid pulling a
     # real Settings (which would require env config + JWT keys).
+    # The vault root and lifecycle sqlite path live under pytest's
+    # unique ``tmp_path`` so parallel test execution and
+    # cross-run flakes cannot collide on a fixed ``/tmp`` path.
     from types import SimpleNamespace
     from unittest.mock import MagicMock
 
     from musubi.vault.runtime import VaultSyncRuntime, build_vault_sync_runtime
     from musubi.vault.watcher import VaultWatcher
 
-    vault_root = _Path("/tmp/vault003-runtime-test-fixture")
+    vault_root = tmp_path / "vault_root"
     vault_root.mkdir(parents=True, exist_ok=True)
+    lifecycle_sqlite_path = str(tmp_path / "lifecycle.sqlite")
     settings = SimpleNamespace(
         vault_path=str(vault_root),
         qdrant_host="localhost",
@@ -853,7 +866,7 @@ def test_runtime_factory_produces_watcher_construction_inputs(
         tei_dense_url="http://localhost:8080",
         tei_sparse_url="http://localhost:8081",
         tei_reranker_url="http://localhost:8082",
-        lifecycle_sqlite_path="/tmp/vault003-runtime-test.db",
+        lifecycle_sqlite_path=lifecycle_sqlite_path,
         lifecycle_pending_cap=1000,
         lifecycle_lease_ttl_s=300.0,
         lifecycle_backoff_base_s=1.0,
@@ -1124,7 +1137,7 @@ def test_runtime_module_does_not_import_watcher() -> None:
     )
 
 
-def test_runtime_factory_does_not_import_watcher() -> None:
+def test_runtime_factory_does_not_import_watcher(tmp_path: Path) -> None:
     """VAULT-003 round-5: same constraint as above, but verified
     during the FACTORY CALL. The factory's import graph stays
     inside ``musubi.vault.runtime`` — no transitive
@@ -1132,14 +1145,23 @@ def test_runtime_factory_does_not_import_watcher() -> None:
     inside a TRUE COLD-START subprocess (so other tests that have
     already imported ``musubi.vault.watcher`` via ``runpy.run_module``
     cannot pollute the constraint) and re-assert the constraint
-    after the call.
+    after the call. The factory needs a real vault root on disk
+    and a writable sqlite path; both come from pytest's
+    ``tmp_path`` so the test is order-independent and free of
+    cross-run ``/tmp`` collisions.
     """
     import json
     import subprocess
     import sys
-    from pathlib import Path as _Path
 
-    repo_root = _Path(__file__).resolve().parents[2]
+    repo_root = Path(__file__).resolve().parents[2]
+    vault_root = str(tmp_path / "vault_root")
+    lifecycle_sqlite_path = str(tmp_path / "lifecycle.sqlite")
+    # Create the vault root inside the host so the subprocess can
+    # see it (the subprocess inherits cwd, not the fixture).
+    import os
+
+    os.makedirs(vault_root, exist_ok=True)
     # Stub the factory collaborators inside the subprocess so the
     # call doesn't need a real Qdrant / TEI / coordinator. We embed
     # the stubs as a Python heredoc.
@@ -1157,12 +1179,12 @@ def test_runtime_factory_does_not_import_watcher() -> None:
         "import musubi.store as _store; "
         "_store.bootstrap = lambda _q: None; "
         "settings = SimpleNamespace("
-        "  vault_path='/tmp', "
+        f"  vault_path={vault_root!r}, "
         "  qdrant_host='localhost', qdrant_port=6333, "
         "  qdrant_api_key=SimpleNamespace(get_secret_value=lambda: 'k'), "
         "  musubi_allow_plaintext=True, "
         "  tei_dense_url='http://a', tei_sparse_url='http://b', tei_reranker_url='http://c', "
-        "  lifecycle_sqlite_path='/tmp/lc.db', "
+        f"  lifecycle_sqlite_path={lifecycle_sqlite_path!r}, "
         "  lifecycle_pending_cap=1, lifecycle_lease_ttl_s=1.0, "
         "  lifecycle_backoff_base_s=1.0, lifecycle_backoff_max_s=1.0, "
         "  lifecycle_sqlite_busy_timeout_ms=1, "
@@ -1186,4 +1208,64 @@ def test_runtime_factory_does_not_import_watcher() -> None:
         f"__main__ when invoked from `python -m "
         f"musubi.vault.watcher`). sys.modules musubi.vault.* = "
         f"{mods!r}"
+    )
+
+
+# --------------------------------------------------------------------------- #
+# VAULT-003 round-6 (Yua 18:11): file-path refusal + tmp_path + unconditional
+# systemd proof.
+# --------------------------------------------------------------------------- #
+
+
+def test_runtime_rejects_vault_path_that_is_a_regular_file(
+    tmp_path: Path,
+) -> None:
+    """VAULT-003 round-6: ``build_vault_sync_runtime`` must refuse
+    to start when ``settings.vault_path`` is a regular file (not
+    a directory). The watcher must fail closed + visibly rather
+    than silently booting against a dangling/non-directory path.
+    This test makes the narrowed docstring truthful (the
+    round-5 docstring says ``VaultRuntimeError`` is raised for
+    missing OR invalid ``vault_path``; this test pins the
+    regular-file refusal case)."""
+    from types import SimpleNamespace
+
+    import pytest
+
+    from musubi.vault.runtime import VaultRuntimeError, build_vault_sync_runtime
+
+    # Create a real file (not a directory) under pytest's unique
+    # tmp_path; that fixture guarantees cross-run isolation.
+    file_path = tmp_path / "not_a_vault.md"
+    file_path.write_text("# not a vault root\n", encoding="utf-8")
+    assert file_path.exists() and file_path.is_file()
+
+    settings = SimpleNamespace(
+        vault_path=str(file_path),
+        # The factory reads these but raises BEFORE touching them
+        # on the file-path refusal path; values are placeholders.
+        qdrant_host="x",
+        qdrant_port=0,
+        qdrant_api_key=SimpleNamespace(get_secret_value=lambda: "x"),
+        musubi_allow_plaintext=True,
+        tei_dense_url="x",
+        tei_sparse_url="x",
+        tei_reranker_url="x",
+        lifecycle_sqlite_path=str(tmp_path / "lifecycle.sqlite"),
+        lifecycle_pending_cap=1,
+        lifecycle_lease_ttl_s=1.0,
+        lifecycle_backoff_base_s=1.0,
+        lifecycle_backoff_max_s=1.0,
+        lifecycle_sqlite_busy_timeout_ms=1,
+    )
+    with pytest.raises(VaultRuntimeError) as excinfo:
+        build_vault_sync_runtime(settings=settings)  # type: ignore[arg-type]
+    msg = str(excinfo.value)
+    assert str(file_path) in msg, (
+        f"VaultRuntimeError message must include the offending "
+        f"vault_path for operator actionability; got: {msg!r}"
+    )
+    assert "not a directory" in msg, (
+        f"VaultRuntimeError message must say 'not a directory' so "
+        f"the cause is obvious in the systemd journal; got: {msg!r}"
     )
