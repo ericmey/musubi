@@ -221,8 +221,9 @@ def test_fanout_namespace_preserves_include_lineage(
         "not-a-bool",  # arbitrary non-bool string
         [],  # empty list
         {"k": "v"},  # dict
+        None,  # JSON null
     ],
-    ids=["str_false", "int_zero", "int_one", "str_garbage", "empty_list", "dict"],
+    ids=["str_false", "int_zero", "int_one", "str_garbage", "empty_list", "dict", "null"],
 )
 def test_non_boolean_include_lineage_rejected_at_wire(
     bad_value: object, monkeypatch: pytest.MonkeyPatch, api_settings: Settings
