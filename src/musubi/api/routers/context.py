@@ -152,9 +152,15 @@ async def context_pack(
         ),
         warnings=[warning.code for warning in envelope.warnings],
     )
-    # Account exactly the FINAL surfaced items (each carries object_id + plane), once. An empty
-    # pack accounts nothing.
-    await account_delivered(qdrant, [item for group in pack.groups for item in group.items])
+    # Account exactly the FINAL surfaced items (each carries namespace + object_id + plane), once.
+    # An empty pack accounts nothing. Fail-loud but bounded: an accounting failure becomes an
+    # INTERNAL APIError, never a raw exception leaked to the caller.
+    try:
+        await account_delivered(qdrant, [item for group in pack.groups for item in group.items])
+    except Exception:
+        raise APIError(
+            status_code=500, code="INTERNAL", detail="access accounting failed"
+        ) from None
     return pack
 
 

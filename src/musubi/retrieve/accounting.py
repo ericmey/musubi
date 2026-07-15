@@ -37,28 +37,43 @@ async def account_delivered(client: QdrantClient, results: list[Any]) -> None:
     pass here is exactly-once by construction. Rows on non-accountable planes (artifact/thought)
     are skipped. Does not mutate ``results``.
     """
-    by_plane: dict[str, list[str]] = {}
+    by_plane: dict[str, set[tuple[str, str]]] = {}
     for row in results:
         plane = getattr(row, "plane", None)
         object_id = getattr(row, "object_id", None)
-        if plane in ACCOUNTABLE_PLANES and object_id:
-            by_plane.setdefault(plane, []).append(object_id)
+        namespace = getattr(row, "namespace", None)
+        if plane in ACCOUNTABLE_PLANES and object_id and namespace:
+            by_plane.setdefault(plane, set()).add((namespace, object_id))
 
     if not by_plane:
         return
 
     now_str = utc_now().isoformat().replace("+00:00", "Z")
 
-    for plane, object_ids in by_plane.items():
+    for plane, pairs in by_plane.items():
         collection = collection_for_plane(plane)
-        # One batched READ: current access_count for exactly these delivered rows. object_id is a
-        # globally-unique KSUID, so a MatchAny on it resolves each row unambiguously.
+        # One batched READ, scoped to the EXACT delivered (namespace, object_id) pairs — the
+        # codebase's tenant-scoping pattern (raw_lookup._by_id), not object_id alone. A point whose
+        # stored namespace differs from a delivered row's is never touched. `should` = OR over the
+        # per-pair `must` (namespace AND object_id); still ONE scroll + ONE write per collection.
         records, _ = client.scroll(
             collection_name=collection,
             scroll_filter=models.Filter(
-                must=[models.FieldCondition(key="object_id", match=models.MatchAny(any=object_ids))]
+                should=[
+                    models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="namespace", match=models.MatchValue(value=ns)
+                            ),
+                            models.FieldCondition(
+                                key="object_id", match=models.MatchValue(value=oid)
+                            ),
+                        ]
+                    )
+                    for ns, oid in pairs
+                ]
             ),
-            limit=len(object_ids),
+            limit=len(pairs),
             with_payload=True,
         )
         updates = [

@@ -25,6 +25,7 @@ field. The implementation flips the reds green in the same slice.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -36,13 +37,14 @@ from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.planes.thoughts.plane import ThoughtsPlane
+from musubi.retrieve.accounting import account_delivered
 from musubi.retrieve.orchestration import NamespaceTarget, RetrievalQuery
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.store import bootstrap
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import raw_payload
 from musubi.types.artifact import SourceArtifact
-from musubi.types.common import generate_ksuid
+from musubi.types.common import Err, generate_ksuid
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
@@ -242,40 +244,99 @@ async def test_delivered_concept_row_accounted(
     assert _ac(qdrant, "concept", ns, oid) == 1
 
 
-# ═══ artifact + thought: explicit tested no-op (types lack access_count) ═══════
-async def test_delivered_artifact_row_is_explicit_noop(
-    qdrant: QdrantClient, embedder: FakeEmbedder, reranker: _FakeReranker
+# ═══ artifact + thought: explicit no-op (types lack access_count) — DETERMINISTIC ══
+@pytest.mark.parametrize("plane", ["artifact", "thought"])
+async def test_non_accountable_plane_delivery_is_noop(
+    qdrant: QdrantClient, embedder: FakeEmbedder, plane: str
 ) -> None:
-    ns = f"{_ROOT}/artifact"
-    art = await ArtifactPlane(client=qdrant, embedder=embedder).create(
-        SourceArtifact(
-            namespace=ns,
-            title="shared artifact marker",
-            filename="marker.md",
-            sha256="a" * 64,
-            content_type="text/markdown",
-            size_bytes=32,
-            chunker="markdown-headings-v1",
+    """A DELIVERED row on a plane whose type lacks access_count (artifact/thought) writes nothing.
+    Deterministic: hand account_delivered a stub delivered row directly, so the no-op branch is
+    always exercised — not gated on whether retrieval happened to deliver the row."""
+    row: Any
+    if plane == "artifact":
+        ns = f"{_ROOT}/artifact"
+        row = await ArtifactPlane(client=qdrant, embedder=embedder).create(
+            SourceArtifact(
+                namespace=ns,
+                title="artifact marker",
+                filename="marker.md",
+                sha256="a" * 64,
+                content_type="text/markdown",
+                size_bytes=32,
+                chunker="markdown-headings-v1",
+            )
         )
+    else:
+        ns = f"{_ROOT}/thought"
+        row = await ThoughtsPlane(client=qdrant, embedder=embedder).send(
+            Thought(namespace=ns, content="thought marker", from_presence="aoi", to_presence="yua")
+        )
+    await account_delivered(
+        qdrant, [SimpleNamespace(plane=plane, object_id=row.object_id, namespace=ns)]
     )
-    # No access_count field on SourceArtifact — accounting is a deliberate no-op, no error.
-    rows = await _run(qdrant, embedder, reranker, ns=ns, plane="artifact", mode="deep", limit=5)
-    _ = rows  # delivery may be empty depending on chunking; the invariant is: no access_count write.
-    assert _ac(qdrant, "artifact", ns, art.object_id) is None
+    assert _ac(qdrant, plane, ns, row.object_id) is None, (
+        f"{plane} carries no access_count — accounting must write nothing"
+    )
 
 
-async def test_delivered_thought_row_is_explicit_noop(
-    qdrant: QdrantClient, embedder: FakeEmbedder, reranker: _FakeReranker
+# ═══ #2: account the EXACT (namespace, object_id) pair, never object_id alone ══════
+async def test_account_delivered_scopes_to_exact_namespace_object_id_pair(
+    qdrant: QdrantClient, embedder: FakeEmbedder
 ) -> None:
-    ns = f"{_ROOT}/thought"
-    th = await ThoughtsPlane(client=qdrant, embedder=embedder).send(
-        Thought(
-            namespace=ns, content="shared thought marker", from_presence="aoi", to_presence="yua"
-        )
+    """Collision discriminator: a delivered row whose namespace does not match the STORED point's
+    namespace must NEVER bump it — object_id-only filtering would wrongly write across namespaces."""
+    ns_real = f"{_ROOT}/episodic"
+    oid = await _seed_episodic(qdrant, embedder, ns_real, "collision marker")
+    assert _ac(qdrant, "episodic", ns_real, oid) == 0
+
+    # Same object_id, WRONG namespace → must not bump the real point.
+    await account_delivered(
+        qdrant,
+        [SimpleNamespace(plane="episodic", object_id=oid, namespace="eric/imposter/episodic")],
     )
-    rows = await _run(qdrant, embedder, reranker, ns=ns, plane="thought", mode="deep", limit=5)
-    _ = rows
-    assert _ac(qdrant, "thought", ns, th.object_id) is None
+    assert _ac(qdrant, "episodic", ns_real, oid) == 0, (
+        "mismatched-namespace delivery bumped the row"
+    )
+
+    # Correct (namespace, object_id) → bumps exactly once.
+    await account_delivered(
+        qdrant, [SimpleNamespace(plane="episodic", object_id=oid, namespace=ns_real)]
+    )
+    assert _ac(qdrant, "episodic", ns_real, oid) == 1
+
+
+# ═══ #3: accounting failure is fail-LOUD but honors the Result contract ════════════
+async def test_retrieve_normalizes_accounting_failure_to_typed_err(
+    qdrant: QdrantClient,
+    embedder: FakeEmbedder,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If account_delivered raises, retrieve() returns a typed Err(kind='internal') with BOUNDED
+    detail — never a raw exception (fail-loud, but the Result contract holds; best-effort was
+    rejected: accounting drives lifecycle and must not silently vanish)."""
+    ns = f"{_ROOT}/episodic"
+    await _seed_episodic(qdrant, embedder, ns, "loud failure marker")
+    import musubi.retrieve.orchestration as orch
+
+    async def _boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("qdrant write exploded with secret detail")
+
+    monkeypatch.setattr(orch, "account_delivered", _boom)
+    q = RetrievalQuery(
+        namespace=ns,
+        query_text="loud failure marker",
+        mode="fast",  # fast mode needs no reranker
+        limit=5,
+        planes=["episodic"],
+        state_filter=["provisional", "matured", "promoted"],
+        namespace_targets=[NamespaceTarget(namespace=ns, plane="episodic")],
+    )
+    res = await run_orchestration_retrieve(qdrant, embedder, query=q)
+    assert isinstance(res, Err), "accounting failure must surface as Err, not raise"
+    assert res.error.kind == "internal"
+    assert "secret detail" not in res.error.detail, (
+        "detail must be bounded (type name, not raw message)"
+    )
 
 
 # ═══ batched, not N+1 ═════════════════════════════════════════════════════════

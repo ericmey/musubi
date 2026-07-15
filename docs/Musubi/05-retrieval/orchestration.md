@@ -279,8 +279,8 @@ Integration:
 17. `integration: end-to-end deep-path with rerank, NDCG@10 on golden set ≥ threshold`
 18. `integration: kill TEI mid-request, pipeline returns with documented degradation`
 
-Access accounting (RET-002 / #500) — realized in `tests/retrieve/test_ret002_access_accounting.py`
-and `tests/api/test_ret002_streaming_access.py`:
+Access accounting (RET-002 / #500) — realized in `tests/retrieve/test_ret002_access_accounting.py`,
+`tests/api/test_ret002_streaming_access.py`, and `tests/api/test_ret002_context_accounting.py`:
 
 19. `test_delivered_episodic_row_accounted_once_per_mode`
 20. `test_deep_include_lineage_false_still_accounts_delivered`
@@ -288,8 +288,10 @@ and `tests/api/test_ret002_streaming_access.py`:
 22. `test_limit_drop_accounts_only_delivered_not_dropped_candidates`
 23. `test_delivered_curated_row_accounted`
 24. `test_delivered_concept_row_accounted`
-25. `test_delivered_artifact_row_is_explicit_noop`
-26. `test_delivered_thought_row_is_explicit_noop`
+25. `test_non_accountable_plane_delivery_is_noop`
+26. `test_account_delivered_scopes_to_exact_namespace_object_id_pair`
 27. `test_accounting_is_batched_per_collection_not_n_plus_1`
 28. `test_streaming_retrieval_accounts_each_delivered_row_once`
 29. `test_context_accounts_only_surfaced_pack_items_not_dropped_candidates`
+30. `test_retrieve_normalizes_accounting_failure_to_typed_err`
+31. `test_context_accounting_failure_returns_internal_not_raw`

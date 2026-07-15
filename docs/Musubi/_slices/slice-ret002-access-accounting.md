@@ -69,8 +69,10 @@ guards (green before and after) and a streaming proof:
 - `test_limit_drop_accounts_only_delivered_not_dropped_candidates`
 - `test_delivered_curated_row_accounted`
 - `test_delivered_concept_row_accounted`
-- `test_delivered_artifact_row_is_explicit_noop`
-- `test_delivered_thought_row_is_explicit_noop`
+- `test_non_accountable_plane_delivery_is_noop` (parameterized artifact/thought — direct, deterministic)
+- `test_account_delivered_scopes_to_exact_namespace_object_id_pair` (exact (ns,object_id), collision guard)
+- `test_retrieve_normalizes_accounting_failure_to_typed_err` (fail-loud, Result contract)
+- `test_context_accounting_failure_returns_internal_not_raw` (fail-loud, INTERNAL APIError)
 - `test_accounting_is_batched_per_collection_not_n_plus_1`
 - `test_streaming_retrieval_accounts_each_delivered_row_once` (HTTP+streaming share the seam)
 - `test_context_accounts_only_surfaced_pack_items_not_dropped_candidates` (/v1/context accounts the trimmed final pack, not retrieval candidates)
@@ -97,6 +99,14 @@ guards (green before and after) and a streaming proof:
   reason is unaccounted by construction; the new test discriminates this via the `max_items`
   trim (max_chars/filler pack-trimming is covered by existing context_pack unit tests, not
   re-integration-tested here).
+- Copilot #2/#4/#5 folded (one commit): (#2) `account_delivered` now scopes each write to the
+  EXACT delivered `(namespace, object_id)` pair via a `should`-of-`must` filter — one read/write
+  per collection preserved, plus a collision discriminator. (#4/#5) the vacuous artifact/thought
+  no-op tests replaced by a deterministic parameterized test that hands `account_delivered` a stub
+  row directly. (#3) best-effort was REJECTED intentionally — accounting drives lifecycle and must
+  stay fail-loud — but raw exceptions violated `retrieve()`'s `Result` contract, so an accounting
+  failure now normalizes to `Err(RetrievalError kind='internal')` in orchestration and an INTERNAL
+  `APIError` in `/v1/context`, with bounded detail; one failure-contract test per seam.
 
 ### Out-of-scope: pre-existing `05-retrieval/orchestration` Test Contract bullets
 

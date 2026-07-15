@@ -238,7 +238,16 @@ async def retrieve(
     # fanout/dedup/sort/limit — never on a dropped candidate and independent of lineage
     # hydration. Covers HTTP and streaming (both call this seam). Does not touch results/warnings.
     if account_access and isinstance(finalized, Ok):
-        await account_delivered(client, finalized.value.results)
+        # Fail-LOUD (access accounting drives lifecycle; it must never silently vanish) but honor
+        # the Result contract: normalize an accounting failure to a typed Err, never a raw raise.
+        try:
+            await account_delivered(client, finalized.value.results)
+        except Exception as exc:
+            return Err(
+                error=RetrievalError(
+                    kind="internal", detail=f"access accounting failed: {type(exc).__name__}"
+                )
+            )
     return finalized
 
 

@@ -70,3 +70,29 @@ def test_context_accounts_only_surfaced_pack_items_not_dropped_candidates(
         )
     for oid in dropped:
         assert _access_count(qdrant, oid) == 0, f"dropped candidate {oid} must NOT be accounted"
+
+
+def test_context_accounting_failure_returns_internal_not_raw(
+    client: TestClient, valid_token: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RET-002 #3 seam: fail-loud but bounded — if account_delivered raises in /v1/context, the
+    caller gets a clean INTERNAL 500, never a raw traceback. (best-effort was rejected.)"""
+    import musubi.api.routers.context as ctx
+
+    async def _boom(*_a: object, **_k: object) -> None:
+        raise RuntimeError("qdrant write exploded")
+
+    monkeypatch.setattr(ctx, "account_delivered", _boom)
+    hdr = {"Authorization": f"Bearer {valid_token}"}
+    resp = client.post(
+        "/v1/episodic", headers=hdr, json={"namespace": _NS, "content": "context failure marker"}
+    )
+    assert resp.status_code // 100 == 2, resp.text
+
+    r = client.post(
+        "/v1/context",
+        headers=hdr,
+        json={"namespace": _NS, "query_text": "context failure", "planes": ["episodic"]},
+    )
+    assert r.status_code == 500
+    assert r.json()["error"]["code"] == "INTERNAL"
