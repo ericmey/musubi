@@ -114,49 +114,45 @@ class VaultReconciler:
         # Ghost row reconciliation (VAULT-001)
         ghosts_archived = 0
         ghosts_pending = 0
-        try:
-            inventory = await self.curated_plane.scan_vault_rows()
-            for row in inventory:
-                vp = row.vault_path
-                if not vp or row.state in ("archived", "superseded"):
-                    continue
-                if vp not in seen_paths:
-                    expected_ns = infer_namespace(vp)
-                    if row.namespace != expected_ns:
-                        logger.debug(
-                            "Ghost row candidate %s namespace %s does not match expected %s, skipping",
-                            vp,
-                            row.namespace,
-                            expected_ns,
-                        )
-                        continue
 
-                    try:
-                        res = await self.curated_plane.transition(
-                            namespace=row.namespace,
-                            object_id=row.object_id,
-                            to_state="archived",
-                            actor="system/vault-reconciler",
-                            reason=f"Ghost row reconciliation (deleted from disk): {vp}",
-                            coordinator=self.coordinator,
-                        )
-                        if isinstance(res, Err):
-                            logger.error(
-                                "Failed to archive ghost row %s: %s", vp, res.error.message
-                            )
-                            errored += 1
-                        else:
-                            if isinstance(res.value, TransitionPending):
-                                logger.info("Ghost row archive pending for %s", vp)
-                                ghosts_pending += 1
-                            else:
-                                logger.info("Archived ghost row missing from disk: %s", vp)
-                                ghosts_archived += 1
-                    except Exception as exc:
-                        logger.error("Error archiving ghost row %s: %s", vp, exc)
+        inventory = await self.curated_plane.scan_vault_rows()
+        for row in inventory:
+            vp = row.vault_path
+            if not vp or row.state in ("archived", "superseded"):
+                continue
+            if vp not in seen_paths:
+                expected_ns = infer_namespace(vp)
+                if row.namespace != expected_ns:
+                    logger.debug(
+                        "Ghost row candidate %s namespace %s does not match expected %s, skipping",
+                        vp,
+                        row.namespace,
+                        expected_ns,
+                    )
+                    continue
+
+                try:
+                    res = await self.curated_plane.transition(
+                        namespace=row.namespace,
+                        object_id=row.object_id,
+                        to_state="archived",
+                        actor="system/vault-reconciler",
+                        reason=f"Ghost row reconciliation (deleted from disk): {vp}",
+                        coordinator=self.coordinator,
+                    )
+                    if isinstance(res, Err):
+                        logger.error("Failed to archive ghost row %s: %s", vp, res.error.message)
                         errored += 1
-        except Exception as exc:
-            logger.error("Failed to scan curated plane for ghost rows: %s", exc)
+                    else:
+                        if isinstance(res.value, TransitionPending):
+                            logger.info("Ghost row archive pending for %s", vp)
+                            ghosts_pending += 1
+                        else:
+                            logger.info("Archived ghost row missing from disk: %s", vp)
+                            ghosts_archived += 1
+                except Exception as exc:
+                    logger.error("Error archiving ghost row %s: %s", vp, exc)
+                    errored += 1
 
         logger.info(
             "vault-reconcile complete scanned=%d upserted=%d "

@@ -680,7 +680,7 @@ async def test_scan_vault_rows_paginates_and_validates(
     )
 
     # Mock to paginate
-    from typing import Any
+
     def mock_scroll(*args: Any, offset: Any = None, **kwargs: Any) -> tuple[list[Any], int | None]:
         if offset is None:
             return all_records[:2], 2  # return first 2, next offset is 2
