@@ -150,35 +150,57 @@ async def _seed_documents(
     return key_to_object_id
 
 
-async def _wait_visible(expected_object_ids: set[str], *, count_visible: Any) -> None:
-    """Poll ``count_visible()`` until every seeded object_id is queryable, bounded. A row that never
-    becomes visible fails loud rather than measuring against a half-seeded store."""
+async def wait_for_visibility(
+    client: Any, collection: str, namespace: str, *, expected_count: int
+) -> None:
+    """Poll until at least ``expected_count`` distinct object_ids are queryable in ``namespace``,
+    bounded, else fail loud. The SHARED visibility semantics for the scheduled gate AND the BEIR
+    integration path — freshly-seeded rows aren't instantly queryable, and measuring a half-seeded
+    store yields 0/0. Callers pass the ACTUAL distinct seeded count (dedup can reduce it below the
+    document count), never a raw document total."""
+
+    async def _count() -> int:
+        records, _ = client.scroll(
+            collection_name=collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
+                ]
+            ),
+            limit=10_000,
+            with_payload=["object_id"],
+            with_vectors=False,
+        )
+        return len({(rec.payload or {}).get("object_id") for rec in records})
+
     for attempt in range(_VISIBILITY_ATTEMPTS):
         if attempt:
             await asyncio.sleep(_VISIBILITY_BACKOFF_S)
-        if await count_visible() >= len(expected_object_ids):
+        if await _count() >= expected_count:
             return
     raise ScheduledGateFailure(
-        f"seeded rows never became visible ({len(expected_object_ids)} expected) after "
+        f"seeded rows never became visible ({expected_count} expected) in {namespace!r} after "
         f"{_VISIBILITY_ATTEMPTS} polls — refusing to measure a half-seeded store"
     )
 
 
 async def _measure(
     corpus: ScheduledCorpus, key_to_object_id: dict[str, str], *, retrieve: Any
-) -> dict[str, dict[str, float]]:
-    """Per-mode metrics: retrieve each query (scoped to the run namespace, provisional included) and
-    score its ranked object_ids against the graded refs. ``retrieve(query_text, mode)`` returns the
-    ranked object_id list from the live pipeline."""
+) -> tuple[dict[str, dict[str, float]], list[dict[str, Any]]]:
+    """Retrieve + score each query. Returns ``(per_mode_aggregate, per_query)`` — Yua requires the
+    per-query results, not only aggregates, so a failing run can be attributed to specific queries."""
     by_mode: dict[str, list[dict[str, float]]] = {}
+    per_query: list[dict[str, Any]] = []
     for query in corpus.queries:
         ordered_ids = await retrieve(query.text, query.mode)
         relevant = [
             {"object_id": key_to_object_id[ref.key], "relevance": ref.relevance}
             for ref in query.relevant
         ]
-        by_mode.setdefault(query.mode, []).append(evaluate_query(ordered_ids, relevant))
-    return {mode: aggregate(rows) for mode, rows in by_mode.items()}
+        metrics = evaluate_query(ordered_ids, relevant)
+        by_mode.setdefault(query.mode, []).append(metrics)
+        per_query.append({"id": query.id, "mode": query.mode, "metrics": metrics})
+    return {mode: aggregate(rows) for mode, rows in by_mode.items()}, per_query
 
 
 def _teardown(client: Any, collection: str, namespace: str) -> None:
@@ -203,11 +225,12 @@ def _teardown(client: Any, collection: str, namespace: str) -> None:
 
 async def run_scheduled_seeded_gate(
     backends: Any, *, data_dir: Path, run_id: str
-) -> dict[str, dict[str, float]]:
+) -> dict[str, Any]:
     """The full self-seeding scheduled measurement: validate+checksum the corpus, seed it into a
-    fresh run-scoped namespace via the production write seam, wait for visibility, measure per-mode
-    metrics, and tear down ONLY the run-owned data (even on failure). Returns per-mode metrics; the
-    caller enforces the frozen thresholds and never tunes them."""
+    fresh run-scoped namespace via the production write seam, wait for visibility, measure metrics,
+    and tear down ONLY the run-owned data (even on failure). Returns
+    ``{"by_mode": <per-mode aggregate>, "per_query": [...]}`` — the caller enforces the frozen
+    thresholds on ``by_mode`` and never tunes them; per-query is for attribution."""
     from musubi.evals.live_gate import _hits_or_raise
     from musubi.retrieve.deep import RetrievalQuery, run_deep_retrieve
     from musubi.retrieve.fast import run_fast_retrieve
@@ -221,25 +244,6 @@ async def run_scheduled_seeded_gate(
     namespace = run_namespace("episodic", run_id=run_id)
     collection = collection_for_plane("episodic")
     plane_factory = _episodic_plane_factory(backends)
-
-    def _count_visible() -> Any:
-        async def _count() -> int:
-            records, _ = backends.client.scroll(
-                collection_name=collection,
-                scroll_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="namespace", match=models.MatchValue(value=namespace)
-                        )
-                    ]
-                ),
-                limit=10_000,
-                with_payload=["object_id"],
-                with_vectors=False,
-            )
-            return len({(rec.payload or {}).get("object_id") for rec in records})
-
-        return _count()
 
     async def _retrieve(query_text: str, mode: str) -> list[str]:
         # Provisional included so the immediate-recall contract is exercised.
@@ -271,8 +275,14 @@ async def run_scheduled_seeded_gate(
 
     try:
         key_to_object_id = await _seed_documents(corpus, plane_factory=plane_factory, run_id=run_id)
-        await _wait_visible(set(key_to_object_id.values()), count_visible=_count_visible)
-        return await _measure(corpus, key_to_object_id, retrieve=_retrieve)
+        await wait_for_visibility(
+            backends.client,
+            collection,
+            namespace,
+            expected_count=len(set(key_to_object_id.values())),
+        )
+        by_mode, per_query = await _measure(corpus, key_to_object_id, retrieve=_retrieve)
+        return {"by_mode": by_mode, "per_query": per_query}
     finally:
         # Best-effort teardown: a cleanup failure must NEVER mask the original gate error (or a real
         # measurement). Surface it as a log line and let the original propagate.
@@ -309,4 +319,5 @@ __all__ = [
     "new_run_id",
     "run_namespace",
     "run_scheduled_seeded_gate",
+    "wait_for_visibility",
 ]

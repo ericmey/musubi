@@ -170,3 +170,30 @@ def test_measure_hybrid_vs_dense_computes_delta() -> None:
     assert result["hybrid_ndcg@10"] == pytest.approx(1.0)
     assert result["dense_ndcg@10"] < result["hybrid_ndcg@10"]
     assert result["delta"] > 0.0
+
+
+def test_measure_immediate_yields_zero_but_visible_reaches_measurement() -> None:
+    """RED discriminator (Yua ruling): measuring BEFORE seed visibility (search returns nothing)
+    yields 0/0 — the 0.0/0.0 the first real BEIR run showed — while AFTER visibility (search returns
+    the seeded hits) it reaches a real measurement. Proves the visibility wait is load-bearing."""
+    query = {
+        "text": "t",
+        "mode": "hybrid",
+        "namespace": "test/default/blended",
+        "relevant": [{"object_id": "a", "relevance": 3}],
+    }
+
+    async def immediate(_query: dict[str, Any], _hybrid: bool) -> list[str]:
+        return []  # nothing queryable yet — the pre-visibility state
+
+    async def visible(_query: dict[str, Any], hybrid: bool) -> list[str]:
+        return ["a", "b"] if hybrid else ["x", "a"]  # rows now queryable
+
+    before = asyncio.run(measure_hybrid_vs_dense([query], immediate))
+    after = asyncio.run(measure_hybrid_vs_dense([query], visible))
+    assert before == {
+        "hybrid_ndcg@10": 0.0,
+        "dense_ndcg@10": 0.0,
+        "delta": 0.0,
+    }  # 0/0 pre-visibility
+    assert after["hybrid_ndcg@10"] > 0.0  # reaches a real measurement post-visibility

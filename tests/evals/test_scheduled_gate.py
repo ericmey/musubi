@@ -25,9 +25,9 @@ from musubi.evals.scheduled_gate import (
     _measure,
     _seed_documents,
     _teardown,
-    _wait_visible,
     load_corpus,
     run_namespace,
+    wait_for_visibility,
 )
 from musubi.types.common import validate_namespace
 
@@ -119,15 +119,25 @@ def test_seed_failure_fails_loud() -> None:
 # --- discriminator 4: visibility timeout -----------------------------------------------------------
 
 
+class _NeverVisibleClient:
+    """A client whose namespace scroll always returns nothing — rows never become visible."""
+
+    def scroll(self, *_a: Any, **_k: Any) -> Any:
+        return ([], None)
+
+
 def test_visibility_timeout_fails_loud(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sg, "_VISIBILITY_ATTEMPTS", 3)
     monkeypatch.setattr(sg, "_VISIBILITY_BACKOFF_S", 0.0)
-
-    async def _never_visible() -> int:
-        return 0  # seeded rows never appear
-
     with pytest.raises(ScheduledGateFailure, match="never became visible"):
-        asyncio.run(_wait_visible({"a", "b"}, count_visible=_never_visible))
+        asyncio.run(
+            wait_for_visibility(
+                _NeverVisibleClient(),
+                "musubi_episodic",
+                "evalrun-x/scheduled/episodic",
+                expected_count=2,
+            )
+        )
 
 
 # --- discriminator 5: invalid namespace ------------------------------------------------------------
@@ -159,10 +169,11 @@ def test_measure_of_empty_store_yields_failing_metrics() -> None:
     async def _empty_retrieve(_text: str, _mode: str) -> list[str]:
         return []
 
-    by_mode = asyncio.run(
+    by_mode, per_query = asyncio.run(
         _measure(corpus, {"d1": "oid-d1", "d2": "oid-d2"}, retrieve=_empty_retrieve)
     )
     assert by_mode["fast"]["ndcg@10"] == 0.0  # nothing retrieved → zero
+    assert len(per_query) == len(corpus.queries)  # per-query results present for attribution
     with pytest.raises(ValueError, match="below threshold"):
         enforce_thresholds(by_mode)
 
@@ -194,13 +205,17 @@ def test_scheduled_seeded_gate_full_mechanism_local() -> None:
     data_dir = Path(__file__).parent / "data"
 
     try:
-        by_mode = asyncio.run(
+        result = asyncio.run(
             sg.run_scheduled_seeded_gate(backends, data_dir=data_dir, run_id=run_id)
         )
+        by_mode = result["by_mode"]
         # Both modes in the canonical corpus were measured with the full metric set.
         assert set(by_mode) == {"fast", "deep"}
         for metrics in by_mode.values():
             assert {"ndcg@10", "mrr", "recall@20", "p@1"} <= set(metrics)
+        # Per-query attribution is present (Yua requires per-query, not only aggregates).
+        assert len(result["per_query"]) == 8
+        assert all({"id", "mode", "metrics"} <= set(row) for row in result["per_query"])
     finally:
         # Teardown ran in the gate's finally; the run namespace must be empty.
         records, _ = client.scroll(

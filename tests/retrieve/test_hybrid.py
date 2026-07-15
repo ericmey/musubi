@@ -462,20 +462,27 @@ def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_d
     namespace = "eric/beir-eval/episodic"
     plane = EpisodicPlane(client=backends.client, embedder=backends.embedder)
 
+    from musubi.evals.scheduled_gate import wait_for_visibility
+
     groups = _beir_query_groups(count=40)
     queries: list[dict[str, Any]] = []
+    seeded_object_ids: set[str] = (
+        set()
+    )  # ACTUAL distinct rows (dedup can merge repeated distractors)
     for query_text, relevant_text, distractors in groups:
         answer = asyncio.run(
             plane.create(
                 EpisodicMemory(namespace=namespace, content=relevant_text, state="matured")
             )
         )
+        seeded_object_ids.add(str(answer.object_id))
         for distractor in distractors:
-            asyncio.run(
+            written = asyncio.run(
                 plane.create(
                     EpisodicMemory(namespace=namespace, content=distractor, state="matured")
                 )
             )
+            seeded_object_ids.add(str(written.object_id))
         queries.append(
             {
                 "text": query_text,
@@ -484,26 +491,14 @@ def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_d
             }
         )
 
-    # Wait for the freshly-seeded rows to become queryable before measuring — otherwise both hybrid
-    # and dense retrieve nothing (the 0.0/0.0 the first real x86 run showed). Bounded; fail loud.
-    total_seeded = 4 * len(groups)  # one answer + three distractors per group
-    for _attempt in range(60):
-        records, _ = backends.client.scroll(
-            collection_name=collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
-                ]
-            ),
-            limit=10_000,
-            with_payload=["object_id"],
-            with_vectors=False,
+    # Reuse the scheduled gate's visibility semantics on the ACTUAL distinct seeded count (dedup can
+    # reduce it below 4*groups) — else both hybrid and dense retrieve nothing (the 0.0/0.0 the first
+    # real x86 run showed) and the measurement is meaningless.
+    asyncio.run(
+        wait_for_visibility(
+            backends.client, collection, namespace, expected_count=len(seeded_object_ids)
         )
-        if len({(r.payload or {}).get("object_id") for r in records}) >= total_seeded:
-            break
-        time.sleep(0.5)
-    else:
-        raise AssertionError(f"BEIR corpus never became visible ({total_seeded} rows expected)")
+    )
 
     async def search(query: dict[str, Any], hybrid: bool) -> list[str]:
         result = await hybrid_search(

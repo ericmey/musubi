@@ -111,21 +111,26 @@ def _run_scheduled(data_dir: Path) -> None:
 
     run_id = new_run_id()
     try:
-        by_mode = asyncio.run(run_scheduled_seeded_gate(backends, data_dir=data_dir, run_id=run_id))
+        result = asyncio.run(run_scheduled_seeded_gate(backends, data_dir=data_dir, run_id=run_id))
     except (LiveGateUnavailable, ScheduledGateFailure) as exc:
         _write(f"Scheduled gate failed (fail-loud, no fabricated numbers): {exc}")
         raise SystemExit(3) from exc
 
+    by_mode = result["by_mode"]
+    _write(f"Scheduled gate PER-QUERY (corpus=scheduled_corpus.yaml run={run_id}):")
+    for row in result["per_query"]:
+        _write(f"  {row['id']} [{row['mode']}]: {row['metrics']}")
+
     try:
         enforce_thresholds(by_mode)
     except ValueError as exc:
-        # Below threshold: report RAW per-mode results + corpus attribution, never tuned to green.
+        # Below threshold: per-query is printed above; report the RAW aggregate, never tuned to green.
         _write(
             f"Scheduled gate BELOW thresholds (raw results, NOT tuned) — "
-            f"corpus=scheduled_corpus.yaml run={run_id} metrics={by_mode} :: {exc}"
+            f"corpus=scheduled_corpus.yaml run={run_id} aggregate={by_mode} :: {exc}"
         )
         raise SystemExit(1) from exc
-    _write(f"Scheduled gate PASSED — corpus=scheduled_corpus.yaml run={run_id} metrics={by_mode}")
+    _write(f"Scheduled gate PASSED — corpus=scheduled_corpus.yaml run={run_id} aggregate={by_mode}")
     raise SystemExit(0)
 
 
