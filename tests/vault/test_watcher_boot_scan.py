@@ -24,7 +24,7 @@ def mock_write_log() -> MagicMock:
     return wl
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_boot_scan_detects_body_hash_change(
     tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
 ) -> None:
@@ -73,7 +73,7 @@ async def test_boot_scan_detects_body_hash_change(
     assert cast(AsyncMock, watcher._handle_event).call_args[0][0] == str(f1)
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_boot_scan_indexes_new_files(
     tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
 ) -> None:
@@ -113,3 +113,134 @@ async def test_boot_scan_indexes_new_files(
     await captured[0]
 
     assert cast(AsyncMock, watcher._handle_event).call_count == 0
+
+
+@pytest.mark.anyio
+async def test_boot_scan_removes_ghost_row(
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
+) -> None:
+    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log)
+    watcher._loop = asyncio.get_running_loop()
+
+    # File missing from disk, but in Qdrant
+    point = MagicMock()
+    point.payload = {"vault_path": "missing.md", "body_hash": "old_hash"}
+    mock_curated_plane._client.scroll.return_value = ([point], None)
+
+    captured: list[asyncio.Task[Any]] = []
+    original_create_task = watcher._loop.create_task
+
+    def capture(coro: Any) -> Any:
+        t = original_create_task(coro)
+        captured.append(t)
+        return t
+
+    watcher._loop.create_task = capture  # type: ignore[assignment]
+    watcher.boot_scan()
+    await captured[0]
+
+    # Should call delete
+    assert mock_curated_plane._client.delete.call_count == 1
+    _args, kwargs = mock_curated_plane._client.delete.call_args
+    assert kwargs["collection_name"] == "musubi_curated"
+    filter_arg = kwargs["points_selector"]
+    assert filter_arg.must[0].key == "vault_path"
+    assert filter_arg.must[0].match.value == "missing.md"
+
+
+@pytest.mark.anyio
+async def test_boot_scan_ignores_unchanged_files(
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
+) -> None:
+    import hashlib
+
+    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log)
+    watcher._loop = asyncio.get_running_loop()
+
+    f1 = tmp_path / "unchanged.md"
+    f1.write_text("---\ntitle: t\n---\nbody")
+    real_hash = hashlib.sha256(b"body").hexdigest()
+
+    point = MagicMock()
+    point.payload = {"vault_path": "unchanged.md", "body_hash": real_hash}
+    mock_curated_plane._client.scroll.return_value = ([point], None)
+
+    from unittest.mock import AsyncMock
+
+    setattr(watcher, "_handle_event", AsyncMock())
+
+    captured: list[asyncio.Task[Any]] = []
+    original_create_task = watcher._loop.create_task
+
+    def capture(coro: Any) -> Any:
+        t = original_create_task(coro)
+        captured.append(t)
+        return t
+
+    watcher._loop.create_task = capture  # type: ignore[assignment]
+    watcher.boot_scan()
+    await captured[0]
+
+    assert mock_curated_plane._client.delete.call_count == 0
+    assert cast(AsyncMock, watcher._handle_event).call_count == 0
+
+
+@pytest.mark.anyio
+async def test_handle_event_inner_processes_move(
+    tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
+) -> None:
+    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log)
+    watcher._loop = asyncio.get_running_loop()
+
+    from watchdog.events import FileMovedEvent
+
+    f1 = tmp_path / "old.md"
+    f2 = tmp_path / "new.md"
+
+    # We don't actually need f2 to exist if we only check that delete is called for old.md
+    # but let's make f2 exist so the event doesn't exit early.
+    f2.write_text("---\ntitle: t\n---\nbody")
+
+    event = FileMovedEvent(str(f1), str(f2))
+
+    await watcher._handle_event_inner(str(f1), event)
+
+    assert mock_curated_plane._client.delete.call_count == 1
+    _args, kwargs = mock_curated_plane._client.delete.call_args
+    filter_arg = kwargs["points_selector"]
+    assert filter_arg.must[0].key == "vault_path"
+    assert filter_arg.must[0].match.value == "old.md"
+
+
+@pytest.mark.anyio
+async def test_failure_visibility_on_ghost_row(
+    tmp_path: Path,
+    mock_curated_plane: MagicMock,
+    mock_write_log: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log)
+    watcher._loop = asyncio.get_running_loop()
+
+    point = MagicMock()
+    point.payload = {"vault_path": "missing.md", "body_hash": "old_hash"}
+    mock_curated_plane._client.scroll.return_value = ([point], None)
+
+    mock_curated_plane._client.delete.side_effect = Exception("delete_failed_injected")
+
+    captured: list[asyncio.Task[Any]] = []
+    original_create_task = watcher._loop.create_task
+
+    def capture(coro: Any) -> Any:
+        t = original_create_task(coro)
+        captured.append(t)
+        return t
+
+    watcher._loop.create_task = capture  # type: ignore[assignment]
+    watcher.boot_scan()
+    await captured[0]
+
+    assert mock_curated_plane._client.delete.call_count == 1
+    assert (
+        "Boot scan failed to reconcile ghost row missing.md: delete_failed_injected" in caplog.text
+    )

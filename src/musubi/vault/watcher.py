@@ -222,12 +222,27 @@ class VaultWatcher:
         logger.info("Handling event %s for %s", event.event_type, path_str)
         path = Path(path_str)
         if event.event_type == "moved" and hasattr(event, "dest_path"):
+            try:
+                old_rel = path.relative_to(self.vault_root)
+                if (
+                    not any(part.startswith(".") or part.startswith("_") for part in old_rel.parts)
+                    and path.suffix == ".md"
+                ):
+                    await self._handle_deleted(str(old_rel))
+            except ValueError:
+                pass
+
             dp = event.dest_path
             path = Path(dp.decode("utf-8") if isinstance(dp, bytes) else dp)
             path_str = str(path)
 
         try:
-            rel_path = str(path.relative_to(self.vault_root))
+            rel_path_obj = path.relative_to(self.vault_root)
+            if any(part.startswith(".") or part.startswith("_") for part in rel_path_obj.parts):
+                return
+            if path.suffix != ".md":
+                return
+            rel_path = str(rel_path_obj)
         except ValueError:
             return
 
@@ -340,8 +355,17 @@ class VaultWatcher:
         return "system/internal/curated"
 
     async def _handle_deleted(self, rel_path: str) -> None:
-        # TODO: Implement archival flow
-        logger.info("File deleted: %s", rel_path)
+        from qdrant_client import models
+
+        self.curated_plane._client.delete(
+            collection_name="musubi_curated",
+            points_selector=models.Filter(
+                must=[
+                    models.FieldCondition(key="vault_path", match=models.MatchValue(value=rel_path))
+                ]
+            ),
+        )
+        logger.info("File deleted and removed from Qdrant: %s", rel_path)
 
     def boot_scan(self) -> None:
         """Run a background scan over the vault to catch missed edits."""
@@ -381,6 +405,7 @@ class VaultWatcher:
 
             from musubi.vault.frontmatter import parse_frontmatter
 
+            seen_paths = set()
             for path in self.vault_root.rglob("*.md"):
                 try:
                     rel_path = path.relative_to(self.vault_root)
@@ -388,6 +413,7 @@ class VaultWatcher:
                         continue
 
                     rel_str = str(rel_path)
+                    seen_paths.add(rel_str)
                     content = path.read_text(encoding="utf-8")
                     _, body = parse_frontmatter(content)
                     body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -406,8 +432,18 @@ class VaultWatcher:
                         # by the `except ValueError: return` —
                         # the file was never processed.
                         await self._handle_event(str(path), evt)
+                        known_hashes[rel_str] = body_hash
                 except Exception as exc:
                     logger.error("Boot scan failed on path %s: %s", path, exc)
+
+            for vp in list(known_hashes.keys()):
+                if vp not in seen_paths:
+                    logger.info("Boot scan found ghost row for %s", vp)
+                    try:
+                        await self._handle_deleted(vp)
+                        del known_hashes[vp]
+                    except Exception as exc:
+                        logger.error("Boot scan failed to reconcile ghost row %s: %s", vp, exc)
 
             logger.info("Boot scan complete")
 
