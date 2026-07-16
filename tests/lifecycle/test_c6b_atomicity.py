@@ -431,7 +431,7 @@ def _enclosing_of(
     cur = parent.get(node)
     while cur is not None and not isinstance(cur, types):
         cur = parent.get(cur)
-    return cur
+    return cast("ast.AST | None", cur)
 
 
 def _is_coordinator_annotation(ann: ast.AST | None) -> bool:
