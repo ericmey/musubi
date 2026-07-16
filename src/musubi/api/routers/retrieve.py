@@ -7,8 +7,14 @@ parameters; no state mutation. NDJSON streaming variant
 Three namespace shapes are accepted:
 
 - **3-segment** (``tenant/presence/plane``): single-plane query. The
-  stored-row filter is literal; the ``planes`` field, if set, must
-  not contradict the namespace's trailing plane.
+  stored-row filter is literal; the trailing plane segment is the
+  authoritative single target. The ``planes`` request field is
+  IGNORED for this shape — the pre-AUTH-001 contract that a 3-seg
+  concrete namespace is always single-plane is preserved. Supplying
+  a non-empty ``planes`` does NOT trigger an "inconsistent planes"
+  400; the default ``ContextQuery.planes`` is silently ignored.
+  3-seg with ``*`` as the plane segment is the wildcard-plane shape
+  (handled below) and DOES use the supplied ``planes`` list.
 - **2-segment** (``tenant/presence``): cross-plane query. Each entry
   in ``planes`` is expanded to ``<namespace>/<plane>`` server-side
   and the pipeline fans out, merging results by score. Scope is
@@ -38,6 +44,7 @@ from typing import Literal
 from fastapi import APIRouter, Body, Depends, Request
 from pydantic import BaseModel, Field, StrictBool, model_validator
 from qdrant_client import QdrantClient
+from qdrant_client.http import models
 
 from musubi.api.dependencies import (
     get_embedder,
@@ -58,7 +65,7 @@ from musubi.api.responses import (
     RetrieveResponse,
 )
 from musubi.auth import authenticate_request
-from musubi.auth.scopes import resolve_namespace_scope
+from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
@@ -67,17 +74,29 @@ from musubi.types.common import Err
 
 router = APIRouter(prefix="/v1/retrieve", tags=["retrieve"])
 
+_NAMESPACE_FACET_LIMIT = 10_000
+
 
 class RetrieveQuery(BaseModel):
-    namespace: str = Field(
-        ...,
+    # AUTH-001: ``namespace`` is OPTIONAL. Omit (or send null) to recall
+    # across every authorized concrete namespace in the caller's
+    # identity_family across the caller's authorized planes
+    # (minus the canonical per-agent exclusion list). Supplying
+    # ``namespace`` preserves the existing concrete / fanout /
+    # wildcard narrowing. The only signal is whether ``namespace``
+    # is supplied; no second boolean.
+    namespace: str | None = Field(
+        default=None,
+        min_length=1,
         description=(
             "Namespace pattern. Three shapes accepted: "
             "3-segment concrete `<tenant>/<presence>/<plane>` (single target), "
             "2-segment `<tenant>/<presence>` (cross-plane fanout, requires `planes`), "
             "or wildcard with `*` replacing any single segment "
             "(e.g. `nyla/*/episodic`, `*/voice/curated`). "
-            "Writes reject `*`; wildcards are read-only. See ADR 0031."
+            "Optional in AUTH-001: omit (or null) to recall across all "
+            "authorized namespaces; the per-agent exclusion list "
+            "(`salesai` mandatory + per-agent settings) is applied centrally. See ADR 0031 + AUTH-001."
         ),
     )
     # query_text required for fast/deep/blended; optional for recent.
@@ -215,6 +234,14 @@ def _dedup_planes(planes: list[str]) -> list[str]:
     return out
 
 
+def _validate_planes(planes: list[str]) -> str | None:
+    """Return a request-shape error for the first unsupported plane."""
+    for plane in _dedup_planes(planes):
+        if plane not in _VALID_PLANES:
+            return f"unknown plane '{plane}' in planes list (valid: {sorted(_VALID_PLANES)})"
+    return None
+
+
 def _resolve_targets(
     namespace: str,
     planes: list[str] | None,
@@ -278,12 +305,14 @@ def _resolve_targets(
                 f"3-segment namespace '{namespace}' names unknown plane "
                 f"'{derived_plane}' (valid: {sorted(_VALID_PLANES)})",
             )
-        if requested is not None and requested != [derived_plane]:
-            return (
-                [],
-                f"3-segment namespace '{namespace}' pins plane "
-                f"'{derived_plane}'; planes={requested} is inconsistent",
-            )
+        # 3-segment concrete plane already pins the plane; the
+        # `planes` request field is IGNORED for this shape (the
+        # 3-seg concrete plane is the single source of truth). The
+        # default `ContextQuery.planes` value must not be allowed to
+        # flip a well-formed 3-seg concrete request into a 400
+        # "inconsistent planes list" error. This matches the
+        # pre-AUTH-001 contract: a 3-seg concrete namespace was
+        # always single-plane.
         return ([(namespace, derived_plane)], None)
 
     if shape == 2:
@@ -366,6 +395,72 @@ def _expand_wildcard_targets(
     return expanded
 
 
+def _enumerate_family_targets(
+    client: QdrantClient,
+    *,
+    family: str,
+    planes: list[str],
+) -> list[tuple[str, str]]:
+    """AUTH-001: enumerate every stored concrete namespace in ``family``
+    across the requested planes.
+
+    Used when the request body omits ``namespace`` (or sends null). This
+    function discovers family candidates only; authorization and the
+    per-agent exclusion list are applied afterwards by
+    ``enforce_namespace_policy``.
+
+    Dedups ``planes`` before facetting — duplicate plane names
+    (e.g. ``["episodic", "episodic"]``) would otherwise facet the
+    same collection twice and emit duplicate namespace targets,
+    causing redundant authorization checks and retrieval work.
+
+    Uses Qdrant's server-side facet operation over the indexed namespace
+    field, filtered by the indexed identity-family field. This transfers
+    distinct namespace values rather than every stored point. The hard cap
+    fails loudly instead of silently narrowing default recall.
+    """
+    expanded: list[tuple[str, str]] = []
+    for plane in _dedup_planes(planes):
+        collection = collection_for_plane(plane)
+        response = client.facet(
+            collection_name=collection,
+            key="namespace",
+            facet_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="identity_family",
+                        match=models.MatchValue(value=family),
+                    )
+                ]
+            ),
+            limit=_NAMESPACE_FACET_LIMIT,
+            exact=True,
+        )
+        if len(response.hits) >= _NAMESPACE_FACET_LIMIT:
+            # Fail closed + visibly. This is a graceful backend
+            # resource cap (too many distinct namespaces for one
+            # family+plane) — surface as a typed BACKEND_UNAVAILABLE
+            # envelope so the client gets Musubi's structured error
+            # shape (not FastAPI's generic 500). The HTTP status
+            # is 503 because the operator can resolve it (raise the
+            # cap, partition the family, etc.) — it is not a 5xx
+            # server bug.
+            raise APIError(
+                status_code=503,
+                code="BACKEND_UNAVAILABLE",
+                detail=(
+                    f"namespace enumeration reached safety cap "
+                    f"{_NAMESPACE_FACET_LIMIT} for collection {collection!r}; "
+                    "narrow the request or contact the operator to "
+                    "raise the cap"
+                ),
+            )
+        seen = {hit.value for hit in response.hits if isinstance(hit.value, str)}
+        for ns in sorted(seen):
+            expanded.append((ns, plane))
+    return expanded
+
+
 @router.post("", response_model=RetrieveResponse)
 async def retrieve(
     request: Request,
@@ -375,10 +470,13 @@ async def retrieve(
     embedder: Embedder = Depends(get_embedder),
     reranker: TEIRerankerClient = Depends(get_reranker),
 ) -> RetrieveResponse:
-    targets, shape_err = _resolve_targets(body.namespace, body.planes)
-    if shape_err is not None:
-        raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
-
+    # AUTH-001: when the body omits ``namespace`` (or sends null),
+    # recall spans every concrete namespace in the caller's
+    # identity_family across the caller's authorized planes. The
+    # per-agent exclusion list (`salesai` mandatory baseline +
+    # per-agent settings) is applied centrally
+    # by ``enforce_namespace_policy`` after target resolution. The
+    # seam is the single source of truth for the exclusion policy.
     # Authenticate first so unauth callers cannot probe for empty
     # wildcard matches. Token check is once per request — the per-target
     # work is scope evaluation on the single resulting context.
@@ -392,6 +490,17 @@ async def retrieve(
         code: ErrorCode = err.code  # type: ignore[assignment]
         raise APIError(status_code=err.status_code, code=code, detail=err.detail)
     context = auth_result.value
+
+    if body.namespace is None:
+        family = context.presence.split("/", 1)[0]
+        planes = body.planes or ["curated", "concept", "episodic"]
+        if plane_err := _validate_planes(planes):
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=plane_err)
+        targets = _enumerate_family_targets(qdrant, family=family, planes=planes)
+    else:
+        targets, shape_err = _resolve_targets(body.namespace, body.planes)
+        if shape_err is not None:
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
 
     # Wildcard segments resolve against live Qdrant payload. An empty
     # expansion of a wildcard pattern is a valid state — no rows in any
@@ -414,20 +523,44 @@ async def retrieve(
             limit=body.limit,
         )
 
-    for target_namespace, _plane in targets:
-        scope_result = resolve_namespace_scope(context, namespace=target_namespace, access="r")
-        if isinstance(scope_result, Err):
-            raise APIError(
-                status_code=scope_result.error.status_code,
-                code="FORBIDDEN",
-                detail=scope_result.error.detail,
+    # AUTH-001: the shared READ-ONLY enforcement seam. It first applies
+    # per-namespace scope authorization (rejecting or dropping unauthorized
+    # targets according to ``reject_unauthorized``), then drops namespaces in
+    # the canonical per-agent Settings exclusion list. The seam replaces the
+    # route-local ``resolve_namespace_scope`` loop and is the single source of
+    # truth for exclusion policy; route-specific exclusions are a must-fix.
+    policy_result = enforce_namespace_policy(
+        context,
+        targets=targets,
+        settings=settings,
+        reject_unauthorized=body.namespace is not None,
+    )
+    if isinstance(policy_result, Err):
+        raise APIError(
+            status_code=policy_result.error.status_code,
+            code="FORBIDDEN",
+            detail=policy_result.error.detail,
+        )
+    targets = policy_result.value
+
+    if not targets:
+        if body.mode == "recent":
+            return RecentRetrieveResponse(
+                results=[],
+                mode="recent",
+                limit=body.limit,
             )
+        return RankedRetrieveResponse(
+            results=[],
+            mode=body.mode,
+            limit=body.limit,
+        )
 
     # Hand orchestration the fully-resolved targets. A 3-segment
     # call reduces to exactly one (namespace, plane) target, so the
     # single-plane code path is preserved bit-for-bit.
     query_body: dict[str, object] = {
-        "namespace": body.namespace,
+        "namespace": body.namespace or "",
         "query_text": body.query_text,
         "mode": body.mode,
         "limit": body.limit,

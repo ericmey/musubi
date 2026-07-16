@@ -54,10 +54,19 @@ def _seed(client: QdrantClient) -> tuple[str, str]:
 
 
 def _row(client: QdrantClient, oid: str) -> dict[str, Any]:
+    # DATA-001 P2: after a vector-changing reinforce the object is a v2 layout; the RET-008 access fields
+    # + reinforcement_count live on the ANCHOR identity, not the content shell (a no-op for a v1 row).
+    from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
+
     recs, _ = client.scroll(
         collection_name=_COLL,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                )
+            ],
         ),
         limit=1,
         with_payload=True,
@@ -66,10 +75,19 @@ def _row(client: QdrantClient, oid: str) -> dict[str, Any]:
 
 
 def _curated_count(client: QdrantClient, oid: str) -> int:
+    # DATA-001 P2: after a same-id update the object is a v2 layout; access_count lives on the ANCHOR
+    # identity, not the content shell — exclude content (a no-op for a v1 row).
+    from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
+
     recs, _ = client.scroll(
         collection_name=_CURATED_COLL,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                )
+            ],
         ),
         limit=1,
         with_payload=True,
@@ -317,7 +335,7 @@ def test_crash_after_done_before_clear_recovers_without_double_count(
 
 @pytest.mark.integration
 def test_dedup_merge_upsert_preserves_leased_access_count(
-    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch
+    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """Proof 3: ``EpisodicPlane.create()``'s dedup-MERGE path re-upserts an existing row via a
     full-point upsert. If the dedup probe read the row BEFORE a concurrent leased increment, the
@@ -326,22 +344,46 @@ def test_dedup_merge_upsert_preserves_leased_access_count(
     leased increment survives. RED before the wiring, GREEN after.
 
     The stale probe is injected deterministically by pinning ``_find_dedup_candidate`` to a
-    pre-bump snapshot — modelling the probe-before / upsert-after race without a live thread."""
-    plane = EpisodicPlane(client=real_qdrant, embedder=FakeEmbedder())
-    ns, oid = _seed(real_qdrant)  # access_count starts at 0
+    pre-bump snapshot — modelling the probe-before / upsert-after race without a live thread.
+    DATA-001 P2: the reinforce is a vector change → the REAL immutable-vector seam (publisher wired),
+    and we ASSERT a real reinforce ran (a factually-incompatible probe would insert a fresh row and
+    exercise nothing — Yua)."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+
+    ns, oid = _seed(real_qdrant)  # access_count starts at 0; content "lease invariant"
     stale_existing = EpisodicMemory.model_validate(_row(real_qdrant, oid))  # count == 0 snapshot
+    rc_before = int(_row(real_qdrant, oid).get("reinforcement_count", 0))
 
     asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))
     assert _row(real_qdrant, oid).get("access_count") == 1
 
+    coord = LifecycleTransitionCoordinator(
+        client=real_qdrant, db_path=tmp_path / "lease-ep.db", backoff_base_s=0.01, backoff_max_s=0.01
+    )
+    pub = ImmutableVectorPublisher(client=real_qdrant, embedder=FakeEmbedder(), collection=_COLL)
+    register_immutable_vector_dispatch(coord, {_COLL: pub})
+    plane = EpisodicPlane(
+        client=real_qdrant, embedder=FakeEmbedder(), coordinator=coord, vector_publisher=pub
+    )
     # The dedup probe returns the STALE (count==0) candidate as if it read before the bump.
     monkeypatch.setattr(
-        plane, "_find_dedup_candidate", lambda namespace, dense: (stale_existing, None, None)
+        plane,
+        "_find_dedup_candidate",
+        lambda namespace, dense: (stale_existing, None, None, 1.0),
     )
+    # Compatible surface form of the seed's "lease invariant" so a REAL reinforce runs.
     asyncio.run(
-        plane.create(EpisodicMemory(namespace=ns, content="near duplicate", state="matured"))
+        plane.create(EpisodicMemory(namespace=ns, content="Lease invariant.", state="matured"))
     )
-    assert _row(real_qdrant, oid).get("access_count") == 1  # leased increment survived the merge
+    row = _row(real_qdrant, oid)
+    assert int(row.get("reinforcement_count", 0)) == rc_before + 1, (
+        "a real reinforce must have run (else the access-count assertion is vacuous)"
+    )
+    assert row.get("access_count") == 1  # leased increment survived the merge
 
 
 def _seed_curated(client: QdrantClient, *, body_hash: str) -> CuratedKnowledge:
@@ -360,21 +402,40 @@ def _seed_curated(client: QdrantClient, *, body_hash: str) -> CuratedKnowledge:
 
 
 @pytest.mark.integration
-def test_curated_update_upsert_preserves_leased_access_count(real_qdrant: QdrantClient) -> None:
+def test_curated_update_upsert_preserves_leased_access_count(
+    real_qdrant: QdrantClient, tmp_path: Any
+) -> None:
     """Proof 4a: ``CuratedPlane.create()``'s same-id UPDATE path (same ``object_id``, new body)
     re-upserts via a full-point upsert built from the INCOMING model, which carries a DEFAULT
     ``access_count = 0``. Without preservation the upsert resets a leased increment to 0. RED before
     the wiring, GREEN after (reads the stored lease-owned fields fresh). Naturally non-vacuous — the
-    incoming model's stale count is real, not injected."""
+    incoming model's stale count is real, not injected. DATA-001 P2: the same-id update is a vector
+    change, so it traverses the REAL immutable-vector seam (coordinator + publisher wired below)."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+
     row = _seed_curated(real_qdrant, body_hash="a" * 64)
     asyncio.run(
         lease_increment_access(real_qdrant, _CURATED_COLL, {(str(row.namespace), row.object_id)})
     )
     assert _curated_count(real_qdrant, row.object_id) == 1
 
+    coord = LifecycleTransitionCoordinator(
+        client=real_qdrant, db_path=tmp_path / "lease-cur.db", backoff_base_s=0.01, backoff_max_s=0.01
+    )
+    pub = ImmutableVectorPublisher(
+        client=real_qdrant, embedder=FakeEmbedder(), collection=_CURATED_COLL
+    )
+    register_immutable_vector_dispatch(coord, {_CURATED_COLL: pub})
+    plane = CuratedPlane(
+        client=real_qdrant, embedder=FakeEmbedder(), coordinator=coord, vector_publisher=pub
+    )
     # Same object_id + vault_path, DIFFERENT body → the same-id UPDATE path.
     asyncio.run(
-        CuratedPlane(client=real_qdrant, embedder=FakeEmbedder()).create(
+        plane.create(
             CuratedKnowledge(
                 object_id=row.object_id,
                 namespace=row.namespace,

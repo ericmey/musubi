@@ -16,6 +16,7 @@ from typing import Any, Protocol, cast
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.embedding.cosine import cosine_similarity
 from musubi.lifecycle import LifecycleEventSink, store
 from musubi.lifecycle.scheduler import Job, file_lock
 from musubi.planes.concept import ConceptPlane
@@ -138,15 +139,6 @@ def _resolve_candidate_memory(
     return None
 
 
-def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
-    dot = sum(a * b for a, b in zip(v1, v2, strict=True))
-    mag1 = sum(a * a for a in v1) ** 0.5
-    mag2 = sum(a * a for a in v2) ** 0.5
-    if mag1 == 0 or mag2 == 0:
-        return 0.0
-    return float(dot / (mag1 * mag2))
-
-
 def _threshold_cluster(
     items: list[MemoryWithVector], threshold: float
 ) -> list[list[MemoryWithVector]]:
@@ -156,7 +148,7 @@ def _threshold_cluster(
     adj: list[list[int]] = [[] for _ in range(n)]
     for i in range(n):
         for j in range(i + 1, n):
-            sim = _cosine_similarity(items[i].vector, items[j].vector)
+            sim = cosine_similarity(items[i].vector, items[j].vector)
             if sim >= threshold:
                 adj[i].append(j)
                 adj[j].append(i)
@@ -676,7 +668,7 @@ async def synthesis_run(
 
             vec_a = (await embedder.embed_dense([concept_a.content]))[0]
             vec_b = (await embedder.embed_dense([concept_b.content]))[0]
-            sim = _cosine_similarity(vec_a, vec_b)
+            sim = cosine_similarity(vec_a, vec_b)
 
             if cfg.contradiction_min_similarity <= sim < cfg.contradiction_max_similarity:
                 verdict = await ollama.check_contradiction(ContradictionInput(concept_a, concept_b))

@@ -1,6 +1,6 @@
 ---
 owner: claude-code-opus48
-status: in-progress
+status: done
 issue: 510
 title: "Slice: RET-011 exact deployment-namespace retrieval"
 slice_id: slice-ret011-exact-namespace
@@ -9,10 +9,10 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-progress
+  - status/done
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

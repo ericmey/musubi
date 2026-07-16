@@ -3,12 +3,12 @@ title: "Slice: C6 lifecycle audit-event loss — durable-on-accept implementatio
 slice_id: slice-c6-lifecycle-event-loss
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: yua
 phase: "Lifecycle-audit 2026-07-14 — C6 durable-on-accept implementation successor"
-tags: [section/slices, status/in-progress, type/slice, lifecycle, audit, durability]
+tags: [section/slices, status/done, type/slice, lifecycle, audit, durability]
 updated: 2026-07-14
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 issue: 433

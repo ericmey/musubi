@@ -17,7 +17,7 @@ import os
 import uuid as _uuidmod
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import QdrantClient, models
@@ -369,3 +369,20 @@ def test_supersession_of_v2_anchor_no_layout_validation_error(plane: CuratedPlan
         "the old v2 object is marked superseded through the narrow lease write"
     )
     assert str(superseded.superseded_by) == str(new.object_id)
+
+
+# ==================================================================================================
+# get() — anchor-aware resolution (healthy v2 + dangling fail-closed)
+# ==================================================================================================
+def test_curated_get_resolves_healthy_v2(plane: CuratedPlane) -> None:
+    v2 = _v2(plane, "one", "get healthy committed", vault_path="geth.md")
+    got = asyncio.run(plane.get(namespace=cast(Any, _NS), object_id=cast(Any, v2)))
+    assert got is not None and str(got.object_id) == v2
+    assert got.content == "get healthy committed", "get resolves the committed content via the anchor"
+
+
+def test_curated_get_dangling_v2_returns_none(plane: CuratedPlane, qdrant: QdrantClient) -> None:
+    v2 = _v2(plane, "one", "get dangling committed", vault_path="getd.md")
+    _make_dangling(qdrant, v2)
+    got = asyncio.run(plane.get(namespace=cast(Any, _NS), object_id=cast(Any, v2)))
+    assert got is None, "a dangling committed pointer fails closed (None) on curated get"

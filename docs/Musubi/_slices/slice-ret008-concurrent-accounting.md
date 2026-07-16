@@ -1,6 +1,6 @@
 ---
 owner: claude-code-opus48
-status: in-review
+status: done
 issue: 502
 title: "Slice: RET-008 concurrency-safe access accounting"
 slice_id: slice-ret008-concurrent-accounting
@@ -9,7 +9,7 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-review
+  - status/done
   - type/slice
 updated: 2026-07-15
 reviewed: true

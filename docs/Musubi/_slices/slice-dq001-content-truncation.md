@@ -4,12 +4,12 @@ slice_id: slice-dq001-content-truncation
 issue: 443
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: cowork-tama
 phase: "Retrieval"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

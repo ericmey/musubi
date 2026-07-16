@@ -37,9 +37,10 @@ from musubi.api.routers.retrieve import (
     RetrieveQuery,
     _expand_wildcard_targets,
     _resolve_targets,
+    _validate_planes,
 )
 from musubi.auth import authenticate_request
-from musubi.auth.scopes import resolve_namespace_scope
+from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
 from musubi.settings import Settings
@@ -60,9 +61,16 @@ async def retrieve_stream(
     embedder: Embedder = Depends(get_embedder),
     reranker: TEIRerankerClient = Depends(get_reranker),
 ) -> StreamingResponse:
-    targets, shape_err = _resolve_targets(body.namespace, body.planes)
-    if shape_err is not None:
-        raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
+    # AUTH-001: when the body omits ``namespace``, defer the target
+    # resolution until after auth so we can derive the caller's
+    # identity_family.
+    if body.namespace is None:
+        targets: list[tuple[str, str]] = []
+        shape_err: str | None = None
+    else:
+        targets, shape_err = _resolve_targets(body.namespace, body.planes)
+        if shape_err is not None:
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=shape_err)
 
     auth_result = authenticate_request(
         request,  # type: ignore[arg-type]
@@ -75,10 +83,33 @@ async def retrieve_stream(
         raise APIError(status_code=err.status_code, code=code, detail=err.detail)
     context = auth_result.value
 
-    pattern_had_wildcards = any("*" in ns for ns, _ in targets)
+    if body.namespace is None:
+        from musubi.api.routers.retrieve import _enumerate_family_targets
+
+        family = context.presence.split("/", 1)[0]
+        planes = body.planes or ["curated", "concept", "episodic"]
+        if plane_err := _validate_planes(planes):
+            raise APIError(status_code=400, code="BAD_REQUEST", detail=plane_err)
+        targets = _enumerate_family_targets(qdrant, family=family, planes=planes)
+
     targets = _expand_wildcard_targets(qdrant, targets)
 
-    if pattern_had_wildcards and not targets:
+    # AUTH-001: the shared READ-ONLY enforcement seam.
+    policy_result = enforce_namespace_policy(
+        context,
+        targets=targets,
+        settings=settings,
+        reject_unauthorized=body.namespace is not None,
+    )
+    if isinstance(policy_result, Err):
+        raise APIError(
+            status_code=policy_result.error.status_code,
+            code="FORBIDDEN",
+            detail=policy_result.error.detail,
+        )
+    targets = policy_result.value
+
+    if not targets:
         headers = {
             "X-Musubi-Mode": body.mode,
             "X-Musubi-Limit": str(body.limit),
@@ -88,20 +119,12 @@ async def retrieve_stream(
         async def _emit_empty() -> AsyncIterator[bytes]:
             if False:
                 yield b""
+            return
 
         return StreamingResponse(_emit_empty(), media_type="application/x-ndjson", headers=headers)
 
-    for target_namespace, _plane in targets:
-        scope_result = resolve_namespace_scope(context, namespace=target_namespace, access="r")
-        if isinstance(scope_result, Err):
-            raise APIError(
-                status_code=scope_result.error.status_code,
-                code="FORBIDDEN",
-                detail=scope_result.error.detail,
-            )
-
     query_body: dict[str, object] = {
-        "namespace": body.namespace,
+        "namespace": body.namespace or "",
         "query_text": body.query_text,
         "mode": body.mode,
         "limit": body.limit,

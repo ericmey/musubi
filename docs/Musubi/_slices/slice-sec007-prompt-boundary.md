@@ -1,14 +1,14 @@
 ---
 title: "Slice: SEC-007 — Secure JSON LLM Prompt Boundary"
 slice_id: slice-sec007-prompt-boundary
-status: in-review
+status: done
 owner: gemini-3-1-shiori
 phase: "Auth"
 section: _slices
 type: slice
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

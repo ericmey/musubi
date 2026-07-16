@@ -215,6 +215,14 @@ overfetch; concept/thought/artifact byte-unchanged):
 91. `test_hybrid_gated_filters_carry_must_not_anchor_non_gated_do_not` — tests/retrieve/test_data001_phase2_hybrid.py
 92. `test_hybrid_bounded_underfill_reaches_live_past_higher_stale` — tests/retrieve/test_data001_phase2_hybrid.py
 
+Unit B anchor-aware `get()` discriminators (healthy v2 resolves committed content; dangling fails closed
+— episodic returns None with ZERO access bump, curated returns None):
+
+93. `test_episodic_get_resolves_healthy_v2` — tests/store/test_data001_phase2_identity_consumers.py
+94. `test_episodic_get_dangling_v2_returns_none_without_access_bump` — tests/store/test_data001_phase2_identity_consumers.py
+95. `test_curated_get_resolves_healthy_v2` — tests/store/test_data001_phase2_curated_retrieval.py
+96. `test_curated_get_dangling_v2_returns_none` — tests/store/test_data001_phase2_curated_retrieval.py
+
 ## Scope (Yua-approved 2026-07-15 — coupled integration)
 
 The multi-point layout is only correct if EVERY identity consumer resolves the anchor and no write

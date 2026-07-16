@@ -792,3 +792,48 @@ def test_dedup_walks_past_many_stale_to_the_live_candidate(
         "the live duplicate must be found past >4 stale higher-scoring snapshots"
     )
     assert str(found[0].object_id) == v2
+
+
+# ==================================================================================================
+# get() — anchor-aware resolution (healthy v2 + dangling fail-closed with no access bump)
+# ==================================================================================================
+def _anchor_access_count(qdrant: QdrantClient, oid: str) -> int:
+    """The access_count on the IDENTITY (anchor) row (must_not content)."""
+    recs, _ = qdrant.scroll(
+        collection_name=_COLL,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value="content")
+                )
+            ],
+        ),
+        limit=1,
+        with_payload=True,
+    )
+    return int((recs[0].payload or {}).get("access_count", 0)) if recs else -1
+
+
+def test_episodic_get_resolves_healthy_v2(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    v2 = _full_v2(qdrant, coord, "get healthy committed", state="matured")
+    got = asyncio.run(_plane(qdrant).get(namespace=_NS, object_id=v2, bump_access=False))
+    assert got is not None and str(got.object_id) == v2
+    assert got.content == "get healthy committed", (
+        "get resolves the committed content via the anchor"
+    )
+
+
+def test_episodic_get_dangling_v2_returns_none_without_access_bump(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    v2 = _full_v2(qdrant, coord, "get dangling committed", state="matured")
+    before = _anchor_access_count(qdrant, v2)
+    _make_dangling(qdrant, v2)
+    got = asyncio.run(_plane(qdrant).get(namespace=_NS, object_id=v2, bump_access=True))
+    assert got is None, "a dangling committed pointer fails closed (None) on get"
+    assert _anchor_access_count(qdrant, v2) == before, (
+        "get must NOT bump access when it fails to resolve (no bump on a dangling read)"
+    )

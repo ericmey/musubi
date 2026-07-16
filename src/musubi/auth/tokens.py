@@ -152,7 +152,9 @@ def _fetch_jwks(settings: Settings) -> Result[dict[str, Any], InvalidTokenError]
     return Ok(value=cast(dict[str, Any], body))
 
 
-def _context_from_payload(payload: dict[str, Any]) -> Result[AuthContext, InvalidTokenError]:
+def _context_from_payload(
+    payload: dict[str, Any],
+) -> Result[AuthContext, InvalidTokenError]:
     subject = payload.get("sub")
     issuer = payload.get("iss")
     audience = payload.get("aud")
