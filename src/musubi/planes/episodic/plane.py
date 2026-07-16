@@ -32,12 +32,14 @@ Design notes:
 
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Any, Literal, cast, get_args
 
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.embedding.cosine import cosine_similarity
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.store.access_lease import lease_increment_access
@@ -213,9 +215,9 @@ class EpisodicPlane:
         if len(dense) != 1024:
             raise ValueError(f"vector dimension mismatch: got {len(dense)}, expected 1024")
 
-        found = self._find_dedup_candidate(memory.namespace, dense)
-        if found is not None:
-            existing, existing_dense, existing_sparse = found
+        found_res = self._find_dedup_candidate(memory.namespace, dense)
+        if found_res is not None:
+            existing, existing_dense, existing_sparse, _score = found_res
             if _is_factually_compatible(existing, memory):
                 return await self._reinforce(
                     existing=existing,
@@ -270,6 +272,9 @@ class EpisodicPlane:
         if not memories:
             return []
 
+        if len(memories) > 100:
+            raise ValueError("batch_create exceeds maximum batch size of 100")
+
         # Per-row validation — same as create(). Fail fast on the whole
         # batch if any row is malformed; partial success would be harder
         # to reason about for callers.
@@ -304,10 +309,54 @@ class EpisodicPlane:
         # dedup hits are reinforced individually through the attributable mutation lease (DATA-001
         # #530) so a concurrent unrelated mutation is never overwritten. The TEI embed stays batched;
         # only the WRITE for reinforced rows is per-row (dedup hits are the minority).
-        points: list[models.PointStruct] = []
         finalised: list[EpisodicMemory] = []
+
+        # Track pending rows within the current batch to correctly deduplicate intra-batch.
+        # Dict maps object_id -> (Memory, dense, sparse) for newly created rows in the loop.
+        pending_batch: dict[str, tuple[EpisodicMemory, list[float], dict[int, float]]] = {}
+
         for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
-            found = self._find_dedup_candidate(memory.namespace, dense)
+            # 1. Intra-batch search
+            intra_found: tuple[EpisodicMemory, list[float], dict[int, float]] | None = None
+            intra_score = -1.0
+
+            for p_mem, p_dense, p_sparse in pending_batch.values():
+                if p_mem.namespace != memory.namespace:
+                    continue
+                # Compute true cosine similarity for the pending in-memory batch.
+                score = cosine_similarity(dense, p_dense)
+                # Ensure sequential semantic choice: keep the highest-scoring candidate available
+                # with a deterministic tie-break based on object_id to ensure order independence.
+                if score >= self._dedup_threshold and (
+                    (score > intra_score and not math.isclose(score, intra_score, abs_tol=1e-6))
+                    or (
+                        math.isclose(score, intra_score, abs_tol=1e-6)
+                        and intra_found
+                        and p_mem.object_id > intra_found[0].object_id
+                    )
+                ):
+                    intra_score = score
+                    intra_found = (p_mem, p_dense, p_sparse)
+
+            found: tuple[EpisodicMemory, list[float] | None, dict[int, float] | None] | None = (
+                intra_found
+            )
+
+            # 2. Qdrant search
+            qdrant_found = self._find_dedup_candidate(memory.namespace, dense)
+
+            # Tie-breaker between Qdrant hit and Intra-batch hit:
+            if qdrant_found is not None:
+                q_mem, q_dense, _q_sparse, q_score = qdrant_found
+                if (
+                    q_score > intra_score and not math.isclose(q_score, intra_score, abs_tol=1e-6)
+                ) or (
+                    math.isclose(q_score, intra_score, abs_tol=1e-6)
+                    and intra_found
+                    and q_mem.object_id > intra_found[0].object_id
+                ):
+                    found = (q_mem, q_dense, _q_sparse)
+                    intra_found = None  # Ensure we know it's external
 
             compatible = False
             if found is not None:
@@ -316,18 +365,39 @@ class EpisodicPlane:
 
             if found is not None and compatible:
                 existing, existing_dense, existing_sparse = found
-                finalised.append(
-                    await self._reinforce(
+
+                if intra_found is not None:
+                    existing, existing_dense, existing_sparse = intra_found
+                    # Merge intra-batch directly in memory without hitting Qdrant's _reinforce.
+                    # This guarantees we update the pending record that will eventually be upserted.
+                    updated, existing_content_won = self._merge_row(
                         existing=existing,
-                        existing_dense=existing_dense,
-                        existing_sparse=existing_sparse,
                         new=memory,
-                        dense=dense,
-                        sparse=sparse,
                         merge_strategy=merge_strategy,
+                        now=now,
                     )
-                )
+
+                    if not existing_content_won:
+                        existing_dense = dense
+                        existing_sparse = sparse
+
+                    pending_batch[updated.object_id] = (updated, existing_dense, existing_sparse)
+                    finalised.append(updated)
+                else:
+                    # External hit: must reinforce through the attributable mutation lease.
+                    finalised.append(
+                        await self._reinforce(
+                            existing=existing,
+                            existing_dense=existing_dense,
+                            existing_sparse=existing_sparse,
+                            new=memory,
+                            dense=dense,
+                            sparse=sparse,
+                            merge_strategy=merge_strategy,
+                        )
+                    )
             else:
+                # Fresh insert
                 data = memory.model_dump()
                 data.update(
                     state="provisional",
@@ -339,10 +409,11 @@ class EpisodicPlane:
                     updated_epoch=epoch_of(now),
                 )
                 fresh = EpisodicMemory.model_validate(data)
-                points.append(self._make_point(fresh, dense=dense, sparse=sparse))
+                pending_batch[fresh.object_id] = (fresh, dense, sparse)
                 finalised.append(fresh)
 
-        # Single Qdrant upsert for the fresh inserts (if any).
+        # Single Qdrant upsert for the fresh inserts + intra-batch merges
+        points = [self._make_point(mem, dense=d, sparse=s) for mem, d, s in pending_batch.values()]
         if points:
             self._client.upsert(collection_name=self._collection, points=points)
         return finalised
@@ -474,11 +545,11 @@ class EpisodicPlane:
 
     def _find_dedup_candidate(
         self, namespace: str, dense: list[float]
-    ) -> tuple[EpisodicMemory, list[float] | None, dict[int, float] | None] | None:
+    ) -> tuple[EpisodicMemory, list[float] | None, dict[int, float] | None, float] | None:
         """Return the best existing point above the dedup threshold, if any.
 
         Returns the rehydrated :class:`EpisodicMemory` plus the point's
-        stored dense and sparse vectors. The vectors let the
+        stored dense and sparse vectors, and the raw cosine score. The vectors let the
         reinforce path preserve the existing embeddings when
         ``longer-wins`` keeps the existing content — otherwise the
         payload and vectors would drift apart on every dedup hit where
@@ -510,11 +581,11 @@ class EpisodicPlane:
         if isinstance(vectors, dict):
             raw_dense = vectors.get(DENSE_VECTOR_NAME)
             if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
-                existing_dense = raw_dense  # type: ignore[assignment]
+                existing_dense = [v for v in raw_dense if isinstance(v, float)]
             raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
             if isinstance(raw_sparse, models.SparseVector):
                 existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))
-        return memory, existing_dense, existing_sparse
+        return memory, existing_dense, existing_sparse, point.score
 
     # ------------------------------------------------------------------
     # Read

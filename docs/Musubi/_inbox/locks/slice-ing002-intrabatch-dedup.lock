@@ -1,0 +1,14 @@
+{
+  "agent": "gemini-3-1-shiori",
+  "branch": "shiori/issue533-ing002-intrabatch-fresh",
+  "owns_paths": [
+    "docs/Musubi/_inbox/locks/slice-ing002-intrabatch-dedup.lock",
+    "docs/Musubi/_slices/slice-ing002-intrabatch-dedup.md",
+    "src/musubi/embedding/cosine.py",
+    "src/musubi/lifecycle/synthesis.py",
+    "src/musubi/planes/episodic/plane.py",
+    "tests/planes/test_episodic.py"
+  ],
+  "reason": "ING-002: Intra-batch dedup equivalence",
+  "timestamp": "2026-07-16T03:10:45Z"
+}
