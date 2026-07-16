@@ -44,7 +44,13 @@ from musubi.store.access_lease import lease_increment_access
 from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, strip_layout_fields
+from musubi.store.specs import (
+    DENSE_VECTOR_NAME,
+    POINT_KIND_ANCHOR,
+    POINT_KIND_FIELD,
+    SPARSE_VECTOR_NAME,
+    strip_layout_fields,
+)
 from musubi.types.common import (
     KSUID,
     Err,
@@ -65,6 +71,21 @@ _POINT_NS = uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000001")
 _DEFAULT_DEDUP_THRESHOLD = 0.92
 _VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured",)
 _VISIBLE_STATES_WITH_DEMOTED: tuple[LifecycleState, ...] = ("matured", "demoted")
+
+# DATA-001 P2 anchor-aware ranked reads: prefilter is IMMUTABLE-only (namespace + must_not anchor);
+# state/tag filters move POST-hydration, so we BOUNDED-overfetch to refill the drops (superseded content,
+# post-filtered rows) and accept a truthful underfill rather than an unbounded retry.
+_RANKED_OVERFETCH_FACTOR = 4
+_RANKED_OVERFETCH_MAX = 256
+
+
+def _not_anchor() -> list[models.Condition]:
+    return [
+        models.FieldCondition(
+            key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_ANCHOR)
+        )
+    ]
+
 
 # Content-merge strategy on dedup hit.
 #
@@ -111,6 +132,18 @@ def _memory_from_payload(payload: dict[str, Any]) -> EpisodicMemory:
     — the plane must never hand out a half-constructed object.
     """
     return EpisodicMemory.model_validate(payload)
+
+
+def _safe_ranked_memory(resolved: dict[str, Any]) -> EpisodicMemory | None:
+    """Model-validate a resolved ranked candidate, FAILING CLOSED (None) rather than raising on an
+    empty/malformed payload (DATA-001 P2, Yua) — a corrupt row must never 500 a dense query; it is
+    skipped from the ranked view (and stays deletable via the delete path)."""
+    from pydantic import ValidationError
+
+    try:
+        return _memory_from_payload(strip_layout_fields(resolved))
+    except ValidationError:
+        return None
 
 
 def _is_factually_compatible(existing: EpisodicMemory, new: EpisodicMemory) -> bool:
@@ -489,7 +522,20 @@ class EpisodicPlane:
         reinforce path preserve the existing embeddings when
         ``longer-wins`` keeps the existing content — otherwise the
         payload and vectors would drift apart on every dedup hit where
-        new text was shorter."""
+        new text was shorter.
+
+        DATA-001 P2: ranks v1 rows + content points (never anchors), and accepts a v2 hit ONLY when it
+        is the committed ``live_point`` of its anchor — a superseded/staged higher-scoring content
+        snapshot, a zero/stale anchor vector, or a dangling/cross-object pointer is skipped, walking the
+        bounded-overfetched candidates in score order until the first LIVE one. The returned vectors are
+        that live candidate point's own (the committed content's), so reinforce preserves the real
+        embedding."""
+        from musubi.store.immutable_vectors import resolve_ranked_candidate
+
+        # DEDUP BUDGET (Yua): a duplicate-create is DESTRUCTIVE, so the live duplicate must not be hidden
+        # behind a few stale/superseded higher-scoring content snapshots — walk the FULL capped candidate
+        # budget, not a small factor, before concluding "no duplicate".
+        overfetch = _RANKED_OVERFETCH_MAX
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
@@ -497,31 +543,35 @@ class EpisodicPlane:
             query_filter=models.Filter(
                 must=[
                     models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
-                ]
+                ],
+                must_not=_not_anchor(),
             ),
-            limit=1,
+            limit=overfetch,
             score_threshold=self._dedup_threshold,
             with_payload=True,
             with_vectors=True,
         )
-        if not resp.points:
-            return None
-        point = resp.points[0]
-        payload = point.payload
-        if not payload:
-            return None
-        memory = _memory_from_payload(payload)
-        existing_dense: list[float] | None = None
-        existing_sparse: dict[int, float] | None = None
-        vectors = point.vector
-        if isinstance(vectors, dict):
-            raw_dense = vectors.get(DENSE_VECTOR_NAME)
-            if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
-                existing_dense = raw_dense  # type: ignore[assignment]
-            raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
-            if isinstance(raw_sparse, models.SparseVector):
-                existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))
-        return memory, existing_dense, existing_sparse
+        for point in resp.points:  # score-descending
+            resolved = resolve_ranked_candidate(
+                self._client, self._collection, point_id=point.id, payload=dict(point.payload or {})
+            )
+            if resolved is None:
+                continue  # anchor / superseded / dangling -> not the committed live candidate
+            memory = _safe_ranked_memory(resolved)
+            if memory is None:
+                continue  # malformed authoritative payload -> fail closed (skip)
+            existing_dense: list[float] | None = None
+            existing_sparse: dict[int, float] | None = None
+            vectors = point.vector  # the LIVE candidate point's own committed vectors
+            if isinstance(vectors, dict):
+                raw_dense = vectors.get(DENSE_VECTOR_NAME)
+                if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
+                    existing_dense = raw_dense  # type: ignore[assignment]
+                raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
+                if isinstance(raw_sparse, models.SparseVector):
+                    existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))
+            return memory, existing_dense, existing_sparse
+        return None
 
     # ------------------------------------------------------------------
     # Read
@@ -602,32 +652,44 @@ class EpisodicPlane:
         ``get`` by id.
         """
         visible = _VISIBLE_STATES_WITH_DEMOTED if include_demoted else _VISIBLE_STATES
+        visible_set = {str(s) for s in visible}
         dense = (await self._embedder.embed_dense([query]))[0]
+        # DATA-001 P2: prefilter IMMUTABLE-only (namespace + must_not anchor) — content points carry no
+        # `state`, so a state prefilter would drop the real vectors and surface zero-vector anchors.
+        # BOUNDED overfetch, then hydrate each candidate through its anchor and apply state POST-hydration.
+        from musubi.store.immutable_vectors import resolve_ranked_candidate
+
+        overfetch = min(max(limit, 1) * _RANKED_OVERFETCH_FACTOR, _RANKED_OVERFETCH_MAX)
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
             using=DENSE_VECTOR_NAME,
             query_filter=models.Filter(
                 must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="state",
-                        match=models.MatchAny(any=[str(s) for s in visible]),
-                    ),
-                ]
+                    models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
+                ],
+                must_not=_not_anchor(),
             ),
-            limit=limit,
+            limit=overfetch,
             with_payload=True,
         )
         out: list[EpisodicMemory] = []
         pairs: set[tuple[str, str]] = set()
-        for point in resp.points:
-            if point.payload:
-                payload = dict(point.payload)
-                out.append(_memory_from_payload(payload))
-                pairs.add((str(payload.get("namespace")), str(payload.get("object_id"))))
+        for point in resp.points:  # score-descending; keep candidate score order
+            if len(out) >= limit:
+                break
+            resolved = resolve_ranked_candidate(
+                self._client, self._collection, point_id=point.id, payload=dict(point.payload or {})
+            )
+            if resolved is None:
+                continue  # anchor / superseded content / dangling-cross-object -> not a live candidate
+            if resolved.get("state") not in visible_set:
+                continue  # POST-hydration mutable-state filter (authoritative anchor state)
+            memory = _safe_ranked_memory(resolved)
+            if memory is None:
+                continue  # malformed authoritative payload -> fail closed (skip from the ranked view)
+            out.append(memory)
+            pairs.add((str(resolved.get("namespace")), str(resolved.get("object_id"))))
 
         # RET-008 (#502): route the batched access bump through the shared fenced lease (never a
         # bare RMW that would race/lose a concurrent leased increment).

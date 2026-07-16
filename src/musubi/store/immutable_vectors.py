@@ -259,6 +259,58 @@ def delete_object_layout(
     )
 
 
+def read_anchor_payload(
+    client: Any, collection: str, *, namespace: str, object_id: str
+) -> dict[str, Any] | None:
+    """The v2 anchor's RAW payload (a single scroll), or None. Used by ranked-read hydration where the
+    caller needs the full authoritative dict (not the structured :class:`AnchorView`)."""
+    recs, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=_anchor_filter(namespace, object_id),
+        limit=1,
+        with_payload=True,
+    )
+    if not recs or not recs[0].payload:
+        return None
+    return dict(recs[0].payload)
+
+
+def resolve_ranked_candidate(
+    client: Any, collection: str, *, point_id: Any, payload: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Hydrate a DENSE-RANKED candidate point to the authoritative payload to expose, or None if it is
+    not the committed live candidate (DATA-001 P2, Yua's frozen retrieval rule).
+
+    - A v2 CONTENT point is accepted ONLY when it IS the committed ``live_point`` of its object's anchor
+      AND the anchor's namespace/object_id match — one anchor read, so a concurrent pointer swap can
+      leave the read slightly stale but never torn. It then hydrates anchor-OVER-content (the candidate's
+      vector SCORE is preserved by the caller). A superseded/staged snapshot, a dangling/cross-object
+      pointer, or a missing anchor all return None (fail closed).
+    - A v1 / pre-Phase-2 row (``point_kind`` ABSENT) is self-authoritative -> its own payload.
+    - An ANCHOR, or ANY other/unknown ``point_kind`` value, is NEVER a ranked candidate -> None (fail
+      closed: an anchor carries a zero/stale vector, and an unrecognized kind is corruption).
+
+    Layout keys remain on the merged payload; the caller strips them and applies state/tag/validity
+    filters POST-hydration, and fails closed (skips) on a candidate that will not model-validate."""
+    kind = payload.get("point_kind")
+    if kind is None:
+        return dict(payload)  # v1 / legacy self-pointer (no point_kind marker)
+    if kind != CONTENT_KIND:
+        return None  # anchor OR unknown/corrupt kind -> never ranked
+    namespace = str(payload.get("namespace"))
+    object_id = str(payload.get("object_id"))
+    anchor_payload = read_anchor_payload(
+        client, collection, namespace=namespace, object_id=object_id
+    )
+    if anchor_payload is None:
+        return None  # a content snapshot with no committed anchor
+    if str(anchor_payload.get("live_point")) != str(point_id):
+        return None  # a superseded / staged content snapshot, not the committed live one
+    if anchor_payload.get("object_id") != object_id or anchor_payload.get("namespace") != namespace:
+        return None  # cross-object / corrupt
+    return {**payload, **anchor_payload}  # anchor OVER content (single consistent read)
+
+
 _EMBED_KINDS = ("episodic", "curated")
 
 
@@ -804,8 +856,10 @@ __all__ = [
     "content_point_id_for",
     "delete_object_layout",
     "read_anchor",
+    "read_anchor_payload",
     "read_identity_payload",
     "register_immutable_vector_dispatch",
     "resolve_committed_content",
+    "resolve_ranked_candidate",
     "strip_layout_fields",
 ]

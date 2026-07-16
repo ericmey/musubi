@@ -488,3 +488,230 @@ def test_delete_content_failure_preserves_identity_then_retry_removes_all(
     # retry against the healthy client removes everything.
     asyncio.run(_delete(qdrant, "del-fail"))
     assert _points_for(qdrant, "del-fail") == []
+
+
+# ==================================================================================================
+# Unit B: episodic anchor-aware ranked reads (query + dedup). Rank v1/content, never anchors; accept a
+# v2 candidate only when it IS the committed live_point; apply state POST-hydration; bounded overfetch.
+# ==================================================================================================
+import uuid as _uuidmod  # noqa: E402
+
+
+def _upsert_content(qdrant: QdrantClient, oid: str, text: str, *, cid: str | None = None) -> str:
+    """Upsert a STALE (not-live) content point for oid with a vector = embed(text)."""
+    point_id = cid or str(_uuidmod.uuid4())
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=point_id,
+                payload={
+                    "object_id": oid,
+                    "namespace": _NS,
+                    "point_kind": "content",
+                    "content": text,
+                },
+                vector={
+                    DENSE_VECTOR_NAME: _dense(text),
+                    "sparse_splade_v1": models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+    return point_id
+
+
+def _upsert_kind(qdrant: QdrantClient, oid: str, kind: str, text: str) -> None:
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=str(_uuidmod.uuid4()),
+                payload={
+                    "object_id": oid,
+                    "namespace": _NS,
+                    "point_kind": kind,
+                    "content": text,
+                    "state": "matured",
+                },
+                vector={
+                    DENSE_VECTOR_NAME: _dense(text),
+                    "sparse_splade_v1": models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+
+
+def _full_v1(qdrant: QdrantClient, content: str, **extra: Any) -> str:
+    """A v1 row carrying a COMPLETE, model-valid EpisodicMemory payload (so a ranked read exposes it)."""
+    from musubi.planes.episodic.plane import episodic_point_id
+    from musubi.types.episodic import EpisodicMemory
+
+    mem = EpisodicMemory(namespace=_NS, content=content, **extra)
+    oid = str(mem.object_id)
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=episodic_point_id(oid),
+                payload=mem.model_dump(mode="json"),
+                vector={
+                    DENSE_VECTOR_NAME: _dense(content),
+                    "sparse_splade_v1": models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+    return oid
+
+
+def _full_v2(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator, content: str, **extra: Any
+) -> str:
+    """A v2 object (anchor + content) whose committed payload is a COMPLETE EpisodicMemory."""
+    from musubi.store.immutable_vectors import ImmutableVectorPublisher
+    from musubi.types.episodic import EpisodicMemory
+
+    mem = EpisodicMemory(namespace=_NS, content=content, **extra)
+    oid = str(mem.object_id)
+    pub = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=_COLL)
+    pub.register(coord)
+    pub.publish(coord, object_id=oid, namespace=_NS, content_payload=mem.model_dump(mode="json"))
+    return oid
+
+
+async def _query(qdrant: QdrantClient, text: str, **kw: Any) -> list[Any]:
+    return cast("list[Any]", await _plane(qdrant).query(namespace=_NS, query=text, **kw))
+
+
+def test_resolve_ranked_candidate_classification() -> None:
+    """The ranked-read classifier (pure, no real Qdrant flakiness): anchors + unknown/corrupt kinds are
+    NEVER candidates; only ``point_kind`` ABSENT is v1-self; a content point is accepted ONLY when it is
+    the committed live_point of its anchor (a stale/superseded snapshot is rejected)."""
+    from musubi.store.immutable_vectors import resolve_ranked_candidate
+
+    class _AnchorStub:
+        def __init__(self, anchor_payload: dict[str, Any] | None) -> None:
+            self._a = anchor_payload
+
+        def scroll(self, **_kw: Any) -> tuple[list[Any], Any]:
+            if self._a is None:
+                return ([], None)
+            return ([type("P", (), {"payload": self._a})()], None)
+
+    anchor = {"live_point": "cp-live", "object_id": "o1", "namespace": _NS}
+    stub = cast(QdrantClient, _AnchorStub(anchor))
+    content = {"point_kind": "content", "object_id": "o1", "namespace": _NS, "content": "c"}
+    # anchor never ranks; unknown kind never ranks (fail closed)
+    assert (
+        resolve_ranked_candidate(stub, _COLL, point_id="x", payload={"point_kind": "anchor"})
+        is None
+    )
+    assert (
+        resolve_ranked_candidate(stub, _COLL, point_id="x", payload={"point_kind": "weird"}) is None
+    )
+    # v1 (no point_kind) is self-authoritative
+    v1 = {"object_id": "o0", "namespace": _NS, "content": "c0"}
+    assert resolve_ranked_candidate(stub, _COLL, point_id="x", payload=v1) == v1
+    # a content point that IS the live_point hydrates anchor-over-content
+    live = resolve_ranked_candidate(stub, _COLL, point_id="cp-live", payload=content)
+    assert live is not None and live.get("live_point") == "cp-live"
+    # a stale/superseded content snapshot (not the live_point) is rejected
+    assert resolve_ranked_candidate(stub, _COLL, point_id="cp-stale", payload=content) is None
+    # a content point with NO committed anchor fails closed
+    assert (
+        resolve_ranked_candidate(
+            cast(QdrantClient, _AnchorStub(None)), _COLL, point_id="cp", payload=content
+        )
+        is None
+    )
+
+
+def test_query_ranks_v1_and_healthy_v2(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    v1 = _full_v1(qdrant, "alpha-body", state="matured")
+    v2 = _full_v2(qdrant, coord, "beta-body", state="matured")
+    got = {str(m.object_id): m for m in asyncio.run(_query(qdrant, "alpha-body", limit=10))}
+    assert v1 in got and v2 in got, "both v1 and healthy v2 rank"
+    assert got[v2].content == "beta-body", "the v2 hit is the RESOLVED committed content"
+
+
+def test_query_rejects_stale_higher_scoring_content(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    v2 = _full_v2(qdrant, coord, "live-body", state="matured")
+    _upsert_content(qdrant, v2, "MATCH")  # a STALE content that scores 1.0 for query "MATCH"
+    got = [m for m in asyncio.run(_query(qdrant, "MATCH", limit=10)) if str(m.object_id) == v2]
+    assert len(got) == 1, (
+        "the object appears once — via its live candidate, never the stale snapshot"
+    )
+    assert got[0].content == "live-body", "the stale higher-scoring content is rejected; live wins"
+
+
+def test_query_dangling_and_unknown_kind_fail_closed(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    dangle = _full_v2(qdrant, coord, "dangle-body", state="matured")
+    _make_dangling(qdrant, dangle)  # committed content deleted
+    _upsert_kind(qdrant, "q-unknown", "sasquatch", "q-unknown")  # corrupt/unknown point_kind
+    ids = {str(m.object_id) for m in asyncio.run(_query(qdrant, "dangle-body", limit=10))}
+    assert dangle not in ids, "a dangling committed pointer fails closed in ranked reads"
+    assert "q-unknown" not in ids, "an unknown/corrupt point_kind is never ranked (fail closed)"
+
+
+def test_query_state_filter_is_post_hydration(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    arch = _full_v2(qdrant, coord, "arch-body", state="archived")  # archived on the anchor
+    mat = _full_v2(qdrant, coord, "mat-body", state="matured")
+    ids = {str(m.object_id) for m in asyncio.run(_query(qdrant, "mat-body", limit=10))}
+    assert mat in ids and arch not in ids, (
+        "archived filtered by AUTHORITATIVE anchor state (post-hydration)"
+    )
+
+
+def test_query_malformed_candidate_fails_closed(qdrant: QdrantClient) -> None:
+    # State=matured so the state check PASSES and the safe-validate seam is load-bearing; content is
+    # omitted (required by EpisodicMemory) so an old direct model_validate would RAISE (Yua).
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=str(_uuidmod.uuid4()),
+                payload={"object_id": "q-bad", "namespace": _NS, "state": "matured"},  # no content
+                vector={
+                    DENSE_VECTOR_NAME: _dense("q-bad"),
+                    "sparse_splade_v1": models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+    ids = {str(m.object_id) for m in asyncio.run(_query(qdrant, "q-bad", limit=10))}
+    assert "q-bad" not in ids, "a malformed (state-passing) candidate is skipped, never a 500"
+
+
+def test_dedup_walks_past_many_stale_to_the_live_candidate(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    """A destructive duplicate-create is prevented only if the live duplicate is not hidden behind
+    stale/superseded higher-scoring content. Bury the live candidate behind 6 stale ones (all scoring
+    higher for the probe) and prove the capped budget still finds it (Yua: budget must exceed 4)."""
+    from musubi.planes.episodic import EpisodicPlane
+
+    v2 = _full_v2(
+        qdrant, coord, "live-dup", state="matured"
+    )  # live content vector = embed("live-dup")
+    for _ in range(6):
+        _upsert_content(qdrant, v2, "PROBE")  # stale, score 1.0 for probe embed("PROBE")
+    plane = EpisodicPlane(client=qdrant, embedder=FakeEmbedder(), dedup_threshold=-1.0)
+    found = plane._find_dedup_candidate(_NS, _dense("PROBE"))
+    assert found is not None, (
+        "the live duplicate must be found past >4 stale higher-scoring snapshots"
+    )
+    assert str(found[0].object_id) == v2
