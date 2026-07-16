@@ -1508,14 +1508,17 @@ class LifecycleTransitionCoordinator:
         namespace: str,
         collection: str,
         patch_json: str | None = None,
+        operation_key: str | None = None,
     ) -> str:
         """Durably admit ONE custom (non-transition) intent of ``kind`` — the generalization of
         :meth:`enqueue_index_intent`. Same cap gate + ``ux_active_intent`` idempotency (one active
         intent per ``(collection, object_id)``); backpressure NEVER raises. ``patch_json`` is the
         durable intent payload the handler replays from with no caller memory (DATA-001 P2); it is
         validated as JSON and size-bounded HERE, so a malformed/oversized payload fails truthfully at
-        admission rather than silently mid-apply. Returns ``'admitted'`` / ``'already_active'`` /
-        ``'at_capacity'`` (on capacity the caller MUST record a visible terminal disposition)."""
+        admission rather than silently mid-apply. ``operation_key`` may be supplied by a caller that
+        must drive its own just-admitted intent inline via :meth:`drive_intent` (else one is generated).
+        Returns ``'admitted'`` / ``'already_active'`` / ``'at_capacity'`` (on capacity the caller MUST
+        record a visible terminal disposition)."""
         if not kind or kind == "lifecycle_transition":
             raise ValueError(
                 f"custom intent kind must be non-empty and non-transition; got {kind!r}"
@@ -1530,7 +1533,7 @@ class LifecycleTransitionCoordinator:
                 json.loads(patch_json)
             except (json.JSONDecodeError, TypeError) as exc:
                 raise ValueError(f"patch_json is not valid JSON: {exc}") from exc
-        opk = f"{kind}:{object_id}:{self._new_token()}"
+        opk = operation_key or f"{kind}:{object_id}:{self._new_token()}"
         con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
@@ -1569,6 +1572,67 @@ class LifecycleTransitionCoordinator:
             if admitted is not True:
                 return ReconcileReport()
             return self._reconcile_locked(limit=limit)
+
+    def drive_intent(self, operation_key: str) -> ReconcileReport:
+        """Claim and drive EXACTLY ONE just-admitted operation to a terminal/pending outcome, using the
+        SAME lease + state-machine + custom-handler path as the reconcile worker — but scoped to this
+        ``operation_key`` ALONE. It NEVER selects, claims, or drives any other queued intent.
+
+        This is the synchronous-inline seam (DATA-001 P2): a caller admits a durable intent, then drives
+        only its own operation to completion so it keeps a committed-return contract, while the durable
+        row remains the crash net for the worker. If the row is already terminal/unknown, or a valid
+        owner (the worker) already holds it, this is a bounded no-op — the caller then reads back and
+        returns a truthful pending/typed result, never an uncommitted object."""
+        with self._barrier_admit(role="reconcile") as admitted:
+            if admitted is not True:
+                return ReconcileReport()
+            return self._drive_operation_locked(operation_key)
+
+    def _drive_operation_locked(self, operation_key: str) -> ReconcileReport:
+        now = self._now()
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
+        try:
+            row = con.execute(
+                "SELECT operation_key,object_id,collection,target_state,expected_version,namespace,"
+                "actor,reason,event_id,state,patch_json,intent_kind FROM lifecycle_outbox "
+                "WHERE operation_key = ? AND state IN ('PENDING','APPLIED')",
+                (operation_key,),
+            ).fetchone()
+        finally:
+            con.close()
+        counts = {"claimed": 0, "finalized": 0, "pending": 0, "abandoned": 0}
+        if row is None:
+            return ReconcileReport(**counts)  # already terminal / unknown — nothing to drive.
+        (opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state, patch_json, ikind) = row
+        token = self._new_token()
+        cc = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
+        try:
+            got = self._claim(cc, opk, now, token)
+            cc.commit()
+        finally:
+            cc.close()
+        if not got:
+            return ReconcileReport(**counts)  # a valid owner (the worker) holds it — leave it be.
+        counts["claimed"] += 1
+        if ikind and ikind != "lifecycle_transition":
+            self._drive_custom_intent(ikind, opk, oid, coll, ns, token, counts, patch_json)
+        else:
+            self._reconcile_claimed(
+                opk,
+                oid,
+                coll,
+                tstate,
+                ver,
+                ns,
+                actor,
+                reason,
+                event_id,
+                state,
+                patch_json,
+                token,
+                counts,
+            )
+        return ReconcileReport(**counts)
 
     def _reconcile_locked(self, *, limit: int = 100) -> ReconcileReport:
         """One reconcile pass (S4). Select DUE non-terminal rows (fair, oldest-first: never-scheduled

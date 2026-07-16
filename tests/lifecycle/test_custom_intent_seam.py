@@ -129,3 +129,40 @@ def test_cap_and_already_active_unchanged(client: QdrantClient, tmp_path: Path) 
         atcap.enqueue_custom_intent(kind="k", object_id="o2", namespace="t/p/e", collection="c")
         == "at_capacity"
     )
+
+
+def test_drive_intent_touches_only_the_named_operation(
+    client: QdrantClient, tmp_path: Path
+) -> None:
+    """DATA-001 P2 named-inline seam: drive_intent(opk) claims + drives ONLY that operation via the
+    same handler path, and NEVER touches an unrelated queued intent (proof for the synchronous
+    create()/update() path)."""
+    coord = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "c.db")
+    driven: list[str] = []
+
+    def _h(ctx: CustomIntentContext) -> str:
+        driven.append(ctx.operation_key)
+        return "confirmed"
+
+    coord.register_intent_handler("k", _h)
+    coord.enqueue_custom_intent(
+        kind="k",
+        object_id="oA",
+        namespace="t/p/e",
+        collection="c",
+        patch_json="{}",
+        operation_key="op-A",
+    )
+    coord.enqueue_custom_intent(
+        kind="k",
+        object_id="oB",
+        namespace="t/p/e",
+        collection="c",
+        patch_json="{}",
+        operation_key="op-B",
+    )
+    coord.drive_intent("op-A")
+    assert driven == ["op-A"], f"drive_intent must touch ONLY the named op; drove {driven}"
+    # op-B stays PENDING (untouched) — the worker reconcile drives it.
+    coord.reconcile_once()
+    assert set(driven) == {"op-A", "op-B"}
