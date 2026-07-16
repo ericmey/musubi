@@ -11,11 +11,7 @@ Guidelines:
 - Do NOT include AI disclaimers ("as an AI", "as a language model", "I cannot", etc.) — those are rejected by the content validator.
 
 Concept:
-- Title: {TITLE}
-- Content: {CONTENT}
-- Rationale: {RATIONALE}
 - Top supporting memories:
-{TOP_MEMORIES}
 
 Respond in this exact JSON shape, no commentary:
 

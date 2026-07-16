@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.17.9](https://github.com/ericmey/musubi/compare/v1.17.8...v1.17.9) (2026-07-16)
+
+
+### Bug Fixes
+
+* **lifecycle:** prevent promotion lockout loops via structured fault-tolerance ordering ([#572](https://github.com/ericmey/musubi/issues/572)) ([31ed3d4](https://github.com/ericmey/musubi/commit/31ed3d460a6ad193cfde18a7c3b1951438d38987))
+* **llm:** structurally isolate untrusted memory payloads via JSON-encoded user boundary ([#569](https://github.com/ericmey/musubi/issues/569)) ([26ee503](https://github.com/ericmey/musubi/commit/26ee503b2e95f6b2ce90778900857b2a977d03cb))
+
+## [1.17.8](https://github.com/ericmey/musubi/compare/v1.17.7...v1.17.8) (2026-07-16)
+
+
+### Bug Fixes
+
+* **vault:** preserve curated frontmatter fidelity ([#573](https://github.com/ericmey/musubi/issues/573)) ([9453aac](https://github.com/ericmey/musubi/commit/9453aacd49762fd5e15aef56b4672aa6dadc3ff5))
+
+## [1.17.7](https://github.com/ericmey/musubi/compare/v1.17.6...v1.17.7) (2026-07-16)
+
+
+### Bug Fixes
+
+* LIFE-006 durable lifecycle job failure alerts (Issue [#528](https://github.com/ericmey/musubi/issues/528)) ([#529](https://github.com/ericmey/musubi/issues/529)) ([96016c9](https://github.com/ericmey/musubi/commit/96016c98ef973b6f8ae60b549ea08090787b53df))
+
 ## [1.17.6](https://github.com/ericmey/musubi/compare/v1.17.5...v1.17.6) (2026-07-15)
 
 
