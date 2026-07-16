@@ -38,6 +38,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 from musubi.types.common import utc_now
 
 _LEASE_TTL_US = 5_000_000  # a lease older than this may be taken over (crash/stall recovery)
@@ -56,8 +57,16 @@ def _pair_conditions(namespace: str, object_id: str) -> list[models.Condition]:
     ]
 
 
+# DATA-001 P2: the access lease owns access_count on the AUTHORITATIVE IDENTITY row — the v2 anchor, or
+# a v1/legacy single point — never a write-once content snapshot (which also carries object_id). A
+# no-op for concept/thought/artifact (no content points), so their exactly-once accounting is unchanged.
+_EXCLUDE_CONTENT: list[models.Condition] = [
+    models.FieldCondition(key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT))
+]
+
+
 def _pair_filter(namespace: str, object_id: str) -> models.Filter:
-    return models.Filter(must=_pair_conditions(namespace, object_id))
+    return models.Filter(must=_pair_conditions(namespace, object_id), must_not=_EXCLUDE_CONTENT)
 
 
 def _token(phase: str, issued_us: int) -> str:
@@ -100,7 +109,9 @@ def _set_op(
     return models.SetPayloadOperation(
         set_payload=models.SetPayload(
             payload=payload,
-            filter=models.Filter(must=[*_pair_conditions(namespace, object_id), fence]),
+            filter=models.Filter(
+                must=[*_pair_conditions(namespace, object_id), fence], must_not=_EXCLUDE_CONTENT
+            ),
         )
     )
 

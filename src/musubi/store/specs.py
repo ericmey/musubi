@@ -23,6 +23,13 @@ DENSE_VECTOR_NAME: Final[str] = "dense_bge_m3_v1"
 SPARSE_VECTOR_NAME: Final[str] = "sparse_splade_v1"
 DENSE_SIZE: Final[int] = 1024
 
+# DATA-001 Phase 2 point-kind marker (payload field ``point_kind``). A v2 object is a stable ANCHOR
+# (the authoritative mutable identity row) plus one-or-more write-once CONTENT snapshots. Legacy v1
+# rows and every other plane's rows carry NO ``point_kind`` and are unaffected.
+POINT_KIND_FIELD: Final[str] = "point_kind"
+POINT_KIND_ANCHOR: Final[str] = "anchor"
+POINT_KIND_CONTENT: Final[str] = "content"
+
 PayloadSchema = Literal["keyword", "integer", "float", "bool", "text", "datetime"]
 
 
