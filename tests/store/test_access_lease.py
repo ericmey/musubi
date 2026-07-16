@@ -362,7 +362,10 @@ def test_dedup_merge_upsert_preserves_leased_access_count(
     assert _row(real_qdrant, oid).get("access_count") == 1
 
     coord = LifecycleTransitionCoordinator(
-        client=real_qdrant, db_path=tmp_path / "lease-ep.db", backoff_base_s=0.01, backoff_max_s=0.01
+        client=real_qdrant,
+        db_path=tmp_path / "lease-ep.db",
+        backoff_base_s=0.01,
+        backoff_max_s=0.01,
     )
     pub = ImmutableVectorPublisher(client=real_qdrant, embedder=FakeEmbedder(), collection=_COLL)
     register_immutable_vector_dispatch(coord, {_COLL: pub})
@@ -424,7 +427,10 @@ def test_curated_update_upsert_preserves_leased_access_count(
     assert _curated_count(real_qdrant, row.object_id) == 1
 
     coord = LifecycleTransitionCoordinator(
-        client=real_qdrant, db_path=tmp_path / "lease-cur.db", backoff_base_s=0.01, backoff_max_s=0.01
+        client=real_qdrant,
+        db_path=tmp_path / "lease-cur.db",
+        backoff_base_s=0.01,
+        backoff_max_s=0.01,
     )
     pub = ImmutableVectorPublisher(
         client=real_qdrant, embedder=FakeEmbedder(), collection=_CURATED_COLL

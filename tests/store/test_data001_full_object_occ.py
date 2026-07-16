@@ -146,7 +146,12 @@ def test_dedup_merge_upsert_loses_concurrent_unrelated_field_update(
     monkeypatch.setattr(
         plane,
         "_find_dedup_candidate",
-        lambda namespace, dense: (stale, None, None, 1.0),  # DATA-001 P2 + ING-002: 4-tuple w/ score
+        lambda namespace, dense: (
+            stale,
+            None,
+            None,
+            1.0,
+        ),  # DATA-001 P2 + ING-002: 4-tuple w/ score
     )
     # Compatible surface form of the seed's "occ probe" so a REAL reinforce runs (not a fresh insert).
     asyncio.run(plane.create(EpisodicMemory(namespace=ns, content="Occ probe.", state="matured")))
@@ -176,7 +181,14 @@ def test_reinforce_composes_concurrent_access_increment(
 
     stale = EpisodicMemory.model_validate(_row(real_qdrant, oid))
     monkeypatch.setattr(
-        plane, "_find_dedup_candidate", lambda namespace, dense: (stale, None, None, 1.0)  # DATA-001 P2 + ING-002: 4-tuple w/ score
+        plane,
+        "_find_dedup_candidate",
+        lambda namespace, dense: (
+            stale,
+            None,
+            None,
+            1.0,
+        ),  # DATA-001 P2 + ING-002: 4-tuple w/ score
     )
     # The reinforce only fires when the candidate is factually compatible (_is_factually_compatible
     # is fail-closed: normalized content + participants must match). Use a near-duplicate surface form

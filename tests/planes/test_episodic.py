@@ -1428,7 +1428,9 @@ async def test_batch_vs_sequential_permuted_order(
         stored_seq = qdrant.scroll(
             collection_name="musubi_episodic",
             scroll_filter=models.Filter(
-                must=[models.FieldCondition(key="namespace", match=models.MatchValue(value=ns_seq))],
+                must=[
+                    models.FieldCondition(key="namespace", match=models.MatchValue(value=ns_seq))
+                ],
                 must_not=_not_content,
             ),
             limit=10,

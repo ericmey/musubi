@@ -378,7 +378,9 @@ def test_curated_get_resolves_healthy_v2(plane: CuratedPlane) -> None:
     v2 = _v2(plane, "one", "get healthy committed", vault_path="geth.md")
     got = asyncio.run(plane.get(namespace=cast(Any, _NS), object_id=cast(Any, v2)))
     assert got is not None and str(got.object_id) == v2
-    assert got.content == "get healthy committed", "get resolves the committed content via the anchor"
+    assert got.content == "get healthy committed", (
+        "get resolves the committed content via the anchor"
+    )
 
 
 def test_curated_get_dangling_v2_returns_none(plane: CuratedPlane, qdrant: QdrantClient) -> None:
