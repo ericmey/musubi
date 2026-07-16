@@ -69,6 +69,48 @@ Only two production paths change vectors: `EpisodicPlane._reinforce` when NEW co
 - **`get(object_id)`:** read the anchor, then hydrate the committed content through `anchor.live_point`
   (v2) or the row itself (v1). A v2 anchor with an absent `live_point` fails closed.
 
+## Consumer integration (Yua-approved coupled scope; landed — see the inventory)
+
+The multi-point layout is only correct if EVERY consumer of a `(namespace, object_id)` resolves the
+anchor. The 19-seam grep sweep + 1 discovered seam are reconciled in
+[`data001-phase2-identity-consumer-inventory.md`](./data001-phase2-identity-consumer-inventory.md) (all
+**DONE + proven**). The integration crystallized into a few reusable rules:
+
+- **One shared ranked-read seam (no per-plane fork).** `store/immutable_vectors.py` exports
+  `resolve_ranked_candidate` (hydrate a dense/RRF-ranked candidate to the authoritative payload, or
+  `None`), `not_anchor_condition()` / `not_content_condition()` (the dual prefilters), and
+  `ranked_overfetch(limit)` / `ranked_dedup_budget()` (bounded, never-unbounded fetch). Episodic `query`
+  + `_find_dedup_candidate`, curated `query`, and gated `hybrid_search` all call these — the retrieval
+  rule cannot drift between planes.
+- **Ranked reads exclude anchors; identity reads exclude content.** A ranked read (`query`/dedup/hybrid)
+  prefilters `must_not anchor`, moves state (and curated bitemporal) POST-hydration onto the *validated*
+  model — never raw payload epochs (a malformed epoch would `TypeError`/500) — and skips a candidate that
+  will not model-validate. An identity read (`_scroll`, `namespace_stats`, transitions, recent,
+  `_find_by_vault_path`, `scan_vault_rows`) prefilters `must_not content` — because a content point
+  re-resolves to its own anchor, so without it a scan double-counts, and it is the fail-closed defense
+  against a corrupt/future content shell carrying an identity field.
+- **A content point carries only its projection** (`content`/`summary`/`title` + `object_id`/`namespace`/
+  `point_kind`), never `vault_path`/`state`/validity — those live on the anchor. Verified against the
+  publisher source; the inventory's "Key discriminator" is the canonical statement.
+- **Ranked-read vs identity-read fail direction is INVERSE.** A ranked read of a broken row FAILS CLOSED
+  (skip it from the view — never 500 the whole query). An identity read of a broken row FAILS LOUD:
+  `_find_by_vault_path` and `scan_vault_rows` RAISE, public `find_by_vault_path` returns a typed
+  `invalid_row`, and the vault watcher warns + refuses to archive (only `not_found` is a clean no-op;
+  any unknown future code also fails closed). Rationale: a dropped ranked hit is a smaller lie than a
+  reconciler archiving on an incomplete inventory, or `create` manufacturing a duplicate for a slot that
+  is occupied-but-broken.
+- **Delete removes the COMPLETE layout.** `delete_object_layout` removes every content generation
+  (content-first, `wait=True`) then the identity row in BOTH deterministic id spaces (legacy `_point_id`
+  AND `anchor_point_id`), so a converted-in-place OR brand-new anchor is always reached and no content is
+  orphaned; a corrupted-payload row stays removable (addressed by deterministic id, not by its payload).
+- **Three write compositions inject the publisher** (API bootstrap, lifecycle runner, vault runtime;
+  runner registers handlers before the boot reconcile). A vector-changing write with no wired publisher
+  fails closed, never silently best-effort.
+- **Discovered gap (D1):** curated `create` true-supersession validated the OLD row's fresh payload
+  without stripping layout keys, so superseding a v2 anchor raised `extra_forbidden`. Fixed by
+  strip-before-validate; the narrow lease write is unchanged. Surfaced by a hybrid-bitemporal test
+  collision — the inventory-completeness discipline catching the 20th seam before merge, not in prod.
+
 ## Durable intent — single store (Option B, decided 2026-07-15)
 
 Two candidate durable homes were considered. **Option A** (stage the mutation as a Qdrant content

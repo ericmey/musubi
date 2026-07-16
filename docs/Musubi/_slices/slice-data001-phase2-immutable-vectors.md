@@ -161,6 +161,60 @@ removability + retry truth):
 55. `test_delete_not_found_and_retry_truth` — tests/store/test_data001_phase2_identity_consumers.py
 56. `test_delete_content_failure_preserves_identity_then_retry_removes_all` — tests/store/test_data001_phase2_identity_consumers.py
 
+Unit B episodic anchor-aware retrieval (`query` + `_find_dedup_candidate` + the shared ranked-read seam;
+rank content + v1 never anchors, resolve via anchor, state POST-hydration, bounded overfetch, fail-closed
+on malformed):
+
+57. `test_resolve_ranked_candidate_classification` — tests/store/test_data001_phase2_identity_consumers.py
+58. `test_query_forced_anchors_never_consume_the_ranked_budget` — tests/store/test_data001_phase2_identity_consumers.py
+59. `test_query_ranks_v1_and_healthy_v2` — tests/store/test_data001_phase2_identity_consumers.py
+60. `test_query_rejects_stale_higher_scoring_content` — tests/store/test_data001_phase2_identity_consumers.py
+61. `test_query_dangling_and_unknown_kind_fail_closed` — tests/store/test_data001_phase2_identity_consumers.py
+62. `test_query_state_filter_is_post_hydration` — tests/store/test_data001_phase2_identity_consumers.py
+63. `test_query_malformed_candidate_fails_closed` — tests/store/test_data001_phase2_identity_consumers.py
+64. `test_dedup_walks_past_many_stale_to_the_live_candidate` — tests/store/test_data001_phase2_identity_consumers.py
+
+Unit B curated anchor-aware retrieval + vault seams #8/#9/#12 (query state+bitemporal POST-hydration on
+the typed row; identity seams fail-LOUD — raise / typed `invalid_row`):
+
+65. `test_query_returns_v1_and_healthy_v2` — tests/store/test_data001_phase2_curated_retrieval.py
+66. `test_query_rejects_stale_higher_scoring_content` — tests/store/test_data001_phase2_curated_retrieval.py
+67. `test_query_dangling_v2_fails_closed` — tests/store/test_data001_phase2_curated_retrieval.py
+68. `test_query_bitemporal_window_is_post_hydration` — tests/store/test_data001_phase2_curated_retrieval.py
+69. `test_query_malformed_validity_is_skipped_not_500` — tests/store/test_data001_phase2_curated_retrieval.py
+70. `test_private_find_by_vault_path_absent_returns_none` — tests/store/test_data001_phase2_curated_retrieval.py
+71. `test_private_find_by_vault_path_resolves_v2_identity` — tests/store/test_data001_phase2_curated_retrieval.py
+72. `test_private_find_by_vault_path_dangling_raises` — tests/store/test_data001_phase2_curated_retrieval.py
+73. `test_private_find_by_vault_path_content_shell_does_not_shadow` — tests/store/test_data001_phase2_curated_retrieval.py
+74. `test_public_find_by_vault_path_v2_single_identity` — tests/store/test_data001_phase2_curated_retrieval.py
+75. `test_public_find_by_vault_path_two_identities_multiple_matches` — tests/store/test_data001_phase2_curated_retrieval.py
+76. `test_public_find_by_vault_path_dangling_is_invalid_row` — tests/store/test_data001_phase2_curated_retrieval.py
+77. `test_public_find_by_vault_path_absent_is_not_found` — tests/store/test_data001_phase2_curated_retrieval.py
+78. `test_scan_counts_v2_object_once_excluding_content` — tests/store/test_data001_phase2_curated_retrieval.py
+79. `test_scan_dangling_identity_raises` — tests/store/test_data001_phase2_curated_retrieval.py
+80. `test_supersession_of_v2_anchor_no_layout_validation_error` — tests/store/test_data001_phase2_curated_retrieval.py
+
+Unit B watcher `invalid_row` fail-closed (only `not_found` is the clean no-op; `invalid_row` + any
+unknown code warn + refuse):
+
+81. `test_delete_broken_or_unknown_code_warns_and_refuses` (parametrized invalid_row / unknown) — tests/vault/test_vault003_live_delete.py
+
+Unit B hybrid collection-gated anchor-aware retrieval (must_not anchor both legs + top-level; state +
+curated bitemporal POST-hydration on the validated model; plane-safe skip; RRF score preserved; bounded
+overfetch; concept/thought/artifact byte-unchanged):
+
+82. `test_hybrid_ranks_v1_and_healthy_v2` — tests/retrieve/test_data001_phase2_hybrid.py
+83. `test_hybrid_rejects_stale_higher_scoring_content` — tests/retrieve/test_data001_phase2_hybrid.py
+84. `test_hybrid_anchor_never_ranks_on_either_leg` — tests/retrieve/test_data001_phase2_hybrid.py
+85. `test_hybrid_dangling_fails_closed` — tests/retrieve/test_data001_phase2_hybrid.py
+86. `test_hybrid_state_filter_is_post_hydration` — tests/retrieve/test_data001_phase2_hybrid.py
+87. `test_hybrid_malformed_authoritative_is_skipped` — tests/retrieve/test_data001_phase2_hybrid.py
+88. `test_hybrid_curated_expired_v2_excluded_live_included` — tests/retrieve/test_data001_phase2_hybrid.py
+89. `test_hybrid_curated_ranks_v1_and_healthy_v2` — tests/retrieve/test_data001_phase2_hybrid.py
+90. `test_hybrid_non_anchor_plane_takes_raw_path_no_resolver` (parametrized concept/thought/artifact) — tests/retrieve/test_data001_phase2_hybrid.py
+91. `test_hybrid_gated_filters_carry_must_not_anchor_non_gated_do_not` — tests/retrieve/test_data001_phase2_hybrid.py
+92. `test_hybrid_bounded_underfill_reaches_live_past_higher_stale` — tests/retrieve/test_data001_phase2_hybrid.py
+
 ## Scope (Yua-approved 2026-07-15 — coupled integration)
 
 The multi-point layout is only correct if EVERY identity consumer resolves the anchor and no write
@@ -170,12 +224,22 @@ the identity-consumer seams (inventory in
 compositions (API, lifecycle worker, vault runtime). Same invariant, same Issue (#530) — no new
 Issue; this doc is the ownership record.
 
-## Remaining work in this same slice (owned by #530 — unit B; NOT deferred)
+## Remaining work in this same slice (owned by #530 — NONE; all units landed)
 
-Owned by this coupled slice (no follow-up Issue); must land before it closes. DONE: A-rest
-resolve-before-validate reads (transitions/synthesis/`_scroll`/`namespace_stats`/`writes_curated`
-PATCH/`recent`) and unit C full-layout episodic delete (both anchor-id spaces + all content,
-content-before-identity ordering). Still TODO: **unit B** anchor-aware retrieval — episodic/curated
-`query`, `_find_dedup_candidate`, and `hybrid` (rank content, resolve via anchor, validate
-`candidate == anchor.live_point`, post-hydration state/tag/validity filter, bounded overfetch/underfill;
-concept/thought/artifact untouched).
+Owned by this coupled slice (no follow-up Issue). **All units DONE + proven:**
+
+- **Invariant core** (tests 1–33) + path-audit corrections + `embed_kind` projection.
+- **Unit D** — the three write compositions inject the publisher (API bootstrap, lifecycle runner, vault
+  runtime); episodic/curated `get()` anchor-aware.
+- **Unit A-rest** — resolve-before-validate identity reads (transitions / synthesis / `_scroll` /
+  `namespace_stats` / `writes_curated` PATCH / `recent`).
+- **Unit C** — full-layout episodic delete (both anchor-id spaces + all content, content-before-identity).
+- **Unit B** — anchor-aware retrieval: episodic `query` + `_find_dedup_candidate`, curated `query` +
+  vault seams `_find_by_vault_path` / `find_by_vault_path` / `scan_vault_rows`, and gated `hybrid_search`
+  (rank content, resolve via anchor, state + curated-bitemporal POST-hydration on the validated model,
+  bounded overfetch, fail-closed skip; identity seams fail-LOUD; concept/thought/artifact byte-unchanged),
+  the vault-watcher `invalid_row` branch, and the discovered curated-supersession-over-v2-anchor fix (D1).
+
+Inventory: all 19 original seams + D1 reconciled to **DONE + proven** in
+`docs/Musubi/13-decisions/data001-phase2-identity-consumer-inventory.md`. Test Contract entries 1–92
+above. This slice is ready for handoff to review (no self-merge).
