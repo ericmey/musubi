@@ -37,9 +37,14 @@ Do **not** redesign retrieval semantics merely to satisfy test names. Prefer pro
 ## Owned paths
 
 - `tests/retrieve/test_orchestration.py`
-- `src/musubi/retrieve/orchestration.py` (only if a unit promise is missing at the facade and a minimal fix is required)
 - `docs/Musubi/_slices/slice-ret010-orchestration-tc-gaps.md` (this file)
 - `docs/Musubi/_inbox/locks/slice-ret010-orchestration-tc-gaps.lock`
+
+> Path-ownership note: `tests/retrieve/test_orchestration.py` was still listed under
+> `slice-ret004-evals` (`in-review` despite Issue #430 closed). That stale claim is
+> flipped to `done` in this PR so RET-010 can own the Closure Rule rewrite without a
+> dual-active conflict. `src/musubi/retrieve/orchestration.py` is **not** claimed —
+> no production redesign was required.
 
 ## Forbidden paths
 
@@ -97,3 +102,13 @@ Integration (environment-dependent — prefer skip to named harness if not runna
 - Claimed Issue #509 via Dual-update (`status:ready` → `status:in-progress`, assignee `@me`).
 - Created successor slice `slice-ret010-orchestration-tc-gaps` (original `slice-retrieval-orchestration` remains `done`).
 - Branch `slice/ret010-orchestration-tc-gaps`; draft PR #580. Next: tests-first closure of the orchestration Test Contract.
+
+### 2026-07-15 — cursor-grok — Test Contract closure
+
+- Rewrote `tests/retrieve/test_orchestration.py` so bullets 1–15 have named functions (14 passing + 1 skip for forbidden-namespace at the API auth boundary).
+- Integration bullets (environment / live TEI+Qdrant) declared out-of-scope here; skipped placeholders name the follow-up harnesses:
+  - `integration: end-to-end fast-path on 10K corpus with real TEI + Qdrant, p95 ≤ 400ms` → slice-ops-gpu / retrieval perf harness
+  - `integration: end-to-end deep-path with rerank, NDCG@10 on golden set ≥ threshold` → slice-retrieval-evals / RET-004
+  - `integration: kill TEI mid-request, pipeline returns with documented degradation` → slice-ops-gpu
+- No `src/` redesign: proofs use orchestration/deep/hybrid seams already present. RET-002 + DQ-001 bullets already closed elsewhere.
+- Vault hygiene: flipped `slice-ret004-evals` `in-review` → `done` (Issue #430 already closed) so the stale claim on `tests/retrieve/test_orchestration.py` no longer dual-actives against RET-010.
