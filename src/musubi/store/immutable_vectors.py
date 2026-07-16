@@ -25,7 +25,14 @@ from qdrant_client import models
 
 from musubi.embedding.base import Embedder
 from musubi.planes.episodic.plane import _sparse_to_model
+from musubi.store.memory_serialization import LEASE_OWNED_FIELDS
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+
+# Fields the anchor NEVER stamps on a publish — they are owned by the RET-008 access lease and the
+# Phase-1 mutation lease, which write them on the anchor directly. A partial set_payload that omits
+# them preserves the lease-written values (Yua: anchor owns the authoritative mutable payload, but the
+# LEASES write these fields, not the vector publish).
+_LEASE_OWNED_ON_ANCHOR = LEASE_OWNED_FIELDS | {"update_lease_token"}
 
 ANCHOR_KIND = "anchor"
 CONTENT_KIND = "content"
@@ -135,21 +142,25 @@ def _read_legacy_v1(client: Any, collection: str, *, namespace: str, object_id: 
 def resolve_committed_content(
     client: Any, collection: str, *, namespace: str, object_id: str
 ) -> dict[str, Any] | None:
-    """Return the committed content payload, following ONLY the anchor's ``live_point`` (v2) or a v1
-    legacy self-pointer. A v2 anchor with an absent ``live_point`` FAILS CLOSED (returns None)."""
-    anchor = read_anchor(client, collection, namespace=namespace, object_id=object_id)
-    if anchor is not None:
-        if not anchor.live_point:
-            return (
-                None  # v2 anchor with no committed pointer -> fail closed (never treated as legacy)
-            )
-        pts = client.retrieve(
-            collection_name=collection, ids=[anchor.live_point], with_payload=True
-        )
-        if not pts or not pts[0].payload:
-            return None
-        committed: dict[str, Any] = dict(pts[0].payload)
-        return committed
+    """Return the authoritative committed payload for ``object_id``: the content snapshot named by the
+    anchor's ``live_point`` MERGED WITH the anchor payload OVER it (the anchor is authoritative for
+    every mutable field — Yua), or a v1 legacy self-pointer. A v2 anchor with an absent ``live_point``
+    FAILS CLOSED (returns None). Because the anchor wins, a stale content-snapshot field can never
+    expose or hide a row."""
+    recs, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=_anchor_filter(namespace, object_id),
+        limit=1,
+        with_payload=True,
+    )
+    if recs and recs[0].payload:
+        anchor_payload = dict(recs[0].payload)
+        live_point = anchor_payload.get("live_point")
+        if not live_point:
+            return None  # v2 anchor, no committed pointer -> fail closed (never treated as legacy)
+        pts = client.retrieve(collection_name=collection, ids=[live_point], with_payload=True)
+        content_payload = dict(pts[0].payload) if pts and pts[0].payload else {}
+        return {**content_payload, **anchor_payload}  # anchor OVER content = authoritative mutable
     legacy = _read_legacy_v1(client, collection, namespace=namespace, object_id=object_id)
     if legacy is not None and legacy.payload:
         return dict(legacy.payload)  # v1 legacy self-pointer
@@ -300,7 +311,14 @@ class ImmutableVectorPublisher:
         expected_pv = anchor.pointer_version if anchor else 0
         new_version = (anchor.version if anchor else 0) + 1
         anchor_id = anchor_point_id(ctx.namespace, ctx.object_id)
+        # The anchor owns the FULL authoritative mutable payload (Yua) — everything from the intended
+        # content_payload EXCEPT lease-owned fields (which the leases write; omitting them from this
+        # set_payload preserves their values) — plus the pointer/version metadata.
+        authoritative = {
+            k: v for k, v in content_payload.items() if k not in _LEASE_OWNED_ON_ANCHOR
+        }
         publish = {
+            **authoritative,
             "object_id": ctx.object_id,
             "namespace": ctx.namespace,
             "point_kind": ANCHOR_KIND,
