@@ -32,12 +32,14 @@ Design notes:
 
 from __future__ import annotations
 
+import math
 import uuid
 from typing import Any, Literal, cast, get_args
 
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
+from musubi.embedding.cosine import cosine_similarity
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.store.access_lease import lease_increment_access
@@ -313,13 +315,9 @@ class EpisodicPlane:
         # Dict maps object_id -> (Memory, dense, sparse) for newly created rows in the loop.
         pending_batch: dict[str, tuple[EpisodicMemory, list[float], dict[int, float]]] = {}
 
-        import math
-
-        from musubi.embedding.cosine import cosine_similarity
-
         for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
             # 1. Intra-batch search
-            intra_found = None
+            intra_found: tuple[EpisodicMemory, list[float], dict[int, float]] | None = None
             intra_score = -1.0
 
             for p_mem, p_dense, p_sparse in pending_batch.values():
@@ -340,7 +338,9 @@ class EpisodicPlane:
                     intra_score = score
                     intra_found = (p_mem, p_dense, p_sparse)
 
-            found = intra_found
+            found: tuple[EpisodicMemory, list[float] | None, dict[int, float] | None] | None = (
+                intra_found
+            )
 
             # 2. Qdrant search
             qdrant_found = self._find_dedup_candidate(memory.namespace, dense)
@@ -355,7 +355,7 @@ class EpisodicPlane:
                     and intra_found
                     and q_mem.object_id > intra_found[0].object_id
                 ):
-                    found = (q_mem, q_dense or [], _q_sparse or {})
+                    found = (q_mem, q_dense, _q_sparse)
                     intra_found = None  # Ensure we know it's external
 
             compatible = False
@@ -367,6 +367,7 @@ class EpisodicPlane:
                 existing, existing_dense, existing_sparse = found
 
                 if intra_found is not None:
+                    existing, existing_dense, existing_sparse = intra_found
                     # Merge intra-batch directly in memory without hitting Qdrant's _reinforce.
                     # This guarantees we update the pending record that will eventually be upserted.
                     updated, existing_content_won = self._merge_row(
@@ -381,18 +382,6 @@ class EpisodicPlane:
                         existing_sparse = sparse
 
                     pending_batch[updated.object_id] = (updated, existing_dense, existing_sparse)
-
-                    # Fix: Also replace the base instance inside finalised since it's the exact same array entry.
-                    # And don't append it again as a distinct output item, but the caller expects N inputs -> N outputs.
-                    # Ah! `create()` returns the merged row. If `memories` has M inputs, `finalised` MUST have M outputs.
-                    # So we DO append `updated` for the candidate itself.
-                    # BUT we must ALSO update the previous position in `finalised` so it sees the new merged state
-                    # instead of the old pre-merge state.
-                    for i in range(len(finalised)):
-                        if finalised[i].object_id == updated.object_id:
-                            finalised[i] = updated
-                            # We don't break because there could be multiple prior references if M>2 duplicates exist.
-
                     finalised.append(updated)
                 else:
                     # External hit: must reinforce through the attributable mutation lease.
@@ -592,7 +581,7 @@ class EpisodicPlane:
         if isinstance(vectors, dict):
             raw_dense = vectors.get(DENSE_VECTOR_NAME)
             if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
-                existing_dense = raw_dense
+                existing_dense = [v for v in raw_dense if isinstance(v, float)]
             raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
             if isinstance(raw_sparse, models.SparseVector):
                 existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))

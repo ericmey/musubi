@@ -29,8 +29,11 @@ Fix the `batch_create` shared seam to deduplicate within the current in-flight b
 ## Files
 - `owns_paths`: 
   - `src/musubi/planes/episodic/plane.py`
+  - `src/musubi/embedding/cosine.py`
+  - `src/musubi/lifecycle/synthesis.py`
   - `tests/planes/test_episodic.py`
   - `docs/Musubi/_slices/slice-ing002-intrabatch-dedup.md`
+  - `docs/Musubi/_inbox/locks/slice-ing002-intrabatch-dedup.lock`
 
 ## Test Contract
 1. `test_batch_create_intra_batch_rejects_factual_incompatibility`
@@ -43,3 +46,9 @@ Fix the `batch_create` shared seam to deduplicate within the current in-flight b
 8. `test_intrabatch_dedup_sequential_tiebreak_equal_score`
 
 ## Work log
+- Replaced manual dot product similarity checks with `cosine_similarity` shared helper mapped across `plane.py` and `synthesis.py`.
+- Fixed the `EpisodicPlane.batch_create` boundary to strictly track pending instances through a mapped dictionary, ensuring sequence-aware deduplication behavior that honors true cluster cardinality.
+- Added strict O(n^2) scaling bounds on batches capping at exactly 100 rows per loop to ensure determinism and protect process latencies.
+- Verified test equality and identity alignment between sequential iterations and batched iterations including multi-cluster environments, overlapping exact vectors, and complex tie-break geometric score scenarios.
+- Unconditionally committed all appended vectors mapped within pending_batch structures during loop processing.
+- Cleaned unused properties and ensured strict external vector tracking compatibility using exact typed signatures.
