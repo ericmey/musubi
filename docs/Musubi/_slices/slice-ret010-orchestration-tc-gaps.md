@@ -4,12 +4,12 @@ slice_id: slice-ret010-orchestration-tc-gaps
 issue: 509
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: cursor-grok
 phase: "Retrieval"
-tags: [section/slices, status/in-progress, type/slice, retrieval, orchestration]
+tags: [section/slices, status/done, type/slice, retrieval, orchestration]
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

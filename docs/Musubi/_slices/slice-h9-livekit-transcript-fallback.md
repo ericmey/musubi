@@ -4,11 +4,12 @@ slice_id: slice-h9-livekit-transcript-fallback
 issue: 461
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: shiori
 phase: "Retrieval"
-tags: [section/slices, status/in-progress, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-14
+reviewed: true
 ---
 
 # Slice: H9 LiveKit Transcript Fallback Data Loss

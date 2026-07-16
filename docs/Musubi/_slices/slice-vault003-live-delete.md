@@ -4,10 +4,10 @@ slice_id: slice-vault003-live-delete
 issue: 552
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: cowork-tama
 phase: "5 Vault"
-tags: [section/slices, status/in-review, type/slice, phase/5-vault]
+tags: [section/slices, status/done, type/slice, phase/5-vault]
 updated: 2026-07-15
 reviewed: true
 depends-on: []
