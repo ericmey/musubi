@@ -148,6 +148,19 @@ curated PATCH / recent — resolve authoritative identity before validate/count/
 47. `test_patch_metadata_preserves_concurrent_state_access_bumps_version_once` — tests/planes/test_curated.py
 48. `test_patch_curated_router_refuses_dangling_pointer_without_mutation` — tests/planes/test_curated.py
 
+Unit C full-layout episodic delete (remove the complete v1/v2 layout across BOTH id spaces + all
+content; content-before-identity ordering; canonical cross-namespace refusal + corrupted-row
+removability + retry truth):
+
+49. `test_delete_removes_v1_layout` — tests/store/test_data001_phase2_identity_consumers.py
+50. `test_delete_removes_converted_v2_layout` — tests/store/test_data001_phase2_identity_consumers.py
+51. `test_delete_removes_brand_new_v2_layout` — tests/store/test_data001_phase2_identity_consumers.py
+52. `test_delete_removes_all_content_generations` — tests/store/test_data001_phase2_identity_consumers.py
+53. `test_delete_wrong_namespace_refuses_with_zero_deletion` — tests/store/test_data001_phase2_identity_consumers.py
+54. `test_delete_corrupt_identity_payload_still_removable` — tests/store/test_data001_phase2_identity_consumers.py
+55. `test_delete_not_found_and_retry_truth` — tests/store/test_data001_phase2_identity_consumers.py
+56. `test_delete_content_failure_preserves_identity_then_retry_removes_all` — tests/store/test_data001_phase2_identity_consumers.py
+
 ## Scope (Yua-approved 2026-07-15 — coupled integration)
 
 The multi-point layout is only correct if EVERY identity consumer resolves the anchor and no write
@@ -157,11 +170,12 @@ the identity-consumer seams (inventory in
 compositions (API, lifecycle worker, vault runtime). Same invariant, same Issue (#530) — no new
 Issue; this doc is the ownership record.
 
-## Remaining work in this same slice (owned by #530 — units A-rest, C, B; NOT deferred)
+## Remaining work in this same slice (owned by #530 — unit B; NOT deferred)
 
-These are owned by this coupled slice (no follow-up Issue) and must land before it closes; tracked in
-the inventory doc. Still TODO after this checkpoint: the remaining resolve-before-validate
-reads (`transitions._lookup_point_id`, `synthesis`, api list `_scroll`, `namespace_stats` count,
-`writes_curated` PATCH fence, `recent`), full-layout delete (episodic/curated delete + the two
-anchor-id spaces), and anchor-aware retrieval (episodic/curated `query`, `_find_dedup_candidate`,
-`hybrid` — rank content, resolve via anchor, post-hydration filter, bounded overfetch/underfill).
+Owned by this coupled slice (no follow-up Issue); must land before it closes. DONE: A-rest
+resolve-before-validate reads (transitions/synthesis/`_scroll`/`namespace_stats`/`writes_curated`
+PATCH/`recent`) and unit C full-layout episodic delete (both anchor-id spaces + all content,
+content-before-identity ordering). Still TODO: **unit B** anchor-aware retrieval — episodic/curated
+`query`, `_find_dedup_candidate`, and `hybrid` (rank content, resolve via anchor, validate
+`candidate == anchor.live_point`, post-hydration state/tag/validity filter, bounded overfetch/underfill;
+concept/thought/artifact untouched).

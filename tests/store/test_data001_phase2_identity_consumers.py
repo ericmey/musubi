@@ -283,3 +283,208 @@ def test_synthesis_resolve_candidate_no_torn_read() -> None:
     )
     assert result.vector == vector_a
     assert stub.scroll_calls == 0, "the resolver must NOT re-read the anchor (no torn-read window)"
+
+
+# ==================================================================================================
+# Unit C: episodic operator delete removes the COMPLETE v1/v2 layout across BOTH id spaces.
+# ==================================================================================================
+def _plane(qdrant: QdrantClient) -> Any:
+    from musubi.planes.episodic import EpisodicPlane
+
+    return EpisodicPlane(client=qdrant, embedder=FakeEmbedder())
+
+
+def _dense(text: str) -> list[float]:
+    return asyncio.run(FakeEmbedder().embed_dense([text]))[0]
+
+
+def _upsert_v1(qdrant: QdrantClient, oid: str, **payload: Any) -> None:
+    from musubi.planes.episodic.plane import episodic_point_id
+
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=episodic_point_id(oid),
+                payload={
+                    "object_id": oid,
+                    "namespace": _NS,
+                    "content": oid,
+                    "state": "matured",
+                    **payload,
+                },
+                vector={
+                    DENSE_VECTOR_NAME: _dense(oid),
+                    "sparse_splade_v1": models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+
+
+def _convert_to_v2(qdrant: QdrantClient, coord: LifecycleTransitionCoordinator, oid: str) -> None:
+    """A v1 row that a vector-changing publish converts IN PLACE — the anchor keeps the legacy id."""
+    from musubi.store.immutable_vectors import ImmutableVectorPublisher
+
+    _upsert_v1(qdrant, oid)
+    pub = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=_COLL)
+    pub.register(coord)
+    pub.publish(coord, object_id=oid, namespace=_NS, content_payload={"content": oid + "-new-body"})
+
+
+def _points_for(qdrant: QdrantClient, oid: str) -> list[Any]:
+    recs, _ = qdrant.scroll(
+        collection_name=_COLL,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+        ),
+        limit=100,
+        with_payload=True,
+    )
+    return list(recs)
+
+
+def _content_points_for(qdrant: QdrantClient, oid: str) -> list[Any]:
+    return [p for p in _points_for(qdrant, oid) if (p.payload or {}).get("point_kind") == "content"]
+
+
+async def _delete(qdrant: QdrantClient, oid: str, namespace: str = _NS) -> Any:
+    return await _plane(qdrant).delete(
+        namespace=namespace, object_id=oid, actor="op", reason="test", is_operator=True
+    )
+
+
+def test_delete_removes_v1_layout(qdrant: QdrantClient) -> None:
+    _upsert_v1(qdrant, "del-v1")
+    asyncio.run(_delete(qdrant, "del-v1"))
+    assert _points_for(qdrant, "del-v1") == [], "a v1 row must be fully removed"
+
+
+def test_delete_removes_converted_v2_layout(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.planes.episodic.plane import episodic_point_id
+    from musubi.store.immutable_vectors import read_anchor
+
+    _convert_to_v2(qdrant, coord, "del-cv2")
+    anchor = read_anchor(qdrant, _COLL, namespace=_NS, object_id="del-cv2")
+    assert anchor is not None  # converted anchor lives at the legacy id
+    assert _content_points_for(qdrant, "del-cv2"), "has a content point"
+    asyncio.run(_delete(qdrant, "del-cv2"))
+    assert _points_for(qdrant, "del-cv2") == [], (
+        "converted-v2 anchor (legacy id) + content all removed"
+    )
+    # sanity: the legacy id space is empty too
+    assert qdrant.retrieve(collection_name=_COLL, ids=[episodic_point_id("del-cv2")]) == []
+
+
+def test_delete_removes_brand_new_v2_layout(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.store.immutable_vectors import anchor_point_id, read_anchor
+
+    _make_v2(qdrant, coord, "del-bn2")
+    assert read_anchor(qdrant, _COLL, namespace=_NS, object_id="del-bn2") is not None
+    asyncio.run(_delete(qdrant, "del-bn2"))
+    assert _points_for(qdrant, "del-bn2") == [], (
+        "brand-new-v2 anchor (anchor_point_id) + content removed"
+    )
+    assert qdrant.retrieve(collection_name=_COLL, ids=[anchor_point_id(_NS, "del-bn2")]) == []
+
+
+def test_delete_removes_all_content_generations(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    import uuid as _uuid
+
+    _make_v2(qdrant, coord, "del-gen")
+    # a superseded generation that was never GC'd (still carries the object's identity).
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=str(_uuid.uuid4()),
+                payload={"object_id": "del-gen", "namespace": _NS, "point_kind": "content"},
+                vector={
+                    DENSE_VECTOR_NAME: _dense("old-gen"),
+                    "sparse_splade_v1": models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+    assert len(_content_points_for(qdrant, "del-gen")) >= 2
+    asyncio.run(_delete(qdrant, "del-gen"))
+    assert _content_points_for(qdrant, "del-gen") == [], "every content generation must be swept"
+    assert _points_for(qdrant, "del-gen") == []
+
+
+def test_delete_wrong_namespace_refuses_with_zero_deletion(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    _make_v2(qdrant, coord, "del-ns2")
+    _upsert_v1(qdrant, "del-ns1")
+    for oid in ("del-ns2", "del-ns1"):
+        with pytest.raises(LookupError):
+            asyncio.run(_delete(qdrant, oid, namespace="eric/OTHER/episodic"))
+        assert _points_for(qdrant, oid), f"a wrong-namespace delete must delete nothing ({oid})"
+
+
+def test_delete_corrupt_identity_payload_still_removable(qdrant: QdrantClient) -> None:
+    # a v1 row whose namespace payload is DAMAGE (a string, but not a canonical namespace).
+    _upsert_v1(qdrant, "del-corrupt", namespace="garbage")
+    event = asyncio.run(_delete(qdrant, "del-corrupt"))
+    assert event.to_state == "archived"
+    assert _points_for(qdrant, "del-corrupt") == [], (
+        "a corrupted-namespace row must still be removable"
+    )
+
+
+def test_delete_not_found_and_retry_truth(qdrant: QdrantClient) -> None:
+    with pytest.raises(LookupError):
+        asyncio.run(_delete(qdrant, "never-existed"))
+    _upsert_v1(qdrant, "del-once")
+    asyncio.run(_delete(qdrant, "del-once"))
+    # a second delete of the now-gone object is a truthful not-found, never a phantom success.
+    with pytest.raises(LookupError):
+        asyncio.run(_delete(qdrant, "del-once"))
+
+
+def test_delete_content_failure_preserves_identity_then_retry_removes_all(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    """Ordering proof (Yua): content is deleted FIRST — if it fails, the identity SURVIVES so a retry
+    can still locate and finish. Identity is never deleted first (which would strand the content)."""
+    _make_v2(qdrant, coord, "del-fail")
+
+    class _FailContentDeleteOnce:
+        def __init__(self, real: Any) -> None:
+            self._real = real
+            self._failed = False
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._real, name)
+
+        def delete(self, *, collection_name: str, points_selector: Any, **kw: Any) -> Any:
+            if not self._failed and isinstance(points_selector, models.Filter):
+                self._failed = True
+                raise RuntimeError("injected content-delete failure")
+            return self._real.delete(
+                collection_name=collection_name, points_selector=points_selector, **kw
+            )
+
+    failing = _FailContentDeleteOnce(qdrant)
+    with pytest.raises(RuntimeError, match="injected content-delete failure"):
+        asyncio.run(
+            _plane(cast(QdrantClient, failing)).delete(
+                namespace=_NS, object_id="del-fail", actor="op", reason="t", is_operator=True
+            )
+        )
+    # the identity (and its content) SURVIVE the failed content cleanup — still locatable for retry.
+    assert _points_for(qdrant, "del-fail"), (
+        "a content-delete failure must not strand: identity survives"
+    )
+    # retry against the healthy client removes everything.
+    asyncio.run(_delete(qdrant, "del-fail"))
+    assert _points_for(qdrant, "del-fail") == []

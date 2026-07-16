@@ -211,6 +211,54 @@ def resolve_committed_content(
     return None
 
 
+def read_identity_payload(
+    client: Any, collection: str, *, namespace: str, object_id: str, legacy_point_id: str
+) -> dict[str, Any] | None:
+    """Read the identity row's RAW payload by DETERMINISTIC point id, so a corrupted-payload row (one
+    that lost its namespace/object_id keys) is still addressable (DATA-001 P2). Tries BOTH id spaces: the
+    ``legacy_point_id`` (a v1 row or a converted-in-place anchor) first, then
+    ``anchor_point_id(namespace, object_id)`` (a brand-new anchor — computed from the CALLER's args, not
+    the payload). ``None`` if neither exists; ``{}`` if a point exists with an empty payload."""
+    from musubi.store.raw_lookup import retrieve_by_point_id
+
+    payload = retrieve_by_point_id(client, collection, point_id=legacy_point_id)
+    if payload is not None:
+        return payload
+    return retrieve_by_point_id(client, collection, point_id=anchor_point_id(namespace, object_id))
+
+
+def delete_object_layout(
+    client: Any, collection: str, *, namespace: str, object_id: str, legacy_point_id: str
+) -> None:
+    """Remove the COMPLETE v1/v2 layout for an object (DATA-001 P2). Order is load-bearing (Yua): delete
+    every write-once CONTENT point FIRST (``wait=True``), THEN the identity row in BOTH deterministic id
+    spaces — ``legacy_point_id`` (v1 / converted-in-place anchor) AND ``anchor_point_id(namespace,
+    object_id)`` (brand-new anchor) — also ``wait=True``. If content cleanup fails the identity survives
+    so retry can still locate + finish; identity is never deleted first (which would strand unreachable
+    content). Idempotent; addresses identity by deterministic id so a corrupted-payload row is removable,
+    and sweeps content by (namespace, object_id) filter."""
+    client.delete(
+        collection_name=collection,
+        points_selector=models.Filter(
+            must=[
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+                models.FieldCondition(
+                    key="point_kind", match=models.MatchValue(value=CONTENT_KIND)
+                ),
+            ]
+        ),
+        wait=True,
+    )
+    client.delete(
+        collection_name=collection,
+        points_selector=models.PointIdsList(
+            points=[legacy_point_id, anchor_point_id(namespace, object_id)]
+        ),
+        wait=True,
+    )
+
+
 _EMBED_KINDS = ("episodic", "curated")
 
 
@@ -754,7 +802,9 @@ __all__ = [
     "ImmutableVectorPublisher",
     "anchor_point_id",
     "content_point_id_for",
+    "delete_object_layout",
     "read_anchor",
+    "read_identity_payload",
     "register_immutable_vector_dispatch",
     "resolve_committed_content",
     "strip_layout_fields",

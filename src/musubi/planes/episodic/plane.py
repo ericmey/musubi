@@ -43,7 +43,7 @@ from musubi.lifecycle.transitions import TransitionError, TransitionResult, tran
 from musubi.store.access_lease import lease_increment_access
 from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
-from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
+from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, strip_layout_fields
 from musubi.types.common import (
     KSUID,
@@ -735,8 +735,19 @@ class EpisodicPlane:
         # undeletable-because-broken. The point ID is derived deterministically from the
         # object_id, so it addresses the row no matter what the payload says.
         # (Yua, rev2 review of PR #398.)
-        payload = retrieve_by_point_id(
-            self._client, self._collection, point_id=_point_id(object_id)
+        #
+        # DATA-001 P2: the identity row lives in ONE of two deterministic id spaces — the legacy
+        # `_point_id` (a v1 row or a converted-in-place anchor) OR `anchor_point_id(namespace, object_id)`
+        # (a brand-new anchor). `read_identity_payload` addresses both from the delete ARGS (not the
+        # payload), so a brand-new v2 object is found and a corrupted-payload row stays removable.
+        from musubi.store.immutable_vectors import delete_object_layout, read_identity_payload
+
+        payload = read_identity_payload(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            legacy_point_id=_point_id(object_id),
         )
         if payload is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
@@ -810,9 +821,15 @@ class EpisodicPlane:
             lineage_changes={},
             correlation_id="",
         )
-        self._client.delete(
-            collection_name=self._collection,
-            points_selector=models.PointIdsList(points=[_point_id(object_id)]),
+        # DATA-001 P2: remove the COMPLETE layout — every content point FIRST, then the identity row in
+        # BOTH id spaces (content-before-identity so a cleanup failure leaves the identity findable for
+        # retry; centralized so the id-space knowledge lives in one place).
+        delete_object_layout(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            legacy_point_id=_point_id(object_id),
         )
         return event
 
