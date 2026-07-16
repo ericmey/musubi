@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.10](https://github.com/ericmey/musubi/compare/v1.17.9...v1.17.10) (2026-07-16)
+
+
+### Documentation
+
+* **security:** codify ops endpoint network boundary ([#584](https://github.com/ericmey/musubi/issues/584)) ([f92c301](https://github.com/ericmey/musubi/commit/f92c301fc5ed9ba31e2d0a4020dcc62906fc8e16))
+
 ## [1.17.9](https://github.com/ericmey/musubi/compare/v1.17.8...v1.17.9) (2026-07-16)
 
 
