@@ -409,6 +409,40 @@ class _TEICompositeEmbedder:
         return await self._reranker.rerank(query, candidates)  # type: ignore[no-any-return]
 
 
+def register_boot_intent_handlers(
+    coordinator: Any, *, qdrant: Any, embedder: Any, blob_root: Any
+) -> tuple[Any, Any]:
+    """Construct the write-plane immutable-vector publishers and register the FULL set of custom-intent
+    handlers on ``coordinator`` — the ONE collection-aware dispatcher for the shared
+    ``immutable_vector_publish`` kind (episodic + curated), plus the ART-001 artifact indexer.
+
+    Extracted so the boot sequence is a testable unit (DATA-001 P2): ``_main_async`` calls this BEFORE
+    the synchronous boot reconcile, so a durable PENDING intent left by a prior crash is dispatched on
+    the first reconcile instead of driven with no handler. Returns ``(episodic_publisher,
+    curated_publisher)`` for injection into the write planes."""
+    from musubi.planes.artifact.indexer import ArtifactIndexer
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+    from musubi.store.names import collection_for_plane
+
+    ep_collection = collection_for_plane("episodic")
+    cur_collection = collection_for_plane("curated")
+    episodic_publisher = ImmutableVectorPublisher(
+        client=qdrant, embedder=embedder, collection=ep_collection
+    )
+    curated_publisher = ImmutableVectorPublisher(
+        client=qdrant, embedder=embedder, collection=cur_collection
+    )
+    register_immutable_vector_dispatch(
+        coordinator,
+        {ep_collection: episodic_publisher, cur_collection: curated_publisher},
+    )
+    ArtifactIndexer(client=qdrant, embedder=embedder, blob_root=blob_root).register(coordinator)
+    return episodic_publisher, curated_publisher
+
+
 async def _main_async() -> None:
     """Module entrypoint — compose real deps and run until signal."""
     from pathlib import Path
@@ -439,6 +473,7 @@ async def _main_async() -> None:
     from musubi.llm.promotion_client import HttpxPromotionClient
     from musubi.llm.reflection_client import HttpxReflectionClient
     from musubi.observability import configure_logging, init_tracing
+    from musubi.planes.artifact.plane import ArtifactPlane
     from musubi.planes.concept.plane import ConceptPlane
     from musubi.planes.curated.plane import CuratedPlane
     from musubi.planes.episodic.plane import EpisodicPlane
@@ -494,6 +529,29 @@ async def _main_async() -> None:
         backoff_max_s=settings.lifecycle_backoff_max_s,
         busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
     )
+
+    # Wrap the composite in ChunkedEmbedder so sparse inputs > 510 tokens
+    # are sliding-window-chunked + max-pooled before they hit tei-sparse
+    # (SPLADE-v3 has a hard 512-token model cap). The API server's
+    # bootstrap (src/musubi/api/bootstrap.py) wraps the same way; without
+    # this, vault_reconcile / synthesis / any lifecycle-side embed of a
+    # long input HTTP 413s. See musubi#367.
+    embedder = ChunkedEmbedder(
+        _TEICompositeEmbedder(
+            dense=TEIDenseClient(base_url=str(settings.tei_dense_url)),
+            sparse=TEISparseClient(base_url=str(settings.tei_sparse_url)),
+            reranker=TEIRerankerClient(base_url=str(settings.tei_reranker_url)),
+        )
+    )
+
+    # DATA-001 P2: register ALL custom-intent handlers BEFORE the synchronous boot reconcile below,
+    # else a durable PENDING immutable/artifact intent left by a prior crash is first driven with no
+    # handler (kept pending, not dispatched) until the next interval tick. The publishers are injected
+    # into the write planes below.
+    episodic_publisher, curated_publisher = register_boot_intent_handlers(
+        coordinator, qdrant=qdrant, embedder=embedder, blob_root=settings.artifact_blob_path
+    )
+
     reconcile_driver = _ReconcileDriver(
         reconcile=coordinator.reconcile_once,
         ready=coordinator.readiness_check,
@@ -504,7 +562,8 @@ async def _main_async() -> None:
         max_failures=settings.lifecycle_readiness_max_reconcile_failures,
     )
     # A synchronous boot pass proves the shared schema and reconciler before
-    # readiness can rise. The interval job below is the only ongoing reconciler.
+    # readiness can rise (handlers are registered above so it can dispatch a
+    # durable pending intent). The interval job below is the only ongoing reconciler.
     reconcile_driver.run()
     sink = LifecycleEventSink(
         db_path=settings.lifecycle_sqlite_path,
@@ -522,21 +581,15 @@ async def _main_async() -> None:
     # Protocols — see src/musubi/llm/ollama.py.
     ollama = default_ollama_client()
 
-    # Wrap the composite in ChunkedEmbedder so sparse inputs > 510 tokens
-    # are sliding-window-chunked + max-pooled before they hit tei-sparse
-    # (SPLADE-v3 has a hard 512-token model cap). The API server's
-    # bootstrap (src/musubi/api/bootstrap.py) wraps the same way; without
-    # this, vault_reconcile / synthesis / any lifecycle-side embed of a
-    # long input HTTP 413s. See musubi#367.
-    embedder = ChunkedEmbedder(
-        _TEICompositeEmbedder(
-            dense=TEIDenseClient(base_url=str(settings.tei_dense_url)),
-            sparse=TEISparseClient(base_url=str(settings.tei_sparse_url)),
-            reranker=TEIRerankerClient(base_url=str(settings.tei_reranker_url)),
-        )
+    # DATA-001 P2: inject the coordinator + the exact-collection publisher into the WRITE planes so
+    # vector-capable mutations (episodic reinforce, curated same-id body update) publish through the
+    # fenced immutable-vector seam instead of the retired unfenceable update_vectors.
+    episodic_plane = EpisodicPlane(
+        client=qdrant,
+        embedder=embedder,
+        coordinator=coordinator,
+        vector_publisher=episodic_publisher,
     )
-
-    episodic_plane = EpisodicPlane(client=qdrant, embedder=embedder)
     concept_plane = ConceptPlane(client=qdrant, embedder=embedder)
     thoughts_plane = ThoughtsPlane(client=qdrant, embedder=embedder)
     thought_emitter = ThoughtsPlaneEmitter(
@@ -555,15 +608,9 @@ async def _main_async() -> None:
         lock_dir=lock_dir,
         embedder=embedder,
     )
-    from musubi.planes.artifact.indexer import ArtifactIndexer
-    from musubi.planes.artifact.plane import ArtifactPlane
-
+    # C4/ART-001: the committed-generation indexer's 'artifact_index' handler is now registered ABOVE,
+    # before the boot reconcile (DATA-001 P2 ordering fix), alongside the immutable-vector dispatcher.
     artifact_plane = ArtifactPlane(client=qdrant, embedder=embedder)
-    # C4/ART-001: register the committed-generation indexer as the coordinator's 'artifact_index'
-    # handler so the reconcile job drives upload-enqueued indexing intents to a committed head.
-    ArtifactIndexer(
-        client=qdrant, embedder=embedder, blob_root=settings.artifact_blob_path
-    ).register(coordinator)
     dem_jobs = build_demotion_jobs(
         deps=DemotionDeps(
             qdrant=qdrant,
@@ -600,7 +647,12 @@ async def _main_async() -> None:
         base_url=str(settings.ollama_url),
         model=settings.llm_model,
     )
-    curated_plane = CuratedPlane(client=qdrant, embedder=embedder)
+    curated_plane = CuratedPlane(
+        client=qdrant,
+        embedder=embedder,
+        coordinator=coordinator,
+        vector_publisher=curated_publisher,
+    )
     prom_jobs = build_promotion_jobs(
         deps=PromotionDeps(
             qdrant=qdrant,

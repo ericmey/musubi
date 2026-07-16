@@ -74,18 +74,32 @@ def qdrant() -> Iterator[QdrantClient]:
         client.close()
 
 
-@pytest.fixture
-def plane(qdrant: QdrantClient) -> CuratedPlane:
-    return CuratedPlane(client=qdrant, embedder=FakeEmbedder())
-
-
 _COORDINATOR: LifecycleTransitionCoordinator | None = None
 
 
 @pytest.fixture(autouse=True)
-def _install_coordinator(qdrant: QdrantClient, tmp_path: Path) -> None:
+def coordinator(qdrant: QdrantClient, tmp_path: Path) -> LifecycleTransitionCoordinator:
     global _COORDINATOR
     _COORDINATOR = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+    return _COORDINATOR
+
+
+@pytest.fixture
+def plane(qdrant: QdrantClient, coordinator: LifecycleTransitionCoordinator) -> CuratedPlane:
+    # DATA-001 P2: a same-id body/frontmatter update publishes through the immutable-vector seam; wire
+    # the coordinator + a curated-bound publisher + the dispatcher so the update path is not fail-closed.
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+    from musubi.store.names import collection_for_plane
+
+    coll = collection_for_plane("curated")
+    publisher = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=coll)
+    register_immutable_vector_dispatch(coordinator, {coll: publisher})
+    return CuratedPlane(
+        client=qdrant, embedder=FakeEmbedder(), coordinator=coordinator, vector_publisher=publisher
+    )
 
 
 def _coord() -> LifecycleTransitionCoordinator:
@@ -626,6 +640,68 @@ async def test_create_same_object_id_update_propagates_frontmatter_fields(
     # And identity/creation invariants preserved.
     assert updated.object_id == first.object_id
     assert updated.created_at == first.created_at
+
+
+async def test_same_id_update_inherits_state_lineage_access_from_fresh(
+    plane: CuratedPlane, ns: str
+) -> None:
+    """DATA-001 P2 (Yua): a same-id body/frontmatter update carries ONLY author-managed frontmatter.
+    Lifecycle ``state`` (transitions own it), transition-owned lineage, and lease-owned access are
+    INHERITED from the fresh committed row — a concurrent change to them survives, and the incoming
+    memory can never set them — while the intended frontmatter lands and version bumps exactly once."""
+    from qdrant_client import models as qmodels
+
+    from musubi.types.common import generate_ksuid
+
+    lineage_superseded = str(generate_ksuid())
+    lineage_promoted = str(generate_ksuid())
+    promoted_at_iso = datetime.now(UTC).isoformat()
+    first = await plane.create(
+        _make(namespace=ns, title="T1", content="body one", vault_path="curated/eric/inh.md")
+    )
+    # a concurrent transition-owned STATE + lineage + lease-owned-access change lands on the identity
+    # row (a real state transition, not just lineage — so we prove the EXACT state survives).
+    plane._client.set_payload(
+        collection_name=plane._collection,
+        payload={
+            "state": "superseded",
+            "superseded_by": lineage_superseded,
+            "promoted_from": lineage_promoted,
+            "promoted_at": promoted_at_iso,
+            "access_count": 7,
+        },
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(first.object_id))
+                ),
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+            ]
+        ),
+        wait=True,
+    )
+    # the incoming memory ALSO tries to set state=archived — the allowlist must ignore it.
+    updated = await plane.create(
+        _make(
+            namespace=ns,
+            title="T2-edited",
+            content="a longer edited body two",
+            vault_path="curated/eric/inh.md",
+            object_id=first.object_id,
+            state="archived",
+        )
+    )
+    assert updated.object_id == first.object_id
+    assert updated.title == "T2-edited" and updated.content == "a longer edited body two"  # landed
+    assert updated.version == first.version + 1  # bumped exactly once
+    # the CONCURRENT state transition survives, and the incoming state=archived is ignored (allowlist).
+    assert updated.state == "superseded", (
+        "a concurrent transition-owned state change must survive; incoming state=archived must be ignored"
+    )
+    assert str(updated.superseded_by) == lineage_superseded, "transition-owned lineage must survive"
+    assert str(updated.promoted_from) == lineage_promoted
+    assert updated.promoted_at is not None, "promoted_at must survive alongside promoted_from"
+    assert updated.access_count == 7, "lease-owned access must survive"
 
 
 async def test_query_excludes_archived_by_default(plane: CuratedPlane, ns: str) -> None:

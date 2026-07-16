@@ -44,7 +44,7 @@ from musubi.store.access_lease import lease_increment_access
 from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, strip_layout_fields
 from musubi.types.common import (
     KSUID,
     Err,
@@ -459,7 +459,9 @@ class EpisodicPlane:
             new_memory=new.model_dump(mode="json"),
             merge_strategy=merge_strategy,
         )
-        return EpisodicMemory.model_validate(committed)
+        # resolve, then validate: the committed payload is anchor-over-content and carries Phase-2
+        # layout-only keys the extra="forbid" model would reject — strip them first (Yua).
+        return EpisodicMemory.model_validate(strip_layout_fields(committed))
 
     def _upsert(
         self,
@@ -555,54 +557,34 @@ class EpisodicPlane:
         If you only need to know whether the object is *there*, call
         :meth:`exists` — it does not deserialize, so it still answers for a
         corrupted row.
-        """
-        records, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                ]
-            ),
-            limit=1,
-            with_payload=True,
-        )
-        if not records:
-            return None
-        payload = records[0].payload
-        if not payload:
-            return None
 
+        DATA-001 P2: resolves the AUTHORITATIVE committed payload (a v2 anchor merged over its
+        ``live_point`` content, or a v1/legacy row) before validating — never a raw anchor/content
+        shell — and fails closed (returns None) on a v2 anchor with a dangling/absent committed pointer.
+        The access bump rides the shared fenced lease, which already targets the identity row.
+        """
+        from musubi.store.immutable_vectors import resolve_committed_content
+
+        # Prove the object RESOLVES before any access mutation (Yua): a missing/dangling row returns
+        # None and must NEVER trigger a lease write (the pre-P2 contract mutated nothing on absent).
+        resolved = resolve_committed_content(
+            self._client, self._collection, namespace=str(namespace), object_id=str(object_id)
+        )
+        if resolved is None:
+            return None
         if bump_access:
-            # RET-008 (#502): route the direct-fetch bump through the SHARED fenced lease so it
-            # never races a concurrent retrieval-delivery increment (or another get) on the same
-            # row under multi-worker/cross-process parallelism. Re-read to return the post-bump row.
+            # RET-008 (#502): route the direct-fetch bump through the SHARED fenced lease so it never
+            # races a concurrent retrieval-delivery increment (or another get) on the same row under
+            # multi-worker/cross-process parallelism. The lease targets the identity row (anchor/v1).
             await lease_increment_access(
                 self._client, self._collection, {(str(namespace), str(object_id))}
             )
-            refreshed, _ = self._client.scroll(
-                collection_name=self._collection,
-                scroll_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="namespace", match=models.MatchValue(value=namespace)
-                        ),
-                        models.FieldCondition(
-                            key="object_id", match=models.MatchValue(value=object_id)
-                        ),
-                    ]
-                ),
-                limit=1,
-                with_payload=True,
+            resolved = resolve_committed_content(
+                self._client, self._collection, namespace=str(namespace), object_id=str(object_id)
             )
-            if refreshed and refreshed[0].payload:
-                payload = refreshed[0].payload
-
-        return _memory_from_payload(payload)
+            if resolved is None:
+                return None  # vanished/dangled between the resolve and the bump -> fail closed.
+        return _memory_from_payload(strip_layout_fields(resolved))
 
     async def query(
         self,

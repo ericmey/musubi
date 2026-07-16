@@ -50,11 +50,10 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
-from musubi.store.memory_serialization import memory_update_payload
 from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, strip_layout_fields
 from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Ok, Result, epoch_of, utc_now
 from musubi.types.curated import CuratedKnowledge
 
@@ -64,6 +63,35 @@ from musubi.types.curated import CuratedKnowledge
 _POINT_NS = uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000002")
 
 _VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured",)
+
+# DATA-001 P2: the ONLY fields a same-id body/frontmatter update may set on the durable descriptor
+# (Yua ruling). Everything else — lifecycle ``state`` (transitions own it), ``namespace``, identity
+# (``object_id``), creation (``created_at``/``created_epoch``), ``version``, lineage
+# (``supersedes``/``superseded_by``/``promoted_from``/``promoted_at``), and access/lease/anchor
+# internals — is inherited from the FRESH authoritative row inside the handler, so a concurrent
+# transition/lineage/access mutation between this read and the apply is never clobbered. An ALLOWLIST
+# (not a denylist) so a newly-added model field defaults to the conservative inherit-from-fresh.
+# ``updated_at``/``updated_epoch`` are stamped separately with ONE request timestamp.
+_CURATED_AUTHOR_FIELDS: tuple[str, ...] = (
+    "schema_version",
+    "title",
+    "summary",
+    "content",
+    "topics",
+    "tags",
+    "importance",
+    "vault_path",
+    "valid_from",
+    "valid_from_epoch",  # derived epoch — must move WITH valid_from or range queries filter on stale
+    "valid_until",
+    "valid_until_epoch",
+    "musubi_managed",
+    "body_hash",
+    "merged_from",
+    "supported_by",
+    "linked_to_topics",
+    "contradicts",
+)
 
 
 def _point_id(object_id: str) -> str:
@@ -127,10 +155,23 @@ class FindByVaultPathError:
 class CuratedPlane:
     """CRUD + lifecycle transitions for the curated knowledge plane."""
 
-    def __init__(self, *, client: QdrantClient, embedder: Embedder) -> None:
+    def __init__(
+        self,
+        *,
+        client: QdrantClient,
+        embedder: Embedder,
+        coordinator: LifecycleTransitionCoordinator | None = None,
+        vector_publisher: Any | None = None,
+    ) -> None:
         self._client = client
         self._embedder = embedder
         self._collection = collection_for_plane("curated")
+        # DATA-001 P2: a same-id body/frontmatter update is a vector-capable mutation and goes through
+        # the durable immutable-vector publisher (fenced anchor + content snapshot). Injected only in
+        # PRODUCTION WRITE compositions; a read-only construction leaves them None and a same-id update
+        # then FAILS CLOSED (never the old unfenceable update_vectors). Approved optional injection (Yua).
+        self._coordinator = coordinator
+        self._vector_publisher = vector_publisher
 
     # ------------------------------------------------------------------
     # Create
@@ -189,59 +230,35 @@ class CuratedPlane:
         # supersession is for distinct objects sharing a vault slot;
         # same-id-different-body is just an in-place update.
         if memory.object_id == existing.object_id:
-            # Start from the FULL incoming memory so frontmatter-driven
-            # changes (valid_from/valid_until, musubi_managed, vault_path,
-            # state, etc.) all reach storage — earlier draft of this
-            # branch hand-copied a subset and silently dropped the rest
-            # (Copilot review on PR #363). Then preserve the invariants
-            # that must come from `existing`: the identity (object_id),
-            # the creation timestamps (immutable across an update), the
-            # lineage trail (supersedes/superseded_by carried forward
-            # untouched), and any state machine fields the update isn't
-            # supposed to mutate in-place. Bump version + refresh
-            # updated_at last.
-            dense, sparse = await self._embed_both(_embed_target(memory))
-
-            def plan(current: dict[str, Any]) -> MutationPlan:
-                now_u = utc_now()
-                # Authoritative incoming frontmatter, but the identity + creation timestamps + lineage
-                # come from the FRESH current row (DATA-001 #530) — not the pre-read `existing` — so a
-                # concurrent supersession/promotion/state change is never overwritten. Lease-owned
-                # access fields are excluded (memory_update_payload); version is stamped by the seam.
-                updated = CuratedKnowledge.model_validate(
-                    {
-                        **memory.model_dump(),
-                        "object_id": existing.object_id,
-                        "created_at": current["created_at"],
-                        "created_epoch": current["created_epoch"],
-                        "supersedes": current.get("supersedes", []),
-                        "superseded_by": current.get("superseded_by"),
-                        "promoted_from": current.get("promoted_from"),
-                        "promoted_at": current.get("promoted_at"),
-                        "version": int(current.get("version", 1)),
-                        "updated_at": now_u,
-                        "updated_epoch": epoch_of(now_u),
-                    }
+            # Same-id-different-body is an in-place UPDATE (not a supersession). DATA-001 P2: it is a
+            # vector-capable mutation, so it publishes through the durable immutable-vector seam (fenced
+            # anchor + write-once content), fail-closed if unwired. The durable descriptor carries ONLY
+            # the author-managed frontmatter (``_CURATED_AUTHOR_FIELDS`` + one request ``updated_at``);
+            # identity, creation, lineage, lifecycle ``state`` (transitions own it), ``namespace``, and
+            # access/anchor internals are inherited from the FRESH authoritative row INSIDE the handler,
+            # so a concurrent supersession/promotion/state/access mutation between this read and the
+            # apply is never overwritten (Yua). The handler decides payload-only vs vector-change by the
+            # curated projection (title + summary-or-content). Version bumps once, in the handler.
+            if self._vector_publisher is None or self._coordinator is None:
+                raise RuntimeError(
+                    "curated same-id update reached the vector path but the immutable-vector publisher "
+                    "is not wired (DATA-001 P2 fail-closed)"
                 )
-                changes = memory_update_payload(updated)
-                changes.pop("version", None)  # the mutation lease owns the version bump.
-                return MutationPlan(
-                    changes=changes,
-                    vectors={
-                        DENSE_VECTOR_NAME: dense,
-                        SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
-                    },
-                )
-
-            published = await owned_update(
-                self._client,
-                self._collection,
-                namespace=str(existing.namespace),
+            now_u = utc_now()
+            dump = memory.model_dump(mode="json")
+            set_fields: dict[str, Any] = {
+                key: dump[key] for key in _CURATED_AUTHOR_FIELDS if key in dump
+            }
+            set_fields["updated_at"] = now_u.isoformat()
+            set_fields["updated_epoch"] = epoch_of(now_u)
+            committed = self._vector_publisher.curated_publish(
+                self._coordinator,
                 object_id=str(existing.object_id),
-                point_id=_point_id(existing.object_id),
-                plan=plan,
+                namespace=str(existing.namespace),
+                set_fields=set_fields,
             )
-            return CuratedKnowledge.model_validate(published)
+            # resolve, then validate: strip the Phase-2 layout-only keys the extra="forbid" model rejects.
+            return CuratedKnowledge.model_validate(strip_layout_fields(committed))
 
         # True supersession path (distinct objects sharing a vault slot).
         # Two writes: insert the new row, mark the old row superseded.
@@ -472,28 +489,19 @@ class CuratedPlane:
         Raises if the stored payload does not satisfy ``CuratedKnowledge``. To ask
         only whether the row is present, call :meth:`exists` — it does not
         deserialize, so it still answers for a corrupted row.
+
+        DATA-001 P2: resolves the AUTHORITATIVE committed payload (a v2 anchor merged over its
+        ``live_point`` content, or a v1/legacy row) before validating — never a raw anchor/content
+        shell — and fails closed (None) on a v2 anchor with a dangling/absent committed pointer.
         """
-        records, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                ]
-            ),
-            limit=1,
-            with_payload=True,
+        from musubi.store.immutable_vectors import resolve_committed_content
+
+        resolved = resolve_committed_content(
+            self._client, self._collection, namespace=str(namespace), object_id=str(object_id)
         )
-        if not records:
+        if resolved is None:
             return None
-        payload = records[0].payload
-        if not payload:
-            return None
-        return _curated_from_payload(payload)
+        return _curated_from_payload(strip_layout_fields(resolved))
 
     async def query(
         self,

@@ -26,7 +26,7 @@ from qdrant_client import models
 from musubi.embedding.base import Embedder
 from musubi.planes.episodic.plane import _sparse_to_model
 from musubi.store.memory_serialization import LEASE_OWNED_FIELDS
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, strip_layout_fields
 from musubi.types.common import epoch_of, utc_now
 
 _SYNC_DRIVE_ATTEMPTS = 8  # bounded inline re-drives to commit synchronously under contention
@@ -757,4 +757,5 @@ __all__ = [
     "read_anchor",
     "register_immutable_vector_dispatch",
     "resolve_committed_content",
+    "strip_layout_fields",
 ]

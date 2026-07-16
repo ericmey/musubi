@@ -157,6 +157,41 @@ def test_bootstrap_installs_every_plane_override(
         )
 
 
+def test_bootstrap_wires_write_planes_with_immutable_publisher(
+    app: FastAPI, settings: Settings, patch_qdrant_ok: Any
+) -> None:
+    """DATA-001 P2: the episodic + curated write-plane factories carry the app-lifetime coordinator AND
+    a per-collection immutable-vector publisher (the same object registered on the shared dispatcher),
+    so a vector-changing write publishes through the fenced seam instead of failing closed. Read-only
+    planes (concept) carry neither."""
+    from musubi.api.dependencies import get_lifecycle_service
+    from musubi.store.immutable_vectors import INTENT_KIND
+    from musubi.store.names import collection_for_plane
+
+    bootstrap_production_app(app, settings)
+    coordinator = app.dependency_overrides[get_lifecycle_service]()
+    episodic = app.dependency_overrides[get_episodic_plane]()
+    curated = app.dependency_overrides[get_curated_plane]()
+
+    # LOAD-BEARING: the shared-kind dispatcher must actually be REGISTERED on the coordinator, else every
+    # vector-changing write fails at drive time even though the publisher is injected.
+    assert INTENT_KIND in coordinator._intent_handlers, (
+        "bootstrap must register the immutable-vector dispatcher on the app coordinator"
+    )
+    assert episodic._coordinator is coordinator, (
+        "episodic plane must carry the app-lifetime coordinator"
+    )
+    assert curated._coordinator is coordinator, (
+        "curated plane must carry the app-lifetime coordinator"
+    )
+    assert episodic._vector_publisher is not None
+    assert episodic._vector_publisher._collection == collection_for_plane("episodic")
+    assert curated._vector_publisher is not None
+    assert curated._vector_publisher._collection == collection_for_plane("curated")
+    # a read-only plane is left unwired (no fenced-write path).
+    assert app.dependency_overrides[get_concept_plane]()._client is not None
+
+
 def test_bootstrap_installs_lifecycle_service_override(
     app: FastAPI, settings: Settings, patch_qdrant_ok: Any
 ) -> None:

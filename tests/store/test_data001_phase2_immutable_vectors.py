@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import QdrantClient, models
@@ -536,7 +536,7 @@ def _live_dense(qdrant: QdrantClient, collection: str, object_id: str) -> list[f
     assert pts
     vec = pts[0].vector
     dense = vec[DENSE_VECTOR_NAME] if isinstance(vec, dict) else vec
-    return [float(x) for x in dense]  # type: ignore[union-attr]
+    return [float(x) for x in cast("list[float]", dense)]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -807,7 +807,9 @@ def test_dangling_live_point_fails_closed(
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     pub.publish(coord, object_id="obj-dangle", namespace=_NS, content_payload=_content("body"))
-    live = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-dangle").live_point
+    _dangle_anchor = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-dangle")
+    assert _dangle_anchor is not None
+    live = _dangle_anchor.live_point
     assert live is not None
     # simulate a GC race / corruption: the committed content point vanishes but the pointer still names it.
     qdrant.delete(collection_name=collection, points_selector=[live])
@@ -831,7 +833,9 @@ def test_cross_object_live_point_fails_closed(
     pub.publish(coord, object_id="obj-b", namespace=_NS, content_payload=_content("b-body"))
     from musubi.store.immutable_vectors import read_anchor
 
-    b_live = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-b").live_point
+    _b_anchor = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-b")
+    assert _b_anchor is not None
+    b_live = _b_anchor.live_point
     # corrupt obj-a's anchor to point at obj-b's content point (a cross-object live_point).
     qdrant.set_payload(
         collection_name=collection,
@@ -1189,3 +1193,102 @@ def test_collection_aware_dispatch_routes_both_planes_and_rejects_unknown(
         )
     finally:
         _wipe_both()
+
+
+# --------------------------------------------------------------------------------------------------
+# 26. COLD START (deterministic, separate DBs): the runner's boot-registration helper must run BEFORE
+#     the first reconcile, else a durable pending intent from a prior crash is driven with no handler
+#     (Yua D ordering invariant). Exercises the REAL runner helper, so a runner regression is caught.
+# --------------------------------------------------------------------------------------------------
+def _seed_pending_episodic_intent(
+    qdrant: QdrantClient, collection: str, db: Path, oid: str
+) -> None:
+    """A prior process admitted a durable episodic intent, then crashed before driving it (PENDING)."""
+    from musubi.store.immutable_vectors import ImmutableVectorPublisher
+
+    crashed = LifecycleTransitionCoordinator(client=qdrant, db_path=db)
+    ImmutableVectorPublisher(
+        client=qdrant, embedder=FakeEmbedder(), collection=collection
+    ).admit_publish(crashed, object_id=oid, namespace=_NS, content_payload=_content("cold"))
+    del crashed
+
+
+def test_cold_start_positive_registration_before_first_reconcile_commits(
+    qdrant: QdrantClient, collection: str, tmp_path: Path
+) -> None:
+    import json
+
+    from musubi.lifecycle.runner import register_boot_intent_handlers
+    from musubi.store.immutable_vectors import INTENT_KIND, resolve_committed_content
+
+    cur_coll = collection_for_plane("curated")
+    cur_ns = "eric/data001p2/curated"
+
+    def _wipe_curated() -> None:
+        qdrant.delete(
+            collection_name=cur_coll,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=cur_ns)
+                        )
+                    ]
+                )
+            ),
+        )
+
+    _wipe_curated()
+    try:
+        db = tmp_path / "coldstart-pos.db"
+        # a prior process left BOTH an episodic and a curated durable intent pending (crash).
+        _seed_pending_episodic_intent(qdrant, collection, db, "cold-pos")
+        crashed = LifecycleTransitionCoordinator(client=qdrant, db_path=db)
+        crashed.enqueue_custom_intent(
+            kind=INTENT_KIND,
+            object_id="cold-pos-cur",
+            namespace=cur_ns,
+            collection=cur_coll,
+            patch_json=json.dumps(
+                {
+                    "descriptor": {
+                        "op": "set",
+                        "set_fields": {"title": "T", "content": "cur-cold"},
+                        "embed_kind": "curated",
+                    }
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+        del crashed
+
+        # RESTART: register ALL handlers via the runner's real helper BEFORE the first boot reconcile —
+        # the ONE dispatcher routes BOTH collections, so a single boot pass commits both.
+        coord = LifecycleTransitionCoordinator(client=qdrant, db_path=db)
+        register_boot_intent_handlers(
+            coord, qdrant=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path
+        )
+        coord.reconcile_once()  # the SINGLE boot reconcile
+        assert (resolve_or_none(qdrant, collection, "cold-pos") or {})["content"] == "cold", (
+            "the episodic pending intent must dispatch in the single boot pass"
+        )
+        assert (
+            resolve_committed_content(qdrant, cur_coll, namespace=cur_ns, object_id="cold-pos-cur")
+            or {}
+        )["content"] == "cur-cold", "the curated pending intent must dispatch in the same boot pass"
+    finally:
+        _wipe_curated()
+
+
+def test_cold_start_negative_no_handler_first_reconcile_cannot_commit(
+    qdrant: QdrantClient, collection: str, tmp_path: Path
+) -> None:
+    db = tmp_path / "coldstart-neg.db"
+    _seed_pending_episodic_intent(qdrant, collection, db, "cold-neg")
+    # RESTART with NO handler registered: the first boot reconcile cannot dispatch it.
+    coord = LifecycleTransitionCoordinator(client=qdrant, db_path=db)
+    assert coord.reconcile_once().finalized == 0
+    assert resolve_or_none(qdrant, collection, "cold-neg") is None, (
+        "with no handler the first reconcile must not commit the pending intent"
+    )
