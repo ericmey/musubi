@@ -433,7 +433,12 @@ class EpisodicPlane:
         and only by the proven owner (``update_vectors`` is unfenced); when existing content wins we
         leave the stored vectors untouched. ``existing_dense`` / ``existing_sparse`` (the probe's
         vectors) are no longer needed and are ignored — retained for call-site stability."""
-        del existing_dense, existing_sparse, dense, sparse  # recomputed by the publisher when needed.
+        del (
+            existing_dense,
+            existing_sparse,
+            dense,
+            sparse,
+        )  # recomputed by the publisher when needed.
 
         # DATA-001 P2 (Yua correction 2026-07-15): the durable immutable-vector intent must persist an
         # INTENDED MUTATION DESCRIPTOR (merge_strategy + the incoming new memory) and REBASE it on the

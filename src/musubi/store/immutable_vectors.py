@@ -17,7 +17,6 @@ import asyncio
 import concurrent.futures
 import json
 import secrets
-import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -104,6 +103,32 @@ def _anchor_filter(namespace: str, object_id: str) -> models.Filter:
     )
 
 
+def _legacy_conversion_filter(namespace: str, object_id: str, obs_version: int) -> models.Filter:
+    """Fence for the IN-PLACE conversion of a v1 legacy row INTO the v2 anchor (Yua item 1): target the
+    identity row (object_id+namespace, neither anchor nor content) AT the observed version, so a
+    concurrent Phase-1 bump matches zero and the op-token readback shows we lost -> retry. A
+    never-mutated legacy row carries NO ``version`` field (semantically 0); at ``obs_version == 0`` we
+    therefore admit version-absent-or-zero and EXCLUDE any positive version (a Phase-1 bump), rather than
+    an equality match that a version-less row could never satisfy."""
+    must: list[models.Condition] = [
+        models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+        models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+    ]
+    must_not: list[models.Condition] = [
+        models.FieldCondition(
+            key="point_kind", match=models.MatchAny(any=[ANCHOR_KIND, CONTENT_KIND])
+        )
+    ]
+    if obs_version == 0:
+        # absent-or-0 admitted; exclude version > 0 (a concurrent Phase-1 bump on the legacy row).
+        must_not.append(models.FieldCondition(key="version", range=models.Range(gt=0)))
+    else:
+        must.append(
+            models.FieldCondition(key="version", match=models.MatchValue(value=obs_version))
+        )
+    return models.Filter(must=must, must_not=must_not)
+
+
 def read_anchor(
     client: Any, collection: str, *, namespace: str, object_id: str
 ) -> AnchorView | None:
@@ -159,7 +184,12 @@ def resolve_committed_content(
     anchor's ``live_point`` MERGED WITH the anchor payload OVER it (the anchor is authoritative for
     every mutable field — Yua), or a v1 legacy self-pointer. A v2 anchor with an absent ``live_point``
     FAILS CLOSED (returns None). Because the anchor wins, a stale content-snapshot field can never
-    expose or hide a row."""
+    expose or hide a row.
+
+    The named content point must actually HYDRATE the committed object (Yua): a dangling pointer (no
+    such point / empty payload), or a corrupt/cross-object one (not ``point_kind=content``, or a
+    mismatched namespace/object_id), FAILS CLOSED — we never serve an anchor-only shell or borrow a
+    different row's payload under this anchor's identity."""
     recs, _ = client.scroll(
         collection_name=collection,
         scroll_filter=_anchor_filter(namespace, object_id),
@@ -172,7 +202,17 @@ def resolve_committed_content(
         if not live_point:
             return None  # v2 anchor, no committed pointer -> fail closed (never treated as legacy)
         pts = client.retrieve(collection_name=collection, ids=[live_point], with_payload=True)
-        content_payload = dict(pts[0].payload) if pts and pts[0].payload else {}
+        if not pts or not pts[0].payload:
+            return None  # dangling committed pointer -> fail closed (never an anchor-only shell)
+        content_payload = dict(pts[0].payload)
+        if (
+            content_payload.get("point_kind") != CONTENT_KIND
+            or content_payload.get("namespace") != anchor_payload.get("namespace")
+            or content_payload.get("object_id") != anchor_payload.get("object_id")
+        ):
+            return (
+                None  # corrupt / cross-object live_point -> fail closed (never borrow another row)
+            )
         return {**content_payload, **anchor_payload}  # anchor OVER content = authoritative mutable
     legacy = _read_legacy_v1(client, collection, namespace=namespace, object_id=object_id)
     if legacy is not None and legacy.payload:
@@ -247,6 +287,7 @@ class ImmutableVectorPublisher:
         self._collection = collection
         self._stall_after_staging = False  # fault-injection seams (tests only)
         self._fail_cleanup = False
+        self._inject_pre_publish: Any | None = None
 
     def register(self, coordinator: Any) -> None:
         coordinator.register_intent_handler(INTENT_KIND, self.apply)
@@ -256,6 +297,12 @@ class ImmutableVectorPublisher:
 
     def fail_cleanup_once(self) -> None:
         self._fail_cleanup = True
+
+    def inject_pre_publish_once(self, fn: Any) -> None:
+        """Test seam: run ``fn`` exactly once INSIDE apply, AFTER fresh has been read/rebased but BEFORE
+        the fenced write — the exact window a concurrent Phase-1 mutation would land in. Lets a test
+        prove the version fence / attributable readback without depending on real thread interleaving."""
+        self._inject_pre_publish = fn
 
     def _descriptor_json(self, descriptor: dict[str, Any]) -> str:
         return json.dumps({"descriptor": descriptor}, sort_keys=True, separators=(",", ":"))
@@ -326,15 +373,17 @@ class ImmutableVectorPublisher:
         if status == "at_capacity":
             raise ImmutableVectorPublishPending(f"outbox at capacity for {object_id!r}")
         if status != "admitted":
-            # another writer holds an active intent for this object -> read back or fail loud.
-            committed = resolve_committed_content(
-                self._client, self._collection, namespace=namespace, object_id=object_id
+            # ``already_active``: a DIFFERENT operation holds the active intent for this object (our opk is
+            # freshly random and was NOT inserted). NEVER return the current pre-mutation committed row as
+            # if THIS request landed — fail loud pending so the caller sees its write did not commit (Yua
+            # item 3). The other operation's durable intent will drive that object forward on its own.
+            raise ImmutableVectorPublishPending(
+                f"another intent is already active for {object_id!r}; this publish did not land"
             )
-            if committed is not None:
-                return committed
-            raise ImmutableVectorPublishPending(f"an intent is already active for {object_id!r}")
-        # Drive OUR intent inline, retrying under contention: a dual-fence conflict returns 'retry',
-        # the coordinator re-reads fresh each re-drive, so both changes converge (never uncommitted).
+        # Drive OUR intent inline, retrying under contention: a dual-fence conflict returns 'retry', and
+        # drive_intent bypasses the retry backoff for this explicit inline drive (Yua item 4) so the
+        # coordinator re-reads fresh and re-applies immediately — no production sleep. Both changes
+        # converge; a persistent conflict exhausts the bound and fails loud (durable intent remains).
         for _ in range(_SYNC_DRIVE_ATTEMPTS):
             report = coordinator.drive_intent(opk)
             if report.finalized:
@@ -345,7 +394,6 @@ class ImmutableVectorPublisher:
                     return committed
             if report.abandoned:
                 break  # terminal fence -> will never commit inline.
-            time.sleep(0.01)  # 'retry' outcome / backoff -> re-drive against the newer fresh state.
         raise ImmutableVectorPublishPending(
             f"vector publish for {object_id!r} not committed inline; durable intent remains for worker"
         )
@@ -363,24 +411,35 @@ class ImmutableVectorPublisher:
         anchor = read_anchor(
             self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
         )
-        # Idempotent replay: this operation already committed its pointer. Re-run cleanup only.
-        if anchor is not None and anchor.committed_operation_id == ctx.operation_key:
-            return self._cleanup_and_confirm(ctx.object_id, ctx.namespace, keep=anchor.live_point)
-
-        # REBASE ON FRESH AUTHORITATIVE STATE (Yua): read the current anchor-over-content (or v1), apply
-        # ONLY the intended generic ops, take lease/access fields from FRESH (never the caller patch),
-        # and decide content/vector-change HERE. A stale caller snapshot can never overwrite a
-        # concurrent unrelated mutation because we recompute against fresh + fence on the observed
-        # version below.
+        # Read the FRESH authoritative identity (anchor-over-content, or a v1 legacy row) ONCE — it drives
+        # both idempotent-replay detection and the rebase/observed-version fence below.
         fresh = resolve_committed_content(
             self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
         )
+        # Idempotent replay (crash after our commit, before FINAL) for BOTH v1 and v2, vector-change AND
+        # payload-only: every committed path stamps ``committed_operation_id``, so we re-detect OUR exact
+        # token on the identity row and re-run only cleanup — never a second apply (Yua item 2).
+        if fresh is not None and fresh.get("committed_operation_id") == ctx.operation_key:
+            return self._cleanup_and_confirm(
+                ctx.object_id, ctx.namespace, keep=fresh.get("live_point")
+            )
+
+        # REBASE ON FRESH AUTHORITATIVE STATE (Yua): apply ONLY the intended generic ops to fresh, take
+        # lease/access fields from FRESH (never the caller patch), and decide content/vector-change HERE.
+        # A stale caller snapshot can never overwrite a concurrent unrelated mutation because we recompute
+        # against fresh + fence on the observed version below.
         obs_version = int((fresh or {}).get("version", 0))
         obs_pv = anchor.pointer_version if anchor is not None else 0
         new_full, winning_content, content_changed = _rebase(descriptor, fresh)
         # never let a caller patch carry lease-owned fields onto the anchor.
         for f in _LEASE_OWNED_ON_ANCHOR:
             new_full.pop(f, None)
+
+        # test-only concurrency seam: land a mutation in the fresh-read -> fenced-write window.
+        if self._inject_pre_publish is not None:
+            fn = self._inject_pre_publish
+            self._inject_pre_publish = None
+            fn()
 
         if not content_changed:
             # PAYLOAD-ONLY (existing content won): narrow fenced set_payload on the identity row,
@@ -427,28 +486,38 @@ class ImmutableVectorPublisher:
             "version": obs_version + 1,
         }
         if anchor is None:
-            # First vector change / v1 bootstrap: fence the create on the legacy row's version by
-            # conditionally deleting it; a concurrent Phase-1 bump on the v1 row leaves it, and our
-            # readback then shows we did not win -> retry.
             legacy = _read_legacy_v1(
                 self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
             )
-            base_access = int((legacy.payload or {}).get("access_count", 0)) if legacy else 0
-            self._client.upsert(
-                collection_name=self._collection,
-                points=[
-                    models.PointStruct(
-                        id=anchor_point_id(ctx.namespace, ctx.object_id),
-                        payload={**publish, "access_count": base_access},
-                        vector={
-                            DENSE_VECTOR_NAME: [0.0] * len(dense),
-                            SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
-                        },
-                    )
-                ],
-            )
             if legacy is not None:
-                self._client.delete(collection_name=self._collection, points_selector=[legacy.id])
+                # IN-PLACE fenced conversion of the v1 row INTO the anchor — NEVER delete an unfenced
+                # legacy row (Yua item 1). The version-fenced set_payload matches zero if a concurrent
+                # Phase-1 bump moved the row's version, and the op-token readback below then shows we did
+                # not win -> retry against fresh. One row always represents the object (no two-identity
+                # window), so the leases' ``must_not content`` still targets exactly one row throughout.
+                # The converted row keeps its legacy vector; anchor-aware reads exclude it by point_kind
+                # (the universal anchor-never-ranks mechanism), so a real vector here cannot leak.
+                base_access = int((legacy.payload or {}).get("access_count", 0))
+                self._client.set_payload(
+                    collection_name=self._collection,
+                    payload={**publish, "access_count": base_access},
+                    points=_legacy_conversion_filter(ctx.namespace, ctx.object_id, obs_version),
+                )
+            else:
+                # Brand-new object (no legacy row): create the anchor separately with a zero vector.
+                self._client.upsert(
+                    collection_name=self._collection,
+                    points=[
+                        models.PointStruct(
+                            id=anchor_point_id(ctx.namespace, ctx.object_id),
+                            payload={**publish, "access_count": 0},
+                            vector={
+                                DENSE_VECTOR_NAME: [0.0] * len(dense),
+                                SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
+                            },
+                        )
+                    ],
+                )
         else:
             # Fenced pointer swap on BOTH observed pointer_version AND version (Yua dual fence): a
             # concurrent vector publish (pointer_version) OR Phase-1 payload mutation (version) matches
@@ -495,13 +564,16 @@ class ImmutableVectorPublisher:
         self, ctx: Any, anchor: AnchorView | None, new_full: dict[str, Any], obs_version: int
     ) -> str:
         """Existing content won -> only narrow payload fields changed. Fenced set_payload on the
-        identity row (anchor if v2, else the v1 row) gated on the observed version. No new content
-        point, no vector recompute. A concurrent version bump fails the fence -> retry."""
+        identity row (anchor if v2, else the v1 row) gated on the observed version, stamping OUR
+        ``committed_operation_id`` so success is ATTRIBUTABLE (Yua item 2): a concurrent writer that also
+        bumped version to ``obs+1`` leaves ITS token, not ours, so version equality alone would falsely
+        confirm. No new content point, no vector recompute. Losing the fence -> retry against fresh."""
         narrow = {
             **new_full,
             "object_id": ctx.object_id,
             "namespace": ctx.namespace,
             "version": obs_version + 1,
+            "committed_operation_id": ctx.operation_key,
         }
         must: list[models.Condition] = [
             models.FieldCondition(key="object_id", match=models.MatchValue(value=ctx.object_id)),
@@ -516,9 +588,14 @@ class ImmutableVectorPublisher:
         fresh = resolve_committed_content(
             self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
         )
-        if fresh is not None and int(fresh.get("version", -1)) == obs_version + 1:
+        # sole success signal: OUR exact token landed (a bare version==obs+1 could be a foreign writer).
+        if (
+            fresh is not None
+            and fresh.get("committed_operation_id") == ctx.operation_key
+            and int(fresh.get("version", -1)) == obs_version + 1
+        ):
             return "confirmed"
-        return "retry"  # a concurrent bump won the version -> recompute against fresh.
+        return "retry"  # a concurrent writer won the version -> recompute against fresh.
 
     def _cleanup_and_confirm(self, object_id: str, namespace: str, keep: str | None) -> str:
         """Cleanup is terminal correctness: confirm ONLY after superseded/loser content is gone. On
@@ -555,10 +632,13 @@ class ImmutableVectorPublisher:
         )
 
     def _delete_superseded_content(self, object_id: str, namespace: str, keep: str) -> None:
-        """Delete every content point for this object EXCEPT the committed one (``keep``)."""
-        recs, _ = self._client.scroll(
+        """Delete EVERY content point for this object except the committed one (``keep``) in ONE
+        server-side filtered delete (Yua item 5): ``must_not has_id(keep)`` excludes exactly the live
+        point, so a >256 fan-out is fully collected with no client-side ``limit``/pagination that could
+        silently orphan the tail past the first page."""
+        self._client.delete(
             collection_name=self._collection,
-            scroll_filter=models.Filter(
+            points_selector=models.Filter(
                 must=[
                     models.FieldCondition(
                         key="object_id", match=models.MatchValue(value=object_id)
@@ -569,14 +649,10 @@ class ImmutableVectorPublisher:
                     models.FieldCondition(
                         key="point_kind", match=models.MatchValue(value=CONTENT_KIND)
                     ),
-                ]
+                ],
+                must_not=[models.HasIdCondition(has_id=[keep])],
             ),
-            limit=256,
-            with_payload=False,
         )
-        losers = [r.id for r in recs if str(r.id) != keep]
-        if losers:
-            self._client.delete(collection_name=self._collection, points_selector=losers)
 
 
 __all__ = [

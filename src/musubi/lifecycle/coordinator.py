@@ -1373,19 +1373,28 @@ class LifecycleTransitionCoordinator:
             return (None, None)
         return payload.get("version"), payload.get("state")
 
-    def _claim(self, con: Any, opk: str, now: float, token: str) -> bool:
+    def _claim(
+        self, con: Any, opk: str, now: float, token: str, *, force_due: bool = False
+    ) -> bool:
         """Atomic guarded lease claim (R16): ONE UPDATE (on the caller's ``con``) stamping a fresh
         token on a DUE, unleased-or-expired row. ``rowcount == 1`` IS ownership — a NON-atomic
         check-then-update would race. The FULL due predicate is re-applied at the claim (not only at
         SELECT); an expired lease (``<= now``) is reclaimable while a valid one is exclusive (R17).
-        The caller commits."""
+        The caller commits.
+
+        ``force_due`` (DATA-001 P2, Yua item 4) drops ONLY the ``next_attempt_epoch`` backoff predicate,
+        for the explicit synchronous :meth:`drive_intent` path: an inline re-drive after a 'retry' must
+        re-apply immediately rather than wait out the backoff a background worker paces on. It NEVER
+        relaxes the lease-exclusivity guard, so a valid owner (the worker) still cannot be stolen."""
         expiry = now + self._lease_ttl
+        due = "" if force_due else "AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
+        params = (token, expiry, opk, now) if force_due else (token, expiry, opk, now, now)
         cur = con.execute(
             "UPDATE lifecycle_outbox SET lease_owner=?, lease_expires_epoch=? "
             "WHERE operation_key=? AND state IN ('PENDING','APPLIED') "
-            "AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
+            f"{due}"
             "AND (lease_owner IS NULL OR lease_expires_epoch <= ?)",
-            (token, expiry, opk, now, now),
+            params,
         )
         return bool(cur.rowcount == 1)
 
@@ -1607,7 +1616,8 @@ class LifecycleTransitionCoordinator:
         token = self._new_token()
         cc = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
-            got = self._claim(cc, opk, now, token)
+            # explicit inline drive == drive NOW: bypass the retry backoff (never the lease guard).
+            got = self._claim(cc, opk, now, token, force_due=True)
             cc.commit()
         finally:
             cc.close()

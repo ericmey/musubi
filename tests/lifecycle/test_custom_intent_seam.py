@@ -166,3 +166,33 @@ def test_drive_intent_touches_only_the_named_operation(
     # op-B stays PENDING (untouched) — the worker reconcile drives it.
     coord.reconcile_once()
     assert set(driven) == {"op-A", "op-B"}
+
+
+def test_drive_intent_bypasses_retry_backoff(client: QdrantClient, tmp_path: Path) -> None:
+    """DATA-001 P2, Yua item 4: an explicit inline ``drive_intent`` must re-apply a just-retried intent
+    IMMEDIATELY, bypassing the ``next_attempt_epoch`` backoff a background worker paces on — otherwise
+    the synchronous publish loop can never re-drive its own 'retry' without a production sleep. With a
+    huge backoff the future ``next_attempt_epoch`` would block a non-forced claim, so a second drive that
+    still FINALIZES proves the bypass (and that no lease guard was relaxed)."""
+    coord = LifecycleTransitionCoordinator(
+        client=client, db_path=tmp_path / "c.db", backoff_base_s=3600.0, backoff_max_s=3600.0
+    )
+    outcomes = iter(["retry", "confirmed"])
+
+    def _h(ctx: CustomIntentContext) -> str:
+        return next(outcomes)
+
+    coord.register_intent_handler("k", _h)
+    coord.enqueue_custom_intent(
+        kind="k", object_id="o1", namespace="t/p/e", collection="c", operation_key="op-1"
+    )
+    first = coord.drive_intent("op-1")  # handler returns 'retry' -> schedules next_attempt ~1h out
+    assert first.pending == 1 and first.finalized == 0
+    # a plain worker pass would skip it (backoff not elapsed) — prove that, then prove drive bypasses it.
+    assert coord.reconcile_once().finalized == 0, "worker must still honor the backoff window"
+    second = coord.drive_intent(
+        "op-1"
+    )  # explicit inline drive: bypass backoff, claim, re-apply NOW
+    assert second.finalized == 1, (
+        "drive_intent must bypass the retry backoff and finalize immediately"
+    )

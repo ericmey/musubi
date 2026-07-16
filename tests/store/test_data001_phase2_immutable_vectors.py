@@ -508,6 +508,24 @@ def _count_content_points(qdrant: QdrantClient, collection: str, object_id: str)
     return len(recs)
 
 
+def _content_point_ids(qdrant: QdrantClient, collection: str, object_id: str) -> list[str]:
+    from musubi.store.immutable_vectors import CONTENT_KIND
+
+    recs, _ = qdrant.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+                models.FieldCondition(
+                    key="point_kind", match=models.MatchValue(value=CONTENT_KIND)
+                ),
+            ]
+        ),
+        limit=1000,
+    )
+    return sorted(str(r.id) for r in recs)
+
+
 # --------------------------------------------------------------------------------------------------
 # 12. Synchronous publish(): committed return inline; non-committed raises + worker finishes the intent.
 # --------------------------------------------------------------------------------------------------
@@ -522,9 +540,10 @@ def test_publish_synchronous_committed_return_and_pending_raise(
     )
     assert committed["content"] == "sync"
     assert (resolve_or_none(qdrant, collection, "obj-sync") or {})["content"] == "sync"
-    # NOTE (handoff): bounded inline re-drive under contention needs drive_intent to bypass the
-    # 'retry' backoff so a transient stall is absorbed synchronously; that refinement + the persistent-
-    # fail -> pending-raise proof are tracked in the restart handoff.
+    # bounded inline re-drive under contention is now proven directly: drive_intent bypasses the 'retry'
+    # backoff (test_drive_intent_bypasses_retry_backoff) and the fence discriminators below converge only
+    # because of it. The persistent-fail -> pending-raise contract is covered by
+    # test_publish_fails_loud_when_another_intent_active.
 
 
 # --------------------------------------------------------------------------------------------------
@@ -573,3 +592,240 @@ def test_reinforce_rebases_on_fresh_unrelated_mutation_survives(
     assert sorted(committed["tags"]) == ["a", "b"]  # tag UNION
     assert committed["reinforcement_count"] == 1  # exact increment
     assert committed["importance"] == 9  # concurrent unrelated mutation SURVIVES (no stale clobber)
+
+
+# --------------------------------------------------------------------------------------------------
+# 14. v1 bootstrap is FENCED in place — a concurrent Phase-1 mutation in the window is never dropped.
+#     (Yua item 1: convert the legacy row via a version-fenced set_payload; never delete it unfenced.)
+# --------------------------------------------------------------------------------------------------
+def test_v1_bootstrap_in_place_fence_preserves_concurrent_mutation(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    import uuid
+
+    d0, s0 = _embed("orig-legacy")
+    qdrant.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid4()),
+                payload={
+                    "object_id": "obj-v1fence",
+                    "namespace": _NS,
+                    "content": "orig-legacy",
+                    "importance": 5,
+                    "state": "matured",
+                },
+                vector={
+                    DENSE_VECTOR_NAME: d0,
+                    SPARSE_VECTOR_NAME: models.SparseVector(
+                        indices=list(s0), values=list(s0.values())
+                    ),
+                },
+            )
+        ],
+    )
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+
+    def _concurrent_phase1_bump() -> None:
+        # a Phase-1 mutation lands on the still-legacy row in the fresh-read -> write window: it bumps the
+        # version AND an unrelated field. An UNFENCED legacy delete would destroy this; the version fence
+        # matches zero, forces a retry, and the re-drive rebases on this survivor.
+        qdrant.set_payload(
+            collection_name=collection,
+            payload={"version": 1, "importance": 9},
+            points=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value="obj-v1fence")
+                    )
+                ],
+                must_not=[
+                    models.FieldCondition(
+                        key="point_kind", match=models.MatchAny(any=["anchor", "content"])
+                    )
+                ],
+            ),
+        )
+
+    pub.inject_pre_publish_once(_concurrent_phase1_bump)
+    committed = pub.publish(
+        coord, object_id="obj-v1fence", namespace=_NS, content_payload=_content("new-body")
+    )
+    assert committed["content"] == "new-body"
+    assert committed["importance"] == 9, (
+        "an unfenced legacy delete would drop the concurrent Phase-1 mutation; the in-place version "
+        "fence must force a retry that rebases on it"
+    )
+    anchor = _anchor(qdrant, collection, "obj-v1fence")
+    assert anchor.vector_layout_version == 2 and anchor.live_point is not None
+    assert _count_content_points(qdrant, collection, "obj-v1fence") == 1
+
+
+# --------------------------------------------------------------------------------------------------
+# 15. Payload-only confirm is ATTRIBUTABLE (our op-token), not bare version==obs+1 (Yua item 2).
+# --------------------------------------------------------------------------------------------------
+def test_payload_only_confirm_is_attributable_not_version_equality(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.store.immutable_vectors import anchor_point_id
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(
+        coord,
+        object_id="obj-attrib",
+        namespace=_NS,
+        content_payload={"content": "orig-body", "importance": 1},
+    )
+    v = _anchor(qdrant, collection, "obj-attrib").version
+
+    def _foreign_bump() -> None:
+        # a FOREIGN writer reaches obs+1 first, with ITS OWN op token. A confirm keyed on version==obs+1
+        # alone would falsely attribute the foreign bump to us; only our exact token may confirm.
+        qdrant.set_payload(
+            collection_name=collection,
+            payload={
+                "version": v + 1,
+                "committed_operation_id": "foreign",
+                "importance": 7,
+            },
+            points=[anchor_point_id(_NS, "obj-attrib")],
+        )
+
+    pub.inject_pre_publish_once(_foreign_bump)
+    committed = pub.publish(
+        coord,
+        object_id="obj-attrib",
+        namespace=_NS,
+        content_payload={
+            "content": "orig-body",
+            "importance": 3,
+        },  # content unchanged -> payload-only
+    )
+    assert committed["importance"] == 3, (
+        "payload-only must confirm ONLY on our token; a foreign writer that also reached obs+1 must "
+        "force a retry that rebases and lands our value, never a false confirm on version equality"
+    )
+    assert committed["committed_operation_id"] != "foreign"
+
+
+# --------------------------------------------------------------------------------------------------
+# 16. already_active -> the inline publish FAILS LOUD, never returns the pre-mutation row (Yua item 3).
+# --------------------------------------------------------------------------------------------------
+def test_publish_fails_loud_when_another_intent_active(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.store.immutable_vectors import ImmutableVectorPublishPending
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(coord, object_id="obj-active", namespace=_NS, content_payload=_content("v1"))
+    # a second intent for the SAME object is admitted (worker-owned) and left ACTIVE (not reconciled).
+    assert (
+        pub.admit_publish(
+            coord, object_id="obj-active", namespace=_NS, content_payload=_content("worker")
+        )
+        == "admitted"
+    )
+    # an inline publish now must FAIL LOUD — never return the pre-mutation committed "v1" as if it landed.
+    with pytest.raises(ImmutableVectorPublishPending):
+        pub.publish(coord, object_id="obj-active", namespace=_NS, content_payload=_content("v2"))
+    assert (resolve_or_none(qdrant, collection, "obj-active") or {})["content"] == "v1", (
+        "a failed (pending) publish must not have mutated the committed content"
+    )
+
+
+# --------------------------------------------------------------------------------------------------
+# 17. Cleanup collects EVERY superseded content point, past the first 256-page (Yua item 5).
+# --------------------------------------------------------------------------------------------------
+def test_cleanup_deletes_all_superseded_beyond_256(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    import uuid
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(coord, object_id="obj-big", namespace=_NS, content_payload=_content("v1-body"))
+    # stage 300 stray/superseded content points (a large historical fan-out) directly.
+    d, _ = _embed("stray")
+    strays = [
+        models.PointStruct(
+            id=str(uuid.uuid4()),
+            payload={"object_id": "obj-big", "namespace": _NS, "point_kind": "content"},
+            vector={
+                DENSE_VECTOR_NAME: d,
+                SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
+            },
+        )
+        for _ in range(300)
+    ]
+    qdrant.upsert(collection_name=collection, points=strays)
+    # a superseding publish must GC EVERY superseded content point, not only the first 256-limit page.
+    pub.publish(
+        coord,
+        object_id="obj-big",
+        namespace=_NS,
+        content_payload=_content("v2-body-that-is-longer"),
+    )
+    # not count==1 alone (Yua): the ONE survivor must BE the committed keep point, and it must still
+    # exist and hydrate — every OTHER content point gone, the live pointer intact.
+    anchor = _anchor(qdrant, collection, "obj-big")
+    assert anchor.live_point is not None
+    survivors = _content_point_ids(qdrant, collection, "obj-big")
+    assert survivors == [anchor.live_point], (
+        f"exactly the committed keep point must survive; got {survivors} vs keep {anchor.live_point}"
+    )
+    keep_pts = qdrant.retrieve(
+        collection_name=collection, ids=[anchor.live_point], with_payload=True
+    )
+    assert keep_pts and keep_pts[0].payload, "the committed keep point must still exist and hydrate"
+
+
+# --------------------------------------------------------------------------------------------------
+# 18. A DANGLING committed pointer (live_point names no existing content point) FAILS CLOSED (Yua item 6).
+# --------------------------------------------------------------------------------------------------
+def test_dangling_live_point_fails_closed(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.store.immutable_vectors import read_anchor
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(coord, object_id="obj-dangle", namespace=_NS, content_payload=_content("body"))
+    live = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-dangle").live_point
+    assert live is not None
+    # simulate a GC race / corruption: the committed content point vanishes but the pointer still names it.
+    qdrant.delete(collection_name=collection, points_selector=[live])
+    assert resolve_or_none(qdrant, collection, "obj-dangle") is None, (
+        "a dangling committed pointer must fail closed, never serve the anchor-only shell"
+    )
+
+
+# --------------------------------------------------------------------------------------------------
+# 19. A CROSS-OBJECT / corrupt live_point FAILS CLOSED — never borrow another row's payload (Yua item 6).
+# --------------------------------------------------------------------------------------------------
+def test_cross_object_live_point_fails_closed(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    from musubi.store.immutable_vectors import anchor_point_id
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    # two distinct committed objects, each with its own anchor + content point.
+    pub.publish(coord, object_id="obj-a", namespace=_NS, content_payload=_content("a-body"))
+    pub.publish(coord, object_id="obj-b", namespace=_NS, content_payload=_content("b-body"))
+    from musubi.store.immutable_vectors import read_anchor
+
+    b_live = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-b").live_point
+    # corrupt obj-a's anchor to point at obj-b's content point (a cross-object live_point).
+    qdrant.set_payload(
+        collection_name=collection,
+        payload={"live_point": b_live},
+        points=[anchor_point_id(_NS, "obj-a")],
+    )
+    assert resolve_or_none(qdrant, collection, "obj-a") is None, (
+        "a live_point whose content belongs to another object must fail closed, never be served as "
+        "obj-a's committed content under obj-a's anchor identity"
+    )
