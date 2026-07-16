@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.17.11](https://github.com/ericmey/musubi/compare/v1.17.10...v1.17.11) (2026-07-16)
+
+
+### Documentation
+
+* **data001:** mark Phase 2 reviewed and done ([#530](https://github.com/ericmey/musubi/issues/530)) ([#590](https://github.com/ericmey/musubi/issues/590)) ([f8310a9](https://github.com/ericmey/musubi/commit/f8310a90cf7cc0cef5fc49189c6e6d6ef1acc3bc))
+* **integrity:** reconcile final remediation board ([#588](https://github.com/ericmey/musubi/issues/588)) ([68cccc5](https://github.com/ericmey/musubi/commit/68cccc54e4074ebe86b61eca550992d329b3b656))
+
 ## [1.17.10](https://github.com/ericmey/musubi/compare/v1.17.9...v1.17.10) (2026-07-16)
 
 
