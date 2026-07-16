@@ -1,6 +1,6 @@
 ---
 owner: aoi
-status: in-progress
+status: in-review
 issue: 530
 title: "Slice: DATA-001 Phase 2 — immutable vectors + fenced committed pointer"
 slice_id: slice-data001-phase2-immutable-vectors
@@ -9,7 +9,7 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-progress
+  - status/in-review
   - type/slice
 updated: 2026-07-16
 reviewed: false
@@ -251,3 +251,17 @@ Owned by this coupled slice (no follow-up Issue). **All units DONE + proven:**
 Inventory: all 19 original seams + D1 reconciled to **DONE + proven** in
 `docs/Musubi/13-decisions/data001-phase2-identity-consumer-inventory.md`. Test Contract entries 1–92
 above. This slice is ready for handoff to review (no self-merge).
+
+## Work log
+
+- **2026-07-16 — handoff to review (in-progress → in-review).** All units landed and proven at
+  `26be18b`: invariant core + path-audit corrections + embed_kind projection; unit D (three write
+  compositions inject the publisher); unit A-rest (resolve-before-validate identity reads); unit C
+  (full-layout episodic delete); unit B (episodic/curated `query` + dedup + vault seams #8/#9/#12 +
+  collection-gated `hybrid` + anchor-aware `get()` + watcher `invalid_row` + discovered D1
+  curated-supersession-over-v2-anchor fix). Current main (ING-002) integrated once at `590e793`; the 22
+  merge-exposed failures resolved as test-truth corrections (no src weakened) — including the RET-003 B1
+  fail-loud → ranked-skip supersession recorded in ADR 0035. Gates at `26be18b`: `make check` exit 0
+  (2424 passed), tc-coverage 96/96, agent-check 0 errors, remote CI check pass. Test Contract 1–96.
+  Implementer (Aoi) APPROVE recorded; four-way independent co-signature ceremony in progress. No
+  self-merge.
