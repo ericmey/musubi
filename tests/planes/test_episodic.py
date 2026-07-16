@@ -996,17 +996,18 @@ async def test_intrabatch_dedup_sequential_duplicate(
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_intrabatch_dedup_prefers_best_score_and_tie_breaks(
     plane: EpisodicPlane, ns: str, qdrant: QdrantClient
 ) -> None:
-    # Create an independent embedder that allows us to craft exact similarities.
+    # Use identical compatible content for persisted/pending/candidate to bypass the factual compatibility constraint
+    # naturally without monkey-patching. The geometry will keep earlier rows below threshold vs persisted,
+    # making candidate score .707 vs persisted and .819 vs pending_strong.
     from musubi.embedding.base import Embedder
 
     class ScoreEmbedder(Embedder):
         def __init__(self) -> None:
             self._idx = 0
-            # Order: persisted_near, pending_weak, pending_strong, candidate
-            # Then seq: persisted_near, pw, ps, cand
             import math
 
             def v(deg: float) -> list[float]:
@@ -1014,15 +1015,13 @@ async def test_intrabatch_dedup_prefers_best_score_and_tie_breaks(
                 return [math.cos(r), math.sin(r)] + [0.0] * 1022
 
             self._vectors = [
-                # First run
-                v(0),  # persisted_near
-                v(-80),  # pending_weak
-                v(80),  # pending_strong
-                v(45),  # candidate (matches strong 0.819, near 0.707, weak -0.57)
-                # Seq run
+                # persisted_near
                 v(0),
+                # pending_weak
                 v(-80),
+                # pending_strong
                 v(80),
+                # candidate
                 v(45),
             ]
 
@@ -1041,7 +1040,7 @@ async def test_intrabatch_dedup_prefers_best_score_and_tie_breaks(
 
     test_plane = EpisodicPlane(client=plane._client, embedder=ScoreEmbedder(), dedup_threshold=0.5)
 
-    persisted_near = _make("p_near", ns)
+    persisted_near = _make("identical content", ns)
     persisted_near.object_id = "000000000000000000000000001"
     await test_plane.create(persisted_near)
 
@@ -1052,29 +1051,18 @@ async def test_intrabatch_dedup_prefers_best_score_and_tie_breaks(
         points=[test_plane._client.scroll(collection_name="musubi_episodic")[0][0].id],
     )
 
-    pending_weak = _make("p_weak", ns)
+    pending_weak = _make("identical content", ns)
     pending_weak.object_id = "000000000000000000000000002"
 
-    pending_strong = _make("p_strong", ns)
+    pending_strong = _make("identical content", ns)
     pending_strong.object_id = "000000000000000000000000003"
 
-    candidate = _make("candidate", ns)
-
-    # We must patch factual compatibility so they can merge despite having different content,
-    # otherwise the identical content would cause pending_weak and pending_strong to merge
-    # into persisted_near during their OWN insert iterations.
-    import musubi.planes.episodic.plane
-
-    original_compat = musubi.planes.episodic.plane._is_factually_compatible
-    musubi.planes.episodic.plane._is_factually_compatible = lambda a, b: True
+    candidate = _make("identical content", ns)
 
     # Run batch
     # Candidate matches pending_weak (-0.57 < 0.5), persisted_near (0.707 >= 0.5), pending_strong (0.819 >= 0.5)
     # It must pick pending_strong!
-    try:
-        res = await test_plane.batch_create([pending_weak, pending_strong, candidate])
-    finally:
-        musubi.planes.episodic.plane._is_factually_compatible = original_compat
+    res = await test_plane.batch_create([pending_weak, pending_strong, candidate])
 
     # Ensure they map properly
     assert len(res) == 3
@@ -1095,12 +1083,35 @@ async def test_intrabatch_dedup_prefers_best_score_and_tie_breaks(
 async def test_intrabatch_dedup_sequential_tiebreak_equal_score(
     plane: EpisodicPlane, ns: str, qdrant: QdrantClient
 ) -> None:
-    # A smaller dedicated test for tie breaks.
+    # A valid tie fixture: no persisted row; pending vectors at 0 and 100 degrees (mutual cosine < .5),
+    # candidate at 50 degrees (equal .643 to both), identical factual content.
+    # Assert the documented stable object_id choice (highest ID).
     from musubi.embedding.base import Embedder
 
     class TieEmbedder(Embedder):
+        def __init__(self) -> None:
+            self._idx = 0
+            import math
+
+            def v(deg: float) -> list[float]:
+                r = math.radians(deg)
+                return [math.cos(r), math.sin(r)] + [0.0] * 1022
+
+            self._vectors = [
+                # pending 1 (0 degrees)
+                v(0),
+                # pending 2 (100 degrees)
+                v(100),
+                # candidate (50 degrees)
+                v(50),
+            ]
+
         async def embed_dense(self, texts: list[str]) -> list[list[float]]:
-            return [[1.0, 0.0] + [0.0] * 1022 for _ in texts]
+            res = []
+            for _ in texts:
+                res.append(self._vectors[self._idx])
+                self._idx += 1
+            return res
 
         async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
             return [{} for _ in texts]
@@ -1121,10 +1132,108 @@ async def test_intrabatch_dedup_sequential_tiebreak_equal_score(
     res = await test_plane.batch_create([m1, m2, m3])
 
     assert len(res) == 3
-    assert res[0].object_id == m1.object_id
-    assert res[0].reinforcement_count == 2
-    assert res[1].object_id == m1.object_id
-    assert res[1].reinforcement_count == 2
+    # m1 -> fresh (count 0)
+    # m2 -> fresh (count 0), cos(0, 100) = -0.173 < 0.5
+    # m3 -> matches m1 (cos=0.643) and m2 (cos=0.643).
+    # Picks highest object_id, which is m2!
 
-    assert res[2].object_id == m1.object_id
-    assert res[2].reinforcement_count == 2
+    assert res[0].object_id == m1.object_id
+    assert res[0].reinforcement_count == 0
+    assert res[1].object_id == m2.object_id
+    assert res[1].reinforcement_count == 1
+
+    assert res[2].object_id == m2.object_id
+    assert res[2].reinforcement_count == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_create_enforces_100_item_limit(plane: EpisodicPlane, ns: str) -> None:
+    mems = [_make(f"item {i}", ns) for i in range(101)]
+    with pytest.raises(ValueError, match="exceeds maximum batch size of 100"):
+        await plane.batch_create(mems)
+
+
+@pytest.mark.asyncio
+async def test_batch_vs_sequential_multiple_clusters(
+    plane: EpisodicPlane, qdrant: QdrantClient
+) -> None:
+    # Batch of 4 items: 2 near A, 2 near B.
+    ns_batch = "eric/ops/episodic"
+    m_a1 = _make("Cluster A text is this one", ns_batch)
+    m_a2 = _make("Cluster A text is this one", ns_batch)
+    m_b1 = _make("Cluster B content is here", ns_batch)
+    m_b2 = _make("Cluster B content is here", ns_batch)
+
+    res_batch = await plane.batch_create([m_a1, m_a2, m_b1, m_b2])
+
+    ns_seq = "yua/ops/episodic"
+    s_a1 = _make("Cluster A text is this one", ns_seq)
+    s_a2 = _make("Cluster A text is this one", ns_seq)
+    s_b1 = _make("Cluster B content is here", ns_seq)
+    s_b2 = _make("Cluster B content is here", ns_seq)
+
+    res_s1 = await plane.create(s_a1)
+    res_s2 = await plane.create(s_a2)
+    res_s3 = await plane.create(s_b1)
+    res_s4 = await plane.create(s_b2)
+    res_seq = [res_s1, res_s2, res_s3, res_s4]
+
+    assert len(res_batch) == 4
+    assert res_batch[0].object_id == res_batch[1].object_id
+    assert res_batch[2].object_id == res_batch[3].object_id
+    assert res_batch[0].object_id != res_batch[2].object_id
+
+    assert res_batch[1].reinforcement_count == 1
+    assert res_batch[3].reinforcement_count == 1
+
+    assert res_seq[0].object_id == res_seq[1].object_id
+    assert res_seq[2].object_id == res_seq[3].object_id
+    assert res_seq[1].reinforcement_count == 1
+    assert res_seq[3].reinforcement_count == 1
+
+    from qdrant_client import models
+
+    # DB count check
+    b_count = qdrant.count(
+        collection_name="musubi_episodic",
+        count_filter=models.Filter(
+            must=[models.FieldCondition(key="namespace", match=models.MatchValue(value=ns_batch))]
+        ),
+        exact=True,
+    ).count
+    s_count = qdrant.count(
+        collection_name="musubi_episodic",
+        count_filter=models.Filter(
+            must=[models.FieldCondition(key="namespace", match=models.MatchValue(value=ns_seq))]
+        ),
+        exact=True,
+    ).count
+    assert b_count == 2
+    assert s_count == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_vs_sequential_permuted_order(
+    plane: EpisodicPlane, qdrant: QdrantClient
+) -> None:
+    ns_batch = "astra/ops/episodic"
+    m_a1 = _make("Cluster A", ns_batch)
+    m_b1 = _make("Cluster B", ns_batch)
+    m_a2 = _make("Cluster A", ns_batch)
+
+    res_batch = await plane.batch_create([m_a1, m_b1, m_a2])
+
+    assert len(res_batch) == 3
+    assert res_batch[0].object_id == res_batch[2].object_id
+    assert res_batch[0].object_id != res_batch[1].object_id
+    assert res_batch[2].reinforcement_count == 1
+
+    ns_seq = "yua/ops/episodic"
+    s_a1 = _make("Cluster A", ns_seq)
+    s_b1 = _make("Cluster B", ns_seq)
+    s_a2 = _make("Cluster A", ns_seq)
+    res_seq = [await plane.create(s_a1), await plane.create(s_b1), await plane.create(s_a2)]
+
+    assert len(res_seq) == 3
+    assert res_seq[0].object_id == res_seq[2].object_id
+    assert res_seq[2].reinforcement_count == 1

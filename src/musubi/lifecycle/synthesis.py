@@ -97,15 +97,6 @@ class MemoryWithVector:
     vector: list[float]
 
 
-def _cosine_similarity_removed(v1: list[float], v2: list[float]) -> float:
-    dot = sum(a * b for a, b in zip(v1, v2, strict=True))
-    mag1 = sum(a * a for a in v1) ** 0.5
-    mag2 = sum(a * a for a in v2) ** 0.5
-    if mag1 == 0 or mag2 == 0:
-        return 0.0
-    return float(dot / (mag1 * mag2))
-
-
 def _threshold_cluster(
     items: list[MemoryWithVector], threshold: float
 ) -> list[list[MemoryWithVector]]:

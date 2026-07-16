@@ -33,9 +33,13 @@ Fix the `batch_create` shared seam to deduplicate within the current in-flight b
   - `docs/Musubi/_slices/slice-ing002-intrabatch-dedup.md`
 
 ## Test Contract
-1. `test_batch_create_intra_batch_exact_duplicate`
-2. `test_batch_create_intra_batch_normalized_duplicate`
-3. `test_batch_create_intra_batch_rejects_factual_incompatibility`
-4. `test_batch_create_cross_namespace_isolation`
+1. `test_batch_create_intra_batch_rejects_factual_incompatibility`
+2. `test_batch_create_cross_namespace_isolation`
+3. `test_intrabatch_dedup_sequential_duplicate`
+4. `test_intrabatch_dedup_prefers_best_score_and_tie_breaks`
+5. `test_batch_create_enforces_100_item_limit`
+6. `test_batch_vs_sequential_multiple_clusters`
+7. `test_batch_vs_sequential_permuted_order`
+8. `test_intrabatch_dedup_sequential_tiebreak_equal_score`
 
 ## Work log

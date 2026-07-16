@@ -270,6 +270,9 @@ class EpisodicPlane:
         if not memories:
             return []
 
+        if len(memories) > 100:
+            raise ValueError("batch_create exceeds maximum batch size of 100")
+
         # Per-row validation — same as create(). Fail fast on the whole
         # batch if any row is malformed; partial success would be harder
         # to reason about for callers.
@@ -310,6 +313,8 @@ class EpisodicPlane:
         # Dict maps object_id -> (Memory, dense, sparse) for newly created rows in the loop.
         pending_batch: dict[str, tuple[EpisodicMemory, list[float], dict[int, float]]] = {}
 
+        import math
+
         from musubi.embedding.cosine import cosine_similarity
 
         for memory, dense, sparse in zip(memories, dense_batch, sparse_batch, strict=True):
@@ -325,9 +330,9 @@ class EpisodicPlane:
                 # Ensure sequential semantic choice: keep the highest-scoring candidate available
                 # with a deterministic tie-break based on object_id to ensure order independence.
                 if score >= self._dedup_threshold and (
-                    score > intra_score
+                    (score > intra_score and not math.isclose(score, intra_score, abs_tol=1e-6))
                     or (
-                        score == intra_score
+                        math.isclose(score, intra_score, abs_tol=1e-6)
                         and intra_found
                         and p_mem.object_id > intra_found[0].object_id
                     )
@@ -343,8 +348,10 @@ class EpisodicPlane:
             # Tie-breaker between Qdrant hit and Intra-batch hit:
             if qdrant_found is not None:
                 q_mem, q_dense, _q_sparse, q_score = qdrant_found
-                if q_score > intra_score or (
-                    q_score == intra_score
+                if (
+                    q_score > intra_score and not math.isclose(q_score, intra_score, abs_tol=1e-6)
+                ) or (
+                    math.isclose(q_score, intra_score, abs_tol=1e-6)
                     and intra_found
                     and q_mem.object_id > intra_found[0].object_id
                 ):
