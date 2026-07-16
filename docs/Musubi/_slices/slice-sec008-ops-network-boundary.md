@@ -1,14 +1,14 @@
 ---
 title: "Slice: SEC-008 — Ops Endpoint Network Boundary"
 slice_id: slice-sec008-ops-network-boundary
-status: in-review
+status: done
 owner: yua
 phase: "8-ops"
 section: _slices
 type: slice
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -56,3 +56,7 @@ and does not authorize any mutating or debug endpoint.
 - Added structural CI contracts over the actual deployment sources of truth.
 - Full repository gate: 2399 passed, 195 skipped, 5 xfailed; ruff, mypy,
   coverage, diff check, agent-check, and Closure Rule are green.
+- Tama independently reviewed exact head `debbd92`, verified all five contract
+  points against the router and deployed boundary, and proved each of the four
+  structural tests fails when its protected invariant is weakened. Verdict:
+  **APPROVE**.
