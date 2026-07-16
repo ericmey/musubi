@@ -1493,6 +1493,92 @@ def test_artifact_purge_requires_operator(
     assert r.status_code == 403
 
 
+def test_artifact_purge_truthful_and_idempotent(
+    client: TestClient,
+    api_settings: object,
+    qdrant: object,
+) -> None:
+    import io
+
+    from qdrant_client import models
+
+    from tests.api.conftest import mint_token
+
+    # 1. Create artifact with rw token
+    namespace = "eric/ops/artifact"
+    rw_token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
+    file_bytes = b"blob data"
+    r = client.post(
+        "/v1/artifacts",
+        headers={"Authorization": f"Bearer {rw_token}"},
+        data={
+            "namespace": namespace,
+            "title": "purge-test",
+            "content_type": "text/plain",
+        },
+        files={"file": ("test.txt", io.BytesIO(file_bytes), "text/plain")},
+    )
+    assert r.status_code == 202
+    obj_id = r.json()["object_id"]
+
+    # 2. Inject a chunk into qdrant to prove chunks are deleted
+    chunks_col = "musubi_artifact_chunks"
+
+
+    # Just upsert a dummy point with artifact_id payload
+    import uuid
+
+    from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+    from musubi.types.common import generate_ksuid
+    dummy_id = str(uuid.uuid5(uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000004"), generate_ksuid()))
+    qdrant.upsert(
+        collection_name=chunks_col,
+        points=[
+            models.PointStruct(
+                id=dummy_id,
+                payload={"artifact_id": obj_id, "namespace": namespace},
+                vector={
+                    DENSE_VECTOR_NAME: [0.0]*1024,
+                    SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[])
+                }
+            )
+        ]
+    )
+
+    # Verify things exist
+    assert getattr(api_settings, "artifact_blob_path").joinpath(namespace, obj_id).exists()
+    head_res = qdrant.scroll(collection_name="musubi_artifact", scroll_filter=models.Filter(must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]))[0]
+    assert len(head_res) == 1
+    chunks_res = qdrant.scroll(collection_name=chunks_col, scroll_filter=models.Filter(must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]))[0]
+    assert len(chunks_res) == 1
+
+    # 3. Purge with operator token
+    op_token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])  # type: ignore[arg-type]
+    r_purge = client.post(
+        f"/v1/artifacts/{obj_id}/purge",
+        headers={"Authorization": f"Bearer {op_token}"},
+        params={"namespace": namespace},
+    )
+    assert r_purge.status_code == 200
+    assert r_purge.json() == {"status": "purged"}
+
+    # 4. Verify deletions
+    assert getattr(api_settings, "artifact_blob_path").joinpath(namespace, obj_id).exists() is False
+    head_res_after = qdrant.scroll(collection_name="musubi_artifact", scroll_filter=models.Filter(must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]))[0]
+    assert len(head_res_after) == 0
+    chunks_res_after = qdrant.scroll(collection_name=chunks_col, scroll_filter=models.Filter(must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]))[0]
+    assert len(chunks_res_after) == 0
+
+    # 5. Retry idempotent
+    r_purge_retry = client.post(
+        f"/v1/artifacts/{obj_id}/purge",
+        headers={"Authorization": f"Bearer {op_token}"},
+        params={"namespace": namespace},
+    )
+    assert r_purge_retry.status_code == 200
+    assert r_purge_retry.json() == {"status": "purged"}
+
+
 def test_rate_limit_resets_per_minute_window(
     client: TestClient,
     valid_token: str,

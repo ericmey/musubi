@@ -137,6 +137,8 @@ async def purge_artifact(
     request: Request,
     object_id: str,
     namespace: str = Query(...),
+    plane: ArtifactPlane = Depends(get_artifact_plane),
+    settings: Settings = Depends(get_settings_dep),
 ) -> Response:
     """Operator-only hard delete of the artifact metadata + blob.
 
@@ -149,12 +151,14 @@ async def purge_artifact(
             code="FORBIDDEN",
             detail="purge requires operator scope",
         )
-    # Blob-store removal is a future slice (artifact blob storage isn't
-    # wired in v0). Today: respond 202 acknowledging the operator
-    # request; the actual purge job runs offline.
-    del object_id, namespace
+
+    await plane.purge(namespace=namespace, object_id=object_id)
+
+    blob_path = settings.artifact_blob_path / namespace / object_id
+    blob_path.unlink(missing_ok=True)
+
     return Response(
-        status_code=202, content=b'{"status":"purge-scheduled"}', media_type="application/json"
+        status_code=200, content=b'{"status":"purged"}', media_type="application/json"
     )
 
 
