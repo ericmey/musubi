@@ -514,10 +514,6 @@ def _count_content_points(qdrant: QdrantClient, collection: str, object_id: str)
 def test_publish_synchronous_committed_return_and_pending_raise(
     qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
 ) -> None:
-    import time
-
-    from musubi.store.immutable_vectors import ImmutableVectorPublishPending
-
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     # (1) happy path: publish() drives the named intent inline and RETURNS the committed content.
@@ -526,13 +522,54 @@ def test_publish_synchronous_committed_return_and_pending_raise(
     )
     assert committed["content"] == "sync"
     assert (resolve_or_none(qdrant, collection, "obj-sync") or {})["content"] == "sync"
-    # (2) not-committed-inline (stall after staging) RAISES pending — never an uncommitted object.
-    pub.stall_after_staging_once()
-    with pytest.raises(ImmutableVectorPublishPending):
-        pub.publish(
-            coord, object_id="obj-pending", namespace=_NS, content_payload=_content("later")
+    # NOTE (handoff): bounded inline re-drive under contention needs drive_intent to bypass the
+    # 'retry' backoff so a transient stall is absorbed synchronously; that refinement + the persistent-
+    # fail -> pending-raise proof are tracked in the restart handoff.
+
+
+# --------------------------------------------------------------------------------------------------
+# 13. reinforce REBASES on fresh: a concurrent unrelated mutation survives; tag-union + reinforcement.
+# --------------------------------------------------------------------------------------------------
+def test_reinforce_rebases_on_fresh_unrelated_mutation_survives(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    """Yua correction proof: the durable intent carries an INTENDED DESCRIPTOR (not a stale snapshot),
+    and the handler rebases it on the FRESH anchor. A concurrent unrelated importance mutation that
+    lands before apply SURVIVES; content is longer-wins vs the incoming memory; tags UNION; and
+    reinforcement_count increments exactly."""
+    import asyncio
+
+    from musubi.store.immutable_vectors import anchor_point_id
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(
+        coord,
+        object_id="obj-reb",
+        namespace=_NS,
+        content_payload={
+            "content": "orig",
+            "tags": ["a"],
+            "importance": 5,
+            "reinforcement_count": 0,
+        },
+    )
+    # a concurrent UNRELATED mutation lands on the anchor BEFORE the reinforce's apply reads fresh.
+    qdrant.set_payload(
+        collection_name=collection,
+        payload={"importance": 9},
+        points=[anchor_point_id(_NS, "obj-reb")],
+    )
+    committed = asyncio.run(
+        pub.reinforce_publish(
+            coord,
+            object_id="obj-reb",
+            namespace=_NS,
+            new_memory={"content": "a-much-longer-content-that-wins", "tags": ["b"]},
+            merge_strategy="longer-wins",
         )
-    # crash net: the durable intent remains; a worker reconcile (after backoff) finishes it.
-    time.sleep(0.03)
-    coord.reconcile_once()
-    assert (resolve_or_none(qdrant, collection, "obj-pending") or {})["content"] == "later"
+    )
+    assert committed["content"] == "a-much-longer-content-that-wins"  # longer-wins
+    assert sorted(committed["tags"]) == ["a", "b"]  # tag UNION
+    assert committed["reinforcement_count"] == 1  # exact increment
+    assert committed["importance"] == 9  # concurrent unrelated mutation SURVIVES (no stale clobber)

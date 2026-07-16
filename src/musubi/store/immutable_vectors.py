@@ -17,6 +17,7 @@ import asyncio
 import concurrent.futures
 import json
 import secrets
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -26,7 +27,19 @@ from qdrant_client import models
 from musubi.embedding.base import Embedder
 from musubi.planes.episodic.plane import _sparse_to_model
 from musubi.store.memory_serialization import LEASE_OWNED_FIELDS
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.store.specs import (
+    DENSE_VECTOR_NAME,
+    POINT_KIND_CONTENT,
+    POINT_KIND_FIELD,
+    SPARSE_VECTOR_NAME,
+)
+from musubi.types.common import epoch_of, utc_now
+
+# must_not condition targeting the AUTHORITATIVE identity row (never a content snapshot).
+_EXCLUDE_CONTENT_COND: list[models.Condition] = [
+    models.FieldCondition(key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT))
+]
+_SYNC_DRIVE_ATTEMPTS = 8  # bounded inline re-drives to commit synchronously under contention
 
 # Fields the anchor NEVER stamps on a publish — they are owned by the RET-008 access lease and the
 # Phase-1 mutation lease, which write them on the anchor directly. A partial set_payload that omits
@@ -167,6 +180,64 @@ def resolve_committed_content(
     return None
 
 
+def _parse_descriptor(patch_json: str | None) -> dict[str, Any] | None:
+    """The durable intent payload is an INTENDED MUTATION DESCRIPTOR (never a full snapshot)."""
+    if not patch_json:
+        return None
+    try:
+        outer = json.loads(patch_json)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    desc = outer.get("descriptor") if isinstance(outer, dict) else None
+    if not isinstance(desc, dict) or desc.get("op") not in ("reinforce", "set"):
+        return None
+    return desc
+
+
+def _pick_content(existing: str, incoming: str, strategy: str) -> str:
+    """Content winner for a reinforce. ``longer-wins``: the longer content wins, ties keep existing."""
+    if strategy == "longer-wins":
+        return incoming if len(incoming) > len(existing) else existing
+    return incoming  # default: incoming wins
+
+
+def _rebase(
+    descriptor: dict[str, Any], fresh: dict[str, Any] | None
+) -> tuple[dict[str, Any], str, bool]:
+    """Apply the intended generic ops to the FRESH authoritative payload. Returns
+    ``(new_full_payload, winning_content, content_changed)``. Fields not touched by the op are
+    inherited from ``fresh`` unchanged — so a concurrent unrelated mutation already in ``fresh``
+    survives. Lease/access fields are inherited from fresh and stripped by the caller before write."""
+    base = dict(fresh or {})
+    fresh_content = str(base.get("content", ""))
+    if descriptor["op"] == "reinforce":
+        new_mem = dict(descriptor["new_memory"])
+        if not fresh:
+            base = dict(new_mem)  # brand-new object -> bootstrap on the incoming memory.
+        incoming = str(new_mem.get("content", ""))
+        winner = _pick_content(
+            fresh_content, incoming, descriptor.get("merge_strategy", "longer-wins")
+        )
+        tags = sorted(set(base.get("tags", []) or []) | set(new_mem.get("tags", []) or []))
+        rc = int(base.get("reinforcement_count", 0)) + 1
+        now = utc_now()
+        new_full = {
+            **base,
+            "content": winner,
+            "tags": tags,
+            "reinforcement_count": rc,
+            "updated_at": now.isoformat(),
+            "updated_epoch": epoch_of(now),
+        }
+        return new_full, winner, (winner != fresh_content) or not fresh
+    # op == "set": explicit field set (curated update + generic replace).
+    set_fields = dict(descriptor["set_fields"])
+    new_full = {**base, **set_fields}
+    winner = str(new_full.get("content", fresh_content))
+    changed = (("content" in set_fields) and set_fields["content"] != fresh_content) or not fresh
+    return new_full, winner, changed
+
+
 class ImmutableVectorPublisher:
     """Registers the ``immutable_vector_publish`` handler and admits durable publish intents."""
 
@@ -186,70 +257,97 @@ class ImmutableVectorPublisher:
     def fail_cleanup_once(self) -> None:
         self._fail_cleanup = True
 
+    def _descriptor_json(self, descriptor: dict[str, Any]) -> str:
+        return json.dumps({"descriptor": descriptor}, sort_keys=True, separators=(",", ":"))
+
     def admit_publish(
         self, coordinator: Any, *, object_id: str, namespace: str, content_payload: dict[str, Any]
     ) -> str:
-        """Durably admit ONE vector-publish intent. The COMPLETE mutation (canonical content + narrow
-        fields + a recompute fingerprint — never a raw vector blob) is persisted in the outbox
-        ``patch_json``; the handler recomputes the vector from it. Returns the coordinator admission
-        status (``'admitted'`` / ``'already_active'`` / ``'at_capacity'``)."""
+        """Durably admit ONE 'set' descriptor intent (WORKER-driven; used by the store-level tests). The
+        handler rebases the field-set on fresh state. Returns the admission status."""
         status: str = coordinator.enqueue_custom_intent(
             kind=INTENT_KIND,
             object_id=object_id,
             namespace=namespace,
             collection=self._collection,
-            patch_json=self._patch_json(content_payload),
+            patch_json=self._descriptor_json({"op": "set", "set_fields": content_payload}),
         )
         return status
 
-    def _patch_json(self, content_payload: dict[str, Any]) -> str:
-        content = str(content_payload.get("content", ""))
-        patch = {
-            "content_payload": content_payload,
-            "embed_fingerprint": {
-                "embedder": type(self._embedder).__name__,
-                "content_len": len(content),
-            },
-        }
-        return json.dumps(patch, sort_keys=True, separators=(",", ":"))
+    async def reinforce_publish(
+        self,
+        coordinator: Any,
+        *,
+        object_id: str,
+        namespace: str,
+        new_memory: dict[str, Any],
+        merge_strategy: str,
+    ) -> dict[str, Any]:
+        """SYNCHRONOUS episodic reinforce publish (production write path). The handler REBASES on fresh
+        state — longer-wins content choice vs ``new_memory``, tag UNION, reinforcement_count INCREMENT,
+        lease/access fields from fresh — decides content/vector-change there, and dual-fences on
+        pointer_version AND version. Returns the committed authoritative payload; raises pending if it
+        cannot commit inline."""
+        return self._publish_descriptor(
+            coordinator,
+            object_id,
+            namespace,
+            {"op": "reinforce", "new_memory": new_memory, "merge_strategy": merge_strategy},
+        )
+
+    def curated_publish(
+        self, coordinator: Any, *, object_id: str, namespace: str, set_fields: dict[str, Any]
+    ) -> dict[str, Any]:
+        """SYNCHRONOUS curated field-set publish, rebased on fresh state + dual-fenced (as above)."""
+        return self._publish_descriptor(
+            coordinator, object_id, namespace, {"op": "set", "set_fields": set_fields}
+        )
 
     def publish(
         self, coordinator: Any, *, object_id: str, namespace: str, content_payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """SYNCHRONOUS durable publish (the production write path). Admits the durable intent with an
-        explicit operation_key, drives ONLY that operation inline via ``coordinator.drive_intent``, then
-        returns the content read back through the committed ``anchor.live_point``. NEVER returns an
-        uncommitted object: any non-committed outcome (at-capacity / already-active / retry / fence /
-        worker-held) raises :class:`ImmutableVectorPublishPending` while the durable intent stays for
-        the worker to finish."""
+        """SYNCHRONOUS 'set' publish (production/test), rebased on fresh state + dual-fenced."""
+        return self._publish_descriptor(
+            coordinator, object_id, namespace, {"op": "set", "set_fields": content_payload}
+        )
+
+    def _publish_descriptor(
+        self, coordinator: Any, object_id: str, namespace: str, descriptor: dict[str, Any]
+    ) -> dict[str, Any]:
         opk = f"{INTENT_KIND}:{object_id}:{secrets.token_hex(8)}"
         status: str = coordinator.enqueue_custom_intent(
             kind=INTENT_KIND,
             object_id=object_id,
             namespace=namespace,
             collection=self._collection,
-            patch_json=self._patch_json(content_payload),
+            patch_json=self._descriptor_json(descriptor),
             operation_key=opk,
         )
-        if status == "admitted":
-            coordinator.drive_intent(opk)
-        # 'already_active'/'at_capacity' -> we did not admit THIS opk; fall through to the readback,
-        # which fails loud unless another writer already committed exactly our intended content point.
-        anchor = read_anchor(
-            self._client, self._collection, namespace=namespace, object_id=object_id
-        )
-        committed = resolve_committed_content(
-            self._client, self._collection, namespace=namespace, object_id=object_id
-        )
-        if (
-            anchor is not None
-            and anchor.live_point == content_point_id_for(opk, 0)
-            and committed is not None
-        ):
-            return committed
+        if status == "at_capacity":
+            raise ImmutableVectorPublishPending(f"outbox at capacity for {object_id!r}")
+        if status != "admitted":
+            # another writer holds an active intent for this object -> read back or fail loud.
+            committed = resolve_committed_content(
+                self._client, self._collection, namespace=namespace, object_id=object_id
+            )
+            if committed is not None:
+                return committed
+            raise ImmutableVectorPublishPending(f"an intent is already active for {object_id!r}")
+        # Drive OUR intent inline, retrying under contention: a dual-fence conflict returns 'retry',
+        # the coordinator re-reads fresh each re-drive, so both changes converge (never uncommitted).
+        for _ in range(_SYNC_DRIVE_ATTEMPTS):
+            report = coordinator.drive_intent(opk)
+            if report.finalized:
+                committed = resolve_committed_content(
+                    self._client, self._collection, namespace=namespace, object_id=object_id
+                )
+                if committed is not None:
+                    return committed
+            if report.abandoned:
+                break  # terminal fence -> will never commit inline.
+            time.sleep(0.01)  # 'retry' outcome / backoff -> re-drive against the newer fresh state.
         raise ImmutableVectorPublishPending(
-            f"vector publish for {object_id!r} not committed inline (status={status!r}); "
-            "durable intent remains for worker retry"
+            f"vector publish for {object_id!r} not committed inline; durable intent remains for worker"
         )
 
     # -- the registered apply handler ------------------------------------------------------------ #
@@ -258,78 +356,80 @@ class ImmutableVectorPublisher:
         return str(_run_coro(self._apply_async(ctx)))
 
     async def _apply_async(self, ctx: Any) -> str:
-        if not ctx.patch_json:
-            return "fence"  # no durable payload -> nothing replayable; terminal.
-        try:
-            patch = json.loads(ctx.patch_json)
-            content_payload = dict(patch["content_payload"])
-            content = str(content_payload["content"])
-        except (json.JSONDecodeError, KeyError, TypeError):
-            return "fence"
+        descriptor = _parse_descriptor(ctx.patch_json)
+        if descriptor is None:
+            return "fence"  # no replayable descriptor -> terminal.
 
         anchor = read_anchor(
             self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
         )
-        # Idempotent replay: this operation already committed its pointer. Do NOT re-publish, but
-        # STILL (re)run cleanup — a prior attempt may have published then failed cleanup, and cleanup
-        # is terminal correctness (a confirmed is only truthful once losers are gone).
+        # Idempotent replay: this operation already committed its pointer. Re-run cleanup only.
         if anchor is not None and anchor.committed_operation_id == ctx.operation_key:
             return self._cleanup_and_confirm(ctx.object_id, ctx.namespace, keep=anchor.live_point)
 
-        # Recompute the vector deterministically from the persisted content (NOT a stored blob).
-        dense = (await self._embedder.embed_dense([content]))[0]
-        sparse = (await self._embedder.embed_sparse([content]))[0]
-        generation = ctx.operation_key  # stable per operation
-        content_id = content_point_id_for(ctx.operation_key, 0)
+        # REBASE ON FRESH AUTHORITATIVE STATE (Yua): read the current anchor-over-content (or v1), apply
+        # ONLY the intended generic ops, take lease/access fields from FRESH (never the caller patch),
+        # and decide content/vector-change HERE. A stale caller snapshot can never overwrite a
+        # concurrent unrelated mutation because we recompute against fresh + fence on the observed
+        # version below.
+        fresh = resolve_committed_content(
+            self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
+        )
+        obs_version = int((fresh or {}).get("version", 0))
+        obs_pv = anchor.pointer_version if anchor is not None else 0
+        new_full, winning_content, content_changed = _rebase(descriptor, fresh)
+        # never let a caller patch carry lease-owned fields onto the anchor.
+        for f in _LEASE_OWNED_ON_ANCHOR:
+            new_full.pop(f, None)
 
-        # Stage the write-once content point INVISIBLY (not yet named by live_point).
+        if not content_changed:
+            # PAYLOAD-ONLY (existing content won): narrow fenced set_payload on the identity row,
+            # fenced on the observed version. No new content point. A concurrent version bump fails
+            # the fence -> retry -> recompute against the newer fresh state.
+            return self._publish_payload_only(ctx, anchor, new_full, obs_version)
+
+        # VECTOR CHANGE: recompute the vector from the winning content, stage a write-once content
+        # point, then a SINGLE fenced anchor publish gated on BOTH pointer_version AND version.
+        dense = (await self._embedder.embed_dense([winning_content]))[0]
+        sparse = (await self._embedder.embed_sparse([winning_content]))[0]
+        generation = ctx.operation_key
+        content_id = content_point_id_for(ctx.operation_key, 0)
         self._client.upsert(
             collection_name=self._collection,
             points=[
                 models.PointStruct(
                     id=content_id,
                     payload={
-                        **content_payload,
                         "object_id": ctx.object_id,
                         "namespace": ctx.namespace,
                         "point_kind": CONTENT_KIND,
                         "generation": generation,
                         "owner_token": ctx.owner_token,
-                        "state": "matured",
+                        "content": winning_content,
                     },
-                    vector={
-                        DENSE_VECTOR_NAME: dense,
-                        SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
-                    },
+                    vector={DENSE_VECTOR_NAME: dense, SPARSE_VECTOR_NAME: _sparse_to_model(sparse)},
                 )
             ],
         )
         if self._stall_after_staging:
             self._stall_after_staging = False
-            return "retry"  # simulate crash after staging, before publish; reconcile re-drives.
+            return "retry"
 
-        expected_pv = anchor.pointer_version if anchor else 0
-        new_version = (anchor.version if anchor else 0) + 1
-        anchor_id = anchor_point_id(ctx.namespace, ctx.object_id)
-        # The anchor owns the FULL authoritative mutable payload (Yua) — everything from the intended
-        # content_payload EXCEPT lease-owned fields (which the leases write; omitting them from this
-        # set_payload preserves their values) — plus the pointer/version metadata.
-        authoritative = {
-            k: v for k, v in content_payload.items() if k not in _LEASE_OWNED_ON_ANCHOR
-        }
         publish = {
-            **authoritative,
+            **new_full,
             "object_id": ctx.object_id,
             "namespace": ctx.namespace,
             "point_kind": ANCHOR_KIND,
             "vector_layout_version": VECTOR_LAYOUT_V2,
             "live_point": content_id,
-            "pointer_version": expected_pv + 1,
+            "pointer_version": obs_pv + 1,
             "committed_operation_id": ctx.operation_key,
-            "version": new_version,
+            "version": obs_version + 1,
         }
         if anchor is None:
-            # First publish or v1 bootstrap: create the anchor, preserving a legacy row's access_count.
+            # First vector change / v1 bootstrap: fence the create on the legacy row's version by
+            # conditionally deleting it; a concurrent Phase-1 bump on the v1 row leaves it, and our
+            # readback then shows we did not win -> retry.
             legacy = _read_legacy_v1(
                 self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
             )
@@ -338,7 +438,7 @@ class ImmutableVectorPublisher:
                 collection_name=self._collection,
                 points=[
                     models.PointStruct(
-                        id=anchor_id,
+                        id=anchor_point_id(ctx.namespace, ctx.object_id),
                         payload={**publish, "access_count": base_access},
                         vector={
                             DENSE_VECTOR_NAME: [0.0] * len(dense),
@@ -350,8 +450,9 @@ class ImmutableVectorPublisher:
             if legacy is not None:
                 self._client.delete(collection_name=self._collection, points_selector=[legacy.id])
         else:
-            # Fenced pointer swap: partial set_payload (preserves access fields), filtered on the
-            # exact observed pointer_version — a stale/lost publisher matches zero.
+            # Fenced pointer swap on BOTH observed pointer_version AND version (Yua dual fence): a
+            # concurrent vector publish (pointer_version) OR Phase-1 payload mutation (version) matches
+            # zero, so we lose and retry against fresh.
             self._client.set_payload(
                 collection_name=self._collection,
                 payload=publish,
@@ -367,13 +468,15 @@ class ImmutableVectorPublisher:
                             key="point_kind", match=models.MatchValue(value=ANCHOR_KIND)
                         ),
                         models.FieldCondition(
-                            key="pointer_version", match=models.MatchValue(value=expected_pv)
+                            key="pointer_version", match=models.MatchValue(value=obs_pv)
+                        ),
+                        models.FieldCondition(
+                            key="version", match=models.MatchValue(value=obs_version)
                         ),
                     ]
                 ),
             )
 
-        # Exact readback is the ONLY success signal.
         published = read_anchor(
             self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
         )
@@ -383,9 +486,39 @@ class ImmutableVectorPublisher:
             or published.live_point != content_id
         ):
             self._delete_content_generation(ctx.object_id, ctx.namespace, generation)
-            return "fence"  # lost/fenced — remove only our own staged point.
-
+            return (
+                "retry"  # lost the dual fence -> reconcile re-drives against the newer fresh state.
+            )
         return self._cleanup_and_confirm(ctx.object_id, ctx.namespace, keep=content_id)
+
+    def _publish_payload_only(
+        self, ctx: Any, anchor: AnchorView | None, new_full: dict[str, Any], obs_version: int
+    ) -> str:
+        """Existing content won -> only narrow payload fields changed. Fenced set_payload on the
+        identity row (anchor if v2, else the v1 row) gated on the observed version. No new content
+        point, no vector recompute. A concurrent version bump fails the fence -> retry."""
+        narrow = {
+            **new_full,
+            "object_id": ctx.object_id,
+            "namespace": ctx.namespace,
+            "version": obs_version + 1,
+        }
+        must: list[models.Condition] = [
+            models.FieldCondition(key="object_id", match=models.MatchValue(value=ctx.object_id)),
+            models.FieldCondition(key="namespace", match=models.MatchValue(value=ctx.namespace)),
+            models.FieldCondition(key="version", match=models.MatchValue(value=obs_version)),
+        ]
+        self._client.set_payload(
+            collection_name=self._collection,
+            payload=narrow,
+            points=models.Filter(must=must, must_not=_EXCLUDE_CONTENT_COND),  # identity row only
+        )
+        fresh = resolve_committed_content(
+            self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
+        )
+        if fresh is not None and int(fresh.get("version", -1)) == obs_version + 1:
+            return "confirmed"
+        return "retry"  # a concurrent bump won the version -> recompute against fresh.
 
     def _cleanup_and_confirm(self, object_id: str, namespace: str, keep: str | None) -> str:
         """Cleanup is terminal correctness: confirm ONLY after superseded/loser content is gone. On
