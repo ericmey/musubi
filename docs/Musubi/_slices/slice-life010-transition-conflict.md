@@ -1,14 +1,14 @@
 ---
 title: "Slice: LIFE-010 — Transition Conflict Hard Fence"
 slice_id: slice-life010-transition-conflict
-status: in-review
+status: done
 owner: gemini-3-1-pro
 phase: "Lifecycle"
 section: _slices
 type: slice
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

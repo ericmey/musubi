@@ -1,6 +1,6 @@
 ---
 owner: gemini-3-1-shiori
-status: in-review
+status: done
 issue: 528
 title: "Slice: LIFE-006 durable lifecycle job failure alerts"
 slice_id: slice-issue528-life006-job-failure-alerts
@@ -9,10 +9,10 @@ type: slice
 phase: "Lifecycle"
 tags:
   - section/slices
-  - status/in-review
+  - status/done
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

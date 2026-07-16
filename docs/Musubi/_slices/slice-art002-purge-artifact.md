@@ -1,14 +1,14 @@
 ---
 title: "Slice: ART-002 — Artifact Purge Stub"
 slice_id: slice-art002-purge-artifact
-status: in-review
+status: done
 owner: shiori@home
 phase: "Auth"
 section: _slices
 type: slice
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-16
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

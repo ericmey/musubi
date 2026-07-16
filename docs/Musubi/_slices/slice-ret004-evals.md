@@ -9,7 +9,7 @@ owner: gemini-3-1
 phase: "Retrieval"
 tags: [section/slices, status/done, type/slice]
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: ["[[_slices/slice-retrieval-hybrid]]", "[[_slices/slice-retrieval-scoring]]"]
 blocks: []
 ---
