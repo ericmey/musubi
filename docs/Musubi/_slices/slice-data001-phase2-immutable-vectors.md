@@ -129,7 +129,7 @@ Identity-consumer + composition discriminators in extended shared files (functio
 path as evidence):
 
 34. `test_presence_and_raw_payload_ignore_orphan_content_shell` — tests/planes/test_raw_lookup_and_delete.py
-35. `test_get_returns_none_for_missing_id` — tests/planes/test_episodic.py (resolve-before-bump)
+35. `test_get_missing_id_does_not_bump_access` — tests/planes/test_episodic.py (resolve-before-bump)
 36. `test_concurrent_dedup_race_resolves_to_single_winner` — tests/planes/test_episodic.py (anchor-aware get)
 37. `test_same_id_update_inherits_state_lineage_access_from_fresh` — tests/planes/test_curated.py
 38. `test_bootstrap_wires_write_planes_with_immutable_publisher` — tests/api/test_bootstrap.py

@@ -472,15 +472,20 @@ async def test_query_returns_at_most_limit_results(plane: EpisodicPlane, ns: str
 # ---------------------------------------------------------------------------
 
 
-async def test_get_returns_none_for_missing_id(
-    plane: EpisodicPlane, ns: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_get_returns_none_for_missing_id(plane: EpisodicPlane, ns: str) -> None:
     # 27-char base62 KSUID that we never minted.
     missing = "0" * 27
-    # DATA-001 P2 (Yua): a missing/dangling get must RESOLVE first and return None WITHOUT attempting an
-    # access-lease mutation — the pre-P2 contract mutated nothing on an absent row.
+    assert await plane.get(namespace=ns, object_id=missing) is None
+
+
+async def test_get_missing_id_does_not_bump_access(
+    plane: EpisodicPlane, ns: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DATA-001 P2 (Yua): a missing/dangling get must RESOLVE first and return None WITHOUT attempting
+    an access-lease mutation — the pre-P2 contract mutated nothing on an absent row."""
     from musubi.store.access_lease import lease_increment_access as _orig_lease
 
+    missing = "0" * 27
     calls = {"n": 0}
 
     async def _spy(*args: Any, **kwargs: Any) -> None:
