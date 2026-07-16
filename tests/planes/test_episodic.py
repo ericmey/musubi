@@ -941,3 +941,190 @@ async def test_semantic_dedup_compares_content_not_summary(
         final = await low_plane.create(candidate)
 
     assert final.object_id != base.object_id
+
+
+@pytest.mark.asyncio
+async def test_batch_create_intra_batch_rejects_factual_incompatibility(
+    plane: EpisodicPlane, ns: str, qdrant: QdrantClient
+) -> None:
+    # Near match but factual incompatible (negation)
+    base = _make("The server is up.", ns)
+    candidate = _make("The server is not up.", ns)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+
+    res = await low_plane.batch_create([base, candidate])
+
+    # They should NOT merge, returning 2 distinct rows
+    assert res[0].object_id != res[1].object_id
+    assert qdrant.count(collection_name="musubi_episodic", exact=True).count == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_create_cross_namespace_isolation(
+    plane: EpisodicPlane, qdrant: QdrantClient
+) -> None:
+    ns1 = "eric/ops/episodic"
+    ns2 = "yua/ops/episodic"
+
+    m1 = _make("Cross namespace match", ns1)
+    m2 = _make("Cross namespace match", ns2)
+
+    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    res = await low_plane.batch_create([m1, m2])
+
+    # They should NOT merge because namespaces differ
+    assert res[0].object_id != res[1].object_id
+    assert qdrant.count(collection_name="musubi_episodic", exact=True).count == 2
+
+
+@pytest.mark.asyncio
+async def test_intrabatch_dedup_sequential_duplicate(
+    plane: EpisodicPlane, ns: str, qdrant: QdrantClient
+) -> None:
+    m1 = _make("Deploy succeeded.", ns)
+    m2 = _make("Deploy succeeded.", ns)
+
+    res = await plane.batch_create([m1, m2])
+
+    assert len(res) == 2
+    assert res[0].object_id == res[1].object_id
+    assert res[1].reinforcement_count == 1
+
+    count = qdrant.count(collection_name="musubi_episodic", exact=True).count
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_intrabatch_dedup_prefers_best_score_and_tie_breaks(
+    plane: EpisodicPlane, ns: str, qdrant: QdrantClient
+) -> None:
+    # Create an independent embedder that allows us to craft exact similarities.
+    from musubi.embedding.base import Embedder
+
+    class ScoreEmbedder(Embedder):
+        def __init__(self) -> None:
+            self._idx = 0
+            # Order: persisted_near, pending_weak, pending_strong, candidate
+            # Then seq: persisted_near, pw, ps, cand
+            import math
+
+            def v(deg: float) -> list[float]:
+                r = math.radians(deg)
+                return [math.cos(r), math.sin(r)] + [0.0] * 1022
+
+            self._vectors = [
+                # First run
+                v(0),  # persisted_near
+                v(-80),  # pending_weak
+                v(80),  # pending_strong
+                v(45),  # candidate (matches strong 0.819, near 0.707, weak -0.57)
+                # Seq run
+                v(0),
+                v(-80),
+                v(80),
+                v(45),
+            ]
+
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            res = []
+            for _ in texts:
+                res.append(self._vectors[self._idx])
+                self._idx += 1
+            return res
+
+        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+            return [{} for _ in texts]
+
+        async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+            return [1.0] * len(candidates)
+
+    test_plane = EpisodicPlane(client=plane._client, embedder=ScoreEmbedder(), dedup_threshold=0.5)
+
+    persisted_near = _make("p_near", ns)
+    persisted_near.object_id = "000000000000000000000000001"
+    await test_plane.create(persisted_near)
+
+    # Overwrite the object_id in payload so it has the expected ID
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"object_id": persisted_near.object_id},
+        points=[test_plane._client.scroll(collection_name="musubi_episodic")[0][0].id],
+    )
+
+    pending_weak = _make("p_weak", ns)
+    pending_weak.object_id = "000000000000000000000000002"
+
+    pending_strong = _make("p_strong", ns)
+    pending_strong.object_id = "000000000000000000000000003"
+
+    candidate = _make("candidate", ns)
+
+    # We must patch factual compatibility so they can merge despite having different content,
+    # otherwise the identical content would cause pending_weak and pending_strong to merge
+    # into persisted_near during their OWN insert iterations.
+    import musubi.planes.episodic.plane
+
+    original_compat = musubi.planes.episodic.plane._is_factually_compatible
+    musubi.planes.episodic.plane._is_factually_compatible = lambda a, b: True
+
+    # Run batch
+    # Candidate matches pending_weak (-0.57 < 0.5), persisted_near (0.707 >= 0.5), pending_strong (0.819 >= 0.5)
+    # It must pick pending_strong!
+    try:
+        res = await test_plane.batch_create([pending_weak, pending_strong, candidate])
+    finally:
+        musubi.planes.episodic.plane._is_factually_compatible = original_compat
+
+    # Ensure they map properly
+    assert len(res) == 3
+    # pending_weak -> fresh
+    # pending_strong -> merges candidate -> has count 1
+    assert res[0].object_id == pending_weak.object_id
+    assert res[1].object_id == pending_strong.object_id
+    assert res[1].reinforcement_count == 1
+    assert res[2].object_id == pending_strong.object_id
+
+    # persisted_near was not touched
+    persisted = await test_plane.get(namespace=ns, object_id=persisted_near.object_id)
+    assert persisted is not None
+    assert persisted.reinforcement_count == 0
+
+
+@pytest.mark.asyncio
+async def test_intrabatch_dedup_sequential_tiebreak_equal_score(
+    plane: EpisodicPlane, ns: str, qdrant: QdrantClient
+) -> None:
+    # A smaller dedicated test for tie breaks.
+    from musubi.embedding.base import Embedder
+
+    class TieEmbedder(Embedder):
+        async def embed_dense(self, texts: list[str]) -> list[list[float]]:
+            return [[1.0, 0.0] + [0.0] * 1022 for _ in texts]
+
+        async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
+            return [{} for _ in texts]
+
+        async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+            return [1.0] * len(candidates)
+
+    test_plane = EpisodicPlane(client=plane._client, embedder=TieEmbedder(), dedup_threshold=0.5)
+
+    m1 = _make("identical content", ns)
+    m1.object_id = "000000000000000000000000001"
+
+    m2 = _make("identical content", ns)
+    m2.object_id = "000000000000000000000000002"
+
+    m3 = _make("identical content", ns)
+
+    res = await test_plane.batch_create([m1, m2, m3])
+
+    assert len(res) == 3
+    assert res[0].object_id == m1.object_id
+    assert res[0].reinforcement_count == 2
+    assert res[1].object_id == m1.object_id
+    assert res[1].reinforcement_count == 2
+
+    assert res[2].object_id == m1.object_id
+    assert res[2].reinforcement_count == 2
