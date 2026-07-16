@@ -1,3 +1,16 @@
+---
+title: "DATA-001 Phase 2 — identity-consumer inventory (#530)"
+section: 13-decisions
+type: adr
+status: accepted
+owner: aoi
+discoverer: yua
+phase: "Integrity remediation 2026-07-15 — DATA-001 Phase 2"
+tags: [type/adr, status/accepted, data-001, concurrency, vectors, consumers]
+updated: 2026-07-16
+supersedes: []
+---
+
 # DATA-001 Phase 2 — identity-consumer inventory (#530)
 
 Work-log companion to [`data001-phase2-immutable-vectors.md`](./data001-phase2-immutable-vectors.md).
