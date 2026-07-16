@@ -631,6 +631,83 @@ def test_resolve_ranked_candidate_classification() -> None:
     )
 
 
+def _at_cosine(base: list[float], target: float) -> list[float]:
+    """A unit vector whose cosine similarity to ``base`` is exactly ``target`` (pure Gram-Schmidt) —
+    lets a discriminator place a candidate JUST BELOW a forced exact-match without guessing embeddings."""
+    import math
+
+    n = len(base)
+    bn = math.sqrt(sum(x * x for x in base)) or 1.0
+    bh = [x / bn for x in base]
+    seed = [0.0] * n
+    seed[1 if abs(bh[0]) > 0.9 else 0] = 1.0  # not parallel to bh
+    dot = sum(a * b for a, b in zip(seed, bh, strict=True))
+    orth = [a - dot * b for a, b in zip(seed, bh, strict=True)]
+    on = math.sqrt(sum(x * x for x in orth)) or 1.0
+    oh = [x / on for x in orth]
+    s = math.sqrt(max(0.0, 1.0 - target * target))
+    return [target * a + s * b for a, b in zip(bh, oh, strict=True)]
+
+
+def test_query_forced_anchors_never_consume_the_ranked_budget(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    """The PRODUCTION ``_not_anchor`` prefilter + budget (not just the exposure classifier): force six
+    anchors to the EXACT query vector (score 1.0) — enough to fill the bounded overfetch (limit=1 →
+    factor 4) if ``must_not anchor`` were weakened — and place one live candidate JUST BELOW them
+    (cosine 0.99). If anchors reached ranking they would occupy every budget slot and the live row would
+    fall off the page; asserting it IS returned proves anchors are excluded from the candidate set, not
+    merely rejected after hydration (Yua)."""
+    from musubi.planes.episodic.plane import episodic_point_id
+    from musubi.store.immutable_vectors import anchor_point_id
+    from musubi.types.episodic import EpisodicMemory
+
+    q = _dense("PROBE-ANCHOR-BUDGET")
+    for n in range(6):  # > overfetch(=4 at limit 1): would evict the live row if anchors ranked
+        oid = f"anchor-bait-{n}"
+        qdrant.upsert(
+            collection_name=_COLL,
+            points=[
+                models.PointStruct(
+                    id=anchor_point_id(_NS, oid),
+                    payload={
+                        "object_id": oid,
+                        "namespace": _NS,
+                        "point_kind": "anchor",
+                        "live_point": "nowhere",  # even if reached, resolve fails closed
+                        "state": "matured",
+                    },
+                    vector={
+                        DENSE_VECTOR_NAME: q,  # forced EXACT match — score 1.0
+                        "sparse_splade_v1": models.SparseVector(indices=[], values=[]),
+                    },
+                )
+            ],
+            wait=True,
+        )
+    live = EpisodicMemory(namespace=_NS, content="the-live-row", state="matured")
+    live_oid = str(live.object_id)
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=episodic_point_id(live_oid),
+                payload=live.model_dump(mode="json"),
+                vector={
+                    DENSE_VECTOR_NAME: _at_cosine(q, 0.99),  # JUST below the forced anchors
+                    "sparse_splade_v1": models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+    ids = {str(m.object_id) for m in asyncio.run(_query(qdrant, "PROBE-ANCHOR-BUDGET", limit=1))}
+    assert ids == {live_oid}, (
+        "the live row survives a budget-filling wall of forced exact-match anchors — the prefilter "
+        "excludes anchors from ranking, so they never evict a real candidate"
+    )
+
+
 def test_query_ranks_v1_and_healthy_v2(
     qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
 ) -> None:
