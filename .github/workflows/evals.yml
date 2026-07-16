@@ -62,6 +62,17 @@ jobs:
         run: |
           set -a && . deploy/test-env/.env.test && set +a
           uv run pytest -m integration -k beir_style_eval tests/retrieve/test_hybrid.py -ra
+      - name: RET-004 fusion diagnostic (read-only capture; Yua-approved single dispatch)
+        # Runs even though the BEIR gate fails at +0.0019: this captures dense-only /
+        # sparse-only / fused per-query ranks for both frozen corpora so weighted-fusion
+        # can be simulated offline. Changes no ranking/corpus/thresholds. -s shows the
+        # RET004-DIAG-JSON blob in the log.
+        if: always()
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -a && . deploy/test-env/.env.test && set +a
+          uv run pytest -m integration -k ret004_fusion_diagnostic tests/retrieve/test_ret004_fusion_diagnostic.py -ra -s
       - name: Tear down stack
         if: always()
         run: |
