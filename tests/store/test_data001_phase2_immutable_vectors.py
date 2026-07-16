@@ -526,6 +526,19 @@ def _content_point_ids(qdrant: QdrantClient, collection: str, object_id: str) ->
     return sorted(str(r.id) for r in recs)
 
 
+def _live_dense(qdrant: QdrantClient, collection: str, object_id: str) -> list[float]:
+    """The dense vector actually stored on the committed live content point."""
+    from musubi.store.immutable_vectors import read_anchor
+
+    a = read_anchor(qdrant, collection, namespace=_NS, object_id=object_id)
+    assert a is not None and a.live_point is not None
+    pts = qdrant.retrieve(collection_name=collection, ids=[a.live_point], with_vectors=True)
+    assert pts
+    vec = pts[0].vector
+    dense = vec[DENSE_VECTOR_NAME] if isinstance(vec, dict) else vec
+    return [float(x) for x in dense]  # type: ignore[union-attr]
+
+
 # --------------------------------------------------------------------------------------------------
 # 12. Synchronous publish(): committed return inline; non-committed raises + worker finishes the intent.
 # --------------------------------------------------------------------------------------------------
@@ -944,11 +957,19 @@ def test_curated_projection_decides_vector_change(
     pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"title": "T2"})
     a1 = _anchor(qdrant, collection, "cur-1")
     assert a1.pointer_version > a0.pointer_version and a1.live_point != a0.live_point
+    # the live vector must be built from the COMPOSITE projection (T2 + 2 newlines + S), not raw content.
+    assert _live_dense(qdrant, collection, "cur-1") == pytest.approx(_embed("T2\n\nS")[0], abs=1e-4)
+    assert _live_dense(qdrant, collection, "cur-1") != pytest.approx(_embed("C")[0], abs=1e-4), (
+        "the vector must not be built from content-only"
+    )
 
     # (b) summary-only change -> projection changes -> VECTOR change.
     pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"summary": "S2"})
     a2 = _anchor(qdrant, collection, "cur-1")
     assert a2.pointer_version > a1.pointer_version and a2.live_point != a1.live_point
+    assert _live_dense(qdrant, collection, "cur-1") == pytest.approx(
+        _embed("T2\n\nS2")[0], abs=1e-4
+    )
 
     # (c) non-projection metadata-only (topics) -> PAYLOAD-ONLY: same pointer/live_point, still commits.
     pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"topics": ["y", "z"]})
@@ -983,6 +1004,10 @@ def test_curated_content_change_without_summary_is_vector_change(
     a1 = _anchor(qdrant, collection, "cur-2")
     assert a1.pointer_version > a0.pointer_version and a1.live_point != a0.live_point, (
         "with no summary the projection is title+content, so a content change must re-embed"
+    )
+    # projection falls through to content: vector == embed(title + 2 newlines + content).
+    assert _live_dense(qdrant, collection, "cur-2") == pytest.approx(
+        _embed("T\n\nC-much-longer")[0], abs=1e-4
     )
 
 
@@ -1019,6 +1044,13 @@ def test_episodic_reinforce_with_summary_is_projection_based(
     assert a1.pointer_version == a0.pointer_version and a1.live_point == a0.live_point, (
         "a summary-shadowed content growth must not re-embed (projection unchanged) -> payload-only"
     )
+    # the retained live vector must be embed(summary), NOT embed(content).
+    assert _live_dense(qdrant, collection, "ep-sum") == pytest.approx(
+        _embed("the-summary")[0], abs=1e-4
+    )
+    assert _live_dense(qdrant, collection, "ep-sum") != pytest.approx(
+        _embed("a-much-longer-content-body")[0], abs=1e-4
+    ), "the vector must embed the summary, not the (longer) content"
     assert (
         committed["content"] == "a-much-longer-content-body"
     )  # longer-wins still updated the body
