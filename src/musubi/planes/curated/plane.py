@@ -423,7 +423,9 @@ class CuratedPlane:
                 f"curated identity for vault_path={vault_path!r} is dangling (no committed content); "
                 "refusing to report absent so create() cannot manufacture a duplicate"
             )
-        return _curated_from_payload(strip_layout_fields(resolved))  # raises on malformed -> fail closed
+        return _curated_from_payload(
+            strip_layout_fields(resolved)
+        )  # raises on malformed -> fail closed
 
     async def find_by_vault_path(
         self, vault_path: str
@@ -545,14 +547,16 @@ class CuratedPlane:
             )
         row = _curated_safe(strip_layout_fields(resolved))
         if row is None:
-            return Err(  # a malformed identity is present-but-broken, likewise never a clean not_found
-                error=FindByVaultPathError(
-                    code="invalid_row",
-                    detail=(
-                        f"identity for vault_path={vault_path!r} will not model-validate; "
-                        "present-but-corrupt, the watcher must warn/refuse"
-                    ),
-                    match_object_ids=(str(payload.get("object_id", "")),),
+            return (
+                Err(  # a malformed identity is present-but-broken, likewise never a clean not_found
+                    error=FindByVaultPathError(
+                        code="invalid_row",
+                        detail=(
+                            f"identity for vault_path={vault_path!r} will not model-validate; "
+                            "present-but-corrupt, the watcher must warn/refuse"
+                        ),
+                        match_object_ids=(str(payload.get("object_id", "")),),
+                    )
                 )
             )
         return Ok(value=row)

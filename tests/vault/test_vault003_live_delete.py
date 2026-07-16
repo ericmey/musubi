@@ -468,7 +468,9 @@ async def test_delete_broken_or_unknown_code_warns_and_refuses(
     rel_path = "eric/shared/broken-identity.md"
     abs_path = str(watcher.vault_root / rel_path)
 
-    err = Err(error=FindByVaultPathError(code=code, detail="broken", match_object_ids=("broken-oid",)))
+    err = Err(
+        error=FindByVaultPathError(code=code, detail="broken", match_object_ids=("broken-oid",))
+    )
     transition_spy = AsyncMock()
     plane.find_by_vault_path = AsyncMock(return_value=err)  # type: ignore[method-assign]
     plane.transition = transition_spy  # type: ignore[method-assign]
