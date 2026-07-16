@@ -49,6 +49,7 @@ from musubi.lifecycle.synthesis import (
     SynthesisInput,
     SynthesisOutput,
 )
+from musubi.llm.prompt_boundary import ChatMessage, build_untrusted_data_messages
 from musubi.types.common import KSUID, validate_ksuid
 
 log = logging.getLogger(__name__)
@@ -156,14 +157,20 @@ class HttpxOllamaClient:
         if not items:
             return {}
 
-        rendered = "\n".join(
-            f"- id={it.object_id} captured={it.captured_importance}\n  content: "
-            f"{_one_line(it.content)}"
-            for it in items
-        )
-        prompt = _load_prompt("importance", _IMPORTANCE_PROMPT_V).replace("{ITEMS}", rendered)
+        payload = {
+            "items": [
+                {
+                    "id": str(it.object_id),
+                    "captured": it.captured_importance,
+                    "content": _one_line(it.content),
+                }
+                for it in items
+            ]
+        }
+        prompt_instructions = _load_prompt("importance", _IMPORTANCE_PROMPT_V)
+        messages = build_untrusted_data_messages(prompt_instructions, payload)  # type: ignore[arg-type]
 
-        raw = await self._chat(prompt, kind="importance", schema=_IMPORTANCE_SCHEMA)
+        raw = await self._chat(messages, kind="importance", schema=_IMPORTANCE_SCHEMA)
         if raw is None:
             return None
         try:
@@ -190,13 +197,20 @@ class HttpxOllamaClient:
         if not items:
             return {}
 
-        rendered = "\n".join(
-            f"- id={it.object_id} existing={it.existing_tags}\n  content: {_one_line(it.content)}"
-            for it in items
-        )
-        prompt = _load_prompt("topics", _TOPICS_PROMPT_V).replace("{ITEMS}", rendered)
+        payload = {
+            "items": [
+                {
+                    "id": str(it.object_id),
+                    "existing": it.existing_tags,
+                    "content": _one_line(it.content),
+                }
+                for it in items
+            ]
+        }
+        prompt_instructions = _load_prompt("topics", _TOPICS_PROMPT_V)
+        messages = build_untrusted_data_messages(prompt_instructions, payload)  # type: ignore[arg-type]
 
-        raw = await self._chat(prompt, kind="topics", schema=_TOPICS_SCHEMA)
+        raw = await self._chat(messages, kind="topics", schema=_TOPICS_SCHEMA)
         if raw is None:
             return None
         try:
@@ -230,13 +244,20 @@ class HttpxOllamaClient:
         """
         if not cluster.memories:
             return None
-        rendered = "\n".join(
-            f"- id={m.object_id} importance={m.importance} tags={m.tags}\n"
-            f"  content: {_one_line(m.content)}"
-            for m in cluster.memories
-        )
-        prompt = _load_prompt("synthesis", _SYNTHESIS_PROMPT_V).replace("{ITEMS}", rendered)
-        raw = await self._chat(prompt, kind="synthesis", schema=_SYNTHESIS_SCHEMA)
+        payload = {
+            "items": [
+                {
+                    "id": str(m.object_id),
+                    "importance": m.importance,
+                    "tags": m.tags,
+                    "content": _one_line(m.content),
+                }
+                for m in cluster.memories
+            ]
+        }
+        prompt_instructions = _load_prompt("synthesis", _SYNTHESIS_PROMPT_V)
+        messages = build_untrusted_data_messages(prompt_instructions, payload)  # type: ignore[arg-type]
+        raw = await self._chat(messages, kind="synthesis", schema=_SYNTHESIS_SCHEMA)
         if raw is None:
             return None
         try:
@@ -266,14 +287,19 @@ class HttpxOllamaClient:
 
     async def check_contradiction(self, pair: ContradictionInput) -> ContradictionOutput | None:
         """Decide whether two concepts conflict logically."""
-        prompt = (
-            _load_prompt("contradiction", _CONTRADICTION_PROMPT_V)
-            .replace("{A_TITLE}", pair.concept_a.title)
-            .replace("{A_CONTENT}", _one_line(pair.concept_a.content))
-            .replace("{B_TITLE}", pair.concept_b.title)
-            .replace("{B_CONTENT}", _one_line(pair.concept_b.content))
-        )
-        raw = await self._chat(prompt, kind="contradiction", schema=_CONTRADICTION_SCHEMA)
+        payload = {
+            "concept_a": {
+                "title": pair.concept_a.title,
+                "content": _one_line(pair.concept_a.content),
+            },
+            "concept_b": {
+                "title": pair.concept_b.title,
+                "content": _one_line(pair.concept_b.content),
+            },
+        }
+        prompt_instructions = _load_prompt("contradiction", _CONTRADICTION_PROMPT_V)
+        messages = build_untrusted_data_messages(prompt_instructions, payload)  # type: ignore[arg-type]
+        raw = await self._chat(messages, kind="contradiction", schema=_CONTRADICTION_SCHEMA)
         if raw is None:
             return None
         try:
@@ -290,7 +316,7 @@ class HttpxOllamaClient:
 
     async def _chat(
         self,
-        prompt: str,
+        messages: list[ChatMessage],
         *,
         kind: str,
         schema: dict[str, Any] | None = None,
@@ -305,7 +331,7 @@ class HttpxOllamaClient:
         url = f"{self._base_url}/api/chat"
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": False,
             "format": schema if schema is not None else "json",
             "options": {"temperature": 0},
