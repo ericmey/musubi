@@ -721,6 +721,29 @@ class ImmutableVectorPublisher:
         )
 
 
+def register_immutable_vector_dispatch(
+    coordinator: Any, publishers: dict[str, ImmutableVectorPublisher]
+) -> None:
+    """Register ONE collection-aware handler for the shared ``immutable_vector_publish`` intent kind
+    (Yua). The coordinator holds exactly ONE handler per intent_kind; episodic and curated both publish
+    under this kind, so calling each publisher's :meth:`ImmutableVectorPublisher.register` in turn would
+    SILENTLY OVERWRITE — only the last-registered collection could reconcile, and the other's durable
+    intents would dispatch to the wrong bound apply. Instead this installs a single dispatcher that
+    routes ``ctx.collection`` to that collection's bound ``publisher.apply``; an intent for an
+    unregistered collection is a misconfiguration and FAILS LOUD as a terminal fence (never a silent
+    wrong-collection apply, never an endless retry). Use this in every multi-collection composition;
+    the per-publisher ``register`` remains for single-collection tests."""
+    by_collection = dict(publishers)
+
+    def _dispatch(ctx: Any) -> str:
+        publisher = by_collection.get(ctx.collection)
+        if publisher is None:
+            return "fence"  # no publisher bound to this collection -> terminal, fail loud.
+        return str(publisher.apply(ctx))
+
+    coordinator.register_intent_handler(INTENT_KIND, _dispatch)
+
+
 __all__ = [
     "ANCHOR_KIND",
     "CONTENT_KIND",
@@ -732,5 +755,6 @@ __all__ = [
     "anchor_point_id",
     "content_point_id_for",
     "read_anchor",
+    "register_immutable_vector_dispatch",
     "resolve_committed_content",
 ]

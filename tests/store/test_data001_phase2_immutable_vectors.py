@@ -1082,3 +1082,110 @@ def test_coordinator_read_object_excludes_content_shell(
     assert payload.get("point_kind") == ANCHOR_KIND and payload.get("live_point") is not None, (
         "the identity read must return the authoritative anchor, not a content snapshot"
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# 25. ONE collection-aware dispatcher for the shared kind: episodic + curated both commit; unknown
+#     collection fails loud (Yua D invariant — two register() calls would silently overwrite).
+# --------------------------------------------------------------------------------------------------
+def test_collection_aware_dispatch_routes_both_planes_and_rejects_unknown(
+    qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
+) -> None:
+    import json
+
+    from musubi.store.immutable_vectors import (
+        INTENT_KIND,
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+        resolve_committed_content,
+    )
+
+    ep_coll = collection_for_plane("episodic")
+    cur_coll = collection_for_plane("curated")
+    cur_ns = "eric/data001p2/curated"
+
+    def _wipe_both() -> None:
+        for coll, ns in ((ep_coll, _NS), (cur_coll, cur_ns)):
+            qdrant.delete(
+                collection_name=coll,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="namespace", match=models.MatchValue(value=ns)
+                            )
+                        ]
+                    )
+                ),
+            )
+
+    _wipe_both()
+    try:
+        ep_pub = ImmutableVectorPublisher(
+            client=qdrant, embedder=FakeEmbedder(), collection=ep_coll
+        )
+        cur_pub = ImmutableVectorPublisher(
+            client=qdrant, embedder=FakeEmbedder(), collection=cur_coll
+        )
+        # ONE dispatcher for the shared kind — NOT two register() calls (which would overwrite).
+        register_immutable_vector_dispatch(coord, {ep_coll: ep_pub, cur_coll: cur_pub})
+
+        # admit one durable intent to EACH collection (worker-driven, left PENDING).
+        assert (
+            ep_pub.admit_publish(
+                coord, object_id="disp-ep", namespace=_NS, content_payload=_content("ep-body")
+            )
+            == "admitted"
+        )
+        cur_desc = json.dumps(
+            {
+                "descriptor": {
+                    "op": "set",
+                    "set_fields": {"title": "T", "content": "C"},
+                    "embed_kind": "curated",
+                }
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        assert (
+            coord.enqueue_custom_intent(
+                kind=INTENT_KIND,
+                object_id="disp-cur",
+                namespace=cur_ns,
+                collection=cur_coll,
+                patch_json=cur_desc,
+            )
+            == "admitted"
+        )
+        # ONE worker drains BOTH via the single dispatcher (a couple passes for the queue).
+        for _ in range(4):
+            coord.reconcile_once()
+        assert (
+            resolve_committed_content(qdrant, ep_coll, namespace=_NS, object_id="disp-ep") or {}
+        )["content"] == "ep-body", (
+            "episodic intent must dispatch to the episodic publisher and commit"
+        )
+        assert (
+            resolve_committed_content(qdrant, cur_coll, namespace=cur_ns, object_id="disp-cur")
+            or {}
+        )["content"] == "C", "curated intent must dispatch to the curated publisher and commit"
+
+        # an intent for an unregistered collection FAILS LOUD (terminal fence), never a wrong apply.
+        assert (
+            coord.enqueue_custom_intent(
+                kind=INTENT_KIND,
+                object_id="disp-unk",
+                namespace="eric/x/episodic",
+                collection="musubi_nonexistent",
+                patch_json=cur_desc,
+                operation_key="disp-unknown-op",
+            )
+            == "admitted"
+        )
+        report = coord.drive_intent("disp-unknown-op")
+        assert report.abandoned == 1 and report.finalized == 0, (
+            "an intent for an unregistered collection must be abandoned, not silently mis-applied"
+        )
+    finally:
+        _wipe_both()
