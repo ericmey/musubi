@@ -22,7 +22,7 @@ Tracks #399.
 Make the `purge_artifact` endpoint truthful and functional. Replaces the 202 mock acknowledgment with a genuine hard delete of the artifact head, its committed chunks, and its blob file. Failures report truth rather than faking success, and the endpoint relies on Qdrant and the blob storage interfaces in an idempotent manner. Uses head-first purge ordering to fence any already-running `ArtifactIndexer` publish (the head readback/filter vanishes).
 
 ## Files
-- `owns_paths`: 
+- `owns_paths`:
   - `src/musubi/api/routers/writes_artifact.py`
   - `src/musubi/planes/artifact/plane.py`
   - `tests/api/test_api_v0_write.py`
@@ -39,7 +39,7 @@ Make the `purge_artifact` endpoint truthful and functional. Replaces the 202 moc
 - Built a fresh, C4-compatible test that creates a canonical blob and intent, reconciles the `ArtifactIndexer`, verifies the physical chunks and the head's committed generation/owner are deleted correctly, ensures idempotency, and confirms a resurrected indexing intent fails (fences) safely on the absent head.
 
 ## Definition of Done
-- Endpoint `DELETE /v1/artifacts/{id}/purge` successfully unlinks the blob and Qdrant head/chunks.
+- Endpoint `POST /v1/artifacts/{id}/purge` successfully unlinks the blob and Qdrant head/chunks.
 - Head is deleted first to fence `ArtifactIndexer`.
 - Idempotency is preserved on retry.
 - Test discriminator proves the load-bearing no-resurrection invariant (re-enqueued intent dies).

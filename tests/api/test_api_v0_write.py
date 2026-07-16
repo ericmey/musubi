@@ -1496,9 +1496,8 @@ def test_artifact_purge_requires_operator(
 def test_artifact_purge_truthful_and_idempotent_and_fenced(
     client: TestClient,
     api_settings: object,
-    qdrant: object,
+    qdrant: QdrantClient,
 ) -> None:
-    import io
     from pathlib import Path
 
     from qdrant_client import models
@@ -1506,7 +1505,6 @@ def test_artifact_purge_truthful_and_idempotent_and_fenced(
     from musubi.embedding.fake import FakeEmbedder
     from musubi.planes.artifact.indexer import ArtifactIndexer
     from tests.api.conftest import mint_token
-    from tests.api.test_api_v0_write import _coord
 
     namespace = "eric/ops/artifact"
     rw_token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
@@ -1536,7 +1534,8 @@ def test_artifact_purge_truthful_and_idempotent_and_fenced(
     obj_id = r.json()["object_id"]
 
     # 2. Process the indexing intent so it gets physical chunks and a committed generation
-    coord.reconcile_once()
+    report = coord.reconcile_once()
+    assert report.finalized == 1
 
     chunks_col = "musubi_artifact_chunks"
 
@@ -1548,19 +1547,27 @@ def test_artifact_purge_truthful_and_idempotent_and_fenced(
         scroll_filter=models.Filter(
             must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]
         ),
-    )[0]  # type: ignore[attr-defined]
+    )[0]
     assert len(head_res) == 1
-    assert (
-        head_res[0].payload is not None
-        and head_res[0].payload.get("committed_generation") is not None
-    )
+
+    head_payload = head_res[0].payload
+    assert head_payload is not None
+    committed_generation = head_payload.get("committed_generation")
+    committed_owner = head_payload.get("committed_owner")
+    assert committed_generation is not None
+    assert committed_owner is not None
+
     chunks_res = qdrant.scroll(
         collection_name=chunks_col,
         scroll_filter=models.Filter(
             must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]
         ),
-    )[0]  # type: ignore[attr-defined]
+    )[0]
     assert len(chunks_res) > 0
+    for chunk in chunks_res:
+        assert chunk.payload is not None
+        assert chunk.payload.get("generation") == committed_generation
+        assert chunk.payload.get("owner_token") == committed_owner
 
     # 3. Purge with operator token
     op_token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])  # type: ignore[arg-type]
@@ -1579,14 +1586,14 @@ def test_artifact_purge_truthful_and_idempotent_and_fenced(
         scroll_filter=models.Filter(
             must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]
         ),
-    )[0]  # type: ignore[attr-defined]
+    )[0]
     assert len(head_res_after) == 0
     chunks_res_after = qdrant.scroll(
         collection_name=chunks_col,
         scroll_filter=models.Filter(
             must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]
         ),
-    )[0]  # type: ignore[attr-defined]
+    )[0]
     assert len(chunks_res_after) == 0
 
     # 5. Retry idempotent
@@ -1600,21 +1607,23 @@ def test_artifact_purge_truthful_and_idempotent_and_fenced(
 
     # 6. Load-bearing no-resurrection discriminator
     coord.enqueue_index_intent(object_id=obj_id, namespace=namespace)
-    coord.reconcile_once()
+    report2 = coord.reconcile_once()
+    assert report2.abandoned == 1
+    assert report2.pending == 0
 
     head_res_fenced = qdrant.scroll(
         collection_name="musubi_artifact",
         scroll_filter=models.Filter(
             must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]
         ),
-    )[0]  # type: ignore[attr-defined]
+    )[0]
     assert len(head_res_fenced) == 0
     chunks_res_fenced = qdrant.scroll(
         collection_name=chunks_col,
         scroll_filter=models.Filter(
             must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]
         ),
-    )[0]  # type: ignore[attr-defined]
+    )[0]
     assert len(chunks_res_fenced) == 0
 
 
