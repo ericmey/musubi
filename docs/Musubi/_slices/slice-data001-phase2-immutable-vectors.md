@@ -135,6 +135,19 @@ path as evidence):
 38. `test_bootstrap_wires_write_planes_with_immutable_publisher` — tests/api/test_bootstrap.py
 39. `test_runtime_factory_wires_curated_plane_with_immutable_publisher` — tests/vault/test_vault003_live_delete.py
 
+Unit A-rest identity-consumer discriminators (transitions / synthesis / API list / namespace_stats /
+curated PATCH / recent — resolve authoritative identity before validate/count/project):
+
+40. `test_transition_identity_lookup_excludes_content` — tests/store/test_data001_phase2_identity_consumers.py
+41. `test_namespace_stats_route_counts_one_identity_per_v2_object` — tests/store/test_data001_phase2_identity_consumers.py
+42. `test_scroll_namespace_excludes_content_and_underfills_on_dangling` — tests/store/test_data001_phase2_identity_consumers.py
+43. `test_scroll_namespace_cursor_survives_dangling_underfill` — tests/store/test_data001_phase2_identity_consumers.py
+44. `test_recent_resolves_v2_and_skips_dangling` — tests/store/test_data001_phase2_identity_consumers.py
+45. `test_synthesis_resolve_candidate_no_torn_read` — tests/store/test_data001_phase2_identity_consumers.py
+46. `test_non_anchor_plane_is_one_scroll_raw` — tests/retrieve/test_recent.py
+47. `test_patch_metadata_preserves_concurrent_state_access_bumps_version_once` — tests/planes/test_curated.py
+48. `test_patch_curated_router_refuses_dangling_pointer_without_mutation` — tests/planes/test_curated.py
+
 ## Scope (Yua-approved 2026-07-15 — coupled integration)
 
 The multi-point layout is only correct if EVERY identity consumer resolves the anchor and no write

@@ -35,6 +35,7 @@ from musubi.lifecycle.coordinator import (
 )
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.store.names import COLLECTION_NAMES
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 from musubi.types.common import (
     KSUID,
     Err,
@@ -311,14 +312,23 @@ def _locate_object(client: QdrantClient, *, object_id: KSUID) -> tuple[str, dict
 def _scroll_by_object_id(
     client: QdrantClient, *, collection: str, object_id: KSUID
 ) -> list[dict[str, Any]]:
-    """Return the payload dict(s) for ``object_id`` in ``collection``, if any."""
+    """Return the AUTHORITATIVE identity payload dict(s) for ``object_id`` in ``collection``, if any.
+
+    DATA-001 P2: excludes write-once CONTENT snapshots (``point_kind == "content"``) so a v2 object
+    resolves to its anchor (full mutable state), never an arbitrary content shell. No-op for v1 rows
+    and concept/thought/artifact (no content points)."""
     try:
         records, _ = client.scroll(
             collection_name=collection,
             scroll_filter=models.Filter(
                 must=[
                     models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))
-                ]
+                ],
+                must_not=[
+                    models.FieldCondition(
+                        key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                    )
+                ],
             ),
             limit=1,
             with_payload=True,
@@ -334,11 +344,19 @@ def _scroll_by_object_id(
 
 
 def _lookup_point_id(client: QdrantClient, *, collection: str, object_id: KSUID) -> str | int:
-    """Find the Qdrant point id for ``object_id``. Raises if missing."""
+    """Find the Qdrant point id of the AUTHORITATIVE identity row for ``object_id``. Raises if missing.
+
+    DATA-001 P2: excludes content snapshots so an admin lineage ``set_payload`` addresses the anchor
+    (or v1 row), never a write-once content shell."""
     records, _ = client.scroll(
         collection_name=collection,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                )
+            ],
         ),
         limit=1,
         with_payload=False,

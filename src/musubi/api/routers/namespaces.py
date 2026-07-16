@@ -11,6 +11,7 @@ from musubi.api.errors import APIError, ErrorCode
 from musubi.api.responses import NamespaceListResponse, NamespaceStats
 from musubi.auth import AuthRequirement, authenticate_request
 from musubi.settings import Settings
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 from musubi.types.common import Err
 
 router = APIRouter(prefix="/v1/namespaces", tags=["namespaces"])
@@ -89,7 +90,15 @@ async def namespace_stats(
                         models.FieldCondition(
                             key="namespace", match=models.MatchValue(value=namespace_path)
                         )
-                    ]
+                    ],
+                    # DATA-001 P2: count IDENTITY rows only — a v2 object is anchor + N content points;
+                    # counting the content snapshots would inflate the per-plane count (no-op for the
+                    # non-anchor planes).
+                    must_not=[
+                        models.FieldCondition(
+                            key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                        )
+                    ],
                 ),
                 exact=True,
             )

@@ -19,7 +19,15 @@ from typing import Any
 from qdrant_client import QdrantClient, models
 
 from musubi.retrieve.grapheme_truncation import truncate_grapheme_safe
+from musubi.store.names import collection_for_plane
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD, strip_layout_fields
 from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
+
+# DATA-001 P2 multi-point-layout collections — a recent hit is resolved anchor-over-content and fails
+# closed on a dangling/cross-object pointer, never projected from a raw anchor shell.
+_IMMUTABLE_VECTOR_COLLECTIONS = frozenset(
+    {collection_for_plane("episodic"), collection_for_plane("curated")}
+)
 
 logger = logging.getLogger(__name__)
 
@@ -153,7 +161,15 @@ async def run_recent_retrieve(
     try:
         records, _ = client.scroll(
             collection_name=collection,
-            scroll_filter=models.Filter(must=must),
+            scroll_filter=models.Filter(
+                must=must,
+                # DATA-001 P2: order/page IDENTITY rows only — never a write-once content snapshot.
+                must_not=[
+                    models.FieldCondition(
+                        key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                    )
+                ],
+            ),
             limit=capped_limit,
             with_payload=True,
             order_by=models.OrderBy(
@@ -177,9 +193,30 @@ async def run_recent_retrieve(
             )
         )
 
+    resolve_layout = collection in _IMMUTABLE_VECTOR_COLLECTIONS
+    if resolve_layout:
+        from musubi.store.immutable_vectors import resolve_committed_content
+
     hits: list[RecentHit] = []
     for record in records:
         payload = dict(record.payload or {})
+        # DATA-001 P2: for episodic/curated, project the RESOLVED committed identity (anchor-over-content),
+        # never the raw anchor shell; a dangling/cross-object pointer fails closed (skipped).
+        if resolve_layout and payload:
+            object_id = payload.get("object_id")
+            resolved = (
+                resolve_committed_content(
+                    client, collection, namespace=namespace, object_id=str(object_id)
+                )
+                if object_id is not None
+                else None
+            )
+            if resolved is None:
+                logger.debug(
+                    "recent retrieve skipping unresolvable identity object_id=%s", object_id
+                )
+                continue
+            payload = strip_layout_fields(resolved)
         if not payload:
             # Surfacing the skip as DEBUG (not WARN) — for recent mode
             # this is more likely to bite than ranked modes ("give me

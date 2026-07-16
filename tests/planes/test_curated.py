@@ -704,6 +704,88 @@ async def test_same_id_update_inherits_state_lineage_access_from_fresh(
     assert updated.access_count == 7, "lease-owned access must survive"
 
 
+async def test_patch_metadata_preserves_concurrent_state_access_bumps_version_once(
+    plane: CuratedPlane, ns: str
+) -> None:
+    """DATA-001 P2 (Yua): the metadata-only PATCH routes through the attributable Phase-1 mutation lease
+    (owned_update) — it targets the identity row (v1 here), bumps version once, and a concurrent
+    transition-owned state + lease-owned access change SURVIVES while the intended metadata lands."""
+    from qdrant_client import models as qmodels
+
+    from musubi.types.common import generate_ksuid
+
+    first = await plane.create(
+        _make(namespace=ns, title="T", content="body", vault_path="curated/eric/patch.md")
+    )
+    # a concurrent transition + access bump lands on the (v1) identity row.
+    superseded_by = str(generate_ksuid())
+    plane._client.set_payload(
+        collection_name=plane._collection,
+        payload={"state": "superseded", "superseded_by": superseded_by, "access_count": 5},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(first.object_id))
+                ),
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+            ]
+        ),
+        wait=True,
+    )
+    updated = await plane.patch_metadata(
+        namespace=ns, object_id=first.object_id, changes={"tags": ["x", "y"], "importance": 9}
+    )
+    assert set(updated.tags) == {"x", "y"} and updated.importance == 9  # metadata landed
+    assert updated.version == first.version + 1  # bumped exactly once
+    assert updated.state == "superseded", "concurrent transition-owned state must survive the PATCH"
+    assert str(updated.superseded_by) == superseded_by
+    assert updated.access_count == 5, "lease-owned access must survive the PATCH"
+
+
+async def test_patch_curated_router_refuses_dangling_pointer_without_mutation(
+    plane: CuratedPlane, ns: str
+) -> None:
+    """DATA-001 P2 (Yua): the ACTUAL patch_curated router must REFUSE (409 CONFLICT) a PATCH against a
+    v2 object whose committed content point is gone, and must NOT mutate the identity row."""
+    from musubi.api.errors import APIError
+    from musubi.api.routers.writes_curated import PatchCuratedRequest, patch_curated
+    from musubi.store.immutable_vectors import read_anchor
+
+    # first create is v1; a same-id body update promotes it to v2 (anchor + content), then dangle it.
+    first = await plane.create(
+        _make(namespace=ns, title="T", content="c1", vault_path="curated/eric/dg.md")
+    )
+    await plane.create(
+        _make(
+            namespace=ns,
+            title="T",
+            content="c2-is-longer",
+            vault_path="curated/eric/dg.md",
+            object_id=first.object_id,
+        )
+    )
+    anchor = read_anchor(
+        plane._client, plane._collection, namespace=ns, object_id=str(first.object_id)
+    )
+    assert anchor is not None and anchor.live_point is not None
+    plane._client.delete(collection_name=plane._collection, points_selector=[anchor.live_point])
+
+    before = await plane.raw_payload(namespace=ns, object_id=str(first.object_id))
+    with pytest.raises(APIError) as exc:
+        await patch_curated(
+            object_id=str(first.object_id),
+            namespace=ns,
+            body=PatchCuratedRequest(tags=["x"], importance=3),
+            qdrant=plane._client,
+            plane=plane,
+        )
+    assert exc.value.status_code == 409, (
+        "a dangling-pointer PATCH must fail closed with 409 CONFLICT"
+    )
+    after = await plane.raw_payload(namespace=ns, object_id=str(first.object_id))
+    assert after == before, "a refused PATCH must not mutate the identity row"
+
+
 async def test_query_excludes_archived_by_default(plane: CuratedPlane, ns: str) -> None:
     saved = await plane.create(
         _make(namespace=ns, content="hidden-me", vault_path="curated/eric/hidden.md")

@@ -503,6 +503,32 @@ class CuratedPlane:
             return None
         return _curated_from_payload(strip_layout_fields(resolved))
 
+    async def patch_metadata(
+        self, *, namespace: Namespace, object_id: KSUID, changes: dict[str, Any]
+    ) -> CuratedKnowledge:
+        """Apply a metadata-only PATCH (author frontmatter, NO body/vector change) to the identity row
+        through the attributable Phase-1 mutation lease (DATA-001 P2, Yua): version-fenced owner-token,
+        rebased on the FRESH row each round, one version bump, targets the identity row (v1 or v2 anchor
+        via ``must_not content``), and composes with concurrent access/transition mutations — so a
+        concurrent state/access change survives while the intended metadata lands. Returns the published
+        row (stripped of layout keys + validated). Raises if the row vanished / lease contention exhausts."""
+        payload_changes = {k: v for k, v in changes.items() if k != "version"}
+
+        def plan(_current: dict[str, Any]) -> MutationPlan:
+            # narrow metadata-only change-set; the mutation lease owns the version bump, and no vectors
+            # change (a body/projection change goes through create() -> the immutable-vector seam).
+            return MutationPlan(changes=dict(payload_changes))
+
+        published = await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            point_id=_point_id(object_id),
+            plan=plan,
+        )
+        return CuratedKnowledge.model_validate(strip_layout_fields(published))
+
     async def query(
         self,
         *,

@@ -14,6 +14,7 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import jwt
 import pytest
@@ -96,13 +97,64 @@ def qdrant() -> Iterator[QdrantClient]:
 
 
 @pytest.fixture
-def episodic(qdrant: QdrantClient) -> EpisodicPlane:
-    return EpisodicPlane(client=qdrant, embedder=FakeEmbedder())
+def coordinator(qdrant: QdrantClient, api_settings: Settings) -> LifecycleTransitionCoordinator:
+    return LifecycleTransitionCoordinator(
+        client=qdrant,
+        db_path=api_settings.lifecycle_sqlite_path,
+        pending_cap=api_settings.lifecycle_pending_cap,
+        lease_ttl=api_settings.lifecycle_lease_ttl_s,
+        backoff_base_s=api_settings.lifecycle_backoff_base_s,
+        backoff_max_s=api_settings.lifecycle_backoff_max_s,
+        busy_timeout_ms=api_settings.lifecycle_sqlite_busy_timeout_ms,
+    )
 
 
 @pytest.fixture
-def curated(qdrant: QdrantClient) -> CuratedPlane:
-    return CuratedPlane(client=qdrant, embedder=FakeEmbedder())
+def _immutable_publishers(
+    qdrant: QdrantClient, coordinator: LifecycleTransitionCoordinator
+) -> tuple[Any, Any]:
+    """DATA-001 P2: ONE dispatcher wiring both write-plane publishers so vector-changing writes
+    (episodic reinforce / curated same-id body update) publish through the fenced seam, not fail-closed."""
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+    from musubi.store.names import collection_for_plane
+
+    ep_coll = collection_for_plane("episodic")
+    cur_coll = collection_for_plane("curated")
+    ep_pub = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=ep_coll)
+    cur_pub = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=cur_coll)
+    register_immutable_vector_dispatch(coordinator, {ep_coll: ep_pub, cur_coll: cur_pub})
+    return ep_pub, cur_pub
+
+
+@pytest.fixture
+def episodic(
+    qdrant: QdrantClient,
+    coordinator: LifecycleTransitionCoordinator,
+    _immutable_publishers: tuple[Any, Any],
+) -> EpisodicPlane:
+    return EpisodicPlane(
+        client=qdrant,
+        embedder=FakeEmbedder(),
+        coordinator=coordinator,
+        vector_publisher=_immutable_publishers[0],
+    )
+
+
+@pytest.fixture
+def curated(
+    qdrant: QdrantClient,
+    coordinator: LifecycleTransitionCoordinator,
+    _immutable_publishers: tuple[Any, Any],
+) -> CuratedPlane:
+    return CuratedPlane(
+        client=qdrant,
+        embedder=FakeEmbedder(),
+        coordinator=coordinator,
+        vector_publisher=_immutable_publishers[1],
+    )
 
 
 @pytest.fixture
@@ -124,6 +176,7 @@ def thoughts(qdrant: QdrantClient) -> ThoughtsPlane:
 def app_factory(
     api_settings: Settings,
     qdrant: QdrantClient,
+    coordinator: LifecycleTransitionCoordinator,
     episodic: EpisodicPlane,
     curated: CuratedPlane,
     concept: ConceptPlane,
@@ -147,15 +200,8 @@ def app_factory(
     app.dependency_overrides[get_concept_plane] = lambda: concept
     app.dependency_overrides[get_artifact_plane] = lambda: artifact
     app.dependency_overrides[get_thoughts_plane] = lambda: thoughts
-    coordinator = LifecycleTransitionCoordinator(
-        client=qdrant,
-        db_path=api_settings.lifecycle_sqlite_path,
-        pending_cap=api_settings.lifecycle_pending_cap,
-        lease_ttl=api_settings.lifecycle_lease_ttl_s,
-        backoff_base_s=api_settings.lifecycle_backoff_base_s,
-        backoff_max_s=api_settings.lifecycle_backoff_max_s,
-        busy_timeout_ms=api_settings.lifecycle_sqlite_busy_timeout_ms,
-    )
+    # DATA-001 P2: the SAME coordinator the write planes were wired to (its dispatcher routes the
+    # inline vector-publish drive), so a synchronous reinforce/same-id update commits, not fail-closed.
     app.dependency_overrides[get_lifecycle_service] = lambda: coordinator
     return app
 
