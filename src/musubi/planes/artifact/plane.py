@@ -565,5 +565,30 @@ class ArtifactPlane:
             expected_version=current.version,
         )
 
+    async def purge(self, *, namespace: Namespace, object_id: KSUID) -> None:
+        """Hard-delete the artifact head point and all indexed chunks."""
+        # Delete head first to fence concurrent indexers (missing head -> terminal fence).
+        self._client.delete(
+            collection_name=self._collection,
+            points_selector=models.PointIdsList(points=[_point_id(object_id)]),
+            wait=True,
+        )
+        self._client.delete(
+            collection_name=self._chunks_collection,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="artifact_id", match=models.MatchValue(value=object_id)
+                        ),
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=namespace)
+                        ),
+                    ]
+                )
+            ),
+            wait=True,
+        )
+
 
 __all__ = ["ArtifactPlane"]

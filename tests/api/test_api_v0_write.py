@@ -1493,6 +1493,131 @@ def test_artifact_purge_requires_operator(
     assert r.status_code == 403
 
 
+def test_artifact_purge_truthful_and_idempotent_and_fenced(
+    client: TestClient,
+    api_settings: object,
+    qdrant: object,
+) -> None:
+    import io
+    from pathlib import Path
+
+    from qdrant_client import models
+
+    from musubi.embedding.fake import FakeEmbedder
+    from musubi.planes.artifact.indexer import ArtifactIndexer
+    from tests.api.conftest import mint_token
+    from tests.api.test_api_v0_write import _coord
+
+    namespace = "eric/ops/artifact"
+    rw_token = mint_token(api_settings, scopes=[f"{namespace}:rw"])  # type: ignore[arg-type]
+
+    # Register the indexer so reconcile_once works
+    coord = _coord()
+    indexer = ArtifactIndexer(
+        client=qdrant,
+        embedder=FakeEmbedder(),
+        blob_root=getattr(api_settings, "artifact_blob_path"),
+    )
+    indexer.register(coord)
+
+    # 1. Create artifact with rw token
+    file_bytes = b"blob data chunks words here"
+    r = client.post(
+        "/v1/artifacts",
+        headers={"Authorization": f"Bearer {rw_token}"},
+        data={
+            "namespace": namespace,
+            "title": "purge-test",
+            "content_type": "text/plain",
+        },
+        files={"file": ("test.txt", io.BytesIO(file_bytes), "text/plain")},
+    )
+    assert r.status_code == 202
+    obj_id = r.json()["object_id"]
+
+    # 2. Process the indexing intent so it gets physical chunks and a committed generation
+    coord.reconcile_once()
+
+    chunks_col = "musubi_artifact_chunks"
+
+    # Verify things exist and are committed
+    blob_path = Path(getattr(api_settings, "artifact_blob_path")) / namespace / obj_id
+    assert blob_path.exists()
+    head_res = qdrant.scroll(
+        collection_name="musubi_artifact",
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]
+        ),
+    )[0]  # type: ignore[attr-defined]
+    assert len(head_res) == 1
+    assert (
+        head_res[0].payload is not None
+        and head_res[0].payload.get("committed_generation") is not None
+    )
+    chunks_res = qdrant.scroll(
+        collection_name=chunks_col,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]
+        ),
+    )[0]  # type: ignore[attr-defined]
+    assert len(chunks_res) > 0
+
+    # 3. Purge with operator token
+    op_token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])  # type: ignore[arg-type]
+    r_purge = client.post(
+        f"/v1/artifacts/{obj_id}/purge",
+        headers={"Authorization": f"Bearer {op_token}"},
+        params={"namespace": namespace},
+    )
+    assert r_purge.status_code == 200
+    assert r_purge.json() == {"status": "purged"}
+
+    # 4. Verify deletions
+    assert not blob_path.exists()
+    head_res_after = qdrant.scroll(
+        collection_name="musubi_artifact",
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]
+        ),
+    )[0]  # type: ignore[attr-defined]
+    assert len(head_res_after) == 0
+    chunks_res_after = qdrant.scroll(
+        collection_name=chunks_col,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]
+        ),
+    )[0]  # type: ignore[attr-defined]
+    assert len(chunks_res_after) == 0
+
+    # 5. Retry idempotent
+    r_purge_retry = client.post(
+        f"/v1/artifacts/{obj_id}/purge",
+        headers={"Authorization": f"Bearer {op_token}"},
+        params={"namespace": namespace},
+    )
+    assert r_purge_retry.status_code == 200
+    assert r_purge_retry.json() == {"status": "purged"}
+
+    # 6. Load-bearing no-resurrection discriminator
+    coord.enqueue_index_intent(object_id=obj_id, namespace=namespace)
+    coord.reconcile_once()
+
+    head_res_fenced = qdrant.scroll(
+        collection_name="musubi_artifact",
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]
+        ),
+    )[0]  # type: ignore[attr-defined]
+    assert len(head_res_fenced) == 0
+    chunks_res_fenced = qdrant.scroll(
+        collection_name=chunks_col,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]
+        ),
+    )[0]  # type: ignore[attr-defined]
+    assert len(chunks_res_fenced) == 0
+
+
 def test_rate_limit_resets_per_minute_window(
     client: TestClient,
     valid_token: str,
