@@ -26,18 +26,9 @@ from qdrant_client import models
 from musubi.embedding.base import Embedder
 from musubi.planes.episodic.plane import _sparse_to_model
 from musubi.store.memory_serialization import LEASE_OWNED_FIELDS
-from musubi.store.specs import (
-    DENSE_VECTOR_NAME,
-    POINT_KIND_CONTENT,
-    POINT_KIND_FIELD,
-    SPARSE_VECTOR_NAME,
-)
+from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.common import epoch_of, utc_now
 
-# must_not condition targeting the AUTHORITATIVE identity row (never a content snapshot).
-_EXCLUDE_CONTENT_COND: list[models.Condition] = [
-    models.FieldCondition(key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT))
-]
 _SYNC_DRIVE_ATTEMPTS = 8  # bounded inline re-drives to commit synchronously under contention
 
 # Fields the anchor NEVER stamps on a publish — they are owned by the RET-008 access lease and the
@@ -567,7 +558,14 @@ class ImmutableVectorPublisher:
         identity row (anchor if v2, else the v1 row) gated on the observed version, stamping OUR
         ``committed_operation_id`` so success is ATTRIBUTABLE (Yua item 2): a concurrent writer that also
         bumped version to ``obs+1`` leaves ITS token, not ours, so version equality alone would falsely
-        confirm. No new content point, no vector recompute. Losing the fence -> retry against fresh."""
+        confirm. No new content point, no vector recompute. Losing the fence -> retry against fresh.
+
+        The identity fence is chosen by LAYOUT (Yua item 7): a v2 anchor fences on its EXACT anchor
+        identity (point_kind==anchor) + observed version; a v1/legacy row (``anchor is None``) reuses
+        :func:`_legacy_conversion_filter`, which admits an absent-or-zero ``version`` so a version-less
+        legacy row's metadata-only mutation commits once instead of an exact ``version==0`` match that a
+        field-less row can never satisfy (which would retry forever). The v1 row keeps NO ``point_kind``,
+        so a payload-only mutation preserves the v1 self-pointer and never fabricates a content point."""
         narrow = {
             **new_full,
             "object_id": ctx.object_id,
@@ -575,16 +573,28 @@ class ImmutableVectorPublisher:
             "version": obs_version + 1,
             "committed_operation_id": ctx.operation_key,
         }
-        must: list[models.Condition] = [
-            models.FieldCondition(key="object_id", match=models.MatchValue(value=ctx.object_id)),
-            models.FieldCondition(key="namespace", match=models.MatchValue(value=ctx.namespace)),
-            models.FieldCondition(key="version", match=models.MatchValue(value=obs_version)),
-        ]
-        self._client.set_payload(
-            collection_name=self._collection,
-            payload=narrow,
-            points=models.Filter(must=must, must_not=_EXCLUDE_CONTENT_COND),  # identity row only
-        )
+        if anchor is None:
+            fence = _legacy_conversion_filter(ctx.namespace, ctx.object_id, obs_version)
+        else:
+            # v2: fence on the EXACT anchor identity (point_kind==anchor), not merely must_not content —
+            # a stray legacy identity row for the same object would otherwise match too (Yua tightening).
+            fence = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=ctx.object_id)
+                    ),
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=ctx.namespace)
+                    ),
+                    models.FieldCondition(
+                        key="point_kind", match=models.MatchValue(value=ANCHOR_KIND)
+                    ),
+                    models.FieldCondition(
+                        key="version", match=models.MatchValue(value=obs_version)
+                    ),
+                ]
+            )
+        self._client.set_payload(collection_name=self._collection, payload=narrow, points=fence)
         fresh = resolve_committed_content(
             self._client, self._collection, namespace=ctx.namespace, object_id=ctx.object_id
         )

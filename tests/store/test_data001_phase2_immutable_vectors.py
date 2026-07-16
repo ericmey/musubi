@@ -829,3 +829,88 @@ def test_cross_object_live_point_fails_closed(
         "a live_point whose content belongs to another object must fail closed, never be served as "
         "obj-a's committed content under obj-a's anchor identity"
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# 20. A version-LESS v1 row's metadata-only mutation commits once (layout-chosen fence) (Yua item 7).
+# --------------------------------------------------------------------------------------------------
+def test_v1_payload_only_metadata_mutation_commits_once(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    """A v1/legacy row carries NO ``version`` field. A same-content (metadata-only) mutation takes the
+    payload-only path with ``anchor is None`` and ``obs_version == 0``; an exact ``version==0`` fence can
+    never match a field-less row, so the old logic retries FOREVER. The layout-chosen fence
+    (_legacy_conversion_filter, absent-or-zero) commits once, preserves the v1 self-pointer (no content
+    point, no anchor), stamps token+version, and an idempotent redrive does not double-apply."""
+    import json
+
+    from musubi.lifecycle.coordinator import CustomIntentContext
+    from musubi.store.immutable_vectors import INTENT_KIND, content_point_id_for, read_anchor
+
+    del content_point_id_for  # imported for parity; unused
+
+    d0, s0 = _embed("stable-body")
+    qdrant.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=str(__import__("uuid").uuid4()),
+                payload={
+                    "object_id": "obj-v1-meta",
+                    "namespace": _NS,
+                    "content": "stable-body",
+                    "importance": 1,
+                    "state": "matured",
+                },  # NOTE: no `version` field — a genuine pre-Phase-2 legacy row.
+                vector={
+                    DENSE_VECTOR_NAME: d0,
+                    SPARSE_VECTOR_NAME: models.SparseVector(
+                        indices=list(s0), values=list(s0.values())
+                    ),
+                },
+            )
+        ],
+    )
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    opk = "immutable_vector_publish:obj-v1-meta:known"
+    descriptor = {"op": "set", "set_fields": {"content": "stable-body", "importance": 5}}
+    desc_json = json.dumps({"descriptor": descriptor}, sort_keys=True, separators=(",", ":"))
+    assert (
+        coord.enqueue_custom_intent(
+            kind=INTENT_KIND,
+            object_id="obj-v1-meta",
+            namespace=_NS,
+            collection=collection,
+            patch_json=desc_json,
+            operation_key=opk,
+        )
+        == "admitted"
+    )
+    report = coord.drive_intent(opk)
+    assert report.finalized == 1, (
+        "a version-less v1 metadata-only mutation must COMMIT (an exact version==0 fence retries forever)"
+    )
+    committed = resolve_or_none(qdrant, collection, "obj-v1-meta") or {}
+    assert committed["importance"] == 5 and committed["content"] == "stable-body"
+    assert committed["committed_operation_id"] == opk and int(committed["version"]) == 1
+    assert read_anchor(qdrant, collection, namespace=_NS, object_id="obj-v1-meta") is None, (
+        "a payload-only mutation must preserve the v1 self-pointer (no anchor promotion)"
+    )
+    assert _content_point_ids(qdrant, collection, "obj-v1-meta") == [], (
+        "a payload-only mutation must never fabricate a content point"
+    )
+    # idempotent redrive: re-run the handler with the SAME operation_key -> replay-only, no double-apply.
+    ctx = CustomIntentContext(
+        operation_key=opk,
+        object_id="obj-v1-meta",
+        collection=collection,
+        namespace=_NS,
+        owner_token="redrive-token",
+        patch_json=desc_json,
+    )
+    assert pub.apply(ctx) == "confirmed"
+    reconfirmed = resolve_or_none(qdrant, collection, "obj-v1-meta") or {}
+    assert int(reconfirmed["version"]) == 1 and reconfirmed["importance"] == 5, (
+        "an idempotent redrive of the committed op must not double-bump version or re-apply"
+    )
