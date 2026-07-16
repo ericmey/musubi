@@ -138,12 +138,13 @@ async def _call(
 ) -> tuple[_SpyQdrantClient, Any]:
     spy = client or _SpyQdrantClient()
     query = kwargs.pop("query", "find gpu notes")
+    collection = kwargs.pop("collection", COLLECTION)
     result = await hybrid_search(
         _client(spy),
         embedder or _CountingEmbedder(),
         namespace=NAMESPACE,
         query=query,
-        collection=COLLECTION,
+        collection=collection,
         **kwargs,
     )
     return spy, result
@@ -333,13 +334,16 @@ async def test_fanout_over_planes_parallel() -> None:
 
 @pytest.mark.asyncio
 async def test_results_deduped_within_single_collection() -> None:
+    # Dedup-by-object_id is collection-agnostic (both paths share the `seen` set); exercise it on a
+    # non-anchor collection so the raw minimal payloads flow through unchanged (the anchor-aware path
+    # would resolve+validate them — covered by the real-Qdrant anchor discriminators).
     spy = _SpyQdrantClient(
         points=[
             _Point("point-1", 0.9, {"object_id": "same", "state": "matured"}),
             _Point("point-2", 0.8, {"object_id": "same", "state": "matured"}),
         ]
     )
-    _client_spy, result = await _call(client=spy)
+    _client_spy, result = await _call(client=spy, collection="musubi_concept")
 
     assert isinstance(result, Ok)
     assert [hit.object_id for hit in result.value.hits] == ["same"]
@@ -347,7 +351,9 @@ async def test_results_deduped_within_single_collection() -> None:
 
 @pytest.mark.asyncio
 async def test_filter_state_matured_excludes_archived_by_default() -> None:
-    spy, _result = await _call()
+    # DATA-001 P2: state stays on the top-level filter ONLY for non-anchor collections (concept/thought/
+    # artifact). For episodic/curated it moves POST-hydration — see test_anchor_aware_* below.
+    spy, _result = await _call(collection="musubi_concept")
 
     conditions = _filter_conditions(spy.calls[0])
     state_conditions = [
@@ -1168,7 +1174,9 @@ async def test_fanout_returns_first_child_error() -> None:
 
 @pytest.mark.asyncio
 async def test_state_filter_overrides_default_visible_states() -> None:
-    spy, result = await _call(state_filter=("archived",))
+    # Non-anchor collection: the explicit state_filter rides the top-level filter (P2 moved this
+    # post-hydration for anchor collections — see test_anchor_aware_* below).
+    spy, result = await _call(state_filter=("archived",), collection="musubi_concept")
 
     assert isinstance(result, Ok)
     conditions = _filter_conditions(spy.calls[0])

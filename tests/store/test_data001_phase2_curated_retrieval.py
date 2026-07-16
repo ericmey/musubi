@@ -349,3 +349,23 @@ def test_scan_dangling_identity_raises(plane: CuratedPlane, qdrant: QdrantClient
     _make_dangling(qdrant, v2)
     with pytest.raises(ValueError, match="dangling"):
         asyncio.run(plane.scan_vault_rows())
+
+
+# ==================================================================================================
+# create true-supersession over a v2 anchor (DATA-001 P2 consumer gap, discovered via hybrid bitemporal)
+# ==================================================================================================
+def test_supersession_of_v2_anchor_no_layout_validation_error(plane: CuratedPlane) -> None:
+    """A DISTINCT new object landing on a vault slot already occupied by a v2 object triggers true
+    supersession. ``supersede_plan`` reads the old row's FRESH payload — a v2 ANCHOR carrying layout-only
+    keys (point_kind/live_point/pointer_version) that ``extra="forbid"`` rejects. Production must strip
+    them before validating (Yua): the old v2 becomes ``superseded`` with NO layout ValidationError, and
+    the new object is created."""
+    old = _v2(plane, "old one", "old committed body", vault_path="slot.md")
+    new = _make("brand new body", vault_path="slot.md")  # distinct object_id, same vault slot
+    created = asyncio.run(plane.create(new))  # must NOT raise a layout ValidationError
+    assert str(created.object_id) == str(new.object_id)
+    superseded = asyncio.run(plane.get(namespace=_NS, object_id=old))
+    assert superseded is not None and superseded.state == "superseded", (
+        "the old v2 object is marked superseded through the narrow lease write"
+    )
+    assert str(superseded.superseded_by) == str(new.object_id)

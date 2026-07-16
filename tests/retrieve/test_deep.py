@@ -51,6 +51,41 @@ class FakeDeepRetrievalLLM(DeepRetrievalLLM):
         return self.expansion
 
 
+async def _seed_matured_episodic(
+    qdrant: QdrantClient, embedder: FakeEmbedder, *, namespace: str, content: str
+) -> EpisodicMemory:
+    """Seed a TRULY-matured v1 episodic row (DATA-001 P2, Yua). ``EpisodicPlane.create`` always forces
+    ``provisional``; pre-P2 these tests still retrieved such rows only because the LOCAL ``:memory:``
+    Qdrant fusion bug did not enforce the top-level state filter. Real Qdrant excludes provisional, and
+    the P2 post-hydration state filter now correctly does too — so the row must be genuinely matured.
+    Seeds a complete v1-shape payload (no ``point_kind`` -> self-authoritative) with real vectors."""
+    from musubi.store.names import collection_for_plane
+    from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+
+    mem = EpisodicMemory(namespace=namespace, content=content, state="matured")
+    dense = (await embedder.embed_dense([content]))[0]
+    sparse = (await embedder.embed_sparse([content]))[0]
+    from musubi.planes.episodic.plane import episodic_point_id
+
+    qdrant.upsert(
+        collection_name=collection_for_plane("episodic"),
+        points=[
+            models.PointStruct(
+                id=episodic_point_id(str(mem.object_id)),
+                payload=mem.model_dump(mode="json"),
+                vector={
+                    DENSE_VECTOR_NAME: dense,
+                    SPARSE_VECTOR_NAME: models.SparseVector(
+                        indices=list(sparse.keys()), values=list(sparse.values())
+                    ),
+                },
+            )
+        ],
+        wait=True,
+    )
+    return mem
+
+
 @pytest.fixture
 def qdrant() -> Iterator[QdrantClient]:
     client = QdrantClient(":memory:")
@@ -84,14 +119,9 @@ async def test_deep_path_invokes_rerank(
 ) -> None:
     """Bullet 1 — test_deep_path_invokes_rerank"""
     # Create enough hits to trigger reranker (reranker skips if <= 5)
-    episodic = EpisodicPlane(client=qdrant, embedder=embedder)
     for i in range(6):
-        await episodic.create(
-            EpisodicMemory(
-                namespace=f"{base_ns}/episodic",
-                content=f"Hit {i}",
-                state="matured",
-            )
+        await _seed_matured_episodic(
+            qdrant, embedder, namespace=f"{base_ns}/episodic", content=f"Hit {i}"
         )
 
     query = RetrievalQuery(namespace=f"{base_ns}/episodic", query_text="Hit", limit=10)
@@ -235,14 +265,9 @@ async def test_deep_path_rerank_down_falls_back_with_warning(
         async def rerank(self, query: str, texts: list[str]) -> list[float]:
             raise EmbeddingError("Reranker down")
 
-    episodic = EpisodicPlane(client=qdrant, embedder=embedder)
     for i in range(6):
-        await episodic.create(
-            EpisodicMemory(
-                namespace=f"{base_ns}/episodic",
-                content=f"Hit {i}",
-                state="matured",
-            )
+        await _seed_matured_episodic(
+            qdrant, embedder, namespace=f"{base_ns}/episodic", content=f"Hit {i}"
         )
     query = RetrievalQuery(namespace=f"{base_ns}/episodic", query_text="Hit", limit=10)
     result = await run_deep_retrieve(qdrant, embedder, DownReranker(), query)  # type: ignore
@@ -330,13 +355,8 @@ async def test_deep_path_llm_expansion_fails_gracefully(
     base_ns: str,
 ) -> None:
     llm = FakeDeepRetrievalLLM(fail=True)
-    episodic = EpisodicPlane(client=qdrant, embedder=embedder)
-    await episodic.create(
-        EpisodicMemory(
-            namespace=f"{base_ns}/episodic",
-            content="original",
-            state="matured",
-        )
+    await _seed_matured_episodic(
+        qdrant, embedder, namespace=f"{base_ns}/episodic", content="original"
     )
     query = RetrievalQuery(namespace=f"{base_ns}/episodic", query_text="original", limit=1)
     result = await run_deep_retrieve(qdrant, embedder, reranker, query, llm=llm)
@@ -522,10 +542,7 @@ async def test_deep_path_no_lineage(
     base_ns: str,
 ) -> None:
     eps_ns = f"{base_ns}/episodic"
-    from musubi.planes.episodic.plane import EpisodicPlane
-
-    plane = EpisodicPlane(client=qdrant, embedder=embedder)
-    await plane.create(EpisodicMemory(namespace=eps_ns, content="Hit 0", state="matured"))
+    await _seed_matured_episodic(qdrant, embedder, namespace=eps_ns, content="Hit 0")
     query = RetrievalQuery(
         namespace=f"{base_ns}/episodic", query_text="Hit", limit=10, include_lineage=False
     )

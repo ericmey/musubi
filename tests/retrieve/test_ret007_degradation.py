@@ -29,6 +29,16 @@ from musubi.retrieve.scoring import Hit
 from musubi.types.common import Err, Ok
 
 
+def _valid_v1_payload() -> dict[str, Any]:
+    """A complete v1-shape EpisodicMemory payload (no ``point_kind`` -> self-authoritative) for a canned
+    ranked hit, so DATA-001 P2's post-hydration resolve+validate accepts it."""
+    from musubi.types.episodic import EpisodicMemory
+
+    return EpisodicMemory(
+        namespace="aoi/ret007/episodic", content="ret007 hit body", state="matured"
+    ).model_dump(mode="json")
+
+
 class DefectStillPresent(Exception):
     """Raised by a red when the current code still exhibits the defect the contract forbids."""
 
@@ -42,11 +52,11 @@ class MockQdrantClient:
         if self.should_timeout:
             raise TimeoutError("Simulated Qdrant Timeout")
         if self.return_hits:
-            hit = type(
-                "MockPoint",
-                (),
-                {"id": "1", "payload": {"state": "matured", "updated_epoch": 1.0}, "score": 1.0},
-            )()
+            # DATA-001 P2: episodic is now anchor-aware, so a ranked hit is resolved + VALIDATED into
+            # EpisodicMemory post-hydration. A canned hit must therefore be a COMPLETE v1-shape payload
+            # (no point_kind -> self-authoritative, so no anchor scroll needed) or it fails closed and
+            # is skipped. Enriching the fake to model a real v1 row, per Yua — never weakening production.
+            hit = type("MockPoint", (), {"id": "1", "payload": _valid_v1_payload(), "score": 1.0})()
             return type("MockResponse", (), {"points": [hit]})()
         return type("MockResponse", (), {"points": []})()
 

@@ -320,9 +320,13 @@ class CuratedPlane:
         # concurrent unrelated mutation to the old row is never overwritten. No vector change.
         def supersede_plan(current: dict[str, Any]) -> MutationPlan:
             now_s = utc_now()
+            # DATA-001 P2: the old row may be a v2 ANCHOR, whose fresh payload carries layout-only keys
+            # (point_kind/live_point/pointer_version/...) that the extra="forbid" model rejects. Strip
+            # them before validating; the write below is still the NARROW lease change-set (state +
+            # superseded_by + updated_at), so the anchor's live_point/pointer/version are untouched.
             superseded = CuratedKnowledge.model_validate(
                 {
-                    **current,
+                    **strip_layout_fields(current),
                     "state": "superseded",
                     "superseded_by": new_row.object_id,
                     "updated_at": now_s,
