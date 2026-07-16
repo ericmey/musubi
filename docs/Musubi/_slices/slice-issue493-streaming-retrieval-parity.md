@@ -1,6 +1,6 @@
 ---
 owner: codex-gpt5-shiori
-status: in-review
+status: done
 issue: 493
 title: "Slice: STREAM-001 retrieval stream parity"
 slice_id: slice-issue493-streaming-retrieval-parity
@@ -9,10 +9,10 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-review
+  - status/done
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

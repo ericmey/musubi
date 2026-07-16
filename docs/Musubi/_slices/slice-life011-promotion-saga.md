@@ -2,14 +2,14 @@
 title: "Slice: LIFE-011 — Promotion Saga Invariants"
 slice_id: slice-life011-promotion-saga
 issue: 555
-status: in-review
+status: done
 owner: gemini-3-1-shiori
 phase: "Lifecycle"
 section: _slices
 type: slice
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

@@ -27,7 +27,7 @@ Fix the `batch_create` shared seam to deduplicate within the current in-flight b
 - [[06-ingestion/capture]]
 
 ## Files
-- `owns_paths`: 
+- `owns_paths`:
   - `src/musubi/planes/episodic/plane.py`
   - `src/musubi/embedding/cosine.py`
   - `src/musubi/lifecycle/synthesis.py`

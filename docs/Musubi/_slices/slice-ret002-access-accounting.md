@@ -1,6 +1,6 @@
 ---
 owner: claude-code-opus48
-status: in-review
+status: done
 issue: 500
 title: "Slice: RET-002 final-delivery access accounting"
 slice_id: slice-ret002-access-accounting
@@ -9,10 +9,10 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-review
+  - status/done
   - type/slice
 updated: 2026-07-15
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---

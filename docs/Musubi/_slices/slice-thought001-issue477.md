@@ -4,10 +4,10 @@ slice_id: slice-thought001-issue477
 issue: 477
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5-shiori
 phase: "Retrieval"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-07-14
 reviewed: true
 depends-on: []
