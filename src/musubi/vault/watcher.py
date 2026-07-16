@@ -5,19 +5,27 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import signal
 from pathlib import Path
-from typing import Any
+
+# VAULT-003: the watcher now requires a LifecycleTransitionCoordinator.
+# Imported lazily (TYPE_CHECKING) to keep the runtime import graph small
+# and avoid a circular import between vault.watcher and lifecycle.coordinator.
+from typing import TYPE_CHECKING, Any
 
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from musubi.planes.curated.plane import CuratedPlane
-from musubi.types.common import generate_ksuid, utc_now
+from musubi.types.common import Err, Ok, generate_ksuid, utc_now
 from musubi.types.curated import CuratedKnowledge
 from musubi.vault.frontmatter import CuratedFrontmatter, parse_frontmatter
 from musubi.vault.namespacing import infer_namespace
 from musubi.vault.writelog import WriteLog
 from musubi.vault.writer import VaultWriter
+
+if TYPE_CHECKING:
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +118,7 @@ class VaultWatcher:
         vault_root: Path,
         curated_plane: CuratedPlane,
         write_log: WriteLog,
+        coordinator: LifecycleTransitionCoordinator,
         debounce_sec: float = 2.0,
         event_rate_per_sec: float = _DEFAULT_EVENT_RATE_PER_SEC,
         indexing_concurrency: int = _DEFAULT_INDEXING_CONCURRENCY,
@@ -122,6 +131,13 @@ class VaultWatcher:
         self.vault_root = vault_root
         self.curated_plane = curated_plane
         self.write_log = write_log
+        # VAULT-003: the canonical archive path requires the
+        # LifecycleTransitionCoordinator. The required-no-default
+        # parameter is the production-wiring discriminator — a
+        # caller that omits the argument fails at the Python
+        # call site (`TypeError: missing 1 required positional
+        # argument`).
+        self.coordinator = coordinator
         self.debounce_sec = debounce_sec
         self.writer = VaultWriter(vault_root, write_log)
 
@@ -333,8 +349,143 @@ class VaultWatcher:
         logger.info("Bootstrapped object_id for %s", rel_path)
 
     async def _handle_deleted(self, rel_path: str) -> None:
-        # TODO: Implement archival flow
-        logger.info("File deleted: %s", rel_path)
+        """VAULT-003: archive the curated row matching ``rel_path`` through the
+        canonical ``LifecycleTransitionCoordinator`` seam.
+
+        The file is gone, so we do NOT re-read the frontmatter. Identity
+        comes from the STORED ``vault_path`` on the existing row
+        (exact match via :meth:`CuratedPlane.find_by_vault_path`).
+
+        Outcomes:
+          - ``Err(not_found)`` from find_by_vault_path -> log ``info``
+            (clean observable no-op) and return.
+          - ``Err(multiple_matches)`` -> log structured ``warning`` with
+            the conflicting object_ids and refuse to archive (fail closed,
+            visibly). A manual operator must reconcile the duplicate.
+          - ``Ok(current)`` and ``current.state == 'archived'`` -> log
+            ``debug`` (idempotent no-op repeat delete; we do NOT re-issue
+            the transition).
+          - ``Ok(current)`` and ``current.state != 'archived'`` -> run
+            the canonical transition to ``archived`` via the coordinator.
+          - ``Ok(TransitionResult)`` -> log ``info`` (archive committed).
+          - ``Err(TransitionError(code='illegal_transition'))`` -> log
+            structured ``warning`` with the actual ``from_state``; the
+            watcher's pre-read state check above already filtered the
+            common repeat-delete case, so this is a real anomaly
+            (superseded/demoted/etc row hitting archive) and stays
+            visible. NO IN-HANDLER RETRY.
+        """
+        lookup = await self.curated_plane.find_by_vault_path(rel_path)
+        if isinstance(lookup, Err):
+            if lookup.error.code == "multiple_matches":
+                # match_count is a BOUNDED LOWER BOUND (the resolver caps its
+                # scroll at limit=2), so present it truthfully — the real
+                # duplicate set may be larger. Same for the object_ids.
+                logger.warning(
+                    "vault-delete-failed-multiple-matches path=%s match_count_at_least=%d "
+                    "match_object_ids_observed=%s",
+                    rel_path,
+                    lookup.error.match_count,
+                    ",".join(lookup.error.match_object_ids),
+                )
+                return
+            # not_found or any other error code: clean observable no-op.
+            logger.info(
+                "vault-delete-noop path=%s reason=%s",
+                rel_path,
+                lookup.error.code,
+            )
+            return
+
+        current = lookup.value
+        if current.state == "archived":
+            # Already archived (repeat delete on the same row) —
+            # idempotent no-op. We do NOT re-issue the transition
+            # because the canonical state machine would surface
+            # `illegal_transition(archived -> archived)` and we don't
+            # want a successful-looking log on a no-op. Wrong-state
+            # rows (superseded/demoted/etc) fall through to the
+            # transition and surface their illegal_transition as a
+            # visible warning.
+            logger.debug(
+                "vault-delete-idempotent path=%s object_id=%s state=archived",
+                rel_path,
+                current.object_id,
+            )
+            return
+
+        result = await self.curated_plane.transition(
+            namespace=current.namespace,
+            object_id=current.object_id,
+            to_state="archived",
+            actor="vault-watcher",
+            reason=f"vault file deleted: {rel_path}",
+            coordinator=self.coordinator,
+        )
+
+        if isinstance(result, Ok):
+            # The canonical seam returns Ok in two distinct shapes and the
+            # log must not conflate them: TransitionPending (durable-accept
+            # admitted, NOT yet finalized) vs a finalized TransitionResult.
+            # Lazy import keeps coordinator out of the module import graph
+            # (see the TYPE_CHECKING note at the top of this file).
+            from musubi.lifecycle.coordinator import TransitionPending
+
+            value = result.value
+            if isinstance(value, TransitionPending):
+                logger.info(
+                    "vault-delete-archived path=%s object_id=%s outcome=pending "
+                    "operation_key=%s event_id=%s",
+                    rel_path,
+                    current.object_id,
+                    value.operation_key,
+                    value.event_id,
+                )
+            else:
+                logger.info(
+                    "vault-delete-archived path=%s object_id=%s outcome=finalized "
+                    "event_id=%s version=%s",
+                    rel_path,
+                    current.object_id,
+                    value.event.event_id,
+                    value.version,
+                )
+            return
+
+        err = result.error
+
+        # Concurrent-archive race: between our find_by_vault_path read
+        # (which saw a non-archived row) and this transition, another
+        # actor archived the SAME row. The canonical transition then
+        # sees state=archived and rejects archived -> archived as an
+        # illegal_transition with from_state=archived. The end state is
+        # exactly what this delete wanted, so it is an idempotent no-op —
+        # the same outcome as the pre-read archived-state check above,
+        # just resolved one layer down. We do NOT warn. Every OTHER
+        # illegal from_state (superseded/demoted/etc) is a real anomaly
+        # and stays a fail-closed warning.
+        if err.code == "illegal_transition" and getattr(err, "from_state", None) == "archived":
+            logger.debug(
+                "vault-delete-idempotent-race path=%s object_id=%s from_state=archived",
+                rel_path,
+                current.object_id,
+            )
+            return
+
+        # Err(TransitionError) — every code here is a real anomaly now
+        # that we've pre-filtered the common repeat-delete case AND the
+        # concurrent archived->archived race. Log the from_state so
+        # operators can see WHY it failed (e.g. superseded -> archived is
+        # illegal in the curated state table).
+        logger.warning(
+            "vault-delete-failed path=%s object_id=%s code=%s from_state=%s to_state=%s message=%s",
+            rel_path,
+            current.object_id,
+            err.code,
+            getattr(err, "from_state", "unknown"),
+            getattr(err, "to_state", "unknown"),
+            err.message,
+        )
 
     def boot_scan(self) -> None:
         """Run a background scan over the vault to catch missed edits."""
@@ -429,3 +580,77 @@ class VaultWatcher:
             self._observer.join()
             self._observer = None
         logger.info("Vault watcher stopped")
+
+
+# ---------------------------------------------------------------------------
+# Production entrypoint
+# ---------------------------------------------------------------------------
+
+
+async def _main_async() -> None:
+    """VAULT-003: the production entrypoint invoked by
+    ``python -m musubi.vault.watcher`` (per
+    ``deploy/systemd/musubi-vault-sync.service``).
+
+    Builds the canonical runtime, constructs the watcher, starts the
+    watchdog observer, then runs the one-time boot scan (the observer
+    is up first so no filesystem event is missed during the scan), and
+    stays alive until SIGTERM/SIGINT. On exit, the observer is stopped
+    cleanly and the runtime's sink is closed. ``WriteLog`` has no
+    ``close()`` — it opens sqlite connections per call, so each
+    ``record_write`` / ``consume_if_exists`` is its own transaction;
+    there is no per-process connection to release.
+    """
+    from musubi.observability import configure_logging
+    from musubi.vault.runtime import build_vault_sync_runtime
+
+    configure_logging()
+    runtime = build_vault_sync_runtime()
+    watcher = VaultWatcher(
+        vault_root=runtime.vault_root,
+        curated_plane=runtime.curated_plane,
+        write_log=runtime.write_log,
+        coordinator=runtime.coordinator,
+    )
+    loop = asyncio.get_running_loop()
+    watcher.start(loop=loop)
+    # Run the boot scan after the observer is up; the scan dispatches
+    # via the same _handle_event path so it respects the canonical
+    # coordinator + curated plane wiring.
+    watcher.boot_scan()
+
+    stop_event = asyncio.Event()
+
+    def _request_stop(*_args: object) -> None:
+        logger.info("vault-watcher-signal-received; requesting stop")
+        stop_event.set()
+
+    import contextlib
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError, ValueError):
+            # Windows / non-unix / signal already installed; skip.
+            loop.add_signal_handler(sig, _request_stop)
+
+    try:
+        await stop_event.wait()
+    finally:
+        watcher.stop()
+        runtime.sink.close()
+        logger.info("vault-watcher-exited-cleanly")
+
+
+def main() -> None:
+    """Synchronous entrypoint for ``python -m musubi.vault.watcher``."""
+    asyncio.run(_main_async())
+
+
+if __name__ == "__main__":
+    main()
+
+
+__all__ = [
+    "VaultWatcher",
+    "WatcherHandler",
+    "main",
+]
