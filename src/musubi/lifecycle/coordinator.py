@@ -191,13 +191,19 @@ class CustomIntentContext:
     uses it as the never-reused publish owner (the ABA fence). The handler MUST mint its own
     never-reused ``generation`` per attempt, stage work under (generation, owner_token), publish by
     a conditional head replace, and return ``'confirmed'`` (published + won), ``'fence'`` (a stale/
-    lost attempt — terminal), or ``'retry'`` (transient — keep PENDING + backoff)."""
+    lost attempt — terminal), or ``'retry'`` (transient — keep PENDING + backoff).
+
+    ``patch_json`` is the durable intent payload persisted at admission (DATA-001 Phase 2): the
+    handler recomputes its effect from this alone, so a crash after admission replays from disk with
+    no caller memory. ``None`` for intents admitted without a payload (e.g. the artifact_index wrapper,
+    which re-derives from Qdrant + the on-disk blob)."""
 
     operation_key: str
     object_id: str
     collection: str
     namespace: str
     owner_token: str
+    patch_json: str | None = None
 
 
 class CleanupConfigError(ValueError):
@@ -1186,6 +1192,7 @@ class LifecycleTransitionCoordinator:
         ns: str,
         token: str,
         counts: dict[str, int],
+        patch_json: str | None = None,
     ) -> None:
         """Drive a claimed non-transition intent (C4/ART-001): dispatch to the registered handler and
         map its outcome onto the SAME disposition policy as a transition apply. A missing handler keeps
@@ -1200,7 +1207,12 @@ class LifecycleTransitionCoordinator:
             counts["pending"] += 1
             return
         ctx = CustomIntentContext(
-            operation_key=opk, object_id=oid, collection=coll, namespace=ns, owner_token=token
+            operation_key=opk,
+            object_id=oid,
+            collection=coll,
+            namespace=ns,
+            owner_token=token,
+            patch_json=patch_json,
         )
         try:
             outcome = handler(ctx)
@@ -1483,16 +1495,42 @@ class LifecycleTransitionCoordinator:
             raise ValueError("intent kind must be non-empty and not 'lifecycle_transition'")
         self._intent_handlers[kind] = handler
 
-    def enqueue_index_intent(
-        self, *, object_id: str, namespace: str, collection: str = "musubi_artifact"
+    #: Max serialized custom-intent patch accepted at admission (DATA-001 P2). The payload is the
+    #: canonical content + narrow fields + a recompute fingerprint — never a raw vector blob — so this
+    #: bounds the durable outbox row. A larger payload fails TRUTHFULLY at admission.
+    _MAX_PATCH_JSON_BYTES = 64 * 1024
+
+    def enqueue_custom_intent(
+        self,
+        *,
+        kind: str,
+        object_id: str,
+        namespace: str,
+        collection: str,
+        patch_json: str | None = None,
     ) -> str:
-        """Durably admit ONE artifact-indexing intent (C4/ART-001). Reuses the outbox +
-        ``ux_active_intent`` (one active intent per ``(collection, object_id)``). Cap-gated like a
-        transition admission — backpressure NEVER raises. Returns a status the caller must honor:
-        ``'admitted'`` (a new intent is PENDING), ``'already_active'`` (one is already in flight —
-        idempotent no-op), or ``'at_capacity'`` (the outbox cap was hit — the caller MUST record a
-        visible terminal disposition; the artifact is NOT silently left ``indexing`` forever)."""
-        opk = f"artifact_index:{object_id}:{self._new_token()}"
+        """Durably admit ONE custom (non-transition) intent of ``kind`` — the generalization of
+        :meth:`enqueue_index_intent`. Same cap gate + ``ux_active_intent`` idempotency (one active
+        intent per ``(collection, object_id)``); backpressure NEVER raises. ``patch_json`` is the
+        durable intent payload the handler replays from with no caller memory (DATA-001 P2); it is
+        validated as JSON and size-bounded HERE, so a malformed/oversized payload fails truthfully at
+        admission rather than silently mid-apply. Returns ``'admitted'`` / ``'already_active'`` /
+        ``'at_capacity'`` (on capacity the caller MUST record a visible terminal disposition)."""
+        if not kind or kind == "lifecycle_transition":
+            raise ValueError(
+                f"custom intent kind must be non-empty and non-transition; got {kind!r}"
+            )
+        if patch_json is not None:
+            if len(patch_json.encode("utf-8")) > self._MAX_PATCH_JSON_BYTES:
+                raise ValueError(
+                    f"patch_json exceeds {self._MAX_PATCH_JSON_BYTES} bytes; persist a recompute "
+                    "fingerprint + narrow fields, never a raw vector blob"
+                )
+            try:
+                json.loads(patch_json)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise ValueError(f"patch_json is not valid JSON: {exc}") from exc
+        opk = f"{kind}:{object_id}:{self._new_token()}"
         con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
@@ -1502,18 +1540,28 @@ class LifecycleTransitionCoordinator:
                     return "at_capacity"
                 con.execute(
                     "INSERT INTO lifecycle_outbox "
-                    "(operation_key,object_id,collection,namespace,state,intent_kind,attempts) "
-                    "VALUES (?,?,?,?,'PENDING','artifact_index',0)",
-                    (opk, object_id, collection, namespace),
+                    "(operation_key,object_id,collection,namespace,state,intent_kind,patch_json,"
+                    "attempts) VALUES (?,?,?,?,'PENDING',?,?,0)",
+                    (opk, object_id, collection, namespace, kind, patch_json),
                 )
                 con.execute("COMMIT")
                 return "admitted"
             except sqlite3.IntegrityError:
-                # ux_active_intent: an index intent is already active for this artifact — idempotent.
+                # ux_active_intent: an intent is already active for this (collection, object_id).
                 con.execute("ROLLBACK")
                 return "already_active"
         finally:
             con.close()
+
+    def enqueue_index_intent(
+        self, *, object_id: str, namespace: str, collection: str = "musubi_artifact"
+    ) -> str:
+        """Backward-compatible artifact_index admission (C4/ART-001) — a thin wrapper over
+        :meth:`enqueue_custom_intent` with ``kind='artifact_index'`` and no patch payload (the indexer
+        re-derives from Qdrant + the on-disk blob). Behavior and return contract are unchanged."""
+        return self.enqueue_custom_intent(
+            kind="artifact_index", object_id=object_id, namespace=namespace, collection=collection
+        )
 
     def reconcile_once(self, *, limit: int = 100) -> ReconcileReport:
         """Run one reconcile pass while holding the S6 shared maintenance barrier."""
@@ -1585,7 +1633,7 @@ class LifecycleTransitionCoordinator:
             # C4/ART-001: a non-transition intent-kind delegates its APPLY to a registered handler;
             # the built-in lifecycle-transition path (ikind NULL/'lifecycle_transition') is untouched.
             if ikind and ikind != "lifecycle_transition":
-                self._drive_custom_intent(ikind, opk, oid, coll, ns, token, counts)
+                self._drive_custom_intent(ikind, opk, oid, coll, ns, token, counts, patch_json)
                 continue
             self._reconcile_claimed(
                 opk,
