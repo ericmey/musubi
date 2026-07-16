@@ -75,6 +75,12 @@ compositions of the multi-point layout.
   `tests/api/test_bootstrap.py`, `tests/vault/test_vault003_live_delete.py` (fixtures wired +
   identity-consumer/composition discriminators added)
 
+## Specs to implement
+
+- [[_slices/slice-data001-phase2-immutable-vectors]] — this slice's contract is its `## Test Contract`
+  below (self-referential, like slice-c6-lifecycle-event-loss): the store invariant core plus the
+  Yua-approved coupled integration (identity consumers + the three write compositions).
+
 ## Test Contract (exact test names; real Qdrant; each fix RED-proofed before GREEN)
 
 `tests/store/test_data001_phase2_immutable_vectors.py` — invariant core (1–13):
@@ -119,14 +125,15 @@ compositions of the multi-point layout.
 32. `test_drive_intent_touches_only_the_named_operation`
 33. `test_drive_intent_bypasses_retry_backoff`
 
-Identity-consumer + composition discriminators in extended shared files:
+Identity-consumer + composition discriminators in extended shared files (function in backticks; file
+path as evidence):
 
-34. `tests/planes/test_raw_lookup_and_delete.py::test_presence_and_raw_payload_ignore_orphan_content_shell`
-35. `tests/planes/test_episodic.py::test_get_returns_none_for_missing_id` (resolve-before-bump)
-36. `tests/planes/test_episodic.py::test_concurrent_dedup_race_resolves_to_single_winner` (anchor-aware get)
-37. `tests/planes/test_curated.py::test_same_id_update_inherits_state_lineage_access_from_fresh`
-38. `tests/api/test_bootstrap.py::test_bootstrap_wires_write_planes_with_immutable_publisher`
-39. `tests/vault/test_vault003_live_delete.py::test_runtime_factory_wires_curated_plane_with_immutable_publisher`
+34. `test_presence_and_raw_payload_ignore_orphan_content_shell` — tests/planes/test_raw_lookup_and_delete.py
+35. `test_get_returns_none_for_missing_id` — tests/planes/test_episodic.py (resolve-before-bump)
+36. `test_concurrent_dedup_race_resolves_to_single_winner` — tests/planes/test_episodic.py (anchor-aware get)
+37. `test_same_id_update_inherits_state_lineage_access_from_fresh` — tests/planes/test_curated.py
+38. `test_bootstrap_wires_write_planes_with_immutable_publisher` — tests/api/test_bootstrap.py
+39. `test_runtime_factory_wires_curated_plane_with_immutable_publisher` — tests/vault/test_vault003_live_delete.py
 
 ## Scope (Yua-approved 2026-07-15 — coupled integration)
 
