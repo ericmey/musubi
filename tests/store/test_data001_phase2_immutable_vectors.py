@@ -874,7 +874,11 @@ def test_v1_payload_only_metadata_mutation_commits_once(
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     opk = "immutable_vector_publish:obj-v1-meta:known"
-    descriptor = {"op": "set", "set_fields": {"content": "stable-body", "importance": 5}}
+    descriptor = {
+        "op": "set",
+        "set_fields": {"content": "stable-body", "importance": 5},
+        "embed_kind": "episodic",
+    }
     desc_json = json.dumps({"descriptor": descriptor}, sort_keys=True, separators=(",", ":"))
     assert (
         coord.enqueue_custom_intent(
@@ -914,3 +918,110 @@ def test_v1_payload_only_metadata_mutation_commits_once(
     assert int(reconfirmed["version"]) == 1 and reconfirmed["importance"] == 5, (
         "an idempotent redrive of the committed op must not double-bump version or re-apply"
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# 21. Curated EMBEDDING PROJECTION (title + summary-or-content) decides vector-change (Yua).
+# --------------------------------------------------------------------------------------------------
+def test_curated_projection_decides_vector_change(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    """The curated projection is ``title + "\\n\\n" + (summary or content)``. A change WITHIN it
+    (title, or summary while summary is authoritative) re-embeds -> new content point + pointer bump; a
+    change OUTSIDE it (topics/importance, or content while a summary shadows it) stays payload-only ->
+    same live_point/pointer_version but the field still commits on the anchor."""
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.curated_publish(
+        coord,
+        object_id="cur-1",
+        namespace=_NS,
+        set_fields={"title": "T", "summary": "S", "content": "C", "topics": ["x"]},
+    )
+    a0 = _anchor(qdrant, collection, "cur-1")
+
+    # (a) title-only change -> projection changes -> VECTOR change (new content point + pointer bump).
+    pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"title": "T2"})
+    a1 = _anchor(qdrant, collection, "cur-1")
+    assert a1.pointer_version > a0.pointer_version and a1.live_point != a0.live_point
+
+    # (b) summary-only change -> projection changes -> VECTOR change.
+    pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"summary": "S2"})
+    a2 = _anchor(qdrant, collection, "cur-1")
+    assert a2.pointer_version > a1.pointer_version and a2.live_point != a1.live_point
+
+    # (c) non-projection metadata-only (topics) -> PAYLOAD-ONLY: same pointer/live_point, still commits.
+    pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"topics": ["y", "z"]})
+    a3 = _anchor(qdrant, collection, "cur-1")
+    assert a3.pointer_version == a2.pointer_version and a3.live_point == a2.live_point
+    assert a3.version > a2.version
+    assert (resolve_or_none(qdrant, collection, "cur-1") or {})["topics"] == ["y", "z"]
+
+    # (d) content change WHILE a summary shadows it -> projection unchanged -> PAYLOAD-ONLY (no re-embed),
+    #     but the new content still lands on the anchor.
+    pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"content": "C-new"})
+    a4 = _anchor(qdrant, collection, "cur-1")
+    assert a4.pointer_version == a3.pointer_version and a4.live_point == a3.live_point
+    assert (resolve_or_none(qdrant, collection, "cur-1") or {})["content"] == "C-new"
+
+
+# --------------------------------------------------------------------------------------------------
+# 22. Curated content change with NO summary IS a vector change (projection falls through to content).
+# --------------------------------------------------------------------------------------------------
+def test_curated_content_change_without_summary_is_vector_change(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.curated_publish(
+        coord, object_id="cur-2", namespace=_NS, set_fields={"title": "T", "content": "C"}
+    )
+    a0 = _anchor(qdrant, collection, "cur-2")
+    pub.curated_publish(
+        coord, object_id="cur-2", namespace=_NS, set_fields={"content": "C-much-longer"}
+    )
+    a1 = _anchor(qdrant, collection, "cur-2")
+    assert a1.pointer_version > a0.pointer_version and a1.live_point != a0.live_point, (
+        "with no summary the projection is title+content, so a content change must re-embed"
+    )
+
+
+# --------------------------------------------------------------------------------------------------
+# 23. Episodic reinforce is PROJECTION-based: a summary shadows growing content -> payload-only (Yua).
+# --------------------------------------------------------------------------------------------------
+def test_episodic_reinforce_with_summary_is_projection_based(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    """Episodic embeds ``summary or content``. A reinforce that grows the stored content but leaves the
+    (authoritative) summary intact does NOT change the projection, so it stays payload-only — the vector
+    is not re-embedded — while longer-wins still updates the stored body and unions tags."""
+    import asyncio
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(
+        coord,
+        object_id="ep-sum",
+        namespace=_NS,
+        content_payload={"content": "short", "summary": "the-summary", "tags": ["a"]},
+    )
+    a0 = _anchor(qdrant, collection, "ep-sum")
+    committed = asyncio.run(
+        pub.reinforce_publish(
+            coord,
+            object_id="ep-sum",
+            namespace=_NS,
+            new_memory={"content": "a-much-longer-content-body", "tags": ["b"]},
+            merge_strategy="longer-wins",
+        )
+    )
+    a1 = _anchor(qdrant, collection, "ep-sum")
+    assert a1.pointer_version == a0.pointer_version and a1.live_point == a0.live_point, (
+        "a summary-shadowed content growth must not re-embed (projection unchanged) -> payload-only"
+    )
+    assert (
+        committed["content"] == "a-much-longer-content-body"
+    )  # longer-wins still updated the body
+    assert committed["summary"] == "the-summary"  # preserved
+    assert sorted(committed["tags"]) == ["a", "b"]  # tag union
+    assert committed["reinforcement_count"] == 1

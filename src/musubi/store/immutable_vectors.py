@@ -211,8 +211,39 @@ def resolve_committed_content(
     return None
 
 
+_EMBED_KINDS = ("episodic", "curated")
+
+
+def _projection(embed_kind: str, payload: dict[str, Any]) -> str:
+    """The EMBEDDING PROJECTION for a plane (Yua) — the exact text a plane feeds the embedder, derived
+    from the fully rebased authoritative payload. A vector change is decided by whether THIS text
+    changes (title/summary/content for curated; summary-or-content for episodic), NOT the stored body
+    alone: a metadata-only mutation outside the projection stays payload-only, and a summary/title-only
+    change re-embeds. Mirrors episodic ``_embed_target`` (plane.py:218) and curated ``_embed_target``
+    (plane.py:91-99) exactly, so a reinforced/updated row's vector matches its fresh-insert sibling."""
+    body = payload.get("summary") or payload.get("content", "")
+    if embed_kind == "curated":
+        return f"{payload.get('title', '')}\n\n{body}"
+    return str(body)  # episodic / generic: summary-or-content
+
+
+def _projection_snapshot(embed_kind: str, new_full: dict[str, Any]) -> dict[str, Any]:
+    """The IMMUTABLE projection-source fields stamped on the write-once content point (Yua): episodic
+    stores content+summary; curated stores title+content+summary — never a ``body`` key. The content
+    point is thus a faithful, self-describing snapshot of exactly what produced its vector."""
+    snap: dict[str, Any] = {
+        "content": new_full.get("content", ""),
+        "summary": new_full.get("summary"),
+    }
+    if embed_kind == "curated":
+        snap["title"] = new_full.get("title", "")
+    return snap
+
+
 def _parse_descriptor(patch_json: str | None) -> dict[str, Any] | None:
-    """The durable intent payload is an INTENDED MUTATION DESCRIPTOR (never a full snapshot)."""
+    """The durable intent payload is an INTENDED MUTATION DESCRIPTOR (never a full snapshot). It carries
+    a validated ``embed_kind`` (which projection the handler re-embeds against); a missing/invalid kind
+    FAILS CLOSED (Yua) — the handler returns a terminal fence rather than embed the wrong projection."""
     if not patch_json:
         return None
     try:
@@ -222,6 +253,8 @@ def _parse_descriptor(patch_json: str | None) -> dict[str, Any] | None:
     desc = outer.get("descriptor") if isinstance(outer, dict) else None
     if not isinstance(desc, dict) or desc.get("op") not in ("reinforce", "set"):
         return None
+    if desc.get("embed_kind") not in _EMBED_KINDS:
+        return None  # missing/invalid embed_kind -> fail closed (never guess the projection).
     return desc
 
 
@@ -308,7 +341,9 @@ class ImmutableVectorPublisher:
             object_id=object_id,
             namespace=namespace,
             collection=self._collection,
-            patch_json=self._descriptor_json({"op": "set", "set_fields": content_payload}),
+            patch_json=self._descriptor_json(
+                {"op": "set", "set_fields": content_payload, "embed_kind": "episodic"}
+            ),
         )
         return status
 
@@ -323,30 +358,43 @@ class ImmutableVectorPublisher:
     ) -> dict[str, Any]:
         """SYNCHRONOUS episodic reinforce publish (production write path). The handler REBASES on fresh
         state — longer-wins content choice vs ``new_memory``, tag UNION, reinforcement_count INCREMENT,
-        lease/access fields from fresh — decides content/vector-change there, and dual-fences on
-        pointer_version AND version. Returns the committed authoritative payload; raises pending if it
-        cannot commit inline."""
+        lease/access fields from fresh — decides vector-change by the EPISODIC projection (summary or
+        content), and dual-fences on pointer_version AND version. Returns the committed authoritative
+        payload; raises pending if it cannot commit inline."""
         return self._publish_descriptor(
             coordinator,
             object_id,
             namespace,
-            {"op": "reinforce", "new_memory": new_memory, "merge_strategy": merge_strategy},
+            {
+                "op": "reinforce",
+                "new_memory": new_memory,
+                "merge_strategy": merge_strategy,
+                "embed_kind": "episodic",
+            },
         )
 
     def curated_publish(
         self, coordinator: Any, *, object_id: str, namespace: str, set_fields: dict[str, Any]
     ) -> dict[str, Any]:
-        """SYNCHRONOUS curated field-set publish, rebased on fresh state + dual-fenced (as above)."""
+        """SYNCHRONOUS curated field-set publish, rebased on fresh state + dual-fenced. Vector-change is
+        decided by the CURATED projection (title + summary-or-content), so a title/summary/content change
+        re-embeds while a non-projection metadata change stays payload-only."""
         return self._publish_descriptor(
-            coordinator, object_id, namespace, {"op": "set", "set_fields": set_fields}
+            coordinator,
+            object_id,
+            namespace,
+            {"op": "set", "set_fields": set_fields, "embed_kind": "curated"},
         )
 
     def publish(
         self, coordinator: Any, *, object_id: str, namespace: str, content_payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """SYNCHRONOUS 'set' publish (production/test), rebased on fresh state + dual-fenced."""
+        """SYNCHRONOUS 'set' publish (production/test, GENERIC episodic projection), rebased + fenced."""
         return self._publish_descriptor(
-            coordinator, object_id, namespace, {"op": "set", "set_fields": content_payload}
+            coordinator,
+            object_id,
+            namespace,
+            {"op": "set", "set_fields": content_payload, "embed_kind": "episodic"},
         )
 
     def _publish_descriptor(
@@ -421,7 +469,8 @@ class ImmutableVectorPublisher:
         # against fresh + fence on the observed version below.
         obs_version = int((fresh or {}).get("version", 0))
         obs_pv = anchor.pointer_version if anchor is not None else 0
-        new_full, winning_content, content_changed = _rebase(descriptor, fresh)
+        embed_kind = str(descriptor["embed_kind"])
+        new_full, _, _ = _rebase(descriptor, fresh)
         # never let a caller patch carry lease-owned fields onto the anchor.
         for f in _LEASE_OWNED_ON_ANCHOR:
             new_full.pop(f, None)
@@ -432,16 +481,21 @@ class ImmutableVectorPublisher:
             self._inject_pre_publish = None
             fn()
 
-        if not content_changed:
-            # PAYLOAD-ONLY (existing content won): narrow fenced set_payload on the identity row,
-            # fenced on the observed version. No new content point. A concurrent version bump fails
-            # the fence -> retry -> recompute against the newer fresh state.
+        # VECTOR-CHANGE is decided by the EMBEDDING PROJECTION, not the stored content alone (Yua): a
+        # title/summary/content change re-embeds; a metadata-only mutation OUTSIDE the projection (e.g.
+        # importance, tags) stays payload-only even though new_full differs from fresh.
+        new_projection = _projection(embed_kind, new_full)
+        vector_changed = (new_projection != _projection(embed_kind, fresh or {})) or not fresh
+        if not vector_changed:
+            # PAYLOAD-ONLY: narrow fenced set_payload on the identity row, fenced on the observed version.
+            # No new content point. A concurrent version bump fails the fence -> retry against fresh.
             return self._publish_payload_only(ctx, anchor, new_full, obs_version)
 
-        # VECTOR CHANGE: recompute the vector from the winning content, stage a write-once content
-        # point, then a SINGLE fenced anchor publish gated on BOTH pointer_version AND version.
-        dense = (await self._embedder.embed_dense([winning_content]))[0]
-        sparse = (await self._embedder.embed_sparse([winning_content]))[0]
+        # VECTOR CHANGE: embed the NEW projection, stage a write-once content point carrying the immutable
+        # projection-source snapshot, then a SINGLE fenced anchor publish gated on pointer_version AND
+        # version.
+        dense = (await self._embedder.embed_dense([new_projection]))[0]
+        sparse = (await self._embedder.embed_sparse([new_projection]))[0]
         generation = ctx.operation_key
         content_id = content_point_id_for(ctx.operation_key, 0)
         self._client.upsert(
@@ -455,7 +509,9 @@ class ImmutableVectorPublisher:
                         "point_kind": CONTENT_KIND,
                         "generation": generation,
                         "owner_token": ctx.owner_token,
-                        "content": winning_content,
+                        # immutable projection-source snapshot (episodic: content+summary;
+                        # curated: title+content+summary) — never a 'body' key (Yua).
+                        **_projection_snapshot(embed_kind, new_full),
                     },
                     vector={DENSE_VECTOR_NAME: dense, SPARSE_VECTOR_NAME: _sparse_to_model(sparse)},
                 )
