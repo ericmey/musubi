@@ -145,11 +145,19 @@ class EpisodicPlane:
         client: QdrantClient,
         embedder: Embedder,
         dedup_threshold: float = _DEFAULT_DEDUP_THRESHOLD,
+        coordinator: LifecycleTransitionCoordinator | None = None,
+        vector_publisher: Any | None = None,
     ) -> None:
         self._client = client
         self._embedder = embedder
         self._collection = collection_for_plane("episodic")
         self._dedup_threshold = dedup_threshold
+        # DATA-001 P2: vector-changing updates go through the durable immutable-vector publisher (fenced
+        # anchor + content snapshot). Injected only in PRODUCTION WRITE compositions; a read-only
+        # construction leaves them None and a vector-changing write then FAILS CLOSED (never the old
+        # unfenceable update_vectors). Approved optional injection (Yua).
+        self._coordinator = coordinator
+        self._vector_publisher = vector_publisher
 
     # ------------------------------------------------------------------
     # Create
@@ -425,36 +433,28 @@ class EpisodicPlane:
         and only by the proven owner (``update_vectors`` is unfenced); when existing content wins we
         leave the stored vectors untouched. ``existing_dense`` / ``existing_sparse`` (the probe's
         vectors) are no longer needed and are ignored — retained for call-site stability."""
-        del existing_dense, existing_sparse  # superseded by the fresh-read mutation lease.
+        del existing_dense, existing_sparse, dense, sparse  # recomputed by the publisher when needed.
 
-        def plan(current: dict[str, Any]) -> MutationPlan:
-            merged, existing_content_won = self._merge_row(
-                existing=EpisodicMemory.model_validate(current),
-                new=new,
-                merge_strategy=merge_strategy,
-                now=utc_now(),
+        # DATA-001 P2 (Yua correction 2026-07-15): the durable immutable-vector intent must persist an
+        # INTENDED MUTATION DESCRIPTOR (merge_strategy + the incoming new memory) and REBASE it on the
+        # FRESH authoritative anchor INSIDE the handler — deciding there whether content/vector changes,
+        # taking lease/access fields from fresh state, and fencing on BOTH pointer_version AND version.
+        # Passing a full stale snapshot would clobber a concurrent unrelated Phase-1 mutation. That
+        # descriptor-rebase handler is being built; until it lands this path FAILS CLOSED rather than
+        # ship the stale-snapshot bug or the unfenceable in-place update_vectors.
+        if self._vector_publisher is None or self._coordinator is None:
+            raise RuntimeError(
+                "episodic reinforce reached the vector-change path but the descriptor-rebase "
+                "immutable-vector publisher is not wired (DATA-001 P2 fail-closed)"
             )
-            dumped = merged.model_dump(mode="json")
-            changes = {
-                k: dumped[k]
-                for k in ("content", "tags", "reinforcement_count", "updated_at", "updated_epoch")
-            }
-            vectors = (
-                None
-                if existing_content_won
-                else {DENSE_VECTOR_NAME: dense, SPARSE_VECTOR_NAME: _sparse_to_model(sparse)}
-            )
-            return MutationPlan(changes=changes, vectors=vectors)
-
-        published = await owned_update(
-            self._client,
-            self._collection,
-            namespace=str(existing.namespace),
+        committed = await self._vector_publisher.reinforce_publish(
+            self._coordinator,
             object_id=str(existing.object_id),
-            point_id=_point_id(existing.object_id),
-            plan=plan,
+            namespace=str(existing.namespace),
+            new_memory=new.model_dump(mode="json"),
+            merge_strategy=merge_strategy,
         )
-        return EpisodicMemory.model_validate(published)
+        return EpisodicMemory.model_validate(committed)
 
     def _upsert(
         self,
