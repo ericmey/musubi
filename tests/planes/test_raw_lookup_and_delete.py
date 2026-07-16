@@ -94,6 +94,72 @@ async def test_point_exists_is_namespace_isolated(
     )
 
 
+async def test_presence_and_raw_payload_ignore_orphan_content_shell(qdrant: QdrantClient) -> None:
+    """DATA-001 P2: presence + inspection answer from the IDENTITY row (v2 anchor or v1), NEVER a
+    write-once content snapshot. An orphan content shell left after a missing/deleted anchor must not
+    report the object present (else an existence guard keeps a half-deleted object alive); once a real
+    anchor exists, both see it."""
+    import uuid
+
+    from qdrant_client import models
+
+    from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+
+    oid = "orphan-shell-oid"
+    dense = (await FakeEmbedder().embed_dense(["x"]))[0]
+    qdrant.upsert(
+        collection_name=COLLECTION,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid4()),
+                payload={
+                    "namespace": NS,
+                    "object_id": oid,
+                    "point_kind": "content",
+                    "content": "x",
+                },
+                vector={
+                    DENSE_VECTOR_NAME: dense,
+                    SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+    assert point_exists(qdrant, COLLECTION, namespace=NS, object_id=oid) is False, (
+        "an orphan content shell must not report the object as present"
+    )
+    assert raw_payload(qdrant, COLLECTION, namespace=NS, object_id=oid) is None
+
+    # once a real anchor identity row exists, presence + inspection see it (and return the anchor).
+    qdrant.upsert(
+        collection_name=COLLECTION,
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid4()),
+                payload={
+                    "namespace": NS,
+                    "object_id": oid,
+                    "point_kind": "anchor",
+                    "state": "matured",
+                    "content": "x",
+                    "live_point": "cp",
+                },
+                vector={
+                    DENSE_VECTOR_NAME: [0.0] * len(dense),
+                    SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+    assert point_exists(qdrant, COLLECTION, namespace=NS, object_id=oid) is True
+    rp = raw_payload(qdrant, COLLECTION, namespace=NS, object_id=oid)
+    assert rp is not None and rp.get("point_kind") == "anchor", (
+        "raw_payload must return the authoritative anchor identity row, not the content shell"
+    )
+
+
 async def test_retrieve_by_point_id_finds_a_row_whose_identifiers_are_gone(
     episodic: EpisodicPlane, qdrant: QdrantClient
 ) -> None:

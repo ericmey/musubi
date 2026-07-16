@@ -41,8 +41,9 @@ Consequences:
 | # | seam (file:line, func) | op | risk | fix | status |
 |---|---|---|---|---|---|
 | 1 | `lifecycle/coordinator.py:872 _read_object` (→ `_persist_event:902`, `_apply_conditional/_confirm:1005`, `_cur:1371`) | scroll ns+oid limit=2 | anchor+content → count=2 → every episodic/curated transition fences/abandons | exclude `point_kind=content` (no-op for v1 + concept/thought/artifact) | **DONE + proven** (test 24, red-proofed) |
-| 2 | `store/raw_lookup.py:71 raw_payload` | scroll ns+oid limit=1 | returns arbitrary point (may be content shell) | target identity (must_not content; resolve anchor-over-content) | TODO |
-| 3 | `store/raw_lookup.py:101 retrieve_by_point_id` (callers pass legacy `_point_id`) | retrieve by id | brand-new anchor at a different id → None (delete 404); converted anchor single-delete orphans content | address full layout, not one derived id | TODO |
+| 2 | `store/raw_lookup.py:71 raw_payload` | scroll ns+oid limit=1 | returns arbitrary point (may be content shell) | target identity (`_identity_by_id`, must_not content); v2 anchor carries content so this IS anchor-over-content | **DONE + proven** (orphan-shell test) |
+| 2b | `store/raw_lookup.py:52 point_exists` (**promoted from Already-safe** — Yua/Tama) | scroll ns+oid limit=1 | an orphan content shell (anchor missing/deleted) reports the object PRESENT → existence guards keep a half-deleted object alive | exclude content (identity presence only) | **DONE + proven** (orphan-content discriminator) |
+| 3 | `store/raw_lookup.py:101 retrieve_by_point_id` (callers pass legacy `_point_id`) | retrieve by id | brand-new anchor at a different id → None (delete 404); converted anchor single-delete orphans content | address full layout, not one derived id — fixed in the DELETE unit (C) | TODO (unit C) |
 | 4 | `planes/episodic/plane.py:559 get()` (→113 `_memory_from_payload`→validate) | scroll ns+oid limit=1 | validates an anchor/content shell → raises; cascades to patch/transition/reinstate | resolve committed content before validate | TODO |
 | 5 | `planes/episodic/plane.py:491 _find_dedup_candidate` | query dense, ns filter | ranks content + stale converted anchors; returns shell → validate fail / stale candidate | query content, exclude anchors, resolve via anchor, overfetch+underfill | TODO |
 | 6 | `planes/episodic/plane.py:624 query()` | query dense, ns+state | content excluded by state; anchors (zero/stale vec) surface → validate fail + real vectors unreachable | anchor-aware retrieval | TODO |
@@ -66,7 +67,6 @@ Also: `api/routers/writes_episodic.py:446 delete` delegates to episodic `plane.d
 
 - `store/mutation_lease.py` + `store/access_lease.py` — `_EXCLUDE_CONTENT` (`must_not point_kind=content`) on every read/CAS; leases hit only the identity row.
 - `store/immutable_vectors.py` — the Phase-2 layer itself (anchor-filtered, fail-closed resolve, full content-fanout delete).
-- `raw_lookup.py:52 point_exists` — boolean presence, still correct (imprecise, not wrong).
 - `api/routers/retrieve.py:348 _expand_wildcard_targets` — reads only `namespace`, dedups into a set.
 - `lifecycle/reflection.py`, `maturation.py`, `demotion.py` sweeps — discriminating-field filters exclude content and read raw dicts. **Caveat:** their *apply* rides `coordinator.transition` → depend on seam #1 (now fixed).
 
