@@ -69,12 +69,27 @@ Only two production paths change vectors: `EpisodicPlane._reinforce` when NEW co
 - **`get(object_id)`:** read the anchor, then hydrate the committed content through `anchor.live_point`
   (v2) or the row itself (v1). A v2 anchor with an absent `live_point` fails closed.
 
-## Durable intent (ruling 2)
+## Durable intent — single store (Option B, decided 2026-07-15)
 
-Before staging, persist the COMPLETE intended mutation — new content + the EXACT narrow payload fields +
-the vector source — in the coordinator outbox `patch_json` (or an equivalent existing durable field),
-keyed by `operation_key`. A crash after enqueue / before apply must be replayable from DISK with no
-caller memory: the coordinator reconstructs the intent and re-drives the handler to completion.
+Two candidate durable homes were considered. **Option A** (stage the mutation as a Qdrant content
+point at admit + enqueue the intent in SQLite) was REJECTED: it is a two-store write with an
+unavoidable cross-store crash gap — stage-first leaves an orphan content point with no intent;
+enqueue-first leaves a durable intent with no replayable mutation. **Option B** (adopted): the COMPLETE
+mutation lives in ONE store — the coordinator outbox `patch_json` — so admission is a single atomic
+SQLite write and there is no cross-store gap.
+
+Before staging, persist the COMPLETE intended mutation — the canonical content + the EXACT narrow
+payload fields + a recompute FINGERPRINT (embedder identity + content length), never a raw vector blob
+— in `patch_json`, keyed by `operation_key`, JSON- and size-validated at admission. The handler
+RECOMPUTES the vector from that content (deterministic for a given embedder), so a crash after
+admission replays from disk with no caller memory.
+
+Coordinator generalization (additive, bounded, authorized under this slice): `enqueue_custom_intent(kind,
+object_id, namespace, collection, patch_json)` generalizes the artifact-only `enqueue_index_intent`
+(now a backward-compatible wrapper); `CustomIntentContext.patch_json` threads the persisted payload
+through `_drive_custom_intent` on every normal/reconcile path. Same cap gate + `ux_active_intent`
+idempotency (one active intent per object — so a "loser" is a stale claim's late write, fenced on
+`pointer_version`, not a second simultaneous intent).
 
 ## Reconciliation — rides the EXISTING coordinator seam (ruling 2; verified, no new worker)
 
