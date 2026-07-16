@@ -25,7 +25,7 @@ Enforces the deterministic `SEC-007` prompt-boundary separation. Centralizes exp
 - [[07-interfaces/index]]
 
 ## Files
-- `owns_paths`: 
+- `owns_paths`:
   - `src/musubi/llm/prompt_boundary.py`
   - `tests/llm/test_prompt_boundary_structural.py`
   - `docs/Musubi/_slices/slice-sec007-prompt-boundary.md`

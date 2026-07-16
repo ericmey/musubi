@@ -7,5 +7,3 @@ If contradictory, briefly explain WHICH claims clash.
 Respond in this exact JSON shape, no commentary:
 
 {"verdict": "<consistent|contradictory>", "reason": "<string>"}
-
-

@@ -13,4 +13,3 @@ Guidelines:
 Respond in this exact JSON shape, no commentary:
 
 {"title": "<string>", "content": "<string>", "rationale": "<string>", "tags": ["<tag>", ...], "importance": <1-10>, "contradicts_notice": "<string or empty>"}
-

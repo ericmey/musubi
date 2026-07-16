@@ -7,4 +7,3 @@ Prefer topics already on the item when they fit. If no topic fits confidently, r
 Respond in exactly this JSON shape, with one entry per input id. No commentary, no markdown.
 
 {"items": [{"id": "<id>", "topics": ["area/sub", ...]}, ...]}
-

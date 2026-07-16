@@ -12,4 +12,3 @@ The capture step gave each item a provisional importance. Revise only if it's me
 Respond in exactly this JSON shape, with one entry per input id. No commentary, no markdown.
 
 {"items": [{"id": "<id>", "importance": <1-10 integer>}, ...]}
-
