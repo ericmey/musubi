@@ -46,8 +46,6 @@ from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import (
     DENSE_VECTOR_NAME,
-    POINT_KIND_ANCHOR,
-    POINT_KIND_FIELD,
     SPARSE_VECTOR_NAME,
     strip_layout_fields,
 )
@@ -71,20 +69,6 @@ _POINT_NS = uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000001")
 _DEFAULT_DEDUP_THRESHOLD = 0.92
 _VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured",)
 _VISIBLE_STATES_WITH_DEMOTED: tuple[LifecycleState, ...] = ("matured", "demoted")
-
-# DATA-001 P2 anchor-aware ranked reads: prefilter is IMMUTABLE-only (namespace + must_not anchor);
-# state/tag filters move POST-hydration, so we BOUNDED-overfetch to refill the drops (superseded content,
-# post-filtered rows) and accept a truthful underfill rather than an unbounded retry.
-_RANKED_OVERFETCH_FACTOR = 4
-_RANKED_OVERFETCH_MAX = 256
-
-
-def _not_anchor() -> list[models.Condition]:
-    return [
-        models.FieldCondition(
-            key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_ANCHOR)
-        )
-    ]
 
 
 # Content-merge strategy on dedup hit.
@@ -530,12 +514,15 @@ class EpisodicPlane:
         bounded-overfetched candidates in score order until the first LIVE one. The returned vectors are
         that live candidate point's own (the committed content's), so reinforce preserves the real
         embedding."""
-        from musubi.store.immutable_vectors import resolve_ranked_candidate
+        from musubi.store.immutable_vectors import (
+            not_anchor_condition,
+            ranked_dedup_budget,
+            resolve_ranked_candidate,
+        )
 
         # DEDUP BUDGET (Yua): a duplicate-create is DESTRUCTIVE, so the live duplicate must not be hidden
         # behind a few stale/superseded higher-scoring content snapshots — walk the FULL capped candidate
-        # budget, not a small factor, before concluding "no duplicate".
-        overfetch = _RANKED_OVERFETCH_MAX
+        # budget (the shared seam), not a small factor, before concluding "no duplicate".
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
@@ -544,9 +531,9 @@ class EpisodicPlane:
                 must=[
                     models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
                 ],
-                must_not=_not_anchor(),
+                must_not=not_anchor_condition(),
             ),
-            limit=overfetch,
+            limit=ranked_dedup_budget(),
             score_threshold=self._dedup_threshold,
             with_payload=True,
             with_vectors=True,
@@ -657,9 +644,12 @@ class EpisodicPlane:
         # DATA-001 P2: prefilter IMMUTABLE-only (namespace + must_not anchor) — content points carry no
         # `state`, so a state prefilter would drop the real vectors and surface zero-vector anchors.
         # BOUNDED overfetch, then hydrate each candidate through its anchor and apply state POST-hydration.
-        from musubi.store.immutable_vectors import resolve_ranked_candidate
+        from musubi.store.immutable_vectors import (
+            not_anchor_condition,
+            ranked_overfetch,
+            resolve_ranked_candidate,
+        )
 
-        overfetch = min(max(limit, 1) * _RANKED_OVERFETCH_FACTOR, _RANKED_OVERFETCH_MAX)
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
@@ -668,9 +658,9 @@ class EpisodicPlane:
                 must=[
                     models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
                 ],
-                must_not=_not_anchor(),
+                must_not=not_anchor_condition(),
             ),
-            limit=overfetch,
+            limit=ranked_overfetch(limit),
             with_payload=True,
         )
         out: list[EpisodicMemory] = []

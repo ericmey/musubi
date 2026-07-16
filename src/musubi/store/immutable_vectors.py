@@ -311,6 +311,32 @@ def resolve_ranked_candidate(
     return {**payload, **anchor_payload}  # anchor OVER content (single consistent read)
 
 
+# Shared ranked-read prefilter + budget (one seam for every anchor-aware plane — episodic AND curated —
+# so the retrieval rule can never fork between them). A dense-ranked read must (1) exclude anchors from
+# the candidate set up front — an anchor carries a zero/stale vector and would otherwise occupy a ranked
+# slot it must never win — and (2) BOUND the overfetch: the resolver drops stale/superseded snapshots
+# post-hydration, so the raw scan is widened by a capped factor to refill, never with an unbounded retry.
+_RANKED_OVERFETCH_FACTOR = 4
+_RANKED_OVERFETCH_MAX = 256
+
+
+def not_anchor_condition() -> list[models.Condition]:
+    """A ``must_not`` clause excluding anchor points from a ranked candidate set (see above)."""
+    return [models.FieldCondition(key="point_kind", match=models.MatchValue(value=ANCHOR_KIND))]
+
+
+def ranked_overfetch(limit: int) -> int:
+    """The bounded raw-scan width for a ranked read of ``limit`` visible rows (capped, never unbounded)."""
+    return min(max(limit, 1) * _RANKED_OVERFETCH_FACTOR, _RANKED_OVERFETCH_MAX)
+
+
+def ranked_dedup_budget() -> int:
+    """The full capped candidate budget for a dedup scan. A duplicate-create is DESTRUCTIVE, so the live
+    duplicate must not stay hidden behind a few stale/superseded higher-scoring snapshots — walk the whole
+    cap, not the small overfetch factor a visible-query uses."""
+    return _RANKED_OVERFETCH_MAX
+
+
 _EMBED_KINDS = ("episodic", "curated")
 
 
@@ -855,6 +881,9 @@ __all__ = [
     "anchor_point_id",
     "content_point_id_for",
     "delete_object_layout",
+    "not_anchor_condition",
+    "ranked_dedup_budget",
+    "ranked_overfetch",
     "read_anchor",
     "read_anchor_payload",
     "read_identity_payload",
