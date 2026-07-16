@@ -15,4 +15,3 @@
   "sid": "slice-sec008-ops-network-boundary",
   "scope": "Docs and structural contracts only. No route, auth, firewall, compose, or live-host mutation."
 }
-
