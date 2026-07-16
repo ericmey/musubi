@@ -24,7 +24,7 @@ blocks: []
 
 ## Specs to implement
 
-- Issue #449 (release-automation defects)
+- [[13-decisions/0026-release-please-for-versioning]] (release-automation defects per Yua 2026-07-13 19:11:24 architecture-contract hardening; tests/docs/design only — the actual automation defect remains future work on Issue #449 status:deferred)- Issue #449 (release-automation defects)
 - Yua 2026-07-13 18:51:31 (post-pin acceptance + corrected contracts)
 - Yua 2026-07-13 18:45:31 (conceptual correction)
 - Yua 2026-07-13 18:48:19 (status shape + buildx cache correction)
