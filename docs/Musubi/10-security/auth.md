@@ -189,6 +189,17 @@ On each request Core:
 
 All this is in `musubi/auth/middleware.py`. It's a FastAPI dependency; every route carries it.
 
+### Network-protected read-only ops exceptions
+
+`GET /v1/ops/health`, `GET /v1/ops/status`, and `GET /v1/ops/metrics` are the
+bounded exceptions to the bearer-per-route rule. Deployment probes and the local
+Prometheus scraper need them before tenant auth is available. They are protected by
+UFW's trusted-VLAN/Kong-source allow rule and the private Compose network; they are
+not safe for public exposure. Mutating and debug ops still require `operator`.
+
+The enforcement, accepted disclosure, negative proof, owner, and review triggers are
+recorded in [[13-decisions/0038-network-protect-read-only-ops-endpoints]].
+
 ## Scope checks on retrieval
 
 Retrieval is trickier — a query might span namespaces (blended). Rule:

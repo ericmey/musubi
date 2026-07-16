@@ -387,11 +387,15 @@ POST   /v1/contradictions/resolve            # operator: pick winner, set reason
 ### 9. Ops
 
 ```
-GET    /v1/ops/health                        # liveness + readiness
-GET    /v1/ops/status                        # per-component status
-GET    /v1/ops/metrics                       # Prometheus format (internal only; protected)
+GET    /v1/ops/health                        # liveness; network-protected, no bearer
+GET    /v1/ops/status                        # readiness; network-protected, no bearer
+GET    /v1/ops/metrics                       # Prometheus; private scrape, no bearer
 POST   /v1/ops/reindex                       # operator: full reindex
 ```
+
+The three read-only exceptions are protected by the deployment firewall/Compose
+boundary, not by tenant bearer scope. Mutating and debug ops remain operator-scoped.
+See [[13-decisions/0038-network-protect-read-only-ops-endpoints]].
 
 ### 10. Namespaces
 
