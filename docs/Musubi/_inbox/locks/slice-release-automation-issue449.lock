@@ -1,0 +1,14 @@
+{
+  "agent": "tama",
+  "branch": "slice/release-automation-issue449",
+  "timestamp": "2026-07-13T22:00:00Z",
+  "reason": "Issue #449 release-automation architecture-contract hardening. Tests/docs/design only per Yua 2026-07-13 19:11:24, 6e07c56, 20:25:31, 20:48:34, 20:57:08, 21:05:45, 21:21:24, 21:27:31, 21:36:58, 21:43:06. The contract is Option C (intentionally separate main/release builds with explicit expected digest divergence). EXACT TEST ACCOUNTING: 73 tests = 6 architecture-contract invariants + 1 strict red + 56 wrong-fixture mutation tests + 10 legitimate controls; 71 pass + 2 strict xfail. Per Yua 21:43:06: docs-only final correction. Invariant 5 wording names PROJECT_RELEASE_GRAMMAR_BASH as the source; representative accepted/rejected examples; consistent 'documented project release grammar (bounded SemVer subset)' phrasing. No source/workflow/deploy changes. No live GH. No host. No merge.",
+  "owns_paths": [
+    "docs/Musubi/_slices/slice-release-automation-issue449.md",
+    "docs/Musubi/_inbox/locks/slice-release-automation-issue449.lock",
+    "tests/release/test_release_automation_issue449.py"
+  ],
+  "sid": "slice-release-automation-issue449",
+  "scope": "Release-automation architecture-contract hardening tests/docs/design only. 73 tests = 6 invariants + 1 strict red + 56 wrong-fixture + 10 controls; 71 pass + 2 strict xfail. No source/workflow/deploy changes. No live GH. No host. No merge. Aoi R20 separate second read when it lands. Spec-Update trailer: docs-only grammar source naming per Yua 21:43:06.",
+  "spec-update": "3f2a882-to-following-commit per Yua 21:43:06 (docs-only: PROJECT_RELEASE_GRAMMAR_BASH as the source; representative accepted/rejected examples; consistent 'documented project release grammar (bounded SemVer subset)' phrasing)"
+}
