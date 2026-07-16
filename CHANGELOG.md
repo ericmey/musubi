@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.7](https://github.com/ericmey/musubi/compare/v1.17.6...v1.17.7) (2026-07-16)
+
+
+### Bug Fixes
+
+* LIFE-006 durable lifecycle job failure alerts (Issue [#528](https://github.com/ericmey/musubi/issues/528)) ([#529](https://github.com/ericmey/musubi/issues/529)) ([96016c9](https://github.com/ericmey/musubi/commit/96016c98ef973b6f8ae60b549ea08090787b53df))
+
 ## [1.17.6](https://github.com/ericmey/musubi/compare/v1.17.5...v1.17.6) (2026-07-15)
 
 
