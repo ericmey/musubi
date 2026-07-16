@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.17.9](https://github.com/ericmey/musubi/compare/v1.17.8...v1.17.9) (2026-07-16)
+
+
+### Bug Fixes
+
+* **lifecycle:** prevent promotion lockout loops via structured fault-tolerance ordering ([#572](https://github.com/ericmey/musubi/issues/572)) ([31ed3d4](https://github.com/ericmey/musubi/commit/31ed3d460a6ad193cfde18a7c3b1951438d38987))
+* **llm:** structurally isolate untrusted memory payloads via JSON-encoded user boundary ([#569](https://github.com/ericmey/musubi/issues/569)) ([26ee503](https://github.com/ericmey/musubi/commit/26ee503b2e95f6b2ce90778900857b2a977d03cb))
+
 ## [1.17.8](https://github.com/ericmey/musubi/compare/v1.17.7...v1.17.8) (2026-07-16)
 
 
