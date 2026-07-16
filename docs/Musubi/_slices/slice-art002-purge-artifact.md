@@ -21,6 +21,9 @@ Tracks #399.
 
 Make the `purge_artifact` endpoint truthful and functional. Replaces the 202 mock acknowledgment with a genuine hard delete of the artifact head, its committed chunks, and its blob file. Failures report truth rather than faking success, and the endpoint relies on Qdrant and the blob storage interfaces in an idempotent manner. Uses head-first purge ordering to fence any already-running `ArtifactIndexer` publish (the head readback/filter vanishes).
 
+## Specs to implement
+- [[04-data-model/source-artifact]]
+
 ## Files
 - `owns_paths`:
   - `src/musubi/api/routers/writes_artifact.py`
