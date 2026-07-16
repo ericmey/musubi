@@ -450,6 +450,43 @@ async def test_missing_row_is_observable_noop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["invalid_row", "some_future_code"])
+async def test_delete_broken_or_unknown_code_warns_and_refuses(
+    plane: CuratedPlane,
+    ns: str,
+    watcher: VaultWatcher,
+    caplog: pytest.LogCaptureFixture,
+    code: str,
+) -> None:
+    """DATA-001 P2 (Yua): only ``not_found`` is the clean no-op. A present-but-dangling/malformed identity
+    (``invalid_row``) AND any unknown/future error code must WARN and REFUSE — never silently inherit the
+    clean-absence path, which would leave a corrupt row live or let a newly-added typed code regress."""
+    from unittest.mock import AsyncMock
+
+    from musubi.planes.curated.plane import FindByVaultPathError
+
+    rel_path = "eric/shared/broken-identity.md"
+    abs_path = str(watcher.vault_root / rel_path)
+
+    err = Err(error=FindByVaultPathError(code=code, detail="broken", match_object_ids=("broken-oid",)))
+    transition_spy = AsyncMock()
+    plane.find_by_vault_path = AsyncMock(return_value=err)  # type: ignore[method-assign]
+    plane.transition = transition_spy  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.DEBUG, logger="musubi.vault.watcher"):
+        await watcher._handle_event(abs_path, FileDeletedEvent(abs_path))
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(rel_path in m and f"code={code}" in m for m in warnings), (
+        f"a non-not_found code ({code}) must emit a structured warning naming the path, got: {warnings}"
+    )
+    # Fail closed: it must NOT be logged as a clean no-op, and must NOT attempt to archive.
+    infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert not any("vault-delete-noop" in m for m in infos), f"{code} is not a clean no-op"
+    transition_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_transition_failure_remains_visible(
     plane: CuratedPlane,
     ns: str,
@@ -1246,8 +1283,10 @@ async def test_find_by_vault_path_uses_limit_two_for_fail_closed(
     real_scroll = plane._client.scroll
 
     def _spy_scroll(*args: Any, **kwargs: Any) -> Any:
-        captured.clear()
-        captured.update(kwargs)
+        # DATA-001 P2: find_by_vault_path issues its OWN scroll first, then RESOLVES the identity through
+        # the anchor (further internal scrolls). Capture only the FIRST (the find's own) scroll shape.
+        if not captured:
+            captured.update(kwargs)
         return real_scroll(*args, **kwargs)
 
     plane._client.scroll = _spy_scroll  # type: ignore[method-assign]
@@ -1286,9 +1325,10 @@ async def test_find_by_vault_path_scroll_requests_payload_only(
     real_scroll = plane._client.scroll
 
     def _spy_scroll(*args: Any, **kwargs: Any) -> Any:
-        # Record the LAST scroll's kwargs (find_by_vault_path issues one).
-        captured.clear()
-        captured.update(kwargs)
+        # Record the FIRST scroll's kwargs (find_by_vault_path's own; DATA-001 P2 then resolves the
+        # identity through the anchor, which issues further internal scrolls).
+        if not captured:
+            captured.update(kwargs)
         return real_scroll(*args, **kwargs)
 
     plane._client.scroll = _spy_scroll  # type: ignore[method-assign]

@@ -350,6 +350,11 @@ class VaultWatcher:
           - ``Err(multiple_matches)`` -> log structured ``warning`` with
             the conflicting object_ids and refuse to archive (fail closed,
             visibly). A manual operator must reconcile the duplicate.
+          - ``Err(invalid_row)`` (DATA-001 P2) -> the path IS occupied by a
+            DANGLING or MALFORMED identity — NOT a clean absence. Log a
+            structured ``warning`` and refuse to archive (fail closed): a
+            broken row must never be silently treated as a no-op, or a
+            corrupt identity would sit un-archived and unreported.
           - ``Ok(current)`` and ``current.state == 'archived'`` -> log
             ``debug`` (idempotent no-op repeat delete; we do NOT re-issue
             the transition).
@@ -377,11 +382,19 @@ class VaultWatcher:
                     ",".join(lookup.error.match_object_ids),
                 )
                 return
-            # not_found or any other error code: clean observable no-op.
-            logger.info(
-                "vault-delete-noop path=%s reason=%s",
+            if lookup.error.code == "not_found":
+                # The ONLY clean-absence outcome: no identity for this path -> observable info no-op.
+                logger.info("vault-delete-noop path=%s reason=%s", rel_path, lookup.error.code)
+                return
+            # EXHAUSTIVE fail-closed default (Yua): invalid_row (present-but-dangling/malformed) AND any
+            # unknown/future error code warn and REFUSE to archive — a silent no-op here would leave a
+            # corrupt row live, or let a newly-added typed code silently regress into a clean absence.
+            logger.warning(
+                "vault-delete-failed-lookup path=%s code=%s detail=%s object_ids_observed=%s",
                 rel_path,
                 lookup.error.code,
+                lookup.error.detail,
+                ",".join(lookup.error.match_object_ids),
             )
             return
 

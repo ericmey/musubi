@@ -833,6 +833,11 @@ async def test_scan_vault_rows_paginates_and_validates(
     )
 
     def mock_scroll(*args: Any, offset: Any = None, **kwargs: Any) -> tuple[list[Any], int | None]:
+        # Only paginate the top-level inventory scroll (limit=1000). DATA-001 P2: scan_vault_rows now
+        # RESOLVES each identity through its anchor, whose internal scrolls must reach the real client —
+        # delegate anything that is not the inventory page, or we would starve the resolver.
+        if kwargs.get("limit") != 1000:
+            return original_scroll(*args, offset=offset, **kwargs)
         if offset is None:
             return all_records[:2], 2  # return first 2, next offset is 2
         else:
@@ -856,14 +861,22 @@ async def test_scan_vault_rows_surfaces_validation_failure(
 
     from musubi.store.specs import DENSE_VECTOR_NAME
 
-    # Seed a row missing required schema fields
+    # Seed a v1-shape identity row (has object_id + namespace so it RESOLVES as a legacy self-pointer)
+    # but missing required schema fields, so the post-resolve model_validate raises. DATA-001 P2: the
+    # scan resolves through the anchor first, then validates — the fail-loud surface for a corrupt row
+    # is still the pydantic validation error (Yua: validation failures must propagate, never be skipped).
     qdrant.upsert(
         collection_name=plane._collection,
         points=[
             PointStruct(
                 id="00000000-0000-0000-0000-000000000000",
                 vector={DENSE_VECTOR_NAME: [0.0] * 1024},
-                payload={"vault_path": "bad.md", "invalid_schema": "missing_required_fields"},
+                payload={
+                    "object_id": "bad-oid",
+                    "namespace": ns,
+                    "vault_path": "bad.md",
+                    "invalid_schema": "missing_required_fields",
+                },
             )
         ],
     )

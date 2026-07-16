@@ -325,6 +325,22 @@ def not_anchor_condition() -> list[models.Condition]:
     return [models.FieldCondition(key="point_kind", match=models.MatchValue(value=ANCHOR_KIND))]
 
 
+def not_content_condition() -> list[models.Condition]:
+    """A ``must_not`` clause excluding write-once CONTENT snapshots from an IDENTITY scroll — the dual of
+    :func:`not_anchor_condition`. An identity read must see one row per object: the ANCHOR (v2, which
+    carries the full authoritative payload) or the legacy v1 row, never a content snapshot.
+
+    A content point carries ONLY its immutable projection source (``content``/``summary``/``title``) plus
+    ``object_id``/``namespace``/``point_kind`` — NOT ``vault_path``/``state``/validity. So this clause is
+    load-bearing in two distinct ways: (1) a full inventory scan that resolves EACH row by ``object_id``
+    would otherwise resolve a v2 object once per content point AND once for its anchor — double-counting;
+    excluding content collapses it to one identity. (2) A lookup by a field a normal content point lacks
+    (e.g. ``vault_path``) does not match content today, but this clause is the fail-closed defense against
+    a CORRUPT or future-schema content shell that carries that field and could shadow/inflate the real
+    anchor."""
+    return [models.FieldCondition(key="point_kind", match=models.MatchValue(value=CONTENT_KIND))]
+
+
 def ranked_overfetch(limit: int) -> int:
     """The bounded raw-scan width for a ranked read of ``limit`` visible rows (capped, never unbounded)."""
     return min(max(limit, 1) * _RANKED_OVERFETCH_FACTOR, _RANKED_OVERFETCH_MAX)
@@ -882,6 +898,7 @@ __all__ = [
     "content_point_id_for",
     "delete_object_layout",
     "not_anchor_condition",
+    "not_content_condition",
     "ranked_dedup_budget",
     "ranked_overfetch",
     "read_anchor",
