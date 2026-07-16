@@ -185,7 +185,7 @@ def _make_watcher(
     write_log = MagicMock()
     write_log.consume_if_exists.return_value = False
 
-    watcher = VaultWatcher(tmp_path, curated_plane, write_log, debounce_sec=0.001)
+    watcher = VaultWatcher(tmp_path, curated_plane, write_log, MagicMock(), debounce_sec=0.001)
     return watcher, curated_plane
 
 
@@ -400,7 +400,7 @@ async def test_boot_scan_vault_002_control_background_exception_observable(
     write_log = MagicMock()
     write_log.consume_if_exists.return_value = False
 
-    watcher = VaultWatcher(tmp_path, curated_plane, write_log, debounce_sec=0.001)
+    watcher = VaultWatcher(tmp_path, curated_plane, write_log, MagicMock(), debounce_sec=0.001)
     watcher._loop = asyncio.get_running_loop()
 
     with caplog.at_level(logging.ERROR, logger="musubi.vault.watcher"):

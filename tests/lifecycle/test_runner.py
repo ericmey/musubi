@@ -31,6 +31,18 @@ from musubi.lifecycle.runner import (
 )
 from musubi.lifecycle.scheduler import Job, build_default_jobs
 
+
+@pytest.fixture(autouse=True)
+def mock_otel(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    from unittest.mock import MagicMock
+
+    monkeypatch.setitem(sys.modules, "opentelemetry", MagicMock())
+    monkeypatch.setitem(sys.modules, "opentelemetry.trace", MagicMock())
+    monkeypatch.setitem(sys.modules, "opentelemetry.sdk", MagicMock())
+    monkeypatch.setitem(sys.modules, "opentelemetry.sdk.trace", MagicMock())
+
+
 # ---------------------------------------------------------------------------
 # _cron_matches
 # ---------------------------------------------------------------------------

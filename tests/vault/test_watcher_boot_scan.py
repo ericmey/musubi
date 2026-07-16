@@ -24,11 +24,22 @@ def mock_write_log() -> MagicMock:
     return wl
 
 
+@pytest.fixture
+def mock_coordinator() -> MagicMock:
+    # VAULT-003: VaultWatcher.__init__ now requires a coordinator.
+    # Boot-scan tests don't exercise the archive path; a MagicMock
+    # suffices as the seam parameter.
+    return MagicMock()
+
+
 @pytest.mark.asyncio
 async def test_boot_scan_detects_body_hash_change(
-    tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
+    tmp_path: Path,
+    mock_curated_plane: MagicMock,
+    mock_write_log: MagicMock,
+    mock_coordinator: MagicMock,
 ) -> None:
-    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log)
+    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log, mock_coordinator)
     watcher._loop = asyncio.get_running_loop()
 
     # Setup the vault with one file
@@ -75,11 +86,14 @@ async def test_boot_scan_detects_body_hash_change(
 
 @pytest.mark.asyncio
 async def test_boot_scan_indexes_new_files(
-    tmp_path: Path, mock_curated_plane: MagicMock, mock_write_log: MagicMock
+    tmp_path: Path,
+    mock_curated_plane: MagicMock,
+    mock_write_log: MagicMock,
+    mock_coordinator: MagicMock,
 ) -> None:
     import hashlib
 
-    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log)
+    watcher = VaultWatcher(tmp_path, mock_curated_plane, mock_write_log, mock_coordinator)
     watcher._loop = asyncio.get_running_loop()
 
     # Setup the vault with one file

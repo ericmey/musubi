@@ -39,10 +39,15 @@ import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from musubi.lifecycle.scheduler import Job
 from musubi.observability.registry import default_registry
+
+
+class _AlertEmitter(Protocol):
+    async def emit(self, channel: str, content: str, title: str | None = None) -> None: ...
+
 
 _REG = default_registry()
 _DURATION = _REG.histogram(
@@ -54,6 +59,11 @@ _DURATION = _REG.histogram(
 _ERRORS = _REG.counter(
     "musubi_lifecycle_job_errors_total",
     "lifecycle worker tick errors",
+    labelnames=("job",),
+)
+_ALERT_ERRORS = _REG.counter(
+    "musubi_lifecycle_job_alert_errors_total",
+    "lifecycle worker tick alert emission errors",
     labelnames=("job",),
 )
 
@@ -162,6 +172,7 @@ class LifecycleRunner:
 
     jobs: list[Job]
     tick_seconds: int = 60
+    thought_emitter: _AlertEmitter | None = None
     _stopping: asyncio.Event = field(default_factory=asyncio.Event, init=False)
     _last_fired: dict[str, datetime] = field(default_factory=dict, init=False)
     _in_flight: set[asyncio.Task[None]] = field(default_factory=set, init=False)
@@ -265,12 +276,64 @@ class LifecycleRunner:
             except Exception as exc:
                 _ERRORS.labels(job=job.name).inc()
                 log.exception("lifecycle-job-crashed name=%s", job.name)
+
+                if self.thought_emitter is not None:
+                    try:
+                        safe_content = _bounded_job_failure_alert(
+                            job_name=job.name,
+                            exc=exc,
+                            span=span,
+                        )
+                        await asyncio.wait_for(
+                            self.thought_emitter.emit(
+                                channel="ops-alerts",
+                                content=safe_content,
+                                title="Lifecycle Job Failure",
+                            ),
+                            timeout=5.0,
+                        )
+                    except Exception as alert_exc:
+                        _ALERT_ERRORS.labels(job=job.name).inc()
+                        log.error(
+                            "lifecycle-job-alert-failed name=%s error=%r", job.name, alert_exc
+                        )
+
                 if span.is_recording():
                     span.set_attribute("lifecycle.job.crashed", True)
                     span.record_exception(exc)
                     span.set_status(Status(StatusCode.ERROR, str(exc)))
             finally:
                 _DURATION.labels(job=job.name).observe(time.monotonic() - start)
+
+
+def _trace_id_hex(span: Any) -> str:
+    """Extract a hex trace_id from an OTel span, or a stable placeholder.
+
+    Must never raise and must never include exception / PII content — alerts
+    are operator-facing Thoughts that land in the Thought plane.
+    """
+    try:
+        ctx = span.get_span_context()
+        trace_id = getattr(ctx, "trace_id", 0)
+        if isinstance(trace_id, int) and trace_id != 0:
+            return format(trace_id, "032x")
+    except Exception:
+        pass
+    return "unavailable"
+
+
+def _bounded_job_failure_alert(*, job_name: str, exc: BaseException, span: Any) -> str:
+    """Bounded, non-secret ops-alert body for a crashed lifecycle job.
+
+    Includes job name, exception *class* (not ``str(exc)``), a UTC timestamp,
+    and the current span's ``trace_id`` so operators can distinguish repeats
+    and jump from the Thought into logs/traces.
+    """
+    occurred = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return (
+        f"Job '{job_name}' crashed with {type(exc).__name__} "
+        f"at {occurred} trace_id={_trace_id_hex(span)}. See logs for details."
+    )
 
 
 def _utc_now() -> datetime:
@@ -608,9 +671,13 @@ async def _main_async() -> None:
         ],
     )
 
+    # LIFE-006: wire the same Thought emitter demotion/promotion use into the
+    # runner so crashed ticks emit a durable ops-alerts Thought in production
+    # (not only when tests inject a fake emitter).
     runner = LifecycleRunner(
         jobs=jobs,
         tick_seconds=min(60, settings.lifecycle_reconcile_interval_s),
+        thought_emitter=thought_emitter,
     )
     runner.install_signal_handlers()
     await runner.run()
