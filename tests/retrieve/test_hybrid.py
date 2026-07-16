@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -672,30 +674,45 @@ def test_beir_corpus_is_diverse_real_and_lexically_favorable() -> None:
         )
 
 
-@pytest.mark.integration
-def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points() -> (
-    None
-):
-    """RET-004: on a synthetic labelled corpus, hybrid (dense+sparse) retrieval must beat dense-only
-    by at least BEIR_MIN_HYBRID_DENSE_DELTA (0.02) NDCG@10. Runs against the REAL Qdrant+TEI stack
-    (marked ``integration`` → deselected locally, executed by the scheduled x86 TEI CI job). Never
-    faked: without the stack this errors/deselects rather than reporting an invented delta."""
-    from musubi.evals.live_gate import (
-        BEIR_MIN_HYBRID_DENSE_DELTA,
-        build_settings_backends,
+@contextmanager
+def _isolated_eval_namespace(client: QdrantClient, collection: str, *, label: str) -> Iterator[str]:
+    """A run-unique eval namespace with an empty-at-entry guard and teardown-on-exit (pass OR fail).
+
+    RET-004 (Yua Option C, diagnostic run 29460335871): the BEIR gate previously seeded a FIXED
+    namespace ``eric/beir-eval/episodic`` with NO teardown, so rows accumulated across runs and made
+    the hybrid-vs-dense delta non-deterministic (the frozen corpus scored +0.0019 in the polluted
+    namespace but a clean +0.0250 in isolation). This gives each run its OWN ``evalrun-`` namespace,
+    asserts it starts EMPTY (leaked pollution can never carry over), and tears it down in a ``finally``
+    on both success and failure. Reuses the scheduled gate's owner-scoped ``_teardown`` (which refuses
+    any non-``evalrun-`` namespace, so this can never touch real data)."""
+    from musubi.evals.scheduled_gate import _teardown, new_run_id
+
+    namespace = f"evalrun-{new_run_id()}/{label}/episodic"
+    existing, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))]
+        ),
+        limit=1,
     )
-    from musubi.planes.episodic.plane import EpisodicPlane
-    from musubi.retrieve.hybrid import hybrid_search
-    from musubi.store.names import collection_for_plane
-    from musubi.types.episodic import EpisodicMemory
+    assert not existing, (
+        f"eval namespace {namespace!r} must start EMPTY (run-unique isolation); found leaked rows — "
+        "a prior run's teardown did not fire"
+    )
+    try:
+        yield namespace
+    finally:
+        _teardown(client, collection, namespace)
 
-    backends = build_settings_backends()  # raises LiveGateUnavailable without the real stack
-    collection = collection_for_plane("episodic")
-    namespace = "eric/beir-eval/episodic"
-    plane = EpisodicPlane(client=backends.client, embedder=backends.embedder)
 
-    from musubi.evals.live_gate import evaluate_query
+def _measure_beir_delta(backends: Any, collection: str, namespace: str, plane: Any) -> None:
+    """Seed + mature the frozen 16-group BEIR corpus into ``namespace``, then assert hybrid beats
+    dense-only by >= BEIR_MIN_HYBRID_DENSE_DELTA NDCG@10. Called INSIDE ``_isolated_eval_namespace`` so
+    every run measures a clean, run-unique namespace (RET-004 Option C)."""
+    from musubi.evals.live_gate import BEIR_MIN_HYBRID_DENSE_DELTA, evaluate_query
     from musubi.evals.scheduled_gate import wait_for_visibility
+    from musubi.retrieve.hybrid import hybrid_search
+    from musubi.types.episodic import EpisodicMemory
 
     groups = _beir_query_groups()
     seeded_object_ids: set[str] = set()  # ACTUAL distinct rows (dedup can merge)
@@ -798,6 +815,91 @@ def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_d
         f"hybrid must beat dense-only by >= {BEIR_MIN_HYBRID_DENSE_DELTA} NDCG@10; "
         f"got hybrid {hybrid_ndcg:.4f} dense {dense_ndcg:.4f} delta {delta:.4f}"
     )
+
+
+@pytest.mark.integration
+def test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points() -> (
+    None
+):
+    """RET-004: on a synthetic labelled corpus, hybrid (dense+sparse) retrieval must beat dense-only
+    by at least BEIR_MIN_HYBRID_DENSE_DELTA (0.02) NDCG@10. Runs against the REAL Qdrant+TEI stack
+    (marked ``integration`` → deselected locally, executed by the scheduled x86 TEI CI job). Never
+    faked: without the stack this errors/deselects rather than reporting an invented delta.
+
+    Isolation (Yua Option C): the seed→mature→measure→assert runs INSIDE a run-unique ``evalrun-``
+    namespace that is asserted empty at entry and torn down in a ``finally`` on pass OR fail — so the
+    delta is deterministic and never polluted by a prior run's leaked rows (diagnostic run
+    29460335871 measured +0.0250 clean vs +0.0019 in the old shared namespace)."""
+    from musubi.evals.live_gate import build_settings_backends
+    from musubi.planes.episodic.plane import EpisodicPlane
+    from musubi.store.names import collection_for_plane
+
+    backends = build_settings_backends()  # raises LiveGateUnavailable without the real stack
+    collection = collection_for_plane("episodic")
+    plane = EpisodicPlane(client=backends.client, embedder=backends.embedder)
+    with _isolated_eval_namespace(backends.client, collection, label="beir") as namespace:
+        _measure_beir_delta(backends, collection, namespace, plane)
+
+
+def test_beir_eval_namespace_isolation_empty_and_teardown_on_pass_and_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RET-004 Option C discriminator (in-memory Qdrant, NO TEI): proves the isolation mechanism the
+    BEIR gate now depends on — (a) teardown fires after a PASSING body, (b) teardown fires even when
+    the body RAISES (finally semantics), and (c) the empty-at-entry guard FIRES if the run namespace
+    is polluted. Red-proofs each leg: without the finally, leg (b) leaks; without the guard, leg (c)
+    would not raise."""
+    from musubi.embedding import FakeEmbedder
+    from musubi.planes.episodic.plane import EpisodicPlane
+    from musubi.store import bootstrap
+    from musubi.store.names import collection_for_plane
+    from musubi.types.common import generate_ksuid
+    from musubi.types.episodic import EpisodicMemory
+
+    client = QdrantClient(":memory:")
+    bootstrap(client)
+    collection = collection_for_plane("episodic")
+    plane = EpisodicPlane(client=client, embedder=FakeEmbedder())
+
+    def _count(ns: str) -> int:
+        recs, _ = client.scroll(
+            collection_name=collection,
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="namespace", match=models.MatchValue(value=ns))]
+            ),
+            limit=100,
+        )
+        return len(recs)
+
+    # (a) teardown fires after a PASSING body
+    with _isolated_eval_namespace(client, collection, label="beirtest") as ns_pass:
+        asyncio.run(plane.create(EpisodicMemory(namespace=ns_pass, content="row", state="matured")))
+        assert _count(ns_pass) == 1
+    assert _count(ns_pass) == 0, "teardown must empty the namespace after a passing body"
+
+    # (b) teardown fires even when the body RAISES (the finally is the whole point)
+    ns_fail: dict[str, str] = {}
+    with (
+        pytest.raises(RuntimeError, match="boom"),
+        _isolated_eval_namespace(client, collection, label="beirtest") as ns,
+    ):
+        ns_fail["ns"] = ns
+        asyncio.run(plane.create(EpisodicMemory(namespace=ns, content="row", state="matured")))
+        raise RuntimeError("boom")
+    assert _count(ns_fail["ns"]) == 0, "teardown must empty the namespace even when the body raises"
+
+    # (c) the empty-at-entry guard FIRES if the run namespace already holds rows (pollution)
+    fixed_id = generate_ksuid().lower()
+    monkeypatch.setattr("musubi.evals.scheduled_gate.new_run_id", lambda: fixed_id)
+    polluted_ns = f"evalrun-{fixed_id}/beirtest/episodic"
+    asyncio.run(
+        plane.create(EpisodicMemory(namespace=polluted_ns, content="pollution", state="matured"))
+    )
+    with (
+        pytest.raises(AssertionError, match="must start EMPTY"),
+        _isolated_eval_namespace(client, collection, label="beirtest"),
+    ):
+        pass
 
 
 @pytest.mark.integration
