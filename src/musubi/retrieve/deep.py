@@ -104,8 +104,9 @@ async def run_deep_retrieve(
                 collection=collection_for_plane(p),
                 limit=query.limit * 2,  # pre-fetch more for reranker
                 state_filter=query.state_filter,
-                # Give generous timeouts for deep path
-                timeout_s=5.0,
+                # Spec: deep per-plane hybrid budget is 1500ms
+                # ([[05-retrieval/orchestration]] / [[05-retrieval/hybrid-search]]).
+                timeout_s=1.5,
                 sparse_timeout_s=1.0,
             )
         )
