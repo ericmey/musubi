@@ -168,24 +168,33 @@ async def test_fast_mode_skips_rerank(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_deep_mode_invokes_rerank(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Deep mode must pass the reranker into ``run_deep_retrieve`` and invoke it."""
-    reranker = _TrackingReranker()
-    seen: dict[str, Any] = {}
+    """Real deep path: mocked hybrid candidates must call ``deep.rerank``."""
+    rerank_calls = {"n": 0}
 
-    async def fake_deep(*args: Any, **kwargs: Any) -> Any:
-        reranker_arg = kwargs.get("reranker", args[2] if len(args) > 2 else None)
-        assert reranker_arg is not None
-        seen["reranker"] = reranker_arg
-        # Mimic deep calling the cross-encoder when enough candidates exist.
-        await reranker_arg.rerank("gpu", ["a"] * 6)
-        return Ok(value=DeepResult(hits=[_scored_hit("oid-deep")], warnings=()))
+    async def fake_hybrid(*args: Any, **kwargs: Any) -> Any:
+        # >5 candidates so the production rerank gate does not short-circuit.
+        return Ok(value=HybridSearchResult(hits=_hybrid_hits(6), warnings=()))
 
-    monkeypatch.setattr("musubi.retrieve.orchestration.run_deep_retrieve", fake_deep)
+    async def tracking_rerank(*args: Any, **kwargs: Any) -> Any:
+        rerank_calls["n"] += 1
+        candidates = kwargs.get("candidates")
+        if candidates is None and len(args) >= 3:
+            candidates = args[2]
+        assert candidates is not None
+        return RerankResult(
+            hits=list(candidates)[: kwargs.get("top_k", len(candidates))], warnings=()
+        )
 
-    result = await _retrieve(mode="deep", reranker=reranker)
+    monkeypatch.setattr("musubi.retrieve.deep.hybrid_search", fake_hybrid)
+    monkeypatch.setattr("musubi.retrieve.deep.rerank", tracking_rerank)
+    monkeypatch.setattr(
+        "musubi.retrieve.deep._hydrate_one",
+        AsyncMock(side_effect=lambda hit, *a, **k: hit),
+    )
+
+    result = await _retrieve(mode="deep", reranker=_TrackingReranker(), limit=10)
     assert isinstance(result, Ok)
-    assert seen["reranker"] is reranker
-    assert reranker.calls == 1
+    assert rerank_calls["n"] == 1
 
 
 @pytest.mark.asyncio
@@ -220,24 +229,38 @@ async def test_fast_mode_skips_lineage_hydrate(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.asyncio
 async def test_deep_mode_hydrates_when_flag_true(monkeypatch: pytest.MonkeyPatch) -> None:
-    """When ``include_lineage=True``, deep dispatch must request hydration."""
-    seen: dict[str, Any] = {}
+    """Real deep path: ``include_lineage=True`` must invoke ``_hydrate_one``."""
+    hydrate_calls = {"n": 0}
 
-    async def fake_deep(*args: Any, **kwargs: Any) -> Any:
-        query = kwargs.get("query", args[3] if len(args) > 3 else None)
-        assert query is not None
-        seen["include_lineage"] = query.include_lineage
-        return Ok(value=DeepResult(hits=[_scored_hit("oid-h")], warnings=()))
+    async def fake_hybrid(*args: Any, **kwargs: Any) -> Any:
+        return Ok(value=HybridSearchResult(hits=_hybrid_hits(3), warnings=()))
 
-    monkeypatch.setattr("musubi.retrieve.orchestration.run_deep_retrieve", fake_deep)
+    async def tracking_hydrate(hit: Any, *args: Any, **kwargs: Any) -> Any:
+        hydrate_calls["n"] += 1
+        return hit
+
+    monkeypatch.setattr("musubi.retrieve.deep.hybrid_search", fake_hybrid)
+    monkeypatch.setattr("musubi.retrieve.deep._hydrate_one", tracking_hydrate)
 
     result = await _retrieve(
         mode="deep",
         reranker=_TrackingReranker(),
         include_lineage=True,
+        limit=10,
     )
     assert isinstance(result, Ok)
-    assert seen["include_lineage"] is True
+    assert hydrate_calls["n"] == 3
+
+    # Control: flag false must not hydrate.
+    hydrate_calls["n"] = 0
+    result_off = await _retrieve(
+        mode="deep",
+        reranker=_TrackingReranker(),
+        include_lineage=False,
+        limit=10,
+    )
+    assert isinstance(result_off, Ok)
+    assert hydrate_calls["n"] == 0
 
 
 def _hybrid_hits(n: int = 6) -> list[HybridHit]:
@@ -396,21 +419,19 @@ async def test_whole_call_timeout_fast_400ms(monkeypatch: pytest.MonkeyPatch) ->
 
 @pytest.mark.asyncio
 async def test_per_plane_timeout_deep_1500ms(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Deep hybrid plane timeout must surface as orchestration ``kind=timeout``.
+    """Deep must pass ``timeout_s=1.5`` into hybrid (spec per-plane budget)."""
+    seen: dict[str, Any] = {}
 
-    Spec table lists 1500ms per-plane hybrid budget; deep currently passes
-    ``timeout_s=5.0`` into hybrid (whole-leg headroom). This proof asserts the
-    timeout *propagation* contract at the orchestration boundary — not the
-    literal 1500ms fence (that lives in hybrid and would be a redesign).
-    """
-    from musubi.retrieve.hybrid import RetrievalError as HybridError
+    async def capturing_hybrid(*args: Any, **kwargs: Any) -> Any:
+        seen["timeout_s"] = kwargs.get("timeout_s")
+        from musubi.retrieve.hybrid import RetrievalError as HybridError
 
-    async def timing_out_hybrid(*args: Any, **kwargs: Any) -> Any:
         return Err(error=HybridError(code="qdrant_timeout", detail="hybrid timed out"))
 
-    monkeypatch.setattr("musubi.retrieve.deep.hybrid_search", timing_out_hybrid)
+    monkeypatch.setattr("musubi.retrieve.deep.hybrid_search", capturing_hybrid)
 
     result = await _retrieve(mode="deep", reranker=_TrackingReranker())
+    assert seen["timeout_s"] == 1.5
     assert isinstance(result, Err)
     assert result.error.kind == "timeout"
 

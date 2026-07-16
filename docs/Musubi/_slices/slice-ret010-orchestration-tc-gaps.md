@@ -37,20 +37,21 @@ Do **not** redesign retrieval semantics merely to satisfy test names. Prefer pro
 ## Owned paths
 
 - `tests/retrieve/test_orchestration.py`
+- `src/musubi/retrieve/deep.py` (RET-010 review: align deep per-plane hybrid `timeout_s` to 1.5s)
 - `docs/Musubi/_slices/slice-ret010-orchestration-tc-gaps.md` (this file)
 - `docs/Musubi/_inbox/locks/slice-ret010-orchestration-tc-gaps.lock`
 
 > Path-ownership note: `tests/retrieve/test_orchestration.py` was still listed under
 > `slice-ret004-evals` (`in-review` despite Issue #430 closed). That stale claim is
 > flipped to `done` in this PR so RET-010 can own the Closure Rule rewrite without a
-> dual-active conflict. `src/musubi/retrieve/orchestration.py` is **not** claimed —
-> no production redesign was required.
+> dual-active conflict. `deep.py` is claimed only for the spec-aligned `timeout_s=1.5`
+> one-liner (reviewer-required); no broader deep redesign.
 
 ## Forbidden paths
 
-- `src/musubi/retrieve/fast.py`, `deep.py`, `hybrid.py`, `scoring.py`, `rerank.py`, `blended.py`, `recent.py` — open a cross-slice ticket if a proof requires production changes there
+- `src/musubi/retrieve/fast.py`, `hybrid.py`, `scoring.py`, `rerank.py`, `blended.py`, `recent.py` — open a cross-slice ticket if a proof requires production changes there
 - `src/musubi/api/`, `openapi.yaml`, `proto/`, `src/musubi/types/`
-- Redesigning scoring weights, timeout budgets, or mode dispatch
+- Redesigning scoring weights or mode dispatch beyond the spec-aligned deep `timeout_s=1.5`
 - Live host / GPU / TEI contact for integration bullets (route those to existing harnesses)
 
 ## Test Contract
@@ -112,3 +113,4 @@ Integration (environment-dependent — prefer skip to named harness if not runna
   - `integration: kill TEI mid-request, pipeline returns with documented degradation` → slice-ops-gpu
 - No `src/` redesign: proofs use orchestration/deep/hybrid seams already present. RET-002 + DQ-001 bullets already closed elsewhere.
 - Vault hygiene: flipped `slice-ret004-evals` `in-review` → `done` (Issue #430 already closed) so the stale claim on `tests/retrieve/test_orchestration.py` no longer dual-actives against RET-010.
+- Reviewer fixes: deep per-plane hybrid `timeout_s` → `1.5` (asserted); `test_deep_mode_invokes_rerank` / `test_deep_mode_hydrates_when_flag_true` now run the real deep path with hybrid/`_hydrate_one` mocks.
