@@ -1057,3 +1057,28 @@ def test_episodic_reinforce_with_summary_is_projection_based(
     assert committed["summary"] == "the-summary"  # preserved
     assert sorted(committed["tags"]) == ["a", "b"]  # tag union
     assert committed["reinforcement_count"] == 1
+
+
+# --------------------------------------------------------------------------------------------------
+# 24. coordinator._read_object targets the IDENTITY row, never the content shell (Yua inventory).
+# --------------------------------------------------------------------------------------------------
+def test_coordinator_read_object_excludes_content_shell(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    """A v2 object is anchor + content point (both carry object_id+namespace). The coordinator's
+    identity read gates every durable transition on count==1 (_persist_event/_confirm); if it counted
+    the content shell too (count==2) every transition on a reinforced/updated episodic/curated object
+    would fence/abandon. Prove it returns EXACTLY the anchor."""
+    from musubi.store.immutable_vectors import ANCHOR_KIND
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(coord, object_id="obj-ro", namespace=_NS, content_payload=_content("body"))
+    assert _content_point_ids(qdrant, collection, "obj-ro"), "the object has a content point"
+    payload, count = coord._read_object(collection, "obj-ro", _NS)
+    assert count == 1, (
+        "identity read must exclude the content shell (else transitions fence on count==2)"
+    )
+    assert payload.get("point_kind") == ANCHOR_KIND and payload.get("live_point") is not None, (
+        "the identity read must return the authoritative anchor, not a content snapshot"
+    )

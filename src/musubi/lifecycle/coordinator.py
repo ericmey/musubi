@@ -51,6 +51,7 @@ from qdrant_client import models
 
 from musubi.lifecycle import store
 from musubi.observability.registry import Counter, Gauge, default_registry
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
 
@@ -872,8 +873,16 @@ class LifecycleTransitionCoordinator:
     def _read_object(
         self, collection: str, object_id: str, namespace: str
     ) -> tuple[dict[str, Any], int]:
-        """Read the object's payload, requesting enough rows to PROVE exactly one match for
-        ``object_id`` within ``namespace`` (returns ``(payload, count)``; empty payload if none)."""
+        """Read the object's AUTHORITATIVE identity payload, requesting enough rows to PROVE exactly one
+        match for ``object_id`` within ``namespace`` (returns ``(payload, count)``; empty payload if
+        none).
+
+        DATA-001 P2: excludes write-once CONTENT snapshots (``point_kind == "content"``) so a v2 object
+        (anchor + one-or-more content points) still reads as EXACTLY ONE identity row — the anchor (full
+        mutable state/version) — instead of count==2. A v1/legacy row (no ``point_kind``) and every
+        concept/thought/artifact row (no content points) are unaffected: the exclusion is a no-op there.
+        Without this, every durable lifecycle transition on a reinforced/updated episodic or curated
+        object would fence/abandon on the count check."""
         points, _ = self._require_client().scroll(
             collection_name=collection,
             scroll_filter=models.Filter(
@@ -884,7 +893,12 @@ class LifecycleTransitionCoordinator:
                     models.FieldCondition(
                         key="namespace", match=models.MatchValue(value=namespace)
                     ),
-                ]
+                ],
+                must_not=[
+                    models.FieldCondition(
+                        key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                    )
+                ],
             ),
             limit=2,
             with_payload=True,
