@@ -40,14 +40,38 @@ def _payload(object_id: str, *, created_epoch: float, **extra: Any) -> dict[str,
     }
 
 
-class _SpyQdrantClient:
-    """Records the last scroll call's args; returns canned points.
+def _condition_matches(payload: dict[str, Any], cond: Any) -> bool:
+    """Evaluate one qdrant FieldCondition (MatchValue / MatchAny / Range) against a payload — enough of
+    the filter surface for recent's scroll + DATA-001 P2 ``resolve_committed_content``'s identity/legacy
+    scrolls (anchor point_kind, must_not content, namespace/object_id equality, created_epoch range)."""
+    key = str(getattr(cond, "key", ""))
+    value = payload.get(key)
+    match = getattr(cond, "match", None)
+    rng = getattr(cond, "range", None)
+    if match is not None:
+        if hasattr(match, "value"):  # MatchValue
+            return bool(value == match.value)
+        if hasattr(match, "any"):  # MatchAny
+            return value in match.any
+    if rng is not None:
+        if value is None:
+            return False
+        ok = True
+        if rng.gt is not None:
+            ok = ok and value > rng.gt
+        if rng.gte is not None:
+            ok = ok and value >= rng.gte
+        return ok
+    return True
 
-    ``last_kwargs`` is initialized to ``{}`` rather than ``None`` so
-    tests can index into it without first narrowing through an
-    ``assert is not None``. Every test calls ``run_recent_retrieve``
-    before inspecting, so the empty default is never observed in
-    practice — it's a type-friendliness shim.
+
+class _SpyQdrantClient:
+    """A filter-faithful in-memory fake (DATA-001 P2, Yua): its ``scroll`` honors must/must_not
+    FieldConditions and ``retrieve`` resolves ids, so it models the identity scroll + live-point retrieve
+    that anchor-aware reads perform — instead of returning canned points regardless of the filter.
+
+    ``last_kwargs`` records the LAST scroll; the filter-shape tests use an EMPTY point set, so no
+    resolver round-trip fires and ``last_kwargs`` stays the primary recent scroll.
     """
 
     def __init__(self, points: list[Any] | None = None) -> None:
@@ -55,10 +79,23 @@ class _SpyQdrantClient:
         self.last_kwargs: dict[str, Any] = {}
         self.scroll_calls = 0
 
+    def _match(self, payload: dict[str, Any], scroll_filter: Any) -> bool:
+        if scroll_filter is None:
+            return True
+        if not all(_condition_matches(payload, c) for c in scroll_filter.must or []):
+            return False
+        return not any(_condition_matches(payload, c) for c in scroll_filter.must_not or [])
+
     def scroll(self, **kwargs: Any) -> tuple[list[Any], Any]:
         self.scroll_calls += 1
         self.last_kwargs = kwargs
-        return (self.points, None)
+        scroll_filter = kwargs.get("scroll_filter")
+        matched = [p for p in self.points if self._match(dict(p.payload or {}), scroll_filter)]
+        return (matched, None)
+
+    def retrieve(self, *, collection_name: str, ids: list[Any], **kwargs: Any) -> list[Any]:
+        by_id = {getattr(p, "id", p.payload.get("object_id")): p for p in self.points}
+        return [by_id[i] for i in ids if i in by_id]
 
 
 def _client(points: list[Any] | None = None) -> tuple[QdrantClient, _SpyQdrantClient]:
@@ -218,6 +255,20 @@ async def test_returns_hits_in_qdrant_returned_order() -> None:
     )
     assert isinstance(res, Ok)
     assert [h.object_id for h in res.value.results] == ["newer", "older"]
+
+
+@pytest.mark.asyncio
+async def test_non_anchor_plane_is_one_scroll_raw() -> None:
+    """DATA-001 P2 (Yua): concept/thought/artifact have no anchors — recent must NOT perform the
+    per-row resolver round-trip; one scroll, raw projection."""
+    points = [_FakePoint(_payload("c1", created_epoch=1.0), point_id="c1")]
+    client, spy = _client(points=points)
+    res = await run_recent_retrieve(
+        client=client, namespace=NAMESPACE, collection="musubi_concept", limit=5
+    )
+    assert isinstance(res, Ok)
+    assert [h.object_id for h in res.value.results] == ["c1"]
+    assert spy.scroll_calls == 1, "a non-anchor plane must not resolve per row (one scroll only)"
 
 
 @pytest.mark.asyncio

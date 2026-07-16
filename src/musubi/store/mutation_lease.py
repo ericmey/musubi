@@ -81,7 +81,16 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
+
 _log = logging.getLogger(__name__)
+
+# DATA-001 P2: the mutation lease owns the authoritative payload on the IDENTITY row — the v2 anchor,
+# or a v1/legacy single point — never a write-once content snapshot (which also carries object_id). A
+# no-op for concept/thought/artifact (no content points), so Phase-1 payload mutation there is unchanged.
+_EXCLUDE_CONTENT: list[models.Condition] = [
+    models.FieldCondition(key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT))
+]
 
 _LEASE_TTL_US = 5_000_000  # an owner token older than this may be taken over (crash/stall recovery)
 _MAX_ROUNDS = 160  # bounded round budget; caps a pathological live-lock, fail-loud past it
@@ -141,7 +150,9 @@ def _issued_us(token: str) -> int:
 def _read(client: QdrantClient, collection: str, namespace: str, object_id: str) -> dict[str, Any]:
     records, _ = client.scroll(
         collection_name=collection,
-        scroll_filter=models.Filter(must=_conditions(namespace, object_id)),
+        scroll_filter=models.Filter(
+            must=_conditions(namespace, object_id), must_not=_EXCLUDE_CONTENT
+        ),
         limit=1,
         with_payload=True,
         with_vectors=False,
@@ -163,7 +174,8 @@ def _clear_token(
                 models.FieldCondition(
                     key="update_lease_token", match=models.MatchValue(value=token)
                 ),
-            ]
+            ],
+            must_not=_EXCLUDE_CONTENT,
         ),
     )
 
@@ -249,7 +261,8 @@ async def owned_update(
                         key="version", match=models.MatchValue(value=read_version)
                     ),
                     token_fence,
-                ]
+                ],
+                must_not=_EXCLUDE_CONTENT,
             ),
         )
 
@@ -312,7 +325,8 @@ async def owned_update(
                         models.FieldCondition(
                             key="update_lease_token", match=models.MatchValue(value=token)
                         ),
-                    ]
+                    ],
+                    must_not=_EXCLUDE_CONTENT,
                 ),
             )
         except BaseException as original:
@@ -354,7 +368,8 @@ async def owned_update(
                     models.FieldCondition(
                         key="update_lease_token", match=models.MatchValue(value=done)
                     ),
-                ]
+                ],
+                must_not=_EXCLUDE_CONTENT,
             ),
         )
         return {**committed, "update_lease_token": None}  # our change is durably committed.

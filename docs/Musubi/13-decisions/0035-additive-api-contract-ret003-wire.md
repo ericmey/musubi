@@ -174,7 +174,23 @@ class RecentResultRow(BaseModel):
 - All 6 existing regression-guard tests remain unchanged.
 - Runtime `/v1/openapi.json` is the source-of-truth; repo-root `openapi.yaml` is regenerated
   as a separate slice.
-- Corrupt `state` / `importance` source values → 500 (server integrity), not 422.
+- Corrupt `state` / `importance` source values → 500 (server integrity), not 422. **SUPERSEDED for
+  RANKED reads — see §DATA-001 P2 supersession below.**
+
+## DATA-001 P2 supersession (2026-07-16)
+
+The accepted DATA-001 Phase 2 ADR
+([data001-phase2-immutable-vectors](data001-phase2-immutable-vectors.md)) freezes the rule that a
+malformed **ranked** candidate is **skipped** (fail closed) during anchor-aware retrieval — never
+500-ing the whole query over one corrupt row. DATA-001 P2 is the later accepted contract, so it
+supersedes the RET-003 B1 "corrupt-source → 500" rule **for ranked reads only**: a corrupt `state` /
+`importance` source value now yields **HTTP 200 with the bad row OMITTED** from the results (never
+fabricated, never exposed). **Identity reads** (the curated vault-path resolution and
+`scan_vault_rows`) remain **fail-loud** — a broken identity there raises or surfaces a typed
+`invalid_row`, because a silently-dropped identity would let `create` duplicate or the reconciler
+archive on an incomplete inventory. Tests updated:
+`test_retrieve_ranked_state_is_source_backed_not_fabricated` and
+`test_retrieve_ranked_importance_is_source_backed_not_fabricated` now assert 200 + omitted.
 
 ## Slice ownership (for the tests-first slice)
 

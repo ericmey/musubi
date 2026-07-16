@@ -35,6 +35,44 @@ _COLL = collection_for_plane("episodic")
 _CURATED_COLL = collection_for_plane("curated")
 
 
+def _wired_episodic_plane(qdrant: QdrantClient, db_path: Any) -> EpisodicPlane:
+    """A fully-wired episodic plane (DATA-001 P2): temp coordinator + collection-bound publisher +
+    dispatcher, so a vector-changing reinforce traverses the REAL descriptor/pointer seam (never mocked
+    away, never fail-closed). Mirrors the test_episodic.py plane fixture."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+
+    coord = LifecycleTransitionCoordinator(
+        client=qdrant, db_path=db_path, backoff_base_s=0.01, backoff_max_s=0.01
+    )
+    pub = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=_COLL)
+    register_immutable_vector_dispatch(coord, {_COLL: pub})
+    return EpisodicPlane(
+        client=qdrant, embedder=FakeEmbedder(), coordinator=coord, vector_publisher=pub
+    )
+
+
+def _wired_curated_plane(qdrant: QdrantClient, db_path: Any) -> CuratedPlane:
+    """A fully-wired curated plane (DATA-001 P2) — same seam as above, curated collection."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+
+    coord = LifecycleTransitionCoordinator(
+        client=qdrant, db_path=db_path, backoff_base_s=0.01, backoff_max_s=0.01
+    )
+    pub = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=_CURATED_COLL)
+    register_immutable_vector_dispatch(coord, {_CURATED_COLL: pub})
+    return CuratedPlane(
+        client=qdrant, embedder=FakeEmbedder(), coordinator=coord, vector_publisher=pub
+    )
+
+
 @pytest.fixture
 def real_qdrant() -> Iterator[QdrantClient]:
     port = int(os.environ.get("MUSUBI_TEST_QDRANT_PORT", "6339"))
@@ -57,10 +95,20 @@ def _seed(client: QdrantClient) -> tuple[str, str]:
 
 
 def _row(client: QdrantClient, oid: str) -> dict[str, Any]:
+    # DATA-001 P2: after a vector-changing reinforce the object is a v2 layout (anchor + content points).
+    # The RET-008 access fields + reinforcement_count live on the ANCHOR identity row, not the content
+    # shell — exclude content so this returns the authoritative identity (a no-op for a v1 row).
+    from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
+
     recs, _ = client.scroll(
         collection_name=_COLL,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                )
+            ],
         ),
         limit=1,
         with_payload=True,
@@ -70,15 +118,19 @@ def _row(client: QdrantClient, oid: str) -> dict[str, Any]:
 
 @pytest.mark.integration
 def test_dedup_merge_upsert_loses_concurrent_unrelated_field_update(
-    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch
+    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """DATA-001 RED: the episodic dedup-merge full-point upsert carries the probe-time snapshot of
     every non-lease field. An unrelated concurrent mutation (``importance`` 5 → 9) that lands in the
     read-to-upsert window is silently overwritten. GREEN once the UPDATE writes only the fields it
-    intends to change (or fences on version)."""
-    plane = EpisodicPlane(client=real_qdrant, embedder=FakeEmbedder())
-    ns, oid = _seed(real_qdrant)  # importance == 5
+    intends to change (or fences on version). DATA-001 P2: the reinforce is a vector change, so it
+    traverses the REAL immutable-vector seam (publisher wired), and we ASSERT a real reinforce ran
+    (reinforcement_count bumps) — a factually-incompatible probe would silently insert a fresh row and
+    exercise nothing (Yua)."""
+    plane = _wired_episodic_plane(real_qdrant, tmp_path / "occ-unrelated.db")
+    ns, oid = _seed(real_qdrant)  # importance == 5; content "occ probe"
     stale = EpisodicMemory.model_validate(_row(real_qdrant, oid))  # snapshot: importance == 5
+    rc_before = int(_row(real_qdrant, oid).get("reinforcement_count", 0))
 
     # A concurrent, UNRELATED mutation lands AFTER the probe read.
     real_qdrant.set_payload(
@@ -92,26 +144,36 @@ def test_dedup_merge_upsert_loses_concurrent_unrelated_field_update(
 
     # The dedup-merge upsert fires from the STALE snapshot (importance == 5).
     monkeypatch.setattr(
-        plane, "_find_dedup_candidate", lambda namespace, dense: (stale, None, None)
+        plane,
+        "_find_dedup_candidate",
+        lambda namespace, dense: (
+            stale,
+            None,
+            None,
+            1.0,
+        ),  # DATA-001 P2 + ING-002: 4-tuple w/ score
     )
-    asyncio.run(
-        plane.create(EpisodicMemory(namespace=ns, content="near duplicate", state="matured"))
-    )
+    # Compatible surface form of the seed's "occ probe" so a REAL reinforce runs (not a fresh insert).
+    asyncio.run(plane.create(EpisodicMemory(namespace=ns, content="Occ probe.", state="matured")))
 
+    row = _row(real_qdrant, oid)
+    assert int(row.get("reinforcement_count", 0)) == rc_before + 1, (
+        "a real reinforce must have run (else the unrelated-field assertion is vacuous)"
+    )
     # DATA-001 invariant: the unrelated concurrent update must survive the reinforce.
-    assert _row(real_qdrant, oid).get("importance") == 9, (
+    assert row.get("importance") == 9, (
         "reinforce upsert overwrote a concurrent unrelated field (cross-mutation lost update)"
     )
 
 
 @pytest.mark.integration
 def test_reinforce_composes_concurrent_access_increment(
-    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch
+    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """The two P0 fixes compose: a leased access_count increment (RET-008) is preserved by a dedup
     reinforce (DATA-001) — the reinforce's narrow change-set never touches the access fields — and the
     reinforce still lands (reinforcement_count bumps)."""
-    plane = EpisodicPlane(client=real_qdrant, embedder=FakeEmbedder())
+    plane = _wired_episodic_plane(real_qdrant, tmp_path / "occ-reinforce.db")
     ns, oid = _seed(real_qdrant)
     asyncio.run(lease_increment_access(real_qdrant, _COLL, {(ns, oid)}))  # access_count -> 1
     assert _row(real_qdrant, oid).get("access_count") == 1
@@ -119,7 +181,14 @@ def test_reinforce_composes_concurrent_access_increment(
 
     stale = EpisodicMemory.model_validate(_row(real_qdrant, oid))
     monkeypatch.setattr(
-        plane, "_find_dedup_candidate", lambda namespace, dense: (stale, None, None)
+        plane,
+        "_find_dedup_candidate",
+        lambda namespace, dense: (
+            stale,
+            None,
+            None,
+            1.0,
+        ),  # DATA-001 P2 + ING-002: 4-tuple w/ score
     )
     # The reinforce only fires when the candidate is factually compatible (_is_factually_compatible
     # is fail-closed: normalized content + participants must match). Use a near-duplicate surface form
@@ -133,10 +202,19 @@ def test_reinforce_composes_concurrent_access_increment(
 
 
 def _curated_payload(client: QdrantClient, oid: str) -> dict[str, Any]:
+    # DATA-001 P2: after a same-id update the object is a v2 layout; lineage (superseded_by) lives on the
+    # ANCHOR identity, not the content shell — exclude content (a no-op for a v1 row).
+    from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
+
     recs, _ = client.scroll(
         collection_name=_CURATED_COLL,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                )
+            ],
         ),
         limit=1,
         with_payload=True,
@@ -146,13 +224,13 @@ def _curated_payload(client: QdrantClient, oid: str) -> dict[str, Any]:
 
 @pytest.mark.integration
 def test_curated_same_id_update_preserves_concurrent_lineage(
-    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch
+    real_qdrant: QdrantClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Any
 ) -> None:
     """Curated same-id UPDATE (a vault sync) takes identity + lineage from the FRESH current row, not
     the pre-read snapshot — so a concurrent supersession's ``superseded_by`` is never overwritten
     (DATA-001). Models the read-to-write window by pinning the vault-path probe to a pre-supersession
     snapshot."""
-    plane = CuratedPlane(client=real_qdrant, embedder=FakeEmbedder())
+    plane = _wired_curated_plane(real_qdrant, tmp_path / "occ-curated.db")
     ns = f"data001-{generate_ksuid()[:8].lower()}/dev/curated"
     original = asyncio.run(
         plane.create(

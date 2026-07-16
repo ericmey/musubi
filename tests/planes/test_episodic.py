@@ -71,18 +71,32 @@ def qdrant() -> Iterator[QdrantClient]:
         client.close()
 
 
-@pytest.fixture
-def plane(qdrant: QdrantClient) -> EpisodicPlane:
-    return EpisodicPlane(client=qdrant, embedder=FakeEmbedder())
-
-
 _COORDINATOR: LifecycleTransitionCoordinator | None = None
 
 
 @pytest.fixture(autouse=True)
-def _install_coordinator(qdrant: QdrantClient, tmp_path: Path) -> None:
+def coordinator(qdrant: QdrantClient, tmp_path: Path) -> LifecycleTransitionCoordinator:
     global _COORDINATOR
     _COORDINATOR = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+    return _COORDINATOR
+
+
+@pytest.fixture
+def plane(qdrant: QdrantClient, coordinator: LifecycleTransitionCoordinator) -> EpisodicPlane:
+    # DATA-001 P2: a vector-changing reinforce publishes through the immutable-vector seam; wire the
+    # coordinator + a collection-bound publisher + the dispatcher so the reinforce path is not fail-closed.
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+    from musubi.store.names import collection_for_plane
+
+    coll = collection_for_plane("episodic")
+    publisher = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=coll)
+    register_immutable_vector_dispatch(coordinator, {coll: publisher})
+    return EpisodicPlane(
+        client=qdrant, embedder=FakeEmbedder(), coordinator=coordinator, vector_publisher=publisher
+    )
 
 
 def _coord() -> LifecycleTransitionCoordinator:
@@ -204,6 +218,8 @@ async def test_create_dedup_hit_updates_content_with_new_text(
         client=plane._client,
         embedder=plane._embedder,
         dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
     )
     first_cand = _make("first version.", ns)
     first_cand.summary = "first version"
@@ -461,6 +477,25 @@ async def test_get_returns_none_for_missing_id(plane: EpisodicPlane, ns: str) ->
     # 27-char base62 KSUID that we never minted.
     missing = "0" * 27
     assert await plane.get(namespace=ns, object_id=missing) is None
+
+
+async def test_get_missing_id_does_not_bump_access(
+    plane: EpisodicPlane, ns: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DATA-001 P2 (Yua): a missing/dangling get must RESOLVE first and return None WITHOUT attempting
+    an access-lease mutation — the pre-P2 contract mutated nothing on an absent row."""
+    from musubi.store.access_lease import lease_increment_access as _orig_lease
+
+    missing = "0" * 27
+    calls = {"n": 0}
+
+    async def _spy(*args: Any, **kwargs: Any) -> None:
+        calls["n"] += 1
+        await _orig_lease(*args, **kwargs)
+
+    monkeypatch.setattr("musubi.planes.episodic.plane.lease_increment_access", _spy)
+    assert await plane.get(namespace=ns, object_id=missing) is None
+    assert calls["n"] == 0, "get() on a missing id must not attempt an access-lease mutation"
 
 
 async def test_create_rejects_future_event_at(plane: EpisodicPlane, ns: str) -> None:
@@ -723,7 +758,13 @@ async def test_semantic_dedup_merges_normalized_duplicate(
     candidate = _make("  DEPLOY  succeeded!!! ", ns)
 
     # We must force a low threshold because our FakeEmbedder will randomly generate vectors for different strings.
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
 
     if use_batch:
         res = await low_plane.batch_create([candidate])
@@ -744,7 +785,13 @@ async def test_semantic_dedup_rejects_paraphrase(
     base = await plane.create(_make("The deployment was successful.", ns))
     candidate = _make("Deployment succeeded.", ns)
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     if use_batch:
         res = await low_plane.batch_create([candidate])
         final = res[0]
@@ -768,7 +815,13 @@ async def test_semantic_dedup_rejects_participants_change(
     candidate = _make("Meeting finished", ns)
     candidate.participants = ["yua"]
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     if use_batch:
         res = await low_plane.batch_create([candidate])
         final = res[0]
@@ -787,7 +840,13 @@ async def test_semantic_dedup_rejects_correction(
     base = await plane.create(_make("Deploy succeeded.", ns))
     candidate = _make("Deploy failed.", ns)
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     if use_batch:
         res = await low_plane.batch_create([candidate])
         final = res[0]
@@ -807,7 +866,13 @@ async def test_semantic_dedup_rejects_negation(
     base = await plane.create(_make("The server is up.", ns))
     candidate = _make("The server is not up.", ns)
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     if use_batch:
         res = await low_plane.batch_create([candidate])
         final = res[0]
@@ -826,7 +891,13 @@ async def test_semantic_dedup_rejects_participant_change(
     base = await plane.create(_make("Aoi reviewed the PR.", ns))
     candidate = _make("Yua reviewed the PR.", ns)
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     if use_batch:
         res = await low_plane.batch_create([candidate])
         final = res[0]
@@ -845,7 +916,13 @@ async def test_semantic_dedup_rejects_time_change(
     base = await plane.create(_make("Meeting at 4pm.", ns))
     candidate = _make("Meeting at 5pm.", ns)
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     if use_batch:
         res = await low_plane.batch_create([candidate])
         final = res[0]
@@ -870,7 +947,13 @@ async def test_semantic_dedup_rejects_conflicting_numbers(
     base3 = await plane.create(_make("Offset is 5", ns))
     c3 = _make("Offset is -5", ns)
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     for c, b in [(c1, base), (c2, base2), (c3, base3)]:
         if use_batch:
             res = await low_plane.batch_create([c])
@@ -889,7 +972,13 @@ async def test_semantic_dedup_rejects_ambiguity(
     base = await plane.create(_make("Near match.", ns))
     candidate = _make("A near match.", ns)
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     if use_batch:
         res = await low_plane.batch_create([candidate])
         final = res[0]
@@ -911,7 +1000,13 @@ async def test_semantic_dedup_rejects_language_token_punctuation(
     base2 = await plane.create(_make("I cant", ns))
     c2 = _make("I can't", ns)
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     for c, b in [(c1, base), (c2, base2)]:
         if use_batch:
             res = await low_plane.batch_create([c])
@@ -934,7 +1029,13 @@ async def test_semantic_dedup_compares_content_not_summary(
     candidate = _make("Detailed failure log B", ns)
     candidate.summary = "Failure summary"
 
-    low_plane = EpisodicPlane(client=plane._client, embedder=plane._embedder, dedup_threshold=-1.0)
+    low_plane = EpisodicPlane(
+        client=plane._client,
+        embedder=plane._embedder,
+        dedup_threshold=-1.0,
+        coordinator=plane._coordinator,
+        vector_publisher=plane._vector_publisher,
+    )
     if use_batch:
         res = await low_plane.batch_create([candidate])
         final = res[0]
@@ -1303,12 +1404,23 @@ async def test_batch_vs_sequential_permuted_order(
         for rb, rs in zip(res_batch, res_seq, strict=True):
             assert projection(rb) == projection(rs)
 
+        # DATA-001 P2: a dedup reinforce publishes a v2 layout (anchor + content points). Compare the
+        # IDENTITY rows only (must_not content) and strip the layout-only keys before validating — the
+        # anchor carries the full committed payload, so a stripped identity row is the authoritative view.
+        from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD, strip_layout_fields
+
+        _not_content: list[models.Condition] = [
+            models.FieldCondition(
+                key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+            )
+        ]
         stored_batch = qdrant.scroll(
             collection_name="musubi_episodic",
             scroll_filter=models.Filter(
                 must=[
                     models.FieldCondition(key="namespace", match=models.MatchValue(value=ns_batch))
-                ]
+                ],
+                must_not=_not_content,
             ),
             limit=10,
         )[0]
@@ -1316,7 +1428,10 @@ async def test_batch_vs_sequential_permuted_order(
         stored_seq = qdrant.scroll(
             collection_name="musubi_episodic",
             scroll_filter=models.Filter(
-                must=[models.FieldCondition(key="namespace", match=models.MatchValue(value=ns_seq))]
+                must=[
+                    models.FieldCondition(key="namespace", match=models.MatchValue(value=ns_seq))
+                ],
+                must_not=_not_content,
             ),
             limit=10,
         )[0]
@@ -1325,14 +1440,18 @@ async def test_batch_vs_sequential_permuted_order(
 
         sb_proj = sorted(
             [
-                projection(EpisodicMemory.model_validate(p.payload))
+                projection(EpisodicMemory.model_validate(strip_layout_fields(p.payload)))
                 for p in stored_batch
                 if p.payload
             ],
             key=lambda x: x["content"],
         )
         ss_proj = sorted(
-            [projection(EpisodicMemory.model_validate(p.payload)) for p in stored_seq if p.payload],
+            [
+                projection(EpisodicMemory.model_validate(strip_layout_fields(p.payload)))
+                for p in stored_seq
+                if p.payload
+            ],
             key=lambda x: x["content"],
         )
 

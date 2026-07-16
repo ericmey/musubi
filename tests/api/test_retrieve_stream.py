@@ -31,6 +31,10 @@ def test_streaming_retrieval_ranked(
             "query_text": "stream ranked",
             "mode": "fast",
             "limit": 5,
+            # DATA-001 P2: the write above creates a PROVISIONAL row (correct production behavior), which
+            # fast mode now filters post-hydration. This test asserts the ranked wire shape, not state —
+            # request provisional visibility so the freshly-written row is returned.
+            "state_filter": ["provisional"],
         },
     )
 

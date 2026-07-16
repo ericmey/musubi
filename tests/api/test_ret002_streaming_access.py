@@ -44,6 +44,9 @@ def test_streaming_retrieval_accounts_each_delivered_row_once(
             "query_text": "stream accounting marker",
             "mode": "fast",
             "limit": 5,
+            # DATA-001 P2: the write creates a PROVISIONAL row, now filtered by fast mode
+            # post-hydration; this test asserts access accounting, not state — request it visible.
+            "state_filter": ["provisional"],
         },
     )
     assert r.status_code == 200, r.text

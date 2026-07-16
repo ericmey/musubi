@@ -39,13 +39,25 @@ from typing import Any
 
 from qdrant_client import QdrantClient, models
 
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 
-def _by_id(namespace: str, object_id: str) -> models.Filter:
+
+def _identity_by_id(namespace: str, object_id: str) -> models.Filter:
+    """Match the AUTHORITATIVE identity row for ``(namespace, object_id)`` — the v2 anchor (which
+    carries the full mutable payload, content included) or a v1/legacy row — never a write-once CONTENT
+    snapshot (DATA-001 P2). The exclusion is a no-op for v1 rows and for concept/thought/artifact
+    (no content points). Targeting identity is why ``point_exists`` cannot be fooled by an orphan
+    content shell and ``raw_payload`` returns the anchor-over-content authoritative payload."""
     return models.Filter(
         must=[
             models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
             models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
-        ]
+        ],
+        must_not=[
+            models.FieldCondition(
+                key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+            )
+        ],
     )
 
 
@@ -57,10 +69,14 @@ def point_exists(client: QdrantClient, collection: str, *, namespace: str, objec
     is missing or malforming *those* keys is invisible to it. For deletion — where being
     unreachable is fatal — use :func:`retrieve_by_point_id`, which addresses the point
     directly and does not care what the payload says.
+
+    DATA-001 P2: presence is answered from the IDENTITY row (v2 anchor or v1), never a CONTENT
+    snapshot (Yua). An orphan content shell left behind after a missing/deleted anchor must NOT
+    report the object as present — otherwise an existence guard keeps a half-deleted object alive.
     """
     records, _ = client.scroll(
         collection_name=collection,
-        scroll_filter=_by_id(namespace, object_id),
+        scroll_filter=_identity_by_id(namespace, object_id),
         limit=1,
         with_payload=False,
         with_vectors=False,
@@ -84,10 +100,17 @@ def raw_payload(
     (Yua, rev2 review of PR #398.)
 
     Subject to the same payload-filter reachability limit as :func:`point_exists`.
+
+    DATA-001 P2: returns the AUTHORITATIVE identity row (v2 anchor or v1), never a CONTENT snapshot
+    (Yua). The v2 anchor carries the full mutable payload — content included — so this IS the
+    anchor-over-content authoritative view; it deliberately does NOT follow ``live_point`` (that
+    fails closed on a dangling pointer, which would blind this inspection/repair door to exactly the
+    broken row it exists to open). For the hydrated committed content use
+    :func:`musubi.store.immutable_vectors.resolve_committed_content`.
     """
     records, _ = client.scroll(
         collection_name=collection,
-        scroll_filter=_by_id(namespace, object_id),
+        scroll_filter=_identity_by_id(namespace, object_id),
         limit=1,
         with_payload=True,
         with_vectors=False,

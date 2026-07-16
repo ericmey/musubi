@@ -47,6 +47,11 @@ from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.planes.curated import CuratedPlane
 from musubi.storage import build_qdrant_client
+from musubi.store.immutable_vectors import (
+    ImmutableVectorPublisher,
+    register_immutable_vector_dispatch,
+)
+from musubi.store.names import collection_for_plane
 from musubi.vault.writelog import WriteLog
 
 if TYPE_CHECKING:
@@ -193,7 +198,10 @@ def build_vault_sync_runtime(*, settings: Settings | None = None) -> VaultSyncRu
     embedder: Embedder = ChunkedEmbedder(
         _TEICompositeEmbedder(dense=dense, sparse=sparse, reranker=reranker)
     )
-    curated_plane = CuratedPlane(client=qdrant, embedder=embedder)
+    # DATA-001 P2: the vault watcher performs same-object curated body updates, which are vector-capable
+    # and publish through the fenced immutable-vector seam. Build the coordinator FIRST, register the
+    # collection-aware dispatcher, then inject the coordinator + curated publisher into the plane — else
+    # the same-id update path fails closed (unwired publisher).
     coordinator = LifecycleTransitionCoordinator(
         client=qdrant,
         db_path=settings.lifecycle_sqlite_path,
@@ -202,6 +210,17 @@ def build_vault_sync_runtime(*, settings: Settings | None = None) -> VaultSyncRu
         backoff_base_s=settings.lifecycle_backoff_base_s,
         backoff_max_s=settings.lifecycle_backoff_max_s,
         busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    _cur_collection = collection_for_plane("curated")
+    curated_publisher = ImmutableVectorPublisher(
+        client=qdrant, embedder=embedder, collection=_cur_collection
+    )
+    register_immutable_vector_dispatch(coordinator, {_cur_collection: curated_publisher})
+    curated_plane = CuratedPlane(
+        client=qdrant,
+        embedder=embedder,
+        coordinator=coordinator,
+        vector_publisher=curated_publisher,
     )
     sink = LifecycleEventSink(
         db_path=settings.lifecycle_sqlite_path,

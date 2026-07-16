@@ -45,16 +45,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from pydantic import ValidationError
 from qdrant_client import QdrantClient, models
 
 from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
-from musubi.store.memory_serialization import memory_update_payload
 from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, strip_layout_fields
 from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Ok, Result, epoch_of, utc_now
 from musubi.types.curated import CuratedKnowledge
 
@@ -64,6 +64,35 @@ from musubi.types.curated import CuratedKnowledge
 _POINT_NS = uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000002")
 
 _VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured",)
+
+# DATA-001 P2: the ONLY fields a same-id body/frontmatter update may set on the durable descriptor
+# (Yua ruling). Everything else — lifecycle ``state`` (transitions own it), ``namespace``, identity
+# (``object_id``), creation (``created_at``/``created_epoch``), ``version``, lineage
+# (``supersedes``/``superseded_by``/``promoted_from``/``promoted_at``), and access/lease/anchor
+# internals — is inherited from the FRESH authoritative row inside the handler, so a concurrent
+# transition/lineage/access mutation between this read and the apply is never clobbered. An ALLOWLIST
+# (not a denylist) so a newly-added model field defaults to the conservative inherit-from-fresh.
+# ``updated_at``/``updated_epoch`` are stamped separately with ONE request timestamp.
+_CURATED_AUTHOR_FIELDS: tuple[str, ...] = (
+    "schema_version",
+    "title",
+    "summary",
+    "content",
+    "topics",
+    "tags",
+    "importance",
+    "vault_path",
+    "valid_from",
+    "valid_from_epoch",  # derived epoch — must move WITH valid_from or range queries filter on stale
+    "valid_until",
+    "valid_until_epoch",
+    "musubi_managed",
+    "body_hash",
+    "merged_from",
+    "supported_by",
+    "linked_to_topics",
+    "contradicts",
+)
 
 
 def _point_id(object_id: str) -> str:
@@ -88,6 +117,33 @@ def _curated_from_payload(payload: dict[str, Any]) -> CuratedKnowledge:
     return CuratedKnowledge.model_validate(payload)
 
 
+def _curated_safe(payload: dict[str, Any]) -> CuratedKnowledge | None:
+    """Validate a resolved+stripped ranked-query candidate, or None if it will not model-validate.
+
+    Only the RANKED QUERY skips a malformed authoritative payload — it must not 500 the whole retrieval
+    over one bad row. The by-id fetch (:meth:`get`) and the reconciler scan (:meth:`scan_vault_rows`)
+    do the opposite and SURFACE corruption (raise): a caller asking for one specific row, or building a
+    complete trustworthy inventory, must hear that a row is broken (Yua)."""
+    try:
+        return _curated_from_payload(payload)
+    except ValidationError:
+        return None
+
+
+def _curated_visible_at(row: CuratedKnowledge, at_epoch: float) -> bool:
+    """POST-hydration curated visibility on the TYPED, already-validated row: state in the default view
+    AND the bitemporal window ``(valid_from is null OR valid_from <= at) AND (valid_until is null OR at <
+    valid_until)``. Evaluated on ``CuratedKnowledge`` (``valid_*_epoch`` are ``float | None``), NEVER on
+    the raw payload — a malformed string/object epoch there would ``TypeError`` and 500 the query, so the
+    row must be validated (or dropped) FIRST (Yua). Applied after anchor hydration because a v2 content
+    point carries no state/validity — only the committed anchor does."""
+    if str(row.state) not in {str(s) for s in _VISIBLE_STATES}:
+        return False
+    if row.valid_from_epoch is not None and row.valid_from_epoch > at_epoch:
+        return False
+    return not (row.valid_until_epoch is not None and at_epoch >= row.valid_until_epoch)
+
+
 def _embed_target(memory: CuratedKnowledge) -> str:
     """The text we feed the embedder.
 
@@ -104,12 +160,18 @@ class FindByVaultPathError:
     """Typed error from :meth:`CuratedPlane.find_by_vault_path`.
 
     ``code`` is one of:
-      - ``not_found``        — no row matched the supplied ``vault_path``.
-      - ``multiple_matches`` — more than one row matched (the
+      - ``not_found``        — no IDENTITY row matched the supplied ``vault_path``.
+      - ``multiple_matches`` — more than one IDENTITY row matched (the
         ``(namespace, vault_path)`` uniqueness invariant was violated).
         The caller MUST treat this as a visible warning and refuse to
         take destructive action against an arbitrary match (Yua
         VAULT-003 binding: fail closed and visibly on >1 matches).
+      - ``invalid_row``      — exactly one identity matched but it is
+        DANGLING (a v2 anchor with no committed content) or MALFORMED
+        (will not model-validate). DATA-001 P2 (Yua): a broken identity
+        must NOT collapse into a clean ``not_found`` — the path IS
+        occupied, so the watcher must WARN/REFUSE rather than treat it as
+        a safe archive-by-path no-op. Visible fail-closed, never silent.
     """
 
     code: str
@@ -127,10 +189,23 @@ class FindByVaultPathError:
 class CuratedPlane:
     """CRUD + lifecycle transitions for the curated knowledge plane."""
 
-    def __init__(self, *, client: QdrantClient, embedder: Embedder) -> None:
+    def __init__(
+        self,
+        *,
+        client: QdrantClient,
+        embedder: Embedder,
+        coordinator: LifecycleTransitionCoordinator | None = None,
+        vector_publisher: Any | None = None,
+    ) -> None:
         self._client = client
         self._embedder = embedder
         self._collection = collection_for_plane("curated")
+        # DATA-001 P2: a same-id body/frontmatter update is a vector-capable mutation and goes through
+        # the durable immutable-vector publisher (fenced anchor + content snapshot). Injected only in
+        # PRODUCTION WRITE compositions; a read-only construction leaves them None and a same-id update
+        # then FAILS CLOSED (never the old unfenceable update_vectors). Approved optional injection (Yua).
+        self._coordinator = coordinator
+        self._vector_publisher = vector_publisher
 
     # ------------------------------------------------------------------
     # Create
@@ -189,59 +264,35 @@ class CuratedPlane:
         # supersession is for distinct objects sharing a vault slot;
         # same-id-different-body is just an in-place update.
         if memory.object_id == existing.object_id:
-            # Start from the FULL incoming memory so frontmatter-driven
-            # changes (valid_from/valid_until, musubi_managed, vault_path,
-            # state, etc.) all reach storage — earlier draft of this
-            # branch hand-copied a subset and silently dropped the rest
-            # (Copilot review on PR #363). Then preserve the invariants
-            # that must come from `existing`: the identity (object_id),
-            # the creation timestamps (immutable across an update), the
-            # lineage trail (supersedes/superseded_by carried forward
-            # untouched), and any state machine fields the update isn't
-            # supposed to mutate in-place. Bump version + refresh
-            # updated_at last.
-            dense, sparse = await self._embed_both(_embed_target(memory))
-
-            def plan(current: dict[str, Any]) -> MutationPlan:
-                now_u = utc_now()
-                # Authoritative incoming frontmatter, but the identity + creation timestamps + lineage
-                # come from the FRESH current row (DATA-001 #530) — not the pre-read `existing` — so a
-                # concurrent supersession/promotion/state change is never overwritten. Lease-owned
-                # access fields are excluded (memory_update_payload); version is stamped by the seam.
-                updated = CuratedKnowledge.model_validate(
-                    {
-                        **memory.model_dump(),
-                        "object_id": existing.object_id,
-                        "created_at": current["created_at"],
-                        "created_epoch": current["created_epoch"],
-                        "supersedes": current.get("supersedes", []),
-                        "superseded_by": current.get("superseded_by"),
-                        "promoted_from": current.get("promoted_from"),
-                        "promoted_at": current.get("promoted_at"),
-                        "version": int(current.get("version", 1)),
-                        "updated_at": now_u,
-                        "updated_epoch": epoch_of(now_u),
-                    }
+            # Same-id-different-body is an in-place UPDATE (not a supersession). DATA-001 P2: it is a
+            # vector-capable mutation, so it publishes through the durable immutable-vector seam (fenced
+            # anchor + write-once content), fail-closed if unwired. The durable descriptor carries ONLY
+            # the author-managed frontmatter (``_CURATED_AUTHOR_FIELDS`` + one request ``updated_at``);
+            # identity, creation, lineage, lifecycle ``state`` (transitions own it), ``namespace``, and
+            # access/anchor internals are inherited from the FRESH authoritative row INSIDE the handler,
+            # so a concurrent supersession/promotion/state/access mutation between this read and the
+            # apply is never overwritten (Yua). The handler decides payload-only vs vector-change by the
+            # curated projection (title + summary-or-content). Version bumps once, in the handler.
+            if self._vector_publisher is None or self._coordinator is None:
+                raise RuntimeError(
+                    "curated same-id update reached the vector path but the immutable-vector publisher "
+                    "is not wired (DATA-001 P2 fail-closed)"
                 )
-                changes = memory_update_payload(updated)
-                changes.pop("version", None)  # the mutation lease owns the version bump.
-                return MutationPlan(
-                    changes=changes,
-                    vectors={
-                        DENSE_VECTOR_NAME: dense,
-                        SPARSE_VECTOR_NAME: _sparse_to_model(sparse),
-                    },
-                )
-
-            published = await owned_update(
-                self._client,
-                self._collection,
-                namespace=str(existing.namespace),
+            now_u = utc_now()
+            dump = memory.model_dump(mode="json")
+            set_fields: dict[str, Any] = {
+                key: dump[key] for key in _CURATED_AUTHOR_FIELDS if key in dump
+            }
+            set_fields["updated_at"] = now_u.isoformat()
+            set_fields["updated_epoch"] = epoch_of(now_u)
+            committed = self._vector_publisher.curated_publish(
+                self._coordinator,
                 object_id=str(existing.object_id),
-                point_id=_point_id(existing.object_id),
-                plan=plan,
+                namespace=str(existing.namespace),
+                set_fields=set_fields,
             )
-            return CuratedKnowledge.model_validate(published)
+            # resolve, then validate: strip the Phase-2 layout-only keys the extra="forbid" model rejects.
+            return CuratedKnowledge.model_validate(strip_layout_fields(committed))
 
         # True supersession path (distinct objects sharing a vault slot).
         # Two writes: insert the new row, mark the old row superseded.
@@ -269,9 +320,13 @@ class CuratedPlane:
         # concurrent unrelated mutation to the old row is never overwritten. No vector change.
         def supersede_plan(current: dict[str, Any]) -> MutationPlan:
             now_s = utc_now()
+            # DATA-001 P2: the old row may be a v2 ANCHOR, whose fresh payload carries layout-only keys
+            # (point_kind/live_point/pointer_version/...) that the extra="forbid" model rejects. Strip
+            # them before validating; the write below is still the NARROW lease change-set (state +
+            # superseded_by + updated_at), so the anchor's live_point/pointer/version are untouched.
             superseded = CuratedKnowledge.model_validate(
                 {
-                    **current,
+                    **strip_layout_fields(current),
                     "state": "superseded",
                     "superseded_by": new_row.object_id,
                     "updated_at": now_s,
@@ -327,7 +382,17 @@ class CuratedPlane:
         whichever row Qdrant returns first rather than a hard crash; the
         rebuild integration test (deferred to slice-vault-sync) catches
         the duplicate.
-        """
+
+        DATA-001 P2: the scroll targets the IDENTITY row (``must_not`` content) and RESOLVES it through
+        its anchor before validating (``extra="forbid"`` rejects raw layout keys). A normal v2 content
+        point carries no ``vault_path`` (only its projection source), so ``must_not`` content is here as
+        fail-closed defense against a corrupt/future content shell that DID carry ``vault_path`` and could
+        shadow the real anchor. Crucially, this DISTINGUISHES two cases the caller must not conflate
+        (Yua): NO identity for the path -> ``None`` (``create`` inserts fresh); a found-but-DANGLING/
+        MALFORMED identity -> RAISE (fail closed) — returning ``None`` there would let ``create``
+        manufacture a DUPLICATE for a path that is already occupied by a broken row."""
+        from musubi.store.immutable_vectors import not_content_condition, resolve_committed_content
+
         records, _ = self._client.scroll(
             collection_name=self._collection,
             scroll_filter=models.Filter(
@@ -338,17 +403,33 @@ class CuratedPlane:
                     models.FieldCondition(
                         key="vault_path", match=models.MatchValue(value=vault_path)
                     ),
-                ]
+                ],
+                must_not=not_content_condition(),
             ),
             limit=1,
             with_payload=True,
         )
         if not records:
-            return None
+            return None  # genuinely no identity for this path -> create() may insert fresh
         payload = records[0].payload
         if not payload:
-            return None
-        return _curated_from_payload(payload)
+            raise ValueError(  # an identity row with no payload is BROKEN, not absent -> fail closed
+                f"curated identity for vault_path={vault_path!r} has an empty payload"
+            )
+        resolved = resolve_committed_content(
+            self._client,
+            self._collection,
+            namespace=str(payload.get("namespace", namespace)),
+            object_id=str(payload.get("object_id", "")),
+        )
+        if resolved is None:
+            raise ValueError(  # found-but-dangling: the path IS occupied by a broken identity
+                f"curated identity for vault_path={vault_path!r} is dangling (no committed content); "
+                "refusing to report absent so create() cannot manufacture a duplicate"
+            )
+        return _curated_from_payload(
+            strip_layout_fields(resolved)
+        )  # raises on malformed -> fail closed
 
     async def find_by_vault_path(
         self, vault_path: str
@@ -370,21 +451,30 @@ class CuratedPlane:
         target the wrong row. This method:
 
         - Returns ``Err(FindByVaultPathError(code='not_found'))`` when
-          no row matches (the watcher's clean observable no-op).
-        - Returns ``Ok(row)`` when EXACTLY one row matches.
+          no IDENTITY row matches (the watcher's clean observable no-op).
+        - Returns ``Ok(row)`` when EXACTLY one identity matches AND
+          resolves+validates.
         - Returns ``Err(FindByVaultPathError(code='multiple_matches'))``
-          when more than one row matches — the caller MUST refuse to
-          take destructive action.
+          when more than one IDENTITY row matches — the caller MUST
+          refuse to take destructive action.
+        - Returns ``Err(FindByVaultPathError(code='invalid_row'))`` when
+          exactly one identity matches but is DANGLING or MALFORMED — a
+          broken-but-present row, NOT a clean absence (DATA-001 P2, Yua).
 
-        The scroll is bounded to ``limit=2`` (Yua VAULT-003 review
+        The scroll excludes content shells (``must_not`` content) so
+        cardinality is counted over DISTINCT IDENTITIES. A normal content
+        snapshot carries no ``vault_path``, so this is the fail-closed
+        defense against a corrupt/future shell that DID carry it inflating
+        the count into a false ``multiple_matches`` or shadowing the real
+        anchor. It is bounded to ``limit=2`` (Yua VAULT-003 review
         binding): fetching the second match is sufficient to fail
         closed, and a limit of 2 is the smallest unconstrained value
         that still surfaces the duplicate case without pulling a
-        potentially unbounded row count. Zero matches -> not_found;
-        one match -> Ok; two matches -> multiple_matches. Anything
-        more than 2 in the duplicate case is the same bug and the
-        caller fails closed on the second match.
+        potentially unbounded row count. Zero identities -> not_found;
+        one -> resolve (Ok / invalid_row); two -> multiple_matches.
         """
+        from musubi.store.immutable_vectors import not_content_condition, resolve_committed_content
+
         if not isinstance(vault_path, str) or not vault_path:
             return Err(
                 error=FindByVaultPathError(
@@ -399,7 +489,8 @@ class CuratedPlane:
                     models.FieldCondition(
                         key="vault_path", match=models.MatchValue(value=vault_path)
                     ),
-                ]
+                ],
+                must_not=not_content_condition(),  # count DISTINCT IDENTITIES, never content shells
             ),
             limit=2,
             with_payload=True,
@@ -423,7 +514,7 @@ class CuratedPlane:
                 error=FindByVaultPathError(
                     code="multiple_matches",
                     detail=(
-                        f"vault_path={vault_path!r} matched >=2 rows; "
+                        f"vault_path={vault_path!r} matched >=2 identity rows; "
                         "(namespace, vault_path) uniqueness invariant violated. "
                         "Fetches at most 2 rows because the second match is "
                         "sufficient to fail closed."
@@ -436,11 +527,43 @@ class CuratedPlane:
         if not payload:
             return Err(
                 error=FindByVaultPathError(
-                    code="not_found",
-                    detail=f"matched row for vault_path={vault_path!r} has empty payload",
+                    code="invalid_row",  # present-but-broken, NOT a clean absence
+                    detail=f"matched identity for vault_path={vault_path!r} has an empty payload",
                 )
             )
-        return Ok(value=_curated_from_payload(payload))
+        resolved = resolve_committed_content(
+            self._client,
+            self._collection,
+            namespace=str(payload.get("namespace", "")),
+            object_id=str(payload.get("object_id", "")),
+        )
+        if resolved is None:
+            return Err(  # a dangling identity is present-but-broken — must not become clean not_found
+                error=FindByVaultPathError(
+                    code="invalid_row",
+                    detail=(
+                        f"identity for vault_path={vault_path!r} is dangling (no committed content); "
+                        "the path is occupied by a broken row — the watcher must warn/refuse, not "
+                        "treat it as absent"
+                    ),
+                    match_object_ids=(str(payload.get("object_id", "")),),
+                )
+            )
+        row = _curated_safe(strip_layout_fields(resolved))
+        if row is None:
+            return (
+                Err(  # a malformed identity is present-but-broken, likewise never a clean not_found
+                    error=FindByVaultPathError(
+                        code="invalid_row",
+                        detail=(
+                            f"identity for vault_path={vault_path!r} will not model-validate; "
+                            "present-but-corrupt, the watcher must warn/refuse"
+                        ),
+                        match_object_ids=(str(payload.get("object_id", "")),),
+                    )
+                )
+            )
+        return Ok(value=row)
 
     async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
         """Is this row present? Answered WITHOUT deserializing it.
@@ -472,28 +595,45 @@ class CuratedPlane:
         Raises if the stored payload does not satisfy ``CuratedKnowledge``. To ask
         only whether the row is present, call :meth:`exists` — it does not
         deserialize, so it still answers for a corrupted row.
+
+        DATA-001 P2: resolves the AUTHORITATIVE committed payload (a v2 anchor merged over its
+        ``live_point`` content, or a v1/legacy row) before validating — never a raw anchor/content
+        shell — and fails closed (None) on a v2 anchor with a dangling/absent committed pointer.
         """
-        records, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                ]
-            ),
-            limit=1,
-            with_payload=True,
+        from musubi.store.immutable_vectors import resolve_committed_content
+
+        resolved = resolve_committed_content(
+            self._client, self._collection, namespace=str(namespace), object_id=str(object_id)
         )
-        if not records:
+        if resolved is None:
             return None
-        payload = records[0].payload
-        if not payload:
-            return None
-        return _curated_from_payload(payload)
+        return _curated_from_payload(strip_layout_fields(resolved))
+
+    async def patch_metadata(
+        self, *, namespace: Namespace, object_id: KSUID, changes: dict[str, Any]
+    ) -> CuratedKnowledge:
+        """Apply a metadata-only PATCH (author frontmatter, NO body/vector change) to the identity row
+        through the attributable Phase-1 mutation lease (DATA-001 P2, Yua): version-fenced owner-token,
+        rebased on the FRESH row each round, one version bump, targets the identity row (v1 or v2 anchor
+        via ``must_not content``), and composes with concurrent access/transition mutations — so a
+        concurrent state/access change survives while the intended metadata lands. Returns the published
+        row (stripped of layout keys + validated). Raises if the row vanished / lease contention exhausts."""
+        payload_changes = {k: v for k, v in changes.items() if k != "version"}
+
+        def plan(_current: dict[str, Any]) -> MutationPlan:
+            # narrow metadata-only change-set; the mutation lease owns the version bump, and no vectors
+            # change (a body/projection change goes through create() -> the immutable-vector seam).
+            return MutationPlan(changes=dict(payload_changes))
+
+        published = await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            point_id=_point_id(object_id),
+            plan=plan,
+        )
+        return CuratedKnowledge.model_validate(strip_layout_fields(published))
 
     async def query(
         self,
@@ -515,10 +655,24 @@ class CuratedPlane:
         believe on 2025-12-01?" introspection. Superseded and archived
         rows are not in the default view; reach for them by id via
         :meth:`get`.
+
+        DATA-001 P2: the prefilter is IMMUTABLE-only (namespace + ``must_not`` anchor, the shared
+        seam) — a v2 content point carries no ``state``/validity, so a state/bitemporal prefilter would
+        drop the real vectors and surface zero-vector anchors. Each candidate is hydrated through its
+        anchor (``resolve_ranked_candidate``); state AND the bitemporal window are applied POST-hydration
+        on the authoritative payload; the scan is BOUNDED-overfetched to refill drops (anchors,
+        superseded content, out-of-window/wrong-state rows) with a truthful underfill, never an unbounded
+        retry; and a malformed authoritative payload fails closed (skips) rather than 500-ing the query.
         """
         at = valid_at if valid_at is not None else utc_now()
         at_epoch = epoch_of(at)
         dense = (await self._embedder.embed_dense([query]))[0]
+        from musubi.store.immutable_vectors import (
+            not_anchor_condition,
+            ranked_overfetch,
+            resolve_ranked_candidate,
+        )
+
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
@@ -528,52 +682,50 @@ class CuratedPlane:
                     models.FieldCondition(
                         key="namespace", match=models.MatchValue(value=namespace)
                     ),
-                    models.FieldCondition(
-                        key="state",
-                        match=models.MatchAny(any=[str(s) for s in _VISIBLE_STATES]),
-                    ),
-                    models.Filter(
-                        should=[
-                            models.IsNullCondition(
-                                is_null=models.PayloadField(key="valid_from_epoch")
-                            ),
-                            models.FieldCondition(
-                                key="valid_from_epoch",
-                                range=models.Range(lte=at_epoch),
-                            ),
-                        ]
-                    ),
-                    models.Filter(
-                        should=[
-                            models.IsNullCondition(
-                                is_null=models.PayloadField(key="valid_until_epoch")
-                            ),
-                            models.FieldCondition(
-                                key="valid_until_epoch",
-                                range=models.Range(gt=at_epoch),
-                            ),
-                        ]
-                    ),
-                ]
+                ],
+                must_not=not_anchor_condition(),
             ),
-            limit=limit,
+            limit=ranked_overfetch(limit),
             with_payload=True,
         )
         out: list[CuratedKnowledge] = []
-        for point in resp.points:
-            if point.payload:
-                out.append(_curated_from_payload(point.payload))
+        for point in resp.points:  # score-descending; preserve candidate score order
+            if len(out) >= limit:
+                break
+            resolved = resolve_ranked_candidate(
+                self._client, self._collection, point_id=point.id, payload=dict(point.payload or {})
+            )
+            if resolved is None:
+                continue  # anchor / superseded content / dangling-cross-object -> not a live candidate
+            row = _curated_safe(strip_layout_fields(resolved))
+            if row is None:
+                continue  # malformed authoritative payload -> fail closed (skip from the ranked view)
+            if not _curated_visible_at(row, at_epoch):
+                continue  # POST-hydration state + bitemporal window on the TYPED row (never raw epochs)
+            out.append(row)
         return out
 
     async def scan_vault_rows(self) -> list[CuratedKnowledge]:
         """Return a snapshot of all validated curated rows.
         Used by the vault reconciler to detect ghost rows.
-        """
+
+        DATA-001 P2: the scroll excludes write-once CONTENT shells (``must_not`` content). Because this
+        scan RESOLVES each row by ``object_id``, a v2 object's content points would each resolve back to
+        its anchor and be counted again — excluding content both collapses that double-count and stops the
+        1000-row page budget being burned on snapshots that are not identities. Each identity row is
+        RESOLVED through its anchor before validating (``extra="forbid"`` rejects raw layout keys). This
+        scan is FAIL-LOUD, the opposite of the ranked query (Yua / VaultReconciler contract): a dangling
+        or malformed identity RAISES rather than being skipped — the reconciler needs a COMPLETE,
+        trustworthy inventory, and a silently-dropped row would let ghost archival run against an
+        incomplete picture."""
+        from musubi.store.immutable_vectors import not_content_condition, resolve_committed_content
+
         out: list[CuratedKnowledge] = []
         offset = None
         while True:
             resp, offset = self._client.scroll(
                 collection_name=self._collection,
+                scroll_filter=models.Filter(must_not=not_content_condition()),
                 limit=1000,
                 offset=offset,
                 with_payload=True,
@@ -582,7 +734,18 @@ class CuratedPlane:
             for point in resp:
                 if point.payload is None:
                     raise ValueError("curated inventory row is missing its payload")
-                row = _curated_from_payload(point.payload)
+                resolved = resolve_committed_content(
+                    self._client,
+                    self._collection,
+                    namespace=str(point.payload.get("namespace", "")),
+                    object_id=str(point.payload.get("object_id", "")),
+                )
+                if resolved is None:
+                    raise ValueError(  # dangling identity -> fail loud (never a silent gap in inventory)
+                        "curated inventory identity "
+                        f"{point.payload.get('object_id')!r} is dangling (no committed content)"
+                    )
+                row = _curated_from_payload(strip_layout_fields(resolved))  # raises on malformed
                 if row.vault_path:
                     out.append(row)
             if offset is None:

@@ -61,6 +61,11 @@ from musubi.planes.episodic import EpisodicPlane
 from musubi.planes.thoughts import ThoughtsPlane
 from musubi.settings import Settings
 from musubi.storage import build_qdrant_client
+from musubi.store.immutable_vectors import (
+    ImmutableVectorPublisher,
+    register_immutable_vector_dispatch,
+)
+from musubi.store.names import collection_for_plane
 
 _DEFAULT_RETRY_ATTEMPTS = 5
 _DEFAULT_RETRY_BACKOFF_S = 1.0
@@ -218,6 +223,33 @@ def bootstrap_production_app(
         _TEICompositeEmbedder(dense=dense, sparse=sparse, reranker=reranker)
     )
 
+    # Exactly one app-lifetime coordinator. API callers submit durable transition intents through it;
+    # background reconciliation remains worker-only, but a SYNCHRONOUS write that changes a vector
+    # (episodic reinforce / curated same-id body update) drives its own immutable-vector intent inline
+    # via this coordinator — so the collection-aware dispatcher MUST be registered here too (DATA-001
+    # P2), before any plane factory can be called. ONE handler for the shared kind routes by collection.
+    coordinator = LifecycleTransitionCoordinator(
+        client=qdrant,
+        db_path=settings.lifecycle_sqlite_path,
+        pending_cap=settings.lifecycle_pending_cap,
+        lease_ttl=settings.lifecycle_lease_ttl_s,
+        backoff_base_s=settings.lifecycle_backoff_base_s,
+        backoff_max_s=settings.lifecycle_backoff_max_s,
+        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
+    )
+    _ep_collection = collection_for_plane("episodic")
+    _cur_collection = collection_for_plane("curated")
+    episodic_publisher = ImmutableVectorPublisher(
+        client=qdrant, embedder=embedder, collection=_ep_collection
+    )
+    curated_publisher = ImmutableVectorPublisher(
+        client=qdrant, embedder=embedder, collection=_cur_collection
+    )
+    register_immutable_vector_dispatch(
+        coordinator,
+        {_ep_collection: episodic_publisher, _cur_collection: curated_publisher},
+    )
+
     # Every override below is a fresh closure-captured factory; calling
     # bootstrap a second time replaces the dict entries cleanly (idempotent).
     app.dependency_overrides[get_qdrant_client] = lambda: qdrant
@@ -227,10 +259,16 @@ def bootstrap_production_app(
     # retrieve pipeline's signature honest + tests easier).
     app.dependency_overrides[get_reranker] = lambda: reranker
     app.dependency_overrides[get_episodic_plane] = lambda: EpisodicPlane(
-        client=qdrant, embedder=embedder
+        client=qdrant,
+        embedder=embedder,
+        coordinator=coordinator,
+        vector_publisher=episodic_publisher,
     )
     app.dependency_overrides[get_curated_plane] = lambda: CuratedPlane(
-        client=qdrant, embedder=embedder
+        client=qdrant,
+        embedder=embedder,
+        coordinator=coordinator,
+        vector_publisher=curated_publisher,
     )
     app.dependency_overrides[get_concept_plane] = lambda: ConceptPlane(
         client=qdrant, embedder=embedder
@@ -240,17 +278,6 @@ def bootstrap_production_app(
     )
     app.dependency_overrides[get_thoughts_plane] = lambda: ThoughtsPlane(
         client=qdrant, embedder=embedder
-    )
-    # Exactly one app-lifetime coordinator. API callers submit durable
-    # transition intents through it; reconciliation remains worker-only.
-    coordinator = LifecycleTransitionCoordinator(
-        client=qdrant,
-        db_path=settings.lifecycle_sqlite_path,
-        pending_cap=settings.lifecycle_pending_cap,
-        lease_ttl=settings.lifecycle_lease_ttl_s,
-        backoff_base_s=settings.lifecycle_backoff_base_s,
-        backoff_max_s=settings.lifecycle_backoff_max_s,
-        busy_timeout_ms=settings.lifecycle_sqlite_busy_timeout_ms,
     )
     app.dependency_overrides[get_lifecycle_service] = lambda: coordinator
 

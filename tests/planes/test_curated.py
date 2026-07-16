@@ -38,7 +38,7 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -74,18 +74,32 @@ def qdrant() -> Iterator[QdrantClient]:
         client.close()
 
 
-@pytest.fixture
-def plane(qdrant: QdrantClient) -> CuratedPlane:
-    return CuratedPlane(client=qdrant, embedder=FakeEmbedder())
-
-
 _COORDINATOR: LifecycleTransitionCoordinator | None = None
 
 
 @pytest.fixture(autouse=True)
-def _install_coordinator(qdrant: QdrantClient, tmp_path: Path) -> None:
+def coordinator(qdrant: QdrantClient, tmp_path: Path) -> LifecycleTransitionCoordinator:
     global _COORDINATOR
     _COORDINATOR = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+    return _COORDINATOR
+
+
+@pytest.fixture
+def plane(qdrant: QdrantClient, coordinator: LifecycleTransitionCoordinator) -> CuratedPlane:
+    # DATA-001 P2: a same-id body/frontmatter update publishes through the immutable-vector seam; wire
+    # the coordinator + a curated-bound publisher + the dispatcher so the update path is not fail-closed.
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+    from musubi.store.names import collection_for_plane
+
+    coll = collection_for_plane("curated")
+    publisher = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=coll)
+    register_immutable_vector_dispatch(coordinator, {coll: publisher})
+    return CuratedPlane(
+        client=qdrant, embedder=FakeEmbedder(), coordinator=coordinator, vector_publisher=publisher
+    )
 
 
 def _coord() -> LifecycleTransitionCoordinator:
@@ -628,6 +642,150 @@ async def test_create_same_object_id_update_propagates_frontmatter_fields(
     assert updated.created_at == first.created_at
 
 
+async def test_same_id_update_inherits_state_lineage_access_from_fresh(
+    plane: CuratedPlane, ns: str
+) -> None:
+    """DATA-001 P2 (Yua): a same-id body/frontmatter update carries ONLY author-managed frontmatter.
+    Lifecycle ``state`` (transitions own it), transition-owned lineage, and lease-owned access are
+    INHERITED from the fresh committed row — a concurrent change to them survives, and the incoming
+    memory can never set them — while the intended frontmatter lands and version bumps exactly once."""
+    from qdrant_client import models as qmodels
+
+    from musubi.types.common import generate_ksuid
+
+    lineage_superseded = str(generate_ksuid())
+    lineage_promoted = str(generate_ksuid())
+    promoted_at_iso = datetime.now(UTC).isoformat()
+    first = await plane.create(
+        _make(namespace=ns, title="T1", content="body one", vault_path="curated/eric/inh.md")
+    )
+    # a concurrent transition-owned STATE + lineage + lease-owned-access change lands on the identity
+    # row (a real state transition, not just lineage — so we prove the EXACT state survives).
+    plane._client.set_payload(
+        collection_name=plane._collection,
+        payload={
+            "state": "superseded",
+            "superseded_by": lineage_superseded,
+            "promoted_from": lineage_promoted,
+            "promoted_at": promoted_at_iso,
+            "access_count": 7,
+        },
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(first.object_id))
+                ),
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+            ]
+        ),
+        wait=True,
+    )
+    # the incoming memory ALSO tries to set state=archived — the allowlist must ignore it.
+    updated = await plane.create(
+        _make(
+            namespace=ns,
+            title="T2-edited",
+            content="a longer edited body two",
+            vault_path="curated/eric/inh.md",
+            object_id=first.object_id,
+            state="archived",
+        )
+    )
+    assert updated.object_id == first.object_id
+    assert updated.title == "T2-edited" and updated.content == "a longer edited body two"  # landed
+    assert updated.version == first.version + 1  # bumped exactly once
+    # the CONCURRENT state transition survives, and the incoming state=archived is ignored (allowlist).
+    assert updated.state == "superseded", (
+        "a concurrent transition-owned state change must survive; incoming state=archived must be ignored"
+    )
+    assert str(updated.superseded_by) == lineage_superseded, "transition-owned lineage must survive"
+    assert str(updated.promoted_from) == lineage_promoted
+    assert updated.promoted_at is not None, "promoted_at must survive alongside promoted_from"
+    assert updated.access_count == 7, "lease-owned access must survive"
+
+
+async def test_patch_metadata_preserves_concurrent_state_access_bumps_version_once(
+    plane: CuratedPlane, ns: str
+) -> None:
+    """DATA-001 P2 (Yua): the metadata-only PATCH routes through the attributable Phase-1 mutation lease
+    (owned_update) — it targets the identity row (v1 here), bumps version once, and a concurrent
+    transition-owned state + lease-owned access change SURVIVES while the intended metadata lands."""
+    from qdrant_client import models as qmodels
+
+    from musubi.types.common import generate_ksuid
+
+    first = await plane.create(
+        _make(namespace=ns, title="T", content="body", vault_path="curated/eric/patch.md")
+    )
+    # a concurrent transition + access bump lands on the (v1) identity row.
+    superseded_by = str(generate_ksuid())
+    plane._client.set_payload(
+        collection_name=plane._collection,
+        payload={"state": "superseded", "superseded_by": superseded_by, "access_count": 5},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(first.object_id))
+                ),
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+            ]
+        ),
+        wait=True,
+    )
+    updated = await plane.patch_metadata(
+        namespace=ns, object_id=first.object_id, changes={"tags": ["x", "y"], "importance": 9}
+    )
+    assert set(updated.tags) == {"x", "y"} and updated.importance == 9  # metadata landed
+    assert updated.version == first.version + 1  # bumped exactly once
+    assert updated.state == "superseded", "concurrent transition-owned state must survive the PATCH"
+    assert str(updated.superseded_by) == superseded_by
+    assert updated.access_count == 5, "lease-owned access must survive the PATCH"
+
+
+async def test_patch_curated_router_refuses_dangling_pointer_without_mutation(
+    plane: CuratedPlane, ns: str
+) -> None:
+    """DATA-001 P2 (Yua): the ACTUAL patch_curated router must REFUSE (409 CONFLICT) a PATCH against a
+    v2 object whose committed content point is gone, and must NOT mutate the identity row."""
+    from musubi.api.errors import APIError
+    from musubi.api.routers.writes_curated import PatchCuratedRequest, patch_curated
+    from musubi.store.immutable_vectors import read_anchor
+
+    # first create is v1; a same-id body update promotes it to v2 (anchor + content), then dangle it.
+    first = await plane.create(
+        _make(namespace=ns, title="T", content="c1", vault_path="curated/eric/dg.md")
+    )
+    await plane.create(
+        _make(
+            namespace=ns,
+            title="T",
+            content="c2-is-longer",
+            vault_path="curated/eric/dg.md",
+            object_id=first.object_id,
+        )
+    )
+    anchor = read_anchor(
+        plane._client, plane._collection, namespace=ns, object_id=str(first.object_id)
+    )
+    assert anchor is not None and anchor.live_point is not None
+    plane._client.delete(collection_name=plane._collection, points_selector=[anchor.live_point])
+
+    before = await plane.raw_payload(namespace=ns, object_id=str(first.object_id))
+    with pytest.raises(APIError) as exc:
+        await patch_curated(
+            object_id=str(first.object_id),
+            namespace=ns,
+            body=PatchCuratedRequest(tags=["x"], importance=3),
+            qdrant=plane._client,
+            plane=plane,
+        )
+    assert exc.value.status_code == 409, (
+        "a dangling-pointer PATCH must fail closed with 409 CONFLICT"
+    )
+    after = await plane.raw_payload(namespace=ns, object_id=str(first.object_id))
+    assert after == before, "a refused PATCH must not mutate the identity row"
+
+
 async def test_query_excludes_archived_by_default(plane: CuratedPlane, ns: str) -> None:
     saved = await plane.create(
         _make(namespace=ns, content="hidden-me", vault_path="curated/eric/hidden.md")
@@ -675,6 +833,14 @@ async def test_scan_vault_rows_paginates_and_validates(
     )
 
     def mock_scroll(*args: Any, offset: Any = None, **kwargs: Any) -> tuple[list[Any], int | None]:
+        # Only paginate the top-level inventory scroll (limit=1000). DATA-001 P2: scan_vault_rows now
+        # RESOLVES each identity through its anchor, whose internal scrolls must reach the real client —
+        # delegate anything that is not the inventory page, or we would starve the resolver.
+        if kwargs.get("limit") != 1000:
+            return cast(
+                "tuple[list[Any], int | None]",
+                original_scroll(*args, **{**kwargs, "offset": offset}),
+            )
         if offset is None:
             return all_records[:2], 2  # return first 2, next offset is 2
         else:
@@ -698,14 +864,22 @@ async def test_scan_vault_rows_surfaces_validation_failure(
 
     from musubi.store.specs import DENSE_VECTOR_NAME
 
-    # Seed a row missing required schema fields
+    # Seed a v1-shape identity row (has object_id + namespace so it RESOLVES as a legacy self-pointer)
+    # but missing required schema fields, so the post-resolve model_validate raises. DATA-001 P2: the
+    # scan resolves through the anchor first, then validates — the fail-loud surface for a corrupt row
+    # is still the pydantic validation error (Yua: validation failures must propagate, never be skipped).
     qdrant.upsert(
         collection_name=plane._collection,
         points=[
             PointStruct(
                 id="00000000-0000-0000-0000-000000000000",
                 vector={DENSE_VECTOR_NAME: [0.0] * 1024},
-                payload={"vault_path": "bad.md", "invalid_schema": "missing_required_fields"},
+                payload={
+                    "object_id": "bad-oid",
+                    "namespace": ns,
+                    "vault_path": "bad.md",
+                    "invalid_schema": "missing_required_fields",
+                },
             )
         ],
     )

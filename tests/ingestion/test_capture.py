@@ -73,8 +73,24 @@ def embedder() -> FakeEmbedder:
 
 
 @pytest.fixture
-def plane(qdrant: QdrantClient, embedder: FakeEmbedder) -> EpisodicPlane:
-    return EpisodicPlane(client=qdrant, embedder=embedder)
+def plane(qdrant: QdrantClient, embedder: FakeEmbedder, tmp_path: Path) -> EpisodicPlane:
+    # DATA-001 P2: a dedup reinforce that changes the vector publishes through the immutable-vector seam;
+    # wire the coordinator + collection-bound publisher + dispatcher so the reinforce path is not
+    # fail-closed (mirrors the test_episodic.py plane fixture).
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+    from musubi.store.names import collection_for_plane
+
+    coll = collection_for_plane("episodic")
+    coord = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "capture-coord.db")
+    publisher = ImmutableVectorPublisher(client=qdrant, embedder=embedder, collection=coll)
+    register_immutable_vector_dispatch(coord, {coll: publisher})
+    return EpisodicPlane(
+        client=qdrant, embedder=embedder, coordinator=coord, vector_publisher=publisher
+    )
 
 
 @pytest.fixture

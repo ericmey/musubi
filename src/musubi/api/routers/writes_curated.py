@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
-from qdrant_client import QdrantClient, models
+from qdrant_client import QdrantClient
 
 from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import (
@@ -161,22 +161,27 @@ async def patch_curated(
             detail=f"curated knowledge {object_id!r} not found in namespace {namespace!r}",
         )
 
-    # NEVER PERSIST WHAT YOU CANNOT READ BACK. The allowlist stops unknown keys; this
-    # stops invalid values of known keys. Curated is shared settled truth — a row bricked
-    # here is permanent false ground for every agent. See musubi.api.patch_guard.
-    assert_readable_after_patch(current_raw, incoming, CuratedKnowledge, object_id=object_id)
-    qdrant.set_payload(
-        collection_name="musubi_curated",
-        payload=incoming,
-        points=models.Filter(
-            must=[
-                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
-            ]
-        ),
+    # DATA-001 P2 (Yua): PATCH is not a repair path and its response uses get() — it must NOT mutate a
+    # row it cannot SERVE. Resolve the committed payload with get() semantics; a present-but-dangling /
+    # cross-object v2 anchor (raw_payload above found the identity row, but the committed content is
+    # unresolvable) FAILS CLOSED with 409. raw_payload only distinguishes absent (404) from corrupt.
+    served = await plane.get(namespace=namespace, object_id=object_id)
+    if served is None:
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail=(
+                f"curated knowledge {object_id!r} has unresolvable committed content; PATCH refused"
+            ),
+        )
+    # NEVER PERSIST WHAT YOU CANNOT READ BACK. Validate the RESOLVED canonical row (never raw anchor
+    # layout keys), then publish the metadata-only change through the attributable Phase-1 mutation
+    # lease (CuratedPlane.patch_metadata -> owned_update): version-fenced owner-token, rebased on fresh,
+    # one version bump, targets the identity row (v1 and v2), composes with concurrent access/state.
+    assert_readable_after_patch(
+        served.model_dump(mode="json"), incoming, CuratedKnowledge, object_id=object_id
     )
-    refreshed = await plane.get(namespace=namespace, object_id=object_id)
-    assert refreshed is not None
-    return refreshed
+    return await plane.patch_metadata(namespace=namespace, object_id=object_id, changes=incoming)
 
 
 @router.delete(

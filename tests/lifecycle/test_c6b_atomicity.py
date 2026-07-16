@@ -7772,8 +7772,25 @@ def route_env(tmp_path: Path) -> Iterator[_RouteEnv]:
         qdrant = QdrantClient(":memory:")
     bootstrap(qdrant)
     embedder = FakeEmbedder()
-    episodic = EpisodicPlane(client=qdrant, embedder=embedder)
-    curated = CuratedPlane(client=qdrant, embedder=embedder)
+    # DATA-001 P2: wire the immutable-vector seam so a seed that dedups->reinforces is not fail-closed.
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.store.immutable_vectors import (
+        ImmutableVectorPublisher,
+        register_immutable_vector_dispatch,
+    )
+
+    _r21_coord = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "r21-coord.db")
+    _ep_coll = collection_for_plane("episodic")
+    _cur_coll = collection_for_plane("curated")
+    _ep_pub = ImmutableVectorPublisher(client=qdrant, embedder=embedder, collection=_ep_coll)
+    _cur_pub = ImmutableVectorPublisher(client=qdrant, embedder=embedder, collection=_cur_coll)
+    register_immutable_vector_dispatch(_r21_coord, {_ep_coll: _ep_pub, _cur_coll: _cur_pub})
+    episodic = EpisodicPlane(
+        client=qdrant, embedder=embedder, coordinator=_r21_coord, vector_publisher=_ep_pub
+    )
+    curated = CuratedPlane(
+        client=qdrant, embedder=embedder, coordinator=_r21_coord, vector_publisher=_cur_pub
+    )
     concept = ConceptPlane(client=qdrant, embedder=embedder)
     artifact = ArtifactPlane(client=qdrant, embedder=embedder)
     app = create_app(settings=settings)

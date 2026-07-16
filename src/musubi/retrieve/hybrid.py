@@ -14,11 +14,50 @@ from qdrant_client import QdrantClient, models
 from musubi.config import get_settings
 from musubi.embedding.base import Embedder
 from musubi.retrieve.warnings import RetrievalWarning, sparse_embedding_failed
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, collection_has_sparse
-from musubi.types.common import Err, LifecycleState, Namespace, Ok, Result
+from musubi.store.immutable_vectors import (
+    not_anchor_condition,
+    ranked_overfetch,
+    resolve_ranked_candidate,
+)
+from musubi.store.names import collection_for_plane
+from musubi.store.specs import (
+    DENSE_VECTOR_NAME,
+    SPARSE_VECTOR_NAME,
+    collection_has_sparse,
+    strip_layout_fields,
+)
+from musubi.types.common import (
+    Err,
+    LifecycleState,
+    Namespace,
+    Ok,
+    Result,
+    epoch_of,
+    utc_now,
+)
+from musubi.types.curated import CuratedKnowledge
+from musubi.types.episodic import EpisodicMemory
 
 HYBRID_PREFETCH_LIMIT = 50
 _DEFAULT_VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured", "promoted")
+
+# DATA-001 P2: the anchor-aware planes. A hybrid query against these collections ranks write-once CONTENT
+# points + v1 rows (never anchors), resolves each candidate through its authoritative anchor, validates
+# it into its plane model (skipping a malformed row, never 500-ing downstream), and applies lifecycle
+# state POST-hydration (a content point carries no ``state``). concept/thought/artifact are NOT in this
+# set and stay byte-for-byte on the pre-P2 path (one fused pass, raw payloads, no resolver read).
+_IMMUTABLE_VECTOR_COLLECTIONS = frozenset(
+    {collection_for_plane("episodic"), collection_for_plane("curated")}
+)
+# The plane model each anchor-aware collection's authoritative payload validates into (post-hydration
+# fail-closed gate). A collection absent here is not anchor-aware.
+_PLANE_MODELS: dict[str, type[EpisodicMemory] | type[CuratedKnowledge]] = {
+    collection_for_plane("episodic"): EpisodicMemory,
+    collection_for_plane("curated"): CuratedKnowledge,
+}
+# Only curated carries a bitemporal validity window in the default view (parity with CuratedPlane.query;
+# EpisodicPlane.query filters state only). Applied POST-hydration on the validated row, never raw epochs.
+_BITEMPORAL_COLLECTIONS = frozenset({collection_for_plane("curated")})
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +188,13 @@ async def hybrid_search(
         (sparse_embedding_failed(plane),) if encoding.value.sparse_degraded else ()
     )
 
+    # DATA-001 P2: for an anchor-aware collection, the prefilter is IMMUTABLE-only (namespace + must_not
+    # anchor on both fusion legs and the top-level filter); lifecycle state moves POST-hydration because a
+    # content point carries none; and the fused fetch is BOUNDED-overfetched so hydration drops still
+    # leave ``limit`` rows. Non-anchor collections keep the exact pre-P2 path.
+    anchor_aware = collection in _IMMUTABLE_VECTOR_COLLECTIONS
+    visible_states = _visible_state_set(state_filter, include_archived)
+
     resolved_prefetch_limit = (
         prefetch_limit if prefetch_limit is not None else _prefetch_limit_from_settings()
     )
@@ -156,6 +202,7 @@ async def hybrid_search(
         namespace=namespace,
         state_filter=state_filter,
         include_archived=include_archived,
+        anchor_aware=anchor_aware,
     )
     prefetch = _build_prefetch(
         encoding.value,
@@ -163,6 +210,7 @@ async def hybrid_search(
         dense_enabled=dense_enabled,
         sparse_enabled=sparse_enabled,
         namespace_filter=_namespace_filter(namespace),
+        anchor_aware=anchor_aware,
     )
     if not prefetch:
         return Err(
@@ -178,7 +226,7 @@ async def hybrid_search(
             collection=collection,
             prefetch=prefetch,
             query_filter=query_filter,
-            limit=limit,
+            limit=ranked_overfetch(limit) if anchor_aware else limit,
             timeout_s=timeout_s,
         )
     except TimeoutError:
@@ -198,7 +246,16 @@ async def hybrid_search(
             )
         )
 
-    return Ok(value=HybridSearchResult(hits=_hits_from_response(response), warnings=warnings))
+    hits = _hits_from_response(
+        response,
+        client=client,
+        collection=collection,
+        anchor_aware=anchor_aware,
+        visible_states=visible_states,
+        limit=limit,
+        at_epoch=epoch_of(utc_now()),
+    )
+    return Ok(value=HybridSearchResult(hits=hits, warnings=warnings))
 
 
 async def hybrid_search_many(
@@ -349,8 +406,9 @@ def _namespace_condition(namespace: Namespace) -> models.FieldCondition:
 
 
 def _namespace_filter(namespace: Namespace) -> models.Filter:
-    """Namespace-only filter for the prefetch stage (state visibility stays on the top-level
-    query_filter, unchanged by this slice)."""
+    """Namespace-only filter for the prefetch stage. For non-anchor collections state visibility stays on
+    the top-level query_filter; for an anchor-aware collection :func:`_build_prefetch` adds ``must_not``
+    anchor and state moves POST-hydration (a content point carries no ``state``)."""
     return models.Filter(must=[_namespace_condition(namespace)])
 
 
@@ -361,6 +419,7 @@ def _build_prefetch(
     dense_enabled: bool,
     sparse_enabled: bool,
     namespace_filter: models.Filter,
+    anchor_aware: bool = False,
 ) -> list[models.Prefetch]:
     # RET-011: DEFENSE-IN-DEPTH + local-mode parity. The PRODUCTION namespace correction is the
     # exact-namespace top-level `query_filter` (real Qdrant applies it to candidate generation, so
@@ -368,8 +427,15 @@ def _build_prefetch(
     # But the in-memory (`:memory:`) Qdrant test client does NOT apply the top-level fusion filter
     # to prefetch+fusion results, so unit tests can only observe the scope if it also rides on each
     # prefetch. Scoping the prefetch makes `:memory:` faithful to production and is harmless
-    # belt-and-suspenders on a real server. NAMESPACE-ONLY on purpose: state visibility stays on the
-    # top-level query_filter, so this slice does not touch lifecycle-state semantics.
+    # belt-and-suspenders on a real server. For a non-anchor collection this stays NAMESPACE-ONLY and
+    # state visibility remains on the top-level query_filter (RET-011 semantics untouched).
+    #
+    # DATA-001 P2: for an anchor-aware collection, exclude anchors from BOTH fusion legs — an anchor
+    # carries a zero/stale vector and must never enter a candidate list on either the dense or the sparse
+    # side, or RRF could fuse it into the ranked output. State moves POST-hydration for these collections.
+    pf_filter = namespace_filter
+    if anchor_aware:
+        pf_filter = namespace_filter.model_copy(update={"must_not": not_anchor_condition()})
     prefetch: list[models.Prefetch] = []
     if dense_enabled and embedding.dense:
         prefetch.append(
@@ -377,7 +443,7 @@ def _build_prefetch(
                 query=embedding.dense,
                 using=DENSE_VECTOR_NAME,
                 limit=limit,
-                filter=namespace_filter,
+                filter=pf_filter,
             )
         )
     if sparse_enabled and embedding.sparse:
@@ -389,10 +455,23 @@ def _build_prefetch(
                 ),
                 using=SPARSE_VECTOR_NAME,
                 limit=limit,
-                filter=namespace_filter,
+                filter=pf_filter,
             )
         )
     return prefetch
+
+
+def _visible_state_set(
+    state_filter: Sequence[LifecycleState] | None, include_archived: bool
+) -> set[str] | None:
+    """The lifecycle states a hybrid query exposes — the SAME set :func:`_build_filter` puts on the
+    top-level filter for non-anchor collections, computed once so the anchor-aware path can apply it
+    POST-hydration instead. ``None`` means no state restriction (``include_archived`` with no explicit
+    filter): every state is visible, matching a top-level filter that omits the state condition."""
+    states = state_filter
+    if states is None and not include_archived:
+        states = _DEFAULT_VISIBLE_STATES
+    return {str(state) for state in states} if states is not None else None
 
 
 def _build_filter(
@@ -400,6 +479,7 @@ def _build_filter(
     namespace: Namespace,
     state_filter: Sequence[LifecycleState] | None,
     include_archived: bool,
+    anchor_aware: bool = False,
 ) -> models.Filter:
     """Build the Qdrant filter for a hybrid search.
 
@@ -423,6 +503,10 @@ def _build_filter(
     See ``family_of`` in ``musubi.types.common`` (still used by synthesis + payload writes).
     """
     must: list[models.Condition] = [_namespace_condition(namespace)]
+    if anchor_aware:
+        # DATA-001 P2: exclude anchors; state moves POST-hydration (a content point carries no ``state``,
+        # so a top-level state condition here would drop every real candidate and surface only anchors).
+        return models.Filter(must=must, must_not=not_anchor_condition())
     states = state_filter
     if states is None and not include_archived:
         states = _DEFAULT_VISIBLE_STATES
@@ -462,11 +546,73 @@ async def _query_points(
     return await asyncio.wait_for(run(), timeout=timeout_s)
 
 
-def _hits_from_response(response: Any) -> list[HybridHit]:
+def _within_validity(model: EpisodicMemory | CuratedKnowledge, at_epoch: float) -> bool:
+    """The bitemporal default-view window on the TYPED row (``valid_*_epoch`` are ``float | None``):
+    ``(valid_from is null OR valid_from <= at) AND (valid_until is null OR at < valid_until)``. Evaluated
+    on the validated model, never the raw payload — a malformed epoch there would ``TypeError``."""
+    if model.valid_from_epoch is not None and model.valid_from_epoch > at_epoch:
+        return False
+    return not (model.valid_until_epoch is not None and at_epoch >= model.valid_until_epoch)
+
+
+def _safe_validate(
+    model_cls: type[EpisodicMemory] | type[CuratedKnowledge] | None, payload: dict[str, Any]
+) -> EpisodicMemory | CuratedKnowledge | None:
+    """Validate a resolved+stripped authoritative payload into its plane model, or ``None`` if it will
+    not model-validate. A ranked read must fail closed on a malformed row — skip it from the fused view,
+    never let it escape as a hit and 500 a downstream consumer that re-validates."""
+    if model_cls is None:
+        return None
+    try:
+        return model_cls.model_validate(payload)
+    except ValidationError:
+        return None
+
+
+def _hits_from_response(
+    response: Any,
+    *,
+    client: QdrantClient | None = None,
+    collection: str | None = None,
+    anchor_aware: bool = False,
+    visible_states: set[str] | None = None,
+    limit: int | None = None,
+    at_epoch: float = 0.0,
+) -> list[HybridHit]:
+    """Pack the fused response into typed hits.
+
+    Non-anchor collections keep the exact pre-P2 behaviour: one pass over the raw payloads, deduped by
+    ``object_id``. DATA-001 P2 anchor-aware collections instead, per candidate: HYDRATE through the
+    authoritative anchor (``resolve_ranked_candidate`` — a superseded/stale content snapshot, a
+    dangling/cross-object pointer, or an anchor that slipped the prefilter returns ``None`` and is
+    skipped); strip layout keys and VALIDATE into the plane model (a malformed authoritative row fails
+    closed — skipped, never escaping to 500 a downstream consumer); apply the lifecycle-state filter and
+    (curated only) the bitemporal window POST-hydration on the VALIDATED row; and PRESERVE the candidate's
+    fused RRF ``score`` (never an anchor's). The fetch was bounded-overfetched upstream, so the loop trims
+    to ``limit`` after the drops — a truthful underfill, never an unbounded retry."""
     hits: list[HybridHit] = []
     seen: set[str] = set()
+    model_cls = _PLANE_MODELS.get(collection) if collection is not None else None
+    bitemporal = collection in _BITEMPORAL_COLLECTIONS if collection is not None else False
     for point in response.points:
-        payload = dict(point.payload or {})
+        raw = dict(point.payload or {})
+        if anchor_aware:
+            assert (
+                client is not None and collection is not None
+            )  # set together on the anchor-aware path
+            resolved = resolve_ranked_candidate(client, collection, point_id=point.id, payload=raw)
+            if resolved is None:
+                continue  # anchor / superseded content / dangling-cross-object -> not a live candidate
+            payload = strip_layout_fields(resolved)
+            model = _safe_validate(model_cls, payload)
+            if model is None:
+                continue  # malformed authoritative payload -> fail closed (skip, never 500 downstream)
+            if visible_states is not None and str(model.state) not in visible_states:
+                continue  # POST-hydration lifecycle-state filter on the validated row
+            if bitemporal and not _within_validity(model, at_epoch):
+                continue  # POST-hydration curated bitemporal window on the validated row
+        else:
+            payload = raw
         object_id = str(payload.get("object_id", point.id))
         if object_id in seen:
             continue
@@ -478,6 +624,8 @@ def _hits_from_response(response: Any) -> list[HybridHit]:
                 payload=payload,
             )
         )
+        if anchor_aware and limit is not None and len(hits) >= limit:
+            break  # bounded-overfetch trim: enough live rows survived hydration
     return hits
 
 

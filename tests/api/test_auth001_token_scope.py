@@ -122,7 +122,7 @@ def test_default_read_spans_at_least_two_non_excluded_namespaces(
 
     res = client.post(
         "/v1/retrieve",
-        json={"mode": "fast", "query_text": "hello"},
+        json={"mode": "fast", "query_text": "hello", "state_filter": ["provisional"]},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
@@ -152,7 +152,7 @@ def test_default_read_returns_authorized_subset_instead_of_failing_on_other_targ
     )
     res = client.post(
         "/v1/retrieve",
-        json={"mode": "fast", "query_text": "memory"},
+        json={"mode": "fast", "query_text": "memory", "state_filter": ["provisional"]},
         headers={"Authorization": f"Bearer {seed_token}"},
     )
 
@@ -445,7 +445,12 @@ def test_settings_exclusions_add_to_mandatory_not_subtract(
 
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/*/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/*/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
@@ -480,7 +485,12 @@ def test_per_agent_settings_adds_to_mandatory(
 
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/*/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/*/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
@@ -515,7 +525,12 @@ def test_per_agent_settings_keyed_by_subject_or_presence_both_contribute(
 
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/*/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/*/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200
@@ -537,7 +552,12 @@ def test_unauthorized_namespaces_remain_denied_not_silently_broadened(
     _patch_auth(monkeypatch, ("eric/command-chair/*:r",))
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/salesai/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/salesai/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     # Should still return 403 because it's unauthorized (we check resolve_namespace_scope FIRST)
@@ -592,7 +612,12 @@ def test_explicit_narrowing_still_narrows(
     _seed_qdrant(client, token, "eric/other/episodic", "hello other")
     res = client.post(
         "/v1/retrieve",
-        json={"namespace": "eric/command-chair/episodic", "mode": "fast", "query_text": "hello"},
+        json={
+            "namespace": "eric/command-chair/episodic",
+            "mode": "fast",
+            "query_text": "hello",
+            "state_filter": ["provisional"],
+        },
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200

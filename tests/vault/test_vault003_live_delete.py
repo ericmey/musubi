@@ -450,6 +450,45 @@ async def test_missing_row_is_observable_noop(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["invalid_row", "some_future_code"])
+async def test_delete_broken_or_unknown_code_warns_and_refuses(
+    plane: CuratedPlane,
+    ns: str,
+    watcher: VaultWatcher,
+    caplog: pytest.LogCaptureFixture,
+    code: str,
+) -> None:
+    """DATA-001 P2 (Yua): only ``not_found`` is the clean no-op. A present-but-dangling/malformed identity
+    (``invalid_row``) AND any unknown/future error code must WARN and REFUSE — never silently inherit the
+    clean-absence path, which would leave a corrupt row live or let a newly-added typed code regress."""
+    from unittest.mock import AsyncMock
+
+    from musubi.planes.curated.plane import FindByVaultPathError
+
+    rel_path = "eric/shared/broken-identity.md"
+    abs_path = str(watcher.vault_root / rel_path)
+
+    err = Err(
+        error=FindByVaultPathError(code=code, detail="broken", match_object_ids=("broken-oid",))
+    )
+    transition_spy = AsyncMock()
+    plane.find_by_vault_path = AsyncMock(return_value=err)  # type: ignore[method-assign]
+    plane.transition = transition_spy  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.DEBUG, logger="musubi.vault.watcher"):
+        await watcher._handle_event(abs_path, FileDeletedEvent(abs_path))
+
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(rel_path in m and f"code={code}" in m for m in warnings), (
+        f"a non-not_found code ({code}) must emit a structured warning naming the path, got: {warnings}"
+    )
+    # Fail closed: it must NOT be logged as a clean no-op, and must NOT attempt to archive.
+    infos = [r.getMessage() for r in caplog.records if r.levelno == logging.INFO]
+    assert not any("vault-delete-noop" in m for m in infos), f"{code} is not a clean no-op"
+    transition_spy.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_transition_failure_remains_visible(
     plane: CuratedPlane,
     ns: str,
@@ -1119,6 +1158,101 @@ def test_runtime_factory_produces_watcher_construction_inputs(
         vault_root.rmdir()
 
 
+def test_runtime_factory_wires_curated_plane_with_immutable_publisher(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DATA-001 P2 (Yua): the vault runtime is a third write composition — its same-object curated body
+    updates publish through the fenced immutable-vector seam. Prove the factory builds the coordinator
+    FIRST, registers the dispatcher, and injects the coordinator + a curated-bound publisher into the
+    returned CuratedPlane (else the update path fails closed). Only the network deps are stubbed;
+    CuratedPlane, the coordinator, and the publisher stay REAL so their wiring is observable."""
+    from types import SimpleNamespace
+
+    from qdrant_client import QdrantClient
+
+    from musubi.embedding import FakeEmbedder
+    from musubi.store import bootstrap as _bootstrap
+    from musubi.store.names import collection_for_plane
+    from musubi.vault.runtime import VaultSyncRuntime, build_vault_sync_runtime
+
+    vault_root = tmp_path / "vault_root"
+    vault_root.mkdir(parents=True, exist_ok=True)
+    settings = SimpleNamespace(
+        vault_path=str(vault_root),
+        qdrant_host="localhost",
+        qdrant_port=6333,
+        qdrant_api_key=SimpleNamespace(get_secret_value=lambda: "test-key"),
+        musubi_allow_plaintext=True,
+        tei_dense_url="http://localhost:8080",
+        tei_sparse_url="http://localhost:8081",
+        tei_reranker_url="http://localhost:8082",
+        lifecycle_sqlite_path=str(tmp_path / "lifecycle.sqlite"),
+        lifecycle_pending_cap=1000,
+        lifecycle_lease_ttl_s=300.0,
+        lifecycle_backoff_base_s=1.0,
+        lifecycle_backoff_max_s=60.0,
+        lifecycle_sqlite_busy_timeout_ms=5000,
+    )
+    qc = QdrantClient(":memory:")
+    _bootstrap(qc)
+    # stub ONLY the network deps; keep CuratedPlane + coordinator + publisher real so wiring is visible.
+    monkeypatch.setattr("musubi.vault.runtime.build_qdrant_client", lambda **_kw: qc)
+    monkeypatch.setattr("musubi.vault.runtime.ChunkedEmbedder", lambda _composite: FakeEmbedder())
+    monkeypatch.setattr("musubi.store.bootstrap", lambda _qdrant: None)
+
+    runtime: VaultSyncRuntime = build_vault_sync_runtime(settings=settings)  # type: ignore[arg-type]
+    assert runtime.curated_plane._coordinator is runtime.coordinator, (
+        "the curated plane must carry the runtime's coordinator"
+    )
+    assert runtime.curated_plane._vector_publisher is not None
+    assert runtime.curated_plane._vector_publisher._collection == collection_for_plane("curated"), (
+        "the curated plane must carry a curated-bound immutable-vector publisher"
+    )
+    # LOAD-BEARING: the dispatcher must actually be REGISTERED (not merely injected). Drive a REAL
+    # same-id curated body update through the returned plane — it fails closed if the runtime stopped
+    # calling register_immutable_vector_dispatch.
+    import asyncio
+
+    from musubi.store.immutable_vectors import INTENT_KIND
+    from musubi.types.curated import CuratedKnowledge
+
+    assert INTENT_KIND in runtime.coordinator._intent_handlers, (
+        "the vault runtime must register the immutable-vector dispatcher"
+    )
+    rt_ns = "eric/vault-runtime/curated"
+    first = asyncio.run(
+        runtime.curated_plane.create(
+            CuratedKnowledge(
+                namespace=rt_ns,
+                title="T",
+                content="body one",
+                vault_path="rt.md",
+                body_hash="a" * 64,
+            )
+        )
+    )
+    updated = asyncio.run(
+        runtime.curated_plane.create(
+            CuratedKnowledge(
+                namespace=rt_ns,
+                title="T",
+                content="body two is longer",
+                vault_path="rt.md",
+                body_hash="b" * 64,
+                object_id=first.object_id,
+            )
+        )
+    )
+    assert updated.content == "body two is longer" and updated.version == first.version + 1, (
+        "a same-id body update must commit through the wired dispatcher (not fail closed)"
+    )
+
+    import contextlib
+
+    with contextlib.suppress(OSError):
+        vault_root.rmdir()
+
+
 # --------------------------------------------------------------------------- #
 # VAULT-003 re-review (Yua 2026-07-15 17:06): behavioral command-path
 # discriminator + corrected doc wording.
@@ -1151,8 +1285,10 @@ async def test_find_by_vault_path_uses_limit_two_for_fail_closed(
     real_scroll = plane._client.scroll
 
     def _spy_scroll(*args: Any, **kwargs: Any) -> Any:
-        captured.clear()
-        captured.update(kwargs)
+        # DATA-001 P2: find_by_vault_path issues its OWN scroll first, then RESOLVES the identity through
+        # the anchor (further internal scrolls). Capture only the FIRST (the find's own) scroll shape.
+        if not captured:
+            captured.update(kwargs)
         return real_scroll(*args, **kwargs)
 
     plane._client.scroll = _spy_scroll  # type: ignore[method-assign]
@@ -1191,9 +1327,10 @@ async def test_find_by_vault_path_scroll_requests_payload_only(
     real_scroll = plane._client.scroll
 
     def _spy_scroll(*args: Any, **kwargs: Any) -> Any:
-        # Record the LAST scroll's kwargs (find_by_vault_path issues one).
-        captured.clear()
-        captured.update(kwargs)
+        # Record the FIRST scroll's kwargs (find_by_vault_path's own; DATA-001 P2 then resolves the
+        # identity through the anchor, which issues further internal scrolls).
+        if not captured:
+            captured.update(kwargs)
         return real_scroll(*args, **kwargs)
 
     plane._client.scroll = _spy_scroll  # type: ignore[method-assign]

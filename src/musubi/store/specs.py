@@ -15,13 +15,44 @@ other module should duplicate collection- or index-metadata.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from musubi.store.names import CollectionName
 
 DENSE_VECTOR_NAME: Final[str] = "dense_bge_m3_v1"
 SPARSE_VECTOR_NAME: Final[str] = "sparse_splade_v1"
 DENSE_SIZE: Final[int] = 1024
+
+# DATA-001 Phase 2 point-kind marker (payload field ``point_kind``). A v2 object is a stable ANCHOR
+# (the authoritative mutable identity row) plus one-or-more write-once CONTENT snapshots. Legacy v1
+# rows and every other plane's rows carry NO ``point_kind`` and are unaffected.
+POINT_KIND_FIELD: Final[str] = "point_kind"
+POINT_KIND_ANCHOR: Final[str] = "anchor"
+POINT_KIND_CONTENT: Final[str] = "content"
+
+# Phase-2 layout-only keys that live on the anchor/content but are NOT fields of any canonical memory
+# model (the models are ``extra="forbid"``). Every consumer that ``model_validate``s a resolved payload
+# — plane get/query/write-return + anchor-aware reads — must strip these first (Yua: resolve, then
+# validate). Lives here (a zero-dependency module) so planes can import it without the
+# immutable_vectors <-> episodic.plane import cycle.
+LAYOUT_ONLY_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "point_kind",
+        "live_point",
+        "pointer_version",
+        "committed_operation_id",
+        "vector_layout_version",
+        "generation",
+        "owner_token",
+    }
+)
+
+
+def strip_layout_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return ``payload`` without the Phase-2 layout-only keys, so an ``extra="forbid"`` memory model
+    can validate the resolved authoritative payload."""
+    return {k: v for k, v in payload.items() if k not in LAYOUT_ONLY_FIELDS}
+
 
 PayloadSchema = Literal["keyword", "integer", "float", "bool", "text", "datetime"]
 

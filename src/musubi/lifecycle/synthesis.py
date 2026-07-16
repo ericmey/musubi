@@ -97,6 +97,48 @@ class MemoryWithVector:
     vector: list[float]
 
 
+def _resolve_candidate_memory(
+    client: QdrantClient, collection: str, payload: dict[str, Any], vector: Any
+) -> MemoryWithVector | None:
+    """Anchor-aware resolution of an episodic scroll/fetch record to ``(EpisodicMemory, dense vector)``
+    for synthesis clustering (DATA-001 P2, Yua). Uses the caller's SINGLE anchor snapshot ``payload`` —
+    it never re-reads the anchor — retrieves the exact ``live_point`` it names ONCE (payload+vectors),
+    validates that point is this anchor's content (kind + namespace + object_id), then pairs the
+    anchor-over-content payload with THAT SAME point's dense vector. A concurrent pointer swap after the
+    caller read can leave this snapshot slightly stale, but never TORN (never B's payload with A's
+    vector). A v1 row keeps its self payload + self vector. Fails closed (None) otherwise."""
+    from musubi.store.immutable_vectors import ANCHOR_KIND, CONTENT_KIND, strip_layout_fields
+
+    if payload.get("point_kind") == ANCHOR_KIND:
+        live = payload.get("live_point")
+        if not live:
+            return None
+        pts = client.retrieve(
+            collection_name=collection, ids=[live], with_payload=True, with_vectors=True
+        )
+        if not pts or not pts[0].payload or not isinstance(pts[0].vector, dict):
+            return None
+        content_payload = dict(pts[0].payload)
+        if (
+            content_payload.get("point_kind") != CONTENT_KIND
+            or content_payload.get("namespace") != payload.get("namespace")
+            or content_payload.get("object_id") != payload.get("object_id")
+        ):
+            return None  # dangling / cross-object / non-content live_point -> fail closed.
+        dense = pts[0].vector.get(DENSE_VECTOR_NAME)
+        if not isinstance(dense, list):
+            return None
+        # anchor (the caller's single snapshot) OVER its own committed content — one consistent read.
+        merged = {**content_payload, **payload}
+        memory = EpisodicMemory.model_validate(strip_layout_fields(merged))
+        return MemoryWithVector(memory, cast(list[float], dense))
+    if isinstance(vector, dict) and isinstance(vector.get(DENSE_VECTOR_NAME), list):
+        return MemoryWithVector(
+            EpisodicMemory.model_validate(payload), cast(list[float], vector[DENSE_VECTOR_NAME])
+        )
+    return None
+
+
 def _threshold_cluster(
     items: list[MemoryWithVector], threshold: float
 ) -> list[list[MemoryWithVector]]:
@@ -429,57 +471,58 @@ async def synthesis_run(
             with_vectors=True,
         )
         for r in records:
-            if (
-                r.payload
-                and r.vector
-                and isinstance(r.vector, dict)
-                and DENSE_VECTOR_NAME in r.vector
-            ):
-                memory = EpisodicMemory.model_validate(r.payload)
-                vector = r.vector[DENSE_VECTOR_NAME]
-                if isinstance(vector, list):
-                    memories_with_vectors.append(
-                        MemoryWithVector(memory, cast(list[float], vector))
-                    )
-                    seen_ids.add(memory.object_id)
-                    if memory.updated_epoch and memory.updated_epoch > max_epoch:
-                        max_epoch = memory.updated_epoch
+            if not r.payload:
+                continue
+            # DATA-001 P2: the state filter matches a v2 ANCHOR (or a v1 row); resolve the authoritative
+            # payload + the committed content vector before clustering — never the anchor's zero vector.
+            resolved = _resolve_candidate_memory(
+                client, collection_for_plane("episodic"), dict(r.payload), r.vector
+            )
+            if resolved is None:
+                continue
+            memories_with_vectors.append(resolved)
+            seen_ids.add(resolved.memory.object_id)
+            if resolved.memory.updated_epoch and resolved.memory.updated_epoch > max_epoch:
+                max_epoch = resolved.memory.updated_epoch
         if offset is None:
             break
 
     # Step 1b: Pull unclustered candidates from prior sweeps within TTL.
-    # Candidates are stored by object_id (KSUID), but Qdrant identifies
-    # points by point_id (UUID5 derived from object_id) — translate via
-    # the episodic plane's public `episodic_point_id` helper.
-    from musubi.planes.episodic.plane import episodic_point_id
-
+    # Candidates are stored by object_id (KSUID). DATA-001 P2: resolve each by its object_id payload
+    # (excluding content snapshots) rather than the legacy `episodic_point_id` — a brand-new v2 anchor
+    # lives at a DIFFERENT point id, so a legacy-id retrieve would silently miss it. The identity row
+    # (anchor or v1) is then resolved anchor-aware to its committed content vector.
     candidate_ids = cursor.get_candidates(family, ttl_sec=cfg.candidate_ttl_sec, now_epoch=now)
     candidate_ids_to_fetch = [oid for oid in candidate_ids if oid not in seen_ids]
-    if candidate_ids_to_fetch:
-        retrieved = client.retrieve(
+    for oid in candidate_ids_to_fetch:
+        recs, _ = client.scroll(
             collection_name=collection_for_plane("episodic"),
-            ids=[episodic_point_id(oid) for oid in candidate_ids_to_fetch],
+            scroll_filter=models.Filter(
+                must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+                must_not=[
+                    models.FieldCondition(
+                        key="point_kind", match=models.MatchValue(value="content")
+                    )
+                ],
+            ),
+            limit=1,
             with_payload=True,
             with_vectors=True,
         )
-        for r in retrieved:
-            if (
-                r.payload
-                and r.vector
-                and isinstance(r.vector, dict)
-                and DENSE_VECTOR_NAME in r.vector
-            ):
-                # Belt: only accept if still matured (a candidate could
-                # have been demoted/archived since being marked).
-                if r.payload.get("state") != "matured":
-                    continue
-                memory = EpisodicMemory.model_validate(r.payload)
-                vector = r.vector[DENSE_VECTOR_NAME]
-                if isinstance(vector, list):
-                    memories_with_vectors.append(
-                        MemoryWithVector(memory, cast(list[float], vector))
-                    )
-                    seen_ids.add(memory.object_id)
+        if not recs or not recs[0].payload:
+            continue
+        payload = dict(recs[0].payload)
+        # Belt: only accept if still matured (a candidate could have been demoted/archived). The state
+        # is authoritative on the identity row (anchor or v1).
+        if payload.get("state") != "matured":
+            continue
+        resolved = _resolve_candidate_memory(
+            client, collection_for_plane("episodic"), payload, recs[0].vector
+        )
+        if resolved is None:
+            continue
+        memories_with_vectors.append(resolved)
+        seen_ids.add(resolved.memory.object_id)
 
     if len(memories_with_vectors) < cfg.min_cluster_size:
         # Not enough memories to form even the smallest cluster. Every

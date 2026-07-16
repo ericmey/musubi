@@ -51,6 +51,7 @@ from qdrant_client import models
 
 from musubi.lifecycle import store
 from musubi.observability.registry import Counter, Gauge, default_registry
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
 
@@ -191,13 +192,19 @@ class CustomIntentContext:
     uses it as the never-reused publish owner (the ABA fence). The handler MUST mint its own
     never-reused ``generation`` per attempt, stage work under (generation, owner_token), publish by
     a conditional head replace, and return ``'confirmed'`` (published + won), ``'fence'`` (a stale/
-    lost attempt — terminal), or ``'retry'`` (transient — keep PENDING + backoff)."""
+    lost attempt — terminal), or ``'retry'`` (transient — keep PENDING + backoff).
+
+    ``patch_json`` is the durable intent payload persisted at admission (DATA-001 Phase 2): the
+    handler recomputes its effect from this alone, so a crash after admission replays from disk with
+    no caller memory. ``None`` for intents admitted without a payload (e.g. the artifact_index wrapper,
+    which re-derives from Qdrant + the on-disk blob)."""
 
     operation_key: str
     object_id: str
     collection: str
     namespace: str
     owner_token: str
+    patch_json: str | None = None
 
 
 class CleanupConfigError(ValueError):
@@ -866,8 +873,16 @@ class LifecycleTransitionCoordinator:
     def _read_object(
         self, collection: str, object_id: str, namespace: str
     ) -> tuple[dict[str, Any], int]:
-        """Read the object's payload, requesting enough rows to PROVE exactly one match for
-        ``object_id`` within ``namespace`` (returns ``(payload, count)``; empty payload if none)."""
+        """Read the object's AUTHORITATIVE identity payload, requesting enough rows to PROVE exactly one
+        match for ``object_id`` within ``namespace`` (returns ``(payload, count)``; empty payload if
+        none).
+
+        DATA-001 P2: excludes write-once CONTENT snapshots (``point_kind == "content"``) so a v2 object
+        (anchor + one-or-more content points) still reads as EXACTLY ONE identity row — the anchor (full
+        mutable state/version) — instead of count==2. A v1/legacy row (no ``point_kind``) and every
+        concept/thought/artifact row (no content points) are unaffected: the exclusion is a no-op there.
+        Without this, every durable lifecycle transition on a reinforced/updated episodic or curated
+        object would fence/abandon on the count check."""
         points, _ = self._require_client().scroll(
             collection_name=collection,
             scroll_filter=models.Filter(
@@ -878,7 +893,12 @@ class LifecycleTransitionCoordinator:
                     models.FieldCondition(
                         key="namespace", match=models.MatchValue(value=namespace)
                     ),
-                ]
+                ],
+                must_not=[
+                    models.FieldCondition(
+                        key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                    )
+                ],
             ),
             limit=2,
             with_payload=True,
@@ -1186,6 +1206,7 @@ class LifecycleTransitionCoordinator:
         ns: str,
         token: str,
         counts: dict[str, int],
+        patch_json: str | None = None,
     ) -> None:
         """Drive a claimed non-transition intent (C4/ART-001): dispatch to the registered handler and
         map its outcome onto the SAME disposition policy as a transition apply. A missing handler keeps
@@ -1200,7 +1221,12 @@ class LifecycleTransitionCoordinator:
             counts["pending"] += 1
             return
         ctx = CustomIntentContext(
-            operation_key=opk, object_id=oid, collection=coll, namespace=ns, owner_token=token
+            operation_key=opk,
+            object_id=oid,
+            collection=coll,
+            namespace=ns,
+            owner_token=token,
+            patch_json=patch_json,
         )
         try:
             outcome = handler(ctx)
@@ -1361,19 +1387,28 @@ class LifecycleTransitionCoordinator:
             return (None, None)
         return payload.get("version"), payload.get("state")
 
-    def _claim(self, con: Any, opk: str, now: float, token: str) -> bool:
+    def _claim(
+        self, con: Any, opk: str, now: float, token: str, *, force_due: bool = False
+    ) -> bool:
         """Atomic guarded lease claim (R16): ONE UPDATE (on the caller's ``con``) stamping a fresh
         token on a DUE, unleased-or-expired row. ``rowcount == 1`` IS ownership — a NON-atomic
         check-then-update would race. The FULL due predicate is re-applied at the claim (not only at
         SELECT); an expired lease (``<= now``) is reclaimable while a valid one is exclusive (R17).
-        The caller commits."""
+        The caller commits.
+
+        ``force_due`` (DATA-001 P2, Yua item 4) drops ONLY the ``next_attempt_epoch`` backoff predicate,
+        for the explicit synchronous :meth:`drive_intent` path: an inline re-drive after a 'retry' must
+        re-apply immediately rather than wait out the backoff a background worker paces on. It NEVER
+        relaxes the lease-exclusivity guard, so a valid owner (the worker) still cannot be stolen."""
         expiry = now + self._lease_ttl
+        due = "" if force_due else "AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
+        params = (token, expiry, opk, now) if force_due else (token, expiry, opk, now, now)
         cur = con.execute(
             "UPDATE lifecycle_outbox SET lease_owner=?, lease_expires_epoch=? "
             "WHERE operation_key=? AND state IN ('PENDING','APPLIED') "
-            "AND (next_attempt_epoch IS NULL OR next_attempt_epoch <= ?) "
+            f"{due}"
             "AND (lease_owner IS NULL OR lease_expires_epoch <= ?)",
-            (token, expiry, opk, now, now),
+            params,
         )
         return bool(cur.rowcount == 1)
 
@@ -1483,16 +1518,45 @@ class LifecycleTransitionCoordinator:
             raise ValueError("intent kind must be non-empty and not 'lifecycle_transition'")
         self._intent_handlers[kind] = handler
 
-    def enqueue_index_intent(
-        self, *, object_id: str, namespace: str, collection: str = "musubi_artifact"
+    #: Max serialized custom-intent patch accepted at admission (DATA-001 P2). The payload is the
+    #: canonical content + narrow fields + a recompute fingerprint — never a raw vector blob — so this
+    #: bounds the durable outbox row. A larger payload fails TRUTHFULLY at admission.
+    _MAX_PATCH_JSON_BYTES = 64 * 1024
+
+    def enqueue_custom_intent(
+        self,
+        *,
+        kind: str,
+        object_id: str,
+        namespace: str,
+        collection: str,
+        patch_json: str | None = None,
+        operation_key: str | None = None,
     ) -> str:
-        """Durably admit ONE artifact-indexing intent (C4/ART-001). Reuses the outbox +
-        ``ux_active_intent`` (one active intent per ``(collection, object_id)``). Cap-gated like a
-        transition admission — backpressure NEVER raises. Returns a status the caller must honor:
-        ``'admitted'`` (a new intent is PENDING), ``'already_active'`` (one is already in flight —
-        idempotent no-op), or ``'at_capacity'`` (the outbox cap was hit — the caller MUST record a
-        visible terminal disposition; the artifact is NOT silently left ``indexing`` forever)."""
-        opk = f"artifact_index:{object_id}:{self._new_token()}"
+        """Durably admit ONE custom (non-transition) intent of ``kind`` — the generalization of
+        :meth:`enqueue_index_intent`. Same cap gate + ``ux_active_intent`` idempotency (one active
+        intent per ``(collection, object_id)``); backpressure NEVER raises. ``patch_json`` is the
+        durable intent payload the handler replays from with no caller memory (DATA-001 P2); it is
+        validated as JSON and size-bounded HERE, so a malformed/oversized payload fails truthfully at
+        admission rather than silently mid-apply. ``operation_key`` may be supplied by a caller that
+        must drive its own just-admitted intent inline via :meth:`drive_intent` (else one is generated).
+        Returns ``'admitted'`` / ``'already_active'`` / ``'at_capacity'`` (on capacity the caller MUST
+        record a visible terminal disposition)."""
+        if not kind or kind == "lifecycle_transition":
+            raise ValueError(
+                f"custom intent kind must be non-empty and non-transition; got {kind!r}"
+            )
+        if patch_json is not None:
+            if len(patch_json.encode("utf-8")) > self._MAX_PATCH_JSON_BYTES:
+                raise ValueError(
+                    f"patch_json exceeds {self._MAX_PATCH_JSON_BYTES} bytes; persist a recompute "
+                    "fingerprint + narrow fields, never a raw vector blob"
+                )
+            try:
+                json.loads(patch_json)
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise ValueError(f"patch_json is not valid JSON: {exc}") from exc
+        opk = operation_key or f"{kind}:{object_id}:{self._new_token()}"
         con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
@@ -1502,18 +1566,28 @@ class LifecycleTransitionCoordinator:
                     return "at_capacity"
                 con.execute(
                     "INSERT INTO lifecycle_outbox "
-                    "(operation_key,object_id,collection,namespace,state,intent_kind,attempts) "
-                    "VALUES (?,?,?,?,'PENDING','artifact_index',0)",
-                    (opk, object_id, collection, namespace),
+                    "(operation_key,object_id,collection,namespace,state,intent_kind,patch_json,"
+                    "attempts) VALUES (?,?,?,?,'PENDING',?,?,0)",
+                    (opk, object_id, collection, namespace, kind, patch_json),
                 )
                 con.execute("COMMIT")
                 return "admitted"
             except sqlite3.IntegrityError:
-                # ux_active_intent: an index intent is already active for this artifact — idempotent.
+                # ux_active_intent: an intent is already active for this (collection, object_id).
                 con.execute("ROLLBACK")
                 return "already_active"
         finally:
             con.close()
+
+    def enqueue_index_intent(
+        self, *, object_id: str, namespace: str, collection: str = "musubi_artifact"
+    ) -> str:
+        """Backward-compatible artifact_index admission (C4/ART-001) — a thin wrapper over
+        :meth:`enqueue_custom_intent` with ``kind='artifact_index'`` and no patch payload (the indexer
+        re-derives from Qdrant + the on-disk blob). Behavior and return contract are unchanged."""
+        return self.enqueue_custom_intent(
+            kind="artifact_index", object_id=object_id, namespace=namespace, collection=collection
+        )
 
     def reconcile_once(self, *, limit: int = 100) -> ReconcileReport:
         """Run one reconcile pass while holding the S6 shared maintenance barrier."""
@@ -1521,6 +1595,68 @@ class LifecycleTransitionCoordinator:
             if admitted is not True:
                 return ReconcileReport()
             return self._reconcile_locked(limit=limit)
+
+    def drive_intent(self, operation_key: str) -> ReconcileReport:
+        """Claim and drive EXACTLY ONE just-admitted operation to a terminal/pending outcome, using the
+        SAME lease + state-machine + custom-handler path as the reconcile worker — but scoped to this
+        ``operation_key`` ALONE. It NEVER selects, claims, or drives any other queued intent.
+
+        This is the synchronous-inline seam (DATA-001 P2): a caller admits a durable intent, then drives
+        only its own operation to completion so it keeps a committed-return contract, while the durable
+        row remains the crash net for the worker. If the row is already terminal/unknown, or a valid
+        owner (the worker) already holds it, this is a bounded no-op — the caller then reads back and
+        returns a truthful pending/typed result, never an uncommitted object."""
+        with self._barrier_admit(role="reconcile") as admitted:
+            if admitted is not True:
+                return ReconcileReport()
+            return self._drive_operation_locked(operation_key)
+
+    def _drive_operation_locked(self, operation_key: str) -> ReconcileReport:
+        now = self._now()
+        con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms)
+        try:
+            row = con.execute(
+                "SELECT operation_key,object_id,collection,target_state,expected_version,namespace,"
+                "actor,reason,event_id,state,patch_json,intent_kind FROM lifecycle_outbox "
+                "WHERE operation_key = ? AND state IN ('PENDING','APPLIED')",
+                (operation_key,),
+            ).fetchone()
+        finally:
+            con.close()
+        counts = {"claimed": 0, "finalized": 0, "pending": 0, "abandoned": 0}
+        if row is None:
+            return ReconcileReport(**counts)  # already terminal / unknown — nothing to drive.
+        (opk, oid, coll, tstate, ver, ns, actor, reason, event_id, state, patch_json, ikind) = row
+        token = self._new_token()
+        cc = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
+        try:
+            # explicit inline drive == drive NOW: bypass the retry backoff (never the lease guard).
+            got = self._claim(cc, opk, now, token, force_due=True)
+            cc.commit()
+        finally:
+            cc.close()
+        if not got:
+            return ReconcileReport(**counts)  # a valid owner (the worker) holds it — leave it be.
+        counts["claimed"] += 1
+        if ikind and ikind != "lifecycle_transition":
+            self._drive_custom_intent(ikind, opk, oid, coll, ns, token, counts, patch_json)
+        else:
+            self._reconcile_claimed(
+                opk,
+                oid,
+                coll,
+                tstate,
+                ver,
+                ns,
+                actor,
+                reason,
+                event_id,
+                state,
+                patch_json,
+                token,
+                counts,
+            )
+        return ReconcileReport(**counts)
 
     def _reconcile_locked(self, *, limit: int = 100) -> ReconcileReport:
         """One reconcile pass (S4). Select DUE non-terminal rows (fair, oldest-first: never-scheduled
@@ -1585,7 +1721,7 @@ class LifecycleTransitionCoordinator:
             # C4/ART-001: a non-transition intent-kind delegates its APPLY to a registered handler;
             # the built-in lifecycle-transition path (ikind NULL/'lifecycle_transition') is untouched.
             if ikind and ikind != "lifecycle_transition":
-                self._drive_custom_intent(ikind, opk, oid, coll, ns, token, counts)
+                self._drive_custom_intent(ikind, opk, oid, coll, ns, token, counts, patch_json)
                 continue
             self._reconcile_claimed(
                 opk,

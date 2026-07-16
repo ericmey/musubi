@@ -45,8 +45,12 @@ from musubi.lifecycle.transitions import TransitionError, TransitionResult, tran
 from musubi.store.access_lease import lease_increment_access
 from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
-from musubi.store.raw_lookup import point_exists, raw_payload, retrieve_by_point_id
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+from musubi.store.raw_lookup import point_exists, raw_payload
+from musubi.store.specs import (
+    DENSE_VECTOR_NAME,
+    SPARSE_VECTOR_NAME,
+    strip_layout_fields,
+)
 from musubi.types.common import (
     KSUID,
     Err,
@@ -67,6 +71,7 @@ _POINT_NS = uuid.UUID("6b0d5e2e-1e8e-4e0f-8e3e-000000000001")
 _DEFAULT_DEDUP_THRESHOLD = 0.92
 _VISIBLE_STATES: tuple[LifecycleState, ...] = ("matured",)
 _VISIBLE_STATES_WITH_DEMOTED: tuple[LifecycleState, ...] = ("matured", "demoted")
+
 
 # Content-merge strategy on dedup hit.
 #
@@ -115,6 +120,18 @@ def _memory_from_payload(payload: dict[str, Any]) -> EpisodicMemory:
     return EpisodicMemory.model_validate(payload)
 
 
+def _safe_ranked_memory(resolved: dict[str, Any]) -> EpisodicMemory | None:
+    """Model-validate a resolved ranked candidate, FAILING CLOSED (None) rather than raising on an
+    empty/malformed payload (DATA-001 P2, Yua) — a corrupt row must never 500 a dense query; it is
+    skipped from the ranked view (and stays deletable via the delete path)."""
+    from pydantic import ValidationError
+
+    try:
+        return _memory_from_payload(strip_layout_fields(resolved))
+    except ValidationError:
+        return None
+
+
 def _is_factually_compatible(existing: EpisodicMemory, new: EpisodicMemory) -> bool:
     """Return whether a cosine hit is safe to merge.
 
@@ -147,11 +164,19 @@ class EpisodicPlane:
         client: QdrantClient,
         embedder: Embedder,
         dedup_threshold: float = _DEFAULT_DEDUP_THRESHOLD,
+        coordinator: LifecycleTransitionCoordinator | None = None,
+        vector_publisher: Any | None = None,
     ) -> None:
         self._client = client
         self._embedder = embedder
         self._collection = collection_for_plane("episodic")
         self._dedup_threshold = dedup_threshold
+        # DATA-001 P2: vector-changing updates go through the durable immutable-vector publisher (fenced
+        # anchor + content snapshot). Injected only in PRODUCTION WRITE compositions; a read-only
+        # construction leaves them None and a vector-changing write then FAILS CLOSED (never the old
+        # unfenceable update_vectors). Approved optional injection (Yua).
+        self._coordinator = coordinator
+        self._vector_publisher = vector_publisher
 
     # ------------------------------------------------------------------
     # Create
@@ -496,36 +521,35 @@ class EpisodicPlane:
         and only by the proven owner (``update_vectors`` is unfenced); when existing content wins we
         leave the stored vectors untouched. ``existing_dense`` / ``existing_sparse`` (the probe's
         vectors) are no longer needed and are ignored — retained for call-site stability."""
-        del existing_dense, existing_sparse  # superseded by the fresh-read mutation lease.
+        del (
+            existing_dense,
+            existing_sparse,
+            dense,
+            sparse,
+        )  # recomputed by the publisher when needed.
 
-        def plan(current: dict[str, Any]) -> MutationPlan:
-            merged, existing_content_won = self._merge_row(
-                existing=EpisodicMemory.model_validate(current),
-                new=new,
-                merge_strategy=merge_strategy,
-                now=utc_now(),
+        # DATA-001 P2 (Yua correction 2026-07-15): the durable immutable-vector intent must persist an
+        # INTENDED MUTATION DESCRIPTOR (merge_strategy + the incoming new memory) and REBASE it on the
+        # FRESH authoritative anchor INSIDE the handler — deciding there whether content/vector changes,
+        # taking lease/access fields from fresh state, and fencing on BOTH pointer_version AND version.
+        # Passing a full stale snapshot would clobber a concurrent unrelated Phase-1 mutation. That
+        # descriptor-rebase handler is being built; until it lands this path FAILS CLOSED rather than
+        # ship the stale-snapshot bug or the unfenceable in-place update_vectors.
+        if self._vector_publisher is None or self._coordinator is None:
+            raise RuntimeError(
+                "episodic reinforce reached the vector-change path but the descriptor-rebase "
+                "immutable-vector publisher is not wired (DATA-001 P2 fail-closed)"
             )
-            dumped = merged.model_dump(mode="json")
-            changes = {
-                k: dumped[k]
-                for k in ("content", "tags", "reinforcement_count", "updated_at", "updated_epoch")
-            }
-            vectors = (
-                None
-                if existing_content_won
-                else {DENSE_VECTOR_NAME: dense, SPARSE_VECTOR_NAME: _sparse_to_model(sparse)}
-            )
-            return MutationPlan(changes=changes, vectors=vectors)
-
-        published = await owned_update(
-            self._client,
-            self._collection,
-            namespace=str(existing.namespace),
+        committed = await self._vector_publisher.reinforce_publish(
+            self._coordinator,
             object_id=str(existing.object_id),
-            point_id=_point_id(existing.object_id),
-            plan=plan,
+            namespace=str(existing.namespace),
+            new_memory=new.model_dump(mode="json"),
+            merge_strategy=merge_strategy,
         )
-        return EpisodicMemory.model_validate(published)
+        # resolve, then validate: the committed payload is anchor-over-content and carries Phase-2
+        # layout-only keys the extra="forbid" model would reject — strip them first (Yua).
+        return EpisodicMemory.model_validate(strip_layout_fields(committed))
 
     def _upsert(
         self,
@@ -553,7 +577,23 @@ class EpisodicPlane:
         reinforce path preserve the existing embeddings when
         ``longer-wins`` keeps the existing content — otherwise the
         payload and vectors would drift apart on every dedup hit where
-        new text was shorter."""
+        new text was shorter.
+
+        DATA-001 P2: ranks v1 rows + content points (never anchors), and accepts a v2 hit ONLY when it
+        is the committed ``live_point`` of its anchor — a superseded/staged higher-scoring content
+        snapshot, a zero/stale anchor vector, or a dangling/cross-object pointer is skipped, walking the
+        bounded-overfetched candidates in score order until the first LIVE one. The returned vectors are
+        that live candidate point's own (the committed content's), so reinforce preserves the real
+        embedding."""
+        from musubi.store.immutable_vectors import (
+            not_anchor_condition,
+            ranked_dedup_budget,
+            resolve_ranked_candidate,
+        )
+
+        # DEDUP BUDGET (Yua): a duplicate-create is DESTRUCTIVE, so the live duplicate must not be hidden
+        # behind a few stale/superseded higher-scoring content snapshots — walk the FULL capped candidate
+        # budget (the shared seam), not a small factor, before concluding "no duplicate".
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
@@ -561,31 +601,37 @@ class EpisodicPlane:
             query_filter=models.Filter(
                 must=[
                     models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
-                ]
+                ],
+                must_not=not_anchor_condition(),
             ),
-            limit=1,
+            limit=ranked_dedup_budget(),
             score_threshold=self._dedup_threshold,
             with_payload=True,
             with_vectors=True,
         )
-        if not resp.points:
-            return None
-        point = resp.points[0]
-        payload = point.payload
-        if not payload:
-            return None
-        memory = _memory_from_payload(payload)
-        existing_dense: list[float] | None = None
-        existing_sparse: dict[int, float] | None = None
-        vectors = point.vector
-        if isinstance(vectors, dict):
-            raw_dense = vectors.get(DENSE_VECTOR_NAME)
-            if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
-                existing_dense = [v for v in raw_dense if isinstance(v, float)]
-            raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
-            if isinstance(raw_sparse, models.SparseVector):
-                existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))
-        return memory, existing_dense, existing_sparse, point.score
+        for point in resp.points:  # score-descending
+            resolved = resolve_ranked_candidate(
+                self._client, self._collection, point_id=point.id, payload=dict(point.payload or {})
+            )
+            if resolved is None:
+                continue  # anchor / superseded / dangling -> not the committed live candidate
+            memory = _safe_ranked_memory(resolved)
+            if memory is None:
+                continue  # malformed authoritative payload -> fail closed (skip)
+            existing_dense: list[float] | None = None
+            existing_sparse: dict[int, float] | None = None
+            vectors = point.vector  # the LIVE candidate point's own committed vectors
+            if isinstance(vectors, dict):
+                raw_dense = vectors.get(DENSE_VECTOR_NAME)
+                if isinstance(raw_dense, list) and raw_dense and isinstance(raw_dense[0], float):
+                    existing_dense = [v for v in raw_dense if isinstance(v, float)]
+                raw_sparse = vectors.get(SPARSE_VECTOR_NAME)
+                if isinstance(raw_sparse, models.SparseVector):
+                    existing_sparse = dict(zip(raw_sparse.indices, raw_sparse.values, strict=True))
+            # main (#585) added the candidate score to the return signature — preserve the LIVE
+            # candidate point's own fused score alongside the resolved memory + committed vectors.
+            return memory, existing_dense, existing_sparse, point.score
+        return None
 
     # ------------------------------------------------------------------
     # Read
@@ -621,54 +667,34 @@ class EpisodicPlane:
         If you only need to know whether the object is *there*, call
         :meth:`exists` — it does not deserialize, so it still answers for a
         corrupted row.
-        """
-        records, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                ]
-            ),
-            limit=1,
-            with_payload=True,
-        )
-        if not records:
-            return None
-        payload = records[0].payload
-        if not payload:
-            return None
 
+        DATA-001 P2: resolves the AUTHORITATIVE committed payload (a v2 anchor merged over its
+        ``live_point`` content, or a v1/legacy row) before validating — never a raw anchor/content
+        shell — and fails closed (returns None) on a v2 anchor with a dangling/absent committed pointer.
+        The access bump rides the shared fenced lease, which already targets the identity row.
+        """
+        from musubi.store.immutable_vectors import resolve_committed_content
+
+        # Prove the object RESOLVES before any access mutation (Yua): a missing/dangling row returns
+        # None and must NEVER trigger a lease write (the pre-P2 contract mutated nothing on absent).
+        resolved = resolve_committed_content(
+            self._client, self._collection, namespace=str(namespace), object_id=str(object_id)
+        )
+        if resolved is None:
+            return None
         if bump_access:
-            # RET-008 (#502): route the direct-fetch bump through the SHARED fenced lease so it
-            # never races a concurrent retrieval-delivery increment (or another get) on the same
-            # row under multi-worker/cross-process parallelism. Re-read to return the post-bump row.
+            # RET-008 (#502): route the direct-fetch bump through the SHARED fenced lease so it never
+            # races a concurrent retrieval-delivery increment (or another get) on the same row under
+            # multi-worker/cross-process parallelism. The lease targets the identity row (anchor/v1).
             await lease_increment_access(
                 self._client, self._collection, {(str(namespace), str(object_id))}
             )
-            refreshed, _ = self._client.scroll(
-                collection_name=self._collection,
-                scroll_filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="namespace", match=models.MatchValue(value=namespace)
-                        ),
-                        models.FieldCondition(
-                            key="object_id", match=models.MatchValue(value=object_id)
-                        ),
-                    ]
-                ),
-                limit=1,
-                with_payload=True,
+            resolved = resolve_committed_content(
+                self._client, self._collection, namespace=str(namespace), object_id=str(object_id)
             )
-            if refreshed and refreshed[0].payload:
-                payload = refreshed[0].payload
-
-        return _memory_from_payload(payload)
+            if resolved is None:
+                return None  # vanished/dangled between the resolve and the bump -> fail closed.
+        return _memory_from_payload(strip_layout_fields(resolved))
 
     async def query(
         self,
@@ -686,32 +712,47 @@ class EpisodicPlane:
         ``get`` by id.
         """
         visible = _VISIBLE_STATES_WITH_DEMOTED if include_demoted else _VISIBLE_STATES
+        visible_set = {str(s) for s in visible}
         dense = (await self._embedder.embed_dense([query]))[0]
+        # DATA-001 P2: prefilter IMMUTABLE-only (namespace + must_not anchor) — content points carry no
+        # `state`, so a state prefilter would drop the real vectors and surface zero-vector anchors.
+        # BOUNDED overfetch, then hydrate each candidate through its anchor and apply state POST-hydration.
+        from musubi.store.immutable_vectors import (
+            not_anchor_condition,
+            ranked_overfetch,
+            resolve_ranked_candidate,
+        )
+
         resp = self._client.query_points(
             collection_name=self._collection,
             query=dense,
             using=DENSE_VECTOR_NAME,
             query_filter=models.Filter(
                 must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="state",
-                        match=models.MatchAny(any=[str(s) for s in visible]),
-                    ),
-                ]
+                    models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))
+                ],
+                must_not=not_anchor_condition(),
             ),
-            limit=limit,
+            limit=ranked_overfetch(limit),
             with_payload=True,
         )
         out: list[EpisodicMemory] = []
         pairs: set[tuple[str, str]] = set()
-        for point in resp.points:
-            if point.payload:
-                payload = dict(point.payload)
-                out.append(_memory_from_payload(payload))
-                pairs.add((str(payload.get("namespace")), str(payload.get("object_id"))))
+        for point in resp.points:  # score-descending; keep candidate score order
+            if len(out) >= limit:
+                break
+            resolved = resolve_ranked_candidate(
+                self._client, self._collection, point_id=point.id, payload=dict(point.payload or {})
+            )
+            if resolved is None:
+                continue  # anchor / superseded content / dangling-cross-object -> not a live candidate
+            if resolved.get("state") not in visible_set:
+                continue  # POST-hydration mutable-state filter (authoritative anchor state)
+            memory = _safe_ranked_memory(resolved)
+            if memory is None:
+                continue  # malformed authoritative payload -> fail closed (skip from the ranked view)
+            out.append(memory)
+            pairs.add((str(resolved.get("namespace")), str(resolved.get("object_id"))))
 
         # RET-008 (#502): route the batched access bump through the shared fenced lease (never a
         # bare RMW that would race/lose a concurrent leased increment).
@@ -819,8 +860,19 @@ class EpisodicPlane:
         # undeletable-because-broken. The point ID is derived deterministically from the
         # object_id, so it addresses the row no matter what the payload says.
         # (Yua, rev2 review of PR #398.)
-        payload = retrieve_by_point_id(
-            self._client, self._collection, point_id=_point_id(object_id)
+        #
+        # DATA-001 P2: the identity row lives in ONE of two deterministic id spaces — the legacy
+        # `_point_id` (a v1 row or a converted-in-place anchor) OR `anchor_point_id(namespace, object_id)`
+        # (a brand-new anchor). `read_identity_payload` addresses both from the delete ARGS (not the
+        # payload), so a brand-new v2 object is found and a corrupted-payload row stays removable.
+        from musubi.store.immutable_vectors import delete_object_layout, read_identity_payload
+
+        payload = read_identity_payload(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            legacy_point_id=_point_id(object_id),
         )
         if payload is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
@@ -894,9 +946,15 @@ class EpisodicPlane:
             lineage_changes={},
             correlation_id="",
         )
-        self._client.delete(
-            collection_name=self._collection,
-            points_selector=models.PointIdsList(points=[_point_id(object_id)]),
+        # DATA-001 P2: remove the COMPLETE layout — every content point FIRST, then the identity row in
+        # BOTH id spaces (content-before-identity so a cleanup failure leaves the identity findable for
+        # retry; centralized so the id-space knowledge lives in one place).
+        delete_object_layout(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            legacy_point_id=_point_id(object_id),
         )
         return event
 
