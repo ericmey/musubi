@@ -27,7 +27,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -181,6 +181,34 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------
     jwt_signing_key: SecretStr = Field(description="HS256 signing key for internal JWTs.")
     oauth_authority: AnyHttpUrl = Field(description="OIDC issuer (Auth0 / Kong) base URL.")
+
+    # AUTH-001: per-agent namespace-exclusion list. The default
+    # ``salesai`` is a mandatory baseline and cannot be removed.
+    # Per-agent settings may add more exclusions. The enforcement
+    # seam (auth.scopes.enforce_namespace_policy) composes this
+    # at request time directly from Settings.
+    default_excluded_namespaces: frozenset[str] = Field(
+        default=frozenset({"salesai"}),
+        description=(
+            "Mandatory baseline exclusion list. Always excluded from "
+            "recall; Settings overrides cannot subtract from this set."
+        ),
+    )
+
+    @field_validator("default_excluded_namespaces", mode="after")
+    @classmethod
+    def _enforce_mandatory_salesai(cls, v: frozenset[str]) -> frozenset[str]:
+        return v | frozenset({"salesai"})
+
+    per_agent_excluded_namespaces: dict[str, tuple[str, ...]] = Field(
+        default_factory=dict,
+        description=(
+            "Per-agent additional exclusions keyed by stable "
+            "authenticated subject OR presence. Both contribute via "
+            "union; the per-agent exclusion is additive on top of "
+            "default_excluded_namespaces."
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Feature flags

@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 from musubi.auth.tokens import AuthContext
+from musubi.settings import Settings
 from musubi.types.common import Err, Ok, Result
 
 logger = logging.getLogger(__name__)
@@ -36,13 +37,84 @@ class ScopeGrant(BaseModel):
     scope_used: str
 
 
+def enforce_namespace_policy(
+    context: AuthContext,
+    *,
+    targets: list[tuple[str, str]],
+    settings: Settings,
+    reject_unauthorized: bool = True,
+) -> Result[list[tuple[str, str]], ScopeError]:
+    """AUTH-001: the shared READ-ONLY enforcement seam.
+
+    FIRST runs resolve_namespace_scope on every concrete target. Explicitly
+    requested targets fail the whole request on any unauthorized namespace.
+    Implicit default-all discovery sets ``reject_unauthorized=False`` so its
+    result is exactly the authorized subset rather than a probe-dependent 403.
+    THEN filters the authorized set using Settings mandatory + subject/presence additive roots with parsed segment matching.
+    Direct authorized-but-excluded exact target may return 200 empty.
+    """
+
+    # 1. Authorize all targets first
+    authorized: list[tuple[str, str]] = []
+    for ns, plane in targets:
+        result = resolve_namespace_scope(
+            context,
+            namespace=ns,
+            access="r",
+            audit_denial=reject_unauthorized,
+        )
+        if isinstance(result, Err):
+            if reject_unauthorized:
+                return Err(error=result.error)
+            continue
+        authorized.append((ns, plane))
+
+    if not authorized:
+        return Ok(value=[])
+
+    # 2. Filter authorized targets against exclusions
+    exclusions = set(settings.default_excluded_namespaces)
+    if context.subject in settings.per_agent_excluded_namespaces:
+        exclusions.update(settings.per_agent_excluded_namespaces[context.subject])
+    if context.presence in settings.per_agent_excluded_namespaces:
+        exclusions.update(settings.per_agent_excluded_namespaces[context.presence])
+
+    validated: list[tuple[str, str]] = []
+
+    for ns, plane in authorized:
+        parts = ns.split("/")
+        excluded = False
+        for ex in exclusions:
+            ex_parts = ex.split("/")
+
+            if len(ex_parts) == 1:
+                if len(parts) > 1 and parts[1] == ex_parts[0]:
+                    excluded = True
+                    break
+            else:
+                if parts[: len(ex_parts)] == ex_parts:
+                    excluded = True
+                    break
+
+        if not excluded:
+            validated.append((ns, plane))
+
+    return Ok(value=validated)
+
+
 def resolve_namespace_scope(
     context: AuthContext,
     *,
     namespace: str,
     access: AccessLevel,
+    audit_denial: bool = True,
 ) -> Result[ScopeGrant, ScopeError]:
-    """Resolve a token's namespace scopes against a requested namespace/access."""
+    """Resolve a token's namespace scopes against a requested namespace/access.
+
+    Explicit authorization checks audit denials by default. Callers enumerating
+    an implicit discovery set may suppress per-candidate denial events while
+    preserving the same authorization decision.
+    """
 
     for scope in context.scopes:
         if _namespace_scope_allows(scope, namespace, access):
@@ -57,7 +129,15 @@ def resolve_namespace_scope(
             )
 
     detail = f"namespace {namespace!r} not in token scope for {access!r} access"
-    _audit("auth.deny", context, namespace=namespace, scope_used=None, access=access, reason=detail)
+    if audit_denial:
+        _audit(
+            "auth.deny",
+            context,
+            namespace=namespace,
+            scope_used=None,
+            access=access,
+            reason=detail,
+        )
     return Err(error=ScopeError(detail=detail))
 
 

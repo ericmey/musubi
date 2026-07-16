@@ -61,7 +61,11 @@ class NamespaceTarget(BaseModel):
 
 
 class RetrievalQuery(BaseModel):
-    namespace: str = Field(min_length=1)
+    # AUTH-001: ``namespace`` is optional. The router may pass an
+    # empty string when the request used the default-to-all
+    # enumeration (body.namespace was null); the resolved targets
+    # are passed via ``namespace_targets``.
+    namespace: str = Field(default="", min_length=0)
     # query_text is required for fast/deep/blended; ignored for recent.
     # The model_validator below enforces non-empty for the non-recent modes.
     query_text: str = ""
@@ -102,6 +106,8 @@ class RetrievalQuery(BaseModel):
             raise ValueError(
                 f"query_text is required for mode={self.mode!r} (only mode='recent' may omit it)"
             )
+        if not self.namespace and not self.namespace_targets:
+            raise ValueError("namespace must be non-empty when namespace_targets is not provided")
         return self
 
 
