@@ -9,6 +9,7 @@ truthfully at admission, and cap/already-active semantics are unchanged.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from qdrant_client import QdrantClient
@@ -25,12 +26,15 @@ def client() -> Iterator[QdrantClient]:
         c.close()
 
 
-def test_artifact_index_wrapper_unchanged(client, tmp_path) -> None:
+def test_artifact_index_wrapper_unchanged(client: QdrantClient, tmp_path: Path) -> None:
     coord = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "c.db")
     seen: list[str | None] = []
-    coord.register_intent_handler(
-        "artifact_index", lambda ctx: (seen.append(ctx.patch_json), "confirmed")[1]
-    )
+
+    def _h(ctx: CustomIntentContext) -> str:
+        seen.append(ctx.patch_json)
+        return "confirmed"
+
+    coord.register_intent_handler("artifact_index", _h)
     assert coord.enqueue_index_intent(object_id="a1", namespace="t/p/e") == "admitted"
     assert coord.enqueue_index_intent(object_id="a1", namespace="t/p/e") == "already_active"
     coord.reconcile_once()
@@ -39,7 +43,9 @@ def test_artifact_index_wrapper_unchanged(client, tmp_path) -> None:
     )
 
 
-def test_generic_kind_round_trips_patch_through_fresh_coordinator(client, tmp_path) -> None:
+def test_generic_kind_round_trips_patch_through_fresh_coordinator(
+    client: QdrantClient, tmp_path: Path
+) -> None:
     db = tmp_path / "c.db"
     coord1 = LifecycleTransitionCoordinator(client=client, db_path=db)
     payload = '{"content":"hello","tags":["p2"],"fingerprint":"fake-v1"}'
@@ -70,7 +76,9 @@ def test_generic_kind_round_trips_patch_through_fresh_coordinator(client, tmp_pa
     assert got["ctx"].object_id == "o1" and got["ctx"].namespace == "t/p/e"
 
 
-def test_malformed_or_oversized_patch_fails_truthfully(client, tmp_path) -> None:
+def test_malformed_or_oversized_patch_fails_truthfully(
+    client: QdrantClient, tmp_path: Path
+) -> None:
     coord = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "c.db")
     with pytest.raises(ValueError, match="not valid JSON"):
         coord.enqueue_custom_intent(
@@ -95,10 +103,12 @@ def test_malformed_or_oversized_patch_fails_truthfully(client, tmp_path) -> None
         )
 
 
-def test_cap_and_already_active_unchanged(client, tmp_path) -> None:
+def test_cap_and_already_active_unchanged(client: QdrantClient, tmp_path: Path) -> None:
     # already_active (idempotency) is only reachable BELOW the cap — the cap gate is checked FIRST
     # (unchanged ordering): a duplicate admitted while over cap returns at_capacity, not already_active.
-    below = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "below.db", pending_cap=10)
+    below = LifecycleTransitionCoordinator(
+        client=client, db_path=tmp_path / "below.db", pending_cap=10
+    )
     assert (
         below.enqueue_custom_intent(kind="k", object_id="o1", namespace="t/p/e", collection="c")
         == "admitted"
@@ -108,7 +118,9 @@ def test_cap_and_already_active_unchanged(client, tmp_path) -> None:
         == "already_active"
     )
     # at cap=1 a DIFFERENT object is refused with at_capacity (never raises).
-    atcap = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "atcap.db", pending_cap=1)
+    atcap = LifecycleTransitionCoordinator(
+        client=client, db_path=tmp_path / "atcap.db", pending_cap=1
+    )
     assert (
         atcap.enqueue_custom_intent(kind="k", object_id="o1", namespace="t/p/e", collection="c")
         == "admitted"

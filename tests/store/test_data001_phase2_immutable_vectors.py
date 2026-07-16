@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
 
 import pytest
 from qdrant_client import QdrantClient, models
@@ -69,20 +71,20 @@ def collection() -> str:
 
 
 @pytest.fixture
-def coord(qdrant: QdrantClient, tmp_path) -> LifecycleTransitionCoordinator:
+def coord(qdrant: QdrantClient, tmp_path: Path) -> LifecycleTransitionCoordinator:
     # tiny backoff so a 'retry' intent becomes re-drivable almost immediately (cleanup-retry path).
     return LifecycleTransitionCoordinator(
         client=qdrant, db_path=tmp_path / "p2-coord.db", backoff_base_s=0.01, backoff_max_s=0.01
     )
 
 
-def _publisher(qdrant: QdrantClient, collection: str):
+def _publisher(qdrant: QdrantClient, collection: str) -> Any:
     from musubi.store.immutable_vectors import ImmutableVectorPublisher
 
     return ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=collection)
 
 
-def _content(text: str) -> dict:
+def _content(text: str) -> dict[str, Any]:
     return {"content": text, "tags": ["p2"]}
 
 
@@ -97,13 +99,14 @@ def _embed(text: str) -> tuple[list[float], dict[int, float]]:
 # --------------------------------------------------------------------------------------------------
 # 1. Losers can never change a visible vector.
 # --------------------------------------------------------------------------------------------------
-def test_old_owner_late_write_never_becomes_visible(qdrant, collection, coord) -> None:
+def test_old_owner_late_write_never_becomes_visible(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
     """Serialized-intent invariant (Yua): intents are serialized per object (ux_active_intent), so the
     'loser' is a STALE claim's late write, not a second simultaneous intent. Prove: op A commits; a
     concurrent B admitted WHILE A is active returns already_active without changing A's committed
     content; op B admitted only AFTER A is terminal supersedes A; then a simulated stale-A late publish
     fenced on A's old pointer_version matches zero and CANNOT revert B."""
-    from musubi.store.immutable_vectors import read_anchor
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
@@ -120,8 +123,8 @@ def test_old_owner_late_write_never_becomes_visible(qdrant, collection, coord) -
         == "already_active"
     )
     coord.reconcile_once()  # A commits
-    assert resolve_or_none(qdrant, collection, oid)["content"] == "A"
-    a_pv = read_anchor(qdrant, collection, namespace=_NS, object_id=oid).pointer_version
+    assert (resolve_or_none(qdrant, collection, oid) or {})["content"] == "A"
+    a_pv = _anchor(qdrant, collection, oid).pointer_version
 
     # op B is admitted ONLY now that A is terminal, and supersedes.
     assert (
@@ -129,8 +132,8 @@ def test_old_owner_late_write_never_becomes_visible(qdrant, collection, coord) -
         == "admitted"
     )
     coord.reconcile_once()  # B commits
-    assert resolve_or_none(qdrant, collection, oid)["content"] == "B"
-    b_pv = read_anchor(qdrant, collection, namespace=_NS, object_id=oid).pointer_version
+    assert (resolve_or_none(qdrant, collection, oid) or {})["content"] == "B"
+    b_pv = _anchor(qdrant, collection, oid).pointer_version
     assert b_pv > a_pv
 
     # a STALE-A late publish, fenced on A's OLD pointer_version, matches zero -> cannot revert B.
@@ -145,16 +148,18 @@ def test_old_owner_late_write_never_becomes_visible(qdrant, collection, coord) -
             ]
         ),
     )
-    assert resolve_or_none(qdrant, collection, oid)["content"] == "B", (
+    assert (resolve_or_none(qdrant, collection, oid) or {})["content"] == "B", (
         "stale-A late write must not revert B"
     )
-    assert read_anchor(qdrant, collection, namespace=_NS, object_id=oid).pointer_version == b_pv
+    assert _anchor(qdrant, collection, oid).pointer_version == b_pv
 
 
 # --------------------------------------------------------------------------------------------------
 # 2. content_point_id derives from the STABLE operation_key, not the per-claim owner_token.
 # --------------------------------------------------------------------------------------------------
-def test_content_point_id_is_stable_across_reconcile(qdrant, collection, coord) -> None:
+def test_content_point_id_is_stable_across_reconcile(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
     from musubi.store.immutable_vectors import content_point_id_for
 
     # Deterministic in the STABLE operation_key (a reconcile re-drive reuses the SAME id), and distinct
@@ -167,7 +172,9 @@ def test_content_point_id_is_stable_across_reconcile(qdrant, collection, coord) 
 # --------------------------------------------------------------------------------------------------
 # 3. Replay from disk with NO caller memory (durable intent).
 # --------------------------------------------------------------------------------------------------
-def test_crash_before_pointer_replays_from_disk(qdrant, collection, tmp_path) -> None:
+def test_crash_before_pointer_replays_from_disk(
+    qdrant: QdrantClient, collection: str, tmp_path: Path
+) -> None:
     """Admit the intent, then reconstruct a FRESH coordinator + publisher from the same db_path/Qdrant
     (no in-memory caller state) and reconcile — it must converge to a published pointer."""
     db = tmp_path / "replay-coord.db"
@@ -186,17 +193,18 @@ def test_crash_before_pointer_replays_from_disk(qdrant, collection, tmp_path) ->
     pub2 = _publisher(qdrant, collection)
     pub2.register(coord2)
     coord2.reconcile_once()
-    from musubi.store.immutable_vectors import read_anchor
 
-    anchor = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-replay")
+    anchor = _anchor(qdrant, collection, "obj-replay")
     assert anchor is not None and anchor.live_point is not None
-    assert resolve_or_none(qdrant, collection, "obj-replay")["content"] == "recover"
+    assert (resolve_or_none(qdrant, collection, "obj-replay") or {})["content"] == "recover"
 
 
 # --------------------------------------------------------------------------------------------------
 # 4. Crash-after-pointer: idempotent, no double-apply (operation_key stamped on the anchor).
 # --------------------------------------------------------------------------------------------------
-def test_crash_after_pointer_no_double_apply(qdrant, collection, coord) -> None:
+def test_crash_after_pointer_no_double_apply(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     pub.admit_publish(
@@ -206,12 +214,11 @@ def test_crash_after_pointer_no_double_apply(qdrant, collection, coord) -> None:
         content_payload=_content("once"),
     )
     coord.reconcile_once()
-    from musubi.store.immutable_vectors import read_anchor
 
-    v1 = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-idem").version
+    v1 = _anchor(qdrant, collection, "obj-idem").version
     # Re-drive the SAME (already-terminal) intent: must be a confirmed no-op, version not re-bumped.
     coord.reconcile_once()
-    v2 = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-idem").version
+    v2 = _anchor(qdrant, collection, "obj-idem").version
     assert v1 == v2, f"a re-driven committed intent must not double-bump version ({v1} -> {v2})"
 
 
@@ -219,7 +226,7 @@ def test_crash_after_pointer_no_double_apply(qdrant, collection, coord) -> None:
 # 5. Cleanup is terminal correctness — failure returns retry, pointer stays attributable.
 # --------------------------------------------------------------------------------------------------
 def test_cleanup_failure_returns_retry_pointer_stays_attributable(
-    qdrant, collection, coord
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
 ) -> None:
     pub = _publisher(qdrant, collection)
     pub.register(coord)
@@ -240,7 +247,7 @@ def test_cleanup_failure_returns_retry_pointer_stays_attributable(
         content_payload=_content("v2"),
     )
     coord.reconcile_once()  # publishes pointer, cleanup fails -> intent stays PENDING (retry)
-    assert resolve_or_none(qdrant, collection, "obj-clean")["content"] == "v2", (
+    assert (resolve_or_none(qdrant, collection, "obj-clean") or {})["content"] == "v2", (
         "the published pointer must remain attributable even though cleanup failed"
     )
     import time
@@ -255,7 +262,9 @@ def test_cleanup_failure_returns_retry_pointer_stays_attributable(
 # --------------------------------------------------------------------------------------------------
 # 6. Composition with the RET-008 access lease.
 # --------------------------------------------------------------------------------------------------
-def test_concurrent_access_lease_composition(qdrant, collection, coord) -> None:
+def test_concurrent_access_lease_composition(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
     from musubi.store.access_lease import lease_increment_access
 
     pub = _publisher(qdrant, collection)
@@ -267,13 +276,12 @@ def test_concurrent_access_lease_composition(qdrant, collection, coord) -> None:
         content_payload=_content("c"),
     )
     coord.reconcile_once()
-    from musubi.store.immutable_vectors import read_anchor
 
-    before = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-lease")
+    before = _anchor(qdrant, collection, "obj-lease")
     # an access increment on the anchor + a subsequent vector publish must BOTH survive
     import asyncio
 
-    asyncio.run(lease_increment_access(qdrant, collection, [(_NS, "obj-lease")]))
+    asyncio.run(lease_increment_access(qdrant, collection, {(_NS, "obj-lease")}))
     pub.admit_publish(
         coord,
         object_id="obj-lease",
@@ -281,17 +289,19 @@ def test_concurrent_access_lease_composition(qdrant, collection, coord) -> None:
         content_payload=_content("c2"),
     )
     coord.reconcile_once()
-    after = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-lease")
+    after = _anchor(qdrant, collection, "obj-lease")
     assert after.access_count >= before.access_count + 1, (
         "access_count must not be clobbered by the swap"
     )
-    assert resolve_or_none(qdrant, collection, "obj-lease")["content"] == "c2"
+    assert (resolve_or_none(qdrant, collection, "obj-lease") or {})["content"] == "c2"
 
 
 # --------------------------------------------------------------------------------------------------
 # 7. No-future-mutation orphan reconciled.
 # --------------------------------------------------------------------------------------------------
-def test_no_future_mutation_orphan_reconciled(qdrant, collection, coord) -> None:
+def test_no_future_mutation_orphan_reconciled(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     pub.stall_after_staging_once()  # owner stages a content point then never returns
@@ -311,7 +321,9 @@ def test_no_future_mutation_orphan_reconciled(qdrant, collection, coord) -> None
 # --------------------------------------------------------------------------------------------------
 # 8. Reads follow only the committed pointer.
 # --------------------------------------------------------------------------------------------------
-def test_read_follows_committed_pointer_only(qdrant, collection, coord) -> None:
+def test_read_follows_committed_pointer_only(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     pub.admit_publish(
@@ -329,13 +341,15 @@ def test_read_follows_committed_pointer_only(qdrant, collection, coord) -> None:
     )
     coord.reconcile_once()
     # the un-pointed (old) content point must never be returned by the pointer-resolving read
-    assert resolve_or_none(qdrant, collection, "obj-read")["content"] == "new"
+    assert (resolve_or_none(qdrant, collection, "obj-read") or {})["content"] == "new"
 
 
 # --------------------------------------------------------------------------------------------------
 # 9. The anchor's zero vector never ranks in a vector search.
 # --------------------------------------------------------------------------------------------------
-def test_anchor_never_ranks_in_vector_search(qdrant, collection, coord) -> None:
+def test_anchor_never_ranks_in_vector_search(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     pub.admit_publish(
@@ -361,7 +375,7 @@ def test_anchor_never_ranks_in_vector_search(qdrant, collection, coord) -> None:
 # 10. Layout versioning: v1 legacy self-pointer served; v2 missing pointer fails closed.
 # --------------------------------------------------------------------------------------------------
 def test_legacy_v1_served_as_self_pointer_and_v2_missing_pointer_fails_closed(
-    qdrant, collection
+    qdrant: QdrantClient, collection: str
 ) -> None:
     import uuid
 
@@ -419,10 +433,10 @@ def test_legacy_v1_served_as_self_pointer_and_v2_missing_pointer_fails_closed(
 # --------------------------------------------------------------------------------------------------
 # 11. First vector-changing mutation bootstraps a v1 row into content point + v2 anchor.
 # --------------------------------------------------------------------------------------------------
-def test_first_vector_mutation_bootstraps_v1_to_v2(qdrant, collection, coord) -> None:
+def test_first_vector_mutation_bootstraps_v1_to_v2(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
     import uuid
-
-    from musubi.store.immutable_vectors import read_anchor
 
     d0, s0 = _embed("legacy-body")
     qdrant.upsert(
@@ -454,20 +468,28 @@ def test_first_vector_mutation_bootstraps_v1_to_v2(qdrant, collection, coord) ->
         content_payload=_content("new-body"),
     )
     coord.reconcile_once()
-    anchor = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-boot")
+    anchor = _anchor(qdrant, collection, "obj-boot")
     assert (
         anchor is not None and anchor.vector_layout_version == 2 and anchor.live_point is not None
     )
-    assert resolve_or_none(qdrant, collection, "obj-boot")["content"] == "new-body"
+    assert (resolve_or_none(qdrant, collection, "obj-boot") or {})["content"] == "new-body"
 
 
 # --------------------------------------------------------------------------------------------------
 # helpers (bind the intended read/resolve + counting surface)
 # --------------------------------------------------------------------------------------------------
-def resolve_or_none(qdrant: QdrantClient, collection: str, object_id: str) -> dict | None:
+def resolve_or_none(qdrant: QdrantClient, collection: str, object_id: str) -> dict[str, Any] | None:
     from musubi.store.immutable_vectors import resolve_committed_content
 
     return resolve_committed_content(qdrant, collection, namespace=_NS, object_id=object_id)
+
+
+def _anchor(qdrant: QdrantClient, collection: str, object_id: str) -> Any:
+    from musubi.store.immutable_vectors import read_anchor
+
+    a = read_anchor(qdrant, collection, namespace=_NS, object_id=object_id)
+    assert a is not None
+    return a
 
 
 def _count_content_points(qdrant: QdrantClient, collection: str, object_id: str) -> int:
