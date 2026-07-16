@@ -1569,6 +1569,34 @@ def test_artifact_purge_truthful_and_idempotent_and_fenced(
         assert chunk.payload.get("generation") == committed_generation
         assert chunk.payload.get("owner_token") == committed_owner
 
+    # 2.5 Wrong namespace purge (discriminator)
+    wrong_ns = "eric/wrong/artifact"
+    wrong_token = mint_token(api_settings, scopes=["operator", f"{wrong_ns}:rw"])  # type: ignore[arg-type]
+    r_wrong_purge = client.post(
+        f"/v1/artifacts/{obj_id}/purge",
+        headers={"Authorization": f"Bearer {wrong_token}"},
+        params={"namespace": wrong_ns},
+    )
+    assert r_wrong_purge.status_code == 200
+    assert r_wrong_purge.json() == {"status": "purged"}
+
+    # Verify real things STILL exist
+    assert blob_path.exists()
+    head_res_wrong = qdrant.scroll(
+        collection_name="musubi_artifact",
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=obj_id))]
+        ),
+    )[0]
+    assert len(head_res_wrong) == 1
+    chunks_res_wrong = qdrant.scroll(
+        collection_name=chunks_col,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="artifact_id", match=models.MatchValue(value=obj_id))]
+        ),
+    )[0]
+    assert len(chunks_res_wrong) > 0
+
     # 3. Purge with operator token
     op_token = mint_token(api_settings, scopes=["operator", f"{namespace}:rw"])  # type: ignore[arg-type]
     r_purge = client.post(

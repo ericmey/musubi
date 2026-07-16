@@ -570,7 +570,18 @@ class ArtifactPlane:
         # Delete head first to fence concurrent indexers (missing head -> terminal fence).
         self._client.delete(
             collection_name=self._collection,
-            points_selector=models.PointIdsList(points=[_point_id(object_id)]),
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=object_id)
+                        ),
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=namespace)
+                        ),
+                    ]
+                )
+            ),
             wait=True,
         )
         self._client.delete(
