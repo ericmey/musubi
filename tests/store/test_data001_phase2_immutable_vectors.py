@@ -506,3 +506,33 @@ def _count_content_points(qdrant: QdrantClient, collection: str, object_id: str)
         limit=100,
     )
     return len(recs)
+
+
+# --------------------------------------------------------------------------------------------------
+# 12. Synchronous publish(): committed return inline; non-committed raises + worker finishes the intent.
+# --------------------------------------------------------------------------------------------------
+def test_publish_synchronous_committed_return_and_pending_raise(
+    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
+) -> None:
+    import time
+
+    from musubi.store.immutable_vectors import ImmutableVectorPublishPending
+
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    # (1) happy path: publish() drives the named intent inline and RETURNS the committed content.
+    committed = pub.publish(
+        coord, object_id="obj-sync", namespace=_NS, content_payload=_content("sync")
+    )
+    assert committed["content"] == "sync"
+    assert (resolve_or_none(qdrant, collection, "obj-sync") or {})["content"] == "sync"
+    # (2) not-committed-inline (stall after staging) RAISES pending — never an uncommitted object.
+    pub.stall_after_staging_once()
+    with pytest.raises(ImmutableVectorPublishPending):
+        pub.publish(
+            coord, object_id="obj-pending", namespace=_NS, content_payload=_content("later")
+        )
+    # crash net: the durable intent remains; a worker reconcile (after backoff) finishes it.
+    time.sleep(0.03)
+    coord.reconcile_once()
+    assert (resolve_or_none(qdrant, collection, "obj-pending") or {})["content"] == "later"

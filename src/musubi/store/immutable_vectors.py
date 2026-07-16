@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import json
+import secrets
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -32,6 +33,12 @@ VECTOR_LAYOUT_V2 = 2
 INTENT_KIND = "immutable_vector_publish"
 
 _ID_NS = uuid.UUID("d0e5c1a0-0000-4000-8000-000000000001")  # stable namespace for deterministic ids
+
+
+class ImmutableVectorPublishPending(RuntimeError):
+    """A synchronous :meth:`ImmutableVectorPublisher.publish` did NOT commit the vector inline (a
+    retry/fence/worker-held outcome). The durable intent remains for the worker to finish; the caller
+    fails loud rather than returning an uncommitted object (DATA-001 P2, Yua ruling)."""
 
 
 def content_point_id_for(operation_key: str, generation: int = 0) -> str:
@@ -175,6 +182,16 @@ class ImmutableVectorPublisher:
         fields + a recompute fingerprint — never a raw vector blob) is persisted in the outbox
         ``patch_json``; the handler recomputes the vector from it. Returns the coordinator admission
         status (``'admitted'`` / ``'already_active'`` / ``'at_capacity'``)."""
+        status: str = coordinator.enqueue_custom_intent(
+            kind=INTENT_KIND,
+            object_id=object_id,
+            namespace=namespace,
+            collection=self._collection,
+            patch_json=self._patch_json(content_payload),
+        )
+        return status
+
+    def _patch_json(self, content_payload: dict[str, Any]) -> str:
         content = str(content_payload.get("content", ""))
         patch = {
             "content_payload": content_payload,
@@ -183,14 +200,46 @@ class ImmutableVectorPublisher:
                 "content_len": len(content),
             },
         }
+        return json.dumps(patch, sort_keys=True, separators=(",", ":"))
+
+    def publish(
+        self, coordinator: Any, *, object_id: str, namespace: str, content_payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """SYNCHRONOUS durable publish (the production write path). Admits the durable intent with an
+        explicit operation_key, drives ONLY that operation inline via ``coordinator.drive_intent``, then
+        returns the content read back through the committed ``anchor.live_point``. NEVER returns an
+        uncommitted object: any non-committed outcome (at-capacity / already-active / retry / fence /
+        worker-held) raises :class:`ImmutableVectorPublishPending` while the durable intent stays for
+        the worker to finish."""
+        opk = f"{INTENT_KIND}:{object_id}:{secrets.token_hex(8)}"
         status: str = coordinator.enqueue_custom_intent(
             kind=INTENT_KIND,
             object_id=object_id,
             namespace=namespace,
             collection=self._collection,
-            patch_json=json.dumps(patch, sort_keys=True, separators=(",", ":")),
+            patch_json=self._patch_json(content_payload),
+            operation_key=opk,
         )
-        return status
+        if status == "admitted":
+            coordinator.drive_intent(opk)
+        # 'already_active'/'at_capacity' -> we did not admit THIS opk; fall through to the readback,
+        # which fails loud unless another writer already committed exactly our intended content point.
+        anchor = read_anchor(
+            self._client, self._collection, namespace=namespace, object_id=object_id
+        )
+        committed = resolve_committed_content(
+            self._client, self._collection, namespace=namespace, object_id=object_id
+        )
+        if (
+            anchor is not None
+            and anchor.live_point == content_point_id_for(opk, 0)
+            and committed is not None
+        ):
+            return committed
+        raise ImmutableVectorPublishPending(
+            f"vector publish for {object_id!r} not committed inline (status={status!r}); "
+            "durable intent remains for worker retry"
+        )
 
     # -- the registered apply handler ------------------------------------------------------------ #
 
@@ -385,6 +434,7 @@ __all__ = [
     "INTENT_KIND",
     "VECTOR_LAYOUT_V2",
     "AnchorView",
+    "ImmutableVectorPublishPending",
     "ImmutableVectorPublisher",
     "anchor_point_id",
     "content_point_id_for",
