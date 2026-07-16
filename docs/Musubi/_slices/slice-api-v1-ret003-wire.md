@@ -86,6 +86,9 @@ at commit `e8c116c2bfe474263a53b27b882d5038fd0870b5`, merged at 2026-07-13). The
    since orchestration populated them); the router does NOT read `hit.payload`.
 9. **Corrupt source `state` / `importance`** (bad enum, out-of-range) → **500** (server integrity,
    NOT 422). Implementation must NOT clamp / coerce.
+   **SUPERSEDED for RANKED reads by DATA-001 P2 (2026-07-16):** a malformed ranked candidate is now
+   SKIPPED (fail closed) → **HTTP 200 with the bad row OMITTED**, never 500 over one corrupt row. See
+   ADR 0035 §DATA-001 P2 supersession. Identity reads remain fail-loud.
 10. **API governance:** runtime Pydantic is the authoring truth; repo-root `openapi.yaml` is the
     committed deploy-time snapshot; docs skeleton `docs/Musubi/07-interfaces/openapi/musubi.v1.yaml`
     remains untouched in this slice.
@@ -146,9 +149,9 @@ test #13 is split into two:
 ### Ranked-mode (7 strict reds + 1 guard)
 
 1. `test_retrieve_ranked_top_level_state_present_required_nullable` — state key present, may be null
-2. `test_retrieve_ranked_state_is_source_backed_not_fabricated` (valid + invalid) — 500 on bad enum
+2. `test_retrieve_ranked_state_is_source_backed_not_fabricated` (valid + invalid) — DATA-001 P2: 200 + bad row OMITTED (was 500 on bad enum)
 3. `test_retrieve_ranked_top_level_importance_present_required_nullable`
-4. `test_retrieve_ranked_importance_is_source_backed_not_fabricated` (valid + invalid) — 500 on out-of-range
+4. `test_retrieve_ranked_importance_is_source_backed_not_fabricated` (valid + invalid) — DATA-001 P2: 200 + bad row OMITTED (was 500 on out-of-range)
 5. `test_retrieve_ranked_score_kind_is_ranked_combined`
 6. `test_retrieve_ranked_extra_score_components_has_five_keys` — 5 keys (compat path); brief=true
 7. `test_retrieve_ranked_score_is_combined_from_components` — test-local public-to-internal mapping
@@ -292,5 +295,7 @@ The 5 correction cycles (Yua 2026-07-13 09:39:26, 09:49:53, 09:55:38, 10:00:42, 
 applied additively. Top-level response variants with mode discriminator; typed `extra` (compat
 path); 5-key `RankedScoreComponents` (all required, `extra=forbid`); `RecentScoreComponents = {}`
 (exact, never null); `state` / `importance` nullable for missing legacy; `score_kind` declaration;
-`provenance_score` exact-table-only; brief=true preservation; corrupt source -> 500 (not 422).
+`provenance_score` exact-table-only; brief=true preservation; corrupt source -> 500 (not 422)
+**[SUPERSEDED for ranked reads by DATA-001 P2 (2026-07-16): 200 + bad row omitted; see ADR 0035
+§DATA-001 P2 supersession. Identity reads stay fail-loud.]**.
 The spec is the contract. Implementation obeys it.

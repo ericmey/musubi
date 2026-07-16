@@ -28,13 +28,16 @@ commits to.
 
 Source-row discipline (Yua 2026-07-13 11:03:25 + 11:57:59 corrections):
 
-- B1: tests that exercise "corrupt source" behavior (HTTP 500 on bad
-  enum / out-of-range value) seed via RAW qdrant.upsert, NOT through
-  the typed EpisodicMemory model. The typed model would reject the
-  bad value client-side and the corrupt source would never reach the
-  store; then the route could not return 500. We bypass validation
-  and assert the corrupt point is present at the store before
-  exercising the route.
+- B1: tests that exercise "corrupt source" behavior seed via RAW qdrant.upsert, NOT through the typed
+  EpisodicMemory model (which would reject the bad value client-side so the corrupt source never reaches
+  the store). We bypass validation and assert the corrupt point is present at the store before exercising
+  the route.
+  **DATA-001 P2 supersession (2026-07-16):** the earlier B1 contract demanded HTTP 500 on a corrupt-source
+  RANKED read. The accepted DATA-001 P2 ADR (data001-phase2-immutable-vectors) rules that a malformed
+  RANKED candidate is SKIPPED (fail closed), never 500-ing the whole retrieval over one bad row — so the
+  corrupt-state and corrupt-importance ranked tests now assert **200 with the bad row OMITTED** (never
+  fabricated or exposed). This supersedes B1 fail-loud FOR RANKED READS ONLY; IDENTITY reads (scan /
+  vault-path resolution) remain fail-loud. See ADR 0035 §DATA-001 P2 supersession.
 
 - B2: tests that exercise "no importance in source" behavior (raw
   wire `importance` should be null when source is missing) seed via
@@ -225,11 +228,13 @@ def test_retrieve_ranked_top_level_state_present_required_nullable(
 def test_retrieve_ranked_state_is_source_backed_not_fabricated(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
-    """Valid source → exact value; corrupt source (raw upsert with bad enum) → 500.
+    """A corrupt-source row (raw upsert with a bad ``state`` enum) is OMITTED from a ranked read, never
+    fabricated or exposed — and the query still returns 200.
 
-    Seeded via RAW qdrant.upsert to bypass the typed model validation that
-    would otherwise reject the bad value at the plane layer. The corrupt
-    point is asserted to exist at the store before the route is exercised.
+    DATA-001 P2 (accepted ADR) supersedes the RET-003 B1 fail-loud contract FOR RANKED READS: a malformed
+    ranked candidate is skipped (fail closed), never 500-ing the whole retrieval over one bad row. (Identity
+    reads — scan/vault-path — remain fail-loud; that is unchanged.) Seeded via RAW qdrant.upsert to bypass
+    typed validation; the corrupt point is asserted present at the store, then proven absent from results.
     """
     ns = "eric/claude-code/episodic"
     object_id = str(generate_ksuid())
@@ -261,9 +266,13 @@ def test_retrieve_ranked_state_is_source_backed_not_fabricated(
         headers=auth,
         json={"namespace": ns, "query_text": "x", "mode": "fast", "limit": 5},
     )
-    # Corrupt source → 500 (server integrity, NOT 422).
-    assert r.status_code == 500, (
-        f"corrupt state must fail loud (500), got {r.status_code}: {r.text!r}"
+    # DATA-001 P2: 200 with the malformed row skipped (fail closed), NOT a 500.
+    assert r.status_code == 200, (
+        f"a malformed ranked candidate is skipped, not 500 (DATA-001 P2); got {r.status_code}: {r.text!r}"
+    )
+    ids = [row.get("object_id") for row in r.json()["results"]]
+    assert object_id not in ids, (
+        "the corrupt-state row must be omitted, never fabricated or exposed"
     )
 
 
@@ -283,6 +292,7 @@ def test_retrieve_ranked_top_level_importance_present_required_nullable(
             "namespace": ns,
             "object_id": object_id,
             "importance": 7,
+            "state": "matured",  # DATA-001 P2: state is now filtered post-hydration; seed it visible
         },
         marker_in_content=marker,
     )
@@ -310,10 +320,12 @@ def test_retrieve_ranked_top_level_importance_present_required_nullable(
 def test_retrieve_ranked_importance_is_source_backed_not_fabricated(
     client: TestClient, auth: dict[str, str], qdrant: QdrantClient
 ) -> None:
-    """Valid source → exact value; corrupt source (raw upsert with out-of-range importance) → 500.
+    """A corrupt-source row (raw upsert with out-of-range ``importance``) is OMITTED from a ranked read,
+    never fabricated or exposed — and the query still returns 200.
 
-    Seeded via RAW qdrant.upsert to bypass the typed model validation that
-    would otherwise reject the out-of-range value at the plane layer.
+    DATA-001 P2 (accepted ADR) supersedes the RET-003 B1 fail-loud contract FOR RANKED READS: a malformed
+    ranked candidate is skipped (fail closed), never 500-ing the whole retrieval. (Identity reads remain
+    fail-loud.) Seeded via RAW qdrant.upsert to bypass typed validation.
     """
     ns = "eric/claude-code/episodic"
     object_id = str(generate_ksuid())
@@ -345,10 +357,12 @@ def test_retrieve_ranked_importance_is_source_backed_not_fabricated(
         headers=auth,
         json={"namespace": ns, "query_text": "x", "mode": "fast", "limit": 5},
     )
-    # Corrupt source → 500 (server integrity, NOT 422).
-    assert r.status_code == 500, (
-        f"corrupt importance must fail loud (500), got {r.status_code}: {r.text!r}"
+    # DATA-001 P2: 200 with the malformed row skipped (fail closed), NOT a 500.
+    assert r.status_code == 200, (
+        f"a malformed ranked candidate is skipped, not 500 (DATA-001 P2); got {r.status_code}: {r.text!r}"
     )
+    ids = [row.get("object_id") for row in r.json()["results"]]
+    assert object_id not in ids, "the out-of-range-importance row must be omitted, never exposed"
 
 
 def test_retrieve_ranked_score_kind_is_ranked_combined(
@@ -363,7 +377,7 @@ def test_retrieve_ranked_score_kind_is_ranked_combined(
         qdrant,
         collection=collection_for_plane("episodic"),
         object_id=object_id,
-        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        payload={"namespace": ns, "object_id": object_id, "state": "matured"},  # P2: seed visible
         marker_in_content=marker,
     )
 
@@ -444,7 +458,7 @@ def test_retrieve_ranked_score_is_combined_from_components(
         qdrant,
         collection=collection_for_plane("episodic"),
         object_id=object_id,
-        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        payload={"namespace": ns, "object_id": object_id, "state": "matured"},  # P2: seed visible
         marker_in_content=marker,
     )
 
@@ -494,7 +508,7 @@ def test_retrieve_ranked_reinforcement_uses_full_word(
         qdrant,
         collection=collection_for_plane("episodic"),
         object_id=object_id,
-        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        payload={"namespace": ns, "object_id": object_id, "state": "matured"},  # P2: seed visible
         marker_in_content=marker,
     )
 
@@ -837,6 +851,7 @@ def test_wire_importance_audits_internal_default(
         payload={
             "namespace": ns,
             "object_id": object_id,
+            "state": "matured",  # DATA-001 P2: state filtered post-hydration; seed it visible
             # importance is ABSENT here. Internal Hit default is 5 (0.5 normalized).
         },
         marker_in_content=marker,
@@ -1196,7 +1211,7 @@ def test_extra_score_components_path_preserved_for_all_modes(
         qdrant,
         collection=collection_for_plane("episodic"),
         object_id=object_id,
-        payload={"namespace": ns, "object_id": object_id, "state": "provisional"},
+        payload={"namespace": ns, "object_id": object_id, "state": "matured"},  # P2: seed visible
         marker_in_content=marker,
     )
 

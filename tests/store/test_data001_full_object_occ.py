@@ -202,10 +202,19 @@ def test_reinforce_composes_concurrent_access_increment(
 
 
 def _curated_payload(client: QdrantClient, oid: str) -> dict[str, Any]:
+    # DATA-001 P2: after a same-id update the object is a v2 layout; lineage (superseded_by) lives on the
+    # ANCHOR identity, not the content shell — exclude content (a no-op for a v1 row).
+    from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
+
     recs, _ = client.scroll(
         collection_name=_CURATED_COLL,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                )
+            ],
         ),
         limit=1,
         with_payload=True,
