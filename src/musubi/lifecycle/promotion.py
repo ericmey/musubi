@@ -421,11 +421,14 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
                 f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
                 "Concept Promoted",
             )
-        except Exception as e:
+        except Exception:
+            # Post-commit observability only — do not reclassify the promotion.
+            # exc_info=True attaches the traceback; do not also format the
+            # exception into the message (avoids double-formatting).
             log.warning(
-                "Notification emit failed after successful promotion of %s: %s",
+                "Notification emit failed after successful promotion of %s",
                 concept.object_id,
-                e,
+                exc_info=True,
             )
 
         return True
