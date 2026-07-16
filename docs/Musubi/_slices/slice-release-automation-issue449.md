@@ -35,7 +35,7 @@ blocks: []
 
 - `docs/Musubi/_slices/slice-release-automation-issue449.md` (this file)
 - `docs/Musubi/_inbox/locks/slice-release-automation-issue449.lock` (slice lock)
-- `tests/release/test_release_automation_issue449.py` (the 6 architecture-contract invariants + 1 strict red + 56 wrong-fixture mutation tests + 10 legitimate controls; 73 total = 71 pass + 2 xfail)
+- `tests/release/test_release_automation_issue449.py` (the 6 architecture-contract invariants + 1 strict red + wrong-fixture mutation tests + legitimate controls; 75 total = 73 pass + 2 xfail)
 
 ## Out of owns_paths (intentionally not claimed by this slice)
 
@@ -120,7 +120,7 @@ The wrong-fixture tests create a mutated copy of the workflow with a specific in
 | `test_wrong_fixture_inv5_exit_outside_if_block` | 5 | Exit outside the if block | Exit not inside |
 | `test_wrong_fixture_inv6_overlap_enables` | 6 | Replace semver enable with main check | Mutex broken |
 
-## 7 Legitimate controls (prove the tests are not vacuous)
+## Legitimate controls (prove the tests are not vacuous)
 
 1. `test_control_publish_workflow_readable` — the publish workflow file is readable and has the expected structure.
 2. `test_control_autopin_workflow_readable` — the auto-pin workflow file is readable.
@@ -129,6 +129,23 @@ The wrong-fixture tests create a mutated copy of the workflow with a specific in
 5. `test_control_explicit_main_rejected` — explicit 'main' input is rejected.
 6. `test_control_malformed_v_prefix_rejected` — malformed v-prefix values are rejected for both explicit and latest fallback.
 7. `test_control_mutation_helper_writes_to_temp_not_real` — the mutation helper writes to a temp path, NOT the real workflow files.
+8. `test_control_malformed_prerelease_rejected` / `test_control_leading_zero_core_rejected` / `test_control_python_bash_grammar_parity` — bounded release-tag grammar controls.
+9. `test_control_no_live_github_actions_called` — full-module AST scan forbids network-capable imports (module-level AND function-body).
+10. `test_control_autopin_workflow_absence_fails_hard` — missing `auto-digest-bump.yml` fails hard (never `pytest.skip`).
+
+### Auto-pin resolution (matches checked-in `auto-digest-bump.yml`)
+
+Tag resolution is **not** `git ls-remote`. The workflow resolves:
+
+1. `workflow_run.head_branch` when triggered by a successful publish, else
+2. `inputs.tag` on `workflow_dispatch`, else
+3. `gh api …/releases/latest` as fallback,
+
+then resolves the content digest via GHCR's anonymous registry API (`/v2/<image>/manifests/<tag>` → `docker-content-digest`). Slice prose and tests must stay aligned with that fixture.
+
+### Reproducibility / cache (what the suite actually enforces)
+
+Cache (`cache-from` / `cache-to: type=gha`) is treated as a **performance** concern only — not a correctness or bit-reproducibility input. The suite does **not** claim OCI annotation canonicalization (e.g. `org.opencontainers.image.created`) or deterministic base-image digests; those would be separate contracts if required later.
 
 ## Per-wrong discrimination matrix (summary)
 

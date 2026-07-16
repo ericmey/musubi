@@ -2427,3 +2427,67 @@ def test_control_mutation_helper_writes_to_temp_not_real() -> None:
         assert pub_hash != publish_hash_before
         assert hashlib.sha256(PUBLISH_WF.read_bytes()).hexdigest() == publish_hash_before
         assert hashlib.sha256(AUTO_PIN_WF.read_bytes()).hexdigest() == autopin_hash_before
+
+
+# Network-capable modules that would let this contract suite call live
+# GitHub / registries. stdlib ``subprocess`` is allowed (local bash
+# harness only); anything that speaks HTTP must stay out.
+_FORBIDDEN_NETWORK_MODULES = frozenset(
+    {
+        "requests",
+        "httpx",
+        "urllib",
+        "urllib.request",
+        "urllib3",
+        "aiohttp",
+        "http.client",
+        "github",
+    }
+)
+
+
+def test_control_no_live_github_actions_called() -> None:
+    """Control 11: this suite must not import network-capable modules.
+
+    Scans the *entire* module AST (module-level imports AND function
+    bodies). A top-level ``import requests`` / ``from urllib.request
+    import urlopen`` must fail this control — not only imports nested
+    inside a function.
+    """
+    import ast
+
+    source = Path(__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=__file__)
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".", 1)[0]
+                if alias.name in _FORBIDDEN_NETWORK_MODULES or root in _FORBIDDEN_NETWORK_MODULES:
+                    offenders.append(alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            full = node.module
+            root = full.split(".", 1)[0]
+            if full in _FORBIDDEN_NETWORK_MODULES or root in _FORBIDDEN_NETWORK_MODULES:
+                offenders.append(full)
+    assert not offenders, (
+        "Release-automation contract suite must not import network-capable "
+        f"modules (would enable live GitHub/registry calls): {offenders!r}"
+    )
+
+
+def test_control_autopin_workflow_absence_fails_hard(tmp_path: Path) -> None:
+    """Control 12: missing auto-digest-bump.yml must FAIL, never skip.
+
+    Contract B / Inv4 are MUSTs. Deletion of the workflow fixture is a
+    red condition, not a silent pass via ``pytest.skip``.
+    """
+    missing = tmp_path / "auto-digest-bump.yml"
+    assert not missing.exists()
+    with pytest.raises((FileNotFoundError, InvariantError, WorkflowRunVGateError, OSError)):
+        assert_workflow_run_v_gate(missing)
+    # Positive control still requires the real file to exist.
+    assert AUTO_PIN_WF.exists(), (
+        "auto-digest-bump.yml is a MUST fixture for Contract B / Inv4; "
+        "absence must fail the suite, not skip"
+    )
