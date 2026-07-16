@@ -1,6 +1,6 @@
 ---
 owner: aoi
-status: in-review
+status: done
 issue: 530
 title: "Slice: DATA-001 Phase 2 — immutable vectors + fenced committed pointer"
 slice_id: slice-data001-phase2-immutable-vectors
@@ -9,10 +9,10 @@ type: slice
 phase: "Retrieval"
 tags:
   - section/slices
-  - status/in-review
+  - status/done
   - type/slice
 updated: 2026-07-16
-reviewed: false
+reviewed: true
 depends-on: [slice-data001-concurrent-full-object-update]
 blocks: []
 ---
@@ -265,3 +265,7 @@ above. This slice is ready for handoff to review (no self-merge).
   (2424 passed), tc-coverage 96/96, agent-check 0 errors, remote CI check pass. Test Contract 1–96.
   Implementer (Aoi) APPROVE recorded; four-way independent co-signature ceremony in progress. No
   self-merge.
+- **2026-07-16 — merged and closed.** Final reviewed SHA `f20f80d` received independent explicit
+  APPROVE signatures from Aoi, Yua, Tama, and Shiori. Exact CI passed (check 5m9s, smoke, vault
+  hygiene), the explicit real-Qdrant matrix passed 94/94, and PR #583 squash-merged to main as
+  `272ce5e`. Issue #530 closed. Slice status is now `done` and `reviewed: true`.
