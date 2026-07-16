@@ -1409,7 +1409,7 @@ async def test_batch_vs_sequential_permuted_order(
         # anchor carries the full committed payload, so a stripped identity row is the authoritative view.
         from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD, strip_layout_fields
 
-        _not_content = [
+        _not_content: list[models.Condition] = [
             models.FieldCondition(
                 key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
             )

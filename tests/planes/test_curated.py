@@ -38,7 +38,7 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -837,7 +837,10 @@ async def test_scan_vault_rows_paginates_and_validates(
         # RESOLVES each identity through its anchor, whose internal scrolls must reach the real client —
         # delegate anything that is not the inventory page, or we would starve the resolver.
         if kwargs.get("limit") != 1000:
-            return original_scroll(*args, offset=offset, **kwargs)
+            return cast(
+                "tuple[list[Any], int | None]",
+                original_scroll(*args, **{**kwargs, "offset": offset}),
+            )
         if offset is None:
             return all_records[:2], 2  # return first 2, next offset is 2
         else:
