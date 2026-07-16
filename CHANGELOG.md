@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.17.8](https://github.com/ericmey/musubi/compare/v1.17.7...v1.17.8) (2026-07-16)
+
+
+### Bug Fixes
+
+* **vault:** preserve curated frontmatter fidelity ([#573](https://github.com/ericmey/musubi/issues/573)) ([9453aac](https://github.com/ericmey/musubi/commit/9453aacd49762fd5e15aef56b4672aa6dadc3ff5))
+
 ## [1.17.7](https://github.com/ericmey/musubi/compare/v1.17.6...v1.17.7) (2026-07-16)
 
 
