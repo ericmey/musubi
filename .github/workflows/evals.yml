@@ -5,12 +5,14 @@ on:
     branches: [main]
   schedule:
     - cron: '0 0 * * *'
-  # On-demand: workflow_dispatch must exist on the default branch to be callable pre-merge, so the
-  # RET-004 successor (#549) can dispatch the live scheduled gate against its ref before it merges.
+  # On-demand: workflow_dispatch lives on the default branch (landed via #550) so the live scheduled
+  # gate can be dispatched against a feature ref pre-merge to produce real x86 Qdrant+TEI numbers.
   workflow_dispatch:
 
 jobs:
+  # PR gate: deterministic, network-free fixed-embedding smoke — no real models.
   smoke:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +25,44 @@ jobs:
       - name: Sync dependencies
         run: uv sync --extra dev
       - name: Run PR Smoke Gate
-        if: github.event_name == 'pull_request'
         run: |
           uv run python -m musubi.evals smoke --data-dir tests/evals/data
-      - name: Run Scheduled Baseline Report
-        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+
+  # Scheduled gate: the ONLY place real quality NUMBERS are produced. Boots the real Qdrant + TEI
+  # stack on x86, then runs the live scheduled gate + the BEIR hybrid-vs-dense measurement. The live
+  # gate FAILS LOUD without this stack, so a scheduled run that skipped the boot could never pass —
+  # the boot step is load-bearing, not optional.
+  scheduled:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v8.1.0
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Sync dependencies
+        run: uv sync --extra dev
+      - name: Boot Qdrant + TEI stack
         run: |
+          docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-evals up -d --wait --wait-timeout 600
+      - name: Run Scheduled Live Quality Gate
+        # The ChunkedEmbedder loads the gated SPLADE-v3 tokenizer for sparse chunking; without an auth
+        # token a cache-miss 401s (the same gotcha integration.yml wires). Provide the HF secret.
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -a && . deploy/test-env/.env.test && set +a
           uv run python -m musubi.evals scheduled --data-dir tests/evals/data
+      - name: Run BEIR hybrid-vs-dense gate
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -a && . deploy/test-env/.env.test && set +a
+          uv run pytest -m integration -k beir_style_eval tests/retrieve/test_hybrid.py -ra
+      - name: Tear down stack
+        if: always()
+        run: |
+          docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-evals down -v --remove-orphans

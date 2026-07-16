@@ -41,6 +41,7 @@ Design notes:
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -54,7 +55,7 @@ from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
-from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Result, epoch_of, utc_now
+from musubi.types.common import KSUID, Err, LifecycleState, Namespace, Ok, Result, epoch_of, utc_now
 from musubi.types.curated import CuratedKnowledge
 
 # Distinct from the episodic point-namespace UUID — keeps the two
@@ -96,6 +97,31 @@ def _embed_target(memory: CuratedKnowledge) -> str:
     """
     body = memory.summary if memory.summary else memory.content
     return f"{memory.title}\n\n{body}"
+
+
+@dataclass(frozen=True)
+class FindByVaultPathError:
+    """Typed error from :meth:`CuratedPlane.find_by_vault_path`.
+
+    ``code`` is one of:
+      - ``not_found``        — no row matched the supplied ``vault_path``.
+      - ``multiple_matches`` — more than one row matched (the
+        ``(namespace, vault_path)`` uniqueness invariant was violated).
+        The caller MUST treat this as a visible warning and refuse to
+        take destructive action against an arbitrary match (Yua
+        VAULT-003 binding: fail closed and visibly on >1 matches).
+    """
+
+    code: str
+    detail: str
+    # For ``multiple_matches`` this is the OBSERVED BOUNDED LOWER BOUND, not
+    # the total cardinality: ``find_by_vault_path`` scrolls with ``limit=2``
+    # (the second match is sufficient to fail closed), so ``match_count`` is
+    # capped at 2 and a real duplicate set may be larger. Read it as
+    # "at least this many matched", never as an exact count.
+    match_count: int = 0
+    # Likewise bounded: at most the first two matching object_ids observed.
+    match_object_ids: tuple[str, ...] = ()
 
 
 class CuratedPlane:
@@ -323,6 +349,98 @@ class CuratedPlane:
         if not payload:
             return None
         return _curated_from_payload(payload)
+
+    async def find_by_vault_path(
+        self, vault_path: str
+    ) -> Result[CuratedKnowledge, FindByVaultPathError]:
+        """VAULT-003: typed public method that resolves a curated row by its
+        STORED ``vault_path``, no ``namespace`` argument.
+
+        The watcher is the primary caller: when a file is deleted from the
+        vault the frontmatter is gone, so the watcher has no namespace
+        context. This method does a cross-namespace exact-match scroll
+        (Qdrant ``MatchValue``, NOT ``startswith`` / ``prefix`` / regex).
+        Sibling and prefix-collision paths cannot match by construction.
+
+        Uniqueness invariant: ``(namespace, vault_path)`` is unique per
+        slice-vault-sync. ``vault_path`` alone is NOT unique across
+        namespaces — a duplicate ``vault_path`` in two namespaces is a
+        schema bug, but the public API MUST fail closed on it: returning
+        an arbitrary match would let the watcher's archive-by-path
+        target the wrong row. This method:
+
+        - Returns ``Err(FindByVaultPathError(code='not_found'))`` when
+          no row matches (the watcher's clean observable no-op).
+        - Returns ``Ok(row)`` when EXACTLY one row matches.
+        - Returns ``Err(FindByVaultPathError(code='multiple_matches'))``
+          when more than one row matches — the caller MUST refuse to
+          take destructive action.
+
+        The scroll is bounded to ``limit=2`` (Yua VAULT-003 review
+        binding): fetching the second match is sufficient to fail
+        closed, and a limit of 2 is the smallest unconstrained value
+        that still surfaces the duplicate case without pulling a
+        potentially unbounded row count. Zero matches -> not_found;
+        one match -> Ok; two matches -> multiple_matches. Anything
+        more than 2 in the duplicate case is the same bug and the
+        caller fails closed on the second match.
+        """
+        if not isinstance(vault_path, str) or not vault_path:
+            return Err(
+                error=FindByVaultPathError(
+                    code="not_found",
+                    detail="empty or non-string vault_path",
+                )
+            )
+        records, _ = self._client.scroll(
+            collection_name=self._collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="vault_path", match=models.MatchValue(value=vault_path)
+                    ),
+                ]
+            ),
+            limit=2,
+            with_payload=True,
+            # with_payload=True still rehydrates the FULL CuratedKnowledge
+            # payload (this is not a field-selective fetch of object_id/
+            # state). The only optimization here is with_vectors=False: the
+            # resolver never needs the dense+sparse embeddings, so we avoid
+            # shipping them back on every vault delete.
+            with_vectors=False,
+        )
+        if not records:
+            return Err(
+                error=FindByVaultPathError(
+                    code="not_found",
+                    detail=f"no curated row matches vault_path={vault_path!r}",
+                )
+            )
+        if len(records) > 1:
+            ids = tuple(str(rec.payload.get("object_id", "")) for rec in records if rec.payload)
+            return Err(
+                error=FindByVaultPathError(
+                    code="multiple_matches",
+                    detail=(
+                        f"vault_path={vault_path!r} matched >=2 rows; "
+                        "(namespace, vault_path) uniqueness invariant violated. "
+                        "Fetches at most 2 rows because the second match is "
+                        "sufficient to fail closed."
+                    ),
+                    match_count=len(records),
+                    match_object_ids=ids,
+                )
+            )
+        payload = records[0].payload
+        if not payload:
+            return Err(
+                error=FindByVaultPathError(
+                    code="not_found",
+                    detail=f"matched row for vault_path={vault_path!r} has empty payload",
+                )
+            )
+        return Ok(value=_curated_from_payload(payload))
 
     async def exists(self, *, namespace: Namespace, object_id: KSUID) -> bool:
         """Is this row present? Answered WITHOUT deserializing it.

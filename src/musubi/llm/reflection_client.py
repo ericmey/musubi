@@ -21,6 +21,8 @@ from typing import Any
 
 import httpx
 
+from musubi.llm.prompt_boundary import ChatMessage, build_untrusted_data_messages
+
 log = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_S = 180.0
@@ -32,16 +34,10 @@ def _load_prompt(name: str, version: str) -> str:
     return resource.read_text(encoding="utf-8")
 
 
-def _render_prompt(items: list[dict[str, object]]) -> str:
+def _render_prompt(items: list[dict[str, object]]) -> list[ChatMessage]:
     tpl = _load_prompt("reflection", _PROMPT_VERSION)
-    if not items:
-        rendered = "  (no items)"
-    else:
-        rendered = "\n".join(
-            f"- id={it.get('id')} topic={it.get('topic', '')}\n  summary: {it.get('summary', '')}"
-            for it in items
-        )
-    return tpl.replace("{ITEMS}", rendered)
+    payload = {"items": items}
+    return build_untrusted_data_messages(tpl, payload)  # type: ignore[arg-type]
 
 
 def _extract_message_content(body: Any) -> str | None:
@@ -87,11 +83,11 @@ class HttpxReflectionClient:
         if not items:
             return ""
 
-        prompt = _render_prompt(items)
+        messages = _render_prompt(items)
         url = f"{self._base_url}/api/chat"
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": False,
             "options": {"temperature": 0.2},
         }

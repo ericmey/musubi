@@ -384,7 +384,11 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             curated_id = str(persisted.object_id)
             fm_obj = fm_obj.model_copy(update={"object_id": curated_id})
 
-        # Write to vault ONCE after identity is validated
+        # Write only after CuratedPlane has validated or re-adopted the
+        # canonical identity.  A retry after a failed vault write is safe:
+        # CuratedPlane.create returns the existing row, whose object_id is
+        # written into the file below.  Writing earlier would overwrite a
+        # vault path before an unrelated-lineage conflict can fail closed.
         deps.vault_writer.write_curated(rel_path, fm_obj, render.body)
 
         # Transition concept
@@ -411,11 +415,22 @@ async def _promote_concept(deps: PromotionDeps, concept: SynthesizedConcept) -> 
             return False
 
         # Notification Thought
-        await deps.thoughts.emit(
-            "ops-alerts",
-            f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
-            "Concept Promoted",
-        )
+        try:
+            await deps.thoughts.emit(
+                "ops-alerts",
+                f"Promoted concept '{concept.title}' to {rel_path}. Please review.",
+                "Concept Promoted",
+            )
+        except Exception:
+            # Post-commit observability only — do not reclassify the promotion.
+            # exc_info=True attaches the traceback; do not also format the
+            # exception into the message (avoids double-formatting).
+            log.warning(
+                "Notification emit failed after successful promotion of %s",
+                concept.object_id,
+                exc_info=True,
+            )
+
         return True
     except PromotionPolicyError as e:
         log.warning(

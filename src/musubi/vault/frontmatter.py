@@ -6,12 +6,13 @@ import re
 from collections.abc import Mapping
 from datetime import datetime
 from io import StringIO
-from typing import Any
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from ruamel.yaml import YAML
 
-from musubi.types.common import KSUID, LifecycleState
+from musubi.types.common import KSUID, ArtifactRef, LifecycleState
+from musubi.types.curated import CuratedKnowledge
 
 
 class ArtifactRefFrontmatter(BaseModel):
@@ -150,3 +151,48 @@ def _yaml_loader() -> YAML:
         type(None), lambda self, data: self.represent_scalar("tag:yaml.org,2002:null", "")
     )
     return yaml
+
+
+def curated_knowledge_from_frontmatter(
+    fm: CuratedFrontmatter, *, vault_path: str, body_hash: str, content: str
+) -> CuratedKnowledge:
+    """Convert parsed CuratedFrontmatter into the canonical CuratedKnowledge core model."""
+    if fm.read_by:
+        raise ValueError("read_by is unsupported on CuratedKnowledge and cannot be non-empty.")
+    if fm.model_extra:
+        raise ValueError(f"Unsupported frontmatter fields detected: {list(fm.model_extra.keys())}")
+
+    # Convert ArtifactRefFrontmatter to core ArtifactRef explicitly
+    supported_by = [
+        ArtifactRef(artifact_id=ref.artifact_id, chunk_id=ref.chunk_id, quote=ref.quote)
+        for ref in fm.supported_by
+    ]
+
+    return CuratedKnowledge(
+        object_id=fm.object_id,  # type: ignore[arg-type]
+        namespace=fm.namespace,  # type: ignore[arg-type]
+        schema_version=fm.schema_version,
+        vault_path=vault_path,
+        body_hash=body_hash,
+        title=fm.title,
+        content=content,
+        summary=fm.summary,
+        state=cast(Literal["matured", "superseded", "archived"], fm.state),
+        importance=fm.importance,
+        topics=fm.topics,
+        tags=fm.tags,
+        version=fm.version,
+        musubi_managed=fm.musubi_managed,
+        created_at=fm.created,
+        updated_at=fm.updated,
+        valid_from=fm.valid_from,
+        valid_until=fm.valid_until,
+        supersedes=fm.supersedes,
+        superseded_by=fm.superseded_by,
+        merged_from=fm.merged_from,
+        promoted_from=fm.promoted_from,
+        promoted_at=fm.promoted_at,
+        supported_by=supported_by,
+        linked_to_topics=fm.linked_to_topics,
+        contradicts=fm.contradicts,
+    )

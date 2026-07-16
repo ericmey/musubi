@@ -29,6 +29,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from musubi.lifecycle.promotion import PromotionPolicyError, PromotionRender
+from musubi.llm.prompt_boundary import ChatMessage, build_untrusted_data_messages
 
 log = logging.getLogger(__name__)
 
@@ -59,15 +60,19 @@ def _load_prompt(name: str, version: str) -> str:
     return resource.read_text(encoding="utf-8")
 
 
-def _render_prompt(*, title: str, content: str, rationale: str, top_memories: list[str]) -> str:
+def _render_prompt(
+    *, title: str, content: str, rationale: str, top_memories: list[str]
+) -> list[ChatMessage]:
     tpl = _load_prompt("promotion-render", _PROMPT_VERSION)
-    memories_block = "\n".join(f"  - {m}" for m in top_memories) if top_memories else "  (none)"
-    return (
-        tpl.replace("{TITLE}", title)
-        .replace("{CONTENT}", content)
-        .replace("{RATIONALE}", rationale)
-        .replace("{TOP_MEMORIES}", memories_block)
-    )
+    payload = {
+        "concept": {
+            "title": title,
+            "content": content,
+            "rationale": rationale,
+            "top_memories": top_memories,
+        }
+    }
+    return build_untrusted_data_messages(tpl, payload)  # type: ignore[arg-type]
 
 
 def _extract_message_content(body: Any) -> str | None:
@@ -110,13 +115,13 @@ class HttpxPromotionClient:
         top_memories: list[str],
     ) -> PromotionRender:
         """Render a synthesized concept as curated markdown."""
-        prompt = _render_prompt(
+        messages = _render_prompt(
             title=title,
             content=content,
             rationale=rationale,
             top_memories=top_memories,
         )
-        raw = await self._chat(prompt)
+        raw = await self._chat(messages)
         try:
             wire = _PromotionResponse.model_validate_json(raw)
         except (ValidationError, ValueError) as exc:
@@ -131,7 +136,7 @@ class HttpxPromotionClient:
         except ValidationError as exc:
             raise PromotionPolicyError(f"promotion-render body rejected: {exc}") from exc
 
-    async def _chat(self, prompt: str) -> str:
+    async def _chat(self, messages: list[ChatMessage]) -> str:
         # Pass the Pydantic-derived JSON Schema as `format` to engage
         # Ollama's structured-output mode (≥0.5.0). Without this, qwen3:4b
         # occasionally emits a response missing `body`, which would
@@ -140,7 +145,7 @@ class HttpxPromotionClient:
         url = f"{self._base_url}/api/chat"
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "stream": False,
             "format": _PROMOTION_SCHEMA,
             "options": {"temperature": 0.2},

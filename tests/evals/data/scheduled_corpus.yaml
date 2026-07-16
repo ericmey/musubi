@@ -1,0 +1,122 @@
+# RET-004 canonical scheduled-gate graded corpus (checksum-pinned in manifest.json).
+#
+# Hardened per Yua's ruling (2026-07-15): >=8 graded queries covering fast, deep, provisional
+# immediate recall, procedural recall, semantic paraphrase, rare lexical lookup, and
+# correction/negation. Each query has one relevance-3 target, a relevance-1 related item where apt,
+# and unlabeled hard distractors seeded alongside. >=half the queries are NOT near-verbatim
+# restatements of their target: for those, a distractor ECHOES the query's surface tokens while
+# meaning something wrong/stale/negated, and the target answers SEMANTICALLY with different words —
+# so a naive exact-token ranker ranks the wrong doc first (the corpus-discrimination contract asserts
+# a naive baseline fails). Episodic-only. Real quality numbers come from the scheduled x86 TEI run;
+# thresholds are frozen and never tuned to content.
+
+documents:
+  # 1. livekit restart — EASY / near-verbatim (a naive ranker should get this one)
+  - {key: livekit-restart, plane: episodic, state: matured, content: "To restart the livekit voice agent after a deploy: stop the systemd unit, clear the session cache, then start the unit and confirm it re-registers with the room server."}
+  - {key: livekit-arch, plane: episodic, state: matured, content: "Background on the livekit voice agent architecture: how rooms are allocated across regions and how the agent connects."}
+
+  # 2. bring the voice bot online — target OWNS "voice bot recovery"; trap is natural scaling prose
+  - {key: agent-recover, plane: episodic, state: matured, content: "Recovering a crashed voice bot: stop the dead voice worker, clear its session state, then launch a fresh voice runtime so the voice bot re-registers and is serving again."}
+  - {key: livekit-scale-trap, plane: episodic, state: matured, content: "Running more voice bots in parallel is a capacity change: raise the replica count so additional voice-bot workers come up alongside the existing ones. Scaling out adds throughput, it does not restart a bot that has fallen over."}
+
+  # 3. presence token current this session — target OWNS the live credential; trap is a natural audit record
+  - {key: token-current, plane: episodic, state: provisional, content: "Yes — the presence token was rotated this session and the new presence credential is the value in use right now; the current live presence token is the freshly rotated one."}
+  - {key: token-rotation-history-trap, plane: episodic, state: matured, content: "Presence token rotation audit log: every prior presence token rotation is recorded here with its timestamp. These presence token rotations are historical records from earlier sessions, not the value live right now."}
+
+  # 4. trade latency for recall on long-tail — target SEMANTICALLY answers (ef_search); trap is a natural caution
+  - {key: ef-search, plane: episodic, state: matured, content: "When long-tail answers are being missed, widen the search so many more candidate neighbors are scored before ranking: raise the HNSW ef_search parameter. You accept a little more query time in exchange for surfacing the harder matches."}
+  - {key: prefetch-related, plane: episodic, state: matured, content: "The hybrid prefetch limit controls how many candidates each channel returns before fusion."}
+  - {key: latency-recall-tradeoff-trap, plane: episodic, state: matured, content: "A caution on the query-latency versus recall tradeoff for long-tail searches: measure it honestly before shipping, because a recall gain that blows the latency budget is rarely worth it. This is guidance on judging the tradeoff, not a recipe for raising recall."}
+
+  # 5. sync the vault on every write — correction/negation; target is close-only; trap is a natural legacy note
+  - {key: vault-close-sync, plane: episodic, state: matured, content: "No — the vault deliberately flushes to the store only when a file is closed, never on every write, because per-write flushing thrashed the embedder. Close-time flushing is the current policy."}
+  - {key: vault-write-sync-trap, plane: episodic, state: matured, content: "The retired legacy policy flushed the vault to the store on every write event; it was dropped after it overloaded the embedder during rapid edits. Syncing on every write is no longer done."}
+
+  # 6. eligible to enter curated knowledge (semantic paraphrase) — TRAP echoes "enter curated knowledge"
+  - {key: promotion-rule, plane: episodic, state: matured, content: "A memory qualifies for the curated tier once it has matured, been corroborated across two or more sessions, and cleared synthesis review."}
+  - {key: curated-removal-trap, plane: episodic, state: matured, content: "To make an item leave and enter out of curated knowledge, or to enter the archive from curated knowledge, mark the curated knowledge entry superseded — this removes curated knowledge, it does not qualify a memory for it."}
+
+  # 7. revert a bad musubi-core deploy (procedural, non-verbatim) — TRAP echoes "bad musubi-core deploy"
+  - {key: rollback-runbook, plane: episodic, state: matured, content: "Undoing a broken release: pin the previous signed digest, redeploy, verify /ops/status, and confirm the broken build is no longer serving."}
+  - {key: deploy-general, plane: episodic, state: matured, content: "General notes on the musubi-core deploy pipeline and how signed digests are pinned."}
+  - {key: deploy-forward-trap, plane: episodic, state: matured, content: "Shipping a new bad musubi-core deploy forward: to deploy musubi-core forward, bump the pin to a newer musubi-core deploy digest — this is a forward musubi-core deploy, not an undo."}
+
+  # 8. model that makes sparse lexical embeddings — EASY-ish (target names it), one dense trap
+  - {key: splade-sparse, plane: episodic, state: matured, content: "SPLADE-v3 produces the sparse lexical embeddings for retrieval, expanding each token into a weighted term vector for the sparse channel."}
+  - {key: dense-model-trap, plane: episodic, state: matured, content: "The model that turns text into dense vectors is BGE-M3; it makes the dense semantic embeddings, a different channel than the sparse lexical one."}
+
+  # 9. deep procedural — what the deep path adds over fast (ordinary; natural fast-path distractor)
+  - {key: deep-path-adds, plane: episodic, state: matured, content: "Beyond fast search, the deep retrieval path reranks the hybrid candidates with a cross-encoder and can expand the query — the extra quality work the fast path deliberately skips."}
+  - {key: fast-path-note, plane: episodic, state: matured, content: "The fast retrieval path returns the hybrid results directly and skips reranking to stay inside its latency budget on the fast path."}
+
+  # 10. deep provisional immediate recall — a payload index just added this session (ordinary)
+  - {key: index-added-fresh, plane: episodic, state: provisional, content: "This session we added a payload index on the namespace field so scoped scans run faster; that index is live on the collection now."}
+  - {key: index-spec-note, plane: episodic, state: matured, content: "The qdrant collection's payload index configuration and its vector params are documented in the store spec for reference."}
+
+queries:
+  # -- 5 fast --
+  - id: q-livekit-restart
+    text: "how do I restart the livekit voice agent after a deploy"
+    mode: fast
+    behavior: procedural
+    relevant:
+      - {key: livekit-restart, relevance: 3}
+      - {key: livekit-arch, relevance: 1}
+  - id: q-bring-bot-online
+    text: "how do I bring the voice bot back online"
+    mode: fast
+    behavior: semantic-paraphrase
+    relevant:
+      - {key: agent-recover, relevance: 3}
+  - id: q-token-current
+    text: "is the presence token current after this session's rotation"
+    mode: fast
+    behavior: provisional-recall
+    relevant:
+      - {key: token-current, relevance: 3}
+  - id: q-vault-write
+    text: "should we sync the vault on every write event"
+    mode: fast
+    behavior: correction-negation
+    relevant:
+      - {key: vault-close-sync, relevance: 3}
+  - id: q-sparse-model
+    text: "which model produces the sparse lexical embeddings"
+    mode: fast
+    behavior: semantic-paraphrase
+    relevant:
+      - {key: splade-sparse, relevance: 3}
+  # -- 5 deep --
+  - id: q-latency-recall
+    text: "how do I trade query latency for better recall on long-tail searches"
+    mode: deep
+    behavior: rare-lexical
+    relevant:
+      - {key: ef-search, relevance: 3}
+      - {key: prefetch-related, relevance: 1}
+  - id: q-curated-enter
+    text: "what makes a memory eligible to enter curated knowledge"
+    mode: deep
+    behavior: semantic-paraphrase
+    relevant:
+      - {key: promotion-rule, relevance: 3}
+  - id: q-revert-deploy
+    text: "walk me through reverting a bad musubi-core deploy"
+    mode: deep
+    behavior: procedural
+    relevant:
+      - {key: rollback-runbook, relevance: 3}
+      - {key: deploy-general, relevance: 1}
+  - id: q-deep-path
+    text: "what does the deep retrieval path add on top of the fast path"
+    mode: deep
+    behavior: procedural
+    relevant:
+      - {key: deep-path-adds, relevance: 3}
+      - {key: fast-path-note, relevance: 1}
+  - id: q-index-added
+    text: "did we just add a payload index to the qdrant collection this session"
+    mode: deep
+    behavior: provisional-recall
+    relevant:
+      - {key: index-added-fresh, relevance: 3}
