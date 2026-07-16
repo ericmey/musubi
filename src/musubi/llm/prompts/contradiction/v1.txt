@@ -7,11 +7,3 @@ If contradictory, briefly explain WHICH claims clash.
 Respond in this exact JSON shape, no commentary:
 
 {"verdict": "<consistent|contradictory>", "reason": "<string>"}
-
-Concept A:
-title: {A_TITLE}
-content: {A_CONTENT}
-
-Concept B:
-title: {B_TITLE}
-content: {B_CONTENT}

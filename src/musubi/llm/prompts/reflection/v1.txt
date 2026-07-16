@@ -8,6 +8,3 @@ Guidelines:
 - Do not include frontmatter or `# H1` — those are rendered by the calling framework.
 - Do not preface with "Here are the themes" or similar narrator prose.
 - Do not apologize, hedge, or include disclaimers.
-
-Items:
-{ITEMS}
