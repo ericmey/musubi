@@ -1,15 +1,20 @@
 import argparse
+import asyncio
 import json
 import math
 import sys
 from pathlib import Path
 
-import yaml
 from pydantic import ValidationError
 
 from musubi.evals.corpus import verify_manifest
+from musubi.evals.live_gate import (
+    LiveGateUnavailable,
+    build_settings_backends,
+    enforce_thresholds,
+)
 from musubi.evals.runner import run_smoke_gate
-from musubi.evals.schema import GoldenQuery, SmokeFixture
+from musubi.evals.schema import SmokeFixture
 
 
 def _write(message: str) -> None:
@@ -23,12 +28,16 @@ def main() -> None:
     args = parser.parse_args()
 
     data_dir = args.data_dir
+
+    if args.command == "scheduled":
+        _run_scheduled(data_dir)  # self-seeding live gate; raises SystemExit internally
+        return
+
     manifest_path = data_dir / "manifest.json"
-    corpus_path = data_dir / "corpus.yaml"
     smoke_fixture_path = data_dir / "smoke_fixture.json"
     baseline_path = data_dir / "baseline.json"
 
-    required_input = smoke_fixture_path if args.command == "smoke" else corpus_path
+    required_input = smoke_fixture_path
     if not manifest_path.exists() or not required_input.exists():
         _write(f"Missing {required_input.name} or manifest.json.")
         raise SystemExit(1)
@@ -82,26 +91,47 @@ def main() -> None:
         _write(f"Smoke gate passed. ndcg@10={ndcg}")
         raise SystemExit(0)
 
-    corpus: list[dict[str, object]] = []
-    try:
-        with open(corpus_path) as f:
-            docs = list(yaml.safe_load_all(f))
-        for doc in docs:
-            # We assume GoldenQuery schema
-            if doc:
-                q = GoldenQuery.model_validate(doc)
-                # Need to convert to runner shape for smoke gate
-                # The smoke gate expects dicts
-                # But here we just prove schema is validated
-                # Let's rebuild a simple mock dictionary for run_smoke_gate
-                corpus.append({"id": q.id, "text": q.text, "relevance": 1 if q.relevant else 0})
-    except (OSError, yaml.YAMLError, ValidationError, ValueError, TypeError) as exc:
-        _write(f"Schema validation failed: {exc}")
-        raise SystemExit(1) from exc
 
-    if args.command == "scheduled":
-        _write("Scheduled live Qdrant+TEI quality gate is not implemented; see Issue #430.")
-        raise SystemExit(2)
+def _run_scheduled(data_dir: Path) -> None:
+    """The self-seeding scheduled live gate: seed the checksum-pinned graded corpus into a fresh
+    run-scoped namespace via the production write seam, measure per-mode metrics, enforce the FROZEN
+    thresholds, tear down the run data. Fail loud without TEI or on any seed/visibility/corpus error;
+    on a threshold MISS, print the RAW per-mode results + corpus attribution — never tune to green."""
+    from musubi.evals.scheduled_gate import (
+        ScheduledGateFailure,
+        new_run_id,
+        run_scheduled_seeded_gate,
+    )
+
+    try:
+        backends = build_settings_backends()
+    except LiveGateUnavailable as exc:
+        _write(f"Scheduled gate unavailable — fail-loud, no fabricated numbers: {exc}")
+        raise SystemExit(3) from exc
+
+    run_id = new_run_id()
+    try:
+        result = asyncio.run(run_scheduled_seeded_gate(backends, data_dir=data_dir, run_id=run_id))
+    except (LiveGateUnavailable, ScheduledGateFailure) as exc:
+        _write(f"Scheduled gate failed (fail-loud, no fabricated numbers): {exc}")
+        raise SystemExit(3) from exc
+
+    by_mode = result["by_mode"]
+    _write(f"Scheduled gate PER-QUERY (corpus=scheduled_corpus.yaml run={run_id}):")
+    for row in result["per_query"]:
+        _write(f"  {row['id']} [{row['mode']}]: {row['metrics']}")
+
+    try:
+        enforce_thresholds(by_mode)
+    except ValueError as exc:
+        # Below threshold: per-query is printed above; report the RAW aggregate, never tuned to green.
+        _write(
+            f"Scheduled gate BELOW thresholds (raw results, NOT tuned) — "
+            f"corpus=scheduled_corpus.yaml run={run_id} aggregate={by_mode} :: {exc}"
+        )
+        raise SystemExit(1) from exc
+    _write(f"Scheduled gate PASSED — corpus=scheduled_corpus.yaml run={run_id} aggregate={by_mode}")
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
