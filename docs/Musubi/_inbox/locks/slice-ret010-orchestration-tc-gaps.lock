@@ -2,6 +2,7 @@ owner: cursor-grok
 branch: slice/ret010-orchestration-tc-gaps
 claimed: 2026-07-15T20:38:00-04:00
 issue: 509
+pr: 580
 scope: RET-010 — close legacy orchestration Test Contract gaps (Issue #509).
   Successor to slice-retrieval-orchestration (done). Tests-first Closure Rule
   closure on docs/Musubi/05-retrieval/orchestration.md via

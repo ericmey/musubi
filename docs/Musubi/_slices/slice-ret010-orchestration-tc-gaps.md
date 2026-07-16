@@ -96,4 +96,4 @@ Integration (environment-dependent — prefer skip to named harness if not runna
 
 - Claimed Issue #509 via Dual-update (`status:ready` → `status:in-progress`, assignee `@me`).
 - Created successor slice `slice-ret010-orchestration-tc-gaps` (original `slice-retrieval-orchestration` remains `done`).
-- Branch `slice/ret010-orchestration-tc-gaps`; draft PR opened. Next: tests-first closure of the orchestration Test Contract.
+- Branch `slice/ret010-orchestration-tc-gaps`; draft PR #580. Next: tests-first closure of the orchestration Test Contract.
