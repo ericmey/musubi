@@ -52,6 +52,7 @@ _ENV_KEYS: tuple[str, ...] = (
     "VAULT_PATH",
     "ARTIFACT_BLOB_PATH",
     "LIFECYCLE_SQLITE_PATH",
+    "IDEMPOTENCY_RECEIPT_SQLITE_PATH",
     "LOG_DIR",
     # Auth
     "JWT_SIGNING_KEY",
@@ -296,6 +297,17 @@ def test_default_values_present_where_spec_allows(minimal_env: Path, _reset_cach
     # Feature flags default to false per compose-stack.
     assert settings.musubi_grpc is False
     assert settings.musubi_allow_plaintext is False
+    assert settings.idempotency_receipt_sqlite_path is None
+
+
+def test_idempotency_receipt_sqlite_path_accepts_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+    minimal_env: Path,
+    _reset_cache: None,
+) -> None:
+    expected = minimal_env / "receipts" / "idempotency.sqlite"
+    monkeypatch.setenv("IDEMPOTENCY_RECEIPT_SQLITE_PATH", str(expected))
+    assert get_settings().idempotency_receipt_sqlite_path == expected
 
 
 # ---------------------------------------------------------------------------

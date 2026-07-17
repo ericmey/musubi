@@ -24,8 +24,9 @@ the client can recover the accepted object without guessing.
 
 ## Scope
 
-- Persist clean terminal 2xx receipts before an idempotent success response is
-  released to the client.
+- For requests that opt in with `Idempotency-Receipt: durable`, persist clean
+  terminal 2xx receipts before an idempotent success response is released to the
+  client.
 - Bind receipts to issuer, subject, presence, method, operation, authorized
   namespace, idempotency key, and byte-exact request digest.
 - Return `found`, `absent`, `conflict`, or `in_flight` without disclosing another
@@ -33,6 +34,11 @@ the client can recover the accepted object without guessing.
 - Preserve the ordinary POST replay TTL. Receipt retention is independent.
 - Keep `WEB_CONCURRENCY=1`; multi-worker leases and orphaned server-operation
   reconciliation remain Issue #558.
+
+## Specs to implement
+
+- [[07-interfaces/canonical-api]]
+- [[13-decisions/0039-durable-client-idempotency-receipts]]
 
 ## Owned paths
 

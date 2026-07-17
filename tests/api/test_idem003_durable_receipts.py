@@ -7,13 +7,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from musubi.api.idempotency import CompletedResponse, IdempotencyLeaseCache
-from musubi.api.idempotency_dependency import build_identity, canonical_digest
+from musubi.api.idempotency_dependency import canonical_digest
 from musubi.api.idempotency_receipts import DurableReceiptStore, ReceiptLookupStatus
 from musubi.settings import Settings
-
 
 NAMESPACE = "eric/claude-code/episodic"
 OPERATION = "capture_episodic.bucket=capture"
@@ -50,6 +50,12 @@ def _lookup_body(*, digest: bytes = DIGEST, operation: str = OPERATION) -> dict[
 
 
 def test_receipt_survives_replay_cache_expiry_and_process_recreation(tmp_path: Path) -> None:
+    now = [100.0]
+    cache = IdempotencyLeaseCache(clock=lambda: now[0], ttl_s=1.0)
+    assert cache.acquire(IDENTITY, "owner-1", digest=DIGEST)[0] == "acquired"
+    cache.store(IDENTITY, "owner-1", response=RESPONSE)
+    assert cache.probe(IDENTITY, digest=DIGEST) == "completed"
+
     path = tmp_path / "receipts.sqlite"
     first = DurableReceiptStore(path)
     first.store(
@@ -60,6 +66,9 @@ def test_receipt_survives_replay_cache_expiry_and_process_recreation(tmp_path: P
         operation=OPERATION,
     )
     first.close()
+
+    now[0] += 2.0
+    assert cache.probe(IDENTITY, digest=DIGEST) == "absent"
 
     recreated = DurableReceiptStore(path)
     found = recreated.lookup(identity=IDENTITY, digest=DIGEST)
@@ -132,12 +141,17 @@ class _OrderingReceiptStore:
             raise OSError("disk unavailable")
 
 
-async def _exercise_observer(store: _OrderingReceiptStore) -> tuple[list[str], list[dict[str, Any]]]:
+async def _exercise_observer(
+    store: _OrderingReceiptStore,
+    *,
+    cache: IdempotencyLeaseCache | None = None,
+    fail_send: bool = False,
+) -> tuple[list[str], list[dict[str, Any]], IdempotencyLeaseCache]:
     from musubi.api.idempotency import IdempotencyRequestState
     from musubi.api.idempotency_observer import IdempotencyObserver
 
     events = store.events
-    cache = IdempotencyLeaseCache()
+    cache = cache or IdempotencyLeaseCache()
     owner = "owner-1"
     assert cache.acquire(IDENTITY, owner, digest=DIGEST)[0] == "acquired"
 
@@ -157,10 +171,12 @@ async def _exercise_observer(store: _OrderingReceiptStore) -> tuple[list[str], l
     async def send(message: dict[str, Any]) -> None:
         events.append(f"send:{message['type']}:{message.get('status', '')}")
         sent.append(message)
+        if fail_send and message["type"] == "http.response.start":
+            raise OSError("client transport disappeared")
 
     scope: dict[str, Any] = {"type": "http", "state": {}, "method": "POST", "path": "/v1/episodic"}
     await IdempotencyObserver(app)(scope, None, send)  # type: ignore[arg-type]
-    return events, sent
+    return events, sent, cache
 
 
 async def test_success_response_is_not_released_before_durable_receipt_commit() -> None:
@@ -172,10 +188,48 @@ async def test_success_response_is_not_released_before_durable_receipt_commit() 
 
 async def test_receipt_store_failure_returns_failure_not_unreceipted_success() -> None:
     events: list[str] = []
-    _, sent = await _exercise_observer(_OrderingReceiptStore(events, fail=True))
+    _, sent, cache = await _exercise_observer(_OrderingReceiptStore(events, fail=True))
     starts = [message for message in sent if message["type"] == "http.response.start"]
     assert [message["status"] for message in starts] == [503]
     assert all(message.get("status") != 202 for message in starts)
+    assert cache.probe(IDENTITY, digest=DIGEST) == "in_flight"
+
+
+async def test_transport_failure_after_receipt_commit_replays_without_reexecution() -> None:
+    events: list[str] = []
+    cache = IdempotencyLeaseCache()
+    with pytest.raises(OSError, match="client transport disappeared"):
+        await _exercise_observer(_OrderingReceiptStore(events), cache=cache, fail_send=True)
+    assert events[:2] == ["receipt-commit", "send:http.response.start:202"]
+    assert cache.probe(IDENTITY, digest=DIGEST) == "completed"
+
+
+def test_durable_receipt_mode_requires_key_and_known_value(
+    app_factory: Any,
+    auth: dict[str, str],
+) -> None:
+    with TestClient(app_factory) as client:
+        missing_key = client.post(
+            "/v1/episodic",
+            content=RAW_CAPTURE,
+            headers={
+                **auth,
+                "Content-Type": "application/json",
+                "Idempotency-Receipt": "durable",
+            },
+        )
+        unknown_mode = client.post(
+            "/v1/episodic",
+            content=RAW_CAPTURE,
+            headers={
+                **auth,
+                "Content-Type": "application/json",
+                "Idempotency-Key": KEY,
+                "Idempotency-Receipt": "best-effort",
+            },
+        )
+    assert missing_key.status_code == 400
+    assert unknown_mode.status_code == 400
 
 
 def test_absent_and_in_flight_are_distinct_from_found(tmp_path: Path) -> None:
@@ -198,6 +252,7 @@ def test_exact_object_id_namespace_and_response_hash_round_trip(
     capture_headers = {
         **auth,
         "Idempotency-Key": KEY,
+        "Idempotency-Receipt": "durable",
         "Content-Type": "application/json",
     }
     with TestClient(app_factory) as client:

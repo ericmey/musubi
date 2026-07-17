@@ -25,8 +25,10 @@ receipt is useful and safely additive without claiming that broader contract.
 
 ## Decision
 
-For eligible idempotent writes, persist a completed-response receipt before
-releasing a successful response to the client. The durable identity is the existing
+For eligible idempotent writes, `Idempotency-Receipt: durable` opts the request into
+a completed-response receipt persisted before a successful response is released to
+the client. The explicit opt-in preserves the existing 24h key-reuse semantics for
+ordinary idempotent callers. Durable mode requires `Idempotency-Key`. The durable identity is the existing
 post-authorization tuple: authenticated issuer, subject, presence, HTTP method,
 route operation id, authorized namespace, and idempotency key. The receipt also
 stores the byte-exact canonical request digest, exact response bytes and headers,
@@ -54,7 +56,8 @@ does. Issue #558 remains the owner of that boundary.
 
 ## Consequences
 
-- External drainers can adopt a lost success instead of re-POSTing blindly.
+- External drainers can adopt a lost success instead of re-POSTing blindly by
+  explicitly requesting durable receipt semantics.
 - A receipt-store failure becomes a request failure before success bytes are
   released; Musubi never returns an unreceipted success.
 - The observer buffers only the small, already idempotency-eligible write response.

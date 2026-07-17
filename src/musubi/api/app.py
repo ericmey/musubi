@@ -38,6 +38,7 @@ from fastapi.exceptions import RequestValidationError
 from musubi.api.errors import APIError, api_error_handler, error_response
 from musubi.api.idempotency_dependency import Replay
 from musubi.api.idempotency_observer import IdempotencyObserver
+from musubi.api.idempotency_receipts import DurableReceiptStore
 from musubi.api.rate_limit import DEFAULT_BUCKETS, RateLimiter, get_rate_limiter
 from musubi.api.routers import (
     artifacts,
@@ -46,6 +47,7 @@ from musubi.api.routers import (
     contradictions,
     curated,
     episodic,
+    idempotency_receipts,
     lifecycle,
     namespaces,
     ops,
@@ -156,6 +158,10 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
 
         settings = _get_settings()
 
+    receipt_path = settings.idempotency_receipt_sqlite_path
+    if receipt_path is None:
+        receipt_path = settings.lifecycle_sqlite_path.with_name("idempotency-receipts.sqlite")
+
     # REQ-10: single-worker invariant, fail-closed. The idempotency cache is process-local, so
     # more than one worker tears it silently. `WEB_CONCURRENCY` is the standard uvicorn/gunicorn
     # launch signal — read through Settings (keeping raw environment reads out of app code) and rejected
@@ -195,6 +201,7 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         docs_url="/v1/docs",
         redoc_url=None,
     )
+    app.state.idempotency_receipt_store = DurableReceiptStore(receipt_path)
 
     # FastAPI auto-instrumentation: root span per HTTP request. Safe
     # no-op when tracing isn't initialized.
@@ -328,6 +335,7 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
     app.include_router(lifecycle.router)
     app.include_router(contradictions.router)
     app.include_router(namespaces.router)
+    app.include_router(idempotency_receipts.router)
 
     # Write routers (slice-api-v0-write)
     app.include_router(writes_episodic.router)
