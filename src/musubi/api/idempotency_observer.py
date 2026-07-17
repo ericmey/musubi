@@ -24,8 +24,9 @@ Why pure ASGI and not ``@app.middleware`` / ``BaseHTTPMiddleware``: the latter c
 downstream response into a lossy ``_StreamingResponse``, losing exact bytes/headers. A pure-ASGI
 send-wrapper observes ``http.response.start`` / ``http.response.body`` events verbatim.
 
-The observer only buffers a response body for requests that could possibly carry a lease — a write
-method AND an ``Idempotency-Key`` header — so read traffic is never buffered.
+The observer only buffers after the routed dependency publishes an acquired-lease state onto the
+request scope. Requests without that state — including reads, rejected/conflicting writes, and
+writes without an ``Idempotency-Key`` — pass through without response buffering.
 """
 
 from __future__ import annotations
