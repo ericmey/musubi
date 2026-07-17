@@ -533,7 +533,9 @@ satisfy the exact single-`object_id` receipt contract.
 
 `POST /v1/idempotency/receipts/lookup` accepts the authorized namespace, `POST`
 method, eligible route operation id, idempotency key, and the hexadecimal byte-exact
-request digest. Authentication and namespace authorization run before even resolving
+request digest. The digest is exactly 64 ASCII hexadecimal characters; whitespace is
+rejected rather than normalized. Authentication and namespace authorization run
+before even resolving
 the configured receipt store, and therefore before storage access. The response
 status is one of `found`, `absent`, `conflict`, or
 `in_flight`. A `found` response includes the exact accepted `object_id`, namespace,

@@ -207,8 +207,6 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
     # no-op when tracing isn't initialized.
     instrument_fastapi(app)
 
-    install_metrics_middleware(app)
-
     @app.middleware("http")
     async def correlation_id_middleware(
         request: Request,
@@ -293,11 +291,17 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         response.raw_headers = [*completed.raw_headers, (b"x-idempotent-replay", b"true")]
         return response
 
-    # Mount the store-only idempotency observer OUTERMOST (Starlette wraps the most-recently-added
-    # middleware last, so it sees the exact terminal response the client receives). It stores a
-    # completed 2xx and releases the lease established by the routed idempotency dependency; it is a
-    # no-op for every request that did not acquire a lease (reads, replays, conflicts, non-idem).
+    # Mount the store-only idempotency observer outside response-mutating HTTP middleware so it sees
+    # the exact response headers/body that will be replayed. It stores a completed 2xx and releases
+    # the lease established by the routed idempotency dependency; it is a no-op for every request
+    # that did not acquire a lease (reads, replays, conflicts, non-idem).
     app.add_middleware(IdempotencyObserver)
+
+    # Install final-status metrics AFTER the observer. Starlette's most recently added middleware
+    # is outermost, so metrics sees a synthetic fail-closed 503 emitted by the observer rather than
+    # the handler's buffered 2xx. Correlation/rate-limit middleware stays inside the observer so its
+    # response headers are captured faithfully.
+    install_metrics_middleware(app)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_handler(_request: Request, exc: RequestValidationError) -> Response:

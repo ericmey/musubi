@@ -52,6 +52,9 @@ distinguishes:
   available;
 - `absent`: no authorized receipt exists.
 
+The lookup digest is exactly 64 ASCII hexadecimal characters. Whitespace and other
+decoder-normalizable forms are rejected at request validation, before storage.
+
 Receipt retention is independent of the ordinary POST replay TTL. Automatic
 receipt deletion is deferred until fleet outbox-retention policy can prove that no
 client will retry the event; household-scale SQLite growth is preferable to an
@@ -78,8 +81,10 @@ can close that server-crash interval.
 
 - External drainers can adopt a lost success instead of re-POSTing blindly by
   explicitly requesting durable receipt semantics.
-- A receipt-store failure becomes a request failure before success bytes are
-  released; Musubi never returns an unreceipted success.
+- A receipt or durable-mode replay-publication failure becomes a request failure
+  before success bytes are released; Musubi never returns an unprotected success.
+- Final-status HTTP metrics wrap the receipt observer, so a fail-closed synthetic
+  503 is counted as the client-visible 503, never as the handler's buffered 2xx.
 - The observer buffers only the small, already idempotency-eligible write response.
 - Receipt lookup is an authorization-sensitive read and must remain behind the
   normal bearer and namespace checks.

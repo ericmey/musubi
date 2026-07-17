@@ -28,15 +28,17 @@ class ReceiptLookupRequest(BaseModel):
     method: Literal["POST"]
     operation_id: str
     idempotency_key: str = Field(min_length=1, max_length=256)
-    request_digest: str = Field(min_length=64, max_length=64)
+    request_digest: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-fA-F]{64}$")
 
     @field_validator("request_digest")
     @classmethod
     def _hex_digest(cls, value: str) -> str:
         try:
-            bytes.fromhex(value)
+            decoded = bytes.fromhex(value)
         except ValueError as exc:
             raise ValueError("request_digest must be hexadecimal SHA-256") from exc
+        if len(decoded) != 32:
+            raise ValueError("request_digest must decode to exactly 32 bytes")
         return value.lower()
 
     @field_validator("operation_id")

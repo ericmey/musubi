@@ -10,9 +10,15 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from musubi.api.idempotency import CompletedResponse, IdempotencyLeaseCache
+from musubi.api.idempotency import (
+    CompletedResponse,
+    IdempotencyLeaseCache,
+    get_idempotency_lease_cache,
+)
 from musubi.api.idempotency_dependency import canonical_digest
 from musubi.api.idempotency_receipts import DurableReceiptStore, ReceiptLookupStatus
+from musubi.observability.metrics_middleware import install_metrics_middleware
+from musubi.observability.registry import Registry, render_text_format
 from musubi.settings import Settings
 
 NAMESPACE = "eric/claude-code/episodic"
@@ -139,6 +145,24 @@ def test_receipt_lookup_binds_operation_key_and_request_digest(tmp_path: Path) -
     store.close()
 
 
+def test_lookup_digest_rejects_hex_whitespace_before_storage(
+    app_factory: Any,
+    auth: dict[str, str],
+) -> None:
+    store = _ExplodingLookupStore()
+    app_factory.state.idempotency_receipt_store = store
+    body = _lookup_body()
+    body["request_digest"] = "00" * 31 + "  "
+    with TestClient(app_factory) as client:
+        response = client.post(
+            "/v1/idempotency/receipts/lookup",
+            json=body,
+            headers=auth,
+        )
+    assert response.status_code == 422
+    assert store.lookups == 0
+
+
 class _OrderingReceiptStore:
     def __init__(self, events: list[str], *, fail: bool = False) -> None:
         self.events = events
@@ -218,6 +242,45 @@ async def test_replay_store_failure_after_receipt_returns_503_before_success() -
     assert all(message.get("status") != 202 for message in starts)
     assert events[0] == "receipt-commit"
     assert returned_cache.probe(IDENTITY, digest=DIGEST) == "in_flight"
+
+
+def _metric_value(text: str, sample: str) -> float:
+    prefix = f"{sample} "
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return float(line.removeprefix(prefix))
+    return 0.0
+
+
+def test_replay_publication_failure_is_metered_as_client_visible_503(
+    app_factory: Any,
+    auth: dict[str, str],
+) -> None:
+    cache = _ExplodingReplayCache()
+    app_factory.dependency_overrides[get_idempotency_lease_cache] = lambda: cache
+    registry = Registry()
+    app_factory.state._musubi_metrics_installed = False
+    install_metrics_middleware(app_factory, registry=registry)
+    status_503 = 'musubi_http_requests_total{endpoint="/v1/episodic",method="POST",status="503"}'
+    status_202 = 'musubi_http_requests_total{endpoint="/v1/episodic",method="POST",status="202"}'
+    five_xx = 'musubi_5xx_total{endpoint="/v1/episodic"}'
+    before = render_text_format(registry)
+    with TestClient(app_factory) as client:
+        response = client.post(
+            "/v1/episodic",
+            content=RAW_CAPTURE,
+            headers={
+                **auth,
+                "Content-Type": "application/json",
+                "Idempotency-Key": "metrics-replay-publication-failure",
+                "Idempotency-Receipt": "durable",
+            },
+        )
+    after = render_text_format(registry)
+    assert response.status_code == 503
+    assert _metric_value(after, status_503) - _metric_value(before, status_503) == 1
+    assert _metric_value(after, five_xx) - _metric_value(before, five_xx) == 1
+    assert _metric_value(after, status_202) - _metric_value(before, status_202) == 0
 
 
 async def test_transport_failure_after_receipt_commit_replays_without_reexecution() -> None:
