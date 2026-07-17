@@ -94,3 +94,13 @@ the client can recover the accepted object without guessing.
   longstanding canonical-API deferrals); `make check` passed with 2,435 passed,
   195 skipped, 136 deselected, and five documented xfails. Ready for independent
   security and contract review; `reviewed` remains false.
+- 2026-07-17 — Review hardening superseded that first review head. `0a96b1d`
+  removed batch capture from durable eligibility and moved the shared eligibility
+  gate to the routed dependency edge, preventing a multi-object write followed by
+  a single-object receipt failure. `47c0a80` strengthened the regression with real
+  collection-count evidence that the rejected batch performs no mutation. Focused
+  final matrix: 58 passed plus the separately rerun storage mutation proof. Full
+  `make check` on the byte-identical production code: 2,436 passed, 195 skipped,
+  136 deselected, five documented xfails. Aoi re-approved `0a96b1d`; Tama
+  recertified it and requested the stronger proof now present in `47c0a80`. Final
+  exact-head readback remains required before merge; `reviewed` stays false.
