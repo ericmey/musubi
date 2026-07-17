@@ -235,7 +235,9 @@ def test_durable_receipt_mode_requires_key_and_known_value(
 def test_batch_durable_receipt_is_rejected_before_any_mutation(
     app_factory: Any,
     auth: dict[str, str],
+    qdrant: Any,
 ) -> None:
+    before = qdrant.count(collection_name="musubi_episodic", exact=True).count
     with TestClient(app_factory) as client:
         response = client.post(
             "/v1/episodic/batch",
@@ -248,6 +250,8 @@ def test_batch_durable_receipt_is_rejected_before_any_mutation(
         )
     assert response.status_code == 400
     assert "not eligible" in response.text
+    after = qdrant.count(collection_name="musubi_episodic", exact=True).count
+    assert after == before, "durable batch rejection must happen before the handler mutates storage"
 
 
 def test_absent_and_in_flight_are_distinct_from_found(tmp_path: Path) -> None:
