@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.1](https://github.com/ericmey/musubi/compare/v1.18.0...v1.18.1) (2026-07-17)
+
+
+### Documentation
+
+* **slice:** close IDEM-003 after merge ([#596](https://github.com/ericmey/musubi/issues/596)) ([17553a7](https://github.com/ericmey/musubi/commit/17553a727950532575a0b0bcb59dd208d70dbf03))
+
 ## [1.18.0](https://github.com/ericmey/musubi/compare/v1.17.11...v1.18.0) (2026-07-17)
 
 
