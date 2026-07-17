@@ -103,7 +103,8 @@ the client can recover the accepted object without guessing.
   `make check` on the byte-identical production code: 2,436 passed, 195 skipped,
   136 deselected, five documented xfails. Aoi re-approved `0a96b1d`; Tama
   recertified it and requested the stronger proof now present in `47c0a80`. Final
-  exact-head readback remains required before merge; `reviewed` stays false.
+  exact-head readback remained required before merge; at that pre-merge point,
+  `reviewed` remained false.
 - 2026-07-17 — Merged PR #594 into `main` as `53d9c14` and auto-closed Issue
   #593. The final exact-head review chain at `e005d28` included Aoi APPROVE and
   Tama CERTIFY after adversarial checks of authorization-before-storage,
