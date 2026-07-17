@@ -3,10 +3,10 @@ title: "Slice: IDEM-003 durable idempotency receipt lookup"
 slice_id: slice-api-v1-idempotency-receipts
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "7-adapters"
-tags: [section/slices, status/in-progress, type/slice, api, security, idempotency]
+tags: [section/slices, status/in-review, type/slice, api, security, idempotency]
 updated: 2026-07-17
 reviewed: false
 issue: 593
@@ -82,3 +82,15 @@ the client can recover the accepted object without guessing.
   fleet-tools crash matrix proved that client-side idempotency alone cannot safely
   recover a lost POST response after cache expiry. Split from Issue #558 so this
   additive client-recovery API does not falsely claim multi-worker server safety.
+- 2026-07-17 — Tests-first contract landed at `ea7efe4`; implementation landed at
+  `cde7657`. Durable mode is explicit (`Idempotency-Receipt: durable`) so ordinary
+  24h key reuse remains unchanged. Receipt identity includes authenticated
+  issuer/subject/presence, operation, authorized namespace, key, and request digest.
+  Receipt and replay state commit before success bytes; transport loss replays, and
+  restart/expiry recovery uses the authenticated lookup.
+- 2026-07-17 — Final proof on `cde7657`: focused security/idempotency/compatibility
+  matrix 56 passed with the one pre-existing invalid SEC-002 probe skipped; strict
+  runtime/OpenAPI parity passed; Test Contract closure passed (15 applicable, three
+  longstanding canonical-API deferrals); `make check` passed with 2,435 passed,
+  195 skipped, 136 deselected, and five documented xfails. Ready for independent
+  security and contract review; `reviewed` remains false.
