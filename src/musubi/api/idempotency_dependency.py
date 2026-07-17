@@ -36,6 +36,7 @@ from musubi.api.idempotency import (
     get_idempotency_lease_cache,
 )
 from musubi.api.idempotency_receipts import (
+    RECEIPT_ELIGIBLE_OPERATIONS,
     DurableReceiptStore,
     get_idempotency_receipt_store,
 )
@@ -120,8 +121,18 @@ def make_idempotency_dependency(
                 )
             return IdempotentContext(authorized=authorized, identity=None, owner=None)
 
+        key = keys[0]
+        route = request.scope["route"]
+        operation = route.operation_id or route.path
+
         receipt_store: DurableReceiptStore | None = None
         if durable_receipt:
+            if operation not in RECEIPT_ELIGIBLE_OPERATIONS:
+                raise APIError(
+                    status_code=400,
+                    code="BAD_REQUEST",
+                    detail="route is not eligible for durable idempotency receipts",
+                )
             try:
                 receipt_store = get_idempotency_receipt_store(request)
             except RuntimeError as exc:
@@ -131,9 +142,6 @@ def make_idempotency_dependency(
                     detail="durable idempotency receipts are unavailable",
                 ) from exc
 
-        key = keys[0]
-        route = request.scope["route"]
-        operation = route.operation_id or route.path
         identity = build_identity(
             authorized.auth, request.method, operation, authorized.namespace, key
         )

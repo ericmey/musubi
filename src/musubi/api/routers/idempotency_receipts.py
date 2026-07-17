@@ -13,6 +13,7 @@ from musubi.api.errors import APIError
 from musubi.api.idempotency import IdempotencyLeaseCache, get_idempotency_lease_cache
 from musubi.api.idempotency_dependency import build_identity
 from musubi.api.idempotency_receipts import (
+    RECEIPT_ELIGIBLE_OPERATIONS,
     DurableReceiptStore,
     ReceiptLookupStatus,
     get_idempotency_receipt_store,
@@ -20,14 +21,6 @@ from musubi.api.idempotency_receipts import (
 from musubi.settings import Settings
 
 router = APIRouter(prefix="/v1/idempotency/receipts", tags=["idempotency"])
-
-_ELIGIBLE_OPERATIONS = frozenset(
-    {
-        "capture_episodic.bucket=capture",
-        "batch_capture.bucket=batch-write",
-        "create_curated.bucket=capture",
-    }
-)
 
 
 class ReceiptLookupRequest(BaseModel):
@@ -49,7 +42,7 @@ class ReceiptLookupRequest(BaseModel):
     @field_validator("operation_id")
     @classmethod
     def _eligible_operation(cls, value: str) -> str:
-        if value not in _ELIGIBLE_OPERATIONS:
+        if value not in RECEIPT_ELIGIBLE_OPERATIONS:
             raise ValueError("operation_id is not receipt-eligible")
         return value
 

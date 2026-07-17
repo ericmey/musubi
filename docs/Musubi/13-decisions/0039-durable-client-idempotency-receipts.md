@@ -28,11 +28,15 @@ receipt is useful and safely additive without claiming that broader contract.
 For eligible idempotent writes, `Idempotency-Receipt: durable` opts the request into
 a completed-response receipt persisted before a successful response is released to
 the client. The explicit opt-in preserves the existing 24h key-reuse semantics for
-ordinary idempotent callers. Durable mode requires `Idempotency-Key`. The durable identity is the existing
-post-authorization tuple: authenticated issuer, subject, presence, HTTP method,
-route operation id, authorized namespace, and idempotency key. The receipt also
-stores the byte-exact canonical request digest, exact response bytes and headers,
-response SHA-256, and the accepted object id when present.
+ordinary idempotent callers. Durable mode requires `Idempotency-Key`. The durable
+identity is the existing post-authorization tuple: authenticated issuer, subject,
+presence, HTTP method, route operation id, authorized namespace, and idempotency
+key. The receipt also stores the byte-exact canonical request digest, exact response
+bytes and headers, response SHA-256, and the accepted object id when present.
+
+Eligibility is limited to single-object episodic and curated capture. Batch capture
+is rejected before mutation because a list of accepted objects cannot satisfy this
+ADR's exact single-object recovery contract.
 
 Add an authenticated v1 lookup endpoint. It authorizes the requested namespace
 before accessing receipt storage and accepts the operation, idempotency key, and
@@ -50,9 +54,21 @@ client will retry the event; household-scale SQLite growth is preferable to an
 unsafe expiry. Receipt content is never returned across principal or namespace
 boundaries.
 
+Lookup deliberately requires namespace write authority. The capability belongs to
+the principal that could otherwise retry the mutation; namespace read authority
+alone does not grant idempotency-ledger visibility. Within that same authorized
+identity, `conflict` reveals a different digest for the key and `in_flight` reveals
+a live process-local lease. These bounded status disclosures are necessary recovery
+signals and never cross the principal/namespace-derived receipt identity.
+
 `WEB_CONCURRENCY=1` remains enforced. A durable completed receipt does not make an
 orphaned server-side mutation safely replayable, and this ADR does not claim it
 does. Issue #558 remains the owner of that boundary.
+
+The client rule is therefore load-bearing: after any ambiguous response or process
+restart, inspect the receipt before re-POSTing. A blind post-restart re-POST can
+still create an orphan object before the divergent receipt commit fails; only #558
+can close that server-crash interval.
 
 ## Consequences
 

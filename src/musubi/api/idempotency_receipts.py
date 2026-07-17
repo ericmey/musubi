@@ -17,6 +17,13 @@ from fastapi import Request
 
 from musubi.api.idempotency import CompletedResponse, IdempotencyLeaseCache
 
+RECEIPT_ELIGIBLE_OPERATIONS = frozenset(
+    {
+        "capture_episodic.bucket=capture",
+        "create_curated.bucket=capture",
+    }
+)
+
 
 class ReceiptLookupStatus(StrEnum):
     FOUND = "found"
@@ -219,6 +226,7 @@ def get_idempotency_receipt_store(request: Request) -> DurableReceiptStore:
 
 
 __all__ = [
+    "RECEIPT_ELIGIBLE_OPERATIONS",
     "DurableReceipt",
     "DurableReceiptStore",
     "ReceiptLookup",

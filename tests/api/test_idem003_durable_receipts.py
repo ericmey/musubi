@@ -232,6 +232,24 @@ def test_durable_receipt_mode_requires_key_and_known_value(
     assert unknown_mode.status_code == 400
 
 
+def test_batch_durable_receipt_is_rejected_before_any_mutation(
+    app_factory: Any,
+    auth: dict[str, str],
+) -> None:
+    with TestClient(app_factory) as client:
+        response = client.post(
+            "/v1/episodic/batch",
+            json={"namespace": NAMESPACE, "items": [{"content": "must not be captured"}]},
+            headers={
+                **auth,
+                "Idempotency-Key": "batch-receipt-is-not-supported",
+                "Idempotency-Receipt": "durable",
+            },
+        )
+    assert response.status_code == 400
+    assert "not eligible" in response.text
+
+
 def test_absent_and_in_flight_are_distinct_from_found(tmp_path: Path) -> None:
     store = DurableReceiptStore(tmp_path / "receipts.sqlite")
     cache = IdempotencyLeaseCache()
