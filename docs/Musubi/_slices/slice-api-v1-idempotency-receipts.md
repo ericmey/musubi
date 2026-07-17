@@ -3,12 +3,12 @@ title: "Slice: IDEM-003 durable idempotency receipt lookup"
 slice_id: slice-api-v1-idempotency-receipts
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "7-adapters"
-tags: [section/slices, status/in-review, type/slice, api, security, idempotency]
+tags: [section/slices, status/done, type/slice, api, security, idempotency]
 updated: 2026-07-17
-reviewed: false
+reviewed: true
 issue: 593
 depends-on: [slice-idempotency-phase-b]
 blocks: []
@@ -104,3 +104,13 @@ the client can recover the accepted object without guessing.
   136 deselected, five documented xfails. Aoi re-approved `0a96b1d`; Tama
   recertified it and requested the stronger proof now present in `47c0a80`. Final
   exact-head readback remains required before merge; `reviewed` stays false.
+- 2026-07-17 — Merged PR #594 into `main` as `53d9c14` and auto-closed Issue
+  #593. The final exact-head review chain at `e005d28` included Aoi APPROVE and
+  Tama CERTIFY after adversarial checks of authorization-before-storage,
+  identity isolation, receipt/replay/send ordering, final-status metrics, strict
+  digest validation, and typed lookup-backend failures. Exact-head CI passed with
+  2,441 tests, 194 skips, 136 deselections, and five documented xfails; smoke and
+  vault hygiene also passed. This unblocks external verified-delivery adapters,
+  including the fleet-tools drainer, to adopt inspect-before-repost recovery.
+  Multi-worker leases and mutation-before-receipt orphan reconciliation remain
+  explicitly owned by Issue #558.
