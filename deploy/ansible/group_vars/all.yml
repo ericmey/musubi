@@ -38,12 +38,12 @@ musubi_core_port: 8100
 # For what's in a given version, see CHANGELOG.md (authoritative)
 # rather than a comment here — version-specific notes rot; the
 # changelog is the source of truth.
-musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:49cac261f0148d35efd31b8733d49d48d7d9ab4bc5e46ce297e120db56e6b605"
+musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:671bb9634dac281e486544cf361cada5037044aeb6d40e95fd589f88437baa70"
 # Human-readable version paired with `musubi_core_image`. Rendered into
 # `.env.production` as `MUSUBI_SERVICE_VERSION` so spans + dashboards carry
 # the tag, not just the digest. Bumped in lockstep with the image pin by
 # `.github/workflows/auto-digest-bump.yml`.
-musubi_core_version: "v1.17.11"
+musubi_core_version: "v1.18.0"
 musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # TEI image tag = <compute-capability>-<version>. RTX 3080 is Ampere,
 # compute 8.6 → `86-*`. Other GPUs: `turing-*` (RTX 20xx), `89-*` (RTX 40xx),
