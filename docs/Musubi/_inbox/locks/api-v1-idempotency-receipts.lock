@@ -1,0 +1,4 @@
+agent: codex-gpt5
+issue: 593
+started: 2026-07-17T15:40:00-04:00
+branch: slice/api-v1-idempotency-receipts
