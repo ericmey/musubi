@@ -93,6 +93,11 @@ class _ExplodingLookupStore:
         raise AssertionError("receipt storage was touched before authorization")
 
 
+class _UnavailableLookupStore:
+    def lookup_with_lease(self, **_kwargs: object) -> object:
+        raise OSError("receipt ledger unavailable")
+
+
 def test_receipt_lookup_requires_authentication_before_storage_access(
     app_factory: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -161,6 +166,21 @@ def test_lookup_digest_rejects_hex_whitespace_before_storage(
         )
     assert response.status_code == 422
     assert store.lookups == 0
+
+
+def test_receipt_lookup_store_failure_returns_typed_503(
+    app_factory: Any,
+    auth: dict[str, str],
+) -> None:
+    app_factory.state.idempotency_receipt_store = _UnavailableLookupStore()
+    with TestClient(app_factory) as client:
+        response = client.post(
+            "/v1/idempotency/receipts/lookup",
+            json=_lookup_body(),
+            headers=auth,
+        )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "BACKEND_UNAVAILABLE"
 
 
 class _OrderingReceiptStore:

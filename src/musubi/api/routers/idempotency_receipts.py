@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
@@ -90,11 +91,18 @@ async def lookup_receipt(
         body.namespace,
         body.idempotency_key,
     )
-    result = store.lookup_with_lease(
-        identity=identity,
-        digest=bytes.fromhex(body.request_digest),
-        lease_cache=lease_cache,
-    )
+    try:
+        result = store.lookup_with_lease(
+            identity=identity,
+            digest=bytes.fromhex(body.request_digest),
+            lease_cache=lease_cache,
+        )
+    except (OSError, RuntimeError, sqlite3.Error) as exc:
+        raise APIError(
+            status_code=503,
+            code="BACKEND_UNAVAILABLE",
+            detail="durable idempotency receipts are unavailable",
+        ) from exc
     if result.receipt is None:
         return ReceiptLookupResponse(status=result.status)
     receipt = result.receipt
