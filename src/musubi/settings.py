@@ -100,6 +100,14 @@ class Settings(BaseSettings):
     vault_path: Path = Field(description="Host path to the Obsidian vault mount.")
     artifact_blob_path: Path = Field(description="Host path to content-addressed blobs.")
     lifecycle_sqlite_path: Path = Field(description="Host path to lifecycle-work sqlite.")
+    idempotency_receipt_sqlite_path: Path | None = Field(
+        default=None,
+        description=(
+            "Optional host-path override for the durable completed-response receipt ledger. "
+            "When omitted, create_app derives a sibling of lifecycle_sqlite_path. Independent "
+            "from the ordinary idempotency replay TTL."
+        ),
+    )
     lifecycle_sqlite_busy_timeout_ms: int = Field(
         default=5000,
         ge=0,

@@ -32,6 +32,7 @@ _DEFAULT_TTL_S = 24 * 3600
 # The four exhaustive acquire outcomes. Typed so callers handle every case and an unknown status
 # can never fall through as "acquired".
 AcquireStatus = Literal["acquired", "in_flight", "hit", "conflict"]
+ProbeStatus = Literal["absent", "in_flight", "completed", "conflict"]
 
 
 @dataclass(frozen=True)
@@ -269,6 +270,18 @@ class IdempotencyLeaseCache:
         with self._lock:
             self._cleanup_locked(self._clock())
 
+    def probe(self, identity: Any, *, digest: bytes) -> ProbeStatus:
+        """Read-only lease status for the authorized durable-receipt lookup path."""
+        self._require_digest(digest)
+        with self._lock:
+            self._cleanup_locked(self._clock())
+            entry = self._entries.get(identity)
+            if entry is None:
+                return "absent"
+            if entry.digest != digest:
+                return "conflict"
+            return "completed" if entry.done else "in_flight"
+
     def _cleanup_locked(self, now: float) -> None:
         expired = [
             k
@@ -303,6 +316,7 @@ __all__ = [
     "IdempotencyCache",
     "IdempotencyLeaseCache",
     "IdempotencyRequestState",
+    "ProbeStatus",
     "get_idempotency_cache",
     "get_idempotency_lease_cache",
 ]

@@ -1162,6 +1162,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/idempotency/receipts/lookup:
+    post:
+      tags:
+      - idempotency
+      summary: Lookup Receipt
+      operationId: lookup_idempotency_receipt.bucket=default
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiptLookupRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptLookupResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/episodic/batch:
     post:
       tags:
@@ -2873,6 +2898,78 @@ components:
         response validation (500, NOT 422 — per spec §4.6: corrupt stored
 
         data is server integrity, not request validation).'
+    ReceiptLookupRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        method:
+          type: string
+          const: POST
+          title: Method
+        operation_id:
+          type: string
+          title: Operation Id
+        idempotency_key:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Idempotency Key
+        request_digest:
+          type: string
+          maxLength: 64
+          minLength: 64
+          pattern: ^[0-9a-fA-F]{64}$
+          title: Request Digest
+      type: object
+      required:
+      - namespace
+      - method
+      - operation_id
+      - idempotency_key
+      - request_digest
+      title: ReceiptLookupRequest
+    ReceiptLookupResponse:
+      properties:
+        status:
+          $ref: '#/components/schemas/ReceiptLookupStatus'
+        object_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Id
+        namespace:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Namespace
+        operation_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Operation Id
+        response_status:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Response Status
+        response_sha256:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Response Sha256
+      type: object
+      required:
+      - status
+      title: ReceiptLookupResponse
+    ReceiptLookupStatus:
+      type: string
+      enum:
+      - found
+      - absent
+      - conflict
+      - in_flight
+      title: ReceiptLookupStatus
     RecentExtra:
       properties:
         score_components:

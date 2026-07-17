@@ -38,6 +38,7 @@ from fastapi.exceptions import RequestValidationError
 from musubi.api.errors import APIError, api_error_handler, error_response
 from musubi.api.idempotency_dependency import Replay
 from musubi.api.idempotency_observer import IdempotencyObserver
+from musubi.api.idempotency_receipts import DurableReceiptStore
 from musubi.api.rate_limit import DEFAULT_BUCKETS, RateLimiter, get_rate_limiter
 from musubi.api.routers import (
     artifacts,
@@ -46,6 +47,7 @@ from musubi.api.routers import (
     contradictions,
     curated,
     episodic,
+    idempotency_receipts,
     lifecycle,
     namespaces,
     ops,
@@ -156,6 +158,10 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
 
         settings = _get_settings()
 
+    receipt_path = settings.idempotency_receipt_sqlite_path
+    if receipt_path is None:
+        receipt_path = settings.lifecycle_sqlite_path.with_name("idempotency-receipts.sqlite")
+
     # REQ-10: single-worker invariant, fail-closed. The idempotency cache is process-local, so
     # more than one worker tears it silently. `WEB_CONCURRENCY` is the standard uvicorn/gunicorn
     # launch signal — read through Settings (keeping raw environment reads out of app code) and rejected
@@ -195,12 +201,11 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         docs_url="/v1/docs",
         redoc_url=None,
     )
+    app.state.idempotency_receipt_store = DurableReceiptStore(receipt_path)
 
     # FastAPI auto-instrumentation: root span per HTTP request. Safe
     # no-op when tracing isn't initialized.
     instrument_fastapi(app)
-
-    install_metrics_middleware(app)
 
     @app.middleware("http")
     async def correlation_id_middleware(
@@ -286,11 +291,17 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         response.raw_headers = [*completed.raw_headers, (b"x-idempotent-replay", b"true")]
         return response
 
-    # Mount the store-only idempotency observer OUTERMOST (Starlette wraps the most-recently-added
-    # middleware last, so it sees the exact terminal response the client receives). It stores a
-    # completed 2xx and releases the lease established by the routed idempotency dependency; it is a
-    # no-op for every request that did not acquire a lease (reads, replays, conflicts, non-idem).
+    # Mount the store-only idempotency observer outside response-mutating HTTP middleware so it sees
+    # the exact response headers/body that will be replayed. It stores a completed 2xx and releases
+    # the lease established by the routed idempotency dependency; it is a no-op for every request
+    # that did not acquire a lease (reads, replays, conflicts, non-idem).
     app.add_middleware(IdempotencyObserver)
+
+    # Install final-status metrics AFTER the observer. Starlette's most recently added middleware
+    # is outermost, so metrics sees a synthetic fail-closed 503 emitted by the observer rather than
+    # the handler's buffered 2xx. Correlation/rate-limit middleware stays inside the observer so its
+    # response headers are captured faithfully.
+    install_metrics_middleware(app)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_handler(_request: Request, exc: RequestValidationError) -> Response:
@@ -328,6 +339,7 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
     app.include_router(lifecycle.router)
     app.include_router(contradictions.router)
     app.include_router(namespaces.router)
+    app.include_router(idempotency_receipts.router)
 
     # Write routers (slice-api-v0-write)
     app.include_router(writes_episodic.router)

@@ -515,6 +515,42 @@ Cursors are opaque ksuid+epoch packed strings; rotating behind the scenes withou
 
 `Idempotency-Key: <uuid>` header on any POST. 24h TTL. See [[06-ingestion/capture#idempotency]].
 
+### Durable completed-response receipt lookup
+
+An external durable client must not infer that a missing POST response means the
+mutation was absent. An eligible idempotent capture opts in with
+`Idempotency-Receipt: durable`; Musubi then commits an authorization-bound receipt
+and publishes the ordinary replay entry before releasing a successful response.
+Failure of either pre-send step returns typed 503 and holds the process-local lease
+fail-closed; the client recovers through receipt lookup. Ordinary POST replay without
+that header retains its 24h TTL; the receipt ledger is independent and survives API
+process restart. The durable mode requires `Idempotency-Key` and is deliberately
+explicit so ordinary callers retain the existing key-reuse contract.
+
+Durable mode is eligible only for single-object episodic and curated capture.
+Batch capture is rejected before mutation because its multi-object response cannot
+satisfy the exact single-`object_id` receipt contract.
+
+`POST /v1/idempotency/receipts/lookup` accepts the authorized namespace, `POST`
+method, eligible route operation id, idempotency key, and the hexadecimal byte-exact
+request digest. The digest is exactly 64 ASCII hexadecimal characters; whitespace is
+rejected rather than normalized. Authentication and namespace authorization run
+before even resolving
+the configured receipt store, and therefore before storage access. The response
+status is one of `found`, `absent`, `conflict`, or
+`in_flight`. A `found` response includes the exact accepted `object_id`, namespace,
+operation id, original response status, and response-body SHA-256.
+
+Lookup requires write authority intentionally: it is a recovery operation for the
+principal capable of retrying the mutation, not a general namespace read. For that
+same authorized principal and receipt identity, `conflict` discloses that the key
+exists with another digest and `in_flight` discloses a live process-local lease.
+Those statuses are operational signals, not cross-principal discovery surfaces.
+
+`absent` is not permission to re-POST after an ambiguous server failure. Issue #558
+owns durable multi-worker leases and orphaned server-operation reconciliation; v1
+continues to enforce a single API worker.
+
 ## Versioning
 
 Path-prefixed (`/v1/…`). Breaking changes → `/v2/…`. Both run side-by-side for 180 days.

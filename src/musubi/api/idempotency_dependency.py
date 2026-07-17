@@ -35,6 +35,11 @@ from musubi.api.idempotency import (
     IdempotencyRequestState,
     get_idempotency_lease_cache,
 )
+from musubi.api.idempotency_receipts import (
+    RECEIPT_ELIGIBLE_OPERATIONS,
+    DurableReceiptStore,
+    get_idempotency_receipt_store,
+)
 from musubi.api.write_auth import AuthorizedWrite
 
 _DIGEST_DOMAIN = b"musubi-idem-json-v1"
@@ -95,12 +100,48 @@ def make_idempotency_dependency(
             raise APIError(
                 status_code=400, code="BAD_REQUEST", detail="duplicate Idempotency-Key header"
             )
+        receipt_modes = request.headers.getlist("idempotency-receipt")
+        if len(receipt_modes) > 1:
+            raise APIError(
+                status_code=400, code="BAD_REQUEST", detail="duplicate Idempotency-Receipt header"
+            )
+        durable_receipt = bool(receipt_modes)
+        if durable_receipt and receipt_modes[0].lower() != "durable":
+            raise APIError(
+                status_code=400,
+                code="BAD_REQUEST",
+                detail="Idempotency-Receipt must be 'durable'",
+            )
         if not keys:
+            if durable_receipt:
+                raise APIError(
+                    status_code=400,
+                    code="BAD_REQUEST",
+                    detail="Idempotency-Receipt requires Idempotency-Key",
+                )
             return IdempotentContext(authorized=authorized, identity=None, owner=None)
 
         key = keys[0]
         route = request.scope["route"]
         operation = route.operation_id or route.path
+
+        receipt_store: DurableReceiptStore | None = None
+        if durable_receipt:
+            if operation not in RECEIPT_ELIGIBLE_OPERATIONS:
+                raise APIError(
+                    status_code=400,
+                    code="BAD_REQUEST",
+                    detail="route is not eligible for durable idempotency receipts",
+                )
+            try:
+                receipt_store = get_idempotency_receipt_store(request)
+            except RuntimeError as exc:
+                raise APIError(
+                    status_code=503,
+                    code="BACKEND_UNAVAILABLE",
+                    detail="durable idempotency receipts are unavailable",
+                ) from exc
+
         identity = build_identity(
             authorized.auth, request.method, operation, authorized.namespace, key
         )
@@ -139,6 +180,10 @@ def make_idempotency_dependency(
                 identity=identity, owner=owner, digest=digest
             )
             request.state.idem_cache = cache
+            if receipt_store is not None:
+                request.state.idem_receipt_store = receipt_store
+                request.state.idem_namespace = authorized.namespace
+                request.state.idem_operation = operation
         except BaseException:
             cache.release(identity, owner)
             raise
