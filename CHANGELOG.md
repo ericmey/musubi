@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.0](https://github.com/ericmey/musubi/compare/v1.17.11...v1.18.0) (2026-07-17)
+
+
+### Features
+
+* **api:** add durable idempotency receipt lookup ([#594](https://github.com/ericmey/musubi/issues/594)) ([53d9c14](https://github.com/ericmey/musubi/commit/53d9c1406e0ea86e7f93fb18259650cf39fb9859))
+
 ## [1.17.11](https://github.com/ericmey/musubi/compare/v1.17.10...v1.17.11) (2026-07-16)
 
 
