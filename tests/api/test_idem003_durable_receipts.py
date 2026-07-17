@@ -89,9 +89,18 @@ class _ExplodingLookupStore:
 
 def test_receipt_lookup_requires_authentication_before_storage_access(
     app_factory: Any,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store = _ExplodingLookupStore()
     app_factory.state.idempotency_receipt_store = store
+
+    def _getter_must_not_run(_request: object) -> object:
+        raise AssertionError("receipt store dependency resolved before authentication")
+
+    monkeypatch.setattr(
+        "musubi.api.routers.idempotency_receipts.get_idempotency_receipt_store",
+        _getter_must_not_run,
+    )
     with TestClient(app_factory) as client:
         response = client.post("/v1/idempotency/receipts/lookup", json=_lookup_body())
     assert response.status_code == 401
@@ -139,6 +148,11 @@ class _OrderingReceiptStore:
         self.events.append("receipt-commit")
         if self.fail:
             raise OSError("disk unavailable")
+
+
+class _ExplodingReplayCache(IdempotencyLeaseCache):
+    def store(self, *_args: object, **_kwargs: object) -> None:
+        raise OSError("replay cache unavailable")
 
 
 async def _exercise_observer(
@@ -193,6 +207,17 @@ async def test_receipt_store_failure_returns_failure_not_unreceipted_success() -
     assert [message["status"] for message in starts] == [503]
     assert all(message.get("status") != 202 for message in starts)
     assert cache.probe(IDENTITY, digest=DIGEST) == "in_flight"
+
+
+async def test_replay_store_failure_after_receipt_returns_503_before_success() -> None:
+    events: list[str] = []
+    cache = _ExplodingReplayCache()
+    _, sent, returned_cache = await _exercise_observer(_OrderingReceiptStore(events), cache=cache)
+    starts = [message for message in sent if message["type"] == "http.response.start"]
+    assert [message["status"] for message in starts] == [503]
+    assert all(message.get("status") != 202 for message in starts)
+    assert events[0] == "receipt-commit"
+    assert returned_cache.probe(IDENTITY, digest=DIGEST) == "in_flight"
 
 
 async def test_transport_failure_after_receipt_commit_replays_without_reexecution() -> None:

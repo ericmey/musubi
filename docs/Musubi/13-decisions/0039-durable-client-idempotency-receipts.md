@@ -27,7 +27,10 @@ receipt is useful and safely additive without claiming that broader contract.
 
 For eligible idempotent writes, `Idempotency-Receipt: durable` opts the request into
 a completed-response receipt persisted before a successful response is released to
-the client. The explicit opt-in preserves the existing 24h key-reuse semantics for
+the client. The ordinary replay entry is also published before success in durable
+mode. Failure of either pre-send step returns typed 503 and retains the lease
+fail-closed; once the receipt exists, lookup is the recovery path. The explicit
+opt-in preserves the existing 24h key-reuse semantics for
 ordinary idempotent callers. Durable mode requires `Idempotency-Key`. The durable
 identity is the existing post-authorization tuple: authenticated issuer, subject,
 presence, HTTP method, route operation id, authorized namespace, and idempotency
@@ -39,8 +42,9 @@ is rejected before mutation because a list of accepted objects cannot satisfy th
 ADR's exact single-object recovery contract.
 
 Add an authenticated v1 lookup endpoint. It authorizes the requested namespace
-before accessing receipt storage and accepts the operation, idempotency key, and
-request digest needed to reconstruct the same identity. Its result distinguishes:
+before resolving or accessing receipt storage and accepts the operation, idempotency
+key, and request digest needed to reconstruct the same identity. Its result
+distinguishes:
 
 - `found`: exact identity and digest, with accepted object and response proof;
 - `conflict`: identity exists with a different request digest;

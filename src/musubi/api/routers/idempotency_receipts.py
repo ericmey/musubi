@@ -65,12 +65,19 @@ async def lookup_receipt(
     body: ReceiptLookupRequest,
     request: Request,
     settings: Settings = Depends(get_settings_dep),
-    store: DurableReceiptStore = Depends(get_idempotency_receipt_store),
     lease_cache: IdempotencyLeaseCache = Depends(get_idempotency_lease_cache),
 ) -> ReceiptLookupResponse:
     # The storage call stays below this explicit authorization edge. An absent receipt and a
     # receipt owned by another principal/namespace are therefore indistinguishable to the caller.
     authorize_namespace(request, body.namespace, settings=settings, access="w")
+    try:
+        store: DurableReceiptStore = get_idempotency_receipt_store(request)
+    except RuntimeError as exc:
+        raise APIError(
+            status_code=503,
+            code="BACKEND_UNAVAILABLE",
+            detail="durable idempotency receipts are unavailable",
+        ) from exc
     auth = getattr(request.state, "auth", None)
     if auth is None:
         raise APIError(status_code=500, code="INTERNAL", detail="authorized identity unavailable")

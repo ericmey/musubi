@@ -208,6 +208,34 @@ class IdempotencyObserver:
                                 "correlation_id": (scope.get("state") or {}).get("correlation_id"),
                             },
                         )
+                        error_body = json.dumps(
+                            {
+                                "error": {
+                                    "code": "BACKEND_UNAVAILABLE",
+                                    "detail": "durable idempotency replay publication failed",
+                                    "hint": "do not re-POST; inspect the receipt status",
+                                }
+                            },
+                            separators=(",", ":"),
+                        ).encode()
+                        error_headers = [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(error_body)).encode()),
+                        ]
+                        correlation_id = (scope.get("state") or {}).get("correlation_id")
+                        if isinstance(correlation_id, str):
+                            error_headers.append((b"x-request-id", correlation_id.encode()))
+                        await send(
+                            {
+                                "type": "http.response.start",
+                                "status": 503,
+                                "headers": error_headers,
+                            }
+                        )
+                        await send(
+                            {"type": "http.response.body", "body": error_body, "more_body": False}
+                        )
+                        return
 
                 # A durable receipt and replay entry (when requested) now exist before any success
                 # bytes leave this process. Ordinary mode retains its existing post-send behavior.

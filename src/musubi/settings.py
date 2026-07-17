@@ -103,8 +103,9 @@ class Settings(BaseSettings):
     idempotency_receipt_sqlite_path: Path | None = Field(
         default=None,
         description=(
-            "Durable completed-response receipt ledger. Defaults beside lifecycle_sqlite_path "
-            "when omitted. Independent from the ordinary idempotency replay TTL."
+            "Optional host-path override for the durable completed-response receipt ledger. "
+            "When omitted, create_app derives a sibling of lifecycle_sqlite_path. Independent "
+            "from the ordinary idempotency replay TTL."
         ),
     )
     lifecycle_sqlite_busy_timeout_ms: int = Field(
