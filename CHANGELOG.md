@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.2](https://github.com/ericmey/musubi/compare/v1.18.1...v1.18.2) (2026-07-23)
+
+
+### Bug Fixes
+
+* **lifecycle:** _mark_applied idempotent replay — stop LifecycleJobCrashed ([#600](https://github.com/ericmey/musubi/issues/600)) ([1f6bcc2](https://github.com/ericmey/musubi/commit/1f6bcc2ee28f8bfa5b8a3339fe9567904d78cd41))
+
 ## [1.18.1](https://github.com/ericmey/musubi/compare/v1.18.0...v1.18.1) (2026-07-17)
 
 
