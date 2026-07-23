@@ -1110,12 +1110,13 @@ class LifecycleTransitionCoordinator:
             # row returns idempotently, everything else fails loud. The transaction (including any
             # marker inserted above) is rolled back on this path, so a benign replay mutates nothing.
             row = con.execute(
-                "SELECT state, object_id, target_state FROM lifecycle_outbox WHERE operation_key=?",
+                "SELECT state, object_id, target_state, lease_owner "
+                "FROM lifecycle_outbox WHERE operation_key=?",
                 (opk,),
             ).fetchone()
             if row is None:
                 raise RuntimeError(f"mark-applied: no lifecycle_outbox row for {opk}")
-            row_state, row_oid, row_tstate = row[0], row[1], row[2]
+            row_state, row_oid, row_tstate, row_lease_owner = row[0], row[1], row[2], row[3]
             if row_oid != object_id or row_tstate != target_state:
                 # the row exists but is a DIFFERENT operation identity — a genuine mismatch, not a
                 # replay of THIS apply. Surface it (never silently converge onto the wrong row).
@@ -1140,8 +1141,10 @@ class LifecycleTransitionCoordinator:
             if row_state == "PENDING":
                 # still PENDING yet the guarded UPDATE excluded it: a genuine lease-owner mismatch
                 # (S4) — some other lease holder owns this row. Fail loud; do NOT steal the apply.
+                # Name BOTH owners so the diagnostic is actionable, not just "a different owner".
                 raise RuntimeError(
-                    f"mark-applied lease mismatch for {opk}: row is PENDING under a different owner"
+                    f"mark-applied lease mismatch for {opk}: row is PENDING under "
+                    f"lease_owner={row_lease_owner!r} but this call holds owner={owner!r}"
                 )
             # ABANDONED or any other state: mark-applied is not a legal transition from here.
             raise RuntimeError(f"mark-applied: unexpected state {row_state!r} for {opk}")

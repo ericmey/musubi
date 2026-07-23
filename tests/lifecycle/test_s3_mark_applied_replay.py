@@ -176,8 +176,13 @@ def test_identity_mismatch_fails_loud_and_rolls_back_marker(
 def test_lease_owner_mismatch_fails_loud(coord: LifecycleTransitionCoordinator) -> None:
     db = coord._db
     _seed_row(db, "op", "PENDING", lease_owner="ownerA")
-    with pytest.raises(RuntimeError, match="lease mismatch"):
+    with pytest.raises(RuntimeError, match="lease mismatch") as ei:
         coord._mark_applied("op", _OID, _TS, owner="ownerB")
+    # the diagnostic is actionable: it renders BOTH the row's lease owner AND the calling owner,
+    # each correctly labelled (so an operator sees who holds the row vs who tried to apply).
+    msg = str(ei.value)
+    assert "lease_owner='ownerA'" in msg
+    assert "owner='ownerB'" in msg
     # not stolen: still PENDING under ownerA, no marker committed.
     assert _state(db, "op") == "PENDING"
     assert _marker_count(db, "op") == 0
@@ -226,14 +231,16 @@ def test_two_connection_race_one_transition_one_marker_both_normal(
 ) -> None:
     db = coord._db
     _seed_row(db, "op", "PENDING")
-    errors: list[BaseException] = []
+    errors: list[Exception] = []
     barrier = threading.Barrier(2)
 
     def _call() -> None:
         try:
             barrier.wait(timeout=5)
             coord._mark_applied("op", _OID, _TS)
-        except BaseException as exc:  # catch ANY crash — a crashed lifecycle job IS the defect
+        except (
+            Exception
+        ) as exc:  # a crashed lifecycle job IS the defect (not KeyboardInterrupt/etc.)
             errors.append(exc)
 
     t1 = threading.Thread(target=_call)
@@ -243,6 +250,9 @@ def test_two_connection_race_one_transition_one_marker_both_normal(
     t1.join(10)
     t2.join(10)
 
+    # both threads MUST have finished — a deadlock must fail, never false-green or hang the runner.
+    assert not t1.is_alive(), "thread 1 did not finish within the join timeout (possible deadlock)"
+    assert not t2.is_alive(), "thread 2 did not finish within the join timeout (possible deadlock)"
     assert not errors, f"a caller crashed: {errors!r}"  # zero crashed jobs
     assert _state(db, "op") == "APPLIED"  # exactly one transition
     assert _marker_count(db, "op") == 1  # exactly one marker
