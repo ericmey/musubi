@@ -95,6 +95,19 @@ def _state(db: Path, opk: str) -> str | None:
         con.close()
 
 
+def _full_row(db: Path, opk: str) -> tuple[object, ...] | None:
+    """The ENTIRE outbox row (all columns: state, attempts, lease_owner, lease_expires_epoch,
+    terminal_epoch, next_attempt_epoch, ...) — a full zero-mutation fingerprint, not just state."""
+    con = sqlite3.connect(str(db))
+    try:
+        row: tuple[object, ...] | None = con.execute(
+            "SELECT * FROM lifecycle_outbox WHERE operation_key=?", (opk,)
+        ).fetchone()
+        return row
+    finally:
+        con.close()
+
+
 def _marker_count(db: Path, opk: str) -> int:
     con = sqlite3.connect(str(db))
     try:
@@ -129,11 +142,13 @@ def test_matching_replay_is_idempotent_no_mutation(
 ) -> None:
     db = coord._db
     _seed_row(db, "op", terminal)  # already advanced by an earlier pass
-    _seed_marker(db, "op")  # its marker already exists (normal prior apply)
+    _seed_marker(db, "op")  # its marker ALREADY existed (normal prior apply)
+    before = _full_row(db, "op")
     # replay must NOT raise ...
     coord._mark_applied("op", _OID, _TS)
-    # ... and must mutate NOTHING: same terminal state, still exactly one marker.
-    assert _state(db, "op") == terminal
+    # ... and must mutate NOTHING: the FULL outbox row (state, attempts, lease_owner, lease expiry,
+    # terminal/next-attempt fields) is byte-identical, and still exactly one marker.
+    assert _full_row(db, "op") == before
     assert _marker_count(db, "op") == 1
 
 
@@ -166,6 +181,34 @@ def test_lease_owner_mismatch_fails_loud(coord: LifecycleTransitionCoordinator) 
     # not stolen: still PENDING under ownerA, no marker committed.
     assert _state(db, "op") == "PENDING"
     assert _marker_count(db, "op") == 0
+
+
+def test_target_state_mismatch_fails_loud_and_no_mutation(
+    coord: LifecycleTransitionCoordinator,
+) -> None:
+    # SAME object_id, DIFFERENT target_state — an identity mismatch independent of object_id (F2).
+    db = coord._db
+    _seed_row(db, "op", "APPLIED", target_state="archived")  # call passes _TS="matured"
+    before = _full_row(db, "op")
+    with pytest.raises(RuntimeError, match="identity mismatch"):
+        coord._mark_applied("op", _OID, _TS)
+    assert _marker_count(db, "op") == 0
+    assert _full_row(db, "op") == before
+
+
+def test_terminal_row_without_preexisting_marker_is_corruption(
+    coord: LifecycleTransitionCoordinator,
+) -> None:
+    # A terminal row whose S3 apply marker NEVER existed is corruption, NOT a benign replay (F1):
+    # marker+APPLIED are atomic, so an APPLIED/FINAL row with no marker must fail loud, not converge.
+    db = coord._db
+    _seed_row(db, "op", "APPLIED")  # matching identity, but NO marker seeded
+    before = _full_row(db, "op")
+    with pytest.raises(RuntimeError, match="corruption"):
+        coord._mark_applied("op", _OID, _TS)
+    # the marker we inserted this txn is rolled back; the row is untouched.
+    assert _marker_count(db, "op") == 0
+    assert _full_row(db, "op") == before
 
 
 def test_abandoned_state_fails_loud(coord: LifecycleTransitionCoordinator) -> None:

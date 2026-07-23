@@ -1067,6 +1067,10 @@ class LifecycleTransitionCoordinator:
         con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
+            # Whether a MATCHING apply marker already existed BEFORE this txn. A benign replay of a
+            # terminal row requires this: marker+APPLIED are written atomically (S3 correction 3), so
+            # a terminal row whose marker we had to freshly insert is corruption, not a replay.
+            marker_preexisted = False
             try:
                 con.execute(
                     "INSERT INTO lifecycle_apply_markers "
@@ -1082,7 +1086,8 @@ class LifecycleTransitionCoordinator:
                 if existing is None or existing[0] != object_id or existing[1] != target_state:
                     # a genuine marker mismatch — surfaced (the single outer handler rolls back).
                     raise
-                # identical marker (idempotent re-apply) — fall through to the APPLIED move.
+                # identical marker already present (idempotent re-apply) — fall through.
+                marker_preexisted = True
             cur = con.execute(
                 f"UPDATE lifecycle_outbox SET state='APPLIED' "
                 f"WHERE operation_key=? AND state='PENDING'{guard}",
@@ -1119,8 +1124,17 @@ class LifecycleTransitionCoordinator:
                     f"row=({row_oid!r},{row_tstate!r}) call=({object_id!r},{target_state!r})"
                 )
             if row_state in ("APPLIED", "FINAL"):
-                # already effectively applied with a matching identity — an idempotent replay. Roll
-                # back (no mutation) and return normally. Both the earlier pass and this one succeed.
+                if not marker_preexisted:
+                    # a terminal row whose apply marker did NOT already exist: the atomic
+                    # marker+APPLIED invariant (S3 correction 3) is broken — this is corruption,
+                    # not a benign replay. Fail loud; the marker we inserted this txn is rolled
+                    # back by the outer handler, so we mutate nothing.
+                    raise RuntimeError(
+                        f"mark-applied corruption for {opk}: row is {row_state} but had NO "
+                        f"pre-existing apply marker (marker+APPLIED must be atomic)"
+                    )
+                # already applied, matching identity, AND a pre-existing matching marker — a valid
+                # idempotent replay. Roll back (no mutation) and return normally.
                 con.execute("ROLLBACK")
                 return
             if row_state == "PENDING":
