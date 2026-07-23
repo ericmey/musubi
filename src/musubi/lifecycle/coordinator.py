@@ -1067,34 +1067,95 @@ class LifecycleTransitionCoordinator:
         con = store.connect(self._db, busy_timeout_ms=self._busy_timeout_ms, isolation_level=None)
         try:
             con.execute("BEGIN IMMEDIATE")
+            # Whether a MATCHING apply marker already existed BEFORE this txn. A benign replay of a
+            # terminal row requires this: marker+APPLIED are written atomically (S3 correction 3), so
+            # a terminal row whose marker we had to freshly insert is corruption, not a replay.
+            marker_preexisted = False
             try:
                 con.execute(
                     "INSERT INTO lifecycle_apply_markers "
                     "(operation_key, object_id, target_state) VALUES (?,?,?)",
                     (opk, object_id, target_state),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
                 existing = con.execute(
                     "SELECT object_id, target_state FROM lifecycle_apply_markers "
                     "WHERE operation_key=?",
                     (opk,),
                 ).fetchone()
                 if existing is None or existing[0] != object_id or existing[1] != target_state:
-                    # a genuine marker mismatch — surfaced (the single outer handler rolls back).
-                    raise
-                # identical marker (idempotent re-apply) — fall through to the APPLIED move.
+                    # a genuine apply-marker mismatch: a DIFFERENT operation already owns this
+                    # marker key. Surface a PINNED RuntimeError carrying BOTH identities — never
+                    # leak the raw sqlite3.IntegrityError, which hides existing-vs-call. The single
+                    # outer handler rolls back (no mutation).
+                    ex_oid = existing[0] if existing is not None else None
+                    ex_ts = existing[1] if existing is not None else None
+                    raise RuntimeError(
+                        f"mark-applied marker mismatch for {opk}: "
+                        f"existing=({ex_oid!r},{ex_ts!r}) call=({object_id!r},{target_state!r})"
+                    ) from exc
+                # identical marker already present (idempotent re-apply) — fall through.
+                marker_preexisted = True
             cur = con.execute(
                 f"UPDATE lifecycle_outbox SET state='APPLIED' "
                 f"WHERE operation_key=? AND state='PENDING'{guard}",
                 (opk, *gparams),
             )
-            if cur.rowcount != 1:
-                # the marker + APPLIED must move EXACTLY one PENDING row in this txn, else an apply
-                # marker would orphan (committed with no APPLIED row) — refuse (S3 integrity hole 2).
+            if cur.rowcount == 1:
+                # the marker + APPLIED moved EXACTLY one PENDING row (the normal first apply).
+                con.execute("COMMIT")
+                return
+            if cur.rowcount > 1:
+                # operation_key is the PRIMARY KEY, so this cannot happen — but never let an apply
+                # marker orphan (committed with no APPLIED row); refuse (S3 integrity hole 2).
                 raise RuntimeError(
                     f"mark-applied matched {cur.rowcount} PENDING rows for {opk} (need exactly 1)"
                 )
-            con.execute("COMMIT")
+            # rowcount == 0: the PENDING->APPLIED move matched nothing. This is EITHER a benign
+            # idempotent REPLAY — the row was already advanced to APPLIED/FINAL by an earlier pass
+            # or the winner of a two-connection race, the exact LifecycleJobCrashed signature — OR a
+            # real fault. Read the row back and discriminate; only a proven-applied, identity-matched
+            # row returns idempotently, everything else fails loud. The transaction (including any
+            # marker inserted above) is rolled back on this path, so a benign replay mutates nothing.
+            row = con.execute(
+                "SELECT state, object_id, target_state, lease_owner "
+                "FROM lifecycle_outbox WHERE operation_key=?",
+                (opk,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"mark-applied: no lifecycle_outbox row for {opk}")
+            row_state, row_oid, row_tstate, row_lease_owner = row[0], row[1], row[2], row[3]
+            if row_oid != object_id or row_tstate != target_state:
+                # the row exists but is a DIFFERENT operation identity — a genuine mismatch, not a
+                # replay of THIS apply. Surface it (never silently converge onto the wrong row).
+                raise RuntimeError(
+                    f"mark-applied identity mismatch for {opk}: "
+                    f"row=({row_oid!r},{row_tstate!r}) call=({object_id!r},{target_state!r})"
+                )
+            if row_state in ("APPLIED", "FINAL"):
+                if not marker_preexisted:
+                    # a terminal row whose apply marker did NOT already exist: the atomic
+                    # marker+APPLIED invariant (S3 correction 3) is broken — this is corruption,
+                    # not a benign replay. Fail loud; the marker we inserted this txn is rolled
+                    # back by the outer handler, so we mutate nothing.
+                    raise RuntimeError(
+                        f"mark-applied corruption for {opk}: row is {row_state} but had NO "
+                        f"pre-existing apply marker (marker+APPLIED must be atomic)"
+                    )
+                # already applied, matching identity, AND a pre-existing matching marker — a valid
+                # idempotent replay. Roll back (no mutation) and return normally.
+                con.execute("ROLLBACK")
+                return
+            if row_state == "PENDING":
+                # still PENDING yet the guarded UPDATE excluded it: a genuine lease-owner mismatch
+                # (S4) — some other lease holder owns this row. Fail loud; do NOT steal the apply.
+                # Name BOTH owners so the diagnostic is actionable, not just "a different owner".
+                raise RuntimeError(
+                    f"mark-applied lease mismatch for {opk}: row is PENDING under "
+                    f"lease_owner={row_lease_owner!r} but this call holds owner={owner!r}"
+                )
+            # ABANDONED or any other state: mark-applied is not a legal transition from here.
+            raise RuntimeError(f"mark-applied: unexpected state {row_state!r} for {opk}")
         except Exception:
             # ONE rollback owner (S3 integrity hole 3): guard on in_transaction so a failure that
             # already ended the txn is not masked by a second "no transaction" rollback error.
