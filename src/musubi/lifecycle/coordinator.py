@@ -1077,15 +1077,23 @@ class LifecycleTransitionCoordinator:
                     "(operation_key, object_id, target_state) VALUES (?,?,?)",
                     (opk, object_id, target_state),
                 )
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
                 existing = con.execute(
                     "SELECT object_id, target_state FROM lifecycle_apply_markers "
                     "WHERE operation_key=?",
                     (opk,),
                 ).fetchone()
                 if existing is None or existing[0] != object_id or existing[1] != target_state:
-                    # a genuine marker mismatch — surfaced (the single outer handler rolls back).
-                    raise
+                    # a genuine apply-marker mismatch: a DIFFERENT operation already owns this
+                    # marker key. Surface a PINNED RuntimeError carrying BOTH identities — never
+                    # leak the raw sqlite3.IntegrityError, which hides existing-vs-call. The single
+                    # outer handler rolls back (no mutation).
+                    ex_oid = existing[0] if existing is not None else None
+                    ex_ts = existing[1] if existing is not None else None
+                    raise RuntimeError(
+                        f"mark-applied marker mismatch for {opk}: "
+                        f"existing=({ex_oid!r},{ex_ts!r}) call=({object_id!r},{target_state!r})"
+                    ) from exc
                 # identical marker already present (idempotent re-apply) — fall through.
                 marker_preexisted = True
             cur = con.execute(

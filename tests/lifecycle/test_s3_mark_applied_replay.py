@@ -120,6 +120,18 @@ def _marker_count(db: Path, opk: str) -> int:
         con.close()
 
 
+def _marker_row(db: Path, opk: str) -> tuple[object, ...] | None:
+    con = sqlite3.connect(str(db))
+    try:
+        row: tuple[object, ...] | None = con.execute(
+            "SELECT object_id, target_state FROM lifecycle_apply_markers WHERE operation_key=?",
+            (opk,),
+        ).fetchone()
+        return row
+    finally:
+        con.close()
+
+
 # -- ordinary success ------------------------------------------------------------ #
 
 
@@ -171,6 +183,29 @@ def test_identity_mismatch_fails_loud_and_rolls_back_marker(
     # the marker insert attempted this txn must have been rolled back.
     assert _marker_count(db, "op") == 0
     assert _state(db, "op") == "APPLIED"
+
+
+def test_marker_mismatch_pins_runtimeerror_and_no_mutation(
+    coord: LifecycleTransitionCoordinator,
+) -> None:
+    # a DIFFERENT operation already owns this marker key: the INSERT hits a UNIQUE conflict. The
+    # error must be a PINNED RuntimeError naming both identities — NOT the raw sqlite3.IntegrityError.
+    db = coord._db
+    _seed_marker(db, "op", object_id="existing-obj", target_state="existing-ts")
+    _seed_row(db, "op", "PENDING")
+    before_marker = _marker_row(db, "op")
+    before_row = _full_row(db, "op")
+    with pytest.raises(RuntimeError, match="marker mismatch") as ei:
+        coord._mark_applied("op", _OID, _TS)
+    # not the raw sqlite UNIQUE error, and it renders BOTH the existing and the call identities.
+    assert not isinstance(ei.value, sqlite3.IntegrityError)
+    msg = str(ei.value)
+    assert "existing-obj" in msg and "existing-ts" in msg  # the conflicting existing marker
+    assert _OID in msg and _TS in msg  # the calling identity
+    # rollback / no mutation: the existing marker and the outbox row are untouched.
+    assert _marker_row(db, "op") == before_marker
+    assert _marker_count(db, "op") == 1
+    assert _full_row(db, "op") == before_row
 
 
 def test_lease_owner_mismatch_fails_loud(coord: LifecycleTransitionCoordinator) -> None:
