@@ -103,6 +103,10 @@ jobs:
           else
             TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name')
           fi
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$ ]]; then
+            echo "::error::Manual-dispatch tag must be a release tag (project release grammar)"
+            exit 1
+          fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Resolved tag: ${TAG}"
 

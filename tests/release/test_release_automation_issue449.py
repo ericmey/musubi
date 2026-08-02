@@ -10,10 +10,10 @@ The auto-digest-bump.yml workflow gates on workflow_run
 (publish-core-image) with conclusion == 'success' AND
 startsWith(head_branch, 'v'), so deploy pins the release
 channel only for the workflow_run path. However, the
-workflow_dispatch path does NOT have a valid release-only
-guard on the resolved tag - this is a real current hardening
-defect. Source/workflow fix is FORBIDDEN until Yua accepts
-this red commit.
+workflow_dispatch path historically lacked a valid release-only
+guard on the resolved tag. Issue #449 adds the mechanically
+verified guard after all tag sources resolve and before any tag
+output or registry use.
 
 Per Yua 2026-07-13 20:57:08 (WITHHOLD on 6ea08a9):
   - Make the executable Bash proof actually run.
@@ -1060,16 +1060,6 @@ def test_invariant_4_workflow_run_v_gate() -> None:
     assert_workflow_run_v_gate(AUTO_PIN_WF)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ManualDispatchGuardMissingError,
-    reason=(
-        "Invariant 5 FAIL (per Yua 20:57:08 #1): the current "
-        "auto-digest-bump.yml Resolve tag + digest step lacks a "
-        "valid bash guard with proper placement and control "
-        "flow. After the workflow fix, this test flips green."
-    ),
-)
 def test_invariant_5_release_only_manual_dispatch_guard() -> None:
     """Invariant 5: the Resolve tag + digest step has a valid
     release-only manual dispatch guard."""
@@ -1089,23 +1079,12 @@ def test_invariant_6_channel_metadata_allowed_divergence() -> None:
 
 
 # =============================================================
-# 1 Strict Red (reproduces the hardening defect)
+# Regression: the historical hardening defect stays closed
 # =============================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ManualDispatchGuardMissingError,
-    reason=(
-        "Hardening defect (per Yua 19:54:29 + 20:57:08 #1): "
-        "auto-digest-bump.yml does NOT enforce release-only "
-        "manual dispatch. After the workflow fix, this test "
-        "flips green."
-    ),
-)
-def test_red_hardening_defect_manual_dispatch_main() -> None:
-    """Strict red: the current auto-digest-bump workflow
-    accepts a non-release tag from manual dispatch."""
+def test_regression_manual_dispatch_main_is_rejected() -> None:
+    """The auto-pin workflow rejects a non-release manual tag."""
     assert_release_only_manual_dispatch_guard(AUTO_PIN_WF)
 
 
