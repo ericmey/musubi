@@ -551,6 +551,20 @@ Those statuses are operational signals, not cross-principal discovery surfaces.
 owns durable multi-worker leases and orphaned server-operation reconciliation; v1
 continues to enforce a single API worker.
 
+### IDEM-004 staged operation-evidence boundary
+
+Issue #603 and [[13-decisions/0040-durable-operation-evidence-and-legacy-resolution]]
+define the next recovery contract. The durable operation journal may be implemented
+internally before object-side evidence, but that foundation exposes no new public
+lookup states and authorizes no client behavior. Public states such as `reserved`,
+`rejected`, or `orphaned` become part of this API only in the slice that also lands
+mutation-coupled evidence and exact reconciliation. Until then, the four IDEM-003
+statuses above remain the complete wire contract and `absent` remains fail-closed.
+
+The existing lookup continues to require namespace write authority. Read-only
+second-seat auditing of receipt status is an explicit open security-policy boundary;
+ADR 0040 does not silently broaden receipt visibility.
+
 ## Versioning
 
 Path-prefixed (`/v1/…`). Breaking changes → `/v2/…`. Both run side-by-side for 180 days.
