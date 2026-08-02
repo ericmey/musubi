@@ -9,6 +9,7 @@ import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, cast
@@ -56,6 +57,13 @@ def _identity_hash(identity: tuple[Any, ...]) -> str:
 def receipt_identity_hash(identity: tuple[Any, ...]) -> str:
     """Return the opaque stable identity used by exact receipt-audit responses."""
     return _identity_hash(identity)
+
+
+def _utc_iso8601(value: str) -> str:
+    """Normalize SQLite or ISO timestamps to Musubi's UTC wire convention."""
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    return parsed.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 class DurableReceiptStore:
@@ -200,11 +208,7 @@ class DurableReceiptStore:
                 operation=row["operation"],
                 response_status=row["response_status"],
                 response_sha256=row["response_sha256"],
-                committed_at=(
-                    f"{row['committed_at']}Z"
-                    if "+" not in row["committed_at"] and not row["committed_at"].endswith("Z")
-                    else row["committed_at"]
-                ),
+                committed_at=_utc_iso8601(row["committed_at"]),
             ),
         )
 

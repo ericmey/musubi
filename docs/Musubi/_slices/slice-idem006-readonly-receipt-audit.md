@@ -3,10 +3,10 @@ title: "Slice: IDEM-006 read-only two-seat receipt audit"
 slice_id: slice-idem006-readonly-receipt-audit
 section: _slices
 type: slice
-status: done
+status: blocked
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/done, type/slice, api, idempotency, security]
+tags: [section/slices, status/blocked, type/slice, api, idempotency, security]
 updated: 2026-08-02
 reviewed: true
 issue: 607
@@ -68,3 +68,9 @@ creating a guessable-key existence oracle.
   while committed `openapi.yaml` did not. Regenerated the snapshot from the same
   FastAPI app factory with Unicode-preserving YAML output; the semantic diff is
   limited to the additive audit path and its request/response schemas.
+- 2026-08-02 — Code review and CI are complete, but Issue #607 remains blocked
+  on deployment and a live operator-read proof. Restored the slice to `blocked`
+  so code completion cannot be mistaken for the unresolved runtime contract.
+  Copilot also caught a test-helper identity literal and a timestamp-format gap;
+  the helper now uses the target tuple and receipt commit times are normalized
+  to UTC ISO 8601 with microseconds at the durable-store read boundary.

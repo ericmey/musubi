@@ -62,7 +62,7 @@ def _body(*, digest: bytes = DIGEST, target: tuple[str, ...] = TARGET) -> dict[s
         "target_subject": target[1],
         "target_presence": target[2],
         "namespace": target[5],
-        "method": "POST",
+        "method": target[3],
         "operation_id": target[4],
         "idempotency_key": target[6],
         "request_digest": digest.hex(),
@@ -133,7 +133,7 @@ def test_cross_principal_exact_audit_returns_found_with_server_observer(
     assert payload["request_digest"] == DIGEST.hex()
     assert payload["object_id"] == "ep-audit-1"
     assert payload["response_status"] == 202
-    assert payload["receipt_committed_at"].endswith("Z")
+    datetime.strptime(payload["receipt_committed_at"], "%Y-%m-%dT%H:%M:%S.%fZ")
     assert len(payload["target_identity_hash"]) == 64
     assert KEY not in response.text
 
