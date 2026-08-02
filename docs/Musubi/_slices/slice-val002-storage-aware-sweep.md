@@ -46,9 +46,11 @@ sweep validate both physical storage integrity and resolved logical integrity.
 - `test_valid_anchor_and_content_rows_pass_with_pointer_binding`
 - `test_injected_key_is_rejected_for_each_physical_shape`
 - `test_dangling_cross_object_and_stale_generation_pointers_are_rejected`
+- `test_anchor_projection_must_match_embedded_content_snapshot`
 - `test_resolved_logical_object_still_uses_strict_domain_model`
 - `test_unreferenced_content_is_reported_without_being_called_corrupt`
 - `test_full_data001_fixture_returns_clean`
+- `test_layout_envelopes_account_for_every_layout_only_field`
 
 ## Work log
 
@@ -66,3 +68,13 @@ sweep validate both physical storage integrity and resolved logical integrity.
   cross-row pointer conclusions whose targets may be on unseen pages. Focused
   contract: 29 passed. Full `make check`: 2,480 passed, 195 skipped, 136
   deselected, 3 expected xfails; 88.31% coverage; Ruff and mypy passed.
+- 2026-08-02 — Aoi's exact-head review demonstrated that an anchor and its
+  embedded content snapshot could disagree on `title`, `content`, or `summary`
+  while the anchor-winning logical merge still validated. Added explicit
+  projection equality checks before the merge and a three-field discriminator.
+  Added a registry guard that maps every `LAYOUT_ONLY_FIELDS` member to at least
+  one strict physical envelope, so the next storage-layout field breaks at unit
+  test time instead of at the production sweep. Expanded the shape matrix to
+  exercise episodic and curated content independently. Focused contract: 33
+  passed. Full `make check`: 2,484 passed, 195 skipped, 136 deselected, 3
+  expected xfails; 88.34% coverage; Ruff and mypy passed.

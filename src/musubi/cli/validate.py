@@ -133,6 +133,11 @@ _PLANE_MODELS: dict[str, tuple[str, type[BaseModel]]] = {
     "lifecycle": ("musubi_lifecycle_events", LifecycleEvent),
 }
 
+_PROJECTION_FIELDS: dict[str, tuple[str, ...]] = {
+    "episodic": ("content", "summary"),
+    "curated": ("title", "content", "summary"),
+}
+
 
 class _LegacyEnvelope(BaseModel):
     """Storage-only fields allowed on a pre-Phase-2 identity row."""
@@ -281,12 +286,14 @@ def _custom_problem(
     payload: dict[str, Any],
     problem_type: str,
     message: str,
+    *,
+    loc: list[str] | None = None,
 ) -> dict[str, Any]:
     return _problem(
         collection,
         rec,
         payload,
-        errors=[{"type": problem_type, "loc": ["live_point"], "msg": message}],
+        errors=[{"type": problem_type, "loc": loc or ["live_point"], "msg": message}],
     )
 
 
@@ -379,8 +386,26 @@ def _validate_storage_rows(
                     payload,
                     "pointer_generation_mismatch",
                     "anchor operation does not equal the content generation",
+                    loc=["live_point", "generation"],
                 ),
             )
+            continue
+        projection_mismatches = [
+            key for key in _PROJECTION_FIELDS[result.plane] if payload.get(key) != target.get(key)
+        ]
+        if projection_mismatches:
+            for key in projection_mismatches:
+                _add_problem(
+                    result,
+                    _custom_problem(
+                        result.collection,
+                        rec,
+                        payload,
+                        "projection_divergence",
+                        f"anchor {key} does not equal the content snapshot used for embedding",
+                        loc=["live_point", key],
+                    ),
+                )
             continue
         try:
             model.model_validate(strip_layout_fields({**target, **payload}))
@@ -409,6 +434,10 @@ def _scan_collection(
 ) -> PlaneResult:
     """Scan one collection. Reads only. Never raises — records what happened instead."""
     result = PlaneResult(plane=plane, collection=collection, status="scanned")
+    # Cross-page pointer and reverse-reachability checks require a collection-wide view.
+    # Peak memory is therefore O(collection), not O(page); the production corpus is 12k
+    # rows today. If that becomes material, replace this with an explicit two-pass scan
+    # rather than weakening pointer integrity back to page-local guesses.
     seen: list[Any] = []
     offset = None
     while True:
