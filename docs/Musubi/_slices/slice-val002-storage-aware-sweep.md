@@ -27,9 +27,10 @@ sweep validate both physical storage integrity and resolved logical integrity.
 - Validate legacy identity, anchor, and content rows as distinct strict shapes.
 - Validate each anchor's forward pointer, identity match, and commit-generation
   binding, then validate the resolved logical object with its existing domain model.
-- Report orphaned staged content explicitly. Do not let an unreferenced physical
-  row silently contribute to a clean verdict; final severity must reflect whether
-  staging can be live during a concurrent write.
+- Report unreferenced content explicitly and separately from corruption. Content
+  points are immutable history, so an unreferenced point may be a superseded
+  generation or crash-staged work; raw shape alone cannot distinguish the two.
+  Preserve the reverse-reachability inventory without making either inference.
 - Preserve the original unknown-key injection detector on every physical shape.
 
 ## Owned paths
@@ -56,3 +57,12 @@ sweep validate both physical storage integrity and resolved logical integrity.
   controlled verifier proved they are 33 valid logical objects plus 16 intentional
   curated content snapshots; Aoi independently challenged the pointer-generation
   seam and accepted the no-waiver boundary. Production deployment remains held.
+- 2026-08-02 — Added strict legacy, anchor, episodic-content, and curated-content
+  physical validators without changing the domain models. The sweep now checks
+  anchor target existence, namespace/object identity, commit-generation binding,
+  and the resolved logical domain object. Unreferenced immutable content is
+  separately enumerable in JSON and human output without being called corrupt.
+  An interrupted multi-page scan validates the physical rows it saw but withholds
+  cross-row pointer conclusions whose targets may be on unseen pages. Focused
+  contract: 29 passed. Full `make check`: 2,480 passed, 195 skipped, 136
+  deselected, 3 expected xfails; 88.31% coverage; Ruff and mypy passed.

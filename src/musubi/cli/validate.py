@@ -15,6 +15,14 @@ existence with a deserializing ``get()``.
 A corrupted memory that cannot be read and cannot be removed is not an inconvenience. It
 is a falsehood with tenure.
 
+DATA-001 later introduced strict physical storage shapes for episodic and curated rows:
+legacy identity rows, mutable anchors, and write-once content snapshots. Those storage
+fields are not domain fields and must never be admitted into the public domain models.
+This sweep therefore validates each physical shape against its own strict model, validates
+the stripped logical object against the unchanged domain model, and checks every anchor's
+pointer identity and generation binding. Historical content snapshots that no current
+anchor names are reported separately; their existence is not, by itself, corruption.
+
 At least one row is known to be in this state:
 ``aoi/command-chair/episodic/3GJhJLAvYXzIp8Qe8tuPHR9S9th``. **Nobody knows how many
 others are**, because nothing has ever looked. This command is what looks.
@@ -88,14 +96,16 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import typer
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
+from musubi.store.specs import LAYOUT_ONLY_FIELDS, strip_layout_fields
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
+from musubi.types.common import KSUID, Namespace
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.curated import CuratedKnowledge
 from musubi.types.episodic import EpisodicMemory
@@ -122,6 +132,44 @@ _PLANE_MODELS: dict[str, tuple[str, type[BaseModel]]] = {
     "thought": ("musubi_thought", Thought),
     "lifecycle": ("musubi_lifecycle_events", LifecycleEvent),
 }
+
+
+class _LegacyEnvelope(BaseModel):
+    """Storage-only fields allowed on a pre-Phase-2 identity row."""
+
+    model_config = ConfigDict(extra="forbid")
+    committed_operation_id: str | None = Field(default=None, min_length=1)
+
+
+class _AnchorEnvelope(BaseModel):
+    """Strict DATA-001 anchor metadata, separate from the domain payload."""
+
+    model_config = ConfigDict(extra="forbid")
+    point_kind: Literal["anchor"]
+    live_point: str = Field(min_length=1)
+    pointer_version: int = Field(ge=1)
+    committed_operation_id: str = Field(min_length=1)
+    vector_layout_version: Literal[2]
+
+
+class _EpisodicContentPoint(BaseModel):
+    """Write-once episodic embedding projection snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+    object_id: KSUID
+    namespace: Namespace
+    point_kind: Literal["content"]
+    generation: str = Field(min_length=1)
+    owner_token: str = Field(min_length=1)
+    content: str = Field(min_length=1)
+    summary: str | None = None
+
+
+class _CuratedContentPoint(_EpisodicContentPoint):
+    """Write-once curated embedding projection snapshot."""
+
+    title: str = Field(min_length=1)
+
 
 # Exit codes. A caller must be able to distinguish, from the number alone:
 #   "I looked at everything and it is fine"
@@ -156,6 +204,7 @@ class PlaneResult:
     status: str  # "scanned" | "absent" | "error" | "not_requested"
     scanned: int = 0
     broken: list[dict[str, Any]] = field(default_factory=list)
+    unreferenced_content: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -165,6 +214,7 @@ class PlaneResult:
             "status": self.status,
             "scanned": self.scanned,
             "broken": len(self.broken),
+            "unreferenced_content": len(self.unreferenced_content),
             "error": self.error,
         }
 
@@ -180,11 +230,186 @@ def _collection_missing(exc: Exception) -> bool:
     return False
 
 
+def _problem(
+    collection: str,
+    rec: Any,
+    payload: dict[str, Any],
+    *,
+    errors: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "collection": collection,
+        "namespace": payload.get("namespace", "<missing>"),
+        "object_id": payload.get("object_id", "<missing>"),
+        "point_id": str(rec.id),
+        "errors": errors,
+        "unknown_keys": sorted(
+            str(error["loc"][0])
+            for error in errors
+            if error["type"] == "extra_forbidden" and error["loc"]
+        ),
+    }
+
+
+def _validation_problem(
+    collection: str, rec: Any, payload: dict[str, Any], exc: ValidationError
+) -> dict[str, Any]:
+    return _problem(
+        collection,
+        rec,
+        payload,
+        errors=[
+            {"type": error["type"], "loc": list(error["loc"]), "msg": error["msg"]}
+            for error in exc.errors()
+        ],
+    )
+
+
+def _add_problem(result: PlaneResult, problem: dict[str, Any]) -> None:
+    """Keep one finding per physical row while preserving every error on it."""
+    prior = next((row for row in result.broken if row["point_id"] == problem["point_id"]), None)
+    if prior is None:
+        result.broken.append(problem)
+        return
+    prior["errors"].extend(problem["errors"])
+    prior["unknown_keys"] = sorted(set(prior["unknown_keys"]) | set(problem["unknown_keys"]))
+
+
+def _custom_problem(
+    collection: str,
+    rec: Any,
+    payload: dict[str, Any],
+    problem_type: str,
+    message: str,
+) -> dict[str, Any]:
+    return _problem(
+        collection,
+        rec,
+        payload,
+        errors=[{"type": problem_type, "loc": ["live_point"], "msg": message}],
+    )
+
+
+def _validate_storage_rows(
+    result: PlaneResult,
+    records: list[Any],
+    model: type[BaseModel],
+    *,
+    check_pointers: bool = True,
+) -> None:
+    """Validate physical rows; validate cross-row pointers only after a complete scan."""
+    if result.plane not in {"episodic", "curated"}:
+        for rec in records:
+            payload = dict(rec.payload or {})
+            try:
+                model.model_validate(payload)
+            except ValidationError as exc:
+                _add_problem(result, _validation_problem(result.collection, rec, payload, exc))
+        return
+
+    by_point_id = {str(rec.id): rec for rec in records}
+    referenced_content: set[str] = set()
+    content_model = _EpisodicContentPoint if result.plane == "episodic" else _CuratedContentPoint
+
+    for rec in records:
+        payload = dict(rec.payload or {})
+        kind = payload.get("point_kind")
+        if kind == "content":
+            try:
+                content_model.model_validate(payload)
+            except ValidationError as exc:
+                _add_problem(result, _validation_problem(result.collection, rec, payload, exc))
+            continue
+
+        layout = {key: value for key, value in payload.items() if key in LAYOUT_ONLY_FIELDS}
+        try:
+            if kind == "anchor":
+                anchor = _AnchorEnvelope.model_validate(layout)
+            else:
+                _LegacyEnvelope.model_validate(layout)
+                anchor = None
+            model.model_validate(strip_layout_fields(payload))
+        except ValidationError as exc:
+            _add_problem(result, _validation_problem(result.collection, rec, payload, exc))
+            continue
+
+        if anchor is None:
+            continue
+        if not check_pointers:
+            # The target may be on a page the failed scan never reached. Physical
+            # validation above is still evidence; a dangling-pointer conclusion is not.
+            continue
+        referenced_content.add(anchor.live_point)
+        target_rec = by_point_id.get(anchor.live_point)
+        if target_rec is None:
+            _add_problem(
+                result,
+                _custom_problem(
+                    result.collection,
+                    rec,
+                    payload,
+                    "dangling_live_point",
+                    "anchor live_point does not exist in the collection",
+                ),
+            )
+            continue
+        target = dict(target_rec.payload or {})
+        if (
+            target.get("point_kind") != "content"
+            or target.get("namespace") != payload.get("namespace")
+            or target.get("object_id") != payload.get("object_id")
+        ):
+            _add_problem(
+                result,
+                _custom_problem(
+                    result.collection,
+                    rec,
+                    payload,
+                    "pointer_identity_mismatch",
+                    "anchor live_point is not content for the same namespace and object_id",
+                ),
+            )
+            continue
+        if target.get("generation") != anchor.committed_operation_id:
+            _add_problem(
+                result,
+                _custom_problem(
+                    result.collection,
+                    rec,
+                    payload,
+                    "pointer_generation_mismatch",
+                    "anchor operation does not equal the content generation",
+                ),
+            )
+            continue
+        try:
+            model.model_validate(strip_layout_fields({**target, **payload}))
+        except ValidationError as exc:
+            _add_problem(result, _validation_problem(result.collection, rec, payload, exc))
+
+    if not check_pointers:
+        return
+
+    for point_id, rec in by_point_id.items():
+        payload = dict(rec.payload or {})
+        if payload.get("point_kind") == "content" and point_id not in referenced_content:
+            result.unreferenced_content.append(
+                {
+                    "collection": result.collection,
+                    "namespace": payload.get("namespace", "<missing>"),
+                    "object_id": payload.get("object_id", "<missing>"),
+                    "point_id": point_id,
+                    "generation": payload.get("generation"),
+                }
+            )
+
+
 def _scan_collection(
     client: QdrantClient, plane: str, collection: str, model: type[BaseModel], batch: int
 ) -> PlaneResult:
     """Scan one collection. Reads only. Never raises — records what happened instead."""
     result = PlaneResult(plane=plane, collection=collection, status="scanned")
+    seen: list[Any] = []
     offset = None
     while True:
         try:
@@ -199,38 +424,15 @@ def _scan_collection(
             if _collection_missing(exc) and result.scanned == 0:
                 result.status = "absent"
                 return result
-            # A failure PART-WAY through pagination is the nastiest case: we have real
-            # rows and real findings, but we did NOT see everything. Keep what we found
-            # and mark the plane incomplete — partial results must never read as total.
             result.status = "error"
             result.error = f"{type(exc).__name__}: {exc}"
+            _validate_storage_rows(result, seen, model, check_pointers=False)
             return result
 
-        for rec in records:
-            result.scanned += 1
-            payload = rec.payload or {}
-            try:
-                model.model_validate(payload)
-            except ValidationError as exc:
-                result.broken.append(
-                    {
-                        "collection": collection,
-                        # A broken row may be missing these too — never index.
-                        "namespace": payload.get("namespace", "<missing>"),
-                        "object_id": payload.get("object_id", "<missing>"),
-                        "point_id": str(rec.id),
-                        "errors": [
-                            {"type": e["type"], "loc": list(e["loc"]), "msg": e["msg"]}
-                            for e in exc.errors()
-                        ],
-                        "unknown_keys": sorted(
-                            str(e["loc"][0])
-                            for e in exc.errors()
-                            if e["type"] == "extra_forbidden" and e["loc"]
-                        ),
-                    }
-                )
+        result.scanned += len(records)
+        seen.extend(records)
         if offset is None:
+            _validate_storage_rows(result, seen, model)
             return result
 
 
@@ -333,6 +535,7 @@ def validate_rows(
             )
 
     all_broken = [b for r in results for b in r.broken]
+    all_unreferenced_content = [row for r in results for row in r.unreferenced_content]
     absent = [r for r in results if r.status == "absent"]
     errored = [r for r in results if r.status == "error"]
     unrequested = [r for r in results if r.status == "not_requested"]
@@ -406,9 +609,13 @@ def validate_rows(
                     "not_requested_collections": [r.collection for r in unrequested],
                     "scanned": total_scanned,
                     "broken_total": len(all_broken),
+                    # Content snapshots are immutable history. A snapshot that no current
+                    # anchor names is observable evidence, not automatically corruption.
+                    "unreferenced_content_total": len(all_unreferenced_content),
                     # Every requested plane appears, including the ones that failed.
                     "planes": [r.as_dict() for r in results],
                     "broken": all_broken,
+                    "unreferenced_content": all_unreferenced_content,
                 },
                 indent=2,
             )
@@ -423,7 +630,15 @@ def validate_rows(
                 typer.echo(f"  GONE {r.plane:15} {'':>6}       CANONICAL COLLECTION MISSING")
             else:
                 mark = "OK  " if not r.broken else "BAD "
-                typer.echo(f"  {mark} {r.plane:15} {r.scanned:>6} rows  {len(r.broken)} unreadable")
+                history = (
+                    f", {len(r.unreferenced_content)} unreferenced content snapshot(s)"
+                    if r.unreferenced_content
+                    else ""
+                )
+                typer.echo(
+                    f"  {mark} {r.plane:15} {r.scanned:>6} rows  "
+                    f"{len(r.broken)} unreadable{history}"
+                )
         typer.echo("")
 
         # COVERAGE first, INTEGRITY second — always both, always in that order, and never
@@ -501,6 +716,17 @@ def validate_rows(
             typer.echo(
                 "\nNEXT: back up the collection before any repair or quarantine mutation.\n"
                 "This command will never mutate; repair is a separate, deliberate step."
+            )
+
+        if all_unreferenced_content:
+            typer.echo("")
+            typer.echo(
+                "STORAGE HISTORY — "
+                f"{len(all_unreferenced_content)} unreferenced content snapshot(s)."
+            )
+            typer.echo(
+                "  Content snapshots are immutable history; an unreferenced snapshot is "
+                "reported for\n  reverse-reachability review and is not, by itself, corruption."
             )
 
     # Coverage outranks integrity: if we did not look, we do not get to report a count.
