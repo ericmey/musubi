@@ -32,7 +32,11 @@ from musubi.cli.validate import (
     EXIT_BROKEN_PARTIAL,
     EXIT_CLEAN_PARTIAL,
     EXIT_INCOMPLETE,
+    _AnchorEnvelope,
+    _EpisodicContentPoint,
+    _LegacyEnvelope,
 )
+from musubi.store.specs import LAYOUT_ONLY_FIELDS
 
 runner = CliRunner()
 
@@ -42,6 +46,67 @@ GOOD_EPISODIC: dict[str, Any] = {
     "content": "a readable memory",
     "state": "matured",
 }
+
+GOOD_CURATED: dict[str, Any] = {
+    "object_id": "3GfErdjMp1PO7N9mvX6G6VER9C4",
+    "namespace": "lifecycle-worker/ops/curated",
+    "content": "a curated body",
+    "state": "matured",
+    "title": "A curated title",
+    "vault_path": "knowledge/example.md",
+    "body_hash": "a" * 64,
+}
+
+
+def _anchor(*, generation: str = "op-current", **changes: Any) -> dict[str, Any]:
+    return {
+        **GOOD_CURATED,
+        "point_kind": "anchor",
+        "vector_layout_version": 2,
+        "live_point": "content-current",
+        "pointer_version": 1,
+        "committed_operation_id": generation,
+        **changes,
+    }
+
+
+def _content(*, generation: str = "op-current", **changes: Any) -> dict[str, Any]:
+    return {
+        "object_id": GOOD_CURATED["object_id"],
+        "namespace": GOOD_CURATED["namespace"],
+        "point_kind": "content",
+        "generation": generation,
+        "owner_token": "owner-current",
+        "title": GOOD_CURATED["title"],
+        "content": GOOD_CURATED["content"],
+        "summary": None,
+        **changes,
+    }
+
+
+def _episodic_anchor(*, generation: str = "op-current", **changes: Any) -> dict[str, Any]:
+    return {
+        **GOOD_EPISODIC,
+        "point_kind": "anchor",
+        "vector_layout_version": 2,
+        "live_point": "episodic-content-current",
+        "pointer_version": 1,
+        "committed_operation_id": generation,
+        **changes,
+    }
+
+
+def _episodic_content(*, generation: str = "op-current", **changes: Any) -> dict[str, Any]:
+    return {
+        "object_id": GOOD_EPISODIC["object_id"],
+        "namespace": GOOD_EPISODIC["namespace"],
+        "point_kind": "content",
+        "generation": generation,
+        "owner_token": "episodic-owner-current",
+        "content": GOOD_EPISODIC["content"],
+        "summary": None,
+        **changes,
+    }
 
 
 class _Rec:
@@ -103,6 +168,24 @@ def test_every_canonical_collection_is_swept() -> None:
     assert not missing, f"these canonical collections are NOT swept: {sorted(missing)}"
 
 
+def test_layout_envelopes_account_for_every_layout_only_field() -> None:
+    """A new storage field must fail here before it reaches the production sweep."""
+    legacy = set(_LegacyEnvelope.model_fields)
+    anchor = set(_AnchorEnvelope.model_fields)
+    content = set(_EpisodicContentPoint.model_fields) & LAYOUT_ONLY_FIELDS
+
+    assert legacy == {"committed_operation_id"}
+    assert anchor == {
+        "point_kind",
+        "live_point",
+        "pointer_version",
+        "committed_operation_id",
+        "vector_layout_version",
+    }
+    assert content == {"point_kind", "generation", "owner_token"}
+    assert legacy | anchor | content == LAYOUT_ONLY_FIELDS
+
+
 # ---------------------------------------------------------------------------
 # THE BLOCKER: an instrument must not claim health it did not verify
 # ---------------------------------------------------------------------------
@@ -144,22 +227,34 @@ def test_partial_scan_failure_is_never_clean(monkeypatch: pytest.MonkeyPatch) ->
 def test_failure_partway_through_pagination_is_incomplete(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Page 1 scans, page 2 explodes. We saw SOME rows — that is the trap."""
+    """Page 1 scans, page 2 explodes. Do not infer a dangling pointer from unseen rows."""
+
+    episodic_anchor = {
+        **GOOD_EPISODIC,
+        "point_kind": "anchor",
+        "vector_layout_version": 2,
+        "live_point": "content-on-unseen-page",
+        "pointer_version": 1,
+        "committed_operation_id": "op-current",
+    }
 
     class HalfBroken(FakeQdrant):
         def scroll(self, *, collection_name: str, limit: int, offset: Any, **kw: Any) -> Any:
             if collection_name == "musubi_episodic" and offset is not None:
                 raise ConnectionError("connection reset on page 2")
             if collection_name == "musubi_episodic":
-                return [_Rec(GOOD_EPISODIC)], "1"
+                return [_Rec(episodic_anchor, "anchor-current")], "1"
             return super().scroll(collection_name=collection_name, limit=limit, offset=offset)
 
     fake = HalfBroken(ALL_EMPTY)
     monkeypatch.setattr("musubi.cli.validate.QdrantClient", lambda **_: fake)
-    result = runner.invoke(app, ["validate", "rows"])
+    result = runner.invoke(app, ["validate", "rows", "--json"])
+    doc = json.loads(result.stdout)
 
     assert result.exit_code == EXIT_INCOMPLETE
-    assert "clean —" not in result.stdout, "must not print the success line"
+    assert doc["integrity"] == "unknown"
+    assert doc["broken_total"] == 0, "unseen page is not evidence that live_point is dangling"
+    assert doc["unreferenced_content_total"] == 0
 
 
 def test_json_reports_every_plane_including_failures(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -208,6 +303,229 @@ def test_broken_row_is_reported_with_the_offending_key(monkeypatch: pytest.Monke
     assert "UNREADABLE" in result.stdout
     assert "retracted_original" in result.stdout
     assert "3GJhJLAvYXzIp8Qe8tuPHR9S9th" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# VAL-002: immutable-vector physical storage shapes
+# ---------------------------------------------------------------------------
+
+
+def test_valid_legacy_identity_row_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = {**GOOD_EPISODIC, "committed_operation_id": "payload-only-op"}
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(row)]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["broken_total"] == 0
+
+
+@pytest.mark.parametrize(
+    "collection,anchor,content,content_id",
+    [
+        ("musubi_curated", _anchor(), _content(), "content-current"),
+        (
+            "musubi_episodic",
+            _episodic_anchor(),
+            _episodic_content(),
+            "episodic-content-current",
+        ),
+    ],
+)
+def test_valid_anchor_and_content_rows_pass_with_pointer_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    collection: str,
+    anchor: dict[str, Any],
+    content: dict[str, Any],
+    content_id: str,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour[collection] = [[_Rec(anchor, "anchor-current"), _Rec(content, content_id)]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["broken_total"] == 0
+
+
+@pytest.mark.parametrize(
+    "collection,payload,point_id,companion",
+    [
+        (
+            "musubi_episodic",
+            {**GOOD_EPISODIC, "injected": "legacy-junk"},
+            "legacy",
+            None,
+        ),
+        (
+            "musubi_curated",
+            _anchor(injected="anchor-junk"),
+            "anchor-current",
+            _Rec(_content(), "content-current"),
+        ),
+        (
+            "musubi_curated",
+            _content(injected="curated-content-junk"),
+            "content-current",
+            _Rec(_anchor(), "anchor-current"),
+        ),
+        (
+            "musubi_episodic",
+            _episodic_content(injected="episodic-content-junk"),
+            "episodic-content-current",
+            _Rec(_episodic_anchor(), "anchor-current"),
+        ),
+    ],
+)
+def test_injected_key_is_rejected_for_each_physical_shape(
+    monkeypatch: pytest.MonkeyPatch,
+    collection: str,
+    payload: dict[str, Any],
+    point_id: str,
+    companion: _Rec | None,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    rows = [_Rec(payload, point_id)]
+    if companion is not None:
+        rows.append(companion)
+    behaviour[collection] = [rows]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code != 0
+    assert any("injected" in row["unknown_keys"] for row in doc["broken"])
+
+
+@pytest.mark.parametrize(
+    "anchor,content,error_type",
+    [
+        (_anchor(live_point="missing"), _content(), "dangling_live_point"),
+        (
+            _anchor(),
+            _content(object_id="3Gi3yED76fhWRrDGMvzn2mwn58T"),
+            "pointer_identity_mismatch",
+        ),
+        (_anchor(), _content(generation="op-previous"), "pointer_generation_mismatch"),
+    ],
+)
+def test_dangling_cross_object_and_stale_generation_pointers_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    anchor: dict[str, Any],
+    content: dict[str, Any],
+    error_type: str,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_curated"] = [
+        [
+            _Rec(anchor, "anchor-current"),
+            _Rec(content, "content-current"),
+        ]
+    ]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code != 0
+    assert any(error_type == error["type"] for row in doc["broken"] for error in row["errors"])
+
+
+def test_anchor_projection_must_match_embedded_content_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_curated"] = [
+        [
+            _Rec(_anchor(), "anchor-current"),
+            _Rec(
+                _content(
+                    title="a different embedded title",
+                    content="different embedded content",
+                    summary="different embedded summary",
+                ),
+                "content-current",
+            ),
+        ]
+    ]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    assert doc["broken_total"] == 1, "one divergent anchor is one broken physical row"
+    divergence = [
+        error for error in doc["broken"][0]["errors"] if error["type"] == "projection_divergence"
+    ]
+    assert {error["loc"][-1] for error in divergence} == {"title", "content", "summary"}
+
+
+def test_resolved_logical_object_still_uses_strict_domain_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_curated"] = [
+        [
+            _Rec(_anchor(domain_junk="not-layout"), "anchor-current"),
+            _Rec(_content(), "content-current"),
+        ]
+    ]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code != 0
+    assert any("domain_junk" in row["unknown_keys"] for row in doc["broken"])
+
+
+def test_unreferenced_content_is_reported_without_being_called_corrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_curated"] = [[_Rec(_content(), "content-current")]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert doc["broken_total"] == 0
+    assert doc["unreferenced_content_total"] == 1
+    assert doc["unreferenced_content"] == [
+        {
+            "collection": "musubi_curated",
+            "namespace": GOOD_CURATED["namespace"],
+            "object_id": GOOD_CURATED["object_id"],
+            "point_id": "content-current",
+            "generation": "op-current",
+        }
+    ]
+
+    human = _run(monkeypatch, behaviour)
+    assert human.exit_code == 0
+    assert "1 unreferenced content snapshot(s)" in human.stdout
+    assert "not, by itself, corruption" in human.stdout
+
+
+def test_full_data001_fixture_returns_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [_Rec({**GOOD_EPISODIC, "committed_operation_id": "payload-only-op"})]
+    ]
+    behaviour["musubi_curated"] = [
+        [
+            _Rec(_anchor(), "anchor-current"),
+            _Rec(_content(), "content-current"),
+        ]
+    ]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert doc["verdict"] == "clean"
+    assert doc["coverage"] == "full"
+    assert doc["integrity"] == "clean"
+    assert doc["scanned"] == 3
 
 
 def test_all_collections_missing_is_never_clean(monkeypatch: pytest.MonkeyPatch) -> None:
