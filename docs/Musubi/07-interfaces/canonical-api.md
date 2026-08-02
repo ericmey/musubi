@@ -104,14 +104,17 @@ PATCH  /v1/episodic/{id}                     # update tags/importance (limited f
 DELETE /v1/episodic/{id}                     # soft delete (state=archived)
 ```
 
-See [[06-ingestion/capture]] for semantics. Episodic `content` is limited to
-32,768 UTF-8 bytes. Exactly 32,768 bytes proceeds; 32,769 bytes returns HTTP
+See [[06-ingestion/capture]] for semantics. Episodic create and batch-create
+`content` is limited to 32,768 UTF-8 bytes. Exactly 32,768 bytes proceeds;
+32,769 bytes returns HTTP
 422 with `error.code="CONTENT_TOO_LARGE"` after namespace write authorization
 but before idempotency acquisition or plane execution. Clients branch on the
 code, never on 422 alone. Batch capture preflights every item at the same edge:
 if any item is oversized, no item executes. Batch remains ineligible for durable
-completed-response receipts. Other common errors: 400/422 (validation), 401/403,
-503 (backend down).
+completed-response receipts. PATCH content replacement, including retraction,
+does not currently enforce this limit; that asymmetry requires a separate policy
+decision in Issue #611 rather than being implied by the create contract. Other common errors:
+400/422 (validation), 401/403, 503 (backend down).
 
 ### 2. Curated knowledge
 
@@ -485,7 +488,7 @@ Common error codes:
 | Code | HTTP | Meaning |
 |---|---|---|
 | `BAD_REQUEST` | 400 | Validation failed |
-| `CONTENT_TOO_LARGE` | 422 | Episodic content exceeded 32,768 UTF-8 bytes; handler/plane mutation did not start |
+| `CONTENT_TOO_LARGE` | 422 | Episodic create or batch-create content exceeded 32,768 UTF-8 bytes; handler/plane mutation did not start |
 | `UNAUTHORIZED` | 401 | Missing / invalid token |
 | `FORBIDDEN` | 403 | Token valid, scope insufficient |
 | `NOT_FOUND` | 404 | Unknown object_id |

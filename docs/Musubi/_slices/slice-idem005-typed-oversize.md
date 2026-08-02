@@ -16,9 +16,9 @@ blocks: []
 
 # Slice: IDEM-005 typed episodic oversize rejection
 
-Replace the intentional pre-mutation 32 KiB policy guard's untyped HTTP 500 with
-a client-terminal error that cannot be confused with the existing embedding-time
-HTTP 413 path.
+Replace the intentional create and batch-create pre-mutation 32 KiB policy guard's
+untyped HTTP 500 with a client-terminal error that cannot be confused with the
+existing embedding-time HTTP 413 path.
 
 ## Scope
 
@@ -29,6 +29,8 @@ HTTP 413 path.
 - Preflight every batch item before executing any item.
 - Preserve the plane-level guard as defense in depth.
 - Keep batch capture outside the durable-receipt eligibility set.
+- Scope this contract to create and batch-create. PATCH content replacement,
+  including retraction, remains unguarded pending Issue #611's policy decision.
 
 `CONTENT_TOO_LARGE` is the discriminator. A client must not infer this guarantee
 from HTTP 422 alone because ordinary validation failures share that status. HTTP
@@ -63,3 +65,6 @@ guarantee.
 - 2026-08-02 — Aoi rejected HTTP 413 for the new contract because Musubi already
   observes embedding-time 413 after plane entry. The accepted design uses 422
   plus a mandatory code discriminator.
+- 2026-08-02 — Aoi found that PATCH content replacement, including retraction,
+  does not pass through either the API or plane create guards. The contract was
+  scoped to create and batch-create, with the PATCH policy deferred explicitly.
