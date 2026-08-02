@@ -46,7 +46,7 @@ sweep validate both physical storage integrity and resolved logical integrity.
 - `test_injected_key_is_rejected_for_each_physical_shape`
 - `test_dangling_cross_object_and_stale_generation_pointers_are_rejected`
 - `test_resolved_logical_object_still_uses_strict_domain_model`
-- `test_orphaned_content_is_reported_without_false_clean`
+- `test_unreferenced_content_is_reported_without_being_called_corrupt`
 - `test_full_data001_fixture_returns_clean`
 
 ## Work log

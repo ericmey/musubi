@@ -43,6 +43,42 @@ GOOD_EPISODIC: dict[str, Any] = {
     "state": "matured",
 }
 
+GOOD_CURATED: dict[str, Any] = {
+    "object_id": "3GfErdjMp1PO7N9mvX6G6VER9C4",
+    "namespace": "lifecycle-worker/ops/curated",
+    "content": "a curated body",
+    "state": "matured",
+    "title": "A curated title",
+    "vault_path": "knowledge/example.md",
+    "body_hash": "a" * 64,
+}
+
+
+def _anchor(*, generation: str = "op-current", **changes: Any) -> dict[str, Any]:
+    return {
+        **GOOD_CURATED,
+        "point_kind": "anchor",
+        "vector_layout_version": 2,
+        "live_point": "content-current",
+        "pointer_version": 1,
+        "committed_operation_id": generation,
+        **changes,
+    }
+
+
+def _content(*, generation: str = "op-current", **changes: Any) -> dict[str, Any]:
+    return {
+        "object_id": GOOD_CURATED["object_id"],
+        "namespace": GOOD_CURATED["namespace"],
+        "point_kind": "content",
+        "generation": generation,
+        "owner_token": "owner-current",
+        "title": GOOD_CURATED["title"],
+        "content": GOOD_CURATED["content"],
+        "summary": None,
+        **changes,
+    }
+
 
 class _Rec:
     def __init__(self, payload: dict[str, Any] | None, point_id: str = "p1") -> None:
@@ -208,6 +244,145 @@ def test_broken_row_is_reported_with_the_offending_key(monkeypatch: pytest.Monke
     assert "UNREADABLE" in result.stdout
     assert "retracted_original" in result.stdout
     assert "3GJhJLAvYXzIp8Qe8tuPHR9S9th" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# VAL-002: immutable-vector physical storage shapes
+# ---------------------------------------------------------------------------
+
+
+def test_valid_legacy_identity_row_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+    row = {**GOOD_EPISODIC, "committed_operation_id": "payload-only-op"}
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(row)]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["broken_total"] == 0
+
+
+def test_valid_anchor_and_content_rows_pass_with_pointer_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_curated"] = [[
+        _Rec(_anchor(), "anchor-current"),
+        _Rec(_content(), "content-current"),
+    ]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["broken_total"] == 0
+
+
+@pytest.mark.parametrize(
+    "payload,point_id",
+    [
+        ({**GOOD_EPISODIC, "injected": "legacy-junk"}, "legacy"),
+        (_anchor(injected="anchor-junk"), "anchor-current"),
+        (_content(injected="content-junk"), "content-current"),
+    ],
+)
+def test_injected_key_is_rejected_for_each_physical_shape(
+    monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any], point_id: str
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    collection = "musubi_episodic" if point_id == "legacy" else "musubi_curated"
+    rows = [_Rec(payload, point_id)]
+    if point_id == "anchor-current":
+        rows.append(_Rec(_content(), "content-current"))
+    elif point_id == "content-current":
+        rows.append(_Rec(_anchor(), "anchor-current"))
+    behaviour[collection] = [rows]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code != 0
+    assert any("injected" in row["unknown_keys"] for row in doc["broken"])
+
+
+@pytest.mark.parametrize(
+    "anchor,content,error_type",
+    [
+        (_anchor(live_point="missing"), _content(), "dangling_live_point"),
+        (
+            _anchor(),
+            _content(object_id="3Gi3yED76fhWRrDGMvzn2mwn58T"),
+            "pointer_identity_mismatch",
+        ),
+        (_anchor(), _content(generation="op-previous"), "pointer_generation_mismatch"),
+    ],
+)
+def test_dangling_cross_object_and_stale_generation_pointers_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    anchor: dict[str, Any],
+    content: dict[str, Any],
+    error_type: str,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_curated"] = [[
+        _Rec(anchor, "anchor-current"),
+        _Rec(content, "content-current"),
+    ]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code != 0
+    assert any(error_type == error["type"] for row in doc["broken"] for error in row["errors"])
+
+
+def test_resolved_logical_object_still_uses_strict_domain_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_curated"] = [[
+        _Rec(_anchor(domain_junk="not-layout"), "anchor-current"),
+        _Rec(_content(), "content-current"),
+    ]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code != 0
+    assert any("domain_junk" in row["unknown_keys"] for row in doc["broken"])
+
+
+def test_unreferenced_content_is_reported_without_being_called_corrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_curated"] = [[_Rec(_content(), "content-current")]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert doc["broken_total"] == 0
+    assert doc["unreferenced_content_total"] == 1
+
+
+def test_full_data001_fixture_returns_clean(monkeypatch: pytest.MonkeyPatch) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[
+        _Rec({**GOOD_EPISODIC, "committed_operation_id": "payload-only-op"})
+    ]]
+    behaviour["musubi_curated"] = [[
+        _Rec(_anchor(), "anchor-current"),
+        _Rec(_content(), "content-current"),
+    ]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert doc["verdict"] == "clean"
+    assert doc["coverage"] == "full"
+    assert doc["integrity"] == "clean"
+    assert doc["scanned"] == 3
 
 
 def test_all_collections_missing_is_never_clean(monkeypatch: pytest.MonkeyPatch) -> None:
