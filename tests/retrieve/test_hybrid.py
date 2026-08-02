@@ -1059,19 +1059,32 @@ async def test_invalid_limit_returns_typed_error_without_querying_qdrant() -> No
 
 
 @pytest.mark.asyncio
-async def test_zero_dense_and_sparse_weights_return_typed_error() -> None:
+async def test_both_retrieval_channels_disabled_returns_typed_error() -> None:
     result = await hybrid_search(
         _client(_SpyQdrantClient()),
         _CountingEmbedder(),
         namespace=NAMESPACE,
         query="find gpu notes",
         collection=COLLECTION,
-        dense_weight=0.0,
-        sparse_weight=0.0,
+        dense_enabled=False,
+        sparse_enabled=False,
     )
 
     assert isinstance(result, Err)
-    assert result.error.code == "invalid_weights"
+    assert result.error.code == "no_retrieval_channels"
+
+
+@pytest.mark.asyncio
+async def test_legacy_weight_keywords_are_rejected_instead_of_silently_ignored() -> None:
+    with pytest.raises(TypeError, match="dense_weight"):
+        await hybrid_search(
+            _client(_SpyQdrantClient()),
+            _CountingEmbedder(),
+            namespace=NAMESPACE,
+            query="find gpu notes",
+            collection=COLLECTION,
+            dense_weight=0.7,  # type: ignore[call-arg]
+        )
 
 
 @pytest.mark.asyncio
@@ -1108,23 +1121,23 @@ async def test_sparse_embedding_failure_returns_typed_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dense_only_search_omits_sparse_prefetch() -> None:
-    spy, result = await _call(sparse_weight=0.0)
+async def test_sparse_disabled_omits_sparse_prefetch() -> None:
+    spy, result = await _call(sparse_enabled=False)
 
     assert isinstance(result, Ok)
     assert [prefetch.using for prefetch in _prefetches(spy.calls[0])] == [DENSE_VECTOR_NAME]
 
 
 @pytest.mark.asyncio
-async def test_sparse_only_search_omits_dense_prefetch() -> None:
-    spy, result = await _call(dense_weight=0.0)
+async def test_dense_disabled_omits_dense_prefetch() -> None:
+    spy, result = await _call(dense_enabled=False)
 
     assert isinstance(result, Ok)
     assert [prefetch.using for prefetch in _prefetches(spy.calls[0])] == [SPARSE_VECTOR_NAME]
 
 
 @pytest.mark.asyncio
-async def test_dense_only_collection_skips_sparse_prefetch() -> None:
+async def test_dense_only_collection_does_not_encode_sparse() -> None:
     # `musubi_artifact` is declared `has_sparse=False` in the registry
     # (metadata-only collection). Qdrant rejects sparse queries against
     # it with 400 "Not existing vector name" — regression gate for #208.
@@ -1142,6 +1155,27 @@ async def test_dense_only_collection_skips_sparse_prefetch() -> None:
     assert [prefetch.using for prefetch in _prefetches(spy.calls[0])] == [DENSE_VECTOR_NAME]
     # Don't embed sparse if we're never going to use it.
     assert embedder.sparse_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_sparse_only_request_on_dense_only_collection_returns_typed_error() -> None:
+    spy = _SpyQdrantClient()
+    embedder = _CountingEmbedder()
+    result = await hybrid_search(
+        _client(spy),
+        embedder,
+        namespace=NAMESPACE,
+        query="find gpu notes",
+        collection="musubi_artifact",
+        dense_enabled=False,
+        sparse_enabled=True,
+    )
+
+    assert isinstance(result, Err)
+    assert result.error.code == "no_retrieval_channels"
+    assert embedder.dense_calls == 0
+    assert embedder.sparse_calls == 0
+    assert spy.calls == []
 
 
 @pytest.mark.asyncio
@@ -1170,6 +1204,31 @@ async def test_fanout_returns_first_child_error() -> None:
 
     assert isinstance(result, Err)
     assert result.error.code == "empty_query"
+
+
+@pytest.mark.asyncio
+async def test_hybrid_search_many_forwards_explicit_channel_controls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[bool, bool]] = []
+
+    async def fake_hybrid_search(*_args: Any, **kwargs: Any) -> Ok[Any]:
+        calls.append((kwargs["dense_enabled"], kwargs["sparse_enabled"]))
+        return Ok(value=type("Result", (), {"hits": [], "warnings": ()})())
+
+    monkeypatch.setattr("musubi.retrieve.hybrid.hybrid_search", fake_hybrid_search)
+    result = await hybrid_search_many(
+        [_client(_SpyQdrantClient())],
+        _CountingEmbedder(),
+        namespace=NAMESPACE,
+        query="find gpu notes",
+        collections=[COLLECTION],
+        dense_enabled=False,
+        sparse_enabled=True,
+    )
+
+    assert isinstance(result, Ok)
+    assert calls == [(False, True)]
 
 
 @pytest.mark.asyncio

@@ -47,6 +47,7 @@ but may not supply a magnitude that the fusion cannot honor.
 - `test_dense_disabled_omits_dense_prefetch`
 - `test_sparse_disabled_omits_sparse_prefetch`
 - `test_dense_only_collection_does_not_encode_sparse`
+- `test_sparse_only_request_on_dense_only_collection_returns_typed_error`
 - `test_hybrid_search_many_forwards_explicit_channel_controls`
 
 ## Work log
@@ -55,4 +56,3 @@ but may not supply a magnitude that the fusion cannot honor.
   default hybrid path; only tests and the RET-004 diagnostic use the numeric
   parameters, and they use zero/nonzero solely as channel toggles. Requested Aoi's
   architecture challenge before the test-first implementation commit.
-

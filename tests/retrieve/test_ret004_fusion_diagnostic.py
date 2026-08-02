@@ -6,7 +6,7 @@ reconstructed and simulated OFFLINE from the CI log. This test:
 
   * changes NO ranking code, NO corpus, NO thresholds — it only reads/measures;
   * uses the same production seams the real gates use (EpisodicPlane.create, canonical maturation,
-    hybrid_search) with dense-only (sparse_weight=0) and sparse-only (dense_weight=0) toggles;
+    hybrid_search) with explicit dense-only and sparse-only channel controls;
   * seeds into RUN-UNIQUE namespaces and tears them down in a best-effort finally;
   * is ``integration``-marked, so it is deselected locally and executed only by the x86 TEI CI.
 
@@ -39,11 +39,10 @@ def _ranked(
     query: str,
     collection: str,
     state_filter: Any,
-    dense_w: float,
-    sparse_w: float,
+    dense_enabled: bool,
+    sparse_enabled: bool,
 ) -> list[dict[str, Any]]:
-    """One hybrid_search, returning [{id, score}] in rank order. dense_w/sparse_w select the channel
-    (0.0 disables it — the existing on/off semantics), never a magnitude."""
+    """One hybrid_search, returning [{id, score}] in rank order."""
     from musubi.retrieve.hybrid import hybrid_search
 
     result = asyncio.run(
@@ -55,15 +54,16 @@ def _ranked(
             collection=collection,
             limit=DIAG_LIMIT,
             state_filter=state_filter,
-            dense_weight=dense_w,
-            sparse_weight=sparse_w,
+            dense_enabled=dense_enabled,
+            sparse_enabled=sparse_enabled,
             timeout_s=30.0,
             sparse_timeout_s=30.0,
         )
     )
     if isinstance(result, Err):
         raise AssertionError(
-            f"hybrid_search failed (dense_w={dense_w}, sparse_w={sparse_w}): {result}"
+            "hybrid_search failed "
+            f"(dense_enabled={dense_enabled}, sparse_enabled={sparse_enabled}): {result}"
         )
     return [{"id": hit.object_id, "score": round(float(hit.score), 6)} for hit in result.value.hits]
 
@@ -80,8 +80,8 @@ def _capture_three(
             query=query,
             collection=collection,
             state_filter=state_filter,
-            dense_w=1.0,
-            sparse_w=0.0,
+            dense_enabled=True,
+            sparse_enabled=False,
         ),
         "sparse": _ranked(
             client,
@@ -90,8 +90,8 @@ def _capture_three(
             query=query,
             collection=collection,
             state_filter=state_filter,
-            dense_w=0.0,
-            sparse_w=1.0,
+            dense_enabled=False,
+            sparse_enabled=True,
         ),
         "fused": _ranked(
             client,
@@ -100,8 +100,8 @@ def _capture_three(
             query=query,
             collection=collection,
             state_filter=state_filter,
-            dense_w=1.0,
-            sparse_w=1.0,
+            dense_enabled=True,
+            sparse_enabled=True,
         ),
     }
 
