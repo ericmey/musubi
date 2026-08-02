@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -780,21 +781,14 @@ def assert_workflow_run_v_gate(path: Path) -> None:
 # =============================================================
 
 
-def _run_bash_harness_result(
-    guard_block: str, tag_value: str
-) -> subprocess.CompletedProcess[str]:
+def _run_bash_harness_result(guard_block: str, tag_value: str) -> subprocess.CompletedProcess[str]:
     """Execute a guard block with TAG=<tag_value> and return the completed process.
 
     Per Yua 20:57:08 #1: the bash proof must actually run.
     The guard_block is the bash code to test (e.g., the
     if ! [[ \"$TAG\" == v* ]]; then ... exit 1; fi block).
     """
-    script = (
-        "#!/bin/bash\n"
-        "set -euo pipefail\n"
-        "GITHUB_EVENT_NAME=workflow_dispatch\n"
-        f"TAG={tag_value!r}\n{guard_block}\necho SUCCESS\n"
-    )
+    script = f"#!/bin/bash\nset -euo pipefail\n{guard_block}\necho SUCCESS\n"
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
         f.write(script)
         f.flush()
@@ -806,6 +800,7 @@ def _run_bash_harness_result(
             text=True,
             timeout=5,
             check=False,
+            env={**os.environ, "TAG": tag_value, "GITHUB_EVENT_NAME": "workflow_dispatch"},
         )
     finally:
         Path(path).unlink(missing_ok=True)
@@ -2020,7 +2015,11 @@ def test_wrong_fixture_inv4_remove_v_gate_in_autopin(
 # instead of non-capturing groups).
 CORRECTED_GUARD = (
     '          if ! [[ "$TAG" =~ ' + PROJECT_RELEASE_GRAMMAR_BASH + " ]]; then\n"
-    "            echo \"::error::Resolved tag '${TAG}' is not a release tag (source: ${{ github.event_name }})\"\n"
+    "            SAFE_TAG=${TAG//'%'/'%25'}\n"
+    "            SAFE_TAG=${SAFE_TAG//$'\\r'/'%0D'}\n"
+    "            SAFE_TAG=${SAFE_TAG//$'\\n'/'%0A'}\n"
+    "            echo \"::error::Resolved tag '${SAFE_TAG}' is not a release tag "
+    '(source: ${GITHUB_EVENT_NAME:-unknown})"\n'
     "            exit 1\n"
     "          fi\n"
 )

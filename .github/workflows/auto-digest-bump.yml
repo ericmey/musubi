@@ -104,7 +104,10 @@ jobs:
             TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name')
           fi
           if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$ ]]; then
-            echo "::error::Resolved tag '${TAG}' is not a release tag (source: ${{ github.event_name }})"
+            SAFE_TAG=${TAG//'%'/'%25'}
+            SAFE_TAG=${SAFE_TAG//$'\r'/'%0D'}
+            SAFE_TAG=${SAFE_TAG//$'\n'/'%0A'}
+            echo "::error::Resolved tag '${SAFE_TAG}' is not a release tag (source: ${GITHUB_EVENT_NAME:-unknown})"
             exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
