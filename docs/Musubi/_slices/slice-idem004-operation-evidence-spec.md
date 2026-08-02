@@ -3,12 +3,12 @@ title: "Slice: IDEM-004 operation evidence specification"
 slice_id: slice-idem004-operation-evidence-spec
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, api, security, idempotency]
+tags: [section/slices, status/in-review, type/slice, api, security, idempotency]
 updated: 2026-08-02
-reviewed: false
+reviewed: true
 issue: 605
 depends-on: [slice-api-v1-idempotency-receipts]
 blocks: []
@@ -94,3 +94,8 @@ entry in the implementation slice that owns the relevant code.
 - 2026-08-02 — Filed Issue #606 for the untyped HTTP 500 policy rejection and
   Issue #607 for the receipt auditor authority gap. Both are blocked on this ADR;
   neither is silently bundled into the legacy resolver.
+- 2026-08-02 — Aoi independently reviewed immutable PR head `5c8f655` against
+  the two-kind schema, scoped receipt observation, one-sided byte boundary,
+  non-retroactivity, no-probabilistic-resolution rule, internal-only journal stage,
+  and body-plus-content-type digest binding. After rerunning a punctuation-aware
+  search, she withdrew her only finding and accepted S1 with no remaining findings.
