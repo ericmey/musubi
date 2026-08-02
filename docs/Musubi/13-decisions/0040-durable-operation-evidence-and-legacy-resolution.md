@@ -200,14 +200,25 @@ For `operator_abandon`, `delivery_state="unknown"` is required by schema. Abando
 the local delivery intent is a deliberate policy choice to stop retrying; it does
 not claim the historical mutation was absent or present.
 
-### 6. Preserve the receipt authorization boundary until audit policy is decided
+### 6. Preserve the receipt authorization boundary and add a separate audit contract
 
 The ordinary receipt lookup keeps namespace write authority in this ADR. A
 read-scoped endpoint can otherwise become an idempotency-identity discovery surface.
-Two-seat auditability requires a separately designed operator/auditor contract or a
-verifiable non-secret evidence receipt; it must preserve principal and namespace
-non-disclosure. Until that contract lands, receipt-absence claims are one-seat
-observations by construction and must say so explicitly.
+IDEM-006 therefore adds no weaker form of that endpoint. It adds a distinct exact
+audit operation requiring both operator scope and namespace read authority. The
+auditor must already know the target issuer, subject, presence, method, operation,
+namespace, key, and digest. There is no enumeration form and no raw-key echo.
+Cross-principal wrong-digest results collapse to `absent`, so conflict-versus-absent
+cannot reveal which guessed keys exist. Owner-principal conflict fidelity remains
+available because it discloses nothing about another principal.
+
+The audit response records `observer_attestation="server_attested"`, the
+server-observed auditor identity, presence, effective scopes, and timestamp together
+with the requested namespace, operation, digest, and an opaque target identity hash.
+A `found` result includes the receipt commit time and confirms that a specific
+principal captured a specific digest into a specific namespace. This disclosure is accepted
+inside the household operator trust boundary and is not a generally safe public
+API contract.
 
 ### 7. Keep the single-worker deployment gate
 

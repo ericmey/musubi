@@ -558,6 +558,30 @@ same authorized principal and receipt identity, `conflict` discloses that the ke
 exists with another digest and `in_flight` discloses a live process-local lease.
 Those statuses are operational signals, not cross-principal discovery surfaces.
 
+`POST /v1/idempotency/receipts/audit` is the separate two-seat confirmation
+surface. It requires both `operator` scope and read authority for the requested
+namespace before resolving the receipt store. The caller supplies one exact target
+issuer, subject, presence, method, eligible operation, namespace, key, and digest;
+there is no enumeration, prefix, or list form. The response never echoes the raw
+idempotency key. It records `observer_attestation="server_attested"`, the observing
+issuer, subject, presence, effective scopes, timestamp, requested
+namespace/operation/digest, and an opaque target identity hash. A matching receipt
+also returns its object id, receipt commit time, response status, and response-body
+SHA-256.
+
+For a cross-principal auditor, an existing identity with the wrong digest collapses
+to `absent`; only the owning principal may receive `conflict`. This prevents a loop
+over guessable human-readable keys from becoming an existence oracle. The endpoint
+confirms durable receipt state only and does not expose process-local `in_flight`
+leases. Its safety depends on the household fleet trust model: an operator with
+namespace read authority may confirm that a named principal captured a named digest
+at a named time. Do not expose this contract to a broader trust domain without a new
+security decision.
+
+Audit `absent` means no committed durable receipt is visible to this caller. It does
+not mean no operation exists: the state also covers non-durable operation states and
+cross-principal digest conflict.
+
 `absent` is not permission to re-POST after an ambiguous server failure. Issue #558
 owns durable multi-worker leases and orphaned server-operation reconciliation; v1
 continues to enforce a single API worker.

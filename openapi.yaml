@@ -1187,6 +1187,33 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/idempotency/receipts/audit:
+    post:
+      tags:
+      - idempotency
+      summary: Audit Receipt
+      description: Confirm one exact principal-bound durable receipt for a two-seat
+        audit.
+      operationId: audit_idempotency_receipt.bucket=default
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiptAuditRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiptAuditResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/episodic/batch:
     post:
       tags:
@@ -2898,6 +2925,132 @@ components:
         response validation (500, NOT 422 — per spec §4.6: corrupt stored
 
         data is server integrity, not request validation).'
+    ReceiptAuditRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        method:
+          type: string
+          const: POST
+          title: Method
+        operation_id:
+          type: string
+          title: Operation Id
+        idempotency_key:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Idempotency Key
+        request_digest:
+          type: string
+          maxLength: 64
+          minLength: 64
+          pattern: ^[0-9a-fA-F]{64}$
+          title: Request Digest
+        target_issuer:
+          type: string
+          maxLength: 512
+          minLength: 1
+          title: Target Issuer
+        target_subject:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Target Subject
+        target_presence:
+          type: string
+          maxLength: 256
+          minLength: 1
+          title: Target Presence
+      type: object
+      required:
+      - namespace
+      - method
+      - operation_id
+      - idempotency_key
+      - request_digest
+      - target_issuer
+      - target_subject
+      - target_presence
+      title: ReceiptAuditRequest
+    ReceiptAuditResponse:
+      properties:
+        status:
+          type: string
+          enum:
+          - found
+          - absent
+          - conflict
+          title: Status
+        observer_attestation:
+          type: string
+          const: server_attested
+          title: Observer Attestation
+          default: server_attested
+        observer_issuer:
+          type: string
+          title: Observer Issuer
+        observer_subject:
+          type: string
+          title: Observer Subject
+        observer_presence:
+          type: string
+          title: Observer Presence
+        observer_effective_scopes:
+          items:
+            type: string
+          type: array
+          title: Observer Effective Scopes
+        observed_at:
+          type: string
+          format: date-time
+          title: Observed At
+        namespace:
+          type: string
+          title: Namespace
+        operation_id:
+          type: string
+          title: Operation Id
+        request_digest:
+          type: string
+          title: Request Digest
+        target_identity_hash:
+          type: string
+          title: Target Identity Hash
+        object_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Object Id
+        response_status:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Response Status
+        response_sha256:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Response Sha256
+        receipt_committed_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Receipt Committed At
+      type: object
+      required:
+      - status
+      - observer_issuer
+      - observer_subject
+      - observer_presence
+      - observer_effective_scopes
+      - observed_at
+      - namespace
+      - operation_id
+      - request_digest
+      - target_identity_hash
+      title: ReceiptAuditResponse
     ReceiptLookupRequest:
       properties:
         namespace:
