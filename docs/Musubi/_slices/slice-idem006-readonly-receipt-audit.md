@@ -3,12 +3,12 @@ title: "Slice: IDEM-006 read-only two-seat receipt audit"
 slice_id: slice-idem006-readonly-receipt-audit
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, api, idempotency, security]
+tags: [section/slices, status/done, type/slice, api, idempotency, security]
 updated: 2026-08-02
-reviewed: false
+reviewed: true
 issue: 607
 depends-on: [slice-idem004-operation-evidence-spec]
 blocks: []
@@ -58,3 +58,7 @@ creating a guessable-key existence oracle.
   receipt lookup because that route correctly requires namespace write authority.
 - 2026-08-02 — Aoi found the first audit design leaked guessed-key existence via
   cross-principal conflict. The accepted contract collapses that state to absent.
+- 2026-08-02 — Aoi independently reviewed rebased head `493b030` and accepted
+  the authorization order, disclosure boundary, conflict collapse, and narrowed
+  `absent` contract with no remaining findings. Marked terminal before merge to
+  satisfy the repository slice-hygiene gate for PR #613.
