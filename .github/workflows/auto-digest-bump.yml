@@ -99,10 +99,10 @@ jobs:
           #   name for tag-push-triggered runs ("v0.7.0", etc.).
           # - workflow_dispatch: the explicit input.
           # - Fallback: latest GitHub release.
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
-            TAG="${WORKFLOW_RUN_HEAD_BRANCH}"
-          elif [[ -n "${DISPATCH_TAG}" ]]; then
-            TAG="${DISPATCH_TAG}"
+          if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_run" ]]; then
+            TAG="${WORKFLOW_RUN_HEAD_BRANCH:-}"
+          elif [[ -n "${DISPATCH_TAG:-}" ]]; then
+            TAG="${DISPATCH_TAG:-}"
           else
             TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')
           fi

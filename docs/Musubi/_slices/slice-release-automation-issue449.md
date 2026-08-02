@@ -196,3 +196,8 @@ Cache (`cache-from` / `cache-to: type=gha`) is treated as a **performance** conc
   Bash program before the guard executed. The resolver now receives all three
   event values through its step environment, and a regression forbids direct
   GitHub-expression interpolation in the script. Focused suite: 77/77.
+- 2026-08-02 — Aoi's fresh executable review confirmed zero Actions expressions
+  in every run block and preserved source precedence. Her defensive finding was
+  taken: all event-derived shell reads now survive an omitted env key under
+  `set -u`, and the regression forbids the entire `${{ ... }}` expression class
+  inside the resolver script rather than naming only today's three inputs.

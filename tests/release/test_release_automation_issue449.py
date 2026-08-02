@@ -1115,14 +1115,12 @@ def test_regression_dispatch_tag_is_not_interpolated_into_bash_source() -> None:
     run = resolve["run"]
     env = resolve["env"]
 
-    assert "${{ github.event.inputs.tag }}" not in run
-    assert "${{ github.event.workflow_run.head_branch }}" not in run
-    assert "${{ github.event_name }}" not in run
+    assert "${{" not in run
     assert env["DISPATCH_TAG"] == "${{ github.event.inputs.tag }}"
     assert env["WORKFLOW_RUN_HEAD_BRANCH"] == "${{ github.event.workflow_run.head_branch }}"
     assert env["GITHUB_EVENT_NAME"] == "${{ github.event_name }}"
-    assert 'TAG="${DISPATCH_TAG}"' in run
-    assert 'TAG="${WORKFLOW_RUN_HEAD_BRANCH}"' in run
+    assert 'TAG="${DISPATCH_TAG:-}"' in run
+    assert 'TAG="${WORKFLOW_RUN_HEAD_BRANCH:-}"' in run
 
 
 # =============================================================
