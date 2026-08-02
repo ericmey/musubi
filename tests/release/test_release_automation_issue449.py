@@ -1996,7 +1996,7 @@ def test_wrong_fixture_inv4_remove_v_gate_in_autopin(
 # instead of non-capturing groups).
 CORRECTED_GUARD = (
     '          if ! [[ "$TAG" =~ ' + PROJECT_RELEASE_GRAMMAR_BASH + " ]]; then\n"
-    '            echo "::error::Resolved tag \'${TAG}\' is not a release tag (source: ${{ github.event_name }})"\n'
+    "            echo \"::error::Resolved tag '${TAG}' is not a release tag (source: ${{ github.event_name }})\"\n"
     "            exit 1\n"
     "          fi\n"
 )

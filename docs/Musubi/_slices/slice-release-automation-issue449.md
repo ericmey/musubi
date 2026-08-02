@@ -4,14 +4,14 @@ slice_id: slice-release-automation-issue449
 issue: 449
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice, release-automation, v1.13.0-followup]
+tags: [section/slices, status/done, type/slice, release-automation, v1.13.0-followup]
 updated: 2026-08-02
 live-status: release-only-manual-auto-pin-guard-implemented
 spec-update: 3f2a882-to-following-commit per Yua 21:43:06 (docs-only: PROJECT_RELEASE_GRAMMAR_BASH as the source; representative accepted/rejected examples; consistent 'documented project release grammar (bounded SemVer subset)' phrasing)
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -180,3 +180,9 @@ Cache (`cache-from` / `cache-to: type=gha`) is treated as a **performance** conc
 - 2026-07-13 — Tests and architecture documentation landed while workflow changes remained explicitly withheld; the production suite held two strict expected failures for the manual-dispatch seam.
 - 2026-08-02 — Eric explicitly reopened the deferred implementation work. The tested guard was added verbatim to `auto-digest-bump.yml`; the two expected failures flipped green and the focused suite passed 75/75. No workflow was dispatched and no release, registry, deployment, or production host was mutated.
 - 2026-08-02 — Aoi is the mandatory second seat for the workflow diff and its parser/executable-control suite before merge.
+- 2026-08-02 — Aoi independently proved the workflow ERE byte-identical to the
+  test grammar and ran both real Bash and Python over an adversarial corpus with
+  zero divergence. She accepted the implementation and the corrected diagnostic.
+  Full CI then found one formatter-only fixture spelling; repository ruff rewrote
+  that Python literal without changing its evaluated bytes. Focused suite remains
+  75/75. Marked terminal before merge for the repository hygiene gate.
