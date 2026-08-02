@@ -185,7 +185,13 @@ def _kind_from_code(code: str) -> _ErrorKind:
         return "timeout"
     if "forbidden" in c or "unauthorized" in c:
         return "forbidden"
-    if c in {"empty_query", "invalid_limit", "invalid_weights", "invalid_collections", "bad_query"}:
+    if c in {
+        "empty_query",
+        "invalid_limit",
+        "no_retrieval_channels",
+        "invalid_collections",
+        "bad_query",
+    }:
         return "bad_query"
     return "internal"
 
