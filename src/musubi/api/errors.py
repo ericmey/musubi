@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 ErrorCode = Literal[
     "BAD_REQUEST",
+    "CONTENT_TOO_LARGE",
     "UNAUTHORIZED",
     "FORBIDDEN",
     "NOT_FOUND",
