@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.2](https://github.com/ericmey/musubi/compare/v1.19.1...v1.19.2) (2026-08-02)
+
+
+### Bug Fixes
+
+* **release:** reject non-release auto-pin tags ([#616](https://github.com/ericmey/musubi/issues/616)) ([c75fe03](https://github.com/ericmey/musubi/commit/c75fe0379ef7180cf74ffaff37dd231466f2e5b7))
+
 ## [1.19.1](https://github.com/ericmey/musubi/compare/v1.19.0...v1.19.1) (2026-08-02)
 
 
