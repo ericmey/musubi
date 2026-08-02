@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.3](https://github.com/ericmey/musubi/compare/v1.19.2...v1.19.3) (2026-08-02)
+
+
+### Bug Fixes
+
+* **validate:** understand immutable-vector storage shapes ([#627](https://github.com/ericmey/musubi/issues/627)) ([5a6f8c0](https://github.com/ericmey/musubi/commit/5a6f8c0886a0abadd64de7f45cd7e85c615a5102))
+
 ## [1.19.2](https://github.com/ericmey/musubi/compare/v1.19.1...v1.19.2) (2026-08-02)
 
 
