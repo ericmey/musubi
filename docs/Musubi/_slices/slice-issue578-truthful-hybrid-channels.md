@@ -4,12 +4,12 @@ slice_id: slice-issue578-truthful-hybrid-channels
 issue: 578
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice, retrieval, hybrid, rrf]
+tags: [section/slices, status/done, type/slice, retrieval, hybrid, rrf]
 updated: 2026-08-02
-reviewed: false
+reviewed: true
 depends-on: [slice-retrieval-hybrid]
 blocks: []
 ---
@@ -76,3 +76,10 @@ but may not supply a magnitude that the fusion cannot honor.
   passed, 195 skipped, 136 deselected, five pre-existing expected xfails, strict
   mypy/ruff clean, total coverage 90%, and `hybrid.py` coverage 94%. Handed to Aoi
   for mandatory independent review.
+- 2026-08-02 — Aoi accepted the implementation after independently checking
+  effective-channel ordering, removed signatures via AST, fan-out forwarding,
+  unchanged default ranking, and the residual production-reference sweep. A
+  subsequent review caught that orchestration still classified the new typed
+  error as internal; a red regression now proves `no_retrieval_channels` remains
+  a bad-query response through that seam, and the dead `invalid_weights` mapping
+  was removed. Marked terminal before merge for the repository hygiene gate.
