@@ -1107,6 +1107,24 @@ def test_regression_rejected_tag_cannot_inject_workflow_commands() -> None:
     assert "source: workflow_dispatch" in result.stdout
 
 
+def test_regression_dispatch_tag_is_not_interpolated_into_bash_source() -> None:
+    """Untrusted event values enter the resolver through its environment."""
+    config = _load_workflow_yaml(AUTO_PIN_WF)
+    steps = config["jobs"]["bump"]["steps"]
+    resolve = next(step for step in steps if step.get("name") == "Resolve tag + digest")
+    run = resolve["run"]
+    env = resolve["env"]
+
+    assert "${{ github.event.inputs.tag }}" not in run
+    assert "${{ github.event.workflow_run.head_branch }}" not in run
+    assert "${{ github.event_name }}" not in run
+    assert env["DISPATCH_TAG"] == "${{ github.event.inputs.tag }}"
+    assert env["WORKFLOW_RUN_HEAD_BRANCH"] == "${{ github.event.workflow_run.head_branch }}"
+    assert env["GITHUB_EVENT_NAME"] == "${{ github.event_name }}"
+    assert 'TAG="${DISPATCH_TAG}"' in run
+    assert 'TAG="${WORKFLOW_RUN_HEAD_BRANCH}"' in run
+
+
 # =============================================================
 # Wrong-Fixture Mutation Tests
 # =============================================================

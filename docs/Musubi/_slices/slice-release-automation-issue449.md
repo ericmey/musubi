@@ -191,3 +191,8 @@ Cache (`cache-from` / `cache-to: type=gha`) is treated as a **performance** conc
   uses `GITHUB_EVENT_NAME`, and a real-input regression proves one diagnostic line
   with no injected workflow command. Marked terminal before merge for the repository
   hygiene gate.
+- 2026-08-02 — Copilot found the remaining source-interpolation seam: the
+  dispatch tag and workflow-run head were still inserted into the generated
+  Bash program before the guard executed. The resolver now receives all three
+  event values through its step environment, and a regression forbids direct
+  GitHub-expression interpolation in the script. Focused suite: 77/77.
