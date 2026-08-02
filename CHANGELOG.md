@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.3](https://github.com/ericmey/musubi/compare/v1.18.2...v1.18.3) (2026-08-02)
+
+
+### Documentation
+
+* **idempotency:** specify IDEM-004 operation evidence ([#604](https://github.com/ericmey/musubi/issues/604)) ([cf1b0c7](https://github.com/ericmey/musubi/commit/cf1b0c7b4c2ce0685ff28f6d0a3ec93ed773e400))
+
 ## [1.18.2](https://github.com/ericmey/musubi/compare/v1.18.1...v1.18.2) (2026-07-23)
 
 
