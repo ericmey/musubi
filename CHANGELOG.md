@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.1](https://github.com/ericmey/musubi/compare/v1.19.0...v1.19.1) (2026-08-02)
+
+
+### Bug Fixes
+
+* **retrieve:** replace dead hybrid weights with channel controls ([#617](https://github.com/ericmey/musubi/issues/617)) ([382e8fb](https://github.com/ericmey/musubi/commit/382e8fb9e9ef923337f80d2ddc6f7cca701b0a86))
+
 ## [1.19.0](https://github.com/ericmey/musubi/compare/v1.18.5...v1.19.0) (2026-08-02)
 
 
