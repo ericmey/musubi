@@ -76,6 +76,28 @@ def _require_operator_for_created_at(request: Request) -> None:
 
 router = APIRouter(prefix="/v1/episodic", tags=["episodic-writes"])
 
+EPISODIC_CONTENT_LIMIT_BYTES = 32_768
+
+
+def _reject_oversize_content(content: str) -> None:
+    """Reject the documented episodic byte limit before idempotency or plane execution.
+
+    ``CONTENT_TOO_LARGE`` is the client-terminal discriminator. Callers must branch on
+    the error code, not HTTP 422 alone: ordinary request validation also uses 422.
+    The check deliberately measures UTF-8 bytes, matching ``EpisodicPlane.create``.
+    """
+    content_bytes = len(content.encode("utf-8"))
+    if content_bytes > EPISODIC_CONTENT_LIMIT_BYTES:
+        raise APIError(
+            status_code=422,
+            code="CONTENT_TOO_LARGE",
+            detail=(
+                f"episodic content is {content_bytes} UTF-8 bytes; "
+                f"the limit is {EPISODIC_CONTENT_LIMIT_BYTES}"
+            ),
+            hint="use the artifact plane for content larger than 32 KiB",
+        )
+
 
 def _require_tz_aware(value: datetime | None) -> datetime | None:
     """Reject naive datetimes at the request-model layer.
@@ -243,6 +265,7 @@ async def authorized_capture(
     """Body-auth dependency edge: parse the body ONCE, authorize its namespace, return the
     validated context. The idempotency dependency / handler ``Depends`` on this."""
     authorize_namespace(request, body.namespace, settings=settings, access="w")
+    _reject_oversize_content(body.content)
     return AuthorizedWrite(auth=request.state.auth, namespace=body.namespace, body=body)
 
 
@@ -252,6 +275,10 @@ async def authorized_batch(
     settings: Settings = Depends(get_settings_dep),
 ) -> AuthorizedWrite[BatchCaptureRequest]:
     authorize_namespace(request, body.namespace, settings=settings, access="w")
+    # Preflight the entire batch after authorization and before idempotency acquisition or
+    # iteration. If item N is oversized, items 1..N-1 are not executed either.
+    for item in body.items:
+        _reject_oversize_content(item.content)
     return AuthorizedWrite(auth=request.state.auth, namespace=body.namespace, body=body)
 
 

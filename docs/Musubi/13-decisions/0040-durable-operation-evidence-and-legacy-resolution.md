@@ -35,13 +35,14 @@ inspection separated them into two classes:
   object, so a future implementation cannot reconstruct that evidence
   retroactively.
 
-The runtime boundary was exercised on v1.18.2 with exactly 32,769 ASCII content
+The legacy runtime boundary was exercised on v1.18.2 with exactly 32,769 ASCII content
 bytes. Before and after an exact durable-mode request, its authorization-bound
 receipt lookup was `absent` and the namespace contained 1,511 episodic identities;
 the request returned HTTP 500. This is one-sided boundary evidence: 32,769 was
-rejected, while exactly 32,768 was not exercised. The untyped 500 is a separate
-defect; an intentional non-mutating policy rejection must become a typed response
-and terminal operation state.
+rejected, while exactly 32,768 was not exercised. IDEM-005 subsequently fixed the
+wire contract: exactly 32,768 UTF-8 content bytes proceeds, while 32,769 returns
+HTTP 422 with `CONTENT_TOO_LARGE` after authorization and before idempotency or
+plane execution. The code, never 422 alone, is the terminal non-mutation signal.
 
 The current receipt lookup requires namespace write authority. Its `absent` result
 is scoped to the authenticated principal and authorized namespace; it does not mean
@@ -229,7 +230,7 @@ replica, or cross-process writer still reopens #558 before deployment.
    contract, deploy serially, run integrity sweeps and crash probes, and reconcile
    production rows through supported commands.
 
-The intentional 32 KiB rejection returning HTTP 500 is tracked in Issue #606. The
+The intentional 32 KiB rejection formerly returning HTTP 500 is resolved by Issue #606. The
 read-only auditor's inability to inspect receipt state is tracked in Issue #607.
 They remain separate defects rather than being hidden inside an idempotency
 implementation PR.
