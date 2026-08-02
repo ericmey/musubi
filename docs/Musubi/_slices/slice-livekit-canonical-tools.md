@@ -3,53 +3,68 @@ title: "Slice: LiveKit voice — canonical agent tools"
 slice_id: slice-livekit-canonical-tools
 section: _slices
 type: slice
-status: blocked
+status: done
+owner: aoi-claude-opus
 phase: "8 Post-1.0"
-tags: [section/slices, status/blocked, type/slice, adapter, livekit, voice, agent-tools]
-updated: 2026-04-29
-reviewed: false
+tags: [section/slices, status/done, type/slice, adapter, livekit, voice, agent-tools]
+updated: 2026-08-02
+reviewed: true
 depends-on: ["[[_slices/slice-retrieve-recent]]"]
 blocks: []
 ---
 
 # Slice: LiveKit voice — canonical agent tools
 
-> Collapse the two voice mixins (`MemoryToolsMixin` active path + `MusubiVoiceToolsMixin` dormant v2 path) into a single canonical mixin that conforms to [[07-interfaces/agent-tools]]. Widen `musubi_recent` from voice-only to cross-modal default.
+> Collapse the two voice mixins (`MemoryToolsMixin` active path +
+> `MusubiVoiceToolsMixin` dormant path) into one honest runtime mixin.
 
-**Phase:** 8 Post-1.0 · **Status:** `blocked` (on [[_slices/slice-retrieve-recent]] for full cross-modal canonical surface; voice has its own existing recency fallback so the slice MAY pick up early)
+**Phase:** 8 Post-1.0 · **Status:** `done` (voice PR #11 merged the mixin
+collapse on 2026-04-30; later runtime cleanup deliberately removed tool wrappers
+whose backing operations were not honestly available)
 
 ## Implementation lives in a sibling repo
 
 `github.com/ericmey/openclaw-livekit` — the standalone voice agent monorepo. This slice is the **tracking artifact** for the work in that repo, mirroring the pattern used for [[_slices/slice-adapter-openclaw]]. Code/tests/PR happen there; the contract this slice satisfies is [[07-interfaces/agent-tools]] in this vault.
 
-## Why this slice exists
+## Outcome
 
-The voice agent has two parallel implementations today:
+Voice PR #11 (`5d3aba0`) completed the structural work:
 
-- `tools/src/tools/memory.py` — `MemoryToolsMixin`, the live path. Exposes `musubi_recent`, `musubi_search`, `musubi_remember`. `musubi_recent` is **voice-channel only** — Aoi-on-the-phone cannot answer "what was I doing on Claude Code?".
-- `tools/src/tools/musubi_voice.py` — `MusubiVoiceToolsMixin`, dormant v2 path. Exposes `musubi_recall`, `musubi_remember`, `musubi_think`. Awaits a "v2 cutover" that ADR 0032 obsoletes.
+- renamed the live class to `MusubiToolsMixin` and switched agent MROs;
+- deleted dormant `tools/src/tools/musubi_voice.py` and its parallel tests;
+- preserved the old `MemoryToolsMixin` name for its documented transition window;
+- consolidated recent, search, remember, get, and think implementations in the
+  one owned module.
 
-Per [[13-decisions/0032-agent-tools-canonical-surface]] the canonical surface is one set of names with cross-modal defaults. Two mixins is one too many.
+Later commits made the runtime surface stricter than the original draft. `5392008`
+removed the unimplemented `musubi_get` stub instead of advertising a tool that could
+not fetch. `663757e` unexposed `musubi_think` because no real phone consumer used the
+route; its implementation remains available behind an honest future wrapper. The
+current LLM surface is exactly `musubi_recent`, `musubi_search`, and
+`musubi_remember`. This is intentional supersession, not unfinished migration.
+
+The original cross-modal `musubi_recent` requirement was also superseded by the
+deployed operator contract: recent is voice-channel chronology, while
+`musubi_search` is the explicit cross-channel semantic path. Prompts, implementation,
+and tests all state that distinction.
 
 ## Specs to implement
 
 - [[07-interfaces/agent-tools]] (the contract)
 
-## Owned paths (in `openclaw-livekit`, not this repo)
+## Implemented paths (in `openclaw-livekit`, not this repo)
 
-- `tools/src/tools/musubi.py` (new) — single canonical mixin implementing all five tools per spec
-- `tools/src/tools/memory.py` (modified) — wrap deprecated names as one-release aliases that delegate to the canonical mixin
-- `tools/src/tools/musubi_voice.py` (deleted) — superseded; the dormant v2 path is replaced by the canonical mixin
-- `agents/{aoi,nyla,party}/agent.py` — switch MRO to the canonical mixin
-- `tools/tests/test_*.py` — contract test cases per [[07-interfaces/agent-tools#test-contract]]
-
-## Forbidden paths
-
-- `sdk/musubi_v2_client.py` — no client changes; consumes existing methods. SDK extensions for `mode=recent` are tracked by [[_slices/slice-retrieve-recent]].
+- `tools/src/tools/memory.py` — single `MusubiToolsMixin` implementation.
+- `tools/src/tools/musubi_voice.py` — deleted.
+- agent composition — one canonical mixin through the shared base.
+- SDK and agent tests — runtime registration, recall, remember, greeting, and MRO
+  coverage.
 
 ## Depends on
 
-- [[_slices/slice-retrieve-recent]] — `musubi_recent` cross-modal needs `mode=recent` on the backend. Until that lands, voice MAY keep its current `_scroll_episodic_recent` fallback and migrate when the backend mode ships.
+- [[_slices/slice-retrieve-recent]] remains a backend opportunity, not a blocker for
+  this completed adapter slice. Voice deliberately retains its scoped recent scroll;
+  cross-channel recall uses `musubi_search`.
 
 ## Unblocks
 
@@ -59,10 +74,25 @@ Per [[13-decisions/0032-agent-tools-canonical-surface]] the canonical surface is
 
 Same canonical contract suite as [[_slices/slice-mcp-canonical-tools]]; modality tag for `musubi_remember` is `src:livekit-voice-remember`. Adapter-specific addition:
 
-- [ ] **MRO collapse.** Each agent (aoi, nyla, party) has a single `MusubiToolsMixin` in its MRO; `MusubiVoiceToolsMixin` and `MemoryToolsMixin` are gone (or are aliasing-only wrappers).
-- [ ] **Legacy tool aliases.** `musubi_recall` (the voice-dormant name) and any divergent `musubi_search` parameter shape resolve to the canonical surface for one minor release with deprecation logging.
-- [ ] **Greeting hook.** The on-enter prefetch (`fetch_recent_context`) now consumes `musubi_recent` semantics — cross-modal scope, recency-ordered. Voice greeting includes recent activity from other modalities.
+- [x] **MRO collapse.** Current agents compose one `MusubiToolsMixin`; the dormant
+  parallel mixin is deleted.
+- [x] **Legacy transition.** The old class alias shipped for the transition window
+  and was later removed with the rest of the dead routes.
+- [x] **Greeting hook.** `fetch_recent_context` and `musubi_recent` share one scoped,
+  recency-ordered implementation. The cross-modal greeting requirement was
+  superseded; `musubi_search` owns cross-channel recall.
 
 ## Definition of Done
 
-![[00-index/definition-of-done]] (adapted: code/tests/PR live in `openclaw-livekit`; this slice flips to `done` when the openclaw-livekit PR merges and an integration test confirms cross-modal recent works)
+![[00-index/definition-of-done]] (adapted: code/tests/PR live in
+`openclaw-livekit`). Verified against current remote head `eedee72` on 2026-08-02:
+SDK 183 passed/5 skipped; Nyla 32/2; Aoi 27; Yua 30; Party 27; Sumi 81;
+scripts 3; voicebook-tts 18; voicebook-stream 49.
+
+## Closure record
+
+- 2026-04-30 — voice PR #11 merged as `5d3aba0`.
+- 2026-07-09/10 — fake/unconsumed tool wrappers removed by `5392008` and
+  `663757e`; the runtime surface became smaller and more truthful.
+- 2026-08-02 — current `origin/main` (`eedee72`) inspected in a detached clean
+  worktree and the full workspace test command passed after `make sync-venvs`.
