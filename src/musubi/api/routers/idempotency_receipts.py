@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import UTC, datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field, field_validator
 
-from musubi.api.auth import authorize_namespace
+from musubi.api.auth import authorize_namespace, require_operator_scope
 from musubi.api.dependencies import get_settings_dep
 from musubi.api.errors import APIError
 from musubi.api.idempotency import IdempotencyLeaseCache, get_idempotency_lease_cache
@@ -18,6 +19,7 @@ from musubi.api.idempotency_receipts import (
     DurableReceiptStore,
     ReceiptLookupStatus,
     get_idempotency_receipt_store,
+    receipt_identity_hash,
 )
 from musubi.settings import Settings
 
@@ -57,6 +59,30 @@ class ReceiptLookupResponse(BaseModel):
     operation_id: str | None = None
     response_status: int | None = None
     response_sha256: str | None = None
+
+
+class ReceiptAuditRequest(ReceiptLookupRequest):
+    target_issuer: str = Field(min_length=1, max_length=512)
+    target_subject: str = Field(min_length=1, max_length=256)
+    target_presence: str = Field(min_length=1, max_length=256)
+
+
+class ReceiptAuditResponse(BaseModel):
+    status: Literal["found", "absent", "conflict"]
+    observer_attestation: Literal["server_attested"] = "server_attested"
+    observer_issuer: str
+    observer_subject: str
+    observer_presence: str
+    observer_effective_scopes: tuple[str, ...]
+    observed_at: datetime
+    namespace: str
+    operation_id: str
+    request_digest: str
+    target_identity_hash: str
+    object_id: str | None = None
+    response_status: int | None = None
+    response_sha256: str | None = None
+    receipt_committed_at: str | None = None
 
 
 @router.post(
@@ -116,4 +142,97 @@ async def lookup_receipt(
     )
 
 
-__all__ = ["ReceiptLookupRequest", "ReceiptLookupResponse", "router"]
+@router.post(
+    "/audit",
+    response_model=ReceiptAuditResponse,
+    operation_id="audit_idempotency_receipt.bucket=default",
+)
+async def audit_receipt(
+    body: ReceiptAuditRequest,
+    request: Request,
+    settings: Settings = Depends(get_settings_dep),
+) -> ReceiptAuditResponse:
+    """Confirm one exact principal-bound durable receipt for a two-seat audit."""
+    # Both gates run before the store is resolved. Read authority establishes the
+    # namespace boundary; operator authority establishes the household audit trust
+    # boundary. Neither one implies the other.
+    authorize_namespace(request, body.namespace, settings=settings, access="r")
+    require_operator_scope(request, settings=settings)
+    auth = getattr(request.state, "auth", None)
+    if auth is None:
+        raise APIError(status_code=500, code="INTERNAL", detail="authorized identity unavailable")
+    try:
+        store: DurableReceiptStore = get_idempotency_receipt_store(request)
+    except RuntimeError as exc:
+        raise APIError(
+            status_code=503,
+            code="BACKEND_UNAVAILABLE",
+            detail="durable idempotency receipts are unavailable",
+        ) from exc
+
+    identity = (
+        body.target_issuer,
+        body.target_subject,
+        body.target_presence,
+        body.method,
+        body.operation_id,
+        body.namespace,
+        body.idempotency_key,
+    )
+    try:
+        result = store.lookup(identity=identity, digest=bytes.fromhex(body.request_digest))
+    except (OSError, RuntimeError, sqlite3.Error) as exc:
+        raise APIError(
+            status_code=503,
+            code="BACKEND_UNAVAILABLE",
+            detail="durable idempotency receipts are unavailable",
+        ) from exc
+
+    owns_target = (
+        auth.issuer,
+        auth.subject,
+        auth.presence,
+    ) == (
+        body.target_issuer,
+        body.target_subject,
+        body.target_presence,
+    )
+    status: Literal["found", "absent", "conflict"]
+    if result.status is ReceiptLookupStatus.CONFLICT and not owns_target:
+        # A cross-principal conflict would reveal that a guessed human-readable key
+        # exists with different content. Collapse it to absent; only an owner may see
+        # conflict fidelity for its own identity.
+        status = "absent"
+    elif result.status is ReceiptLookupStatus.CONFLICT:
+        status = "conflict"
+    elif result.status is ReceiptLookupStatus.FOUND:
+        status = "found"
+    else:
+        status = "absent"
+
+    receipt = result.receipt if status == "found" else None
+    return ReceiptAuditResponse(
+        status=status,
+        observer_issuer=auth.issuer,
+        observer_subject=auth.subject,
+        observer_presence=auth.presence,
+        observer_effective_scopes=auth.scopes,
+        observed_at=datetime.now(UTC),
+        namespace=body.namespace,
+        operation_id=body.operation_id,
+        request_digest=body.request_digest,
+        target_identity_hash=receipt_identity_hash(identity),
+        object_id=receipt.object_id if receipt is not None else None,
+        response_status=receipt.response_status if receipt is not None else None,
+        response_sha256=receipt.response_sha256 if receipt is not None else None,
+        receipt_committed_at=receipt.committed_at if receipt is not None else None,
+    )
+
+
+__all__ = [
+    "ReceiptAuditRequest",
+    "ReceiptAuditResponse",
+    "ReceiptLookupRequest",
+    "ReceiptLookupResponse",
+    "router",
+]

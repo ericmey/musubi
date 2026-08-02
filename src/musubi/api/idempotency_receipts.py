@@ -39,6 +39,7 @@ class DurableReceipt:
     operation: str
     response_status: int
     response_sha256: str
+    committed_at: str
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,11 @@ class ReceiptLookup:
 def _identity_hash(identity: tuple[Any, ...]) -> str:
     encoded = json.dumps(identity, ensure_ascii=True, separators=(",", ":")).encode()
     return hashlib.sha256(b"musubi-idem-receipt-v1\x00" + encoded).hexdigest()
+
+
+def receipt_identity_hash(identity: tuple[Any, ...]) -> str:
+    """Return the opaque stable identity used by exact receipt-audit responses."""
+    return _identity_hash(identity)
 
 
 class DurableReceiptStore:
@@ -177,7 +183,7 @@ class DurableReceiptStore:
             row = connection.execute(
                 """
                 SELECT request_digest, namespace, operation, object_id,
-                       response_status, response_sha256
+                       response_status, response_sha256, committed_at
                   FROM idempotency_receipts WHERE identity_hash = ?
                 """,
                 (_identity_hash(identity),),
@@ -194,6 +200,11 @@ class DurableReceiptStore:
                 operation=row["operation"],
                 response_status=row["response_status"],
                 response_sha256=row["response_sha256"],
+                committed_at=(
+                    f"{row['committed_at']}Z"
+                    if "+" not in row["committed_at"] and not row["committed_at"].endswith("Z")
+                    else row["committed_at"]
+                ),
             ),
         )
 
@@ -232,4 +243,5 @@ __all__ = [
     "ReceiptLookup",
     "ReceiptLookupStatus",
     "get_idempotency_receipt_store",
+    "receipt_identity_hash",
 ]

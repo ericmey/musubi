@@ -1,0 +1,15 @@
+{
+  "agent": "codex-gpt5-yua",
+  "branch": "fix/idem006-readonly-audit",
+  "timestamp": "2026-08-02T21:45:00Z",
+  "reason": "IDEM-006 exact read-only two-seat receipt audit under Aoi safety review",
+  "owns_paths": [
+    "docs/Musubi/_inbox/locks/slice-idem006-readonly-receipt-audit.lock",
+    "docs/Musubi/_slices/slice-idem006-readonly-receipt-audit.md",
+    "docs/Musubi/07-interfaces/canonical-api.md",
+    "docs/Musubi/13-decisions/0040-durable-operation-evidence-and-legacy-resolution.md",
+    "src/musubi/api/idempotency_receipts.py",
+    "src/musubi/api/routers/idempotency_receipts.py",
+    "tests/api/test_idem006_receipt_audit.py"
+  ]
+}
