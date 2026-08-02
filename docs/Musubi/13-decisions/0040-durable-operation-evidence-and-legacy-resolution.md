@@ -229,9 +229,10 @@ replica, or cross-process writer still reopens #558 before deployment.
    contract, deploy serially, run integrity sweeps and crash probes, and reconcile
    production rows through supported commands.
 
-The intentional 32 KiB rejection returning HTTP 500 and the read-only auditor's
-inability to inspect receipt state are tracked as separate defects rather than
-being hidden inside an idempotency implementation PR.
+The intentional 32 KiB rejection returning HTTP 500 is tracked in Issue #606. The
+read-only auditor's inability to inspect receipt state is tracked in Issue #607.
+They remain separate defects rather than being hidden inside an idempotency
+implementation PR.
 
 ## Test contract
 

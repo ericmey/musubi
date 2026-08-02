@@ -91,3 +91,6 @@ entry in the implementation slice that owns the relevant code.
 - 2026-08-02 — Draft PR #604 opened from a clean `origin/main` worktree before
   documentation edits. Parent defect #603 remains open; this spec slice is Issue
   #605 and must not falsely close the production defect.
+- 2026-08-02 — Filed Issue #606 for the untyped HTTP 500 policy rejection and
+  Issue #607 for the receipt auditor authority gap. Both are blocked on this ADR;
+  neither is silently bundled into the legacy resolver.
