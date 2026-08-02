@@ -3,10 +3,10 @@ title: "Slice: IDEM-004 operation evidence specification"
 slice_id: slice-idem004-operation-evidence-spec
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-review, type/slice, api, security, idempotency]
+tags: [section/slices, status/done, type/slice, api, security, idempotency]
 updated: 2026-08-02
 reviewed: true
 issue: 605
@@ -104,3 +104,6 @@ entry in the implementation slice that owns the relevant code.
   `make issue-check` exited clean with warnings only; `make tc-coverage
   SLICE=slice-idem004-operation-evidence-spec` satisfied the Closure Rule with 15
   passing, 3 existing explicit skips, and 1 non-test contract bullet.
+- 2026-08-02 — Pre-merge closure state set to `done` because PR #604 uses
+  `Closes #605`; the authoritative Vault hygiene gate requires the closing PR to
+  carry terminal slice frontmatter before merge.
