@@ -99,3 +99,8 @@ entry in the implementation slice that owns the relevant code.
   non-retroactivity, no-probabilistic-resolution rule, internal-only journal stage,
   and body-plus-content-type digest binding. After rerunning a punctuation-aware
   search, she withdrew her only finding and accepted S1 with no remaining findings.
+- 2026-08-02 — Handoff gates: `make check` passed with 2,451 passing, 195
+  skipped, 136 deselected, and 5 expected xfails; `make agent-check` and
+  `make issue-check` exited clean with warnings only; `make tc-coverage
+  SLICE=slice-idem004-operation-evidence-spec` satisfied the Closure Rule with 15
+  passing, 3 existing explicit skips, and 1 non-test contract bullet.
