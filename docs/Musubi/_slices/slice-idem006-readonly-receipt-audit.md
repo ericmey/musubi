@@ -38,6 +38,7 @@ creating a guessable-key existence oracle.
 - `src/musubi/api/idempotency_receipts.py`
 - `src/musubi/api/routers/idempotency_receipts.py`
 - `tests/api/test_idem006_receipt_audit.py`
+- `openapi.yaml`
 - `docs/Musubi/07-interfaces/canonical-api.md`
 - `docs/Musubi/13-decisions/0040-durable-operation-evidence-and-legacy-resolution.md`
 - `docs/Musubi/_slices/slice-idem006-readonly-receipt-audit.md`
@@ -62,3 +63,8 @@ creating a guessable-key existence oracle.
   the authorization order, disclosure boundary, conflict collapse, and narrowed
   `absent` contract with no remaining findings. Marked terminal before merge to
   satisfy the repository slice-hygiene gate for PR #613.
+- 2026-08-02 — Full CI caught a missing generated contract artifact that the
+  focused receipt suite could not: runtime exposed the audit route and schemas,
+  while committed `openapi.yaml` did not. Regenerated the snapshot from the same
+  FastAPI app factory with Unicode-preserving YAML output; the semantic diff is
+  limited to the additive audit path and its request/response schemas.
