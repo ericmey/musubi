@@ -4,12 +4,12 @@ slice_id: slice-release-automation-issue449
 issue: 449
 section: _slices
 type: slice
-status: in-progress
-owner: tama
+status: done
+owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice, release-automation, v1.13.0-followup]
-updated: 2026-07-13
-live-status: pinned-to-v1.13.0-not-deployment-proven-as-of-2026-07-13-21:44ET
+tags: [section/slices, status/done, type/slice, release-automation, v1.13.0-followup]
+updated: 2026-08-02
+live-status: release-only-manual-auto-pin-guard-implemented
 spec-update: 3f2a882-to-following-commit per Yua 21:43:06 (docs-only: PROJECT_RELEASE_GRAMMAR_BASH as the source; representative accepted/rejected examples; consistent 'documented project release grammar (bounded SemVer subset)' phrasing)
 reviewed: true
 depends-on: []
@@ -18,13 +18,14 @@ blocks: []
 
 # Slice: Release Automation Architecture-Contract Hardening (Issue #449)
 
-> Architecture-contract hardening (Option C per Yua 2026-07-13 19:11:24). Tests/docs/design only. The publish-core-image.yml workflow intentionally builds and signs BOTH a moving main channel (bleeding-edge) AND an immutable release channel (v* tags). The auto-digest-bump.yml workflow gates on workflow_run (publish-core-image) with conclusion == 'success' AND startsWith(head_branch, 'v'), so deploy pins the release channel only. The 6 invariants are mechanically testable via the wrong-fixture mutation tests. NEW HARDENING DEFECT: workflow_dispatch unconditionally allows an explicit tag=main, so a moving main digest CAN feed the deployment pin through manual dispatch. This is a newly confirmed hardening defect. No source/workflow/deploy changes.
+> Architecture-contract hardening (Option C per Yua 2026-07-13 19:11:24). The publish-core-image.yml workflow intentionally builds and signs BOTH a moving main channel (bleeding-edge) AND an immutable release channel (v* tags). Issue #449 closes the remaining manual-dispatch seam: every resolved tag is now checked against the documented project release grammar before output or registry use, so `main` cannot feed the deployment pin. The 6 invariants are mechanically testable via the wrong-fixture mutation tests.
 
-**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `tama` · **Architecture-contract hardening**
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `codex-gpt5` · **Architecture-contract hardening**
 
 ## Specs to implement
 
-- [[13-decisions/0026-release-please-for-versioning]] (release-automation defects per Yua 2026-07-13 19:11:24 architecture-contract hardening; tests/docs/design only — the actual automation defect remains future work on Issue #449 status:deferred)- Issue #449 (release-automation defects)
+- [[13-decisions/0026-release-please-for-versioning]] (release-automation architecture contract)
+- Issue #449 (manual-dispatch release-only hardening)
 - Yua 2026-07-13 18:51:31 (post-pin acceptance + corrected contracts)
 - Yua 2026-07-13 18:45:31 (conceptual correction)
 - Yua 2026-07-13 18:48:19 (status shape + buildx cache correction)
@@ -35,12 +36,12 @@ blocks: []
 
 - `docs/Musubi/_slices/slice-release-automation-issue449.md` (this file)
 - `docs/Musubi/_inbox/locks/slice-release-automation-issue449.lock` (slice lock)
-- `tests/release/test_release_automation_issue449.py` (the 6 architecture-contract invariants + 1 strict red + wrong-fixture mutation tests + legitimate controls; 75 total = 73 pass + 2 xfail)
+- `.github/workflows/auto-digest-bump.yml` (release-only guard after tag resolution and before use)
+- `tests/release/test_release_automation_issue449.py` (the 6 architecture-contract invariants + regressions + wrong-fixture mutation tests + legitimate controls; 76 passing)
 
 ## Out of owns_paths (intentionally not claimed by this slice)
 
 - `.github/workflows/publish-core-image.yml` (per Yua 19:11:24: no workflow edits)
-- `.github/workflows/auto-digest-bump.yml` (per Yua 19:11:24: no workflow edits)
 - `.github/workflows/release-please.yml` (same constraint)
 - `src/musubi/**` (the production Musubi source; tests-only)
 - `deploy/**` (the deployment source; tests-only)
@@ -49,7 +50,6 @@ blocks: []
 ## Forbidden paths
 
 - `.github/workflows/publish-core-image.yml` (per Yua 19:11:24: no workflow edits)
-- `.github/workflows/auto-digest-bump.yml` (per Yua 19:11:24: no workflow edits)
 - `.github/workflows/release-please.yml` (same constraint)
 - Any live `gh workflow run` / `gh release` / `gh api` mutation
 - Any `git push` to `main` (slice/branch only)
@@ -65,14 +65,12 @@ The 6 invariants define the CURRENT INTENTIONAL ARCHITECTURE-CONTRACT for the Mu
 - **Channel 2 (main) — moving development:** A non-authoritative image build per push. May carry different OCI metadata.
 - **Channel distinguisher:** `org.opencontainers.image.version` annotation sourced from the tag via `docker/metadata-action@v5`'s `type=semver,pattern={{version}}` with `startsWith(github.ref, 'refs/tags/v')` guard. The main guard is `type=ref,event=branch` with `github.ref == 'refs/heads/main'` guard. Mutually exclusive.
 - **Sign/attest/scan shared:** Both main and v* paths share the same `publish-core-image` job, which includes cosign sign, CycloneDX SBOM, cosign attest, and Trivy scan. None of these are conditional on the trigger type.
-- **Auto-pin input:** `auto-digest-bump` reads the resolved tag digest via `/v2/<image>/manifests/<tag>`. It gates on `workflow_run` with `conclusion == 'success'` AND `startsWith(head_branch, 'v')`. The `inputs.tag` manual dispatch path does NOT have a v* guard (this is a hardening defect; see "Hardening defect" below).
+- **Auto-pin input:** `auto-digest-bump` reads the resolved tag digest via `/v2/<image>/manifests/<tag>`. It gates on `workflow_run` with `conclusion == 'success'` AND `startsWith(head_branch, 'v')`, then applies the same bounded release-tag grammar to every resolved tag source before output or registry use.
 - **Reproducibility:** Cache is a performance concern, NOT a correctness or reproducibility input.
 
-## Hardening defect (NEW, per Yua 6e07c56 finding 2)
+## Hardening defect resolution
 
-`auto-digest-bump.yml` allows `workflow_dispatch` unconditionally. If the explicit input tag is `main`, the `Resolve tag + digest` step sets `TAG` to `main` and resolves `/manifests/main`. Therefore a moving main digest CAN feed the deployment pin through manual dispatch. This is a newly confirmed hardening defect: release-only manual dispatch enforcement is missing.
-
-The test `test_red_hardening_defect_manual_dispatch_main` reproduces this defect against the current source. Source/workflow fix is FORBIDDEN until Yua accepts this red commit.
+Before this slice, `workflow_dispatch` accepted `tag=main`, allowing a moving main digest to feed the deployment pin. The Resolve step now rejects every tag outside the documented bounded release grammar after all three tag sources resolve and before the tag is emitted or used in a registry request. This house grammar is intentionally narrower than full SemVer: build metadata and prerelease identifiers beginning with a digit and containing letters are unsupported. `test_regression_manual_dispatch_main_is_rejected` and the shared invariant helper keep that seam closed.
 
 ## 6 Architecture-Contract Invariants (positive guards)
 
@@ -83,9 +81,9 @@ The test `test_red_hardening_defect_manual_dispatch_main` reproduces this defect
 5. **main digest can never feed pin:** the Resolve tag + digest step must have a valid bash guard using the documented project release grammar (bounded SemVer subset). The guard source is `PROJECT_RELEASE_GRAMMAR_BASH` (derived from the same `_CORE_NUM` / `_IDENT` / `_PRERELEASE` building blocks that drive `PROJECT_RELEASE_GRAMMAR_PYTHON`). Representative accepted values: `v1.13.0`, `v0.7.0`, `v2.0.0-rc.1`, `v1.0.0-alpha.1`, `v1.0.0-x.7.z.92`, `v1.0.0-alpha-a.b-c-somethinglong`. Representative rejected values: `v01.02.003` (leading zeros), `v1.0.0-` (trailing hyphen), `v1.2.3-.` (dot-only prerelease), `v1.2.3-alpha..1` (empty identifier), `v1.0.0+build` (build metadata unsupported), `v1.0.0-01` (leading zero in numeric prerelease), `v1.0.0-1x` (mixed alphanumeric-leading-digit). The guard must appear BEFORE tag is emitted and inside the matched if block. The Python resolver and the executable Bash proof share one grammar source; the cross-product parity test extracts the actual guard regex from `CORRECTED_GUARD` and verifies all three return the same verdict on every corpus value. Production helper: `assert_release_only_manual_dispatch_guard(path)` (executable bash proof).
 6. **channel-metadata rule / allowed-divergence contract:** the publish workflow's with.tags has mutually exclusive main ref and release semver guards. Divergence between main and v* digests is ALLOWED, not GUARANTEED. Production helper: `assert_release_channel_consumption(path)`.
 
-## 1 Strict red (reproduces the hardening defect)
+## Regression for the historical hardening defect
 
-`test_red_hardening_defect_manual_dispatch_main` asserts the current source exhibits the manual-dispatch-main hardening defect. It MUST fail against the current source for the intended reason. Source/workflow fix is FORBIDDEN until Yua accepts this red commit.
+`test_regression_manual_dispatch_main_is_rejected` asserts the checked-in Resolve step contains an executable, correctly placed release-only guard. The full module now passes 76/76; there are no expected failures.
 
 ## Wrong-fixture mutation tests (mechanically testable)
 
@@ -177,11 +175,29 @@ Cache (`cache-from` / `cache-to: type=gha`) is treated as a **performance** conc
 | Exit outside if block | Inv 5 | `assert_release_only_manual_dispatch_guard` |
 | Overlap enables | Inv 6 | `assert_release_channel_consumption` |
 
-## Tests/docs/design only (per Yua 19:11:24)
+## Work log
 
-- No source changes to the publish or auto-pin workflows
-- No workflow edits
-- No deployment changes
-- No host contact
-- No merge (this is a draft PR; awaiting Aoi R20 and then Yua's accept and merge call)
-- Aoi R20 (release-automation follow-up; this slice is available for an independent second read after Aoi R20 lands)
+- 2026-07-13 — Tests and architecture documentation landed while workflow changes remained explicitly withheld; the production suite held two strict expected failures for the manual-dispatch seam.
+- 2026-08-02 — Eric explicitly reopened the deferred implementation work. The tested guard was added verbatim to `auto-digest-bump.yml`; the two expected failures flipped green and the focused suite passed 76/76. No workflow was dispatched and no release, registry, deployment, or production host was mutated.
+- 2026-08-02 — Aoi is the mandatory second seat for the workflow diff and its parser/executable-control suite before merge.
+- 2026-08-02 — Aoi independently proved the workflow ERE byte-identical to the
+  test grammar and ran both real Bash and Python over an adversarial corpus with
+  zero divergence. She accepted the implementation and the corrected diagnostic.
+  Full CI then found one formatter-only fixture spelling; repository ruff rewrote
+  that Python literal without changing its evaluated bytes. Focused suite remains
+  76/76. Copilot then found that rejected workflow-dispatch input could enter an
+  Actions command unescaped and that the old Bash harness treated GitHub expression
+  syntax failure as a valid rejection. The guard now percent-encodes `%`, CR, and LF,
+  uses `GITHUB_EVENT_NAME`, and a real-input regression proves one diagnostic line
+  with no injected workflow command. Marked terminal before merge for the repository
+  hygiene gate.
+- 2026-08-02 — Copilot found the remaining source-interpolation seam: the
+  dispatch tag and workflow-run head were still inserted into the generated
+  Bash program before the guard executed. The resolver now receives all three
+  event values through its step environment, and a regression forbids direct
+  GitHub-expression interpolation in the script. Focused suite: 77/77.
+- 2026-08-02 — Aoi's fresh executable review confirmed zero Actions expressions
+  in every run block and preserved source precedence. Her defensive finding was
+  taken: all event-derived shell reads now survive an omitted env key under
+  `set -u`, and the regression forbids the entire `${{ ... }}` expression class
+  inside the resolver script rather than naming only today's three inputs.

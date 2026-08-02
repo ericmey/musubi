@@ -88,6 +88,9 @@ jobs:
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_PAT || secrets.GITHUB_TOKEN }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
+          WORKFLOW_RUN_HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
@@ -96,12 +99,19 @@ jobs:
           #   name for tag-push-triggered runs ("v0.7.0", etc.).
           # - workflow_dispatch: the explicit input.
           # - Fallback: latest GitHub release.
-          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
-            TAG="${{ github.event.workflow_run.head_branch }}"
-          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
-            TAG="${{ github.event.inputs.tag }}"
+          if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_run" ]]; then
+            TAG="${WORKFLOW_RUN_HEAD_BRANCH:-}"
+          elif [[ -n "${DISPATCH_TAG:-}" ]]; then
+            TAG="${DISPATCH_TAG:-}"
           else
-            TAG=$(gh api repos/${{ github.repository }}/releases/latest --jq '.tag_name')
+            TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')
+          fi
+          if ! [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?))(\.((0|[1-9][0-9]*)|([a-zA-Z]([0-9a-zA-Z-]*[0-9a-zA-Z])?)))*)?$ ]]; then
+            SAFE_TAG=${TAG//'%'/'%25'}
+            SAFE_TAG=${SAFE_TAG//$'\r'/'%0D'}
+            SAFE_TAG=${SAFE_TAG//$'\n'/'%0A'}
+            echo "::error::Resolved tag '${SAFE_TAG}' is not a release tag (source: ${GITHUB_EVENT_NAME:-unknown})"
+            exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Resolved tag: ${TAG}"

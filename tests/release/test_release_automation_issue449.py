@@ -10,10 +10,10 @@ The auto-digest-bump.yml workflow gates on workflow_run
 (publish-core-image) with conclusion == 'success' AND
 startsWith(head_branch, 'v'), so deploy pins the release
 channel only for the workflow_run path. However, the
-workflow_dispatch path does NOT have a valid release-only
-guard on the resolved tag - this is a real current hardening
-defect. Source/workflow fix is FORBIDDEN until Yua accepts
-this red commit.
+workflow_dispatch path historically lacked a valid release-only
+guard on the resolved tag. Issue #449 adds the mechanically
+verified guard after all tag sources resolve and before any tag
+output or registry use.
 
 Per Yua 2026-07-13 20:57:08 (WITHHOLD on 6ea08a9):
   - Make the executable Bash proof actually run.
@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -780,30 +781,34 @@ def assert_workflow_run_v_gate(path: Path) -> None:
 # =============================================================
 
 
-def _run_bash_harness(guard_block: str, tag_value: str) -> int:
-    """Execute a guard block with TAG=<tag_value> and return
-    the exit code.
+def _run_bash_harness_result(guard_block: str, tag_value: str) -> subprocess.CompletedProcess[str]:
+    """Execute a guard block with TAG=<tag_value> and return the completed process.
 
     Per Yua 20:57:08 #1: the bash proof must actually run.
     The guard_block is the bash code to test (e.g., the
     if ! [[ \"$TAG\" == v* ]]; then ... exit 1; fi block).
     """
-    script = f"#!/bin/bash\nset -euo pipefail\nTAG={tag_value!r}\n{guard_block}\necho SUCCESS\n"
+    script = f"#!/bin/bash\nset -euo pipefail\n{guard_block}\necho SUCCESS\n"
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
         f.write(script)
         f.flush()
         path = f.name
     try:
-        result = subprocess.run(
+        return subprocess.run(
             ["bash", path],
             capture_output=True,
             text=True,
             timeout=5,
             check=False,
+            env={**os.environ, "TAG": tag_value, "GITHUB_EVENT_NAME": "workflow_dispatch"},
         )
-        return result.returncode
     finally:
         Path(path).unlink(missing_ok=True)
+
+
+def _run_bash_harness(guard_block: str, tag_value: str) -> int:
+    """Execute a guard block and return only its exit code."""
+    return _run_bash_harness_result(guard_block, tag_value).returncode
 
 
 def _extract_guard_block(run_script: str) -> str | None:
@@ -1060,16 +1065,6 @@ def test_invariant_4_workflow_run_v_gate() -> None:
     assert_workflow_run_v_gate(AUTO_PIN_WF)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ManualDispatchGuardMissingError,
-    reason=(
-        "Invariant 5 FAIL (per Yua 20:57:08 #1): the current "
-        "auto-digest-bump.yml Resolve tag + digest step lacks a "
-        "valid bash guard with proper placement and control "
-        "flow. After the workflow fix, this test flips green."
-    ),
-)
 def test_invariant_5_release_only_manual_dispatch_guard() -> None:
     """Invariant 5: the Resolve tag + digest step has a valid
     release-only manual dispatch guard."""
@@ -1089,24 +1084,43 @@ def test_invariant_6_channel_metadata_allowed_divergence() -> None:
 
 
 # =============================================================
-# 1 Strict Red (reproduces the hardening defect)
+# Regression: the historical hardening defect stays closed
 # =============================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ManualDispatchGuardMissingError,
-    reason=(
-        "Hardening defect (per Yua 19:54:29 + 20:57:08 #1): "
-        "auto-digest-bump.yml does NOT enforce release-only "
-        "manual dispatch. After the workflow fix, this test "
-        "flips green."
-    ),
-)
-def test_red_hardening_defect_manual_dispatch_main() -> None:
-    """Strict red: the current auto-digest-bump workflow
-    accepts a non-release tag from manual dispatch."""
+def test_regression_manual_dispatch_main_is_rejected() -> None:
+    """The auto-pin workflow rejects a non-release manual tag."""
     assert_release_only_manual_dispatch_guard(AUTO_PIN_WF)
+
+
+def test_regression_rejected_tag_cannot_inject_workflow_commands() -> None:
+    """Untrusted dispatch input is escaped before entering a workflow command."""
+    guard = _extract_guard_block(_get_resolve_step_run(AUTO_PIN_WF))
+    assert guard is not None
+    result = _run_bash_harness_result(guard, "bad%\n::warning::injected\r")
+    assert result.returncode == 1
+    assert result.stdout.count("\n") == 1
+    assert "\n::warning::" not in result.stdout
+    assert "%25" in result.stdout
+    assert "%0A" in result.stdout
+    assert "%0D" in result.stdout
+    assert "source: workflow_dispatch" in result.stdout
+
+
+def test_regression_dispatch_tag_is_not_interpolated_into_bash_source() -> None:
+    """Untrusted event values enter the resolver through its environment."""
+    config = _load_workflow_yaml(AUTO_PIN_WF)
+    steps = config["jobs"]["bump"]["steps"]
+    resolve = next(step for step in steps if step.get("name") == "Resolve tag + digest")
+    run = resolve["run"]
+    env = resolve["env"]
+
+    assert "${{" not in run
+    assert env["DISPATCH_TAG"] == "${{ github.event.inputs.tag }}"
+    assert env["WORKFLOW_RUN_HEAD_BRANCH"] == "${{ github.event.workflow_run.head_branch }}"
+    assert env["GITHUB_EVENT_NAME"] == "${{ github.event_name }}"
+    assert 'TAG="${DISPATCH_TAG:-}"' in run
+    assert 'TAG="${WORKFLOW_RUN_HEAD_BRANCH:-}"' in run
 
 
 # =============================================================
@@ -2017,7 +2031,11 @@ def test_wrong_fixture_inv4_remove_v_gate_in_autopin(
 # instead of non-capturing groups).
 CORRECTED_GUARD = (
     '          if ! [[ "$TAG" =~ ' + PROJECT_RELEASE_GRAMMAR_BASH + " ]]; then\n"
-    '            echo "::error::Manual-dispatch tag must be a release tag (project release grammar)"\n'
+    "            SAFE_TAG=${TAG//'%'/'%25'}\n"
+    "            SAFE_TAG=${SAFE_TAG//$'\\r'/'%0D'}\n"
+    "            SAFE_TAG=${SAFE_TAG//$'\\n'/'%0A'}\n"
+    "            echo \"::error::Resolved tag '${SAFE_TAG}' is not a release tag "
+    '(source: ${GITHUB_EVENT_NAME:-unknown})"\n'
     "            exit 1\n"
     "          fi\n"
 )
