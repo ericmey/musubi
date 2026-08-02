@@ -4,7 +4,7 @@ slice_id: slice-livekit-canonical-tools
 section: _slices
 type: slice
 status: done
-owner: aoi-claude-opus
+owner: codex-gpt5
 phase: "8 Post-1.0"
 tags: [section/slices, status/done, type/slice, adapter, livekit, voice, agent-tools]
 updated: 2026-08-02
