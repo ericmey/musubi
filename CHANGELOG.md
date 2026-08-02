@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.4](https://github.com/ericmey/musubi/compare/v1.18.3...v1.18.4) (2026-08-02)
+
+
+### Bug Fixes
+
+* **api:** type episodic oversize rejection ([#610](https://github.com/ericmey/musubi/issues/610)) ([32c6a9d](https://github.com/ericmey/musubi/commit/32c6a9d93ec33b419b90f9537197d44cf261d212))
+
 ## [1.18.3](https://github.com/ericmey/musubi/compare/v1.18.2...v1.18.3) (2026-08-02)
 
 
