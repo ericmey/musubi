@@ -3,12 +3,12 @@ title: "Slice: IDEM-005 typed episodic oversize rejection"
 slice_id: slice-idem005-typed-oversize
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, api, idempotency]
+tags: [section/slices, status/done, type/slice, api, idempotency]
 updated: 2026-08-02
-reviewed: false
+reviewed: true
 issue: 606
 depends-on: [slice-idem004-operation-evidence-spec]
 blocks: []
@@ -68,3 +68,5 @@ guarantee.
 - 2026-08-02 — Aoi found that PATCH content replacement, including retraction,
   does not pass through either the API or plane create guards. The contract was
   scoped to create and batch-create, with the PATCH policy deferred explicitly.
+- 2026-08-02 — Server implementation accepted by the second safety seat at
+  `4589e3d`; terminal slice state is required before merge by vault hygiene.
