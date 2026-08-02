@@ -70,7 +70,7 @@ The 6 invariants define the CURRENT INTENTIONAL ARCHITECTURE-CONTRACT for the Mu
 
 ## Hardening defect resolution
 
-Before this slice, `workflow_dispatch` accepted `tag=main`, allowing a moving main digest to feed the deployment pin. The Resolve step now rejects every tag outside the documented bounded release grammar after all three tag sources resolve and before the tag is emitted or used in a registry request. `test_regression_manual_dispatch_main_is_rejected` and the shared invariant helper keep that seam closed.
+Before this slice, `workflow_dispatch` accepted `tag=main`, allowing a moving main digest to feed the deployment pin. The Resolve step now rejects every tag outside the documented bounded release grammar after all three tag sources resolve and before the tag is emitted or used in a registry request. This house grammar is intentionally narrower than full SemVer: build metadata and prerelease identifiers beginning with a digit and containing letters are unsupported. `test_regression_manual_dispatch_main_is_rejected` and the shared invariant helper keep that seam closed.
 
 ## 6 Architecture-Contract Invariants (positive guards)
 
