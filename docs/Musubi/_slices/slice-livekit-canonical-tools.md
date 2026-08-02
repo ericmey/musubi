@@ -82,6 +82,16 @@ Same canonical contract suite as [[_slices/slice-mcp-canonical-tools]]; modality
   recency-ordered implementation. The cross-modal greeting requirement was
   superseded; `musubi_search` owns cross-channel recall.
 
+## Work log
+
+- 2026-08-02 — **Greeting hook bullet disposition:** the original requirement
+  "Voice greeting includes recent activity from other modalities" was withdrawn,
+  not deferred. The deployed contract deliberately separates voice-channel
+  chronology (`musubi_recent` / the greeting hook) from explicit cross-channel
+  semantic recall (`musubi_search`). There is no follow-up issue because restoring
+  implicit cross-modal greeting injection is not planned; any future proposal
+  would be a new contract decision rather than unfinished work from this slice.
+
 ## Definition of Done
 
 ![[00-index/definition-of-done]] (adapted: code/tests/PR live in
