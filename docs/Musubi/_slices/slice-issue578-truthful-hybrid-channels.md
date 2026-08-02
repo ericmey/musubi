@@ -38,7 +38,9 @@ but may not supply a magnitude that the fusion cannot honor.
 ## Owned paths
 
 - `src/musubi/retrieve/hybrid.py`
+- `src/musubi/retrieve/orchestration.py` (typed-error classification only)
 - `tests/retrieve/test_hybrid.py`
+- `tests/retrieve/test_orchestration.py` (typed-error classification regression only)
 - `tests/retrieve/test_ret004_fusion_diagnostic.py`
 - `tests/retrieve/test_ret007_degradation.py`
 - `docs/Musubi/05-retrieval/hybrid-search.md`
