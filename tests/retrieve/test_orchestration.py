@@ -21,6 +21,7 @@ from musubi.retrieve.hybrid import HybridHit, HybridSearchResult
 from musubi.retrieve.orchestration import (
     NamespaceTarget,
     RetrievalQuery,
+    _kind_from_code,
     retrieve,
 )
 from musubi.retrieve.rerank import RerankResult
@@ -552,6 +553,11 @@ async def test_bad_query_returns_typed_error() -> None:
     )
     assert isinstance(res, Err)
     assert res.error.kind == "bad_query"
+
+
+def test_no_retrieval_channels_is_classified_as_bad_query() -> None:
+    """The hybrid channel-selection contract must remain a caller error through orchestration."""
+    assert _kind_from_code("no_retrieval_channels") == "bad_query"
 
 
 @pytest.mark.skip(
