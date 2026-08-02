@@ -780,30 +780,40 @@ def assert_workflow_run_v_gate(path: Path) -> None:
 # =============================================================
 
 
-def _run_bash_harness(guard_block: str, tag_value: str) -> int:
-    """Execute a guard block with TAG=<tag_value> and return
-    the exit code.
+def _run_bash_harness_result(
+    guard_block: str, tag_value: str
+) -> subprocess.CompletedProcess[str]:
+    """Execute a guard block with TAG=<tag_value> and return the completed process.
 
     Per Yua 20:57:08 #1: the bash proof must actually run.
     The guard_block is the bash code to test (e.g., the
     if ! [[ \"$TAG\" == v* ]]; then ... exit 1; fi block).
     """
-    script = f"#!/bin/bash\nset -euo pipefail\nTAG={tag_value!r}\n{guard_block}\necho SUCCESS\n"
+    script = (
+        "#!/bin/bash\n"
+        "set -euo pipefail\n"
+        "GITHUB_EVENT_NAME=workflow_dispatch\n"
+        f"TAG={tag_value!r}\n{guard_block}\necho SUCCESS\n"
+    )
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
         f.write(script)
         f.flush()
         path = f.name
     try:
-        result = subprocess.run(
+        return subprocess.run(
             ["bash", path],
             capture_output=True,
             text=True,
             timeout=5,
             check=False,
         )
-        return result.returncode
     finally:
         Path(path).unlink(missing_ok=True)
+
+
+def _run_bash_harness(guard_block: str, tag_value: str) -> int:
+    """Execute a guard block and return only its exit code."""
+    return _run_bash_harness_result(guard_block, tag_value).returncode
 
 
 def _extract_guard_block(run_script: str) -> str | None:
@@ -1086,6 +1096,20 @@ def test_invariant_6_channel_metadata_allowed_divergence() -> None:
 def test_regression_manual_dispatch_main_is_rejected() -> None:
     """The auto-pin workflow rejects a non-release manual tag."""
     assert_release_only_manual_dispatch_guard(AUTO_PIN_WF)
+
+
+def test_regression_rejected_tag_cannot_inject_workflow_commands() -> None:
+    """Untrusted dispatch input is escaped before entering a workflow command."""
+    guard = _extract_guard_block(_get_resolve_step_run(AUTO_PIN_WF))
+    assert guard is not None
+    result = _run_bash_harness_result(guard, "bad%\n::warning::injected\r")
+    assert result.returncode == 1
+    assert result.stdout.count("\n") == 1
+    assert "\n::warning::" not in result.stdout
+    assert "%25" in result.stdout
+    assert "%0A" in result.stdout
+    assert "%0D" in result.stdout
+    assert "source: workflow_dispatch" in result.stdout
 
 
 # =============================================================
