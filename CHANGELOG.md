@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.0](https://github.com/ericmey/musubi/compare/v1.18.5...v1.19.0) (2026-08-02)
+
+
+### Features
+
+* **idem:** add read-only two-seat receipt audit ([#613](https://github.com/ericmey/musubi/issues/613)) ([ee6de8b](https://github.com/ericmey/musubi/commit/ee6de8b810a0bc742a0835b5aa3e3f9733a3019b))
+
 ## [1.18.5](https://github.com/ericmey/musubi/compare/v1.18.4...v1.18.5) (2026-08-02)
 
 
