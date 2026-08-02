@@ -779,8 +779,8 @@ def _measure_beir_delta(backends: Any, collection: str, namespace: str, plane: A
             query=query_text,
             collection=collection,
             limit=10,
-            dense_weight=1.0,
-            sparse_weight=1.0 if hybrid else 0.0,  # dense-only drops the lexical channel
+            dense_enabled=True,
+            sparse_enabled=hybrid,  # dense-only drops the lexical channel
         )
         if isinstance(result, Err):
             raise AssertionError(f"hybrid_search failed: {result}")

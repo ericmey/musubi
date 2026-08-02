@@ -7,7 +7,10 @@
     "src/musubi/retrieve/hybrid.py",
     "tests/retrieve/test_hybrid.py",
     "tests/retrieve/test_ret004_fusion_diagnostic.py",
+    "tests/retrieve/test_ret007_degradation.py",
     "docs/Musubi/05-retrieval/hybrid-search.md",
+    "docs/Musubi/13-decisions/0041-truthful-hybrid-channel-controls.md",
+    "docs/Musubi/13-decisions/index.md",
     "docs/Musubi/_slices/slice-issue578-truthful-hybrid-channels.md",
     "docs/Musubi/_inbox/locks/slice-issue578-truthful-hybrid-channels.lock"
   ]

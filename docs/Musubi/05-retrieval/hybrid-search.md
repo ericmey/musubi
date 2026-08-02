@@ -75,6 +75,18 @@ Alternatives we evaluated:
 
 RRF it is.
 
+### Channel controls are booleans, not weights
+
+The internal `hybrid_search` and `hybrid_search_many` seams expose
+`dense_enabled` and `sparse_enabled` booleans for diagnostic and degradation
+paths. They do not expose numeric weights: Qdrant's server-side RRF is unweighted,
+so accepting a magnitude would advertise tuning that the fusion cannot honor.
+
+Both channels default to enabled. A collection without a sparse vector capability
+uses dense only under that default. A caller explicitly requesting sparse-only on
+such a collection receives the typed `no_retrieval_channels` error; Musubi does
+not silently turn an unavailable requested mode into an empty query.
+
 ## Configuring the prefetch step
 
 Each prefetch `limit` is 50 (configurable, `HYBRID_PREFETCH_LIMIT`). Rationale:

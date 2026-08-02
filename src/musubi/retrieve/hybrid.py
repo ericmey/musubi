@@ -142,8 +142,8 @@ async def hybrid_search(
     collection: str,
     limit: int = 10,
     state_filter: Sequence[LifecycleState] | None = None,
-    dense_weight: float = 1.0,
-    sparse_weight: float = 1.0,
+    dense_enabled: bool = True,
+    sparse_enabled: bool = True,
     include_archived: bool = False,
     prefetch_limit: int | None = None,
     cache: QueryEmbeddingCache | None = None,
@@ -156,26 +156,25 @@ async def hybrid_search(
         return Err(error=RetrievalError(code="empty_query", detail="query must not be empty"))
     if limit <= 0:
         return Err(error=RetrievalError(code="invalid_limit", detail="limit must be positive"))
-    if dense_weight <= 0.0 and sparse_weight <= 0.0:
-        return Err(
-            error=RetrievalError(
-                code="invalid_weights",
-                detail="at least one retrieval channel must have a positive weight",
-            )
-        )
-
     # Dense-only collections (e.g. musubi_artifact) don't declare a sparse
     # vector channel; querying sparse_splade_v1 against them makes Qdrant
     # reject the request with 400 "Not existing vector name" (see #208).
-    dense_enabled = dense_weight > 0.0
-    sparse_enabled = sparse_weight > 0.0 and collection_has_sparse(collection)
+    use_dense = dense_enabled
+    use_sparse = sparse_enabled and collection_has_sparse(collection)
+    if not use_dense and not use_sparse:
+        return Err(
+            error=RetrievalError(
+                code="no_retrieval_channels",
+                detail=f"no requested retrieval channel is available for {collection}",
+            )
+        )
 
     encoding = await _encode_query(
         embedder,
         query=query,
         cache=cache,
-        dense_enabled=dense_enabled,
-        sparse_enabled=sparse_enabled,
+        dense_enabled=use_dense,
+        sparse_enabled=use_sparse,
         sparse_timeout_s=sparse_timeout_s,
     )
     if isinstance(encoding, Err):
@@ -207,8 +206,8 @@ async def hybrid_search(
     prefetch = _build_prefetch(
         encoding.value,
         limit=resolved_prefetch_limit,
-        dense_enabled=dense_enabled,
-        sparse_enabled=sparse_enabled,
+        dense_enabled=use_dense,
+        sparse_enabled=use_sparse,
         namespace_filter=_namespace_filter(namespace),
         anchor_aware=anchor_aware,
     )
@@ -267,8 +266,8 @@ async def hybrid_search_many(
     collections: Sequence[str],
     limit: int = 10,
     state_filter: Sequence[LifecycleState] | None = None,
-    dense_weight: float = 1.0,
-    sparse_weight: float = 1.0,
+    dense_enabled: bool = True,
+    sparse_enabled: bool = True,
     include_archived: bool = False,
     prefetch_limit: int | None = None,
     cache: QueryEmbeddingCache | None = None,
@@ -295,8 +294,8 @@ async def hybrid_search_many(
                 collection=collection,
                 limit=limit,
                 state_filter=state_filter,
-                dense_weight=dense_weight,
-                sparse_weight=sparse_weight,
+                dense_enabled=dense_enabled,
+                sparse_enabled=sparse_enabled,
                 include_archived=include_archived,
                 prefetch_limit=prefetch_limit,
                 cache=cache,

@@ -69,6 +69,7 @@ SORT file.name ASC
 - [[13-decisions/0034-context-pack-api]] — Add `/v1/context` as the deployed ranked context-pack surface for essence alignment.
 - [[13-decisions/data001-phase2-immutable-vectors]] — DATA-001 Phase 2: immutable content points + a fenced anchor `live_point` pointer swap as the atomic vector-change commit; reconciliation rides the existing lifecycle coordinator custom-intent seam.
 - [[13-decisions/0038-network-protect-read-only-ops-endpoints]] — Keep health, status, and metrics bearer-unauthenticated behind a testable trusted-network boundary.
+- [[13-decisions/0041-truthful-hybrid-channel-controls]] — Replace dead numeric hybrid weights with explicit channel booleans while preserving unweighted server-side RRF.
 - [[13-decisions/sources]] — Public sources that informed these decisions.
 - [[13-decisions/template-weights-change]] — Template ADR for retrieval scoring weight changes.
 

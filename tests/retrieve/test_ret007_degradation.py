@@ -150,7 +150,7 @@ async def test_control_successful_sparse() -> None:
         namespace="test/ns",
         query="test",
         collection="musubi_episodic",
-        sparse_weight=1.0,
+        sparse_enabled=True,
     )
     assert isinstance(result, Ok) and len(result.value.hits) == 1
 

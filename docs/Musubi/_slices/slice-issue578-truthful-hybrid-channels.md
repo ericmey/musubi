@@ -20,6 +20,10 @@ Remove the false weighting contract from the internal hybrid-search seam. Musubi
 uses unweighted server-side RRF by design; callers may enable or disable a channel,
 but may not supply a magnitude that the fusion cannot honor.
 
+## Specs to implement
+
+- [[13-decisions/0041-truthful-hybrid-channel-controls]]
+
 ## Decision boundary
 
 - Preserve server-side Qdrant RRF and the default dense-plus-sparse behavior.
@@ -36,7 +40,10 @@ but may not supply a magnitude that the fusion cannot honor.
 - `src/musubi/retrieve/hybrid.py`
 - `tests/retrieve/test_hybrid.py`
 - `tests/retrieve/test_ret004_fusion_diagnostic.py`
+- `tests/retrieve/test_ret007_degradation.py`
 - `docs/Musubi/05-retrieval/hybrid-search.md`
+- `docs/Musubi/13-decisions/0041-truthful-hybrid-channel-controls.md`
+- `docs/Musubi/13-decisions/index.md`
 - `docs/Musubi/_slices/slice-issue578-truthful-hybrid-channels.md`
 - `docs/Musubi/_inbox/locks/slice-issue578-truthful-hybrid-channels.lock`
 
@@ -56,3 +63,8 @@ but may not supply a magnitude that the fusion cannot honor.
   default hybrid path; only tests and the RET-004 diagnostic use the numeric
   parameters, and they use zero/nonzero solely as channel toggles. Requested Aoi's
   architecture challenge before the test-first implementation commit.
+- 2026-08-02 — Aoi independently found no external consumers across fleet-tools,
+  OpenClaw, LiveKit, Vice, Hermes, voice, or Engawa. The plan deliberately errors
+  when sparse-only is requested for a dense-only collection, while preserving the
+  normal true/true default as an effective dense query. No legacy keyword shim or
+  catch-all is added; Python rejects the removed false affordance directly.
