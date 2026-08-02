@@ -20,7 +20,7 @@ blocks: []
 
 > Architecture-contract hardening (Option C per Yua 2026-07-13 19:11:24). The publish-core-image.yml workflow intentionally builds and signs BOTH a moving main channel (bleeding-edge) AND an immutable release channel (v* tags). Issue #449 closes the remaining manual-dispatch seam: every resolved tag is now checked against the documented project release grammar before output or registry use, so `main` cannot feed the deployment pin. The 6 invariants are mechanically testable via the wrong-fixture mutation tests.
 
-**Phase:** 8 Ops · **Status:** `in-progress` · **Owner:** `tama` · **Architecture-contract hardening**
+**Phase:** 8 Ops · **Status:** `done` · **Owner:** `codex-gpt5` · **Architecture-contract hardening**
 
 ## Specs to implement
 
