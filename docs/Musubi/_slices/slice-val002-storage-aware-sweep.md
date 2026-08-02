@@ -4,12 +4,12 @@ slice_id: slice-val002-storage-aware-sweep
 issue: 625
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice, validation, data-integrity]
+tags: [section/slices, status/done, type/slice, validation, data-integrity]
 updated: 2026-08-02
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -78,3 +78,9 @@ sweep validate both physical storage integrity and resolved logical integrity.
   exercise episodic and curated content independently. Focused contract: 33
   passed. Full `make check`: 2,484 passed, 195 skipped, 136 deselected, 3
   expected xfails; 88.34% coverage; Ruff and mypy passed.
+- 2026-08-02 — Aoi independently accepted exact implementation head `adc66ca`
+  after reproducing projection-divergence detection, red-proofing the layout
+  registry guard three ways, and rerunning the full gate with matching results.
+  Remote CI also passed. Slice marked terminal and lock released before merge per
+  repository hygiene; production deployment remains separately held on the
+  post-release live exit-0 sweep.
