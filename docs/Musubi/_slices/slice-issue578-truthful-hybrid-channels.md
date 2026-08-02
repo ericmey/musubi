@@ -4,10 +4,10 @@ slice_id: slice-issue578-truthful-hybrid-channels
 issue: 578
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice, retrieval, hybrid, rrf]
+tags: [section/slices, status/in-review, type/slice, retrieval, hybrid, rrf]
 updated: 2026-08-02
 reviewed: false
 depends-on: [slice-retrieval-hybrid]
@@ -68,3 +68,9 @@ but may not supply a magnitude that the fusion cannot honor.
   when sparse-only is requested for a dense-only collection, while preserving the
   normal true/true default as an effective dense query. No legacy keyword shim or
   catch-all is added; Python rejects the removed false affordance directly.
+- 2026-08-02 — Test-first baseline: 30 passed, one skipped, six failed for the
+  intended missing boolean contract. Implementation: full retrieval suite 240
+  passed/20 skipped; Test Contract 7/7; whole-repo `make check` passed with 2,460
+  passed, 195 skipped, 136 deselected, five pre-existing expected xfails, strict
+  mypy/ruff clean, total coverage 90%, and `hybrid.py` coverage 94%. Handed to Aoi
+  for mandatory independent review.
