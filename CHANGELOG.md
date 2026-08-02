@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.5](https://github.com/ericmey/musubi/compare/v1.18.4...v1.18.5) (2026-08-02)
+
+
+### Documentation
+
+* **voice:** close canonical tools slice ([#615](https://github.com/ericmey/musubi/issues/615)) ([01fe062](https://github.com/ericmey/musubi/commit/01fe0620faafdbd47aa0e0c3c818ce9b4206ed73))
+
 ## [1.18.4](https://github.com/ericmey/musubi/compare/v1.18.3...v1.18.4) (2026-08-02)
 
 
