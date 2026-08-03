@@ -235,9 +235,7 @@ async def test_stored_unindexed_artifact_is_readable_by_id_with_zero_committed_c
 
     fetched = await plane.get(namespace=artifact.namespace, object_id=artifact.object_id)
     assert fetched == artifact
-    assert await plane.chunks_for(
-        namespace=artifact.namespace, object_id=artifact.object_id
-    ) == []
+    assert await plane.chunks_for(namespace=artifact.namespace, object_id=artifact.object_id) == []
     assert await plane.query_by_artifact(artifact_id=artifact.object_id) == []
 
 
