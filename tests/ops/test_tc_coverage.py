@@ -376,3 +376,61 @@ def test_bullet_index_uses_stated_number_not_match_order() -> None:
     bullets = _parse_bullets(text, "spec")
     assert [b.index for b in bullets] == [9, 10, 12]
     assert bullets[1].state == UNPARSEABLE
+
+
+# ---------------------------------------------------------------------------
+# Raised in review on PR #670: scoping the parser to `^\d+\.` was itself too
+# narrow. Five specs write their Test Contract with dashes or task lists and
+# parsed to ZERO — including 03-system-design/namespaces.md, whose five
+# properly-named isolation bullets were never checked by any slice.
+# ---------------------------------------------------------------------------
+
+_DASH_CONTRACT = """
+## Test contract
+
+Every plane's module-level tests must include:
+
+- `test_isolation_read_enforcement` — a token for `nyla` cannot read `aoi` data.
+- `test_household_read_ok` — household episodic is readable.
+- Deterministic fusion given fixed seeds + corpus.
+"""
+
+_TASK_LIST_CONTRACT = """
+## Test contract
+
+- [ ] **`musubi_recent` — basic.** Three rows surface newest-first.
+- [x] `test_already_done` — a checked item is still an obligation.
+"""
+
+
+def test_dash_bullets_are_parsed() -> None:
+    """RED before the review fix: this returned 0 bullets."""
+    bullets = _parse_bullets(_DASH_CONTRACT, "namespaces")
+    assert len(bullets) == 3
+    assert bullets[0].name == "test_isolation_read_enforcement"
+    assert bullets[1].name == "test_household_read_ok"
+    assert bullets[2].state == UNPARSEABLE  # prose item
+
+
+def test_task_list_bullets_are_parsed_and_checkbox_stripped() -> None:
+    """GitHub task lists are obligations too, checked or not."""
+    bullets = _parse_bullets(_TASK_LIST_CONTRACT, "agent-tools")
+    assert len(bullets) == 2
+    # Bolded prose is not a machine-checkable name.
+    assert bullets[0].state == UNPARSEABLE
+    assert not bullets[0].name.startswith("[ ]")
+    # A checked box does not exempt the bullet from being read.
+    assert bullets[1].name == "test_already_done"
+
+
+def test_unordered_items_index_by_position() -> None:
+    """Unordered items state no number, so position is the only reference."""
+    bullets = _parse_bullets(_DASH_CONTRACT, "namespaces")
+    assert [b.index for b in bullets] == [1, 2, 3]
+
+
+def test_note_separator_is_not_doubled() -> None:
+    """``test_x` — prose` must not render as `— — prose`."""
+    bullets = _parse_bullets(_DASH_CONTRACT, "namespaces")
+    assert not bullets[0].note.startswith("—")
+    assert bullets[0].note.startswith("a token")

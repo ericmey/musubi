@@ -20,11 +20,12 @@ Reads ``docs/Musubi/_slices/<slice-id>.md``, finds the specs it
                               almost always declared out-of-scope for unit
                               tests; flagged for the author to confirm.
   - ``✗ missing``          — no test, no work-log mention. **Review-blocker.**
-  - ``✗ unparseable``      — a numbered item in the section that is not
-                              ``test_name``-shaped, so the gate cannot check
-                              it. **Review-blocker.** Before Issue #669 these
-                              were dropped silently, which let a green be
-                              computed over a fraction of the stated contract.
+  - ``✗ unparseable``      — a list item in the section (ordered, unordered, or
+                              task list) that is not ``test_name``-shaped, so
+                              the gate cannot check it. **Review-blocker.**
+                              Before Issue #669 these were dropped silently,
+                              which let a green be computed over a fraction of
+                              the stated contract.
   - ``✗ no-test-contract`` — a linked spec with no ``## Test contract`` section
                               at all. **Review-blocker**, and distinct from a
                               contract that exists and is empty.
@@ -55,15 +56,34 @@ TESTS_DIR = ROOT / "tests"
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 _TEST_CONTRACT_HEADING_RE = re.compile(r"^##\s+Test [Cc]ontract.*$", re.M)
-# Use [ \t] (not \s) so the note capture can't bleed across newlines into
-# the next bullet. Earlier bug: \s+(.*?)$ consumed \n then matched the next
-# line as the "note" — fixed by restricting horizontal whitespace only.
-_BULLET_RE = re.compile(r"^\d+\.[ \t]+`([^`]+)`[ \t]*(.*)$", re.M)
-# Every numbered list item in a Test Contract section, parseable or not.
-# _BULLET_RE only matches items that BEGIN with a backticked token; this one
-# matches the population, so an item _BULLET_RE cannot read becomes a visible
-# ✗ unparseable row instead of vanishing (Issue #669).
-_NUMBERED_ITEM_RE = re.compile(r"^(\d+)\.[ \t]+(.*)$", re.M)
+# Use [ \t] (not \s) throughout so a note capture can't bleed across newlines
+# into the next bullet. Earlier bug: \s+(.*?)$ consumed \n then matched the
+# next line as the "note" — fixed by restricting to horizontal whitespace.
+#
+# EVERY list item in a Test Contract section — ordered (`1.`), unordered
+# (`-`/`*`/`+`), and GitHub task lists (`- [ ]`) — parseable or not.
+#
+# Scoping this to `^\d+\.` was the first, incomplete fix for Issue #669: it
+# rescued ADR 0040's prose but left five specs whose contracts are written with
+# dashes parsing to ZERO. `03-system-design/namespaces.md` is the sharp case —
+# it states five properly-named bullets (`test_isolation_read_enforcement`, …)
+# that the gate could not see purely because they use `-` instead of `1.`, so
+# the namespace isolation tests went unchecked by every slice implementing it.
+# The lesson is the bug's own: a parser narrower than the syntax in use reports
+# a green it never earned. (Raised in review on PR #670.)
+_LIST_ITEM_RE = re.compile(r"^(?:(\d+)\.|[-*+])[ \t]+(.*)$", re.M)
+# A leading GitHub task-list checkbox, stripped before reading the item text.
+_CHECKBOX_RE = re.compile(r"^\[[ xX]\][ \t]*")
+# An item whose text BEGINS with a backticked token — the machine-checkable
+# shape. Applied to the item's text, not the whole line, so it works for every
+# list syntax above.
+_NAMED_ITEM_RE = re.compile(r"^`([^`]+)`[ \t]*(.*)$")
+# Leading separator between a bullet's name and its prose. Specs write
+# "`test_x` <dash> prose" and render_markdown adds its own separator, so
+# without this the table reads "test_x <dash> <dash> prose".
+# Matches U+2014, U+2013 and ASCII hyphen; written as escapes because ruff
+# RUF001/RUF003 flag the literal glyphs as ambiguous.
+_NOTE_SEPARATOR_RE = re.compile("^[\u2014\u2013-]+[ \t]*")
 # Fenced code blocks are stripped before counting items so a numbered line
 # inside an example block is not mistaken for a contract bullet.
 _FENCE_RE = re.compile(r"^```.*?^```", re.M | re.S)
@@ -144,45 +164,54 @@ def has_test_contract(spec_text: str) -> bool:
 def _parse_bullets(spec_text: str, spec_rel: str) -> list[Bullet]:
     """Parse a spec's Test Contract section into bullets, preserving order.
 
-    Enumerates EVERY numbered item in the section. Items that ``_BULLET_RE``
-    can read become ordinary bullets; items it cannot become ✗ unparseable.
+    Enumerates EVERY list item in the section — ordered, unordered, and task
+    lists. An item whose text begins with a backticked token becomes an ordinary
+    bullet; anything else becomes ✗ unparseable, which is visible and blocking.
 
-    Before Issue #669 this returned only ``_BULLET_RE`` matches, so a spec
-    stating its obligations in prose contributed nothing and was indistinguishable
-    from a spec with no obligations. ADR 0040 stated 14 and yielded 1: the other
-    13 were never constructed as Bullet objects, so they could not even be
-    reported ✗ missing, and ``Total: N`` read as the population when it was only
-    the parseable subset.
+    Before Issue #669 only ``^\\d+\\.[ \\t]+`name`  `` matched, so an item the
+    pattern could not read was never constructed as a Bullet at all — it could
+    not even be reported ✗ missing, and ``Total: N`` read as the population when
+    it was only the parseable subset. Two rounds of evidence:
+
+    - ADR 0040 states 14 obligations in prose and yielded 1.
+    - Five specs write their contracts with dashes or task lists and yielded 0,
+      including ``03-system-design/namespaces.md``, whose five properly-named
+      isolation bullets went unchecked by every slice implementing it. Found in
+      review on PR #670, after the first fix widened the parser only to numbers.
     """
     section = _section_after_heading(spec_text, _TEST_CONTRACT_HEADING_RE)
     if not section:
         return []
     section = _FENCE_RE.sub("", section)
     out: list[Bullet] = []
-    for m in _NUMBERED_ITEM_RE.finditer(section):
-        # Use the number the SPEC states, not match order. The `#` column is a
-        # cross-reference: a reviewer reads "✗ unparseable #9" and goes to look
-        # at item 9 in the spec. Match order silently diverges from the stated
-        # numbering whenever a list is non-contiguous (starts at 9, has gaps),
-        # which would send them to the wrong obligation.
-        stated = int(m.group(1))
-        line = m.group(0)
-        parsed = _BULLET_RE.match(line)
-        if parsed:
+    for position, m in enumerate(_LIST_ITEM_RE.finditer(section), start=1):
+        # For an ORDERED item use the number the SPEC states, not match order.
+        # The `#` column is a cross-reference: a reviewer reads "✗ unparseable
+        # #9" and goes to look at item 9 in the spec. Match order silently
+        # diverges from the stated numbering whenever a list is non-contiguous
+        # (starts at 9, has gaps), sending them to the wrong obligation.
+        # An UNORDERED item states no number, so position is the only reference
+        # a reader can use to find it.
+        index = int(m.group(1)) if m.group(1) else position
+        text = " ".join(_CHECKBOX_RE.sub("", m.group(2)).split())
+        named = _NAMED_ITEM_RE.match(text)
+        if named:
+            # Strip a leading em/en/hyphen separator: specs write
+            # "`test_x` — prose", and render_markdown adds its own " — ".
+            note = _NOTE_SEPARATOR_RE.sub("", (named.group(2) or "").strip())
             out.append(
                 Bullet(
                     spec=spec_rel,
-                    index=stated,
-                    name=parsed.group(1).strip(),
-                    note=(parsed.group(2) or "").strip(),
+                    index=index,
+                    name=named.group(1).strip(),
+                    note=note.strip(),
                 )
             )
             continue
-        text = " ".join(m.group(2).split())
         out.append(
             Bullet(
                 spec=spec_rel,
-                index=stated,
+                index=index,
                 name=text[:90] + ("…" if len(text) > 90 else ""),
                 state=UNPARSEABLE,
                 evidence=(
