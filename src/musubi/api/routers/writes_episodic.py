@@ -6,7 +6,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Body, Depends, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
-from qdrant_client import QdrantClient, models
+from qdrant_client import QdrantClient
 
 from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import (
@@ -25,6 +25,12 @@ from musubi.lifecycle.transitions import transition
 from musubi.planes.episodic import EpisodicPlane
 from musubi.retrieve.context_pack import VALID_KINDS, VALID_STALENESS
 from musubi.settings import Settings
+from musubi.store.immutable_vectors import (
+    NonEmbeddingPatchConflict,
+    patch_non_embedding_payload,
+    resolve_committed_content,
+)
+from musubi.store.specs import strip_layout_fields
 from musubi.types.common import Ok, utc_now
 from musubi.types.episodic import EpisodicMemory
 
@@ -443,6 +449,33 @@ async def patch_episodic(
             detail=f"episodic {object_id!r} not found in namespace {namespace!r}",
         )
 
+    is_v2 = current_raw.get("point_kind") == "anchor"
+    readable_current = strip_layout_fields(current_raw)
+    if is_v2:
+        resolved_current = resolve_committed_content(
+            qdrant,
+            "musubi_episodic",
+            namespace=namespace,
+            object_id=object_id,
+        )
+        if resolved_current is None:
+            raise APIError(
+                status_code=409,
+                code="CONFLICT",
+                detail="v2 episodic anchor has no readable committed content; nothing was written",
+            )
+        readable_current = strip_layout_fields(resolved_current)
+    projection_fields = {"content", "summary"} & incoming.keys()
+    if is_v2 and projection_fields:
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail=(
+                f"v2 episodic embedding-projection replacement {sorted(projection_fields)} is "
+                "refused pending the fenced retract and evidence-escrow contract in Issue #611"
+            ),
+        )
+
     # NEVER PERSIST WHAT YOU CANNOT READ BACK.
     #
     # The allowlist above stops unknown KEYS. It does nothing about invalid VALUES of
@@ -454,20 +487,25 @@ async def patch_episodic(
     # invariant total instead of remembered: any divergence between this request model
     # and EpisodicMemory — today's or a future one nobody has thought of — becomes a
     # clean 400 rather than a 500 and a dead memory.
-    assert_readable_after_patch(current_raw, incoming, EpisodicMemory, object_id=object_id)
+    assert_readable_after_patch(readable_current, incoming, EpisodicMemory, object_id=object_id)
 
-    qdrant.set_payload(
-        collection_name="musubi_episodic",
-        payload=incoming,
-        points=models.Filter(
-            must=[
-                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
-            ]
-        ),
-    )
-    refreshed = await plane.get(namespace=namespace, object_id=object_id)
-    assert refreshed is not None
-    return refreshed
+    try:
+        published = patch_non_embedding_payload(
+            qdrant,
+            "musubi_episodic",
+            namespace=namespace,
+            object_id=object_id,
+            observed_payload=current_raw,
+            changes=incoming,
+            tag_mode="replace",
+        )
+    except NonEmbeddingPatchConflict as exc:
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail=str(exc),
+        ) from exc
+    return EpisodicMemory.model_validate(strip_layout_fields(published))
 
 
 @router.delete(

@@ -108,7 +108,7 @@ def test_owned_update_publishes_narrow_change_and_bumps_version(real_qdrant: Qdr
     assert published["tags"] == ["x"]
     assert published["version"] == 2  # bumped from 1
     assert published["importance"] == 5  # untouched
-    assert published.get("update_lease_token") is None  # released
+    assert "update_lease_token" not in published  # released by removal, never persisted null
 
 
 @pytest.mark.integration
@@ -167,7 +167,7 @@ def test_two_writers_same_next_version_both_land_attributably(real_qdrant: Qdran
     assert row["tags"] == ["from-a"]  # writer A's change survived
     assert row["importance"] == 8  # writer B's change survived
     assert row["version"] == 3  # two serialized version steps, no collision
-    assert row.get("update_lease_token") is None
+    assert "update_lease_token" not in row
 
 
 @pytest.mark.integration
@@ -216,7 +216,7 @@ def test_expired_owner_token_takeover_recovers(real_qdrant: QdrantClient) -> Non
     )
     assert published["tags"] == ["recovered"]
     assert published["version"] == 2
-    assert published.get("update_lease_token") is None
+    assert "update_lease_token" not in published
 
 
 @pytest.mark.integration
@@ -232,7 +232,7 @@ def test_skip_plan_is_noop_and_releases(real_qdrant: QdrantClient) -> None:
     )
     assert published["version"] == 1  # not bumped
     assert published["importance"] == 5
-    assert published.get("update_lease_token") is None  # released even on a no-op
+    assert "update_lease_token" not in published  # released even on a no-op
 
 
 @pytest.mark.integration
@@ -318,7 +318,14 @@ def test_stalled_owner_does_not_falsely_attribute_a_takeover_commit(
         # B's completed takeover: a DIFFERENT field (tags) published at v2, token cleared.
         real_qdrant.set_payload(
             collection_name=_COLL,
-            payload={"tags": ["from-b"], "version": 2, "update_lease_token": None},
+            payload={"tags": ["from-b"], "version": 2},
+            points=models.Filter(
+                must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
+            ),
+        )
+        real_qdrant.delete_payload(
+            collection_name=_COLL,
+            keys=["update_lease_token"],
             points=models.Filter(
                 must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))]
             ),
@@ -338,7 +345,7 @@ def test_stalled_owner_does_not_falsely_attribute_a_takeover_commit(
     assert row["tags"] == ["from-b"], "B's takeover change was lost"
     assert row["importance"] == 9, "A falsely attributed B's commit and lost its own change"
     assert row["version"] == 3, "expected two serialized commits (B at v2, A at v3)"
-    assert row.get("update_lease_token") is None
+    assert "update_lease_token" not in row
 
 
 @pytest.mark.integration
@@ -372,7 +379,7 @@ def test_crash_after_done_before_clear_recovers_without_reapply(real_qdrant: Qdr
     ]  # A's committed change preserved (not lost, not double-applied)
     assert row["importance"] == 9  # B's change applied on top
     assert row["version"] == 3  # B committed at the next version — no regression
-    assert row.get("update_lease_token") is None  # the stale done token was cleared
+    assert "update_lease_token" not in row  # the stale done token was removed
 
 
 @pytest.mark.integration
@@ -397,7 +404,7 @@ def test_plan_error_releases_own_token_and_fails_loud(real_qdrant: QdrantClient)
             plan=exploding_plan,
         )
     row = _payload(real_qdrant, oid)
-    assert row.get("update_lease_token") is None  # released — no leaked lease
+    assert "update_lease_token" not in row  # released — no leaked lease
     assert row.get("version") == 1  # row untouched — the failed plan committed nothing
 
 
@@ -513,7 +520,7 @@ def test_seam_reject_releases_own_token(real_qdrant: QdrantClient) -> None:
             plan=lambda cur: MutationPlan(changes={"version": 99}),
         )
     row = _payload(real_qdrant, oid)
-    assert row.get("update_lease_token") is None  # released — no leaked lease
+    assert "update_lease_token" not in row  # released — no leaked lease
     assert row.get("version") == 1  # nothing committed
 
 
@@ -536,7 +543,7 @@ def test_update_vectors_error_releases_own_token_and_fails_loud(real_qdrant: Qdr
             ),
         )
     row = _payload(real_qdrant, oid)
-    assert row.get("update_lease_token") is None  # released
+    assert "update_lease_token" not in row  # released
     assert row.get("version") == 1  # not committed
     assert _dense(real_qdrant, oid) == original  # vector untouched (fake raised before writing)
 
@@ -557,7 +564,7 @@ def test_commit_error_releases_own_token_and_fails_loud(real_qdrant: QdrantClien
             plan=lambda cur: MutationPlan(changes={"tags": ["x"]}),
         )
     row = _payload(real_qdrant, oid)
-    assert row.get("update_lease_token") is None  # released
+    assert "update_lease_token" not in row  # released
     assert row.get("version") == 1  # not committed
 
 
@@ -604,12 +611,12 @@ def test_plan_baseexception_releases_own_token(real_qdrant: QdrantClient) -> Non
             plan=exploding_plan,
         )
     row = _payload(real_qdrant, oid)
-    assert row.get("update_lease_token") is None  # released even on a BaseException
+    assert "update_lease_token" not in row  # released even on a BaseException
     assert row.get("version") == 1
 
 
 class _SkipClearFake:
-    """Pure-unit fake: acquire succeeds, but the skip-release set_payload NEVER lands (the clear is a
+    """Pure-unit fake: acquire succeeds, but the skip-release delete_payload NEVER lands (the clear is a
     no-op), so the own token can never be confirmed cleared. Proves the skip path fails loud on its
     bounded exact-token clear instead of falling through to outer-loop TTL recovery."""
 
@@ -618,28 +625,32 @@ class _SkipClearFake:
         self._acquired = False
 
     def scroll(self, *_a: Any, **_k: Any) -> Any:
+        payload: dict[str, Any] = {
+            "namespace": "n/n/episodic",
+            "object_id": "o",
+            "version": 1,
+        }
+        if self._token is not None:
+            payload["update_lease_token"] = self._token
         rec = type(
             "R",
             (),
             {
                 "id": "p1",
-                "payload": {
-                    "namespace": "n/n/episodic",
-                    "object_id": "o",
-                    "version": 1,
-                    "update_lease_token": self._token,
-                },
+                "payload": payload,
             },
         )()
         return ([rec], None)
 
     def set_payload(self, *, payload: dict[str, Any], **_k: Any) -> Any:
         tok = payload.get("update_lease_token", "__missing__")
-        if tok not in (None, "__missing__") and not self._acquired:
+        if tok != "__missing__" and not self._acquired:
             self._token = cast(str, tok)  # acquire our own token
             self._acquired = True
-        # A clear (tok is None) is a deliberate no-op: the token stays, so readback never confirms.
         return None
+
+    def delete_payload(self, **_k: Any) -> Any:
+        return None  # deliberate no-op: token stays, so readback never confirms
 
 
 class _SkipClearFlakyFake(_SkipClearFake):
@@ -650,16 +661,11 @@ class _SkipClearFlakyFake(_SkipClearFake):
         super().__init__()
         self._clear_fails = clear_fails
 
-    def set_payload(self, *, payload: dict[str, Any], **_k: Any) -> Any:
-        tok = payload.get("update_lease_token", "__missing__")
-        if tok not in (None, "__missing__") and not self._acquired:
-            self._token = cast(str, tok)
-            self._acquired = True
-        elif tok is None:  # a clear attempt
-            if self._clear_fails > 0:
-                self._clear_fails -= 1  # refuse this round
-            else:
-                self._token = None  # land the clear
+    def delete_payload(self, **_k: Any) -> Any:
+        if self._clear_fails > 0:
+            self._clear_fails -= 1  # refuse this round
+        else:
+            self._token = None  # land the clear
         return None
 
 
@@ -689,7 +695,7 @@ def test_skip_clear_retries_until_confirmed() -> None:
         point_id="p1",
         plan=lambda cur: MutationPlan(changes={}, skip=True),
     )
-    assert published.get("update_lease_token") is None  # confirmed released
+    assert "update_lease_token" not in published  # confirmed released
     assert published.get("version") == 1  # no-op — nothing bumped
 
 
@@ -698,9 +704,10 @@ class _CleanupBoom(RuntimeError):
 
 
 class _ClearBoom:
-    """Wraps a real client and raises on the exact-own CLEANUP clear only (a ``set_payload`` whose
-    payload sets ``update_lease_token`` to None and carries no ``version`` — i.e. not the acquire, not
-    the commit). Acquire and confirm proceed on the real row so the own token is genuinely held."""
+    """Wraps a real client and raises on exact-own ``delete_payload`` cleanup only.
+
+    Acquire and confirm proceed on the real row so the own token is genuinely held.
+    """
 
     def __init__(self, inner: QdrantClient) -> None:
         self._inner = inner
@@ -708,14 +715,8 @@ class _ClearBoom:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
-    def set_payload(
-        self, *, collection_name: str, payload: dict[str, Any], points: Any, **kw: Any
-    ) -> Any:
-        if payload.get("update_lease_token", "__x__") is None and "version" not in payload:
-            raise _CleanupBoom("exact-own clear failed")
-        return self._inner.set_payload(
-            collection_name=collection_name, payload=payload, points=points, **kw
-        )
+    def delete_payload(self, **_kw: Any) -> Any:
+        raise _CleanupBoom("exact-own clear failed")
 
 
 @pytest.mark.integration
