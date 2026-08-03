@@ -10,7 +10,6 @@ import pytest
 
 from musubi.retrieve import orchestration
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RETRIEVE_ROOT = REPO_ROOT / "src" / "musubi" / "retrieve"
 SRC_ROOT = REPO_ROOT / "src" / "musubi"
@@ -75,9 +74,7 @@ def _collect_error_code_surface(
                 elif literals:
                     codes.update(literals)
                 else:
-                    forwarding_sites.add(
-                        (path.name, callee, ast.unparse(keyword.value))
-                    )
+                    forwarding_sites.add((path.name, callee, ast.unparse(keyword.value)))
     return codes, rejected_callees, forwarding_sites
 
 
