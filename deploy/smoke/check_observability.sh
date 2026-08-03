@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
-metrics="$(json_get "/v1/ops/metrics")"
+metrics="$(public_get "/v1/ops/metrics")"
 
 if METRICS="$metrics" python3 - <<'PY'
 import os

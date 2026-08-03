@@ -66,11 +66,14 @@ def authenticate_request(
             )
         )
 
-    token_result = validate_token(bearer, settings=settings)
-    if isinstance(token_result, Err):
-        return Err(error=_http_error_from_token_error(token_result.error))
-
-    context = token_result.value
+    cached = _reuse_presented_context(request, bearer)
+    if cached is not None:
+        context = cached
+    else:
+        token_result = validate_token(bearer, settings=settings)
+        if isinstance(token_result, Err):
+            return Err(error=_http_error_from_token_error(token_result.error))
+        context = token_result.value
     if requirement is not None:
         scope_result = _check_requirement(context, requirement)
         if isinstance(scope_result, Err):
@@ -130,4 +133,95 @@ def _http_error_from_scope_error(error: ScopeError) -> AuthHTTPError:
     )
 
 
-__all__ = ["AuthHTTPError", "AuthRequirement", "authenticate_request"]
+#: Private request-state seam. The REQ-8 guard cryptographically validates a presented
+#: bearer at the edge; :func:`authenticate_request` then reuses that result instead of
+#: validating the SAME token a second time in the handler.
+#:
+#: Without this, every protected request validated twice — reproduced by Yua on the
+#: first revision of #413: a valid GET /v1/namespaces returned 200 with
+#: ``validate_token`` call_count=2. ``tokens.py`` has no JWKS cache, so under RS256 that
+#: is two synchronous JWKS fetches per protected request, and it amplifies exactly the
+#: Kong path this issue deliberately bounded.
+#:
+#: Stored as (token, context) and matched on the token, so the cached decision can only
+#: satisfy the credential it was actually derived from.
+PRESENTED_AUTH_STATE_KEY = "_musubi_presented_auth"
+
+
+def presented_bearer_context(
+    authorization: str | None,
+    *,
+    settings: Settings | None = None,
+) -> Result[AuthContext | None, AuthHTTPError]:
+    """REQ-8 edge decision, carrying the validated context so nobody validates twice.
+
+    ``Ok(None)``    — no bearer was presented; proceed (public routes stay public).
+    ``Ok(context)`` — a valid bearer was presented; proceed AND reuse this context.
+    ``Err(error)``  — a bearer was presented and is not valid; serve the error.
+
+    Takes the RAW ``Authorization`` value (``None`` when absent) rather than a headers
+    object, so the decision is a pure string function and depends on no framework's
+    header type.
+
+    A client that sends ``Authorization: Bearer …`` is asserting an identity. Serving
+    it anonymously tells that client it is authenticated when it is not — the failure
+    is silent and lands on the caller. Absent credentials stay public; that is a
+    different fact and stays a 200.
+
+    Deliberately NOT reusing :func:`_bearer_token`, which collapses "absent", "not a
+    bearer scheme" and "bearer with an empty value" all to ``None`` — correct when
+    REQUIRING auth, wrong when DETECTING presentation. An empty ``Bearer`` would read
+    as absent and slip through the very hole REQ-8 closes.
+
+    Scope, deliberately narrow (Issue #413): only the ``Bearer`` scheme is an
+    assertion. A non-bearer ``Authorization`` (``Basic …``) passes through, because
+    rejecting it is policy REQ-8 does not state and no repo caller exercises. Widen it
+    in a slice that says so, not here.
+    """
+    if not isinstance(authorization, str) or not authorization.strip():
+        return Ok(value=None)  # absent — public routes stay public (REQ-8 control 1)
+
+    scheme, _, value = authorization.partition(" ")
+    if scheme.lower() != "bearer":
+        return Ok(value=None)  # not a presented bearer — out of scope, see above
+
+    token = value.strip()
+    if not token:
+        return Err(
+            error=AuthHTTPError(
+                status_code=401,
+                code="UNAUTHORIZED",
+                detail="presented bearer credential is empty",
+            )
+        )
+
+    result = validate_token(token, settings=settings)
+    if isinstance(result, Err):
+        return Err(error=_http_error_from_token_error(result.error))
+    return Ok(value=result.value)
+
+
+def _reuse_presented_context(request: _RequestLike, bearer: str) -> AuthContext | None:
+    """Return the edge-validated context for ``bearer``, or None to validate here.
+
+    Scope/operator requirements are NOT cached — only the cryptographic validation is.
+    The caller still runs :func:`_check_requirement` against the reused context, so a
+    protected route keeps enforcing its AuthRequirement exactly as before.
+    """
+    state = getattr(request, "state", None)
+    entry = getattr(state, PRESENTED_AUTH_STATE_KEY, None) if state is not None else None
+    if not isinstance(entry, tuple) or len(entry) != 2:
+        return None
+    cached_token, cached_context = entry
+    if cached_token != bearer or not isinstance(cached_context, AuthContext):
+        return None
+    return cached_context
+
+
+__all__ = [
+    "PRESENTED_AUTH_STATE_KEY",
+    "AuthHTTPError",
+    "AuthRequirement",
+    "authenticate_request",
+    "presented_bearer_context",
+]

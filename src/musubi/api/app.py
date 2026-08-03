@@ -39,6 +39,7 @@ from musubi.api.errors import APIError, api_error_handler, error_response
 from musubi.api.idempotency_dependency import Replay
 from musubi.api.idempotency_observer import IdempotencyObserver
 from musubi.api.idempotency_receipts import DurableReceiptStore
+from musubi.api.presented_bearer import PresentedBearerGuard
 from musubi.api.rate_limit import DEFAULT_BUCKETS, RateLimiter, get_rate_limiter
 from musubi.api.routers import (
     artifacts,
@@ -290,6 +291,14 @@ def create_app(*, settings: Settings | None = None) -> FastAPI:
         response = Response(content=completed.body, status_code=completed.status)
         response.raw_headers = [*completed.raw_headers, (b"x-idempotent-replay", b"true")]
         return response
+
+    # REQ-8 (Issue #413): a PRESENTED-but-invalid bearer is rejected on EVERY route,
+    # including the public ones and the framework-generated /v1/docs + /v1/openapi.json.
+    # Added FIRST, so it is the innermost of the response-observing middleware — a
+    # rejection is still seen and counted by the observer and the metrics middleware
+    # rather than bypassing telemetry. Absent credentials are untouched and public
+    # routes stay public.
+    app.add_middleware(PresentedBearerGuard, settings=settings)
 
     # Mount the store-only idempotency observer outside response-mutating HTTP middleware so it sees
     # the exact response headers/body that will be replayed. It stores a completed 2xx and releases

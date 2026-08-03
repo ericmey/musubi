@@ -77,7 +77,6 @@ def test_http_wire_shape_drops_warnings(
     client = TestClient(app)
     response = client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={
             "namespace": "test/ns/episodic",
             "query_text": "test",

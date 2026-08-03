@@ -4,9 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib.sh"
 
-json_get "/v1/ops/health" >/dev/null && pass "api health" || fail "api health"
+public_get "/v1/ops/health" >/dev/null && pass "api health" || fail "api health"
 
-status_json="$(json_get "/v1/ops/status")"
+status_json="$(public_get "/v1/ops/status")"
 STATUS_JSON="$status_json" python3 - <<'PY'
 import json
 import os

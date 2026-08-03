@@ -104,7 +104,6 @@ def test_omitted_include_lineage_forwards_true(
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={"namespace": "nyla/test/episodic", "query_text": "x", "mode": "fast", "limit": 5},
     )
     assert response.status_code == 200, response.text
@@ -126,7 +125,6 @@ def test_explicit_include_lineage_false_forwards_false(
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={
             "namespace": "nyla/test/episodic",
             "query_text": "x",
@@ -150,7 +148,6 @@ def test_explicit_include_lineage_true_forwards_true(
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={
             "namespace": "nyla/test/episodic",
             "query_text": "x",
@@ -174,7 +171,6 @@ def test_concrete_namespace_preserves_include_lineage(
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={
             "namespace": "nyla/test/episodic",
             "query_text": "x",
@@ -195,7 +191,6 @@ def test_fanout_namespace_preserves_include_lineage(
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={
             "namespace": "nyla/test",
             "query_text": "x",
@@ -235,7 +230,6 @@ def test_non_boolean_include_lineage_rejected_at_wire(
     client = _make_app(monkeypatch, api_settings)
     response = client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={
             "namespace": "nyla/test/episodic",
             "query_text": "x",

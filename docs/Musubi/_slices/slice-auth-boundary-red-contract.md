@@ -10,7 +10,7 @@ tags: [section/slices, status/done, type/slice, security, p0, auth, idempotency]
 updated: 2026-07-13
 reviewed: true
 depends-on: [slice-sec-002-idempotency-auth-bypass, slice-sec-003-namespace-outside-query, slice-sec-004-contradictions-fleet-scroll]
-blocks: [slice-auth-boundary-phase-a, slice-idempotency-phase-b]
+blocks: [slice-auth-boundary-phase-a, slice-idempotency-phase-b, slice-req8-presented-invalid-bearer]
 issue: 406
 ---
 
@@ -123,7 +123,7 @@ encoded; `UNPROVEN` = design exists, no prototype (blocks the matching `src` fix
 | 5 | preserve raw duplicate headers, cookies, media type, background task, exact bytes — no lossy reconstruction | — | **TO-WRITE** (adversarial: duplicate Set-Cookie, non-JSON media, background task, byte-exactness) |
 | 6 | multipart digest: file bytes + canonical small fields, per-route size, rewind/spool, no collision | — | **UNPROVEN** — ADR D5, no prototype; blocks the D5 `src` fix |
 | 7 | D6 exact token invariant; reject inconsistent issuer/subject/presence | partial via `test_sec002_*` (replay under wrong bearer) | **TO-WRITE** — explicit issuer/subject/presence-mismatch rejection |
-| 8 | public absent-bearer stays public; presented-invalid fails; protected absent fails | `test_*_no_token_must_be_401` (protected-absent) across sec002/003/004 | PARTIAL — the public-route absent-vs-invalid pair is **TO-WRITE** |
+| 8 | public absent-bearer stays public; presented-invalid fails; protected absent fails | `test_*_no_token_must_be_401` (protected-absent) across sec002/003/004; public pair in `tests/api/test_req8_public_invalid_protected_bearer.py` | **CLOSED** — the public absent-vs-invalid pair was written and now passes; implemented by [[_slices/slice-req8-presented-invalid-bearer]] (#413). The protected-absent evidence above is unchanged. |
 | 9 | identity includes route/operation — same key+body cannot replay across endpoints | `test_same_key_body_must_not_replay_across_endpoints` (+ `test_replay_on_same_endpoint_still_works` control) | **RED-XFAIL** (new, observed above) |
 | 10 | Phase-0 single-worker invariant fails closed in runtime config, not only a unit assertion | — | **TO-WRITE** — a config-level fail-closed check, not just a unit assert |
 
