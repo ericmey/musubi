@@ -1,0 +1,18 @@
+{
+  "agent": "codex-gpt5",
+  "branch": "slice/art004-exact-byte-escrow",
+  "owns_paths": [
+    "src/musubi/planes/artifact/escrow.py",
+    "src/musubi/planes/artifact/__init__.py",
+    "src/musubi/planes/artifact/plane.py",
+    "src/musubi/ops/retention.py",
+    "tests/planes/test_artifact_escrow.py",
+    "tests/integration/test_artifact_escrow.py",
+    "tests/ops/test_retention.py",
+    "docs/Musubi/04-data-model/source-artifact.md",
+    "docs/Musubi/_slices/slice-art004-exact-byte-escrow.md",
+    "docs/Musubi/_inbox/locks/slice-art004-exact-byte-escrow.lock"
+  ],
+  "reason": "ART-004 deterministic exact-byte retraction escrow",
+  "timestamp": "2026-08-03T14:10:26Z"
+}
