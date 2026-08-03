@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.20.0](https://github.com/ericmey/musubi/compare/v1.19.7...v1.20.0) (2026-08-03)
+
+
+### Features
+
+* **artifact:** add truthful stored-unindexed state ([#649](https://github.com/ericmey/musubi/issues/649)) ([58309c4](https://github.com/ericmey/musubi/commit/58309c47eabfcdf21735481c3c9fdf03090c2b9b))
+
 ## [1.19.7](https://github.com/ericmey/musubi/compare/v1.19.6...v1.19.7) (2026-08-03)
 
 
