@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from qdrant_client import QdrantClient, models
 
 import musubi.api.routers.writes_curated as writes_curated
+from musubi.api.patch_guard import assert_readable_after_patch
 from musubi.planes.curated import CuratedPlane
 from musubi.store.immutable_vectors import patch_non_embedding_payload
 from musubi.store.names import collection_for_plane
@@ -70,12 +71,11 @@ def test_curated_http_patch_same_version_loser_returns_typed_conflict_without_re
     observed = asyncio.run(curated.raw_payload(namespace=_NS, object_id=str(saved.object_id)))
     assert observed is not None and observed["version"] == 1
 
-    real_assert = writes_curated.assert_readable_after_patch
     injected = False
 
     def inject_same_version_winner(*args: Any, **kwargs: Any) -> None:
         nonlocal injected
-        real_assert(*args, **kwargs)
+        assert_readable_after_patch(*args, **kwargs)
         if injected:
             return
         injected = True
