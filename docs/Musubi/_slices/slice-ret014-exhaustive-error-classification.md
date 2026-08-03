@@ -27,8 +27,9 @@ the producing commit rather than silently becoming an HTTP 500.
 ## Decision boundary
 
 - Mechanically inventory literal `code=` values emitted by retrieve error models.
-- Preserve every current code-to-kind result; this slice changes no public error
-  semantics.
+- Preserve every emitted code-to-kind result; this slice changes no public error
+  semantics. Deliberately retire the unreachable literal `bad_query` code and
+  the unreachable `forbidden` / `unauthorized` substring branches.
 - Replace the implicit `internal` fallback with an exact registry and a named set
   of intentionally internal codes.
 - Reject unknown codes diagnostically. The input domain is closed over
@@ -74,3 +75,8 @@ the producing commit rather than silently becoming an HTTP 500.
   closure is green: 50 passing, one named skip, three pre-existing non-test
   integration bullets, and no missing bullets. Handed exact head to Aoi for the
   mandatory second-seat review.
+- 2026-08-02 — Aoi approved the executable head after independently reproducing
+  `make check` and red-proofing seven registry, self-guard, and closure
+  mutations. Follow-up documentation names all three deliberately retired dead
+  classifier paths; Copilot's duplicate Test Contract numbering finding was
+  also corrected without changing code or tests.

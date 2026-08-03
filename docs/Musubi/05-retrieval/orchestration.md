@@ -234,6 +234,12 @@ expressions, and fails if the error-constructor naming convention silently
 excludes a new callee. Warning codes remain a separate taxonomy even when a
 literal such as `sparse_embedding_failed` intentionally exists in both.
 
+The closed-domain conversion deliberately retires three unreachable classifier
+inputs: the literal `bad_query` code and codes containing `forbidden` or
+`unauthorized`. No retrieve error producer emits any of them. Public
+`kind="bad_query"` remains reachable through the registry's emitted bad-query
+codes, while `kind="forbidden"` remains reachable through HTTP status 403.
+
 ## Observability hooks
 
 Every step emits:
