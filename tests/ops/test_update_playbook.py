@@ -89,8 +89,56 @@ def test_update_recreates_only_named_services_with_core_default() -> None:
     defaults = vars_.get("changed_services")
     assert defaults == ["core"], f"default changed_services should be ['core'], got {defaults!r}"
     text = UPDATE_PLAYBOOK.read_text()
-    assert "{{ changed_services | join(' ') }}" in text, (
-        "compose up must reference the changed_services variable"
+    assert "{{ changed_services_list | join(' ') }}" in text, (
+        "compose up must reference the normalised changed_services_list"
+    )
+
+
+def test_update_never_consumes_raw_changed_services() -> None:
+    """Every consumer must read `changed_services_list`, never `changed_services`.
+
+    Ansible's `-e key=value` extra-vars are ALWAYS strings, so
+    `-e 'changed_services=["core"]'` arrives as literal text. Consuming it
+    directly makes `join(' ')` concatenate its CHARACTERS and `loop:` iterate
+    them one at a time — and both consumers sit inside `no_log: true` tasks,
+    so the operator sees only a bare non-zero exit (#665).
+    """
+    text = UPDATE_PLAYBOOK.read_text()
+    forbidden = (
+        "{{ changed_services | join(' ') }}",
+        "{{ changed_services | to_json }}",
+        'loop: "{{ changed_services }}"',
+    )
+    offenders = [f for f in forbidden if f in text]
+    assert not offenders, (
+        "these consume the un-normalised variable and will silently receive a "
+        f"string from `-e key=value`: {offenders}"
+    )
+
+
+def test_update_normalises_and_asserts_changed_services() -> None:
+    """The normalisation exists AND is guarded before anything is recreated."""
+    play = _play()
+    vars_ = play.get("vars") or {}
+    assert "changed_services_list" in vars_, (
+        "update.yml must define changed_services_list to normalise both spellings"
+    )
+
+    pre = play.get("pre_tasks") or []
+    guard = []
+    for task in pre:
+        for key in ("assert", "ansible.builtin.assert"):
+            body = task.get(key)
+            if body and "changed_services_list" in str(body):
+                guard.append(body)
+    assert guard, (
+        "a pre_task must assert changed_services_list is a non-empty list of "
+        "strings, so a malformed value fails before any pull or recreate"
+    )
+    that = str(guard[0].get("that", ""))
+    assert "is not string" in that, (
+        "the guard must reject a string; that is the exact failure mode of "
+        "`-e key=value` extra-vars"
     )
 
 
