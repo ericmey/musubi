@@ -4,12 +4,12 @@ slice_id: slice-ret014-exhaustive-error-classification
 issue: 619
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice, retrieval, errors]
+tags: [section/slices, status/done, type/slice, retrieval, errors]
 updated: 2026-08-02
-reviewed: false
+reviewed: true
 depends-on: [slice-issue578-truthful-hybrid-channels]
 blocks: []
 ---
@@ -80,3 +80,7 @@ the producing commit rather than silently becoming an HTTP 500.
   mutations. Follow-up documentation names all three deliberately retired dead
   classifier paths; Copilot's duplicate Test Contract numbering finding was
   also corrected without changing code or tests.
+- 2026-08-02 — Aoi's approval carried to `2c62b79` by tree-hash proof that
+  `src/` and `tests/` remained byte-identical to the red-proofed head. Full CI,
+  smoke, vault hygiene, and Test Contract closure are green; the slice is
+  terminal for merge.
