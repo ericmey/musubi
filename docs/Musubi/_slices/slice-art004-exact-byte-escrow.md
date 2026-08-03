@@ -35,7 +35,13 @@ mutation is permitted.
 - Automatic retention must not purge `stored_unindexed` artifacts. Explicit
   operator hard purge remains the only corrupt-address recovery and is never
   invoked by this primitive.
-- Ordinary artifact upload/indexing remains unchanged.
+- The retention proof invokes a configured future artifact policy directly;
+  there is no artifact TTL or live retained population today, so it proves the
+  guard rather than claiming production retention activity.
+- Ordinary artifact upload/indexing remains unchanged. Its existing
+  `write_bytes` path remains less durable by design: escrow is the only blob
+  whose loss is unrecoverable. ART-004's temp+fsync+hard-link protocol is not a
+  silent rewrite of ordinary upload.
 - Episodic tombstone mutation, retraction evidence, endpoint authorization, and
   fleet consumer cutover remain owned by #645, #646, and fleet-tools #32.
 
@@ -69,16 +75,18 @@ mutation is permitted.
    overwritten.
 6. Concurrent identical attempts converge on one exact blob and one identical
    artifact head.
-7. Same operation identity with a different original digest conflicts rather
-   than publishing a second escrow.
-8. A verified escrow is exactly readable by id, has zero chunks, and creates no
+7. A verified escrow is exactly readable by id, has zero chunks, and creates no
    indexing intent.
-9. Exact-text semantic search misses the escrow while the same query finds a
+8. Exact-text semantic search misses the escrow while the same query finds a
    normally indexed positive-control artifact.
-10. `ArtifactPlane.index()` refuses stored-unindexed heads without writing chunks
-    or changing `publication_version`.
-11. Automatic artifact retention skips stored-unindexed heads even when an
-    artifact TTL is configured.
+9. `ArtifactPlane.index()` refuses a live stored-unindexed head even when the
+   caller holds a stale indexing-state object, without writing chunks or
+   changing `publication_version`.
+10. A directly invoked future artifact-retention policy skips stored-unindexed
+    heads even when the row is otherwise eligible.
+11. The request-level same-key/different-digest conflict is owned and
+    mechanically required by #646, which observes the Idempotency-Key and
+    canonical request digest; ART-004 does not invent a second journal.
 12. Real filesystem plus real-Qdrant integration proves bytes-before-head,
     exact readback, and deterministic retry ordering.
 
@@ -88,4 +96,18 @@ mutation is permitted.
   This lane inherits the two boundaries deliberately left by ART-003:
   `publication_version=0`/write-once and the ungated legacy
   `ArtifactPlane.index()` door.
-
+- 2026-08-03 — Aoi approved hard-link no-clobber publication over direct
+  `O_EXCL` final writes: a crash can orphan a temp but cannot poison the final
+  deterministic address with partial bytes. Request-level same-key/different-
+  digest conflict was added to #646's Required failure proof before removal
+  here because this content-addressed primitive cannot observe an
+  Idempotency-Key. The retention check is explicitly a direct future-policy
+  guard, not evidence of a live artifact TTL.
+- 2026-08-03 — Test-first baseline is 10 intended failures and 3 passing
+  retention controls. Nine escrow cases fail because the new module is absent;
+  the retention case reaches current production behavior and observes two
+  purges instead of the required one. `tc-coverage` accounts for all 36 source-
+  artifact bullets. The initial coroutine-concurrency test was rejected before
+  commit because synchronous filesystem work could serialize it; the contract
+  now injects a real hard-link winner and proves the `EEXIST` adoption path,
+  exact retry, and temp cleanup.
