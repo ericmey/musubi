@@ -1,0 +1,18 @@
+{
+  "agent": "codex-gpt5",
+  "branch": "slice/art003-stored-unindexed",
+  "owns_paths": [
+    "src/musubi/types/common.py",
+    "src/musubi/types/artifact.py",
+    "tests/types/test_artifact.py",
+    "tests/planes/test_artifact.py",
+    "openapi.yaml",
+    "docs/Musubi/04-data-model/source-artifact.md",
+    "docs/Musubi/04-data-model/object-hierarchy.md",
+    "docs/Musubi/04-data-model/qdrant-layout.md",
+    "docs/Musubi/_slices/slice-art003-stored-unindexed.md",
+    "docs/Musubi/_inbox/locks/slice-art003-stored-unindexed.lock"
+  ],
+  "reason": "ART-003 truthful stored-unindexed artifact state",
+  "timestamp": "2026-08-03T13:42:36Z"
+}
