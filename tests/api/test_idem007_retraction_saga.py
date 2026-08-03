@@ -121,6 +121,16 @@ def _layout(client: QdrantClient, object_id: str) -> list[dict[str, Any]]:
     )
 
 
+def _artifact_rows(client: QdrantClient) -> list[dict[str, Any]]:
+    rows, _ = client.scroll(
+        collection_name="musubi_artifact",
+        limit=32,
+        with_payload=True,
+        with_vectors=False,
+    )
+    return [dict(row.payload or {}) for row in rows]
+
+
 @pytest.fixture
 def receipt_store(app_factory: Any, tmp_path: Path) -> Iterator[DurableReceiptStore]:
     store = DurableReceiptStore(tmp_path / "idem007-receipts.sqlite")
@@ -301,6 +311,99 @@ def test_both_namespace_authorizations_finish_before_first_stored_state_read(
     )
     assert response.status_code == 403
     assert events == [_NS, _ARTIFACT_NS]
+
+
+@pytest.mark.parametrize(
+    "stored_shape",
+    ["readable", "legacy_content_none", "v2_anchor_missing_pointer", "v2_target_content_none"],
+)
+def test_route_rejects_malformed_episodic_state_before_artifact_touch_with_readable_control(
+    stored_shape: str,
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    api_settings: Settings,
+    receipt_store: DurableReceiptStore,
+) -> None:
+    if stored_shape.startswith("v2_"):
+        publisher = _immutable_publishers[0]
+        assert isinstance(publisher, ImmutableVectorPublisher)
+        memory = _seed_v2(publisher, coordinator)
+        kind = "anchor" if stored_shape == "v2_anchor_missing_pointer" else "content"
+        if kind == "anchor":
+            qdrant.delete_payload(
+                collection_name="musubi_episodic",
+                keys=["live_point"],
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(key="namespace", match=models.MatchValue(value=_NS)),
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=memory.object_id)
+                        ),
+                        models.FieldCondition(
+                            key="point_kind", match=models.MatchValue(value="anchor")
+                        ),
+                    ]
+                ),
+                wait=True,
+            )
+        else:
+            qdrant.set_payload(
+                collection_name="musubi_episodic",
+                payload={"content": None},
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(key="namespace", match=models.MatchValue(value=_NS)),
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=memory.object_id)
+                        ),
+                        models.FieldCondition(
+                            key="point_kind", match=models.MatchValue(value="content")
+                        ),
+                    ]
+                ),
+                wait=True,
+            )
+    else:
+        memory = _seed(episodic)
+        if stored_shape == "legacy_content_none":
+            qdrant.set_payload(
+                collection_name="musubi_episodic",
+                payload={"content": None},
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(key="namespace", match=models.MatchValue(value=_NS)),
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=memory.object_id)
+                        ),
+                    ]
+                ),
+                wait=True,
+            )
+
+    before = _layout(qdrant, memory.object_id)
+    assert _artifact_rows(qdrant) == []
+    response = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=_headers(valid_token, key=f"stored-shape-{stored_shape}"),
+        json=_body(expected_version=memory.version),
+    )
+    if stored_shape == "readable":
+        assert response.status_code == 200, response.text
+        assert len(_artifact_rows(qdrant)) == 1
+        assert any(path.is_file() for path in api_settings.artifact_blob_path.rglob("*"))
+    else:
+        assert response.status_code == 409, response.text
+        assert response.json()["error"]["code"] == "CONFLICT"
+        assert "stored episodic" in response.json()["error"]["detail"].lower()
+        assert _layout(qdrant, memory.object_id) == before
+        assert _artifact_rows(qdrant) == []
+        assert not api_settings.artifact_blob_path.exists() or not any(
+            path.is_file() for path in api_settings.artifact_blob_path.rglob("*")
+        )
 
 
 def test_stale_version_leaves_safe_verified_escrow_and_preserves_episodic_winner(

@@ -176,3 +176,8 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
   behavioral reds reported locally. The test head was invalidated. Typed dynamic
   lookups now let format, lint, and mypy pass while pytest still reports the same
   32 failed / 25 passed focused contract; CI can now examine the thing at risk.
+- 2026-08-03 — Aoi's test-contract attack found that malformed episodic state
+  was covered only in the pure keyhole, not at the route ordering boundary. A
+  readable positive control plus malformed legacy identity, v2 anchor, and v2
+  content-target cases now require typed 409 before any artifact head/blob touch;
+  each malformed episodic layout is byte-identical after refusal.
