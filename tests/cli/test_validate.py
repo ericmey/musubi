@@ -617,6 +617,45 @@ def test_retraction_evidence_must_bind_current_storage_not_itself(
 
 
 @pytest.mark.parametrize(
+    "bad_content",
+    [None, 7],
+    ids=["missing", "non-text"],
+)
+def test_malformed_retraction_target_content_is_recorded_not_raised(
+    monkeypatch: pytest.MonkeyPatch,
+    bad_content: object,
+) -> None:
+    target = _episodic_content()
+    if bad_content is None:
+        target.pop("content")
+    else:
+        target["content"] = bad_content
+
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(_retracted_episodic_anchor(), "anchor-current"),
+            _Rec(target, "episodic-content-current"),
+        ]
+    ]
+    behaviour["musubi_artifact"] = [
+        [_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]
+    ]
+
+    result = _run(monkeypatch, behaviour, "--json")
+
+    assert result.exception is None
+    assert result.exit_code == 1
+    doc = json.loads(result.stdout)
+    anchor_problem = next(row for row in doc["broken"] if row["point_id"] == "anchor-current")
+    assert any(
+        error["type"] == "retraction_evidence_mismatch"
+        and error["loc"][-1] == "original_sha256"
+        for error in anchor_problem["errors"]
+    )
+
+
+@pytest.mark.parametrize(
     "artifact_rows,error_loc",
     [
         ([], "artifact_ref"),

@@ -4,12 +4,12 @@ slice_id: slice-data002-typed-retraction-evidence
 issue: 645
 section: _slices
 type: slice
-status: done
+status: in-progress
 owner: codex-gpt5
 phase: "1-schema"
-tags: [section/slices, status/done, type/slice, data-001, data-integrity, idempotency]
+tags: [section/slices, status/in-progress, type/slice, data-001, data-integrity, idempotency]
 updated: 2026-08-03
-reviewed: true
+reviewed: false
 depends-on: [slice-art004-exact-byte-escrow]
 blocks: []
 ---
@@ -143,3 +143,9 @@ retraction without weakening ordinary projection-divergence checks.
   gate: 2,563 passed, 195 skipped, 140 deselected, 3 xfailed; Test Contract
   closure 27 passing + 8 named out-of-scope; agent check clean with warnings
   only. Terminal metadata carries no executable or contract change.
+- 2026-08-03 — Terminal auto-merge was disabled and the slice reopened after
+  Copilot found that corrupt target content could reach the evidence keyhole and
+  raise from an unchecked `target_payload["content"]` access. The CLI contract is
+  never-raise: missing or non-text target content must produce a field-bound
+  retraction-evidence mismatch while the already-invalid content point remains
+  reported separately.
