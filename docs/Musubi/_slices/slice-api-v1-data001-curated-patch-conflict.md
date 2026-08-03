@@ -41,6 +41,9 @@ internal callers that have nobody to decide whether a retry is still appropriate
 
 - `src/musubi/api/routers/writes_curated.py`
 - `tests/api/test_data001_curated_patch_conflict.py`
+- `tests/store/test_non_embedding_patch.py`
+- `.github/workflows/integration.yml`
+- `Makefile`
 - `docs/Musubi/07-interfaces/canonical-api.md`
 - `docs/Musubi/_slices/slice-api-v1-data001-curated-patch-conflict.md`
 - `docs/Musubi/_inbox/locks/slice-api-v1-data001-curated-patch-conflict.lock`
@@ -56,8 +59,11 @@ internal callers that have nobody to decide whether a retry is still appropriate
 1. `test_curated_http_patch_same_version_loser_returns_typed_conflict_without_retry`
 2. `test_curated_http_patch_preserves_replace_tag_topic_and_importance_semantics`
 3. `test_curated_http_patch_v2_changes_only_anchor_and_preserves_generation_binding`
-4. `test_patch_metadata_preserves_concurrent_state_access_bumps_version_once`
-5. `test_patch_curated_router_refuses_dangling_pointer_without_mutation`
+4. `test_non_embedding_patch_stale_filtered_cas_loses_on_real_qdrant`
+5. `test_non_embedding_patch_release_removes_exact_token_on_real_qdrant`
+6. `test_non_embedding_patch_versionless_legacy_fence_lands_once_on_real_qdrant`
+7. `test_patch_metadata_preserves_concurrent_state_access_bumps_version_once`
+8. `test_patch_curated_router_refuses_dangling_pointer_without_mutation`
 
 ## Work log
 
@@ -78,3 +84,8 @@ internal callers that have nobody to decide whether a retry is still appropriate
 - 2026-08-03 — `make tc-coverage` caught that the slice named no normative spec even
   though it changed the canonical API contract. Added the explicit
   `[[07-interfaces/canonical-api]]` mapping; coverage now satisfies the closure rule.
+- 2026-08-03 — Aoi's implementation review found that #636's real-Qdrant gate covers
+  `owned_update` but never the one-shot `patch_non_embedding_payload` primitive now used
+  by two HTTP routes. Added three real-server cases for a losing filtered CAS, exact-token
+  release by key removal, and the absent-version legacy fence; the integration workflow
+  and its local Makefile twin now collect the focused module explicitly.

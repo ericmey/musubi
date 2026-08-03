@@ -97,7 +97,7 @@ test-integration:
 	  exit 2; \
 	fi
 	MUSUBI_TEST_QDRANT_PORT=$${MUSUBI_TEST_QDRANT_PORT:-6333} uv run pytest \
-	  tests/integration/ tests/store/test_mutation_lease.py \
+	  tests/integration/ tests/store/test_mutation_lease.py tests/store/test_non_embedding_patch.py \
 	  -m integration -ra --strict-markers --no-cov
 
 # --------------------------------------------------------------------------
