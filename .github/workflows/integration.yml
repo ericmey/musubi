@@ -24,6 +24,7 @@ on:
     paths:
       - 'tests/integration/**'
       - 'tests/store/test_mutation_lease.py'
+      - 'tests/store/test_non_embedding_patch.py'
       - 'deploy/test-env/**'
       - '.github/workflows/integration.yml'
       - 'Makefile'
@@ -107,6 +108,7 @@ jobs:
         run: |
           set -o pipefail
           uv run pytest tests/integration/ tests/store/test_mutation_lease.py \
+            tests/store/test_non_embedding_patch.py \
             -m integration -ra --strict-markers --no-cov -v 2>&1 | tee integration.log
         timeout-minutes: 12
 
