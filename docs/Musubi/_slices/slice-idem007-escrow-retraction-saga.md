@@ -198,3 +198,16 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
   route regressions now require caller-supplied artifact reference, original
   digest, vector basis, and raw tombstone content to fail before storage; the
   strict focused total is 117 and OpenAPI declares `additionalProperties: false`.
+- 2026-08-03 — Test Contract closure for the broad episodic-memory spec keeps
+  these pre-existing bullets explicitly out of this endpoint-saga lane:
+  `test_maturation_sets_matured_after_ttl_and_scores_importance` and
+  `test_maturation_skips_already_matured` belong to the completed
+  `slice-lifecycle-maturation`; `test_query_hybrid_returns_scored_results_in_descending_order`
+  belongs to completed `slice-retrieval-hybrid`;
+  `test_forward_compat_reads_schema_version_0_point` remains owned by a future
+  schema-migration slice; `test_perf_create_under_100ms_p95_on_reference_host`
+  and `test_perf_dedup_query_under_30ms_p95` belong to the integration/perf
+  harness; `hypothesis: idempotency — re-ingesting same content N times produces 1 memory with reinforcement_count == N`
+  and `hypothesis: lifecycle monotonicity — state transitions never go backwards (except explicit revive operation)`
+  belong to `slice-plane-episodic-followup`. IDEM-007 changes none of those
+  lifecycle, retrieval, migration, property, or performance contracts.
