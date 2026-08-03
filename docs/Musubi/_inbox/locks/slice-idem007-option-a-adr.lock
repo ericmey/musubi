@@ -1,0 +1,13 @@
+{
+  "agent": "codex-gpt5",
+  "branch": "slice/idem007-option-a-adr",
+  "owns_paths": [
+    "docs/Musubi/13-decisions/0042-escrow-backed-episodic-retraction.md",
+    "docs/Musubi/13-decisions/index.md",
+    "docs/Musubi/_slices/slice-idem007-option-a-adr.md",
+    "docs/Musubi/_inbox/locks/slice-idem007-option-a-adr.lock"
+  ],
+  "reason": "IDEM-007 Option A escrow-backed retraction ADR",
+  "timestamp": "2026-08-03T13:08:00Z"
+}
+
