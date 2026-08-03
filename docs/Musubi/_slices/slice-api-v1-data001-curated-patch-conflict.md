@@ -4,12 +4,12 @@ slice_id: slice-api-v1-data001-curated-patch-conflict
 issue: 637
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, api, data-integrity]
+tags: [section/slices, status/done, type/slice, api, data-integrity]
 updated: 2026-08-03
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -89,3 +89,13 @@ internal callers that have nobody to decide whether a retry is still appropriate
   by two HTTP routes. Added three real-server cases for a losing filtered CAS, exact-token
   release by key removal, and the absent-version legacy fence; the integration workflow
   and its local Makefile twin now collect the focused module explicitly.
+- 2026-08-03 — Full local gate at the production head: 2508 passed, 195 skipped,
+  136 deselected, 3 xfailed; all checks passed. Real-Qdrant run `30814410855` at
+  `d2d753c` executed all three new cases plus all 17 mutation-lease cases: 33 passed,
+  4 skipped, 15 deselected. Aoi independently read the log and approved the exact head.
+- 2026-08-03 — Merged current main, carrying the reviewed route, primitive, tests,
+  integration workflow, and Makefile byte-identically to `86ae5d6`; the v1.19.5 version
+  carrier differed as the discriminating control. Terminal run `30814715059` repeated all
+  20 focused real-Qdrant passes, and required `check`, Vault, smoke, and integration were
+  green. Aoi independently verified the carry, registry-resolved mirror pin, terminal log,
+  and second-seat signature. Slice closed; lock removed.
