@@ -4,6 +4,7 @@
   "owns_paths": [
     "docs/Musubi/_inbox/locks/slice-ret014-exhaustive-error-classification.lock",
     "docs/Musubi/_slices/slice-ret014-exhaustive-error-classification.md",
+    "docs/Musubi/05-retrieval/orchestration.md",
     "src/musubi/retrieve/orchestration.py",
     "tests/retrieve/test_ret014_error_classification.py"
   ],

@@ -20,6 +20,10 @@ Make orchestration classification exhaustive over the closed retrieve-layer erro
 domain. Adding, removing, or renaming an emitted code must fail a focused test at
 the producing commit rather than silently becoming an HTTP 500.
 
+## Specs to implement
+
+- [[05-retrieval/orchestration]]
+
 ## Decision boundary
 
 - Mechanically inventory literal `code=` values emitted by retrieve error models.
@@ -37,6 +41,7 @@ the producing commit rather than silently becoming an HTTP 500.
 
 - `src/musubi/retrieve/orchestration.py` (error classification only)
 - `tests/retrieve/test_ret014_error_classification.py`
+- `docs/Musubi/05-retrieval/orchestration.md` (RET-014 contract only)
 - `docs/Musubi/_slices/slice-ret014-exhaustive-error-classification.md`
 - `docs/Musubi/_inbox/locks/slice-ret014-exhaustive-error-classification.lock`
 

@@ -219,6 +219,21 @@ class RetrievalError(BaseModel):
 
 Success variant carries a `warnings` list too (non-fatal issues). Callers check `is_ok` and inspect `warnings` for partial-degradation signaling.
 
+### Exhaustive sub-layer code classification
+
+Every literal error code emitted inside `src/musubi/retrieve/` has one exact
+entry in the orchestration code-to-kind registry. Codes intentionally mapped to
+`internal` are named separately; an unknown code raises a diagnostic programmer
+error instead of silently falling through to `internal`.
+
+The retrieve package is the closed input domain for this classifier. Dynamic
+forwarders may propagate a code from another retrieve error, but no external
+package constructs the internal `RetrievalError`. A focused source-inventory
+test preserves that premise, inventories both arms of conditional code
+expressions, and fails if the error-constructor naming convention silently
+excludes a new callee. Warning codes remain a separate taxonomy even when a
+literal such as `sparse_embedding_failed` intentionally exists in both.
+
 ## Observability hooks
 
 Every step emits:
@@ -296,6 +311,18 @@ Access accounting (RET-002 / #500) — realized in `tests/retrieve/test_ret002_a
 29. `test_context_accounts_only_surfaced_pack_items_not_dropped_candidates`
 30. `test_retrieve_normalizes_accounting_failure_to_typed_err`
 31. `test_context_accounting_failure_returns_internal_not_raw`
+
+Exhaustive error classification (RET-014 / #619):
+
+32. `test_every_literal_retrieve_error_code_has_an_explicit_classification`
+33. `test_existing_error_code_classifications_preserve_their_semantics`
+34. `test_unknown_retrieve_error_code_is_rejected_instead_of_implicitly_internal`
+35. `test_intentional_internal_error_codes_are_named_and_complete`
+36. `test_error_code_collector_rejects_new_unrecognised_code_callee`
+37. `test_error_code_collector_accounts_for_dynamic_forwarding_sites`
+38. `test_error_code_collector_walks_both_conditional_expression_arms`
+39. `test_retrieval_error_construction_remains_closed_over_retrieve_package`
+40. `test_sparse_embedding_failed_remains_distinct_in_error_and_warning_taxonomies`
 
 
 Grapheme-safe truncation:
