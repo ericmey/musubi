@@ -96,7 +96,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from hashlib import sha256
 from typing import Any, Literal
 
 import typer
@@ -105,12 +104,13 @@ from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from musubi.planes.artifact.escrow import derive_escrow_address
+from musubi.store.retraction_evidence import retraction_evidence_binding_errors
 from musubi.store.specs import LAYOUT_ONLY_FIELDS, strip_layout_fields
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
 from musubi.types.common import KSUID, Namespace
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.curated import CuratedKnowledge
-from musubi.types.episodic import EpisodicMemory, RetractionEvidence, V2RetractionPointer
+from musubi.types.episodic import EpisodicMemory
 from musubi.types.lifecycle_event import LifecycleEvent
 from musubi.types.thought import Thought
 
@@ -299,66 +299,6 @@ def _custom_problem(
         payload,
         errors=[{"type": problem_type, "loc": loc or ["live_point"], "msg": message}],
     )
-
-
-def _retraction_evidence_binding_errors(
-    *,
-    evidence: RetractionEvidence,
-    anchor: _AnchorEnvelope,
-    anchor_payload: dict[str, Any],
-    target_payload: dict[str, Any],
-) -> list[tuple[str, str]] | None:
-    """Return v2-local binding errors, or ``None`` when this is not v2 evidence.
-
-    Every comparison is against the scanned physical rows. Evidence never gets
-    to certify another evidence field. The artifact-head half is deliberately a
-    separate all-plane check after both collections have scanned completely.
-    """
-    pointer = evidence.preserved_pointer
-    if not isinstance(pointer, V2RetractionPointer):
-        return None
-
-    errors: list[tuple[str, str]] = []
-    if pointer.live_point != anchor.live_point:
-        errors.append(
-            ("preserved_pointer", "preserved live_point is not the current anchor pointer")
-        )
-
-    target_content = target_payload.get("content")
-    if not isinstance(target_content, str):
-        errors.append(
-            (
-                "original_sha256",
-                "immutable content is missing or not text; evidence binding cannot be verified",
-            )
-        )
-        return errors
-    target_bytes = target_content.encode("utf-8")
-    target_digest = sha256(target_bytes).hexdigest()
-    if evidence.original_sha256 != target_digest:
-        errors.append(("original_sha256", "recorded digest does not match immutable content"))
-    if evidence.original_utf8_bytes != len(target_bytes):
-        errors.append(
-            ("original_utf8_bytes", "recorded byte length does not match immutable content")
-        )
-
-    prefix_size = evidence.quoted_prefix_utf8_bytes
-    try:
-        prefix = target_bytes[:prefix_size].decode("utf-8")
-    except UnicodeDecodeError:
-        errors.append(
-            ("quoted_prefix_utf8_bytes", "recorded prefix splits the stored UTF-8 content")
-        )
-    else:
-        anchor_content = anchor_payload["content"]
-        if prefix not in anchor_content:
-            errors.append(
-                (
-                    "quoted_prefix_utf8_bytes",
-                    "storage-derived original prefix is absent from the anchor tombstone",
-                )
-            )
-    return errors
 
 
 def _validate_retraction_artifact_heads(
@@ -564,9 +504,8 @@ def _validate_storage_rows(
             if result.plane == "episodic" and isinstance(domain_object, EpisodicMemory):
                 evidence = domain_object.retraction_evidence
                 if evidence is not None:
-                    evidence_errors = _retraction_evidence_binding_errors(
+                    evidence_errors = retraction_evidence_binding_errors(
                         evidence=evidence,
-                        anchor=anchor,
                         anchor_payload=payload,
                         target_payload=target,
                     )

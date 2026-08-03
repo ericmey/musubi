@@ -406,6 +406,44 @@ def test_route_rejects_malformed_episodic_state_before_artifact_touch_with_reada
         )
 
 
+def test_unreadable_would_be_tombstone_is_refused_before_artifact_or_episodic_write(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+    api_settings: Settings,
+    receipt_store: DurableReceiptStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    memory = _seed(episodic)
+    before = _layout(qdrant, memory.object_id)
+    real_validate = EpisodicMemory.model_validate
+    validations = 0
+
+    def reject_candidate(value: object) -> EpisodicMemory:
+        nonlocal validations
+        validations += 1
+        if validations == 2:
+            return real_validate({})
+        return real_validate(value)
+
+    monkeypatch.setattr(EpisodicMemory, "model_validate", reject_candidate)
+    response = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=_headers(valid_token, key="unreadable-candidate"),
+        json=_body(expected_version=memory.version),
+    )
+    assert validations == 2
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "BAD_REQUEST"
+    assert "unreadable episodic row" in response.json()["error"]["detail"]
+    assert _layout(qdrant, memory.object_id) == before
+    assert _artifact_rows(qdrant) == []
+    assert not api_settings.artifact_blob_path.exists() or not any(
+        path.is_file() for path in api_settings.artifact_blob_path.rglob("*")
+    )
+
+
 def test_stale_version_leaves_safe_verified_escrow_and_preserves_episodic_winner(
     client: TestClient,
     valid_token: str,

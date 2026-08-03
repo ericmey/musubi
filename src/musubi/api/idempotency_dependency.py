@@ -24,7 +24,7 @@ import hashlib
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import Depends, Request
 
@@ -87,6 +87,8 @@ def build_identity(auth: Any, method: str, operation: str, namespace: str, key: 
 
 def make_idempotency_dependency(
     authz_dependency: Callable[..., Awaitable[AuthorizedWrite[Any]]],
+    *,
+    durable_receipt: Literal["optional", "required"] = "optional",
 ) -> Callable[..., Awaitable[IdempotentContext]]:
     """Build the idempotency dependency for a capture route, depending on that route's authz edge."""
 
@@ -105,15 +107,21 @@ def make_idempotency_dependency(
             raise APIError(
                 status_code=400, code="BAD_REQUEST", detail="duplicate Idempotency-Receipt header"
             )
-        durable_receipt = bool(receipt_modes)
-        if durable_receipt and receipt_modes[0].lower() != "durable":
+        caller_requested_receipt = bool(receipt_modes)
+        if caller_requested_receipt and receipt_modes[0].lower() != "durable":
             raise APIError(
                 status_code=400,
                 code="BAD_REQUEST",
                 detail="Idempotency-Receipt must be 'durable'",
             )
         if not keys:
-            if durable_receipt:
+            if durable_receipt == "required":
+                raise APIError(
+                    status_code=400,
+                    code="BAD_REQUEST",
+                    detail="this route requires Idempotency-Key",
+                )
+            if caller_requested_receipt:
                 raise APIError(
                     status_code=400,
                     code="BAD_REQUEST",
@@ -125,8 +133,9 @@ def make_idempotency_dependency(
         route = request.scope["route"]
         operation = route.operation_id or route.path
 
+        use_durable_receipt = durable_receipt == "required" or caller_requested_receipt
         receipt_store: DurableReceiptStore | None = None
-        if durable_receipt:
+        if use_durable_receipt:
             if operation not in RECEIPT_ELIGIBLE_OPERATIONS:
                 raise APIError(
                     status_code=400,
@@ -146,6 +155,29 @@ def make_idempotency_dependency(
             authorized.auth, request.method, operation, authorized.namespace, key
         )
         digest = canonical_digest(await request.body(), request.headers.get("content-type", ""))
+
+        # The durable ledger closes the terminal replay window with the exact
+        # stored bytes. A receipt may appear after this ABSENT read and before
+        # lease acquisition; the handler's committed-evidence adoption closes
+        # that distinct midpoint window, so neither mechanism is redundant.
+        if receipt_store is not None:
+            try:
+                durable = receipt_store.lookup_completed(identity=identity, digest=digest)
+            except (OSError, RuntimeError, ValueError) as exc:
+                raise APIError(
+                    status_code=503,
+                    code="BACKEND_UNAVAILABLE",
+                    detail="durable idempotency receipts are unavailable",
+                ) from exc
+            if durable.status.value == "found":
+                assert durable.completed is not None
+                raise Replay(durable.completed)
+            if durable.status.value == "conflict":
+                raise APIError(
+                    status_code=409,
+                    code="CONFLICT",
+                    detail="Idempotency-Key reused with a different request body",
+                )
         owner = secrets.token_hex(
             16
         )  # collision-resistant PER REQUEST; never derived from identity
