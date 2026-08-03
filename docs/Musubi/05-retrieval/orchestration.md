@@ -326,17 +326,17 @@ Exhaustive error classification (RET-014 / #619):
 
 
 Grapheme-safe truncation:
-32. `test_truncation_bypasses_short_text`
-33. `test_truncation_cuts_at_grapheme_boundaries_safely`
-34. `test_truncation_respects_max_chars_lte_3`
-35. `test_truncation_prevents_emoji_zwj_bisection`
-36. `test_truncation_preserves_single_emoji`
-37. `test_truncation_prevents_combined_diacritic_bisection`
-38. `test_truncation_prevents_regional_indicator_bisection`
-39. `test_truncation_preserves_internal_whitespace`
-40. `test_truncation_preserves_trailing_whitespace_if_within_budget`
-41. `test_truncation_prevents_skin_tone_modifier_bisection`
-42. `test_fast_retrieval_uses_grapheme_truncation_for_long_content`
-43. `test_recent_retrieval_uses_grapheme_truncation_for_long_content`
-44. `test_orchestration_uses_grapheme_truncation_for_long_content`
-45. `test_context_pack_uses_grapheme_truncation_for_long_content`
+41. `test_truncation_bypasses_short_text`
+42. `test_truncation_cuts_at_grapheme_boundaries_safely`
+43. `test_truncation_respects_max_chars_lte_3`
+44. `test_truncation_prevents_emoji_zwj_bisection`
+45. `test_truncation_preserves_single_emoji`
+46. `test_truncation_prevents_combined_diacritic_bisection`
+47. `test_truncation_prevents_regional_indicator_bisection`
+48. `test_truncation_preserves_internal_whitespace`
+49. `test_truncation_preserves_trailing_whitespace_if_within_budget`
+50. `test_truncation_prevents_skin_tone_modifier_bisection`
+51. `test_fast_retrieval_uses_grapheme_truncation_for_long_content`
+52. `test_recent_retrieval_uses_grapheme_truncation_for_long_content`
+53. `test_orchestration_uses_grapheme_truncation_for_long_content`
+54. `test_context_pack_uses_grapheme_truncation_for_long_content`
