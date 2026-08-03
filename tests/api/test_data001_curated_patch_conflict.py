@@ -100,6 +100,7 @@ def test_curated_http_patch_same_version_loser_returns_typed_conflict_without_re
 
     assert response.status_code == 409, response.text
     assert response.json()["error"]["code"] == "CONFLICT"
+    assert "lost its observed-version fence" in response.json()["error"]["detail"]
     stored = asyncio.run(curated.get(namespace=_NS, object_id=str(saved.object_id)))
     assert stored is not None
     assert stored.importance == 7, "the HTTP loser silently replayed over the real winner"
