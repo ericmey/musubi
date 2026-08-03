@@ -4,12 +4,12 @@ slice_id: slice-art004-exact-byte-escrow
 issue: 644
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "4-planes"
-tags: [section/slices, status/in-progress, type/slice, artifacts, idempotency, data-integrity]
+tags: [section/slices, status/done, type/slice, artifacts, idempotency, data-integrity]
 updated: 2026-08-03
-reviewed: false
+reviewed: true
 depends-on: [slice-art003-stored-unindexed]
 blocks: []
 ---
@@ -156,3 +156,11 @@ mutation is permitted.
   those fields, while the `EpisodicMemory` positive control has all three. The
   replacement full gate is 2530 passed, 195 skipped, 140 deselected, 3 xfailed,
   all checks passed in 123s.
+- 2026-08-03 — Aoi approved exact production head `5578fe6` after independently
+  reproducing `make check` and reading integration run `30823506819` by test
+  name: the configured-filesystem + real-Qdrant escrow case executed and passed;
+  34 passed, 4 skipped, 15 deselected. Current-main carry at `5610ebb` preserves
+  every reviewed source blob, the complete tests tree, source-artifact spec, and
+  integration workflow byte-for-byte. The differing `src/musubi/__init__.py`
+  release carrier is the control. The upstream v1.20.0 mirror pin resolves to
+  its exact GHCR digest; a fabricated digest is not found.
