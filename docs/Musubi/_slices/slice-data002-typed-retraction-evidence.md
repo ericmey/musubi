@@ -126,3 +126,10 @@ retraction without weakening ordinary projection-divergence checks.
   interpretation explicitly rather than inferring a repo-wide API exception.
   Field-level conditional exclusion preserves existing response-body shape;
   snapshot regeneration separately preserves schema truth.
+- 2026-08-03 — The first production head was invalidated before review after an
+  executable schema/runtime comparison found that inherited `chunk_id` and
+  `quote` fields, narrowed to `None` and excluded from serialization, still
+  accepted explicit null keys even though OpenAPI exposed only `artifact_id`
+  with `additionalProperties: false`. Two field-bound regressions now require
+  key presence to fail regardless of value; whole-artifact ambiguity is rejected
+  rather than accepted and erased.

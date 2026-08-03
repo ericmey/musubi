@@ -7,6 +7,7 @@ See [[04-data-model/lifecycle#EpisodicMemory]] for the transition diagram.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -34,6 +35,17 @@ class RetractionArtifactRef(ArtifactRef):
 
     chunk_id: None = Field(default=None, exclude=True)
     quote: None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _forbid_nonwhole_reference_keys(cls, value: object) -> object:
+        if isinstance(value, Mapping):
+            present = [key for key in ("chunk_id", "quote") if key in value]
+            if present:
+                raise ValueError(
+                    "whole-artifact retraction reference forbids " + ", ".join(present)
+                )
+        return value
 
 
 class V2RetractionPointer(BaseModel):
