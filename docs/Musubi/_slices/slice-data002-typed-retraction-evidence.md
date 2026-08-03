@@ -49,7 +49,9 @@ retraction without weakening ordinary projection-divergence checks.
 - `src/musubi/cli/validate.py`
 - `tests/types/test_episodic.py`
 - `tests/cli/test_validate.py`
+- `openapi.yaml`
 - `docs/Musubi/04-data-model/episodic-memory.md`
+- `docs/Musubi/13-decisions/0042-escrow-backed-episodic-retraction.md`
 - `docs/Musubi/_slices/slice-data002-typed-retraction-evidence.md`
 - `docs/Musubi/_inbox/locks/slice-data002-typed-retraction-evidence.lock`
 
@@ -76,6 +78,9 @@ retraction without weakening ordinary projection-divergence checks.
 8. Whole-dict content-point and vector invariance across the actual mutation is
    owned and mechanically required by #646; this schema/validator lane writes
    no episodic row and does not manufacture a mutation proof.
+9. Evidence-absent episodic serialization omits the optional field so existing
+   response bodies do not gain a null key, while runtime schema and committed
+   OpenAPI truthfully expose the evidence-present shape.
 
 ## Work log
 
@@ -112,3 +117,12 @@ retraction without weakening ordinary projection-divergence checks.
   only recomputing this episodic object's ADR address can reject it. A second
   control proves the `legacy_self` union arm is accepted by the public model
   but cannot waive v2 projection divergence.
+- 2026-08-03 — The full gate, unlike the focused schema/validator suite, reached
+  runtime-vs-snapshot OpenAPI parity and exposed two independent public-contract
+  effects: the new optional field was absent from committed `openapi.yaml`, and
+  ordinary evidence-absent serialization gained `retraction_evidence: null`.
+  ART-003 under the same accepted ADR established that the schema lane owns an
+  additive generated-snapshot update; DATA-002 records that ADR-specific
+  interpretation explicitly rather than inferring a repo-wide API exception.
+  Field-level conditional exclusion preserves existing response-body shape;
+  snapshot regeneration separately preserves schema truth.

@@ -33,6 +33,22 @@ def _retraction_evidence(**changes: Any) -> dict[str, Any]:
     return evidence
 
 
+def _memory_with_evidence(
+    evidence: dict[str, Any],
+    *,
+    namespace: str = "eric/claude-code/episodic",
+    content: str = "[RETRACTED]",
+) -> EpisodicMemory:
+    return EpisodicMemory.model_validate(
+        {
+            "namespace": namespace,
+            "content": content,
+            "state": "matured",
+            "retraction_evidence": evidence,
+        }
+    )
+
+
 def test_defaults_to_provisional(sample_episodic: EpisodicMemory) -> None:
     assert sample_episodic.state == "provisional"
 
@@ -126,11 +142,9 @@ def test_all_fields_round_trip_through_model_dump_model_validate(episodic_namesp
 
 
 def test_retraction_evidence_strict_shape_round_trips_without_storage_fields() -> None:
-    memory = EpisodicMemory(
-        namespace="eric/claude-code/episodic",
+    memory = _memory_with_evidence(
+        _retraction_evidence(),
         content="[RETRACTED] quoted prefix: a readable",
-        state="matured",
-        retraction_evidence=_retraction_evidence(),
     )
 
     dumped = memory.model_dump(mode="json")
@@ -148,6 +162,16 @@ def test_retraction_evidence_strict_shape_round_trips_without_storage_fields() -
         }
         & dumped.keys()
     )
+
+
+def test_absent_retraction_evidence_preserves_existing_wire_shape() -> None:
+    memory = EpisodicMemory(
+        namespace="eric/claude-code/episodic",
+        content="ordinary memory",
+    )
+
+    assert "retraction_evidence" not in memory.model_dump(mode="json")
+    assert "retraction_evidence" in EpisodicMemory.model_json_schema()["properties"]
 
 
 @pytest.mark.parametrize(
@@ -171,24 +195,12 @@ def test_retraction_evidence_rejects_malformed_or_noncanonical_fields(
     change: dict[str, Any], match: str
 ) -> None:
     with pytest.raises(ValueError, match=match):
-        EpisodicMemory(
-            namespace="eric/claude-code/episodic",
-            content="[RETRACTED]",
-            state="matured",
-            retraction_evidence=_retraction_evidence(**change),
-        )
+        _memory_with_evidence(_retraction_evidence(**change))
 
 
 def test_retraction_evidence_requires_derived_sibling_artifact_namespace() -> None:
     with pytest.raises(ValueError, match="sibling artifact namespace"):
-        EpisodicMemory(
-            namespace="eric/claude-code/episodic",
-            content="[RETRACTED]",
-            state="matured",
-            retraction_evidence=_retraction_evidence(
-                artifact_namespace="aoi/command-chair/artifact"
-            ),
-        )
+        _memory_with_evidence(_retraction_evidence(artifact_namespace="aoi/command-chair/artifact"))
 
 
 def test_retraction_evidence_rejects_partial_shape() -> None:
@@ -196,40 +208,22 @@ def test_retraction_evidence_rejects_partial_shape() -> None:
     del evidence["request_digest"]
 
     with pytest.raises(ValueError, match="request_digest"):
-        EpisodicMemory(
-            namespace="eric/claude-code/episodic",
-            content="[RETRACTED]",
-            state="matured",
-            retraction_evidence=evidence,
-        )
+        _memory_with_evidence(evidence)
 
 
 def test_retraction_evidence_prefix_and_omitted_bytes_reconcile_with_original_length() -> None:
     with pytest.raises(ValueError, match=r"quoted_prefix_utf8_bytes.*omitted_bytes"):
-        EpisodicMemory(
-            namespace="eric/claude-code/episodic",
-            content="[RETRACTED]",
-            state="matured",
-            retraction_evidence=_retraction_evidence(omitted_bytes=8),
-        )
+        _memory_with_evidence(_retraction_evidence(omitted_bytes=8))
 
 
 def test_retraction_evidence_requires_exactly_one_typed_preserved_pointer_shape() -> None:
-    legacy = EpisodicMemory(
-        namespace="eric/claude-code/episodic",
-        content="[RETRACTED]",
-        state="matured",
-        retraction_evidence=_retraction_evidence(preserved_pointer={"kind": "legacy_self"}),
-    )
+    legacy = _memory_with_evidence(_retraction_evidence(preserved_pointer={"kind": "legacy_self"}))
     assert legacy.retraction_evidence is not None
     assert legacy.retraction_evidence.preserved_pointer.kind == "legacy_self"
 
     with pytest.raises(ValueError, match="preserved_pointer"):
-        EpisodicMemory(
-            namespace="eric/claude-code/episodic",
-            content="[RETRACTED]",
-            state="matured",
-            retraction_evidence=_retraction_evidence(
+        _memory_with_evidence(
+            _retraction_evidence(
                 preserved_pointer={"kind": "legacy_self", "live_point": "smuggled"}
-            ),
+            )
         )
