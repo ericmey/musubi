@@ -57,13 +57,21 @@ escrow contract in Issue #611.
 - `src/musubi/cli/validate.py`
 - `src/musubi/planes/episodic/plane.py`
 - `src/musubi/store/immutable_vectors.py`
-- `src/musubi/store/mutation_lease.py`
 - `docs/Musubi/07-interfaces/canonical-api.md`
 - `tests/api/test_data001_episodic_patch_fence.py`
-- `tests/store/test_mutation_lease.py`
 - `tests/cli/test_validate.py`
 - `docs/Musubi/_slices/slice-api-v1-data001-episodic-patch-fence.md`
 - `docs/Musubi/_inbox/locks/api-v1-data001-episodic-patch-fence.lock`
+
+## Modified under an active owner
+
+- `src/musubi/store/mutation_lease.py`
+- `tests/store/test_mutation_lease.py`
+
+Both paths remain owned by `slice-data001-concurrent-full-object-update` while
+that slice is in review. This slice changes only the token-release invariant
+shared by the old retrying seam and the new one-shot seam: release removes the
+transient key and confirms absence rather than persisting a null value.
 
 ## Test Contract
 
