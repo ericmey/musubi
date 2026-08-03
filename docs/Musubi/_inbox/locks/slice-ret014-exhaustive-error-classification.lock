@@ -1,0 +1,12 @@
+{
+  "agent": "codex-gpt5",
+  "branch": "slice/ret014-exhaustive-error-classification",
+  "owns_paths": [
+    "docs/Musubi/_inbox/locks/slice-ret014-exhaustive-error-classification.lock",
+    "docs/Musubi/_slices/slice-ret014-exhaustive-error-classification.md",
+    "src/musubi/retrieve/orchestration.py",
+    "tests/retrieve/test_ret014_error_classification.py"
+  ],
+  "reason": "RET-014: exhaustive retrieve error-code classification",
+  "timestamp": "2026-08-03T00:18:30Z"
+}
