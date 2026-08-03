@@ -148,7 +148,8 @@ async def test_escrow_temp_fsync_failure_exposes_no_final_or_head(
     assert isinstance(result, Err)
     assert result.error.code == "blob_publish_failed"
     assert not _blob_path(tmp_path).exists()
-    assert [path for path in _blob_path(tmp_path).parent.iterdir() if path.suffix == ".tmp"] == []
+    parent = _blob_path(tmp_path).parent
+    assert not parent.exists() or [path for path in parent.iterdir() if path.suffix == ".tmp"] == []
     assert (
         await plane.get(namespace=_address().artifact_namespace, object_id=_address().artifact_id)
         is None

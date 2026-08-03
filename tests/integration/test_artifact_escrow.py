@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+from contextlib import suppress
 from pathlib import Path
 
 import pytest
@@ -100,10 +101,12 @@ async def test_real_storage_escrow_orders_verified_blob_before_head_and_reuses(
             == []
         )
     finally:
+        shutil.rmtree(blob_root, ignore_errors=True)
         if plane is not None and cleanup_identity is not None:
-            await plane.purge(
-                namespace=cleanup_identity[0],
-                object_id=cleanup_identity[1],
-            )
-        qdrant.close()
-        shutil.rmtree(blob_root)
+            with suppress(Exception):
+                await plane.purge(
+                    namespace=cleanup_identity[0],
+                    object_id=cleanup_identity[1],
+                )
+        with suppress(Exception):
+            qdrant.close()

@@ -128,3 +128,7 @@ mutation is permitted.
   primitive to adopt the resulting real `EEXIST`. The proof is intentionally
   limited to VFS behavior; successful `fsync` cannot prove crash durability
   from inside the process.
+- 2026-08-03 — Aoi's fresh `38684fb` review found the shared-root integration
+  cleanup was serial: a failed Qdrant purge could mask the original assertion
+  and prevent filesystem cleanup. The unique blob child is now removed first
+  and unconditionally; Qdrant purge and close are independently protected.
