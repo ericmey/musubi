@@ -4,12 +4,12 @@ slice_id: slice-idem007-escrow-retraction-saga
 issue: 646
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, idempotency, artifacts, data-integrity, api]
+tags: [section/slices, status/done, type/slice, idempotency, artifacts, data-integrity, api]
 updated: 2026-08-03
-reviewed: false
+reviewed: true
 depends-on: [slice-art004-exact-byte-escrow, slice-data002-typed-retraction-evidence]
 blocks: []
 ---
@@ -211,3 +211,12 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
   and `hypothesis: lifecycle monotonicity — state transitions never go backwards (except explicit revive operation)`
   belong to `slice-plane-episodic-followup`. IDEM-007 changes none of those
   lifecycle, retrieval, migration, property, or performance contracts.
+- 2026-08-03 — Aoi approved executable/schema head `4d91c84` after independently
+  reproducing 2,608 passing tests and both previously failing OpenAPI guards;
+  `tc-coverage` closed at 42 passing, 3 named skips, 8 named out-of-scope, and
+  zero missing. Post-main head `0293f39` carried byte-identical source, tests,
+  OpenAPI, and ADR body through v1.22.0 metadata, with the version carrier as a
+  differing control and the mirror digest independently resolved by both seats.
+  Required remote contexts were terminal green before PR #658 squash-merged as
+  `a72ba70`. Post-merge content hashes on `origin/main` equal the reviewed head;
+  the pre-merge control lacks the saga module and has a different OpenAPI hash.
