@@ -7,17 +7,94 @@ See [[04-data-model/lifecycle#EpisodicMemory]] for the transition diagram.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from musubi.types.base import MemoryObject
-from musubi.types.common import LifecycleState, Modality, ensure_utc, utc_now
+from musubi.types.common import (
+    ArtifactRef,
+    LifecycleState,
+    Modality,
+    Namespace,
+    ensure_utc,
+    utc_now,
+)
 
 _EPISODIC_STATES: frozenset[LifecycleState] = frozenset(
     {"provisional", "matured", "demoted", "archived", "superseded"}
 )
+
+_SHA256_HEX = r"^[0-9a-f]{64}$"
+
+
+class RetractionArtifactRef(ArtifactRef):
+    """Whole-artifact escrow reference; chunk and quote ambiguity is unrepresentable."""
+
+    chunk_id: None = Field(default=None, exclude=True)
+    quote: None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _forbid_nonwhole_reference_keys(cls, value: object) -> object:
+        if isinstance(value, Mapping):
+            present = [key for key in ("chunk_id", "quote") if key in value]
+            if present:
+                raise ValueError(
+                    "whole-artifact retraction reference forbids " + ", ".join(present)
+                )
+        return value
+
+
+class V2RetractionPointer(BaseModel):
+    """The immutable content pointer preserved by a v2 anchor retraction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["v2"]
+    live_point: str = Field(min_length=1)
+
+
+class LegacyRetractionPointer(BaseModel):
+    """Explicit marker for a legacy single-point row retaining its own vector."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["legacy_self"]
+
+
+type RetractionPointer = Annotated[
+    V2RetractionPointer | LegacyRetractionPointer,
+    Field(discriminator="kind"),
+]
+
+
+class RetractionEvidence(BaseModel):
+    """Strict public evidence for one escrow-backed non-reembedding retraction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["artifact_escrow_v1"]
+    artifact_namespace: Namespace
+    artifact_ref: RetractionArtifactRef
+    original_sha256: str = Field(min_length=64, max_length=64, pattern=_SHA256_HEX)
+    original_utf8_bytes: int = Field(ge=1)
+    quoted_prefix_utf8_bytes: int = Field(ge=1)
+    omitted_bytes: int = Field(ge=0)
+    vector_basis: Literal["original"]
+    preserved_pointer: RetractionPointer
+    operation_identity_hash: str = Field(min_length=64, max_length=64, pattern=_SHA256_HEX)
+    request_digest: str = Field(min_length=64, max_length=64, pattern=_SHA256_HEX)
+
+    @model_validator(mode="after")
+    def _reconcile_byte_accounting(self) -> RetractionEvidence:
+        if self.quoted_prefix_utf8_bytes + self.omitted_bytes != self.original_utf8_bytes:
+            raise ValueError(
+                "quoted_prefix_utf8_bytes plus omitted_bytes must equal original_utf8_bytes"
+            )
+        return self
 
 
 class EpisodicMemory(MemoryObject):
@@ -38,6 +115,10 @@ class EpisodicMemory(MemoryObject):
     )
     topics: list[str] = Field(default_factory=list)
     importance_last_scored_at: datetime | None = None
+    retraction_evidence: RetractionEvidence | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @property
     def importance_last_scored_epoch(self) -> float | None:
@@ -53,7 +134,22 @@ class EpisodicMemory(MemoryObject):
             object.__setattr__(
                 self, "importance_last_scored_at", ensure_utc(self.importance_last_scored_at)
             )
+        if self.retraction_evidence is not None:
+            family, presence, _plane = self.namespace.split("/")
+            sibling = f"{family}/{presence}/artifact"
+            if self.retraction_evidence.artifact_namespace != sibling:
+                raise ValueError(
+                    "retraction_evidence artifact_namespace must be the derived sibling "
+                    "artifact namespace"
+                )
         return self
 
 
-__all__ = ["EpisodicMemory"]
+__all__ = [
+    "EpisodicMemory",
+    "LegacyRetractionPointer",
+    "RetractionArtifactRef",
+    "RetractionEvidence",
+    "RetractionPointer",
+    "V2RetractionPointer",
+]

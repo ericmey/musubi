@@ -7,7 +7,7 @@ status: draft
 updated: 2026-04-17
 up: "[[04-data-model/index]]"
 reviewed: false
-implements: ["src/musubi/planes/episodic/", "src/musubi/store/specs.py", "src/musubi/types/base.py", "src/musubi/types/concept.py", "src/musubi/types/episodic.py", "src/musubi/types/lifecycle_event.py", "src/musubi/types/thought.py", "tests/planes/test_episodic.py", "tests/types/"]
+implements: ["src/musubi/cli/validate.py", "src/musubi/planes/episodic/", "src/musubi/store/specs.py", "src/musubi/types/base.py", "src/musubi/types/concept.py", "src/musubi/types/episodic.py", "src/musubi/types/lifecycle_event.py", "src/musubi/types/thought.py", "tests/cli/test_validate.py", "tests/planes/test_episodic.py", "tests/types/"]
 ---
 # Episodic Memory
 
@@ -117,6 +117,62 @@ Collection: `musubi_episodic` (shared across tenants).
 - On `archival`: `state = "archived"`. Removed from default index behaviors; still in snapshots.
 
 Never deleted except via explicit `DELETE /v1/episodic-memories/{id}` (operator scope only).
+
+### Escrow-backed retraction evidence
+
+ADR 0042 adds an optional strict `retraction_evidence` field to the logical
+episodic model. Its v1 shape is:
+
+```text
+kind: artifact_escrow_v1
+artifact_namespace: <derived sibling artifact namespace>
+artifact_ref:
+  artifact_id: <deterministic escrow KSUID>
+original_sha256: <64 lowercase hex>
+original_utf8_bytes: <positive integer>
+quoted_prefix_utf8_bytes: <positive integer>
+omitted_bytes: <non-negative integer>
+vector_basis: original
+preserved_pointer:
+  kind: v2
+  live_point: <current immutable content point>
+# OR, for a legacy single-point retraction:
+preserved_pointer:
+  kind: legacy_self
+operation_identity_hash: <64 lowercase hex>
+request_digest: <64 lowercase hex>
+```
+
+`artifact_ref` is whole-artifact only: `chunk_id` and `quote` cannot carry a
+value. Prefix bytes plus omitted bytes must equal the recorded original byte
+length, and the artifact namespace must be the sibling of the episodic
+namespace under the same identity family and presence. The raw idempotency key
+is never part of this model.
+
+For a v2 anchor, VAL-002 permits `content`/`summary` projection divergence only
+after its existing physical pointer identity and generation checks pass and the
+typed evidence proves all of the following from scanned storage:
+
+- the v2 evidence pointer equals the anchor's current `live_point`;
+- digest and UTF-8 byte length recomputed from the immutable content point equal
+  the evidence;
+- the positive-length UTF-8 prefix sliced from that content point occurs
+  literally in the committed anchor tombstone, and omitted-byte arithmetic
+  reconciles;
+- recomputing ADR 0042's deterministic escrow address from this episodic
+  namespace, object id, and digest equals the evidence reference; and
+- that exact artifact head exists in the fully scanned artifact plane with
+  `artifact_state=stored_unindexed` and matching digest and byte length.
+
+The cross-plane conclusion runs only when both episodic and artifact scans
+complete. Missing coverage produces `incomplete`/`unknown`, never a clean or
+broken inference about an unseen target. `legacy_self` is part of the public
+evidence union for the dedicated endpoint, but it cannot waive divergence on a
+v2 anchor. Existing inline legacy tombstones without evidence remain valid.
+Evidence-absent rows omit `retraction_evidence` during serialization, preserving
+the existing HTTP response shape rather than adding a null key; evidence-bearing
+rows serialize the complete typed field, and the committed OpenAPI snapshot
+declares that optional shape.
 
 ## API surface
 

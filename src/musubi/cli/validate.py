@@ -96,6 +96,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import Any, Literal
 
 import typer
@@ -103,12 +104,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
+from musubi.planes.artifact.escrow import derive_escrow_address
 from musubi.store.specs import LAYOUT_ONLY_FIELDS, strip_layout_fields
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
 from musubi.types.common import KSUID, Namespace
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.curated import CuratedKnowledge
-from musubi.types.episodic import EpisodicMemory
+from musubi.types.episodic import EpisodicMemory, RetractionEvidence, V2RetractionPointer
 from musubi.types.lifecycle_event import LifecycleEvent
 from musubi.types.thought import Thought
 
@@ -299,6 +301,164 @@ def _custom_problem(
     )
 
 
+def _retraction_evidence_binding_errors(
+    *,
+    evidence: RetractionEvidence,
+    anchor: _AnchorEnvelope,
+    anchor_payload: dict[str, Any],
+    target_payload: dict[str, Any],
+) -> list[tuple[str, str]] | None:
+    """Return v2-local binding errors, or ``None`` when this is not v2 evidence.
+
+    Every comparison is against the scanned physical rows. Evidence never gets
+    to certify another evidence field. The artifact-head half is deliberately a
+    separate all-plane check after both collections have scanned completely.
+    """
+    pointer = evidence.preserved_pointer
+    if not isinstance(pointer, V2RetractionPointer):
+        return None
+
+    errors: list[tuple[str, str]] = []
+    if pointer.live_point != anchor.live_point:
+        errors.append(
+            ("preserved_pointer", "preserved live_point is not the current anchor pointer")
+        )
+
+    target_content = target_payload.get("content")
+    if not isinstance(target_content, str):
+        errors.append(
+            (
+                "original_sha256",
+                "immutable content is missing or not text; evidence binding cannot be verified",
+            )
+        )
+        return errors
+    target_bytes = target_content.encode("utf-8")
+    target_digest = sha256(target_bytes).hexdigest()
+    if evidence.original_sha256 != target_digest:
+        errors.append(("original_sha256", "recorded digest does not match immutable content"))
+    if evidence.original_utf8_bytes != len(target_bytes):
+        errors.append(
+            ("original_utf8_bytes", "recorded byte length does not match immutable content")
+        )
+
+    prefix_size = evidence.quoted_prefix_utf8_bytes
+    try:
+        prefix = target_bytes[:prefix_size].decode("utf-8")
+    except UnicodeDecodeError:
+        errors.append(
+            ("quoted_prefix_utf8_bytes", "recorded prefix splits the stored UTF-8 content")
+        )
+    else:
+        anchor_content = anchor_payload["content"]
+        if prefix not in anchor_content:
+            errors.append(
+                (
+                    "quoted_prefix_utf8_bytes",
+                    "storage-derived original prefix is absent from the anchor tombstone",
+                )
+            )
+    return errors
+
+
+def _validate_retraction_artifact_heads(
+    episodic_result: PlaneResult,
+    episodic_records: list[Any],
+    artifact_records: list[Any],
+) -> None:
+    """Bind every typed evidence reference to the exact scanned artifact head.
+
+    Call only when both collections completed. Missing coverage is not evidence
+    of either a good or bad cross-plane reference.
+    """
+    artifacts = {
+        (payload.get("namespace"), payload.get("object_id")): payload
+        for rec in artifact_records
+        if (payload := dict(rec.payload or {}))
+    }
+
+    for rec in episodic_records:
+        payload = dict(rec.payload or {})
+        if payload.get("point_kind") == "content":
+            continue
+        try:
+            logical = EpisodicMemory.model_validate(strip_layout_fields(payload))
+        except ValidationError:
+            continue
+        evidence = logical.retraction_evidence
+        if evidence is None:
+            continue
+
+        expected = derive_escrow_address(
+            source_namespace=logical.namespace,
+            source_object_id=logical.object_id,
+            original_sha256=evidence.original_sha256,
+        )
+        if (
+            evidence.artifact_namespace != expected.artifact_namespace
+            or evidence.artifact_ref.artifact_id != expected.artifact_id
+        ):
+            _add_problem(
+                episodic_result,
+                _custom_problem(
+                    episodic_result.collection,
+                    rec,
+                    payload,
+                    "retraction_artifact_mismatch",
+                    "artifact reference is not this object's deterministic escrow address",
+                    loc=["retraction_evidence", "artifact_ref"],
+                ),
+            )
+            continue
+
+        head = artifacts.get((evidence.artifact_namespace, evidence.artifact_ref.artifact_id))
+        if head is None:
+            _add_problem(
+                episodic_result,
+                _custom_problem(
+                    episodic_result.collection,
+                    rec,
+                    payload,
+                    "retraction_artifact_mismatch",
+                    "referenced escrow artifact head is absent from scanned storage",
+                    loc=["retraction_evidence", "artifact_ref"],
+                ),
+            )
+            continue
+
+        checks = (
+            (
+                head.get("artifact_state") == "stored_unindexed",
+                "artifact_state",
+                "referenced artifact is not stored_unindexed",
+            ),
+            (
+                head.get("sha256") == evidence.original_sha256,
+                "original_sha256",
+                "artifact digest does not match retraction evidence",
+            ),
+            (
+                head.get("size_bytes") == evidence.original_utf8_bytes,
+                "original_utf8_bytes",
+                "artifact byte length does not match retraction evidence",
+            ),
+        )
+        for valid, loc, message in checks:
+            if valid:
+                continue
+            _add_problem(
+                episodic_result,
+                _custom_problem(
+                    episodic_result.collection,
+                    rec,
+                    payload,
+                    "retraction_artifact_mismatch",
+                    message,
+                    loc=["retraction_evidence", loc],
+                ),
+            )
+
+
 def _validate_storage_rows(
     result: PlaneResult,
     records: list[Any],
@@ -341,7 +501,7 @@ def _validate_storage_rows(
             else:
                 _LegacyEnvelope.model_validate(layout)
                 anchor = None
-            model.model_validate(strip_layout_fields(payload))
+            domain_object = model.model_validate(strip_layout_fields(payload))
         except ValidationError as exc:
             _add_problem(result, _validation_problem(result.collection, rec, payload, exc))
             continue
@@ -400,19 +560,44 @@ def _validate_storage_rows(
             key for key in _PROJECTION_FIELDS[result.plane] if payload.get(key) != target.get(key)
         ]
         if projection_mismatches:
-            for key in projection_mismatches:
-                _add_problem(
-                    result,
-                    _custom_problem(
-                        result.collection,
-                        rec,
-                        payload,
-                        "projection_divergence",
-                        f"anchor {key} does not equal the content snapshot used for embedding",
-                        loc=["live_point", key],
-                    ),
-                )
-            continue
+            evidence_errors: list[tuple[str, str]] | None = None
+            if result.plane == "episodic" and isinstance(domain_object, EpisodicMemory):
+                evidence = domain_object.retraction_evidence
+                if evidence is not None:
+                    evidence_errors = _retraction_evidence_binding_errors(
+                        evidence=evidence,
+                        anchor=anchor,
+                        anchor_payload=payload,
+                        target_payload=target,
+                    )
+            if evidence_errors is None:
+                for key in projection_mismatches:
+                    _add_problem(
+                        result,
+                        _custom_problem(
+                            result.collection,
+                            rec,
+                            payload,
+                            "projection_divergence",
+                            f"anchor {key} does not equal the content snapshot used for embedding",
+                            loc=["live_point", key],
+                        ),
+                    )
+                continue
+            if evidence_errors:
+                for loc, message in evidence_errors:
+                    _add_problem(
+                        result,
+                        _custom_problem(
+                            result.collection,
+                            rec,
+                            payload,
+                            "retraction_evidence_mismatch",
+                            message,
+                            loc=["retraction_evidence", loc],
+                        ),
+                    )
+                continue
         try:
             model.model_validate(strip_layout_fields({**target, **payload}))
         except ValidationError as exc:
@@ -436,7 +621,13 @@ def _validate_storage_rows(
 
 
 def _scan_collection(
-    client: QdrantClient, plane: str, collection: str, model: type[BaseModel], batch: int
+    client: QdrantClient,
+    plane: str,
+    collection: str,
+    model: type[BaseModel],
+    batch: int,
+    *,
+    records_out: list[Any] | None = None,
 ) -> PlaneResult:
     """Scan one collection. Reads only. Never raises — records what happened instead."""
     result = PlaneResult(plane=plane, collection=collection, status="scanned")
@@ -466,6 +657,8 @@ def _scan_collection(
 
         result.scanned += len(records)
         seen.extend(records)
+        if records_out is not None:
+            records_out.extend(records)
         if offset is None:
             _validate_storage_rows(result, seen, model)
             return result
@@ -555,7 +748,10 @@ def validate_rows(
         conn_error = f"{type(exc).__name__}: {exc}"
 
     results = []
+    records_by_plane: dict[str, list[Any]] = {}
     for n in _PLANE_MODELS:
+        records: list[Any] = []
+        records_by_plane[n] = records
         if n not in requested:
             results.append(_unrequested(n))
         elif client is None:
@@ -566,8 +762,25 @@ def validate_rows(
             )
         else:
             results.append(
-                _scan_collection(client, n, _PLANE_MODELS[n][0], _PLANE_MODELS[n][1], batch)
+                _scan_collection(
+                    client,
+                    n,
+                    _PLANE_MODELS[n][0],
+                    _PLANE_MODELS[n][1],
+                    batch,
+                    records_out=records,
+                )
             )
+
+    results_by_plane = {result.plane: result for result in results}
+    episodic_result = results_by_plane["episodic"]
+    artifact_result = results_by_plane["artifact"]
+    if episodic_result.status == "scanned" and artifact_result.status == "scanned":
+        _validate_retraction_artifact_heads(
+            episodic_result,
+            records_by_plane["episodic"],
+            records_by_plane["artifact"],
+        )
 
     all_broken = [b for r in results for b in r.broken]
     all_unreferenced_content = [row for r in results for row in r.unreferenced_content]

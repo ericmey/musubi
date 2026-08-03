@@ -358,6 +358,14 @@ specific recovery property this contract cannot meet.
 
 ## Implementation graph
 
+This accepted ADR authorizes the additive public schemas required by its
+implementation lanes. A lane that changes a response model must own and
+regenerate `openapi.yaml` in the same change, while preserving existing response
+shape when its new optional field is absent. ART-003 established this
+ADR-specific pattern for `stored_unindexed`; DATA-002 applies it to typed
+retraction evidence. This is not a general exception to the repository's frozen
+API rule for changes without an accepted ADR.
+
 - #643 — stored-unindexed artifact state.
 - #644 — exact-byte deterministic escrow primitive.
 - #645 — typed retraction evidence and VAL-002 exception.

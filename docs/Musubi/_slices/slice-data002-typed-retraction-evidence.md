@@ -1,0 +1,164 @@
+---
+title: "Slice: DATA-002 typed retraction evidence"
+slice_id: slice-data002-typed-retraction-evidence
+issue: 645
+section: _slices
+type: slice
+status: done
+owner: codex-gpt5
+phase: "1-schema"
+tags: [section/slices, status/done, type/slice, data-001, data-integrity, idempotency]
+updated: 2026-08-03
+reviewed: true
+depends-on: [slice-art004-exact-byte-escrow]
+blocks: []
+---
+
+# Slice: DATA-002 typed retraction evidence
+
+Implement ADR 0042's strict anchor-local evidence contract and the narrow
+VAL-002 keyhole that recognizes a deliberate non-reembedding episodic
+retraction without weakening ordinary projection-divergence checks.
+
+## Decision boundary
+
+- `retraction_evidence` is a strict optional episodic domain field; malformed,
+  partial, or tag-only shapes fail canonical validation.
+- The evidence names the derived artifact reference and namespace, exact
+  original digest and UTF-8 byte length, exact prefix and omitted-byte
+  accounting, original-vector basis, preserved pointer, opaque operation
+  identity hash, and canonical request digest.
+- VAL-002 permits divergence only for episodic v2 anchors whose evidence binds
+  the current storage pointer, the current immutable content snapshot, and the
+  exact stored-unindexed escrow artifact head. It never permits curated
+  divergence and never trusts evidence to attest its own target bytes.
+- Legacy inline full-original tombstones remain valid. This slice adds no
+  public endpoint, escrow write, or episodic mutation path.
+- Endpoint construction, tombstone prose, immutable content/vector invariance
+  across the write, and request replay semantics remain owned by #646.
+
+## Specs to implement
+
+- [[04-data-model/episodic-memory]]
+- [[13-decisions/0042-escrow-backed-episodic-retraction]]
+
+## Owned paths
+
+- `src/musubi/types/episodic.py`
+- `src/musubi/types/__init__.py`
+- `src/musubi/cli/validate.py`
+- `tests/types/test_episodic.py`
+- `tests/cli/test_validate.py`
+- `openapi.yaml`
+- `docs/Musubi/04-data-model/episodic-memory.md`
+- `docs/Musubi/13-decisions/0042-escrow-backed-episodic-retraction.md`
+- `docs/Musubi/_slices/slice-data002-typed-retraction-evidence.md`
+- `docs/Musubi/_inbox/locks/slice-data002-typed-retraction-evidence.lock`
+
+## Test contract
+
+1. Strict typed evidence round-trips through the public episodic model without
+   exposing DATA-001 layout fields.
+2. Wrong artifact-id shape, non-whole-artifact references, noncanonical hashes,
+   extra fields, partial evidence, a non-sibling artifact namespace, inconsistent
+   byte accounting, or an ambiguous preserved-pointer shape fail closed.
+3. Ordinary accidental episodic and curated projection divergence remains
+   broken.
+4. A fully bound v2 retraction divergence is clean only when pointer,
+   generation, stored original digest/length, non-empty literal prefix,
+   omitted-byte accounting, and exact stored-unindexed escrow head all verify
+   against scanned storage.
+5. Wrong live point, original digest/length, prefix accounting, stale
+   generation, valid-but-wrong deterministic artifact id, missing artifact,
+   wrong artifact state, or artifact digest/length mismatch each fails closed
+   with a discriminating error.
+6. A partial episodic scan with an unseen content target returns
+   incomplete/unknown and makes neither a broken nor a clean cross-row claim.
+7. Existing inline legacy tombstones remain valid without evidence.
+8. Whole-dict content-point and vector invariance across the actual mutation is
+   owned and mechanically required by #646; this schema/validator lane writes
+   no episodic row and does not manufacture a mutation proof.
+9. Evidence-absent episodic serialization omits the optional field so existing
+   response bodies do not gain a null key, while runtime schema and committed
+   OpenAPI truthfully expose the evidence-present shape.
+
+## Work log
+
+- 2026-08-03 — Claimed #645 after ART-004 merged as #652 / `a26d82a`.
+  Read-only mapping confirmed the validator already proves storage pointer
+  identity and generation before projection comparison; this lane adds one
+  episodic-only exception at that seam rather than a parallel pointer system.
+- 2026-08-03 — Aoi's plan attack found the only evidence field still bound to
+  nothing: `artifact_ref.artifact_id`. A purged escrow would otherwise leave a
+  permanently clean-looking tombstone pointing at no supported original. The
+  contract now requires VAL-002 to resolve the deterministic address against
+  the scanned artifact plane and verify stored-unindexed state, digest, and
+  length. Cross-plane conclusions are suppressed when either required scan is
+  incomplete. Prefix length is `>= 1`; zero would make literal containment
+  vacuous. #646 owns the fixed requirement that every server-built tombstone
+  embeds that literal storage-derived prefix.
+- 2026-08-03 — Test Contract closure for the broad episodic-memory spec keeps
+  these pre-existing bullets explicitly out of this schema/validator lane:
+  `test_maturation_sets_matured_after_ttl_and_scores_importance` and
+  `test_maturation_skips_already_matured` belong to the completed
+  `slice-lifecycle-maturation`; `test_query_hybrid_returns_scored_results_in_descending_order`
+  belongs to completed `slice-retrieval-hybrid`;
+  `test_forward_compat_reads_schema_version_0_point` remains owned by a future
+  schema-migration slice; `test_perf_create_under_100ms_p95_on_reference_host`
+  and `test_perf_dedup_query_under_30ms_p95` belong to the integration/perf
+  harness; `hypothesis: idempotency — re-ingesting same content N times produces 1 memory with reinforcement_count == N`
+  and `hypothesis: lifecycle monotonicity — state transitions never go backwards (except explicit revive operation)`
+  belong to `slice-plane-episodic-followup`. DATA-002 changes neither plane
+  behavior nor these deferred contracts.
+- 2026-08-03 — Aoi's test-head attack found that the valid-but-wrong artifact
+  id case resolved to nothing, so lookup-only code and deterministic-address
+  recomputation would both fail the same fixture. The wrong address now holds
+  an otherwise valid stored-unindexed head with matching digest and length;
+  only recomputing this episodic object's ADR address can reject it. A second
+  control proves the `legacy_self` union arm is accepted by the public model
+  but cannot waive v2 projection divergence.
+- 2026-08-03 — The full gate, unlike the focused schema/validator suite, reached
+  runtime-vs-snapshot OpenAPI parity and exposed two independent public-contract
+  effects: the new optional field was absent from committed `openapi.yaml`, and
+  ordinary evidence-absent serialization gained `retraction_evidence: null`.
+  ART-003 under the same accepted ADR established that the schema lane owns an
+  additive generated-snapshot update; DATA-002 records that ADR-specific
+  interpretation explicitly rather than inferring a repo-wide API exception.
+  Field-level conditional exclusion preserves existing response-body shape;
+  snapshot regeneration separately preserves schema truth.
+- 2026-08-03 — The first production head was invalidated before review after an
+  executable schema/runtime comparison found that inherited `chunk_id` and
+  `quote` fields, narrowed to `None` and excluded from serialization, still
+  accepted explicit null keys even though OpenAPI exposed only `artifact_id`
+  with `additionalProperties: false`. Two field-bound regressions now require
+  key presence to fail regardless of value; whole-artifact ambiguity is rejected
+  rather than accepted and erased. A direct conformance guard binds the published
+  schema's forbidden-key set to those same runtime rejections: snapshot parity
+  proves two API descriptions agree, while this test proves behavior conforms to
+  the description.
+- 2026-08-03 — Aoi approved the storage-binding implementation at `6592f1c`
+  after independently executing the whole-reference positive control and both
+  explicit-null rejections, and carried approval to `3e9c9e6` after executing
+  the added serialization-schema/runtime conformance guard. Exact-head local
+  gate: 2,563 passed, 195 skipped, 140 deselected, 3 xfailed; Test Contract
+  closure 27 passing + 8 named out-of-scope; agent check clean with warnings
+  only. Terminal metadata carries no executable or contract change.
+- 2026-08-03 — Terminal auto-merge was disabled and the slice reopened after
+  Copilot found that corrupt target content could reach the evidence keyhole and
+  raise from an unchecked `target_payload["content"]` access. The CLI contract is
+  never-raise: missing or non-text target content must produce a field-bound
+  retraction-evidence mismatch while the already-invalid content point remains
+  reported separately. The first post-fix assertion incorrectly required
+  `result.exception is None`; Typer represents an intentional nonzero verdict as
+  `SystemExit`. The discriminating contract is now: normal `SystemExit(2)`, two
+  separately reported broken rows, and an anchor-local evidence mismatch — not
+  an escaped `KeyError` or `AttributeError`.
+- 2026-08-03 — Aoi approved the reopened validator seam at `0128cdc` after
+  independently reproducing the old `KeyError` and both non-text
+  `AttributeError` cases, then verifying the replacement's six properties:
+  normal `SystemExit(2)`, both corrupt target and evidence-bearing anchor
+  reported, field-bound `original_sha256` mismatch, and the fully bound
+  positive control still clean. Exact-head gate: 2,565 passed, 195 skipped,
+  140 deselected, 3 xfailed; Test Contract closure 27 passing + 8 named
+  out-of-scope; agent check clean with warnings only. Copilot's outdated thread
+  was resolved only after this independent attack.
