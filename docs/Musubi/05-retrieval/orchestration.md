@@ -239,6 +239,9 @@ inputs: the literal `bad_query` code and codes containing `forbidden` or
 `unauthorized`. No retrieve error producer emits any of them. Public
 `kind="bad_query"` remains reachable through the registry's emitted bad-query
 codes, while `kind="forbidden"` remains reachable through HTTP status 403.
+Each retired input now raises `ValueError` rather than classifying; the closure
+that makes those inputs unreachable is asserted by
+`test_retrieval_error_construction_remains_closed_over_retrieve_package`.
 
 ## Observability hooks
 
