@@ -137,6 +137,12 @@ GET    /v1/curated                 # list with filters
 
 Body of a curated doc is normally edited via the vault; POST exists for programmatic creation (e.g., Lifecycle Worker's promotion goes through `curated_create_from_concept` internally — but clients may POST too if they want to create a file through the API).
 
+Curated PATCH accepts only `tags`, `importance`, and `topics`, all with replacement
+semantics. The write is namespace-bound, layout-aware, version-fenced, attributable,
+and non-re-embedding. It targets only the v1 identity row or v2 anchor. A same-version
+HTTP loser receives 409 `CONFLICT` and is never silently retried against a fresh row;
+internal plane mutations retain their separate bounded retry contract.
+
 ### 3. Concepts
 
 ```

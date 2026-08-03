@@ -22,6 +22,12 @@ from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, is_tran
 from musubi.lifecycle.transitions import transition
 from musubi.planes.curated import CuratedPlane
 from musubi.settings import Settings
+from musubi.store.immutable_vectors import (
+    NonEmbeddingPatchConflict,
+    patch_non_embedding_payload,
+)
+from musubi.store.names import collection_for_plane
+from musubi.store.specs import strip_layout_fields
 from musubi.types.common import Ok
 from musubi.types.curated import CuratedKnowledge
 
@@ -175,13 +181,26 @@ async def patch_curated(
             ),
         )
     # NEVER PERSIST WHAT YOU CANNOT READ BACK. Validate the RESOLVED canonical row (never raw anchor
-    # layout keys), then publish the metadata-only change through the attributable Phase-1 mutation
-    # lease (CuratedPlane.patch_metadata -> owned_update): version-fenced owner-token, rebased on fresh,
-    # one version bump, targets the identity row (v1 and v2), composes with concurrent access/state.
+    # layout keys), then publish against exactly the observation this HTTP caller saw. Internal plane
+    # mutations use ``owned_update`` because they have no caller to decide whether retrying is still
+    # appropriate; an HTTP stale-observation loser must receive 409 instead of silently becoming a
+    # later winner. Both seams remain namespace-bound, attributable, layout-aware, and non-reembedding.
     assert_readable_after_patch(
         served.model_dump(mode="json"), incoming, CuratedKnowledge, object_id=object_id
     )
-    return await plane.patch_metadata(namespace=namespace, object_id=object_id, changes=incoming)
+    try:
+        published = patch_non_embedding_payload(
+            qdrant,
+            collection_for_plane("curated"),
+            namespace=namespace,
+            object_id=object_id,
+            observed_payload=current_raw,
+            changes=incoming,
+            tag_mode="replace",
+        )
+    except NonEmbeddingPatchConflict as exc:
+        raise APIError(status_code=409, code="CONFLICT", detail=str(exc)) from exc
+    return CuratedKnowledge.model_validate(strip_layout_fields(published))
 
 
 @router.delete(

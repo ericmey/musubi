@@ -29,6 +29,9 @@ internal callers that have nobody to decide whether a retry is still appropriate
   semantics do not become merge semantics.
 - Namespace binding, v1/v2 identity-row selection, exact-token attribution, generation
   binding, and fail-closed dangling-pointer handling remain unchanged.
+- A physically versionless curated legacy row remains a supported theoretical input to
+  the shared primitive, but the 2026-08-03 live raw-payload census found zero such
+  patchable identity rows; version omission was confined to immutable content snapshots.
 
 ## Owned paths
 
@@ -58,3 +61,13 @@ internal callers that have nobody to decide whether a retry is still appropriate
   and internal mutations need deliberately different concurrency contracts. Tests
   are written first; the stale-observation case injects a real winner after route
   validation so the current retrying route must fail by replaying the loser.
+- 2026-08-03 — Aoi found that the first red could accept the route's pre-existing
+  dangling-pointer 409. The contract now asserts the observed-version-fence detail,
+  so a wrong 409 cannot satisfy the concurrency proof.
+- 2026-08-03 — Read-only raw Qdrant census archived at harem-ops commit `356f192`
+  (`sha256:d6f1457f4ded16bf9f44d6fe3ad3a16fe4f0289b85afb475d693cebb7f1f466b`):
+  121 physical curated points, complete pagination; all 104 patchable identity rows
+  physically carry `version` (22 v1, 82 v2). The 17 version-absent points are all
+  immutable `point_kind=content` snapshots. The API's 104-object distribution is an
+  independent control on the physical classification, so the versionless-legacy case
+  is documented rather than added as a live-population regression.
