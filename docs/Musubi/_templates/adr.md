@@ -12,8 +12,8 @@ date: <% tp.date.now("YYYY-MM-DD") %>
 deciders: [Eric]
 tags: [section/decisions, status/proposed, type/adr]
 updated: <% tp.date.now("YYYY-MM-DD") %>
-supersedes:
-superseded-by:
+supersedes: ""
+superseded-by: ""
 ---
 
 # ADR <% num %>: <% title %>
