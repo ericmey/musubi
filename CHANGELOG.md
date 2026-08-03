@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.3](https://github.com/ericmey/musubi/compare/v1.23.2...v1.23.3) (2026-08-03)
+
+
+### Bug Fixes
+
+* **tc-coverage:** stop dropping unreadable Test Contract bullets ([#669](https://github.com/ericmey/musubi/issues/669)) ([#670](https://github.com/ericmey/musubi/issues/670)) ([76c6a80](https://github.com/ericmey/musubi/commit/76c6a80243f4032630036cfc6439e32af4661347))
+
 ## [1.23.2](https://github.com/ericmey/musubi/compare/v1.23.1...v1.23.2) (2026-08-03)
 
 
