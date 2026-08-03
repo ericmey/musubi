@@ -219,6 +219,30 @@ class RetrievalError(BaseModel):
 
 Success variant carries a `warnings` list too (non-fatal issues). Callers check `is_ok` and inspect `warnings` for partial-degradation signaling.
 
+### Exhaustive sub-layer code classification
+
+Every literal error code emitted inside `src/musubi/retrieve/` has one exact
+entry in the orchestration code-to-kind registry. Codes intentionally mapped to
+`internal` are named separately; an unknown code raises a diagnostic programmer
+error instead of silently falling through to `internal`.
+
+The retrieve package is the closed input domain for this classifier. Dynamic
+forwarders may propagate a code from another retrieve error, but no external
+package constructs the internal `RetrievalError`. A focused source-inventory
+test preserves that premise, inventories both arms of conditional code
+expressions, and fails if the error-constructor naming convention silently
+excludes a new callee. Warning codes remain a separate taxonomy even when a
+literal such as `sparse_embedding_failed` intentionally exists in both.
+
+The closed-domain conversion deliberately retires three unreachable classifier
+inputs: the literal `bad_query` code and codes containing `forbidden` or
+`unauthorized`. No retrieve error producer emits any of them. Public
+`kind="bad_query"` remains reachable through the registry's emitted bad-query
+codes, while `kind="forbidden"` remains reachable through HTTP status 403.
+Each retired input now raises `ValueError` rather than classifying; the closure
+that makes those inputs unreachable is asserted by
+`test_retrieval_error_construction_remains_closed_over_retrieve_package`.
+
 ## Observability hooks
 
 Every step emits:
@@ -297,19 +321,31 @@ Access accounting (RET-002 / #500) — realized in `tests/retrieve/test_ret002_a
 30. `test_retrieve_normalizes_accounting_failure_to_typed_err`
 31. `test_context_accounting_failure_returns_internal_not_raw`
 
+Exhaustive error classification (RET-014 / #619):
+
+32. `test_every_literal_retrieve_error_code_has_an_explicit_classification`
+33. `test_existing_error_code_classifications_preserve_their_semantics`
+34. `test_unknown_retrieve_error_code_is_rejected_instead_of_implicitly_internal`
+35. `test_intentional_internal_error_codes_are_named_and_complete`
+36. `test_error_code_collector_rejects_new_unrecognised_code_callee`
+37. `test_error_code_collector_accounts_for_dynamic_forwarding_sites`
+38. `test_error_code_collector_walks_both_conditional_expression_arms`
+39. `test_retrieval_error_construction_remains_closed_over_retrieve_package`
+40. `test_sparse_embedding_failed_remains_distinct_in_error_and_warning_taxonomies`
+
 
 Grapheme-safe truncation:
-32. `test_truncation_bypasses_short_text`
-33. `test_truncation_cuts_at_grapheme_boundaries_safely`
-34. `test_truncation_respects_max_chars_lte_3`
-35. `test_truncation_prevents_emoji_zwj_bisection`
-36. `test_truncation_preserves_single_emoji`
-37. `test_truncation_prevents_combined_diacritic_bisection`
-38. `test_truncation_prevents_regional_indicator_bisection`
-39. `test_truncation_preserves_internal_whitespace`
-40. `test_truncation_preserves_trailing_whitespace_if_within_budget`
-41. `test_truncation_prevents_skin_tone_modifier_bisection`
-42. `test_fast_retrieval_uses_grapheme_truncation_for_long_content`
-43. `test_recent_retrieval_uses_grapheme_truncation_for_long_content`
-44. `test_orchestration_uses_grapheme_truncation_for_long_content`
-45. `test_context_pack_uses_grapheme_truncation_for_long_content`
+41. `test_truncation_bypasses_short_text`
+42. `test_truncation_cuts_at_grapheme_boundaries_safely`
+43. `test_truncation_respects_max_chars_lte_3`
+44. `test_truncation_prevents_emoji_zwj_bisection`
+45. `test_truncation_preserves_single_emoji`
+46. `test_truncation_prevents_combined_diacritic_bisection`
+47. `test_truncation_prevents_regional_indicator_bisection`
+48. `test_truncation_preserves_internal_whitespace`
+49. `test_truncation_preserves_trailing_whitespace_if_within_budget`
+50. `test_truncation_prevents_skin_tone_modifier_bisection`
+51. `test_fast_retrieval_uses_grapheme_truncation_for_long_content`
+52. `test_recent_retrieval_uses_grapheme_truncation_for_long_content`
+53. `test_orchestration_uses_grapheme_truncation_for_long_content`
+54. `test_context_pack_uses_grapheme_truncation_for_long_content`

@@ -176,24 +176,51 @@ class RetrievalError(BaseModel):
 _ErrorKind = Literal["bad_query", "forbidden", "timeout", "internal"]
 
 
+INTERNAL_ERROR_CODES: frozenset[str] = frozenset(
+    {
+        "all_planes_failed",
+        "dense_embedding_failed",
+        "embeddings_unavailable",
+        "fanout_mismatch",
+        "index_unavailable",
+        "no_query_vectors",
+        "qdrant_query_failed",
+        "sparse_embedding_failed",
+    }
+)
+
+ERROR_KIND_BY_CODE: dict[str, _ErrorKind] = {
+    "all_planes_failed": "internal",
+    "all_planes_timeout": "timeout",
+    "dense_embedding_failed": "internal",
+    "embeddings_unavailable": "internal",
+    "empty_query": "bad_query",
+    "fanout_mismatch": "internal",
+    "index_unavailable": "internal",
+    "invalid_collections": "bad_query",
+    "invalid_limit": "bad_query",
+    "no_query_vectors": "internal",
+    "no_retrieval_channels": "bad_query",
+    "plane_timeout": "timeout",
+    "qdrant_query_failed": "internal",
+    "qdrant_timeout": "timeout",
+    "sparse_embedding_failed": "internal",
+}
+
+
 def _kind_from_code(code: str) -> _ErrorKind:
-    """Map a sub-layer error CODE to the orchestration failure ``kind`` (RET-007 Blocker 2). A
-    timeout anywhere in the pipeline (hybrid ``qdrant_timeout``, blended ``all_planes_timeout``) must
-    reach ``kind=timeout`` → HTTP 503 — NOT be flattened to ``internal`` → 500."""
-    c = code.lower()
-    if "timeout" in c:
-        return "timeout"
-    if "forbidden" in c or "unauthorized" in c:
-        return "forbidden"
-    if c in {
-        "empty_query",
-        "invalid_limit",
-        "no_retrieval_channels",
-        "invalid_collections",
-        "bad_query",
-    }:
-        return "bad_query"
-    return "internal"
+    """Map a closed-domain retrieve error code to its orchestration kind.
+
+    RET-014 keeps the registry exhaustive over every code emitted under
+    :mod:`musubi.retrieve`. Unknown values are programmer errors rather than an
+    implicit ``internal`` classification; the focused contract test inventories
+    producers and fails at the commit that introduces an unclassified code.
+    """
+    normalized = code.lower()
+    try:
+        return ERROR_KIND_BY_CODE[normalized]
+    except KeyError as exc:
+        raise ValueError(f"unclassified retrieve error code: {code!r}") from exc
 
 
 def _kind_from_status(status: int) -> _ErrorKind:
