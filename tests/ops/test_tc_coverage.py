@@ -2,8 +2,15 @@ import ast
 from typing import cast
 
 from docs.Musubi._tools.tc_coverage import (
+    NO_CONTRACT,
+    UNPARSEABLE,
+    Bullet,
     _extract_skip_reason,
+    _parse_bullets,
     _positional_module_string_bindings,
+    classify,
+    has_test_contract,
+    render_summary,
 )
 
 
@@ -250,3 +257,102 @@ def test_e2e_positional(): pass
     assert _extract_skip_reason(func.decorator_list[0], module_names={"_X": "first"}) == "first"
     # The positional resolver must not return "first" for this code.
     assert names != {"_X": "first"}
+
+
+# ---------------------------------------------------------------------------
+# Issue #669: silently-dropped bullets and missing contract sections.
+#
+# The prior parser only matched numbered items that BEGIN with a backticked
+# token. Prose obligations were not misclassified — they were never built as
+# Bullet objects, so `Total: N` reported the parseable subset as if it were the
+# population and the Closure Rule could pass on a near-empty examination.
+# ADR 0040 stated 14 obligations and yielded 1.
+# ---------------------------------------------------------------------------
+
+_PROSE_CONTRACT = """
+## Test contract
+
+The implementation slices collectively prove:
+
+1. client crash after local mark but before network remains resumable;
+2. server crash after reservation but before mutation resumes exactly once;
+3. `operator_abandon` requires `delivery_state="unknown"` in schema;
+"""
+
+
+def test_prose_bullets_are_reported_not_dropped() -> None:
+    """RED before #669: this returned 1 bullet. All three must now appear."""
+    bullets = _parse_bullets(_PROSE_CONTRACT, "0040")
+    assert len(bullets) == 3
+    assert [b.index for b in bullets] == [1, 2, 3]
+
+
+def test_prose_bullets_are_marked_unparseable() -> None:
+    """The two prose items are ✗ unparseable; the backticked one parses."""
+    bullets = _parse_bullets(_PROSE_CONTRACT, "0040")
+    assert [b.state for b in bullets[:2]] == [UNPARSEABLE, UNPARSEABLE]
+    assert bullets[2].name == "operator_abandon"
+    assert bullets[2].state != UNPARSEABLE
+
+
+def test_unparseable_survives_classify_even_if_work_log_mentions_it() -> None:
+    """A work-log mention must NOT clear an unreadable bullet.
+
+    classify() otherwise downgrades unmatched names to ⊘ out-of-scope when the
+    text appears in the work log — which would restore the exact silence #669
+    removed, just by a different route.
+    """
+    bullet = _parse_bullets(_PROSE_CONTRACT, "0040")[0]
+    work_log = "- 2026-08-03 — client crash after local mark but before network remains resumable;"
+    assert classify(bullet, work_log).state == UNPARSEABLE
+
+
+def test_numbered_lines_inside_code_fences_are_not_counted() -> None:
+    """A fenced example must not inflate the stated-bullet count."""
+    text = """
+## Test contract
+
+```text
+1. this is example output, not an obligation
+```
+
+1. `test_real_one`
+"""
+    bullets = _parse_bullets(text, "spec")
+    assert len(bullets) == 1
+    assert bullets[0].name == "test_real_one"
+
+
+def test_has_test_contract_distinguishes_absent_from_empty() -> None:
+    """A spec with no section is not the same as one whose section is empty."""
+    assert has_test_contract("## Test contract\n\n1. `test_x`\n") is True
+    assert has_test_contract("## Test Contract\n\n") is True  # present but empty
+    assert has_test_contract("## Context\n\nno contract here\n") is False
+
+
+def test_summary_reports_machine_checkable_ratio() -> None:
+    """The narrowed input must be visible in the output itself.
+
+    #669's whole failure mode was that nothing on screen showed how much the
+    gate had skipped.
+    """
+    bullets = [
+        Bullet(spec="s", index=1, name="test_ok", state="✓ passing"),
+        Bullet(spec="s", index=2, name="prose", state=UNPARSEABLE),
+        Bullet(spec="s", index=3, name="none", state=NO_CONTRACT),
+    ]
+    out = render_summary(bullets)
+    assert "Total: 3 stated bullet(s)" in out
+    assert "Machine-checkable: 1/3" in out
+    assert "Closure Rule satisfied" not in out
+
+
+def test_summary_satisfied_only_when_everything_is_checkable() -> None:
+    """Negative control: a fully-parseable, fully-passing contract still passes."""
+    bullets = [
+        Bullet(spec="s", index=1, name="test_a", state="✓ passing"),
+        Bullet(spec="s", index=2, name="test_b", state="⏭ skipped"),
+    ]
+    out = render_summary(bullets)
+    assert "Machine-checkable: 2/2" in out
+    assert "✓ Closure Rule satisfied." in out
