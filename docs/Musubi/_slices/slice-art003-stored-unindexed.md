@@ -61,10 +61,17 @@ chunks and never claims indexing success, failure, or active admission.
 4. Existing indexing/indexed/failed fixtures and JSON round trips remain valid.
 5. A directly created stored-unindexed head is readable by exact namespace/id and
    exposes zero committed chunks through both chunk-read surfaces.
-6. The committed OpenAPI snapshot exposes the additive enum value.
+6. `test_runtime_vs_snapshot_openapi_schema_parity` keeps the committed snapshot
+   equal to the runtime schema, including the additive enum value.
 
 ## Work log
 
 - 2026-08-03 — Claimed #643 after ADR 0042 merged at `d42201e`. Production
   escrow writing, blob durability, indexing-intent suppression, and semantic
   search proof remain explicitly owned by #644.
+- 2026-08-03 — Tests written before production code. The first invocation was an
+  invalid instrument because the fresh worktree lacked the dev extra and every
+  async control failed before execution. After `uv sync --extra dev`, 42 existing
+  controls passed and exactly the two new acceptance/readability cases failed on
+  the absent enum; the five forbidden-field cases remain poised to fail if the
+  enum lands without its invariant.
