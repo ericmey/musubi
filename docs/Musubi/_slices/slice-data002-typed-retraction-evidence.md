@@ -148,4 +148,8 @@ retraction without weakening ordinary projection-divergence checks.
   raise from an unchecked `target_payload["content"]` access. The CLI contract is
   never-raise: missing or non-text target content must produce a field-bound
   retraction-evidence mismatch while the already-invalid content point remains
-  reported separately.
+  reported separately. The first post-fix assertion incorrectly required
+  `result.exception is None`; Typer represents an intentional nonzero verdict as
+  `SystemExit`. The discriminating contract is now: normal `SystemExit(2)`, two
+  separately reported broken rows, and an anchor-local evidence mismatch — not
+  an escaped `KeyError` or `AttributeError`.

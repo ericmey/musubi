@@ -324,7 +324,15 @@ def _retraction_evidence_binding_errors(
             ("preserved_pointer", "preserved live_point is not the current anchor pointer")
         )
 
-    target_content = target_payload["content"]
+    target_content = target_payload.get("content")
+    if not isinstance(target_content, str):
+        errors.append(
+            (
+                "original_sha256",
+                "immutable content is missing or not text; evidence binding cannot be verified",
+            )
+        )
+        return errors
     target_bytes = target_content.encode("utf-8")
     target_digest = sha256(target_bytes).hexdigest()
     if evidence.original_sha256 != target_digest:

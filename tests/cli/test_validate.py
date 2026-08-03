@@ -638,19 +638,17 @@ def test_malformed_retraction_target_content_is_recorded_not_raised(
             _Rec(target, "episodic-content-current"),
         ]
     ]
-    behaviour["musubi_artifact"] = [
-        [_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]
-    ]
+    behaviour["musubi_artifact"] = [[_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]]
 
     result = _run(monkeypatch, behaviour, "--json")
 
-    assert result.exception is None
-    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == 2
     doc = json.loads(result.stdout)
+    assert doc["broken_total"] == 2
     anchor_problem = next(row for row in doc["broken"] if row["point_id"] == "anchor-current")
     assert any(
-        error["type"] == "retraction_evidence_mismatch"
-        and error["loc"][-1] == "original_sha256"
+        error["type"] == "retraction_evidence_mismatch" and error["loc"][-1] == "original_sha256"
         for error in anchor_problem["errors"]
     )
 
