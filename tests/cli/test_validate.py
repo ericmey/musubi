@@ -506,6 +506,22 @@ def test_unreferenced_content_is_reported_without_being_called_corrupt(
     assert "not, by itself, corruption" in human.stdout
 
 
+def test_validator_reports_episodic_anchor_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The first live episodic v2 bootstrap must become visible in VAL-002 evidence."""
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(_episodic_anchor(), "episodic-anchor-current"),
+            _Rec(_episodic_content(), "episodic-content-current"),
+        ]
+    ]
+    result = _run(monkeypatch, behaviour, "--plane", "episodic", "--json")
+    assert result.exit_code == EXIT_CLEAN_PARTIAL, result.output
+    doc = json.loads(result.output)
+    episodic = next(row for row in doc["planes"] if row["plane"] == "episodic")
+    assert episodic["anchor_count"] == 1
+
+
 def test_full_data001_fixture_returns_clean(monkeypatch: pytest.MonkeyPatch) -> None:
     behaviour = dict(ALL_EMPTY)
     behaviour["musubi_episodic"] = [
