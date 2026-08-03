@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -15,15 +16,45 @@ from musubi.store import bootstrap
 from musubi.types.common import Ok, generate_ksuid
 
 
+def _configured_test_blob_root() -> Path:
+    env_file = Path(__file__).resolve().parents[2] / "deploy" / "test-env" / ".env.test"
+    prefix = "ARTIFACT_BLOB_PATH="
+    matches = [
+        line.removeprefix(prefix)
+        for line in env_file.read_text().splitlines()
+        if line.startswith(prefix)
+    ]
+    assert len(matches) == 1
+    return Path(matches[0])
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_real_storage_escrow_orders_verified_blob_before_head_and_reuses(
-    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from musubi.planes.artifact.escrow import ArtifactEscrowWriter, derive_escrow_address
 
     port = int(os.environ.get("MUSUBI_TEST_QDRANT_PORT", "6339"))
     qdrant = QdrantClient(host="127.0.0.1", port=port)
+    configured_root = _configured_test_blob_root()
+    configured_root.mkdir(parents=True, exist_ok=True)
+    blob_root = configured_root / f"art004-{generate_ksuid()}"
+    blob_root.mkdir()
+    assert blob_root.stat().st_dev == configured_root.stat().st_dev
+    real_link = os.link
+    winner_injected = False
+
+    def inject_concurrent_winner(src: Path, dst: Path) -> None:
+        nonlocal winner_injected
+        if not winner_injected:
+            winner_injected = True
+            real_link(src, dst)
+        real_link(src, dst)
+
+    monkeypatch.setattr(os, "link", inject_concurrent_winner)
+    plane: ArtifactPlane | None = None
+    cleanup_identity: tuple[str, str] | None = None
     try:
         bootstrap(qdrant)
         plane = ArtifactPlane(client=qdrant, embedder=FakeEmbedder())
@@ -35,15 +66,17 @@ async def test_real_storage_escrow_orders_verified_blob_before_head_and_reuses(
             source_object_id=source_object_id,
             original_sha256=hashlib.sha256(original).hexdigest(),
         )
-        writer = ArtifactEscrowWriter(plane=plane, blob_root=tmp_path)
+        cleanup_identity = (address.artifact_namespace, address.artifact_id)
+        writer = ArtifactEscrowWriter(plane=plane, blob_root=blob_root)
 
         first = await writer.store(
             source_namespace=source_namespace,
             source_object_id=source_object_id,
             original=original,
         )
+        assert winner_injected is True
         assert isinstance(first, Ok)
-        final = tmp_path / address.artifact_namespace / address.artifact_id
+        final = blob_root / address.artifact_namespace / address.artifact_id
         assert final.read_bytes() == original
         assert hashlib.sha256(final.read_bytes()).hexdigest() == first.value.sha256
         assert (
@@ -67,4 +100,10 @@ async def test_real_storage_escrow_orders_verified_blob_before_head_and_reuses(
             == []
         )
     finally:
+        if plane is not None and cleanup_identity is not None:
+            await plane.purge(
+                namespace=cleanup_identity[0],
+                object_id=cleanup_identity[1],
+            )
         qdrant.close()
+        shutil.rmtree(blob_root)

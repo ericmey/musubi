@@ -68,7 +68,8 @@ mutation is permitted.
 1. The accepted ADR formula has a frozen deterministic-id golden vector.
 2. Namespace, source object id, or original digest changes the escrow address;
    its timestamp bytes remain the source object's.
-3. Blob write/readback failure exposes no artifact head.
+3. A temp-file fsync failure exposes neither a final blob nor an artifact head;
+   a final-blob readback failure exposes no artifact head.
 4. Head-publication failure followed by retry reuses only exact verified bytes
    and publishes one version-zero head.
 5. A pre-existing truncated or divergent final blob fails closed and is never
@@ -87,8 +88,10 @@ mutation is permitted.
 11. The request-level same-key/different-digest conflict is owned and
     mechanically required by #646, which observes the Idempotency-Key and
     canonical request digest; ART-004 does not invent a second journal.
-12. Real filesystem plus real-Qdrant integration proves bytes-before-head,
-    exact readback, and deterministic retry ordering.
+12. The configured test-env artifact-blob filesystem plus real-Qdrant
+    integration proves bytes-before-head, a real hard-link `EEXIST` adoption,
+    exact readback, and deterministic retry ordering. This is VFS-path evidence,
+    not a claim that an in-process test proves crash durability.
 
 ## Work log
 
@@ -103,11 +106,25 @@ mutation is permitted.
   here because this content-addressed primitive cannot observe an
   Idempotency-Key. The retention check is explicitly a direct future-policy
   guard, not evidence of a live artifact TTL.
-- 2026-08-03 — Test-first baseline is 10 intended failures and 3 passing
-  retention controls. Nine escrow cases fail because the new module is absent;
+- 2026-08-03 — Test-first baseline is 11 intended failures and 3 passing
+  retention controls. Ten escrow cases fail because the new module is absent;
   the retention case reaches current production behavior and observes two
   purges instead of the required one. `tc-coverage` accounts for all 36 source-
   artifact bullets. The initial coroutine-concurrency test was rejected before
   commit because synchronous filesystem work could serialize it; the contract
   now injects a real hard-link winner and proves the `EEXIST` adoption path,
   exact retry, and temp cleanup.
+- 2026-08-03 — Invalidated the first test-contract head before review: its
+  “write/readback failure” claim injected readback only. The replacement
+  callback raises on the first file `fsync`, proves the complete temp bytes were
+  present at that exact point, and requires no final address and no artifact
+  head. A red count without the write-side failure would have overstated the
+  crash contract.
+- 2026-08-03 — Aoi's independent attack found the orthogonal axis gap: every
+  filesystem proof, including the integration case, used pytest `tmp_path`.
+  The replacement integration case reads `ARTIFACT_BLOB_PATH` from the
+  authoritative test-env config, uses an isolated child on that same
+  filesystem, injects a winner with the real `os.link`, and requires the
+  primitive to adopt the resulting real `EEXIST`. The proof is intentionally
+  limited to VFS behavior; successful `fsync` cannot prove crash durability
+  from inside the process.

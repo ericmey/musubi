@@ -125,6 +125,37 @@ def test_escrow_id_binds_namespace_source_and_digest_while_preserving_timestamp(
 
 
 @pytest.mark.asyncio
+async def test_escrow_temp_fsync_failure_exposes_no_final_or_head(
+    plane: ArtifactPlane, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_fsync = os.fsync
+    fsync_calls = 0
+    complete_temp_seen = False
+
+    def fail_first_file_fsync(fd: int) -> None:
+        nonlocal fsync_calls, complete_temp_seen
+        fsync_calls += 1
+        if fsync_calls == 1:
+            complete_temp_seen = os.fstat(fd).st_size == len(_ORIGINAL)
+            raise OSError("injected temp fsync failure")
+        real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", fail_first_file_fsync)
+    result = await _store(_writer(plane, tmp_path))
+
+    assert fsync_calls == 1
+    assert complete_temp_seen is True
+    assert isinstance(result, Err)
+    assert result.error.code == "blob_publish_failed"
+    assert not _blob_path(tmp_path).exists()
+    assert [path for path in _blob_path(tmp_path).parent.iterdir() if path.suffix == ".tmp"] == []
+    assert (
+        await plane.get(namespace=_address().artifact_namespace, object_id=_address().artifact_id)
+        is None
+    )
+
+
+@pytest.mark.asyncio
 async def test_escrow_blob_readback_failure_exposes_no_head(
     plane: ArtifactPlane, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
