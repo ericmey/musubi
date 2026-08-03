@@ -201,12 +201,13 @@ Malformed, partial, stale, or tag-only evidence cannot waive the invariant.
 Add a dedicated endpoint:
 
 ```text
-POST /v1/episodic/{object_id}/retract?namespace=<episodic-namespace>
+POST /v1/episodic/{object_id}/retract
 ```
 
-The request requires `Idempotency-Key` and `expected_version`. It carries only
-caller-owned truth inputs: retraction date, reason, replacement truth, optional
-summary/tags, and an optional superseding object reference.
+The request requires `Idempotency-Key`; its JSON body carries the episodic
+`namespace`, `expected_version`, and only caller-owned truth inputs: retraction
+date, reason, replacement truth, and optional summary/tags. The sibling artifact
+namespace and every evidence/storage identity are derived server-side.
 
 The endpoint always uses durable completed-response receipt semantics. It adds
 its route operation to the durable-receipt eligibility registry; durable mode is
@@ -218,10 +219,11 @@ Execution order is:
 
 1. authenticate and authorize both namespaces;
 2. acquire the idempotency lease for the exact request;
-3. read and validate the canonical episodic object and expected version;
-4. create or exact-readback-reuse the deterministic escrow;
-5. build and pre-validate the bounded tombstone/evidence;
-6. commit one namespace-bound, layout-aware, one-shot non-reembedding mutation;
+3. read and validate the canonical episodic object;
+4. build and pre-validate the bounded tombstone/evidence;
+5. create or exact-readback-reuse the deterministic escrow;
+6. apply the expected-version fence and commit one namespace-bound,
+   layout-aware, one-shot non-reembedding mutation;
 7. exact-readback the operation identity, request digest, version, and evidence;
 8. return the completed response, which the observer receipts before releasing
    success.

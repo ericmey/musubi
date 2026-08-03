@@ -3,10 +3,10 @@ title: "Slice: IDEM-006 read-only two-seat receipt audit"
 slice_id: slice-idem006-readonly-receipt-audit
 section: _slices
 type: slice
-status: blocked
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/blocked, type/slice, api, idempotency, security]
+tags: [section/slices, status/done, type/slice, api, idempotency, security]
 updated: 2026-08-02
 reviewed: true
 issue: 607
@@ -74,3 +74,6 @@ creating a guessable-key existence oracle.
   Copilot also caught a test-helper identity literal and a timestamp-format gap;
   the helper now uses the target tuple and receipt commit times are normalized
   to UTC ISO 8601 with microseconds at the durable-store read boundary.
+- 2026-08-03 — Live operator audit proof closed #607 and moved the GitHub tracker
+  to `status:done`; corrected this stale frontmatter from `blocked` to `done` so
+  the completed slice no longer holds active ownership of receipt/API paths.

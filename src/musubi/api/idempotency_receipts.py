@@ -22,6 +22,7 @@ RECEIPT_ELIGIBLE_OPERATIONS = frozenset(
     {
         "capture_episodic.bucket=capture",
         "create_curated.bucket=capture",
+        "retract_episodic.bucket=retract",
     }
 )
 
@@ -47,6 +48,14 @@ class DurableReceipt:
 class ReceiptLookup:
     status: ReceiptLookupStatus
     receipt: DurableReceipt | None = None
+
+
+@dataclass(frozen=True)
+class CompletedReceiptLookup:
+    """Private in-process replay material; never used by HTTP audit models."""
+
+    status: ReceiptLookupStatus
+    completed: CompletedResponse | None = None
 
 
 def _identity_hash(identity: tuple[Any, ...]) -> str:
@@ -212,6 +221,55 @@ class DurableReceiptStore:
             ),
         )
 
+    def lookup_completed(
+        self, *, identity: tuple[Any, ...], digest: bytes
+    ) -> CompletedReceiptLookup:
+        """Load the exact completed response for post-authorization replay.
+
+        This deliberately does not widen :class:`ReceiptLookup` or either public
+        audit response. Cross-principal auditors receive only metadata/digests;
+        exact response bytes stay inside the request dependency.
+        """
+        if len(digest) != 32:
+            raise ValueError("request digest must be SHA-256")
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT request_digest, response_status, response_headers_json,
+                       response_body, response_sha256
+                  FROM idempotency_receipts WHERE identity_hash = ?
+                """,
+                (_identity_hash(identity),),
+            ).fetchone()
+        if row is None:
+            return CompletedReceiptLookup(ReceiptLookupStatus.ABSENT)
+        if row["request_digest"] != digest:
+            return CompletedReceiptLookup(ReceiptLookupStatus.CONFLICT)
+        body = bytes(row["response_body"])
+        if hashlib.sha256(body).hexdigest() != row["response_sha256"]:
+            raise ValueError("durable receipt response body failed digest readback")
+        encoded_headers = json.loads(row["response_headers_json"])
+        if not isinstance(encoded_headers, list):
+            raise ValueError("durable receipt headers are malformed")
+        try:
+            raw_headers = tuple(
+                (base64.b64decode(pair[0], validate=True), base64.b64decode(pair[1], validate=True))
+                for pair in encoded_headers
+                if isinstance(pair, list) and len(pair) == 2
+            )
+        except (TypeError, ValueError) as exc:
+            raise ValueError("durable receipt headers are malformed") from exc
+        if len(raw_headers) != len(encoded_headers):
+            raise ValueError("durable receipt headers are malformed")
+        return CompletedReceiptLookup(
+            ReceiptLookupStatus.FOUND,
+            CompletedResponse(
+                status=int(row["response_status"]),
+                raw_headers=raw_headers,
+                body=body,
+            ),
+        )
+
     def lookup_with_lease(
         self,
         *,
@@ -242,6 +300,7 @@ def get_idempotency_receipt_store(request: Request) -> DurableReceiptStore:
 
 __all__ = [
     "RECEIPT_ELIGIBLE_OPERATIONS",
+    "CompletedReceiptLookup",
     "DurableReceipt",
     "DurableReceiptStore",
     "ReceiptLookup",

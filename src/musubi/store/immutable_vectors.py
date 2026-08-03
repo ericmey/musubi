@@ -26,6 +26,7 @@ from qdrant_client import models
 from musubi.embedding.base import Embedder
 from musubi.planes.episodic.plane import _sparse_to_model
 from musubi.store.memory_serialization import LEASE_OWNED_FIELDS
+from musubi.store.retraction_evidence import retraction_evidence_binding_errors
 from musubi.store.specs import (
     DENSE_VECTOR_NAME,
     LAYOUT_ONLY_FIELDS,
@@ -33,6 +34,7 @@ from musubi.store.specs import (
     strip_layout_fields,
 )
 from musubi.types.common import epoch_of, utc_now
+from musubi.types.episodic import RetractionEvidence, V2RetractionPointer
 
 _SYNC_DRIVE_ATTEMPTS = 8  # bounded inline re-drives to commit synchronously under contention
 
@@ -178,7 +180,7 @@ def _identity_payload_for_patch(
     return dict(legacy.payload or {}) if legacy is not None else None
 
 
-def patch_non_embedding_payload(
+def _publish_non_embedding_payload(
     client: Any,
     collection: str,
     *,
@@ -188,13 +190,7 @@ def patch_non_embedding_payload(
     changes: dict[str, Any],
     tag_mode: Literal["replace", "merge"],
 ) -> dict[str, Any]:
-    """Publish one attributable, layout-aware, non-re-embedding PATCH.
-
-    This is deliberately one-shot: exactly the supplied observation may win. The
-    mutation is a narrow filtered ``set_payload``; vectors and immutable content
-    snapshots are never touched. A unique transient token is the only win signal,
-    then it is removed with an exact-token ``delete_payload`` fence.
-    """
+    """Shared private one-shot CAS/readback/exact-token-release machinery."""
     if tag_mode not in {"replace", "merge"}:
         raise ValueError(f"unsupported tag_mode {tag_mode!r}")
     overlap = _PATCH_SEAM_FIELDS & changes.keys()
@@ -204,11 +200,6 @@ def patch_non_embedding_payload(
     fence, observed_version, is_anchor = _non_embedding_patch_filter(
         namespace=namespace, object_id=object_id, observed_payload=observed_payload
     )
-    if is_anchor and {"content", "summary"} & changes.keys():
-        raise NonEmbeddingPatchConflict(
-            "v2 embedding-projection replacement requires the #611 retract contract"
-        )
-
     narrow = dict(changes)
     if "tags" in narrow:
         requested = list(narrow["tags"])
@@ -290,6 +281,89 @@ def patch_non_embedding_payload(
             break
     raise NonEmbeddingPatchConflict(
         f"PATCH for ({namespace!r}, {object_id!r}) committed but token removal was not confirmed"
+    )
+
+
+def patch_non_embedding_payload(
+    client: Any,
+    collection: str,
+    *,
+    namespace: str,
+    object_id: str,
+    observed_payload: dict[str, Any],
+    changes: dict[str, Any],
+    tag_mode: Literal["replace", "merge"],
+) -> dict[str, Any]:
+    """Publish one attributable, layout-aware, non-re-embedding PATCH.
+
+    This public entry point never accepts embedding-projection changes on a v2
+    anchor. Retraction is a sibling entry point with a required storage-bound
+    evidence precondition; there is deliberately no boolean escape hatch here.
+    """
+    if (
+        observed_payload.get("point_kind") == ANCHOR_KIND
+        and {
+            "content",
+            "summary",
+        }
+        & changes.keys()
+    ):
+        raise NonEmbeddingPatchConflict(
+            "v2 embedding-projection replacement requires the #611 retract contract"
+        )
+    return _publish_non_embedding_payload(
+        client,
+        collection,
+        namespace=namespace,
+        object_id=object_id,
+        observed_payload=observed_payload,
+        changes=changes,
+        tag_mode=tag_mode,
+    )
+
+
+def retract_non_embedding_payload(
+    client: Any,
+    collection: str,
+    *,
+    namespace: str,
+    object_id: str,
+    observed_payload: dict[str, Any],
+    target_payload: dict[str, Any],
+    changes: dict[str, Any],
+    evidence: RetractionEvidence,
+) -> dict[str, Any]:
+    """Commit one evidence-gated projection divergence without re-embedding.
+
+    The evidence is required and checked by the same pure helper VAL-002 calls.
+    A v2 divergence that the deploy sweep would reject is therefore unwritable.
+    Legacy evidence remains explicit but has no v2 divergence exception to open.
+    """
+    is_anchor = observed_payload.get("point_kind") == ANCHOR_KIND
+    is_v2_evidence = isinstance(evidence.preserved_pointer, V2RetractionPointer)
+    if is_anchor != is_v2_evidence:
+        raise ValueError("preserved_pointer does not match the observed episodic layout")
+    candidate = {
+        **observed_payload,
+        **changes,
+        "retraction_evidence": evidence.model_dump(mode="json"),
+    }
+    errors = retraction_evidence_binding_errors(
+        evidence=evidence,
+        anchor_payload=candidate,
+        target_payload=target_payload,
+    )
+    if errors:
+        detail = "; ".join(f"{field}: {message}" for field, message in errors)
+        raise ValueError(f"retraction evidence mismatch: {detail}")
+    return _publish_non_embedding_payload(
+        client,
+        collection,
+        namespace=namespace,
+        object_id=object_id,
+        observed_payload=observed_payload,
+        changes={**changes, "retraction_evidence": evidence.model_dump(mode="json")},
+        tag_mode="replace",
     )
 
 
@@ -1082,5 +1156,6 @@ __all__ = [
     "register_immutable_vector_dispatch",
     "resolve_committed_content",
     "resolve_ranked_candidate",
+    "retract_non_embedding_payload",
     "strip_layout_fields",
 ]

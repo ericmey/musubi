@@ -1239,6 +1239,38 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HTTPValidationError'
+  /v1/episodic/{object_id}/retract:
+    post:
+      tags:
+      - episodic-writes
+      summary: Retract Episodic
+      operationId: retract_episodic.bucket=retract
+      parameters:
+      - name: object_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Object Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RetractEpisodicRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RetractEpisodicResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
   /v1/concepts/{object_id}/reinforce:
     post:
       tags:
@@ -3332,6 +3364,66 @@ components:
       required:
       - reason
       title: RejectRequest
+    RetractEpisodicRequest:
+      properties:
+        namespace:
+          type: string
+          title: Namespace
+        expected_version:
+          type: integer
+          minimum: 0.0
+          title: Expected Version
+        'on':
+          type: string
+          minLength: 1
+          title: 'On'
+        because:
+          type: string
+          minLength: 1
+          title: Because
+        truth:
+          type: string
+          minLength: 1
+          title: Truth
+        summary:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Summary
+        tags:
+          items:
+            type: string
+          type: array
+          maxItems: 128
+          title: Tags
+      additionalProperties: false
+      type: object
+      required:
+      - namespace
+      - expected_version
+      - 'on'
+      - because
+      - truth
+      title: RetractEpisodicRequest
+    RetractEpisodicResponse:
+      properties:
+        object_id:
+          type: string
+          title: Object Id
+        version:
+          type: integer
+          title: Version
+        artifact_ref:
+          $ref: '#/components/schemas/RetractionArtifactRef'
+        retraction_evidence:
+          $ref: '#/components/schemas/RetractionEvidence'
+      type: object
+      required:
+      - object_id
+      - version
+      - artifact_ref
+      - retraction_evidence
+      title: RetractEpisodicResponse
     RetractionArtifactRef:
       properties:
         artifact_id:

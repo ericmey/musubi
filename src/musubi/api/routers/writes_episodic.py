@@ -10,6 +10,7 @@ from qdrant_client import QdrantClient
 
 from musubi.api.auth import authorize_namespace, require_auth
 from musubi.api.dependencies import (
+    get_artifact_plane,
     get_episodic_plane,
     get_lifecycle_service,
     get_qdrant_client,
@@ -19,9 +20,15 @@ from musubi.api.errors import APIError
 from musubi.api.idempotency_dependency import IdempotentContext, make_idempotency_dependency
 from musubi.api.lifecycle_responses import TransitionPendingBody, pending_response
 from musubi.api.patch_guard import assert_readable_after_patch, reject_unknown_fields
+from musubi.api.retraction_saga import (
+    RetractEpisodicResponse,
+    authorized_retract,
+    execute_retraction,
+)
 from musubi.api.write_auth import AuthorizedWrite
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, is_transition_pending
 from musubi.lifecycle.transitions import transition
+from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.episodic import EpisodicPlane
 from musubi.retrieve.context_pack import VALID_KINDS, VALID_STALENESS
 from musubi.settings import Settings
@@ -294,6 +301,7 @@ async def authorized_batch(
 # releases the lease.
 _idem_capture = make_idempotency_dependency(authorized_capture)
 _idem_batch = make_idempotency_dependency(authorized_batch)
+_idem_retract = make_idempotency_dependency(authorized_retract, durable_receipt="required")
 
 
 @router.post(
@@ -364,6 +372,31 @@ async def batch_capture(
         saved = await plane.create(memory, preserve_created_at=preserve)
         out.append(saved.object_id)
     return BatchCaptureResponse(object_ids=out)
+
+
+@router.post(
+    "/{object_id}/retract",
+    response_model=RetractEpisodicResponse,
+    operation_id="retract_episodic.bucket=retract",
+)
+async def retract_episodic(
+    request: Request,
+    object_id: str,
+    ctx: IdempotentContext = Depends(_idem_retract),
+    qdrant: QdrantClient = Depends(get_qdrant_client),
+    episodic: EpisodicPlane = Depends(get_episodic_plane),
+    artifact: ArtifactPlane = Depends(get_artifact_plane),
+    settings: Settings = Depends(get_settings_dep),
+) -> RetractEpisodicResponse:
+    return await execute_retraction(
+        request=request,
+        object_id=object_id,
+        ctx=ctx,
+        qdrant=qdrant,
+        episodic=episodic,
+        artifact=artifact,
+        settings=settings,
+    )
 
 
 @router.patch(
