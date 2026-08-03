@@ -8,7 +8,7 @@ updated: 2026-08-03
 deciders: [Eric]
 tags: [architecture, api, artifacts, idempotency, data-001, type/adr, status/accepted]
 supersedes: []
-superseded-by:
+superseded-by: []
 ---
 
 # ADR 0042: Escrow-backed episodic retraction

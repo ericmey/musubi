@@ -104,3 +104,5 @@ Issue #611 remains the umbrella and ADR owner until all five lanes close.
 - 2026-08-03 — Aoi independently reproduced the purge behavior and approved exact
   head `a3993bf`. ADR 0042 is accepted; the production lanes may now advance only
   according to its dependency graph.
+- 2026-08-03 — Copilot caught the new ADR's null `superseded-by` value before
+  merge. It is now an explicit empty list, matching the frontmatter contract.
