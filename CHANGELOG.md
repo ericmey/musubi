@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.7](https://github.com/ericmey/musubi/compare/v1.19.6...v1.19.7) (2026-08-03)
+
+
+### Documentation
+
+* **adr:** define escrow-backed episodic retraction ([#647](https://github.com/ericmey/musubi/issues/647)) ([d42201e](https://github.com/ericmey/musubi/commit/d42201ecf5c426addbadbef2fa80cc6c9571f82c))
+
 ## [1.19.6](https://github.com/ericmey/musubi/compare/v1.19.5...v1.19.6) (2026-08-03)
 
 
