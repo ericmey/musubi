@@ -178,7 +178,9 @@ def test_absent_retraction_evidence_preserves_existing_wire_shape() -> None:
     "change,match",
     [
         ({"artifact_ref": {"artifact_id": "not-a-ksuid"}}, "KSUID"),
+        ({"artifact_ref": {"artifact_id": _ARTIFACT_ID, "chunk_id": None}}, "chunk_id"),
         ({"artifact_ref": {"artifact_id": _ARTIFACT_ID, "chunk_id": _ARTIFACT_ID}}, "chunk_id"),
+        ({"artifact_ref": {"artifact_id": _ARTIFACT_ID, "quote": None}}, "quote"),
         ({"artifact_ref": {"artifact_id": _ARTIFACT_ID, "quote": "original"}}, "quote"),
         ({"original_sha256": "A" * 64}, "original_sha256"),
         ({"operation_identity_hash": "b" * 63}, "operation_identity_hash"),
