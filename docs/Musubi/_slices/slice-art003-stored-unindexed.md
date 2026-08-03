@@ -91,3 +91,6 @@ chunks and never claims indexing success, failure, or active admission.
   invariant without constraining `publication_version`; updated the committed
   OpenAPI schema and artifact model docs. Focused model/plane proof is 44 passed,
   9 skipped, and runtime-vs-snapshot OpenAPI parity is 1 passed.
+- 2026-08-03 — Full `make check` at production head `b6e1442` passed: 2,515
+  passed, 195 skipped, 139 deselected, 3 expected xfails, with format, lint,
+  mypy, coverage, and the committed-schema parity all green.
