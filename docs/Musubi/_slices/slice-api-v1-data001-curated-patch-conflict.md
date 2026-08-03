@@ -33,6 +33,10 @@ internal callers that have nobody to decide whether a retry is still appropriate
   the shared primitive, but the 2026-08-03 live raw-payload census found zero such
   patchable identity rows; version omission was confined to immutable content snapshots.
 
+## Specs to implement
+
+- [[07-interfaces/canonical-api]] — curated PATCH concurrency and replacement semantics.
+
 ## Owned paths
 
 - `src/musubi/api/routers/writes_curated.py`
@@ -71,3 +75,6 @@ internal callers that have nobody to decide whether a retry is still appropriate
   immutable `point_kind=content` snapshots. The API's 104-object distribution is an
   independent control on the physical classification, so the versionless-legacy case
   is documented rather than added as a live-population regression.
+- 2026-08-03 — `make tc-coverage` caught that the slice named no normative spec even
+  though it changed the canonical API contract. Added the explicit
+  `[[07-interfaces/canonical-api]]` mapping; coverage now satisfies the closure rule.
