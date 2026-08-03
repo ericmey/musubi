@@ -54,6 +54,7 @@ escrow contract in Issue #611.
 ## Owned paths
 
 - `.github/workflows/integration.yml`
+- `Makefile`
 - `src/musubi/api/routers/writes_episodic.py`
 - `src/musubi/cli/validate.py`
 - `src/musubi/planes/episodic/plane.py`
@@ -126,3 +127,6 @@ transient key and confirms absence rather than persisting a null value.
   still targeted only `tests/integration/`. Extended the existing real-service gate
   to include `tests/store/test_mutation_lease.py` and trigger when that module changes;
   a green real-service run over that module must precede merge.
+- 2026-08-03 — Kept `make test-integration` equivalent in target set and marker
+  selection, with the same default Qdrant port, so the documented local
+  gate cannot remain narrower than CI while presenting the same name.

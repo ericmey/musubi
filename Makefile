@@ -96,7 +96,9 @@ test-integration:
 	  echo "make test-integration requires docker; install Docker Desktop or skip"; \
 	  exit 2; \
 	fi
-	uv run pytest tests/integration/ -m integration -ra --strict-markers --no-cov
+	MUSUBI_TEST_QDRANT_PORT=$${MUSUBI_TEST_QDRANT_PORT:-6333} uv run pytest \
+	  tests/integration/ tests/store/test_mutation_lease.py \
+	  -m integration -ra --strict-markers --no-cov
 
 # --------------------------------------------------------------------------
 # Perf harness — scripts/perf/. Every perf target expects these env vars:
