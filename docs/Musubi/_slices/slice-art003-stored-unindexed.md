@@ -29,6 +29,13 @@ chunks and never claims indexing success, failure, or active admission.
 - Its digest, size, title, and filename remain ordinary strict artifact metadata;
   the later ART-004 writer owns synthetic naming and exact blob persistence.
 - Existing `indexing`, `indexed`, and `failed` behavior is unchanged.
+- `publication_version` is not an indexing-success field and is not constrained
+  by this state model. ART-004 must prove a newly published escrow head starts at
+  publication version zero and remains write-once.
+- The modern production indexer is intent-driven, so ART-004's no-enqueue rule is
+  the production exclusion. The legacy callable `ArtifactPlane.index()` is still
+  ungated on state; ART-004 must either prove and remove that dead door or refuse
+  `stored_unindexed` through it explicitly.
 - This slice proves by-id readability and zero committed chunks using a directly
   constructed fixture. ART-004 owns the production creation path and the semantic
   search miss with an indexed positive control.
@@ -71,7 +78,12 @@ chunks and never claims indexing success, failure, or active admission.
   search proof remain explicitly owned by #644.
 - 2026-08-03 — Tests written before production code. The first invocation was an
   invalid instrument because the fresh worktree lacked the dev extra and every
-  async control failed before execution. After `uv sync --extra dev`, 42 existing
-  controls passed and exactly the two new acceptance/readability cases failed on
-  the absent enum; the five forbidden-field cases remain poised to fail if the
-  enum lands without its invariant.
+  async control failed before execution. After `uv sync --extra dev`, 37 existing
+  controls passed; two new cases failed on the absent enum while five
+  forbidden-field cases passed vacuously on that same enum rejection.
+- 2026-08-03 — Aoi found the five forbidden-field cases all matched only the
+  state-name prose and therefore proved the same thing. Each case now binds its
+  error to the specific parametrized field; the honest baseline is now seven
+  distinct reds against 37 passing controls. The slice also assigns initial
+  `publication_version` and the surviving legacy `ArtifactPlane.index()` door to
+  ART-004 so neither falls between lanes.

@@ -102,7 +102,7 @@ class TestSourceArtifact:
         }
         data[field] = value
 
-        with pytest.raises(ValueError, match="stored_unindexed"):
+        with pytest.raises(ValueError, match=field):
             SourceArtifact.model_validate(data)
 
     def test_size_bytes_non_negative(self, artifact_namespace: str) -> None:
