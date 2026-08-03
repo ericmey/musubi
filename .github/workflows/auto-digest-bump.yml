@@ -269,7 +269,7 @@ jobs:
               -i deploy/ansible/inventory.yml \\
               -e @~/.musubi-secrets/inventory-vars.yml \\
               -e @~/.musubi-secrets/vault.yml \\
-              -e 'changed_services=["core","lifecycle-worker"]' \\
+              -e '{"changed_services":["core","lifecycle-worker"]}' \\
               deploy/ansible/update.yml
           \`\`\`
 

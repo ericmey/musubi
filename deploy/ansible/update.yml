@@ -21,14 +21,51 @@
 # image bump touches another service:
 #
 #     ansible-playbook update.yml \
-#         -e changed_services='["core","tei-dense"]'
+#         -e '{"changed_services":["core","tei-dense"]}'
+#
+# USE THE JSON FORM ABOVE. Ansible's `-e key=value` spelling produces a
+# STRING, never a list, so `-e changed_services='["core"]'` arrives as the
+# literal text `["core"]`. `| join(' ')` would then join its CHARACTERS
+# into `[ " c o r e " ]` and `loop:` would iterate them one at a time. Both
+# failures land inside `no_log: true` tasks, so the operator sees only a
+# bare non-zero exit with no cause (#665).
+#
+# The string spelling is still normalised below rather than rejected, so a
+# runbook command copied from an older release note keeps working.
 
 - name: Update a running Musubi stack
   hosts: musubi
   become: true
   vars:
     changed_services: ["core"]
+    # Every task below uses THIS, never `changed_services` directly.
+    # Only JSON-looking strings are parsed; anything else passes through
+    # unchanged so the assert below reports it with a usable message instead
+    # of an opaque from_json traceback.
+    changed_services_list: >-
+      {{ changed_services
+         if (changed_services is sequence and changed_services is not string)
+         else (changed_services | from_json
+               if changed_services | trim | first == '['
+               else changed_services) }}
   pre_tasks:
+    # Fails BEFORE anything is pulled or recreated, and outside any no_log
+    # task, so a malformed value is named instead of surfacing later as an
+    # unexplained non-zero exit from `docker compose`.
+    - name: Require changed_services to normalise to a non-empty list of names
+      ansible.builtin.assert:
+        that:
+          - changed_services_list is sequence
+          - changed_services_list is not string
+          - changed_services_list | length > 0
+          - changed_services_list | reject('string') | list | length == 0
+        fail_msg: >-
+          changed_services did not normalise to a list of service names (got
+          {{ changed_services_list | type_debug }}: {{ changed_services_list }}).
+          Pass it as JSON extra-vars:
+          -e '{"changed_services":["core","lifecycle-worker"]}'
+        quiet: true
+
     - name: Inspect 1Password Connect environment file
       ansible.builtin.stat:
         path: /etc/musubi/connect.env
@@ -129,7 +166,7 @@
           exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
           /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml pull
           --policy always
-          {{ changed_services | join(' ') }}
+          {{ changed_services_list | join(' ') }}
         executable: /bin/bash
       changed_when: true
       no_log: true
@@ -141,7 +178,7 @@
           exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
           /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
           up -d --pull never --no-deps --force-recreate --wait --wait-timeout 300
-          {{ changed_services | join(' ') }}
+          {{ changed_services_list | join(' ') }}
         executable: /bin/bash
       changed_when: true
       no_log: true
@@ -165,7 +202,7 @@
     - name: Inspect recreated containers
       community.docker.docker_container_info:
         name: "musubi-{{ item }}-1"
-      loop: "{{ changed_services }}"
+      loop: "{{ changed_services_list }}"
       register: recreated_container_info
       when: not ansible_check_mode
 
@@ -242,6 +279,6 @@
         mode: "0640"
         line: >-
           {"ts":"{{ lookup('pipe', 'date -Iseconds') }}",
-          "services":{{ changed_services | to_json }},
+          "services":{{ changed_services_list | to_json }},
           "core_image":"{{ musubi_core_image }}",
           "triggered_by":"{{ lookup('env', 'USER') | default('ansible', true) }}"}

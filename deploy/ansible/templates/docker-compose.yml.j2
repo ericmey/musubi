@@ -53,8 +53,15 @@ services:
       - /var/log/musubi:/var/log/musubi
     # Readiness, not merely scrape-server liveness: the gauge rises only after
     # shared lifecycle storage opens and a worker-only reconcile pass succeeds.
+    #
+    # Parse the gauge's VALUE; never substring-match a rendered number. The
+    # previous test looked for the literal `... 1.0`, but Musubi's own registry
+    # renders integers bare (`... 1`), so it could never pass — the worker
+    # reported (unhealthy) from the day it was written while reconciling
+    # normally, and `docker compose up --wait` failed every successful deploy
+    # because of it (#665). Comparing the parsed float accepts 1, 1.0 and 1.00.
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; b=urllib.request.urlopen('http://localhost:8101/metrics', timeout=2).read().decode(); sys.exit(0 if 'musubi_lifecycle_coordinator_ready 1.0' in b else 1)"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; b=urllib.request.urlopen('http://localhost:8101/metrics', timeout=2).read().decode(); v=[l.split()[-1] for l in b.splitlines() if l.startswith('musubi_lifecycle_coordinator_ready ')]; sys.exit(0 if v and float(v[-1]) == 1.0 else 1)"]
       interval: 30s
       timeout: 5s
       retries: 3

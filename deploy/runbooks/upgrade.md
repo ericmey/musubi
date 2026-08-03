@@ -114,8 +114,15 @@ ansible-playbook \
  -e @~/.musubi-secrets/inventory-vars.yml \
  -e @~/.musubi-secrets/vault.yml \
  deploy/ansible/update.yml \
- -e changed_services='["core","tei-dense"]' --ask-vault-pass
+ -e '{"changed_services":["core","tei-dense"]}' --ask-vault-pass
 ```
+
+> **Use the JSON extra-vars form for `changed_services`.** Ansible's
+> `-e key=value` spelling always yields a **string**, so
+> `-e changed_services='["core"]'` arrives as the literal text `["core"]`;
+> `join(' ')` then joins its characters and `loop:` iterates them. The
+> playbook now normalises the string spelling and asserts the result before
+> touching the stack, but the JSON form is what to write. See #665.
 
 **Expected output:**
 
