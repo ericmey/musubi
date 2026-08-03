@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.21.0](https://github.com/ericmey/musubi/compare/v1.20.0...v1.21.0) (2026-08-03)
+
+
+### Features
+
+* **artifact:** add exact-byte retraction escrow ([#652](https://github.com/ericmey/musubi/issues/652)) ([a26d82a](https://github.com/ericmey/musubi/commit/a26d82ab01f81d91ba3506c49c6752475e504a11))
+
 ## [1.20.0](https://github.com/ericmey/musubi/compare/v1.19.7...v1.20.0) (2026-08-03)
 
 
