@@ -4,12 +4,12 @@ slice_id: slice-idem007-option-a-adr
 issue: 611
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, api, idempotency, data-integrity]
+tags: [section/slices, status/done, type/slice, api, idempotency, data-integrity]
 updated: 2026-08-03
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -101,3 +101,6 @@ Issue #611 remains the umbrella and ADR owner until all five lanes close.
   when no artifact head was published; the ADR now binds that manual recovery,
   refuses distinct re-retraction, and records the source-timestamp KSUID ordering
   consequence.
+- 2026-08-03 — Aoi independently reproduced the purge behavior and approved exact
+  head `a3993bf`. ADR 0042 is accepted; the production lanes may now advance only
+  according to its dependency graph.

@@ -2,18 +2,18 @@
 title: "ADR 0042: Escrow-backed episodic retraction"
 section: 13-decisions
 type: adr
-status: proposed
+status: accepted
 date: 2026-08-03
 updated: 2026-08-03
 deciders: [Eric]
-tags: [architecture, api, artifacts, idempotency, data-001, type/adr, status/proposed]
+tags: [architecture, api, artifacts, idempotency, data-001, type/adr, status/accepted]
 supersedes: []
 superseded-by:
 ---
 
 # ADR 0042: Escrow-backed episodic retraction
 
-**Status:** proposed
+**Status:** accepted
 **Date:** 2026-08-03
 **Decider:** Eric
 
