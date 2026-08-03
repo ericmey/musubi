@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.2](https://github.com/ericmey/musubi/compare/v1.23.1...v1.23.2) (2026-08-03)
+
+
+### Bug Fixes
+
+* **deploy:** normalise changed_services and make the lifecycle healthcheck value-aware ([#666](https://github.com/ericmey/musubi/issues/666)) ([3c5ecb3](https://github.com/ericmey/musubi/commit/3c5ecb302c10f9025eb1917da115ee539828360d))
+
 ## [1.23.1](https://github.com/ericmey/musubi/compare/v1.23.0...v1.23.1) (2026-08-03)
 
 
