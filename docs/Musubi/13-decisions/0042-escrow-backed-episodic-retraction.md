@@ -90,6 +90,11 @@ object_id_ascii || 0x00 || original_digest_bytes)` as the KSUID payload, where
 tests freeze this encoding; changing it requires a new ADR revision because it
 is the crash-recovery address.
 
+Because the four timestamp bytes come from the source episodic KSUID, escrow
+artifact ids sort by source-object creation time, not escrow creation time.
+Recency and retention logic must use explicit artifact metadata/state rather than
+interpreting KSUID time as the escrow's age.
+
 Publication order is binding:
 
 1. derive the sibling artifact namespace and deterministic artifact id;
@@ -109,6 +114,16 @@ A failure after blob publication but before head publication may leave an
 unreachable blob. The deterministic retry reuses it only after exact digest and
 length verification. Mere path or head existence is never success: a truncated,
 torn, or divergent blob at the deterministic address fails closed.
+
+That failure is recoverable only through explicit operator hard purge of the
+exact derived artifact namespace and id. The failure response identifies that
+address without exposing original content. Before purge, the operator must prove
+that no committed episodic `retraction_evidence` references it; a referenced
+escrow is not eligible for this recovery. The existing idempotent artifact purge
+removes the exact blob, head, and chunks even when publication stopped before a
+head existed. After purge, a retry must observe the address absent and recreate
+it through the same no-clobber publication protocol. The saga never invokes this
+recovery automatically.
 
 The verified blob plus exact artifact head are the durable journal for the
 escrow-before-tombstone midpoint. No second SQLite saga row is added unless an
@@ -214,7 +229,10 @@ Execution order is:
 The handler checks for an already-committed matching operation before treating
 the row as generically already retracted or stale. This closes the crash after
 tombstone commit but before response/receipt. A matching identity and digest
-returns the same logical completed response; a mismatch fails closed.
+returns the same logical completed response. Any different retraction identity
+or digest against a row that already carries `retraction_evidence` returns a
+typed conflict; it cannot overwrite the first evidence, orphan its escrow, or
+form a retraction chain.
 
 Escrow failure causes zero episodic mutation. A stale expected version after
 escrow returns typed 409 and leaves a safe stored-unindexed artifact for exact
@@ -266,6 +284,12 @@ them as malformed evidence.
 11. **A11 — referenced escrow retention:** automatic cleanup cannot delete a
     stored-unindexed artifact named by retraction evidence; orphan cleanup needs
     reverse-reachability proof.
+12. **A12 — corrupt-address recovery is explicit:** a deterministic-address
+    mismatch blocks retraction until an operator proves it unreferenced, hard
+    purges that exact escrow address, and a retry observes it absent.
+13. **A13 — re-retraction cannot replace evidence:** only an exact identity and
+    digest replay may adopt an existing retraction; every distinct attempt is a
+    typed conflict.
 
 ## Consequences
 

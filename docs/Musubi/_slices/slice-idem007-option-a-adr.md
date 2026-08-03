@@ -78,6 +78,13 @@ Issue #611 remains the umbrella and ADR owner until all five lanes close.
     closed rather than being overwritten.
 13. Referenced escrow is excluded from automatic retention purge; orphan cleanup
     requires reverse-reachability proof.
+14. A corrupt deterministic escrow address fails closed but is not permanent:
+    only an explicit operator hard purge may clear the exact unreferenced address
+    before a fresh retry.
+15. A distinct re-retraction cannot overwrite the first evidence or orphan its
+    escrow; only an exact identity-and-digest replay is adoptable.
+16. Escrow KSUID ordering reflects source-object creation time, never escrow age;
+    retention and recency use explicit metadata.
 
 ## Work log
 
@@ -89,3 +96,8 @@ Issue #611 remains the umbrella and ADR owner until all five lanes close.
   receipts cannot journal the escrow-before-tombstone midpoint.
 - 2026-08-03 — Created #643, #644, #645, #646, and
   `ericmey/fleet-tools#32`; all production lanes remain blocked on ADR acceptance.
+- 2026-08-03 — Aoi's ADR attack found one missing recovery edge. Source inspection
+  confirmed the existing idempotent operator purge can clear the exact blob even
+  when no artifact head was published; the ADR now binds that manual recovery,
+  refuses distinct re-retraction, and records the source-timestamp KSUID ordering
+  consequence.
