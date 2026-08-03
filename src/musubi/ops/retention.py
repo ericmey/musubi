@@ -66,6 +66,8 @@ def run_retention(
             for pt in points:
                 if not pt.payload:
                     continue
+                if plane == "artifact" and pt.payload.get("artifact_state") == "stored_unindexed":
+                    continue
                 namespace = pt.payload.get("namespace")
                 obj_id = pt.payload.get("object_id")
                 if not namespace or not obj_id:
