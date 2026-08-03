@@ -4,12 +4,12 @@ slice_id: slice-api-v1-data001-episodic-patch-fence
 issue: 634
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, api, data-integrity]
+tags: [section/slices, status/done, type/slice, api, data-integrity]
 updated: 2026-08-03
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -130,3 +130,13 @@ transient key and confirms absence rather than persisting a null value.
 - 2026-08-03 — Kept `make test-integration` equivalent in target set and marker
   selection, with the same default Qdrant port, so the documented local
   gate cannot remain narrower than CI while presenting the same name.
+- 2026-08-03 — Aoi approved the executable implementation after reproducing
+  `make check` (2,505 passed) and attacking eight concurrency, layout, attribution,
+  and validation claims. The review exposed four green-looking gates that examined
+  less than their names implied: in-memory coverage for a filtered CAS, a workflow
+  path filter that excluded the changed lease module, a successful dispatch that
+  collected only `tests/integration/`, and a local Make target narrower than CI.
+  The terminal workflow and Make target now select the same real-service corpus.
+  Exact-head dispatch 30812590768 executed all 17 mutation-lease cases against real
+  Qdrant with 17 passed and zero failed/errors (30 passed, four skipped overall),
+  independently read from the log by both seats. Slice is terminal for merge.
