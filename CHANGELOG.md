@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.5](https://github.com/ericmey/musubi/compare/v1.19.4...v1.19.5) (2026-08-03)
+
+
+### Bug Fixes
+
+* **episodic:** make PATCH layout-aware and version-fenced ([#636](https://github.com/ericmey/musubi/issues/636)) ([ba45e22](https://github.com/ericmey/musubi/commit/ba45e22665872f2fcc2bf7f45d23ad193c5342d1))
+
 ## [1.19.4](https://github.com/ericmey/musubi/compare/v1.19.3...v1.19.4) (2026-08-03)
 
 
