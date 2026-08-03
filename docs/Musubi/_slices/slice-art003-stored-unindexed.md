@@ -4,12 +4,12 @@ slice_id: slice-art003-stored-unindexed
 issue: 643
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "4-planes"
-tags: [section/slices, status/in-progress, type/slice, artifacts, data-integrity]
+tags: [section/slices, status/done, type/slice, artifacts, data-integrity]
 updated: 2026-08-03
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
@@ -113,3 +113,8 @@ chunks and never claims indexing success, failure, or active admission.
   and `integration: boot sequence is idempotent — two boots produce identical collection schema`
   — are likewise out of scope; ART-003 changes none of those behaviors and owns
   only the documented `artifact_state` value.
+- 2026-08-03 — Aoi approved exact head `5b6564d` after independently
+  reproducing `make check` and attacking all six handoff claims. Main was then
+  merged at `bbbc933`; both source files, both focused test files, and
+  `openapi.yaml` are byte-identical to the reviewed head, while the v1.19.7
+  version carrier differs as the discriminating control.
