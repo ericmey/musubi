@@ -37,6 +37,29 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
 - Same identity and canonical request digest may adopt an exact completed
   retraction. A different identity or digest cannot overwrite evidence, orphan
   its escrow, or form a retraction chain.
+- Terminal replay and midpoint adoption are distinct. After both namespace
+  authorizations, the dependency reads an exact `CompletedResponse` through a
+  store-internal receipt method; the public lookup/audit models never expose
+  response bytes. Receipt absence then permits lease acquisition and handler
+  execution, where committed evidence closes both the landed-tombstone-before-
+  receipt window and the receipt-read-to-lease race. Neither mechanism replaces
+  the other.
+- Existing but unparseable retraction evidence fails typed and never falls
+  through to `expected_version`; recovery requires explicit operator repair.
+- A second public retraction entry point beside `patch_non_embedding_payload`
+  shares its private filter, CAS, readback, and exact-token release machinery.
+  It requires typed evidence and calls the same storage-binding helper as
+  VAL-002 before projection divergence becomes writable. No boolean bypass or
+  duplicated CAS implementation is permitted.
+- `MIN_RETRACTION_PREFIX_UTF8_BYTES` is a 256-byte policy floor, not a derived
+  engineering limit: it keeps verbose caller prose from reducing the evidence
+  quote to near-nothing. Originals at or below that floor remain quoted in full
+  on the live tombstone, so raising the floor also raises the size below which
+  retraction removes none of the original text from the live row. Longer
+  originals quote complete grapheme clusters until at least 256 UTF-8 bytes are
+  represented. Caller-owned prose is rejected rather than truncated when it
+  would starve that reserve. Original length alone never causes refusal; only a
+  first complete grapheme that cannot fit the bounded envelope does.
 - Option B / evidence discard remains unauthorized on every error path.
 - Fleet-tools consumer cutover remains a separate final lane under #611.
 
@@ -52,9 +75,16 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
 - `src/musubi/api/routers/writes_episodic.py`
 - `src/musubi/api/idempotency_dependency.py`
 - `src/musubi/api/idempotency_receipts.py`
+- `src/musubi/store/retraction_evidence.py`
+- `src/musubi/store/immutable_vectors.py`
+- `src/musubi/cli/validate.py`
 - `tests/api/test_idem007_retraction_saga.py`
 - `tests/api/test_idempotency_dependency.py`
 - `tests/api/test_idem003_durable_receipts.py`
+- `tests/store/test_non_embedding_patch.py`
+- `tests/store/test_retraction_evidence.py`
+- `tests/store/test_retraction_non_embedding_patch.py`
+- `tests/cli/test_validate.py`
 - `openapi.yaml`
 - `docs/Musubi/07-interfaces/canonical-api.md`
 - `docs/Musubi/04-data-model/episodic-memory.md`
@@ -70,10 +100,14 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
    artifact namespace reaches neither plane.
 2. Missing, duplicate, or conflicting `Idempotency-Key` input fails typed before
    mutation; this endpoint always installs durable receipt mode rather than
-   trusting an optional caller header.
+   trusting an optional caller header. A durable header cannot enable the mode
+   on an ineligible route, and omitting the header cannot disable it here.
 3. Same key and exact canonical request replays the exact completed response;
    the same key with a different digest conflicts before a second escrow or
-   episodic mutation.
+   episodic mutation. The replay body and duplicate raw headers are byte-exact
+   from the private receipt row rather than reconstructed. The same key and
+   digest under a different issuer/subject/presence is a conflict, never
+   adoption.
 4. Each named escrow failure code leaves the entire episodic physical layout
    byte-identical. A well-formed escrow succeeds in the same test family so the
    refusal cannot pass by rejecting every head or blob.
@@ -82,6 +116,8 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
    that store.
 6. A missing or malformed episodic anchor/content observation fails closed
    without artifact mutation, paired with a canonical readable-row control.
+   Existing unparseable retraction evidence is a distinct typed refusal and
+   cannot fall through to the expected-version path.
 7. Failure after verified escrow and before episodic commit leaves one safe
    deterministic artifact; exact retry reuses its verified inode/head and lands
    exactly one tombstone commit.
@@ -90,7 +126,9 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
 9. Another namespace carrying the same object id is whole-layout invariant.
 10. Oversized, exactly-at-limit, and multibyte originals retract successfully;
     the server-built tombstone remains at most 32,768 UTF-8 bytes, contains a
-    non-empty complete-grapheme prefix, and records exact omitted-byte accounting.
+    complete-grapheme prefix meeting the 256-byte reserve (or the entire shorter
+    original), and records exact omitted-byte accounting. Caller prose that
+    starves the reserve is rejected byte-exact rather than truncated.
 11. If one complete grapheme cannot fit after bounded server structure and
     caller prose, retraction fails typed before episodic mutation.
 12. V2 retraction changes only the anchor payload/version: content-point payload,
@@ -103,7 +141,9 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
     re-retraction identity or digest is a typed conflict and cannot replace the
     first evidence.
 15. VAL-002 reports accepted legacy and v2 retractions clean while ordinary
-    projection divergence remains broken.
+    projection divergence remains broken. The write seam and VAL-002 exercise
+    one shared helper for pointer, generation, content digest/length, prefix,
+    omitted-byte, and tombstone-containment bindings.
 
 ## Work log
 
@@ -118,3 +158,16 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
   with `status:done` after its live audit proof. This lane repairs that stale
   vault half of the dual-update contract before taking shared receipt/API paths;
   the correction changes no IDEM-006 code or contract.
+- 2026-08-03 — Plan attack fixed the final implementation boundaries before the
+  red head: the retract seam is a distinct public entry point sharing private
+  CAS machinery, not a boolean escape hatch; its evidence precondition and
+  VAL-002 use one helper. Durable receipt replay reads exact stored bytes only
+  inside the dependency, while committed evidence covers the pre-receipt and
+  receipt-read-to-lease windows. Principal-bound replay, unparseable-evidence
+  refusal, header-mode isolation, and a 256-byte policy floor for the useful
+  prefix became explicit test obligations. The record also names its consequence:
+  sub-floor originals remain fully visible inside the live tombstone.
+- 2026-08-03 — The first live issue-body amendment was fed through an interactive
+  terminal and its echoed result exposed two missing spans. The update was not
+  treated as delivered: #646 was restored from the previously-read exact body
+  through a file-backed edit, then read back in full before tests continued.

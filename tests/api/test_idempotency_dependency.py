@@ -60,9 +60,20 @@ async def _authz(request: Request) -> AuthorizedWrite[_Body]:
     return AuthorizedWrite(auth=_auth(), namespace=NS, body=_Body())
 
 
-def _app(cache: IdempotencyLeaseCache) -> FastAPI:
+def _app(
+    cache: IdempotencyLeaseCache,
+    *,
+    durable_required: bool = False,
+    receipt_store: object | None = None,
+) -> FastAPI:
     app = FastAPI()
-    idem = make_idempotency_dependency(_authz)
+    idem = (
+        make_idempotency_dependency(_authz, durable_receipt="required")
+        if durable_required
+        else make_idempotency_dependency(_authz)
+    )
+    if receipt_store is not None:
+        app.state.idempotency_receipt_store = receipt_store
     app.add_exception_handler(APIError, api_error_handler)
 
     @app.exception_handler(Replay)
@@ -194,6 +205,65 @@ def test_same_digest_is_replay_served_without_executing() -> None:
     )
     assert r.status_code == 202 and r.headers.get("X-Idempotent-Replay") == "true"
     assert r.json() == {"object_id": "cached"}, "replay serves the cached response, handler not run"
+
+
+class _PrivateCompletedReceiptStore:
+    def __init__(self, completed: CompletedResponse | None, *, status: str = "found") -> None:
+        self.completed = completed
+        self.status = status
+        self.lookups: list[tuple[tuple[Any, ...], bytes]] = []
+
+    def lookup_completed(self, *, identity: tuple[Any, ...], digest: bytes) -> object:
+        from musubi.api.idempotency_receipts import CompletedReceiptLookup, ReceiptLookupStatus
+
+        self.lookups.append((identity, digest))
+        return CompletedReceiptLookup(ReceiptLookupStatus(self.status), self.completed)
+
+
+def test_required_durable_mode_replays_private_receipt_without_optional_header() -> None:
+    body = b'{"namespace":"' + NS.encode() + b'","content":"c"}'
+    exact = CompletedResponse(
+        status=202,
+        raw_headers=((b"content-type", b"application/json"), (b"x-exact", b"yes")),
+        body=b'{ "object_id" : "durable" }\n',
+    )
+    store = _PrivateCompletedReceiptStore(exact)
+    c = TestClient(
+        _app(IdempotencyLeaseCache(), durable_required=True, receipt_store=store),
+        raise_server_exceptions=False,
+    )
+    r = c.post(
+        "/v1/episodic",
+        content=body,
+        headers={"Idempotency-Key": "k", "content-type": "application/json"},
+    )
+    assert r.status_code == 202
+    assert r.content == exact.body
+    assert r.headers["x-exact"] == "yes"
+    assert r.headers["x-idempotent-replay"] == "true"
+    assert len(store.lookups) == 1
+
+
+def test_required_durable_mode_refuses_missing_key_before_private_receipt_lookup() -> None:
+    store = _PrivateCompletedReceiptStore(None, status="absent")
+    c = TestClient(
+        _app(IdempotencyLeaseCache(), durable_required=True, receipt_store=store),
+        raise_server_exceptions=False,
+    )
+    r = c.post("/v1/episodic", json={"namespace": NS, "content": "c"})
+    assert r.status_code == 400
+    assert "Idempotency-Key" in r.text
+    assert store.lookups == []
+
+
+def test_optional_route_header_cannot_select_required_durable_dependency_mode() -> None:
+    """A request header selects a receipt request, never the route's dependency mode."""
+    cache = IdempotencyLeaseCache()
+    store = _PrivateCompletedReceiptStore(None, status="absent")
+    c = TestClient(_app(cache, receipt_store=store), raise_server_exceptions=False)
+    r = c.post("/v1/episodic", json={"namespace": NS, "content": "c"})
+    assert r.status_code == 200 and r.json()["has_identity"] is False
+    assert store.lookups == []
 
 
 # --------------------------------------------------------------------------- #

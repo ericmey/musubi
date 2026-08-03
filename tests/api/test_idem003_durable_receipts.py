@@ -84,6 +84,60 @@ def test_receipt_survives_replay_cache_expiry_and_process_recreation(tmp_path: P
     recreated.close()
 
 
+def test_private_completed_receipt_replay_returns_exact_stored_bytes_and_headers(
+    tmp_path: Path,
+) -> None:
+    """Terminal replay uses private ledger bytes; public audit remains digest-only."""
+    store = DurableReceiptStore(tmp_path / "receipts.sqlite")
+    exact = CompletedResponse(
+        status=202,
+        raw_headers=(
+            (b"content-type", b"application/json"),
+            (b"set-cookie", b"a=1"),
+            (b"set-cookie", b"b=2"),
+        ),
+        body=b'{ "object_id" : "ep-receipt-1", "state" : "provisional" }\n',
+    )
+    store.store(
+        identity=IDENTITY,
+        digest=DIGEST,
+        response=exact,
+        namespace=NAMESPACE,
+        operation=OPERATION,
+    )
+
+    private = store.lookup_completed(identity=IDENTITY, digest=DIGEST)
+    assert private.status is ReceiptLookupStatus.FOUND
+    assert private.completed == exact
+    assert private.completed is not None
+    assert private.completed.body != exact.body[:-1], "one-byte drift must not compare equal"
+    assert private.completed.raw_headers == exact.raw_headers
+
+    public = store.lookup(identity=IDENTITY, digest=DIGEST)
+    assert public.status is ReceiptLookupStatus.FOUND
+    assert not hasattr(public, "completed")
+    assert not hasattr(public.receipt, "response_body")
+    store.close()
+
+
+def test_private_completed_receipt_lookup_distinguishes_conflict_from_absence(
+    tmp_path: Path,
+) -> None:
+    store = DurableReceiptStore(tmp_path / "receipts.sqlite")
+    store.store(
+        identity=IDENTITY,
+        digest=DIGEST,
+        response=RESPONSE,
+        namespace=NAMESPACE,
+        operation=OPERATION,
+    )
+    conflict = store.lookup_completed(identity=IDENTITY, digest=b"x" * 32)
+    absent = store.lookup_completed(identity=(*IDENTITY[:-1], "other-key"), digest=DIGEST)
+    assert conflict.status is ReceiptLookupStatus.CONFLICT and conflict.completed is None
+    assert absent.status is ReceiptLookupStatus.ABSENT and absent.completed is None
+    store.close()
+
+
 class _ExplodingLookupStore:
     def __init__(self) -> None:
         self.lookups = 0
