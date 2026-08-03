@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.0](https://github.com/ericmey/musubi/compare/v1.22.0...v1.23.0) (2026-08-03)
+
+
+### Features
+
+* **idem:** add escrow-first episodic retraction saga ([#658](https://github.com/ericmey/musubi/issues/658)) ([a72ba70](https://github.com/ericmey/musubi/commit/a72ba70b0ced8c001de6c0c9e4847cf2e2797f35))
+
 ## [1.22.0](https://github.com/ericmey/musubi/compare/v1.21.0...v1.22.0) (2026-08-03)
 
 
