@@ -1,5 +1,6 @@
 # Integration suite — boots the test-env compose stack and runs the
-# real-services smoke scenarios from tests/integration/test_smoke.py.
+# real-services smoke scenarios from tests/integration/test_smoke.py plus
+# focused real-Qdrant regression modules outside tests/integration/.
 #
 # Triggers:
 #   - PR-trigger PATH FILTER: runs ONCE on PRs that touch the harness
@@ -22,6 +23,7 @@ on:
   pull_request:
     paths:
       - 'tests/integration/**'
+      - 'tests/store/test_mutation_lease.py'
       - 'deploy/test-env/**'
       - '.github/workflows/integration.yml'
       - 'Makefile'
@@ -88,6 +90,10 @@ jobs:
       - name: Run integration suite
         env:
           MUSUBI_TEST_PROJECT: musubi-integration
+          # The compose stack exposes Qdrant on 6333 by default. Store-level
+          # integration tests default to the collision-avoiding local-dev port
+          # 6339, so bind them explicitly to this job's real service.
+          MUSUBI_TEST_QDRANT_PORT: '6333'
           # musubi-core boots in-process via uvicorn here (see compose
           # header — core is NOT in the test-env stack). At boot it
           # loads the SPLADE-v3 tokenizer for the ChunkedEmbedder
@@ -100,7 +106,8 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -o pipefail
-          uv run pytest tests/integration/ -m integration -ra --strict-markers --no-cov -v 2>&1 | tee integration.log
+          uv run pytest tests/integration/ tests/store/test_mutation_lease.py \
+            -m integration -ra --strict-markers --no-cov -v 2>&1 | tee integration.log
         timeout-minutes: 12
 
       - name: Show compose logs on failure

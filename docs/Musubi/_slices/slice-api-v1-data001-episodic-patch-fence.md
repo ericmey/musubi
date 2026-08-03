@@ -53,6 +53,7 @@ escrow contract in Issue #611.
 
 ## Owned paths
 
+- `.github/workflows/integration.yml`
 - `src/musubi/api/routers/writes_episodic.py`
 - `src/musubi/cli/validate.py`
 - `src/musubi/planes/episodic/plane.py`
@@ -120,3 +121,8 @@ transient key and confirms absence rather than persisting a null value.
 - 2026-08-03 — Filed #637 for curated HTTP PATCH's separate retry-policy mismatch.
   It does not widen this slice: curated already has safe namespace/layout targeting;
   the follow-up only changes HTTP losers from silent rebase to one-shot 409.
+- 2026-08-03 — Aoi found that both local `make check` and PR CI deselected the
+  real-Qdrant mutation-lease tests, and the integration workflow's manual dispatch
+  still targeted only `tests/integration/`. Extended the existing real-service gate
+  to include `tests/store/test_mutation_lease.py` and trigger when that module changes;
+  a green real-service run over that module must precede merge.
