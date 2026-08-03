@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+import importlib
+from collections.abc import Callable
+from typing import Any, cast
 
 import pytest
 
@@ -61,9 +63,12 @@ def _target(anchor: dict[str, Any], **changes: Any) -> dict[str, Any]:
 def _binding_errors(
     evidence: RetractionEvidence, anchor: dict[str, Any], target: dict[str, Any]
 ) -> list[tuple[str, str]] | None:
-    from musubi.store.retraction_evidence import retraction_evidence_binding_errors
-
-    return retraction_evidence_binding_errors(
+    module = importlib.import_module("musubi.store.retraction_evidence")
+    binding = cast(
+        Callable[..., list[tuple[str, str]] | None],
+        getattr(module, "retraction_evidence_binding_errors"),
+    )
+    return binding(
         evidence=evidence,
         anchor_payload=anchor,
         target_payload=target,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import importlib
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -343,10 +344,9 @@ def test_crash_after_verified_escrow_reuses_same_blob_and_lands_once_on_retry(
     receipt_store: DurableReceiptStore,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import musubi.api.retraction_saga as saga
-
     from musubi.planes.artifact.escrow import derive_escrow_address
 
+    saga = importlib.import_module("musubi.api.retraction_saga")
     memory = _seed(episodic)
     before = _layout(qdrant, memory.object_id)
     address = derive_escrow_address(

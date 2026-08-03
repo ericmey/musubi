@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import uuid
-from collections.abc import Iterator
-from typing import Any
+from collections.abc import Callable, Iterator
+from typing import Any, cast
 
 import pytest
 from qdrant_client import QdrantClient, models
@@ -126,9 +127,12 @@ def _retract(
     content: dict[str, Any],
     evidence: RetractionEvidence,
 ) -> dict[str, Any]:
-    from musubi.store.immutable_vectors import retract_non_embedding_payload
-
-    return retract_non_embedding_payload(
+    module = importlib.import_module("musubi.store.immutable_vectors")
+    retract = cast(
+        Callable[..., dict[str, Any]],
+        getattr(module, "retract_non_embedding_payload"),
+    )
+    return retract(
         client,
         _COLLECTION,
         namespace=_NS,
@@ -186,7 +190,7 @@ def test_ordinary_patch_still_cannot_enable_v2_projection_by_flag(qdrant: Qdrant
 
     object_id, anchor, _content = _seed_v2(qdrant)
     with pytest.raises(TypeError):
-        patch_non_embedding_payload(
+        cast(Callable[..., Any], patch_non_embedding_payload)(
             qdrant,
             _COLLECTION,
             namespace=_NS,

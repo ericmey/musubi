@@ -9,8 +9,9 @@ hit / conflict / in_flight / acquired decisions can be driven directly.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import Depends, FastAPI, Request
@@ -67,8 +68,9 @@ def _app(
     receipt_store: object | None = None,
 ) -> FastAPI:
     app = FastAPI()
+    factory = cast(Callable[..., Any], make_idempotency_dependency)
     idem = (
-        make_idempotency_dependency(_authz, durable_receipt="required")
+        factory(_authz, durable_receipt="required")
         if durable_required
         else make_idempotency_dependency(_authz)
     )
@@ -214,10 +216,14 @@ class _PrivateCompletedReceiptStore:
         self.lookups: list[tuple[tuple[Any, ...], bytes]] = []
 
     def lookup_completed(self, *, identity: tuple[Any, ...], digest: bytes) -> object:
-        from musubi.api.idempotency_receipts import CompletedReceiptLookup, ReceiptLookupStatus
+        import importlib
+
+        receipts = importlib.import_module("musubi.api.idempotency_receipts")
+        completed_lookup = getattr(receipts, "CompletedReceiptLookup")
+        receipt_status = getattr(receipts, "ReceiptLookupStatus")
 
         self.lookups.append((identity, digest))
-        return CompletedReceiptLookup(ReceiptLookupStatus(self.status), self.completed)
+        return completed_lookup(receipt_status(self.status), self.completed)
 
 
 def test_required_durable_mode_replays_private_receipt_without_optional_header() -> None:

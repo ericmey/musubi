@@ -171,3 +171,8 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
   terminal and its echoed result exposed two missing spans. The update was not
   treated as delivered: #646 was restored from the previously-read exact body
   through a file-backed edit, then read back in full before tests continued.
+- 2026-08-03 — The first remote red stopped in mypy on references to the
+  deliberately absent production symbols, so it never exercised the 32
+  behavioral reds reported locally. The test head was invalidated. Typed dynamic
+  lookups now let format, lint, and mypy pass while pytest still reports the same
+  32 failed / 25 passed focused contract; CI can now examine the thing at risk.

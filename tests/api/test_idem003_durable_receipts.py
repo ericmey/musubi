@@ -106,7 +106,7 @@ def test_private_completed_receipt_replay_returns_exact_stored_bytes_and_headers
         operation=OPERATION,
     )
 
-    private = store.lookup_completed(identity=IDENTITY, digest=DIGEST)
+    private = getattr(store, "lookup_completed")(identity=IDENTITY, digest=DIGEST)
     assert private.status is ReceiptLookupStatus.FOUND
     assert private.completed == exact
     assert private.completed is not None
@@ -131,8 +131,9 @@ def test_private_completed_receipt_lookup_distinguishes_conflict_from_absence(
         namespace=NAMESPACE,
         operation=OPERATION,
     )
-    conflict = store.lookup_completed(identity=IDENTITY, digest=b"x" * 32)
-    absent = store.lookup_completed(identity=(*IDENTITY[:-1], "other-key"), digest=DIGEST)
+    private_lookup = getattr(store, "lookup_completed")
+    conflict = private_lookup(identity=IDENTITY, digest=b"x" * 32)
+    absent = private_lookup(identity=(*IDENTITY[:-1], "other-key"), digest=DIGEST)
     assert conflict.status is ReceiptLookupStatus.CONFLICT and conflict.completed is None
     assert absent.status is ReceiptLookupStatus.ABSENT and absent.completed is None
     store.close()
