@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.22.0](https://github.com/ericmey/musubi/compare/v1.21.0...v1.22.0) (2026-08-03)
+
+
+### Features
+
+* **data:** type evidence-backed retraction anchors ([#655](https://github.com/ericmey/musubi/issues/655)) ([095ebb0](https://github.com/ericmey/musubi/commit/095ebb016bdfef20ce05b8b4ab7b968adc2687ed))
+
 ## [1.21.0](https://github.com/ericmey/musubi/compare/v1.20.0...v1.21.0) (2026-08-03)
 
 
