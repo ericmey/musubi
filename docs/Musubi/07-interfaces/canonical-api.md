@@ -52,6 +52,7 @@ The scope matcher (see [[10-security/auth]] and `src/musubi/auth/scopes.py`) req
 | Endpoint | Namespace source | Segments | Required access |
 |---|---|---|---|
 | `POST /v1/episodic`, `/v1/episodic/batch`, `GET/PATCH/DELETE /v1/episodic/{id}` | request body / query | 3 (`<tenant>/<presence>/episodic`) | `r` or `w` |
+| `POST /v1/episodic/{id}/retract` | request body; sibling artifact namespace is derived | 3 (`<tenant>/<presence>/episodic`) plus derived artifact sibling | `w` on both |
 | `POST/GET/PATCH/DELETE /v1/curated[/{id}]` | request body / query | 3 (`<tenant>/<presence>/curated`) | `r` or `w` |
 | `GET/PATCH /v1/concepts/{id}`, `POST /v1/concepts/{id}/reinforce\|promote\|reject` | query | 3 (`<tenant>/<presence>/concept`) | `r` or `w` |
 | `POST/GET /v1/artifacts`, `GET /v1/artifacts/{id}/blob\|chunks` | body / query | 3 (`<tenant>/<presence>/artifact`) | `r` or `w` |
@@ -101,6 +102,7 @@ POST   /v1/episodic                          # capture
 POST   /v1/episodic/batch                    # batch capture
 GET    /v1/episodic/{id}                     # fetch one
 PATCH  /v1/episodic/{id}                     # update tags/importance (limited fields)
+POST   /v1/episodic/{id}/retract             # escrow-first falsehood retraction
 DELETE /v1/episodic/{id}                     # soft delete (state=archived)
 ```
 
@@ -111,9 +113,9 @@ See [[06-ingestion/capture]] for semantics. Episodic create and batch-create
 but before idempotency acquisition or plane execution. Clients branch on the
 code, never on 422 alone. Batch capture preflights every item at the same edge:
 if any item is oversized, no item executes. Batch remains ineligible for durable
-completed-response receipts. PATCH content replacement, including retraction,
-does not currently enforce this limit; that asymmetry requires a separate policy
-decision in Issue #611 rather than being implied by the create contract.
+completed-response receipts. Ordinary PATCH is not a v2 retraction surface:
+`content` and `summary` replacement is refused there, while legacy replacement
+retains the historical interim behavior.
 
 PATCH is namespace-bound, layout-aware, version-fenced, and non-re-embedding.
 Tags use replacement semantics on the HTTP surface; importance is replaced. On a
@@ -122,6 +124,28 @@ On a v2 anchor, both are embedding-projection fields backed by the immutable con
 snapshot, so either returns HTTP 409 `CONFLICT` directing the caller to Issue #611;
 tags and importance remain writable on the anchor. A same-version loser also receives
 409 rather than being silently retried against a new observation.
+
+The dedicated retraction route implements ADR 0042. Its JSON body carries
+`namespace`, `expected_version`, `on`, `because`, `truth`, optional `summary`,
+and replacement `tags`; artifact identity, original-byte accounting, tombstone
+structure, vector basis, and retraction evidence are server-owned. It requires
+`Idempotency-Key` and always uses durable completed-response receipts. The
+server authorizes both the episodic namespace and its derived sibling artifact
+namespace before any storage observation. It validates the current row, builds
+and pre-validates a bounded tombstone, durably escrows the exact original bytes
+as `stored_unindexed`, applies the supplied version fence, and performs one
+evidence-gated non-reembedding mutation.
+
+Escrow failure leaves the episodic physical layout unchanged. A stale version
+after escrow returns 409 and preserves the verified deterministic escrow for an
+exact retry. V2 retraction changes only the anchor and retains the immutable
+original content point and vectors; legacy retraction keeps its existing vector.
+The 2xx response returns `object_id`, the new `version`, the whole-artifact
+reference, and strict `retraction_evidence`. Exact terminal retries replay the
+stored response bytes; a landed tombstone before receipt commit is adopted only
+when its principal-bound operation identity, request digest, episodic bindings,
+and exact escrow all verify. A different attempt cannot overwrite the first
+evidence or form a retraction chain.
 
 Other common errors: 400/422 (validation), 401/403, 503 (backend down).
 

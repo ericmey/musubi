@@ -102,6 +102,8 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
    mutation; this endpoint always installs durable receipt mode rather than
    trusting an optional caller header. A durable header cannot enable the mode
    on an ineligible route, and omitting the header cannot disable it here.
+   Caller-supplied artifact reference, digest, vector basis, or raw tombstone
+   content is field-bound rejected rather than silently ignored.
 3. Same key and exact canonical request replays the exact completed response;
    the same key with a different digest conflicts before a second escrow or
    episodic mutation. The replay body and duplicate raw headers are byte-exact
@@ -118,6 +120,8 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
    without artifact mutation, paired with a canonical readable-row control.
    Existing unparseable retraction evidence is a distinct typed refusal and
    cannot fall through to the expected-version path.
+   The exact would-be tombstone row is strict-validated before escrow; an
+   injected canonical-validation failure leaves both planes invariant.
 7. Failure after verified escrow and before episodic commit leaves one safe
    deterministic artifact; exact retry reuses its verified inode/head and lands
    exactly one tombstone commit.
@@ -181,3 +185,16 @@ commit one non-reembedding tombstone mutation. No public half-operation ships.
   readable positive control plus malformed legacy identity, v2 anchor, and v2
   content-target cases now require typed 409 before any artifact head/blob touch;
   each malformed episodic layout is byte-identical after refusal.
+- 2026-08-03 — Production head `2c41cca` made the approved focused contract
+  green at 113 tests, including an additional injected guard proving the exact
+  would-be canonical tombstone is validated before durable escrow or episodic
+  CAS. The first full `make check` reached 2,602 passing tests and failed only
+  the two runtime-versus-snapshot OpenAPI guards on the new route; the snapshot
+  and canonical API/data-model text were then regenerated and reconciled with
+  the accepted ADR's body-derived namespace and escrow-before-version-fence
+  ordering.
+- 2026-08-03 — The documentation reconciliation exposed that the request model
+  still used Pydantic's default unknown-field ignore behavior. Four field-bound
+  route regressions now require caller-supplied artifact reference, original
+  digest, vector basis, and raw tombstone content to fail before storage; the
+  strict focused total is 117 and OpenAPI declares `additionalProperties: false`.

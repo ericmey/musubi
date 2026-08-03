@@ -12,7 +12,7 @@ from typing import Any
 
 import regex
 from fastapi import Body, Depends, Request
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from qdrant_client import QdrantClient
 
 from musubi.api.auth import authorize_namespace
@@ -40,6 +40,8 @@ MIN_RETRACTION_PREFIX_UTF8_BYTES = 256
 
 
 class RetractEpisodicRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     namespace: str
     expected_version: int = Field(ge=0)
     on: str = Field(min_length=1)

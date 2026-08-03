@@ -178,13 +178,22 @@ declares that optional shape.
 
 See [[07-interfaces/canonical-api]]. Relevant endpoints:
 
-- `POST /v1/episodic-memories` — create.
-- `GET /v1/episodic-memories/{id}` — fetch.
-- `PATCH /v1/episodic-memories/{id}` — tag/importance edits (limited fields, audited).
-- `DELETE /v1/episodic-memories/{id}` — operator only; hard delete.
-- `POST /v1/episodic-memories/query` — scored retrieval.
+- `POST /v1/episodic` — create.
+- `GET /v1/episodic/{id}` — fetch.
+- `PATCH /v1/episodic/{id}` — metadata edits; v2 projection replacement is refused.
+- `POST /v1/episodic/{id}/retract` — escrow exact original bytes, then commit a
+  bounded evidence-bearing tombstone without re-embedding.
+- `DELETE /v1/episodic/{id}` — soft archive.
+- `POST /v1/retrieve` — scored retrieval across eligible planes.
 
-The `content` field is capped at 32KB. Long exchanges should be ingested as artifacts and cited via `supported_by`.
+Create content is capped at 32 KiB. The retraction route remains available for
+oversized legacy rows because the exact original moves to an unindexed artifact
+and only the bounded tombstone remains active. It requires durable idempotency,
+both episodic and derived artifact write authorization, and an exact observed
+version. The server reserves a 256-byte policy floor for a literal,
+complete-grapheme prefix of longer originals; originals at or below that floor
+remain quoted in full. Caller prose that would starve the prefix is rejected
+rather than truncated.
 
 ## Test Contract
 

@@ -444,6 +444,37 @@ def test_unreadable_would_be_tombstone_is_refused_before_artifact_or_episodic_wr
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("artifact_ref", {"artifact_id": generate_ksuid()}),
+        ("original_sha256", "0" * 64),
+        ("vector_basis", "original"),
+        ("content", "caller-built tombstone"),
+    ],
+)
+def test_route_rejects_each_server_owned_retraction_field_before_storage(
+    field: str,
+    value: object,
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+    receipt_store: DurableReceiptStore,
+) -> None:
+    memory = _seed(episodic)
+    before = _layout(qdrant, memory.object_id)
+    response = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=_headers(valid_token, key=f"server-owned-{field}"),
+        json={**_body(expected_version=memory.version), field: value},
+    )
+    assert response.status_code == 422, response.text
+    assert field in response.text
+    assert _layout(qdrant, memory.object_id) == before
+    assert _artifact_rows(qdrant) == []
+
+
 def test_stale_version_leaves_safe_verified_escrow_and_preserves_episodic_winner(
     client: TestClient,
     valid_token: str,
