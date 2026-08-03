@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.6](https://github.com/ericmey/musubi/compare/v1.19.5...v1.19.6) (2026-08-03)
+
+
+### Bug Fixes
+
+* **curated:** return one-shot PATCH conflicts ([#639](https://github.com/ericmey/musubi/issues/639)) ([2c996b3](https://github.com/ericmey/musubi/commit/2c996b3219b5abaf4f5fafd483bd50252bf4c8a1))
+
 ## [1.19.5](https://github.com/ericmey/musubi/compare/v1.19.4...v1.19.5) (2026-08-03)
 
 
