@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.4](https://github.com/ericmey/musubi/compare/v1.19.3...v1.19.4) (2026-08-03)
+
+
+### Bug Fixes
+
+* **retrieve:** enforce exhaustive error classification ([#631](https://github.com/ericmey/musubi/issues/631)) ([ec57077](https://github.com/ericmey/musubi/commit/ec57077a6c676eb2f4083c6ea242d5808b3e27fc))
+
 ## [1.19.3](https://github.com/ericmey/musubi/compare/v1.19.2...v1.19.3) (2026-08-02)
 
 
