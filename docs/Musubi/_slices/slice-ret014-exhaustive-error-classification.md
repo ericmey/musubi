@@ -4,10 +4,10 @@ slice_id: slice-ret014-exhaustive-error-classification
 issue: 619
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice, retrieval, errors]
+tags: [section/slices, status/in-review, type/slice, retrieval, errors]
 updated: 2026-08-02
 reviewed: false
 depends-on: [slice-issue578-truthful-hybrid-channels]
@@ -64,3 +64,13 @@ the producing commit rather than silently becoming an HTTP 500.
   primary checkout. Aoi independently reproduced the same set, proved the input
   domain is closed over `retrieve/`, and required self-guards for rejected
   callees plus dynamic forwarding sites before approving implementation.
+- 2026-08-02 — Test-first baseline produced four intended failures and five
+  passing premise tests. The implementation replaces substring heuristics and
+  implicit fallback with an exact 15-code registry, eight-code named internal
+  set, and diagnostic refusal for unknown values. Focused orchestration proof is
+  24 passed/four documented skips. Whole-repo `make check` passed with 2,493
+  passed, 195 skipped, 136 deselected, three expected xfails, strict mypy/ruff
+  clean, total coverage 90%, and `orchestration.py` coverage 86%. Test Contract
+  closure is green: 50 passing, one named skip, three pre-existing non-test
+  integration bullets, and no missing bullets. Handed exact head to Aoi for the
+  mandatory second-seat review.
