@@ -4,12 +4,12 @@ slice_id: slice-data002-typed-retraction-evidence
 issue: 645
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "1-schema"
-tags: [section/slices, status/in-progress, type/slice, data-001, data-integrity, idempotency]
+tags: [section/slices, status/done, type/slice, data-001, data-integrity, idempotency]
 updated: 2026-08-03
-reviewed: false
+reviewed: true
 depends-on: [slice-art004-exact-byte-escrow]
 blocks: []
 ---
@@ -153,3 +153,12 @@ retraction without weakening ordinary projection-divergence checks.
   `SystemExit`. The discriminating contract is now: normal `SystemExit(2)`, two
   separately reported broken rows, and an anchor-local evidence mismatch — not
   an escaped `KeyError` or `AttributeError`.
+- 2026-08-03 — Aoi approved the reopened validator seam at `0128cdc` after
+  independently reproducing the old `KeyError` and both non-text
+  `AttributeError` cases, then verifying the replacement's six properties:
+  normal `SystemExit(2)`, both corrupt target and evidence-bearing anchor
+  reported, field-bound `original_sha256` mismatch, and the fully bound
+  positive control still clean. Exact-head gate: 2,565 passed, 195 skipped,
+  140 deselected, 3 xfailed; Test Contract closure 27 passing + 8 named
+  out-of-scope; agent check clean with warnings only. Copilot's outdated thread
+  was resolved only after this independent attack.
