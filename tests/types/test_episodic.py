@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from musubi.types import EpisodicMemory
+from musubi.types import EpisodicMemory, RetractionArtifactRef
 
 _ARTIFACT_ID = "3GJhJKrgAOyI9ebWT8dLYUtUMGL"
 
@@ -172,6 +172,16 @@ def test_absent_retraction_evidence_preserves_existing_wire_shape() -> None:
 
     assert "retraction_evidence" not in memory.model_dump(mode="json")
     assert "retraction_evidence" in EpisodicMemory.model_json_schema()["properties"]
+
+
+def test_retraction_artifact_ref_runtime_rejects_keys_openapi_forbids() -> None:
+    schema = RetractionArtifactRef.model_json_schema(mode="serialization")
+    assert schema["additionalProperties"] is False
+    assert set(schema["properties"]) == {"artifact_id"}
+
+    for field in ("chunk_id", "quote"):
+        with pytest.raises(ValueError, match=field):
+            RetractionArtifactRef.model_validate({"artifact_id": _ARTIFACT_ID, field: None})
 
 
 @pytest.mark.parametrize(

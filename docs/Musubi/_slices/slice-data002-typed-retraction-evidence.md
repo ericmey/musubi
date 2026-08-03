@@ -132,4 +132,7 @@ retraction without weakening ordinary projection-divergence checks.
   accepted explicit null keys even though OpenAPI exposed only `artifact_id`
   with `additionalProperties: false`. Two field-bound regressions now require
   key presence to fail regardless of value; whole-artifact ambiguity is rejected
-  rather than accepted and erased.
+  rather than accepted and erased. A direct conformance guard binds the published
+  schema's forbidden-key set to those same runtime rejections: snapshot parity
+  proves two API descriptions agree, while this test proves behavior conforms to
+  the description.
