@@ -196,7 +196,7 @@ def test_versionless_legacy_row_accepts_exactly_one_expected_version_zero_patch(
     ].payload
     assert stored is not None
     assert stored["version"] == 1
-    assert stored.get("update_lease_token") is None
+    assert "update_lease_token" not in stored
 
 
 def test_legacy_content_patch_preserves_vectors_and_is_version_fenced(
@@ -221,7 +221,7 @@ def test_legacy_content_patch_preserves_vectors_and_is_version_fenced(
     )[0]
     assert after.vector == before.vector, "retraction must preserve the original retrieval vector"
     assert after.payload is not None and after.payload["version"] == 2
-    assert after.payload.get("update_lease_token") is None
+    assert "update_lease_token" not in after.payload
 
 
 def test_concurrent_same_version_patch_exactly_one_writer_succeeds_and_loser_gets_typed_conflict(

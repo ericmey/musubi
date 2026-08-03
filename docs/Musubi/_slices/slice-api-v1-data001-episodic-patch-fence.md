@@ -36,6 +36,10 @@ remains typed-refused pending the Option A escrow contract in Issue #611.
   and must reuse `_legacy_conversion_filter`; v2 must target the exact anchor kind.
 - Tags use an explicit `replace` or `merge` mode. The API replaces; the plane helper
   merges. Summary remains replacement semantics.
+- Attribution uses the transient `update_lease_token`; release means deleting that
+  key, never persisting a null value. The domain model already accepts and excludes
+  this internal field so crash recovery can read it; that makes exact key-absence
+  assertions, rather than VAL-002, the release invariant.
 - Track the number of episodic anchors in VAL-002 JSON evidence. Zero means the v2
   branch still lacks live estate coverage; the first bootstrap becomes visible.
 
@@ -46,6 +50,7 @@ remains typed-refused pending the Option A escrow contract in Issue #611.
 - `src/musubi/planes/episodic/plane.py`
 - `src/musubi/store/immutable_vectors.py`
 - `tests/api/test_data001_episodic_patch_fence.py`
+- `tests/store/test_mutation_lease.py`
 - `tests/cli/test_validate.py`
 - `docs/Musubi/_slices/slice-api-v1-data001-episodic-patch-fence.md`
 - `docs/Musubi/_inbox/locks/api-v1-data001-episodic-patch-fence.lock`
@@ -62,6 +67,8 @@ remains typed-refused pending the Option A escrow contract in Issue #611.
 8. `test_val002_remains_clean_after_accepted_legacy_and_v2_mutations`
 9. `test_authorization_failure_reaches_neither_raw_read_nor_write`
 10. `test_validator_reports_episodic_anchor_count`
+11. Existing mutation-lease release tests require the transient token key to be
+    absent, not merely null-valued.
 
 ## Work log
 
@@ -73,3 +80,8 @@ remains typed-refused pending the Option A escrow contract in Issue #611.
   on storage-only keys before `set_payload`; a legacy control validates. The issue
   now records the smaller truth: reachable legacy isolation/concurrency defects and
   generic v2 over-refusal. Required target and proof remain unchanged.
+- 2026-08-03 — Aoi found that the first test contract treated an absent mutation
+  token and a persisted null as equivalent. The contract now requires release by
+  key removal. An executable control then refuted the proposed VAL-002 consequence:
+  `MemoryObject` already accepts and excludes the internal token, so an orphan does
+  not red that sweep. The narrower absence invariant remains the honest final shape.
