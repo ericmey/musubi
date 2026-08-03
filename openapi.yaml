@@ -2423,6 +2423,10 @@ components:
             format: date-time
           - type: 'null'
           title: Importance Last Scored At
+        retraction_evidence:
+          anyOf:
+          - $ref: '#/components/schemas/RetractionEvidence'
+          - type: 'null'
       additionalProperties: false
       type: object
       required:
@@ -2457,6 +2461,19 @@ components:
       required:
       - status
       title: HealthResponse
+    LegacyRetractionPointer:
+      properties:
+        kind:
+          type: string
+          const: legacy_self
+          title: Kind
+      additionalProperties: false
+      type: object
+      required:
+      - kind
+      title: LegacyRetractionPointer
+      description: Explicit marker for a legacy single-point row retaining its own
+        vector.
     LifecycleEventListResponse:
       properties:
         items:
@@ -3315,6 +3332,89 @@ components:
       required:
       - reason
       title: RejectRequest
+    RetractionArtifactRef:
+      properties:
+        artifact_id:
+          type: string
+          title: Artifact Id
+      additionalProperties: false
+      type: object
+      required:
+      - artifact_id
+      title: RetractionArtifactRef
+      description: Whole-artifact escrow reference; chunk and quote ambiguity is unrepresentable.
+    RetractionEvidence:
+      properties:
+        kind:
+          type: string
+          const: artifact_escrow_v1
+          title: Kind
+        artifact_namespace:
+          type: string
+          title: Artifact Namespace
+        artifact_ref:
+          $ref: '#/components/schemas/RetractionArtifactRef'
+        original_sha256:
+          type: string
+          maxLength: 64
+          minLength: 64
+          pattern: ^[0-9a-f]{64}$
+          title: Original Sha256
+        original_utf8_bytes:
+          type: integer
+          minimum: 1.0
+          title: Original Utf8 Bytes
+        quoted_prefix_utf8_bytes:
+          type: integer
+          minimum: 1.0
+          title: Quoted Prefix Utf8 Bytes
+        omitted_bytes:
+          type: integer
+          minimum: 0.0
+          title: Omitted Bytes
+        vector_basis:
+          type: string
+          const: original
+          title: Vector Basis
+        preserved_pointer:
+          $ref: '#/components/schemas/RetractionPointer'
+        operation_identity_hash:
+          type: string
+          maxLength: 64
+          minLength: 64
+          pattern: ^[0-9a-f]{64}$
+          title: Operation Identity Hash
+        request_digest:
+          type: string
+          maxLength: 64
+          minLength: 64
+          pattern: ^[0-9a-f]{64}$
+          title: Request Digest
+      additionalProperties: false
+      type: object
+      required:
+      - kind
+      - artifact_namespace
+      - artifact_ref
+      - original_sha256
+      - original_utf8_bytes
+      - quoted_prefix_utf8_bytes
+      - omitted_bytes
+      - vector_basis
+      - preserved_pointer
+      - operation_identity_hash
+      - request_digest
+      title: RetractionEvidence
+      description: Strict public evidence for one escrow-backed non-reembedding retraction.
+    RetractionPointer:
+      oneOf:
+      - $ref: '#/components/schemas/V2RetractionPointer'
+      - $ref: '#/components/schemas/LegacyRetractionPointer'
+      discriminator:
+        propertyName: kind
+        mapping:
+          legacy_self: '#/components/schemas/LegacyRetractionPointer'
+          v2: '#/components/schemas/V2RetractionPointer'
     RetrieveQuery:
       properties:
         namespace:
@@ -4067,6 +4167,23 @@ components:
         callers that want unambiguous semantics. See musubi#352 for the
 
         investigation that surfaced this naming confusion.'
+    V2RetractionPointer:
+      properties:
+        kind:
+          type: string
+          const: v2
+          title: Kind
+        live_point:
+          type: string
+          minLength: 1
+          title: Live Point
+      additionalProperties: false
+      type: object
+      required:
+      - kind
+      - live_point
+      title: V2RetractionPointer
+      description: The immutable content pointer preserved by a v2 anchor retraction.
     ValidationError:
       properties:
         loc:

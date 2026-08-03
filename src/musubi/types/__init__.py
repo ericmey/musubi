@@ -41,7 +41,14 @@ from musubi.types.common import (
 )
 from musubi.types.concept import SynthesizedConcept
 from musubi.types.curated import CuratedKnowledge
-from musubi.types.episodic import EpisodicMemory
+from musubi.types.episodic import (
+    EpisodicMemory,
+    LegacyRetractionPointer,
+    RetractionArtifactRef,
+    RetractionEvidence,
+    RetractionPointer,
+    V2RetractionPointer,
+)
 from musubi.types.lifecycle_event import (
     CaptureEvent,
     LifecycleEvent,
@@ -63,6 +70,7 @@ __all__ = [
     "CuratedKnowledge",
     "EpisodicMemory",
     "Err",
+    "LegacyRetractionPointer",
     "LifecycleEvent",
     "LifecycleState",
     "MemoryObject",
@@ -72,9 +80,13 @@ __all__ = [
     "ObjectType",
     "Ok",
     "Result",
+    "RetractionArtifactRef",
+    "RetractionEvidence",
+    "RetractionPointer",
     "SourceArtifact",
     "SynthesizedConcept",
     "Thought",
+    "V2RetractionPointer",
     "allowed_states",
     "ensure_utc",
     "epoch_of",
