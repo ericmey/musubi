@@ -681,7 +681,12 @@ def test_retraction_artifact_reference_must_match_deterministic_storage_address(
             _Rec(_episodic_content(), "episodic-content-current"),
         ]
     ]
-    behaviour["musubi_artifact"] = [[_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]]
+    # Occupy the wrong address with an otherwise valid, matching escrow head.
+    # Lookup-only validation would accept this cross-object substitution; only
+    # recomputing THIS object's deterministic address can reject it.
+    behaviour["musubi_artifact"] = [
+        [_Rec(_escrow_head(object_id=wrong_but_valid), wrong_but_valid)]
+    ]
 
     result = _run(monkeypatch, behaviour, "--json")
     doc = json.loads(result.stdout)
@@ -694,6 +699,31 @@ def test_retraction_artifact_reference_must_match_deterministic_storage_address(
         if error["type"] == "retraction_artifact_mismatch"
     ]
     assert any("artifact_ref" in error["loc"] for error in mismatches)
+
+
+def test_legacy_retraction_evidence_is_accepted_but_cannot_waive_v2_divergence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy_evidence = _retraction_evidence(preserved_pointer={"kind": "legacy_self"})
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(
+                _retracted_episodic_anchor(retraction_evidence=legacy_evidence),
+                "anchor-current",
+            ),
+            _Rec(_episodic_content(), "episodic-content-current"),
+        ]
+    ]
+    behaviour["musubi_artifact"] = [[_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    errors = [error for row in doc["broken"] for error in row["errors"]]
+    assert any(error["type"] == "projection_divergence" for error in errors)
+    assert not any(error["type"] == "retraction_evidence_mismatch" for error in errors)
 
 
 def test_retraction_evidence_stale_generation_remains_pointer_generation_mismatch(

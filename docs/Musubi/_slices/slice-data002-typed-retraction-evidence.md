@@ -105,3 +105,10 @@ retraction without weakening ordinary projection-divergence checks.
   and `hypothesis: lifecycle monotonicity — state transitions never go backwards (except explicit revive operation)`
   belong to `slice-plane-episodic-followup`. DATA-002 changes neither plane
   behavior nor these deferred contracts.
+- 2026-08-03 — Aoi's test-head attack found that the valid-but-wrong artifact
+  id case resolved to nothing, so lookup-only code and deterministic-address
+  recomputation would both fail the same fixture. The wrong address now holds
+  an otherwise valid stored-unindexed head with matching digest and length;
+  only recomputing this episodic object's ADR address can reject it. A second
+  control proves the `legacy_self` union arm is accepted by the public model
+  but cannot waive v2 projection divergence.
