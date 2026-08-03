@@ -356,3 +356,23 @@ def test_summary_satisfied_only_when_everything_is_checkable() -> None:
     out = render_summary(bullets)
     assert "Machine-checkable: 2/2" in out
     assert "✓ Closure Rule satisfied." in out
+
+
+def test_bullet_index_uses_stated_number_not_match_order() -> None:
+    """The `#` column is a cross-reference into the spec, so it must carry the
+    number the spec states — not the position in the match sequence.
+
+    Raised by review on #670: a non-contiguous list (starting at 9, with a gap)
+    would previously render 1,2,3 and send a reviewer chasing "unparseable #2"
+    to the wrong obligation.
+    """
+    text = """
+## Test contract
+
+9. `test_nine`
+10. prose obligation that cannot be parsed;
+12. `test_twelve`
+"""
+    bullets = _parse_bullets(text, "spec")
+    assert [b.index for b in bullets] == [9, 10, 12]
+    assert bullets[1].state == UNPARSEABLE

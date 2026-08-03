@@ -159,14 +159,20 @@ def _parse_bullets(spec_text: str, spec_rel: str) -> list[Bullet]:
         return []
     section = _FENCE_RE.sub("", section)
     out: list[Bullet] = []
-    for i, m in enumerate(_NUMBERED_ITEM_RE.finditer(section), start=1):
+    for m in _NUMBERED_ITEM_RE.finditer(section):
+        # Use the number the SPEC states, not match order. The `#` column is a
+        # cross-reference: a reviewer reads "✗ unparseable #9" and goes to look
+        # at item 9 in the spec. Match order silently diverges from the stated
+        # numbering whenever a list is non-contiguous (starts at 9, has gaps),
+        # which would send them to the wrong obligation.
+        stated = int(m.group(1))
         line = m.group(0)
         parsed = _BULLET_RE.match(line)
         if parsed:
             out.append(
                 Bullet(
                     spec=spec_rel,
-                    index=i,
+                    index=stated,
                     name=parsed.group(1).strip(),
                     note=(parsed.group(2) or "").strip(),
                 )
@@ -176,7 +182,7 @@ def _parse_bullets(spec_text: str, spec_rel: str) -> list[Bullet]:
         out.append(
             Bullet(
                 spec=spec_rel,
-                index=i,
+                index=stated,
                 name=text[:90] + ("…" if len(text) > 90 else ""),
                 state=UNPARSEABLE,
                 evidence=(
