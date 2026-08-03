@@ -56,6 +56,7 @@ Issue #611 remains the umbrella and ADR owner until all five lanes close.
 
 - `docs/Musubi/13-decisions/0042-escrow-backed-episodic-retraction.md`
 - `docs/Musubi/13-decisions/index.md`
+- `docs/Musubi/_templates/adr.md`
 - `docs/Musubi/_slices/slice-idem007-option-a-adr.md`
 - `docs/Musubi/_inbox/locks/slice-idem007-option-a-adr.lock`
 
@@ -105,4 +106,7 @@ Issue #611 remains the umbrella and ADR owner until all five lanes close.
   head `a3993bf`. ADR 0042 is accepted; the production lanes may now advance only
   according to its dependency graph.
 - 2026-08-03 — Copilot caught the new ADR's null `superseded-by` value before
-  merge. It is now an explicit empty list, matching the frontmatter contract.
+  merge. Aoi traced the defect to the ADR template and measured the live field
+  shape: populated supersession values are scalar strings. The ADR and template
+  now use explicit empty strings for both supersession fields, so the fix travels
+  to future ADRs instead of repairing only this instance.
