@@ -24,7 +24,13 @@ Per [agent-guardrails.md §Test Contract Closure Rule](../docs/Musubi/00-index/a
 make tc-coverage SLICE=<your-slice-id>     # emits the table below; paste it in
 ```
 
-The tool at `docs/Musubi/_tools/tc_coverage.py` parses every Test Contract bullet in your slice's linked specs and classifies each. Anything it marks `✗ missing` blocks merge — either write the test, add `@pytest.mark.skip(reason=...)`, or declare out-of-scope in the slice's work log, then re-run. Exits non-zero if missing bullets remain.
+The tool at `docs/Musubi/_tools/tc_coverage.py` parses every Test Contract bullet in your slice's linked specs and classifies each. Three states block merge:
+
+- `✗ missing` — write the test, add `@pytest.mark.skip(reason=...)`, or declare out-of-scope in the slice's work log.
+- `✗ unparseable` — the spec states a numbered obligation that is not `test_name`-shaped, so the gate **cannot check it**. Rewrite it as a backticked test name or move it out of the Test Contract.
+- `✗ no-test-contract` — a linked spec has no `## Test contract` section at all. Declare the contract or unlink the spec.
+
+Check the `Machine-checkable: N/M` line, not just the state counts: if `N < M` the gate examined less than the specs stated. The last two states were silently dropped before Issue #669, which let a `✓ Closure Rule satisfied` be earned over a fraction of the contract.
 
 | # | Bullet | State | Evidence |
 |---|---|---|---|

@@ -2,8 +2,15 @@ import ast
 from typing import cast
 
 from docs.Musubi._tools.tc_coverage import (
+    NO_CONTRACT,
+    UNPARSEABLE,
+    Bullet,
     _extract_skip_reason,
+    _parse_bullets,
     _positional_module_string_bindings,
+    classify,
+    has_test_contract,
+    render_summary,
 )
 
 
@@ -250,3 +257,180 @@ def test_e2e_positional(): pass
     assert _extract_skip_reason(func.decorator_list[0], module_names={"_X": "first"}) == "first"
     # The positional resolver must not return "first" for this code.
     assert names != {"_X": "first"}
+
+
+# ---------------------------------------------------------------------------
+# Issue #669: silently-dropped bullets and missing contract sections.
+#
+# The prior parser only matched numbered items that BEGIN with a backticked
+# token. Prose obligations were not misclassified — they were never built as
+# Bullet objects, so `Total: N` reported the parseable subset as if it were the
+# population and the Closure Rule could pass on a near-empty examination.
+# ADR 0040 stated 14 obligations and yielded 1.
+# ---------------------------------------------------------------------------
+
+_PROSE_CONTRACT = """
+## Test contract
+
+The implementation slices collectively prove:
+
+1. client crash after local mark but before network remains resumable;
+2. server crash after reservation but before mutation resumes exactly once;
+3. `operator_abandon` requires `delivery_state="unknown"` in schema;
+"""
+
+
+def test_prose_bullets_are_reported_not_dropped() -> None:
+    """RED before #669: this returned 1 bullet. All three must now appear."""
+    bullets = _parse_bullets(_PROSE_CONTRACT, "0040")
+    assert len(bullets) == 3
+    assert [b.index for b in bullets] == [1, 2, 3]
+
+
+def test_prose_bullets_are_marked_unparseable() -> None:
+    """The two prose items are ✗ unparseable; the backticked one parses."""
+    bullets = _parse_bullets(_PROSE_CONTRACT, "0040")
+    assert [b.state for b in bullets[:2]] == [UNPARSEABLE, UNPARSEABLE]
+    assert bullets[2].name == "operator_abandon"
+    assert bullets[2].state != UNPARSEABLE
+
+
+def test_unparseable_survives_classify_even_if_work_log_mentions_it() -> None:
+    """A work-log mention must NOT clear an unreadable bullet.
+
+    classify() otherwise downgrades unmatched names to ⊘ out-of-scope when the
+    text appears in the work log — which would restore the exact silence #669
+    removed, just by a different route.
+    """
+    bullet = _parse_bullets(_PROSE_CONTRACT, "0040")[0]
+    work_log = "- 2026-08-03 — client crash after local mark but before network remains resumable;"
+    assert classify(bullet, work_log).state == UNPARSEABLE
+
+
+def test_numbered_lines_inside_code_fences_are_not_counted() -> None:
+    """A fenced example must not inflate the stated-bullet count."""
+    text = """
+## Test contract
+
+```text
+1. this is example output, not an obligation
+```
+
+1. `test_real_one`
+"""
+    bullets = _parse_bullets(text, "spec")
+    assert len(bullets) == 1
+    assert bullets[0].name == "test_real_one"
+
+
+def test_has_test_contract_distinguishes_absent_from_empty() -> None:
+    """A spec with no section is not the same as one whose section is empty."""
+    assert has_test_contract("## Test contract\n\n1. `test_x`\n") is True
+    assert has_test_contract("## Test Contract\n\n") is True  # present but empty
+    assert has_test_contract("## Context\n\nno contract here\n") is False
+
+
+def test_summary_reports_machine_checkable_ratio() -> None:
+    """The narrowed input must be visible in the output itself.
+
+    #669's whole failure mode was that nothing on screen showed how much the
+    gate had skipped.
+    """
+    bullets = [
+        Bullet(spec="s", index=1, name="test_ok", state="✓ passing"),
+        Bullet(spec="s", index=2, name="prose", state=UNPARSEABLE),
+        Bullet(spec="s", index=3, name="none", state=NO_CONTRACT),
+    ]
+    out = render_summary(bullets)
+    assert "Total: 3 stated bullet(s)" in out
+    assert "Machine-checkable: 1/3" in out
+    assert "Closure Rule satisfied" not in out
+
+
+def test_summary_satisfied_only_when_everything_is_checkable() -> None:
+    """Negative control: a fully-parseable, fully-passing contract still passes."""
+    bullets = [
+        Bullet(spec="s", index=1, name="test_a", state="✓ passing"),
+        Bullet(spec="s", index=2, name="test_b", state="⏭ skipped"),
+    ]
+    out = render_summary(bullets)
+    assert "Machine-checkable: 2/2" in out
+    assert "✓ Closure Rule satisfied." in out
+
+
+def test_bullet_index_uses_stated_number_not_match_order() -> None:
+    """The `#` column is a cross-reference into the spec, so it must carry the
+    number the spec states — not the position in the match sequence.
+
+    Raised by review on #670: a non-contiguous list (starting at 9, with a gap)
+    would previously render 1,2,3 and send a reviewer chasing "unparseable #2"
+    to the wrong obligation.
+    """
+    text = """
+## Test contract
+
+9. `test_nine`
+10. prose obligation that cannot be parsed;
+12. `test_twelve`
+"""
+    bullets = _parse_bullets(text, "spec")
+    assert [b.index for b in bullets] == [9, 10, 12]
+    assert bullets[1].state == UNPARSEABLE
+
+
+# ---------------------------------------------------------------------------
+# Raised in review on PR #670: scoping the parser to `^\d+\.` was itself too
+# narrow. Five specs write their Test Contract with dashes or task lists and
+# parsed to ZERO — including 03-system-design/namespaces.md, whose five
+# properly-named isolation bullets were never checked by any slice.
+# ---------------------------------------------------------------------------
+
+_DASH_CONTRACT = """
+## Test contract
+
+Every plane's module-level tests must include:
+
+- `test_isolation_read_enforcement` — a token for `nyla` cannot read `aoi` data.
+- `test_household_read_ok` — household episodic is readable.
+- Deterministic fusion given fixed seeds + corpus.
+"""
+
+_TASK_LIST_CONTRACT = """
+## Test contract
+
+- [ ] **`musubi_recent` — basic.** Three rows surface newest-first.
+- [x] `test_already_done` — a checked item is still an obligation.
+"""
+
+
+def test_dash_bullets_are_parsed() -> None:
+    """RED before the review fix: this returned 0 bullets."""
+    bullets = _parse_bullets(_DASH_CONTRACT, "namespaces")
+    assert len(bullets) == 3
+    assert bullets[0].name == "test_isolation_read_enforcement"
+    assert bullets[1].name == "test_household_read_ok"
+    assert bullets[2].state == UNPARSEABLE  # prose item
+
+
+def test_task_list_bullets_are_parsed_and_checkbox_stripped() -> None:
+    """GitHub task lists are obligations too, checked or not."""
+    bullets = _parse_bullets(_TASK_LIST_CONTRACT, "agent-tools")
+    assert len(bullets) == 2
+    # Bolded prose is not a machine-checkable name.
+    assert bullets[0].state == UNPARSEABLE
+    assert not bullets[0].name.startswith("[ ]")
+    # A checked box does not exempt the bullet from being read.
+    assert bullets[1].name == "test_already_done"
+
+
+def test_unordered_items_index_by_position() -> None:
+    """Unordered items state no number, so position is the only reference."""
+    bullets = _parse_bullets(_DASH_CONTRACT, "namespaces")
+    assert [b.index for b in bullets] == [1, 2, 3]
+
+
+def test_note_separator_is_not_doubled() -> None:
+    """``test_x` — prose` must not render as `— — prose`."""
+    bullets = _parse_bullets(_DASH_CONTRACT, "namespaces")
+    assert not bullets[0].note.startswith("—")
+    assert bullets[0].note.startswith("a token")

@@ -20,6 +20,15 @@ Reads ``docs/Musubi/_slices/<slice-id>.md``, finds the specs it
                               almost always declared out-of-scope for unit
                               tests; flagged for the author to confirm.
   - ``✗ missing``          — no test, no work-log mention. **Review-blocker.**
+  - ``✗ unparseable``      — a list item in the section (ordered, unordered, or
+                              task list) that is not ``test_name``-shaped, so
+                              the gate cannot check it. **Review-blocker.**
+                              Before Issue #669 these were dropped silently,
+                              which let a green be computed over a fraction of
+                              the stated contract.
+  - ``✗ no-test-contract`` — a linked spec with no ``## Test contract`` section
+                              at all. **Review-blocker**, and distinct from a
+                              contract that exists and is empty.
 
 Output is either a markdown table (default — paste directly into the PR
 template's Test Contract coverage matrix) or JSON.
@@ -47,11 +56,45 @@ TESTS_DIR = ROOT / "tests"
 
 _WIKILINK_RE = re.compile(r"\[\[([^\]|#]+)")
 _TEST_CONTRACT_HEADING_RE = re.compile(r"^##\s+Test [Cc]ontract.*$", re.M)
-# Use [ \t] (not \s) so the note capture can't bleed across newlines into
-# the next bullet. Earlier bug: \s+(.*?)$ consumed \n then matched the next
-# line as the "note" — fixed by restricting horizontal whitespace only.
-_BULLET_RE = re.compile(r"^\d+\.[ \t]+`([^`]+)`[ \t]*(.*)$", re.M)
+# Use [ \t] (not \s) throughout so a note capture can't bleed across newlines
+# into the next bullet. Earlier bug: \s+(.*?)$ consumed \n then matched the
+# next line as the "note" — fixed by restricting to horizontal whitespace.
+#
+# EVERY list item in a Test Contract section — ordered (`1.`), unordered
+# (`-`/`*`/`+`), and GitHub task lists (`- [ ]`) — parseable or not.
+#
+# Scoping this to `^\d+\.` was the first, incomplete fix for Issue #669: it
+# rescued ADR 0040's prose but left five specs whose contracts are written with
+# dashes parsing to ZERO. `03-system-design/namespaces.md` is the sharp case —
+# it states five properly-named bullets (`test_isolation_read_enforcement`, …)
+# that the gate could not see purely because they use `-` instead of `1.`, so
+# the namespace isolation tests went unchecked by every slice implementing it.
+# The lesson is the bug's own: a parser narrower than the syntax in use reports
+# a green it never earned. (Raised in review on PR #670.)
+_LIST_ITEM_RE = re.compile(r"^(?:(\d+)\.|[-*+])[ \t]+(.*)$", re.M)
+# A leading GitHub task-list checkbox, stripped before reading the item text.
+_CHECKBOX_RE = re.compile(r"^\[[ xX]\][ \t]*")
+# An item whose text BEGINS with a backticked token — the machine-checkable
+# shape. Applied to the item's text, not the whole line, so it works for every
+# list syntax above.
+_NAMED_ITEM_RE = re.compile(r"^`([^`]+)`[ \t]*(.*)$")
+# Leading separator between a bullet's name and its prose. Specs write
+# "`test_x` <dash> prose" and render_markdown adds its own separator, so
+# without this the table reads "test_x <dash> <dash> prose".
+# Matches U+2014, U+2013 and ASCII hyphen; written as escapes because ruff
+# RUF001/RUF003 flag the literal glyphs as ambiguous.
+_NOTE_SEPARATOR_RE = re.compile("^[\u2014\u2013-]+[ \t]*")
+# Fenced code blocks are stripped before counting items so a numbered line
+# inside an example block is not mistaken for a contract bullet.
+_FENCE_RE = re.compile(r"^```.*?^```", re.M | re.S)
 _FUNCTION_DEF_RE = re.compile(r"^(?:async\s+)?def\s+(\w+)\b", re.M)
+
+# States that mean "the gate could not examine this", as opposed to "the gate
+# examined it and it is absent" (✗ missing). Both block the Closure Rule, but
+# they are different failures and must not be reported as the same one.
+UNPARSEABLE = "✗ unparseable"
+NO_CONTRACT = "✗ no-test-contract"
+_BLOCKING_STATES = ("✗ missing", UNPARSEABLE, NO_CONTRACT)
 _SKIP_DECORATOR_RE = re.compile(r"@pytest\.mark\.(skip|xfail)\s*\(\s*reason\s*=\s*([\"'])(.+?)\2")
 
 
@@ -108,16 +151,76 @@ def _extract_work_log(slice_text: str) -> str:
     return _section_after_heading(slice_text, re.compile(r"^##\s+Work\s+log\s*$", re.M))
 
 
+def has_test_contract(spec_text: str) -> bool:
+    """True if the spec has a ``## Test contract`` heading at all.
+
+    A spec with no such section previously produced zero bullets — identical
+    output to a spec whose contract is genuinely empty, and silently counted as
+    full coverage. main() turns a False here into a ✗ no-test-contract blocker.
+    """
+    return _TEST_CONTRACT_HEADING_RE.search(spec_text) is not None
+
+
 def _parse_bullets(spec_text: str, spec_rel: str) -> list[Bullet]:
-    """Parse a spec's Test Contract section into bullets, preserving order."""
+    """Parse a spec's Test Contract section into bullets, preserving order.
+
+    Enumerates EVERY list item in the section — ordered, unordered, and task
+    lists. An item whose text begins with a backticked token becomes an ordinary
+    bullet; anything else becomes ✗ unparseable, which is visible and blocking.
+
+    Before Issue #669 only ``^\\d+\\.[ \\t]+`name`  `` matched, so an item the
+    pattern could not read was never constructed as a Bullet at all — it could
+    not even be reported ✗ missing, and ``Total: N`` read as the population when
+    it was only the parseable subset. Two rounds of evidence:
+
+    - ADR 0040 states 14 obligations in prose and yielded 1.
+    - Five specs write their contracts with dashes or task lists and yielded 0,
+      including ``03-system-design/namespaces.md``, whose five properly-named
+      isolation bullets went unchecked by every slice implementing it. Found in
+      review on PR #670, after the first fix widened the parser only to numbers.
+    """
     section = _section_after_heading(spec_text, _TEST_CONTRACT_HEADING_RE)
     if not section:
         return []
+    section = _FENCE_RE.sub("", section)
     out: list[Bullet] = []
-    for i, m in enumerate(_BULLET_RE.finditer(section), start=1):
-        name = m.group(1).strip()
-        note = (m.group(2) or "").strip()
-        out.append(Bullet(spec=spec_rel, index=i, name=name, note=note))
+    for position, m in enumerate(_LIST_ITEM_RE.finditer(section), start=1):
+        # For an ORDERED item use the number the SPEC states, not match order.
+        # The `#` column is a cross-reference: a reviewer reads "✗ unparseable
+        # #9" and goes to look at item 9 in the spec. Match order silently
+        # diverges from the stated numbering whenever a list is non-contiguous
+        # (starts at 9, has gaps), sending them to the wrong obligation.
+        # An UNORDERED item states no number, so position is the only reference
+        # a reader can use to find it.
+        index = int(m.group(1)) if m.group(1) else position
+        text = " ".join(_CHECKBOX_RE.sub("", m.group(2)).split())
+        named = _NAMED_ITEM_RE.match(text)
+        if named:
+            # Strip a leading em/en/hyphen separator: specs write
+            # "`test_x` — prose", and render_markdown adds its own " — ".
+            note = _NOTE_SEPARATOR_RE.sub("", (named.group(2) or "").strip())
+            out.append(
+                Bullet(
+                    spec=spec_rel,
+                    index=index,
+                    name=named.group(1).strip(),
+                    note=note.strip(),
+                )
+            )
+            continue
+        out.append(
+            Bullet(
+                spec=spec_rel,
+                index=index,
+                name=text[:90] + ("…" if len(text) > 90 else ""),
+                state=UNPARSEABLE,
+                evidence=(
+                    "numbered item is not `test_name`-shaped — the gate cannot "
+                    "check it; rewrite as a backticked test name or move it out "
+                    "of the Test Contract"
+                ),
+            )
+        )
     return out
 
 
@@ -264,6 +367,12 @@ def _find_test_definition(func_name: str) -> tuple[Path, int, str | None] | None
 
 
 def classify(bullet: Bullet, work_log: str) -> Bullet:
+    # Already terminal: the gate could not read this item, so there is nothing
+    # to look up. Never let a work-log mention silently clear an unreadable
+    # bullet — that would restore the exact silence Issue #669 removed.
+    if bullet.state in (UNPARSEABLE, NO_CONTRACT):
+        return bullet
+
     name = bullet.name.strip()
 
     # Non-test bullets (hypothesis:, integration:, prose) — flag as non-test.
@@ -317,22 +426,60 @@ def render_summary(bullets: list[Bullet]) -> str:
     counts: dict[str, int] = {}
     for b in bullets:
         counts[b.state] = counts.get(b.state, 0) + 1
-    order = ["✓ passing", "⏭ skipped", "⊘ out-of-scope", "⊘ non-test", "✗ missing"]
+    order = [
+        "✓ passing",
+        "⏭ skipped",
+        "⊘ out-of-scope",
+        "⊘ non-test",
+        "✗ missing",
+        UNPARSEABLE,
+        NO_CONTRACT,
+    ]
     parts = [f"{counts[k]} {k}" for k in order if k in counts]
     total = len(bullets)
     missing = counts.get("✗ missing", 0)
-    return (
-        f"\nTotal: {total} bullet(s) — "
-        + ", ".join(parts)
-        + "\n"
-        + (
-            f"\n⚠ {missing} missing bullet(s) — Test Contract Closure Rule violated. "
+    unparseable = counts.get(UNPARSEABLE, 0)
+    no_contract = counts.get(NO_CONTRACT, 0)
+    checkable = total - unparseable - no_contract
+
+    # State the examined-vs-stated ratio unconditionally. The whole failure in
+    # Issue #669 was that a narrowed input was invisible in the output: the
+    # summary said "Total: 19" when the specs stated 32, and nothing on screen
+    # showed the difference. A reader must not have to open the source to learn
+    # how much the gate skipped.
+    lines = [
+        f"\nTotal: {total} stated bullet(s) — " + ", ".join(parts),
+        f"Machine-checkable: {checkable}/{total}"
+        + (" — every stated bullet is readable by the gate." if checkable == total else ""),
+    ]
+
+    blockers = missing + unparseable + no_contract
+    if not blockers:
+        lines.append("\n✓ Closure Rule satisfied.\n")
+        return "\n".join(lines)
+
+    lines.append("")
+    if missing:
+        lines.append(
+            f"⚠ {missing} missing bullet(s) — Test Contract Closure Rule violated. "
             "Either write the test, mark @pytest.mark.skip with a reason, or declare "
-            "out-of-scope in the slice's ## Work log.\n"
-            if missing
-            else "\n✓ Closure Rule satisfied.\n"
+            "out-of-scope in the slice's ## Work log."
         )
-    )
+    if unparseable:
+        lines.append(
+            f"⚠ {unparseable} unparseable bullet(s) — stated in the spec but not "
+            "`test_name`-shaped, so the gate CANNOT check them. These were silently "
+            "dropped before Issue #669; a green computed without them examined less "
+            "than it appeared to."
+        )
+    if no_contract:
+        lines.append(
+            f"⚠ {no_contract} linked spec(s) have no '## Test contract' section at all. "
+            "A spec that states no obligations is not the same as a spec that meets "
+            "them; declare the contract or unlink the spec."
+        )
+    lines.append("")
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -362,9 +509,29 @@ def main() -> int:
     all_bullets: list[Bullet] = []
     for spec in specs:
         spec_rel = spec.relative_to(VAULT).as_posix()
-        all_bullets.extend(_parse_bullets(spec.read_text(), spec_rel))
+        spec_text = spec.read_text()
+        if not has_test_contract(spec_text):
+            all_bullets.append(
+                Bullet(
+                    spec=spec_rel,
+                    index=0,
+                    name=f"(no '## Test contract' section in {spec_rel})",
+                    state=NO_CONTRACT,
+                    evidence="spec is linked from '## Specs to implement' but states no contract",
+                )
+            )
+            continue
+        all_bullets.extend(_parse_bullets(spec_text, spec_rel))
 
     classified = [classify(b, work_log) for b in all_bullets]
+
+    # The slice's OWN '## Test Contract' is reported but NOT gated. tc_coverage
+    # checks the contracts of the specs a slice implements; a docs-only slice
+    # legitimately declares forward obligations for a future implementation
+    # slice, and marking those ✗ missing here would be wrong. Reporting the
+    # count is not: before Issue #669 these bullets were invisible, so a slice
+    # could state nine obligations that no output ever mentioned.
+    own_bullets = _parse_bullets(slice_text, f"_slices/{args.slice_id}.md")
 
     if args.json:
         print(
@@ -372,6 +539,7 @@ def main() -> int:
                 {
                     "slice": args.slice_id,
                     "specs": [s.relative_to(VAULT).as_posix() for s in specs],
+                    "slice_own_contract_bullets": len(own_bullets),
                     "bullets": [
                         {
                             "index": b.index,
@@ -392,9 +560,19 @@ def main() -> int:
         print(f"Specs: {', '.join(f'`{s.relative_to(VAULT).as_posix()}`' for s in specs)}\n")
         print(render_markdown(classified))
         print(render_summary(classified))
+        if own_bullets:
+            print(
+                f"Note: this slice declares {len(own_bullets)} bullet(s) in its own "
+                "'## Test Contract'. Those are NOT gated here — tc_coverage checks the "
+                "contracts of the specs under '## Specs to implement'. They are an "
+                "obligation on the implementation slice that owns the relevant code.\n"
+            )
 
-    # Exit 1 if any bullet is ✗ missing (gate can use this).
-    return 1 if any(b.state == "✗ missing" for b in classified) else 0
+    # Exit 1 if the Closure Rule is violated. ✗ missing means the gate looked
+    # and found nothing; ✗ unparseable / ✗ no-test-contract mean the gate could
+    # not look at all. All three block — an unexaminable contract must never
+    # exit 0, which is precisely how the Issue #669 green was earned.
+    return 1 if any(b.state in _BLOCKING_STATES for b in classified) else 0
 
 
 if __name__ == "__main__":
