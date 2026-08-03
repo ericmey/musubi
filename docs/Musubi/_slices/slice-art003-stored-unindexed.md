@@ -94,3 +94,22 @@ chunks and never claims indexing success, failure, or active admission.
 - 2026-08-03 — Full `make check` at production head `b6e1442` passed: 2,515
   passed, 195 skipped, 139 deselected, 3 expected xfails, with format, lint,
   mypy, coverage, and the committed-schema parity all green.
+- 2026-08-03 — `tc-coverage` found that class-method tests are invisible to its
+  top-level test-function collector, so the two strict model proofs were moved
+  to top-level without changing their assertions. The qdrant-layout spec's
+  collection/index/query contract is pre-existing and out of scope for this
+  additive metadata-state lane: `test_ensure_collections_idempotent`,
+  `test_ensure_indexes_idempotent`, `test_adding_new_index_does_not_rebuild_collection`,
+  `test_quantization_applied_to_dense_vector`,
+  `test_hybrid_search_returns_rrf_fused_scores`,
+  `test_namespace_filter_required_on_every_query`,
+  `test_scroll_pagination_handles_large_collection`,
+  `test_batch_update_points_preferred_over_loop`,
+  `test_sparse_vector_full_scan_threshold_configurable`, and
+  `test_collection_names_come_from_config_only`. Its remaining bullets —
+  `hypothesis: for any query with same seeds + same corpus, RRF fusion result is stable`,
+  `hypothesis: scroll over a collection yields each point exactly once`,
+  `integration: create collection, index, insert 1000 points, query with filter, assert recall ≥ 0.9 vs brute force`,
+  and `integration: boot sequence is idempotent — two boots produce identical collection schema`
+  — are likewise out of scope; ART-003 changes none of those behaviors and owns
+  only the documented `artifact_state` value.
