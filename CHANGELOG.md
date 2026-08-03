@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.1](https://github.com/ericmey/musubi/compare/v1.23.0...v1.23.1) (2026-08-03)
+
+
+### Documentation
+
+* **slice:** close IDEM-007 saga lane ([#661](https://github.com/ericmey/musubi/issues/661)) ([051f1c2](https://github.com/ericmey/musubi/commit/051f1c2a76ab592b2a13031472566098412f5653))
+
 ## [1.23.0](https://github.com/ericmey/musubi/compare/v1.22.0...v1.23.0) (2026-08-03)
 
 
