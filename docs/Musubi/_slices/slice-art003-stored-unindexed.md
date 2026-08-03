@@ -1,0 +1,120 @@
+---
+title: "Slice: ART-003 truthful stored-unindexed artifacts"
+slice_id: slice-art003-stored-unindexed
+issue: 643
+section: _slices
+type: slice
+status: done
+owner: codex-gpt5
+phase: "4-planes"
+tags: [section/slices, status/done, type/slice, artifacts, data-integrity]
+updated: 2026-08-03
+reviewed: true
+depends-on: []
+blocks: []
+---
+
+# Slice: ART-003 truthful stored-unindexed artifacts
+
+Add the additive artifact indexing state required by ADR 0042: an artifact whose
+blob is deliberately stored and readable by explicit id, but which owns zero
+chunks and never claims indexing success, failure, or active admission.
+
+## Decision boundary
+
+- `stored_unindexed` is an honest indexing-axis state, not an alias for
+  `indexing` or `failed`.
+- It requires zero chunks and no committed generation, committed owner, indexing
+  operation id, or failure reason.
+- Its digest, size, title, and filename remain ordinary strict artifact metadata;
+  the later ART-004 writer owns synthetic naming and exact blob persistence.
+- Existing `indexing`, `indexed`, and `failed` behavior is unchanged.
+- `publication_version` is not an indexing-success field and is not constrained
+  by this state model. ART-004 must prove a newly published escrow head starts at
+  publication version zero and remains write-once.
+- The modern production indexer is intent-driven, so ART-004's no-enqueue rule is
+  the production exclusion. The legacy callable `ArtifactPlane.index()` is still
+  ungated on state; ART-004 must either prove and remove that dead door or refuse
+  `stored_unindexed` through it explicitly.
+- This slice proves by-id readability and zero committed chunks using a directly
+  constructed fixture. ART-004 owns the production creation path and the semantic
+  search miss with an indexed positive control.
+
+## Specs to implement
+
+- [[04-data-model/source-artifact]]
+- [[04-data-model/object-hierarchy]]
+- [[04-data-model/qdrant-layout]]
+- [[13-decisions/0042-escrow-backed-episodic-retraction]]
+
+## Owned paths
+
+- `src/musubi/types/common.py`
+- `src/musubi/types/artifact.py`
+- `tests/types/test_artifact.py`
+- `tests/planes/test_artifact.py`
+- `openapi.yaml`
+- `docs/Musubi/04-data-model/source-artifact.md`
+- `docs/Musubi/04-data-model/object-hierarchy.md`
+- `docs/Musubi/04-data-model/qdrant-layout.md`
+- `docs/Musubi/_slices/slice-art003-stored-unindexed.md`
+- `docs/Musubi/_inbox/locks/slice-art003-stored-unindexed.lock`
+
+## Test contract
+
+1. Strict validation accepts a canonical `stored_unindexed` artifact.
+2. Every non-zero chunk or indexing-owned field makes that state invalid.
+3. Failure reason is forbidden rather than interpreted as a failed state.
+4. Existing indexing/indexed/failed fixtures and JSON round trips remain valid.
+5. A directly created stored-unindexed head is readable by exact namespace/id and
+   exposes zero committed chunks through both chunk-read surfaces.
+6. `test_runtime_vs_snapshot_openapi_schema_parity` keeps the committed snapshot
+   equal to the runtime schema, including the additive enum value.
+
+## Work log
+
+- 2026-08-03 — Claimed #643 after ADR 0042 merged at `d42201e`. Production
+  escrow writing, blob durability, indexing-intent suppression, and semantic
+  search proof remain explicitly owned by #644.
+- 2026-08-03 — Tests written before production code. The first invocation was an
+  invalid instrument because the fresh worktree lacked the dev extra and every
+  async control failed before execution. After `uv sync --extra dev`, 37 existing
+  controls passed; two new cases failed on the absent enum while five
+  forbidden-field cases passed vacuously on that same enum rejection.
+- 2026-08-03 — Aoi found the five forbidden-field cases all matched only the
+  state-name prose and therefore proved the same thing. Each case now binds its
+  error to the specific parametrized field; the honest baseline is now seven
+  distinct reds against 37 passing controls. The slice also assigns initial
+  `publication_version` and the surviving legacy `ArtifactPlane.index()` door to
+  ART-004 so neither falls between lanes.
+- 2026-08-03 — Added the additive enum member and strict stored-unindexed
+  invariant without constraining `publication_version`; updated the committed
+  OpenAPI schema and artifact model docs. Focused model/plane proof is 44 passed,
+  9 skipped, and runtime-vs-snapshot OpenAPI parity is 1 passed.
+- 2026-08-03 — Full `make check` at production head `b6e1442` passed: 2,515
+  passed, 195 skipped, 139 deselected, 3 expected xfails, with format, lint,
+  mypy, coverage, and the committed-schema parity all green.
+- 2026-08-03 — `tc-coverage` found that class-method tests are invisible to its
+  top-level test-function collector, so the two strict model proofs were moved
+  to top-level without changing their assertions. The qdrant-layout spec's
+  collection/index/query contract is pre-existing and out of scope for this
+  additive metadata-state lane: `test_ensure_collections_idempotent`,
+  `test_ensure_indexes_idempotent`, `test_adding_new_index_does_not_rebuild_collection`,
+  `test_quantization_applied_to_dense_vector`,
+  `test_hybrid_search_returns_rrf_fused_scores`,
+  `test_namespace_filter_required_on_every_query`,
+  `test_scroll_pagination_handles_large_collection`,
+  `test_batch_update_points_preferred_over_loop`,
+  `test_sparse_vector_full_scan_threshold_configurable`, and
+  `test_collection_names_come_from_config_only`. Its remaining bullets —
+  `hypothesis: for any query with same seeds + same corpus, RRF fusion result is stable`,
+  `hypothesis: scroll over a collection yields each point exactly once`,
+  `integration: create collection, index, insert 1000 points, query with filter, assert recall ≥ 0.9 vs brute force`,
+  and `integration: boot sequence is idempotent — two boots produce identical collection schema`
+  — are likewise out of scope; ART-003 changes none of those behaviors and owns
+  only the documented `artifact_state` value.
+- 2026-08-03 — Aoi approved exact head `5b6564d` after independently
+  reproducing `make check` and attacking all six handoff claims. Main was then
+  merged at `bbbc933`; both source files, both focused test files, and
+  `openapi.yaml` are byte-identical to the reviewed head, while the v1.19.7
+  version carrier differs as the discriminating control.

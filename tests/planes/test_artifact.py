@@ -212,6 +212,34 @@ async def test_get_artifact_returns_metadata_and_chunk_count(plane: ArtifactPlan
 
 
 @pytest.mark.asyncio
+async def test_stored_unindexed_artifact_is_readable_by_id_with_zero_committed_chunks(
+    plane: ArtifactPlane,
+) -> None:
+    artifact = _make_artifact("stored-unindexed-v1").model_copy(
+        update={
+            "title": "retracted-original-3Hexample",
+            "filename": "retracted-original-3Hexample.txt",
+            "artifact_state": "stored_unindexed",
+            "chunk_count": 0,
+            "committed_generation": None,
+            "committed_owner": None,
+            "index_operation_id": None,
+            "failure_reason": None,
+        }
+    )
+    # Revalidate the copied fixture so this proof cannot bypass the strict model
+    # invariant through Pydantic's intentionally unvalidated model_copy update.
+    artifact = SourceArtifact.model_validate(artifact.model_dump(mode="json"))
+
+    await plane.create(artifact)
+
+    fetched = await plane.get(namespace=artifact.namespace, object_id=artifact.object_id)
+    assert fetched == artifact
+    assert await plane.chunks_for(namespace=artifact.namespace, object_id=artifact.object_id) == []
+    assert await plane.query_by_artifact(artifact_id=artifact.object_id) == []
+
+
+@pytest.mark.asyncio
 async def test_get_artifact_with_include_chunks_returns_chunks_ordered(
     plane: ArtifactPlane,
 ) -> None:

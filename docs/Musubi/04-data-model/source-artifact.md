@@ -18,7 +18,7 @@ Raw, immutable material. Transcripts, documents, channel exports, whatever needs
 ```python
 # musubi/types/artifact.py
 
-ArtifactState = Literal["indexing", "indexed", "failed", "archived"]
+ArtifactState = Literal["indexing", "indexed", "failed", "stored_unindexed"]
 Chunker = Literal["markdown-headings-v1", "vtt-turns-v1", "token-sliding-v1", "json-v1"]
 
 class SourceArtifact(BaseModel):
@@ -144,6 +144,16 @@ Chunking worker (inside Core or Lifecycle Worker):
 
 Client polls `GET /v1/artifacts/{id}` to see state transition `indexing` → `indexed` / `failed`.
 
+`stored_unindexed` is a separate, intentional branch for an artifact whose blob
+is retained for exact by-id reads but never admitted to chunk indexing. Its head
+must have `chunk_count=0` and no `committed_generation`, `committed_owner`,
+`index_operation_id`, or `failure_reason`. The ART-004 escrow writer owns the
+production creation path, synthetic title/filename policy, initial
+`publication_version=0`, suppression of indexing intents, and the remaining
+legacy `ArtifactPlane.index()` entry point. ART-004 also proves semantic-search
+absence with an indexed positive control; ART-003 proves only the strict model
+shape and by-id readability with zero committed chunks.
+
 ## Where artifact metadata lives
 
 We have two options:
@@ -190,10 +200,16 @@ Storage:
 19. `test_blob_url_format_roundtrips`
 20. `test_missing_blob_returns_clear_error_on_read`
 
+Stored-unindexed state:
+
+21. `test_stored_unindexed_accepts_only_empty_indexing_state`
+22. `test_stored_unindexed_rejects_every_indexing_owned_field`
+23. `test_stored_unindexed_artifact_is_readable_by_id_with_zero_committed_chunks`
+
 Isolation:
 
-21. `test_namespace_isolation_reads`
-22. `test_cross_namespace_citation_in_supporting_ref_is_logged`
+24. `test_namespace_isolation_reads`
+25. `test_cross_namespace_citation_in_supporting_ref_is_logged`
 
 ## Prior art
 
