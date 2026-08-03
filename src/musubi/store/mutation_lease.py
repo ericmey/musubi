@@ -38,7 +38,7 @@ So this is a single-row, two-phase **attributable owner lease** on the dedicated
    success signal (mirrors ``store/access_lease.py``): ``{token==None AND version==read+1}`` is NOT
    attributable — a takeover that published a different change at the same next version would be
    falsely claimed as ours, silently losing our change. Absent/other ``done`` ⇒ retry.
-6. **Clear** — ``set_payload(update_lease_token=None)`` fenced on our exact ``done`` token. A crash
+6. **Clear** — ``delete_payload(update_lease_token)`` fenced on our exact ``done`` token. A crash
    after the commit (expired ``done``) is self-healing: the change already committed (version bumped),
    so the next writer takes over the exact expired token and applies ITS change on top at the next
    version — the committed change is never re-applied or lost. An orphaned ``done`` token (no future
@@ -165,9 +165,9 @@ def _clear_token(
 ) -> None:
     """Release the EXACT ``token`` (fenced). Best-effort cleanup — a taken-over token matches zero,
     which is fine (it is no longer ours to release)."""
-    client.set_payload(
+    client.delete_payload(
         collection_name=collection,
-        payload={"update_lease_token": None},
+        keys=["update_lease_token"],
         points=models.Filter(
             must=[
                 *_conditions(namespace, object_id),
@@ -180,15 +180,21 @@ def _clear_token(
     )
 
 
-def _release_own_confirmed(
-    client: QdrantClient, collection: str, namespace: str, object_id: str, token: str
+def _release_token_confirmed(
+    client: QdrantClient,
+    collection: str,
+    namespace: str,
+    object_id: str,
+    token: str,
+    *,
+    failure_context: str,
 ) -> dict[str, Any]:
-    """Release the EXACT own ``token`` and CONFIRM the release by exact-token readback, bounded and
-    immediate. The skip / no-op path uses this so a lease is never left for the outer-loop TTL
-    recovery to reclaim. Returns the released current payload (no change was made, so it is the
-    current truth). Raises :class:`MutationRowVanished` if the row disappears mid-release, or
-    :class:`MutationLeaseConflict` — fail-loud — if the exact-own clear cannot be confirmed within
-    the bounded attempts."""
+    """Remove the EXACT ``token`` and confirm key absence, bounded and immediate.
+
+    A foreign token is not a successful release: it proves takeover won and this
+    caller no longer owns a clean final payload. Fail loud rather than returning
+    operational state as though release completed.
+    """
     for _ in range(_SKIP_CLEAR_ATTEMPTS):
         _clear_token(client, collection, namespace, object_id, token)
         after = _read(client, collection, namespace, object_id)
@@ -196,11 +202,16 @@ def _release_own_confirmed(
             raise MutationRowVanished(
                 f"row ({namespace!r}, {object_id!r}) vanished during skip-release"
             )
+        if "update_lease_token" not in after:
+            return after
         if after.get("update_lease_token") != token:
-            return after  # released (or taken over) — no change was made; return current truth.
+            raise MutationLeaseConflict(
+                f"{failure_context} for ({namespace!r}, {object_id!r}) in {collection} lost "
+                "ownership before token removal"
+            )
     raise MutationLeaseConflict(
-        f"skip-release for ({namespace!r}, {object_id!r}) in {collection} could not confirm the "
-        f"exact-own clear after {_SKIP_CLEAR_ATTEMPTS} attempts"
+        f"{failure_context} for ({namespace!r}, {object_id!r}) in {collection} could not confirm the "
+        f"exact-token removal after {_SKIP_CLEAR_ATTEMPTS} attempts"
     )
 
 
@@ -289,7 +300,14 @@ async def owned_update(
             mutation = plan(held)
             if mutation.skip:
                 # No commit will happen — release now, bounded + confirmed, never via outer-loop TTL.
-                return _release_own_confirmed(client, collection, namespace, object_id, token)
+                return _release_token_confirmed(
+                    client,
+                    collection,
+                    namespace,
+                    object_id,
+                    token,
+                    failure_context="skip-release",
+                )
             _reject_seam_fields(mutation.changes)
 
             # ---- phase 3: proven owner publishes vectors ----
@@ -358,21 +376,15 @@ async def owned_update(
         if committed.get("update_lease_token") != done:
             continue  # a stall/takeover raced the commit — retry, never falsely attribute.
 
-        # ---- phase 6: CLEAR — release, fenced on our EXACT done token ----
-        client.set_payload(
-            collection_name=collection,
-            payload={"update_lease_token": None},
-            points=models.Filter(
-                must=[
-                    *_conditions(namespace, object_id),
-                    models.FieldCondition(
-                        key="update_lease_token", match=models.MatchValue(value=done)
-                    ),
-                ],
-                must_not=_EXCLUDE_CONTENT,
-            ),
+        # ---- phase 6: CLEAR — remove the transient key, fenced on our EXACT done token ----
+        return _release_token_confirmed(
+            client,
+            collection,
+            namespace,
+            object_id,
+            done,
+            failure_context="commit-release",
         )
-        return {**committed, "update_lease_token": None}  # our change is durably committed.
 
     raise MutationLeaseConflict(
         f"full-object update for ({namespace!r}, {object_id!r}) in {collection} unresolved "

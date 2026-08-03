@@ -19,14 +19,19 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal, cast
 
 from qdrant_client import models
 
 from musubi.embedding.base import Embedder
 from musubi.planes.episodic.plane import _sparse_to_model
 from musubi.store.memory_serialization import LEASE_OWNED_FIELDS
-from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME, strip_layout_fields
+from musubi.store.specs import (
+    DENSE_VECTOR_NAME,
+    LAYOUT_ONLY_FIELDS,
+    SPARSE_VECTOR_NAME,
+    strip_layout_fields,
+)
 from musubi.types.common import epoch_of, utc_now
 
 _SYNC_DRIVE_ATTEMPTS = 8  # bounded inline re-drives to commit synchronously under contention
@@ -49,6 +54,15 @@ class ImmutableVectorPublishPending(RuntimeError):
     """A synchronous :meth:`ImmutableVectorPublisher.publish` did NOT commit the vector inline (a
     retry/fence/worker-held outcome). The durable intent remains for the worker to finish; the caller
     fails loud rather than returning an uncommitted object (DATA-001 P2, Yua ruling)."""
+
+
+class NonEmbeddingPatchConflict(RuntimeError):
+    """A one-shot payload-only PATCH lost its exact observed-version fence.
+
+    The caller must surface a typed conflict rather than retrying invisibly: PATCH is
+    request-scoped, and a retry against a fresh version would silently change the
+    expected-version contract.
+    """
 
 
 def content_point_id_for(operation_key: str, generation: int = 0) -> str:
@@ -118,6 +132,165 @@ def _legacy_conversion_filter(namespace: str, object_id: str, obs_version: int) 
             models.FieldCondition(key="version", match=models.MatchValue(value=obs_version))
         )
     return models.Filter(must=must, must_not=must_not)
+
+
+_PATCH_RELEASE_ATTEMPTS = 8
+_PATCH_SEAM_FIELDS = LAYOUT_ONLY_FIELDS | {
+    "namespace",
+    "object_id",
+    "version",
+    "update_lease_token",
+}
+
+
+def _non_embedding_patch_filter(
+    *, namespace: str, object_id: str, observed_payload: dict[str, Any]
+) -> tuple[models.Filter, int, bool]:
+    """Build the structurally-correct identity fence for legacy or v2.
+
+    Legacy rows have neither ``point_kind`` nor necessarily a physical ``version``;
+    reuse the conversion fence so absent version remains semantic zero. V2 targets
+    exactly the anchor and its observed positive version.
+    """
+    is_anchor = observed_payload.get("point_kind") == ANCHOR_KIND
+    observed_version = int(observed_payload.get("version", 0))
+    if is_anchor:
+        base = _anchor_filter(namespace, object_id)
+        must = [
+            *(base.must or []),
+            models.FieldCondition(key="version", match=models.MatchValue(value=observed_version)),
+        ]
+        must_not = cast(list[models.Condition], list(base.must_not or []))
+    else:
+        base = _legacy_conversion_filter(namespace, object_id, observed_version)
+        must = list(base.must or [])
+        must_not = cast(list[models.Condition], list(base.must_not or []))
+    must.append(models.IsEmptyCondition(is_empty=models.PayloadField(key="update_lease_token")))
+    return models.Filter(must=must, must_not=must_not), observed_version, is_anchor
+
+
+def _identity_payload_for_patch(
+    client: Any, collection: str, *, namespace: str, object_id: str, is_anchor: bool
+) -> dict[str, Any] | None:
+    if is_anchor:
+        return read_anchor_payload(client, collection, namespace=namespace, object_id=object_id)
+    legacy = _read_legacy_v1(client, collection, namespace=namespace, object_id=object_id)
+    return dict(legacy.payload or {}) if legacy is not None else None
+
+
+def patch_non_embedding_payload(
+    client: Any,
+    collection: str,
+    *,
+    namespace: str,
+    object_id: str,
+    observed_payload: dict[str, Any],
+    changes: dict[str, Any],
+    tag_mode: Literal["replace", "merge"],
+) -> dict[str, Any]:
+    """Publish one attributable, layout-aware, non-re-embedding PATCH.
+
+    This is deliberately one-shot: exactly the supplied observation may win. The
+    mutation is a narrow filtered ``set_payload``; vectors and immutable content
+    snapshots are never touched. A unique transient token is the only win signal,
+    then it is removed with an exact-token ``delete_payload`` fence.
+    """
+    if tag_mode not in {"replace", "merge"}:
+        raise ValueError(f"unsupported tag_mode {tag_mode!r}")
+    overlap = _PATCH_SEAM_FIELDS & changes.keys()
+    if overlap:
+        raise ValueError(f"non-embedding PATCH cannot modify seam field(s) {sorted(overlap)}")
+
+    fence, observed_version, is_anchor = _non_embedding_patch_filter(
+        namespace=namespace, object_id=object_id, observed_payload=observed_payload
+    )
+    if is_anchor and {"content", "summary"} & changes.keys():
+        raise NonEmbeddingPatchConflict(
+            "v2 embedding-projection replacement requires the #611 retract contract"
+        )
+
+    narrow = dict(changes)
+    if "tags" in narrow:
+        requested = list(narrow["tags"])
+        narrow["tags"] = (
+            sorted(set(observed_payload.get("tags", [])) | set(requested))
+            if tag_mode == "merge"
+            else requested
+        )
+    next_version = observed_version + 1
+    done = f"done:{int(utc_now().timestamp() * 1_000_000)}:{secrets.token_hex(12)}"
+    client.set_payload(
+        collection_name=collection,
+        payload={**narrow, "version": next_version, "update_lease_token": done},
+        points=fence,
+        wait=True,
+    )
+
+    committed = _identity_payload_for_patch(
+        client,
+        collection,
+        namespace=namespace,
+        object_id=object_id,
+        is_anchor=is_anchor,
+    )
+    if committed is None or committed.get("update_lease_token") != done:
+        raise NonEmbeddingPatchConflict(
+            f"PATCH for ({namespace!r}, {object_id!r}) lost its observed-version fence"
+        )
+
+    release_filter = models.Filter(
+        must=[
+            models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+            models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+            models.FieldCondition(key="version", match=models.MatchValue(value=next_version)),
+            models.FieldCondition(key="update_lease_token", match=models.MatchValue(value=done)),
+            *(
+                [
+                    models.FieldCondition(
+                        key="point_kind", match=models.MatchValue(value=ANCHOR_KIND)
+                    )
+                ]
+                if is_anchor
+                else []
+            ),
+        ],
+        must_not=(
+            []
+            if is_anchor
+            else [
+                models.FieldCondition(
+                    key="point_kind",
+                    match=models.MatchAny(any=[ANCHOR_KIND, CONTENT_KIND]),
+                )
+            ]
+        ),
+    )
+    for _ in range(_PATCH_RELEASE_ATTEMPTS):
+        client.delete_payload(
+            collection_name=collection,
+            keys=["update_lease_token"],
+            points=release_filter,
+            wait=True,
+        )
+        released = _identity_payload_for_patch(
+            client,
+            collection,
+            namespace=namespace,
+            object_id=object_id,
+            is_anchor=is_anchor,
+        )
+        if released is not None and "update_lease_token" not in released:
+            resolved = resolve_committed_content(
+                client, collection, namespace=namespace, object_id=object_id
+            )
+            if resolved is None:
+                break
+            return resolved
+        if released is None or released.get("update_lease_token") != done:
+            break
+    raise NonEmbeddingPatchConflict(
+        f"PATCH for ({namespace!r}, {object_id!r}) committed but token removal was not confirmed"
+    )
 
 
 def read_anchor(
@@ -894,11 +1067,13 @@ __all__ = [
     "AnchorView",
     "ImmutableVectorPublishPending",
     "ImmutableVectorPublisher",
+    "NonEmbeddingPatchConflict",
     "anchor_point_id",
     "content_point_id_for",
     "delete_object_layout",
     "not_anchor_condition",
     "not_content_condition",
+    "patch_non_embedding_payload",
     "ranked_dedup_budget",
     "ranked_overfetch",
     "read_anchor",

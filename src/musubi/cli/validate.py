@@ -208,6 +208,7 @@ class PlaneResult:
     collection: str
     status: str  # "scanned" | "absent" | "error" | "not_requested"
     scanned: int = 0
+    anchor_count: int = 0
     broken: list[dict[str, Any]] = field(default_factory=list)
     unreferenced_content: list[dict[str, Any]] = field(default_factory=list)
     error: str | None = None
@@ -218,6 +219,7 @@ class PlaneResult:
             "collection": self.collection,
             "status": self.status,
             "scanned": self.scanned,
+            "anchor_count": self.anchor_count,
             "broken": len(self.broken),
             "unreferenced_content": len(self.unreferenced_content),
             "error": self.error,
@@ -305,6 +307,10 @@ def _validate_storage_rows(
     check_pointers: bool = True,
 ) -> None:
     """Validate physical rows; validate cross-row pointers only after a complete scan."""
+    if result.plane == "episodic":
+        result.anchor_count = sum(
+            1 for rec in records if dict(rec.payload or {}).get("point_kind") == "anchor"
+        )
     if result.plane not in {"episodic", "curated"}:
         for rec in records:
             payload = dict(rec.payload or {})
@@ -664,9 +670,10 @@ def validate_rows(
                     if r.unreferenced_content
                     else ""
                 )
+                anchors = f", {r.anchor_count} anchor(s)" if r.plane == "episodic" else ""
                 typer.echo(
                     f"  {mark} {r.plane:15} {r.scanned:>6} rows  "
-                    f"{len(r.broken)} unreadable{history}"
+                    f"{len(r.broken)} unreadable{history}{anchors}"
                 )
         typer.echo("")
 

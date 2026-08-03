@@ -136,7 +136,7 @@ def test_same_object_id_in_two_namespaces_changes_only_authorized_namespace(
     assert foreign.payload is not None and foreign.payload["importance"] == 4
 
 
-def test_v2_metadata_patch_changes_only_anchor_and_content_patch_is_typed_refusal(
+def test_v2_metadata_patch_changes_only_anchor_and_projection_patch_is_typed_refusal(
     client: TestClient,
     valid_token: str,
     qdrant: QdrantClient,
@@ -171,6 +171,49 @@ def test_v2_metadata_patch_changes_only_anchor_and_content_patch_is_typed_refusa
     assert refused.json()["error"]["code"] == "CONFLICT"
     assert "#611" in refused.json()["error"]["detail"]
     assert _object_rows(qdrant, object_id) == before_content
+
+    refused_summary = client.patch(
+        f"/v1/episodic/{object_id}",
+        headers=_headers(valid_token),
+        params={"namespace": _NS},
+        json={"summary": "a different embedding projection"},
+    )
+    assert refused_summary.status_code == 409, refused_summary.text
+    assert refused_summary.json()["error"]["code"] == "CONFLICT"
+    assert "#611" in refused_summary.json()["error"]["detail"]
+    assert _object_rows(qdrant, object_id) == before_content
+
+
+def test_unresolvable_v2_anchor_fails_closed_before_mutation(
+    client: TestClient,
+    valid_token: str,
+    qdrant: QdrantClient,
+    coordinator: LifecycleTransitionCoordinator,
+    _immutable_publishers: tuple[Any, Any],
+) -> None:
+    object_id = _seed_v2(_immutable_publishers[0], coordinator)
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"live_point": "fabricated-missing-content"},
+        points=models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=_NS)),
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value="anchor")),
+            ]
+        ),
+        wait=True,
+    )
+    before = _object_rows(qdrant, object_id)
+    response = client.patch(
+        f"/v1/episodic/{object_id}",
+        headers=_headers(valid_token),
+        params={"namespace": _NS},
+        json={"importance": 8},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "CONFLICT"
+    assert _object_rows(qdrant, object_id) == before
 
 
 def test_versionless_legacy_row_accepts_exactly_one_expected_version_zero_patch(
@@ -334,6 +377,31 @@ def test_replace_and_merge_tag_modes_and_summary_replacement_remain_distinct(
         )
     )
     assert set(merged.tags) == {"replacement", "merged"}
+
+
+def test_plane_merge_mode_updates_only_v2_anchor(
+    episodic: EpisodicPlane,
+    qdrant: QdrantClient,
+    coordinator: LifecycleTransitionCoordinator,
+    _immutable_publishers: tuple[Any, Any],
+) -> None:
+    object_id = _seed_v2(_immutable_publishers[0], coordinator)
+    before = _object_rows(qdrant, object_id)
+    merged, _event = asyncio.run(
+        episodic.patch(
+            namespace=_NS,
+            object_id=object_id,
+            tags=["merged"],
+            importance=7,
+            actor="test",
+            reason="prove v2 plane helper uses identity-row fence",
+        )
+    )
+    after = _object_rows(qdrant, object_id)
+    assert set(merged.tags) == {"existing", "remove-me", "merged"}
+    assert merged.importance == 7
+    assert after[1] == before[1], "plane helper must not touch immutable content"
+    assert "update_lease_token" not in after[0]
 
 
 def test_val002_remains_clean_after_accepted_legacy_and_v2_mutations(

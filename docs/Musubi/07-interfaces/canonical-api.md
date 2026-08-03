@@ -113,8 +113,17 @@ code, never on 422 alone. Batch capture preflights every item at the same edge:
 if any item is oversized, no item executes. Batch remains ineligible for durable
 completed-response receipts. PATCH content replacement, including retraction,
 does not currently enforce this limit; that asymmetry requires a separate policy
-decision in Issue #611 rather than being implied by the create contract. Other common errors:
-400/422 (validation), 401/403, 503 (backend down).
+decision in Issue #611 rather than being implied by the create contract.
+
+PATCH is namespace-bound, layout-aware, version-fenced, and non-re-embedding.
+Tags use replacement semantics on the HTTP surface; importance is replaced. On a
+legacy row, `content` and `summary` retain their existing non-re-embedding behavior.
+On a v2 anchor, both are embedding-projection fields backed by the immutable content
+snapshot, so either returns HTTP 409 `CONFLICT` directing the caller to Issue #611;
+tags and importance remain writable on the anchor. A same-version loser also receives
+409 rather than being silently retried against a new observation.
+
+Other common errors: 400/422 (validation), 401/403, 503 (backend down).
 
 ### 2. Curated knowledge
 

@@ -43,7 +43,6 @@ from musubi.embedding.cosine import cosine_similarity
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.store.access_lease import lease_increment_access
-from musubi.store.mutation_lease import MutationPlan, owned_update
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import (
@@ -778,39 +777,43 @@ class EpisodicPlane:
         if content is not None:
             raise ValueError("mutating content directly is forbidden")
 
-        current = await self.get(namespace=namespace, object_id=object_id, bump_access=False)
-        if not current:
+        current_raw = await self.raw_payload(namespace=namespace, object_id=object_id)
+        if current_raw is None:
             raise LookupError(f"episodic object {object_id!r} not found in namespace {namespace!r}")
+        current = EpisodicMemory.model_validate(strip_layout_fields(current_raw))
 
         now = utc_now()
 
-        # Publish ONLY the patched fields through the attributable mutation lease (DATA-001 #530):
-        # tags are re-merged against the FRESH current row and importance is set, fenced on version,
-        # so a concurrent unrelated mutation (or a leased access increment) is never overwritten.
-        def plan(cur: dict[str, Any]) -> MutationPlan:
-            now2 = utc_now()
-            data = {**cur, "updated_at": now2, "updated_epoch": epoch_of(now2)}
-            if tags is not None:
-                data["tags"] = sorted(set(cur.get("tags", [])) | set(tags))
-            if importance is not None:
-                data["importance"] = importance
-            dumped = EpisodicMemory.model_validate(data).model_dump(mode="json")
-            keys = ["updated_at", "updated_epoch"]
-            if tags is not None:
-                keys.append("tags")
-            if importance is not None:
-                keys.append("importance")
-            return MutationPlan(changes={k: dumped[k] for k in keys})
+        # Publish ONLY the patched fields through the one-shot, layout-aware,
+        # non-re-embedding fence. Tag merge is explicit at the primitive boundary;
+        # the public API uses the same primitive with replacement semantics.
+        from musubi.store.immutable_vectors import patch_non_embedding_payload
 
-        published = await owned_update(
+        data = {
+            **strip_layout_fields(current_raw),
+            "updated_at": now,
+            "updated_epoch": epoch_of(now),
+        }
+        if tags is not None:
+            data["tags"] = sorted(set(current.tags) | set(tags))
+        if importance is not None:
+            data["importance"] = importance
+        dumped = EpisodicMemory.model_validate(data).model_dump(mode="json")
+        keys = ["updated_at", "updated_epoch"]
+        if tags is not None:
+            keys.append("tags")
+        if importance is not None:
+            keys.append("importance")
+        published = patch_non_embedding_payload(
             self._client,
             self._collection,
             namespace=str(namespace),
             object_id=str(object_id),
-            point_id=_point_id(object_id),
-            plan=plan,
+            observed_payload=current_raw,
+            changes={key: dumped[key] for key in keys},
+            tag_mode="merge",
         )
-        updated = EpisodicMemory.model_validate(published)
+        updated = EpisodicMemory.model_validate(strip_layout_fields(published))
 
         from musubi.types.common import generate_ksuid
 

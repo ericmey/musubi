@@ -616,7 +616,7 @@ def test_plan_baseexception_releases_own_token(real_qdrant: QdrantClient) -> Non
 
 
 class _SkipClearFake:
-    """Pure-unit fake: acquire succeeds, but the skip-release set_payload NEVER lands (the clear is a
+    """Pure-unit fake: acquire succeeds, but the skip-release delete_payload NEVER lands (the clear is a
     no-op), so the own token can never be confirmed cleared. Proves the skip path fails loud on its
     bounded exact-token clear instead of falling through to outer-loop TTL recovery."""
 
@@ -625,28 +625,32 @@ class _SkipClearFake:
         self._acquired = False
 
     def scroll(self, *_a: Any, **_k: Any) -> Any:
+        payload: dict[str, Any] = {
+            "namespace": "n/n/episodic",
+            "object_id": "o",
+            "version": 1,
+        }
+        if self._token is not None:
+            payload["update_lease_token"] = self._token
         rec = type(
             "R",
             (),
             {
                 "id": "p1",
-                "payload": {
-                    "namespace": "n/n/episodic",
-                    "object_id": "o",
-                    "version": 1,
-                    "update_lease_token": self._token,
-                },
+                "payload": payload,
             },
         )()
         return ([rec], None)
 
     def set_payload(self, *, payload: dict[str, Any], **_k: Any) -> Any:
         tok = payload.get("update_lease_token", "__missing__")
-        if tok not in (None, "__missing__") and not self._acquired:
+        if tok != "__missing__" and not self._acquired:
             self._token = cast(str, tok)  # acquire our own token
             self._acquired = True
-        # A clear (tok is None) is a deliberate no-op: the token stays, so readback never confirms.
         return None
+
+    def delete_payload(self, **_k: Any) -> Any:
+        return None  # deliberate no-op: token stays, so readback never confirms
 
 
 class _SkipClearFlakyFake(_SkipClearFake):
@@ -657,16 +661,11 @@ class _SkipClearFlakyFake(_SkipClearFake):
         super().__init__()
         self._clear_fails = clear_fails
 
-    def set_payload(self, *, payload: dict[str, Any], **_k: Any) -> Any:
-        tok = payload.get("update_lease_token", "__missing__")
-        if tok not in (None, "__missing__") and not self._acquired:
-            self._token = cast(str, tok)
-            self._acquired = True
-        elif tok is None:  # a clear attempt
-            if self._clear_fails > 0:
-                self._clear_fails -= 1  # refuse this round
-            else:
-                self._token = None  # land the clear
+    def delete_payload(self, **_k: Any) -> Any:
+        if self._clear_fails > 0:
+            self._clear_fails -= 1  # refuse this round
+        else:
+            self._token = None  # land the clear
         return None
 
 
@@ -705,9 +704,10 @@ class _CleanupBoom(RuntimeError):
 
 
 class _ClearBoom:
-    """Wraps a real client and raises on the exact-own CLEANUP clear only (a ``set_payload`` whose
-    payload sets ``update_lease_token`` to None and carries no ``version`` — i.e. not the acquire, not
-    the commit). Acquire and confirm proceed on the real row so the own token is genuinely held."""
+    """Wraps a real client and raises on exact-own ``delete_payload`` cleanup only.
+
+    Acquire and confirm proceed on the real row so the own token is genuinely held.
+    """
 
     def __init__(self, inner: QdrantClient) -> None:
         self._inner = inner
@@ -715,14 +715,8 @@ class _ClearBoom:
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
 
-    def set_payload(
-        self, *, collection_name: str, payload: dict[str, Any], points: Any, **kw: Any
-    ) -> Any:
-        if payload.get("update_lease_token", "__x__") is None and "version" not in payload:
-            raise _CleanupBoom("exact-own clear failed")
-        return self._inner.set_payload(
-            collection_name=collection_name, payload=payload, points=points, **kw
-        )
+    def delete_payload(self, **_kw: Any) -> Any:
+        raise _CleanupBoom("exact-own clear failed")
 
 
 @pytest.mark.integration
