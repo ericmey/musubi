@@ -20,6 +20,7 @@ instrument **cannot lie about having looked.**
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 from typing import Any
 
 import pytest
@@ -105,6 +106,65 @@ def _episodic_content(*, generation: str = "op-current", **changes: Any) -> dict
         "owner_token": "episodic-owner-current",
         "content": GOOD_EPISODIC["content"],
         "summary": None,
+        **changes,
+    }
+
+
+def _retraction_evidence(**changes: Any) -> dict[str, Any]:
+    original = GOOD_EPISODIC["content"].encode("utf-8")
+    prefix = b"a readable"
+    evidence: dict[str, Any] = {
+        "kind": "artifact_escrow_v1",
+        "artifact_namespace": "eric/claude-code/artifact",
+        "artifact_ref": {"artifact_id": "3GJhJKrgAOyI9ebWT8dLYUtUMGL"},
+        "original_sha256": sha256(original).hexdigest(),
+        "original_utf8_bytes": len(original),
+        "quoted_prefix_utf8_bytes": len(prefix),
+        "omitted_bytes": len(original) - len(prefix),
+        "vector_basis": "original",
+        "preserved_pointer": {
+            "kind": "v2",
+            "live_point": "episodic-content-current",
+        },
+        "operation_identity_hash": "b" * 64,
+        "request_digest": "c" * 64,
+    }
+    evidence.update(changes)
+    return evidence
+
+
+def _retracted_episodic_anchor(**changes: Any) -> dict[str, Any]:
+    anchor = _episodic_anchor(
+        content="[RETRACTED]\nQuoted original prefix: a readable\nEscrowed by reference.",
+        retraction_evidence=_retraction_evidence(),
+    )
+    anchor.update(changes)
+    return anchor
+
+
+def _escrow_head(**changes: Any) -> dict[str, Any]:
+    original = GOOD_EPISODIC["content"].encode("utf-8")
+    digest = sha256(original).hexdigest()
+    artifact_id = "3GJhJKrgAOyI9ebWT8dLYUtUMGL"
+    title = f"retracted-original-{GOOD_EPISODIC['object_id']}-{digest[:12]}"
+    return {
+        "object_id": artifact_id,
+        "namespace": "eric/claude-code/artifact",
+        "state": "matured",
+        "title": title,
+        "filename": f"{title}.txt",
+        "sha256": digest,
+        "content_type": "text/plain; charset=utf-8",
+        "size_bytes": len(original),
+        "chunk_count": 0,
+        "ingestion_metadata": {
+            "kind": "retraction_escrow_v1",
+            "source_namespace": GOOD_EPISODIC["namespace"],
+            "source_object_id": GOOD_EPISODIC["object_id"],
+        },
+        "chunker": "stored-unindexed-v1",
+        "artifact_state": "stored_unindexed",
+        "publication_version": 0,
         **changes,
     }
 
@@ -458,6 +518,244 @@ def test_anchor_projection_must_match_embedded_content_snapshot(
         error for error in doc["broken"][0]["errors"] if error["type"] == "projection_divergence"
     ]
     assert {error["loc"][-1] for error in divergence} == {"title", "content", "summary"}
+
+
+def test_ordinary_episodic_projection_divergence_still_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(_episodic_anchor(content="accidental stale anchor"), "anchor-current"),
+            _Rec(_episodic_content(), "episodic-content-current"),
+        ]
+    ]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    assert any(
+        error["type"] == "projection_divergence" for row in doc["broken"] for error in row["errors"]
+    )
+
+
+def test_fully_storage_bound_retraction_divergence_validates_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(_retracted_episodic_anchor(), "anchor-current"),
+            _Rec(_episodic_content(), "episodic-content-current"),
+        ]
+    ]
+    behaviour["musubi_artifact"] = [[_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert doc["verdict"] == "clean"
+    assert doc["broken_total"] == 0
+
+
+@pytest.mark.parametrize(
+    "evidence_change,anchor_change,error_loc",
+    [
+        (
+            {"preserved_pointer": {"kind": "v2", "live_point": "stale-content"}},
+            {},
+            "preserved_pointer",
+        ),
+        ({"original_sha256": "d" * 64}, {}, "original_sha256"),
+        (
+            {"original_utf8_bytes": 18, "omitted_bytes": 8},
+            {},
+            "original_utf8_bytes",
+        ),
+        (
+            {"quoted_prefix_utf8_bytes": 11, "omitted_bytes": 6},
+            {},
+            "quoted_prefix_utf8_bytes",
+        ),
+    ],
+)
+def test_retraction_evidence_must_bind_current_storage_not_itself(
+    monkeypatch: pytest.MonkeyPatch,
+    evidence_change: dict[str, Any],
+    anchor_change: dict[str, Any],
+    error_loc: str,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    evidence = _retraction_evidence(**evidence_change)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(
+                _retracted_episodic_anchor(
+                    retraction_evidence=evidence,
+                    **anchor_change,
+                ),
+                "anchor-current",
+            ),
+            _Rec(_episodic_content(), "episodic-content-current"),
+        ]
+    ]
+    behaviour["musubi_artifact"] = [[_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    mismatches = [
+        error
+        for row in doc["broken"]
+        for error in row["errors"]
+        if error["type"] == "retraction_evidence_mismatch"
+    ]
+    assert any(error_loc in error["loc"] for error in mismatches)
+
+
+@pytest.mark.parametrize(
+    "artifact_rows,error_loc",
+    [
+        ([], "artifact_ref"),
+        (
+            [
+                _Rec(
+                    _escrow_head(artifact_state="indexed", chunk_count=1),
+                    "3GJhJKrgAOyI9ebWT8dLYUtUMGL",
+                )
+            ],
+            "artifact_state",
+        ),
+        (
+            [_Rec(_escrow_head(sha256="d" * 64), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")],
+            "original_sha256",
+        ),
+        (
+            [_Rec(_escrow_head(size_bytes=18), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")],
+            "original_utf8_bytes",
+        ),
+    ],
+)
+def test_retraction_artifact_reference_must_resolve_to_exact_stored_unindexed_head(
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_rows: list[_Rec],
+    error_loc: str,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(_retracted_episodic_anchor(), "anchor-current"),
+            _Rec(_episodic_content(), "episodic-content-current"),
+        ]
+    ]
+    behaviour["musubi_artifact"] = [artifact_rows]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    mismatches = [
+        error
+        for row in doc["broken"]
+        for error in row["errors"]
+        if error["type"] == "retraction_artifact_mismatch"
+    ]
+    assert any(error_loc in error["loc"] for error in mismatches)
+
+
+def test_retraction_artifact_reference_must_match_deterministic_storage_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrong_but_valid = "3GfErdjMp1PO7N9mvX6G6VER9C4"
+    evidence = _retraction_evidence(artifact_ref={"artifact_id": wrong_but_valid})
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(
+                _retracted_episodic_anchor(retraction_evidence=evidence),
+                "anchor-current",
+            ),
+            _Rec(_episodic_content(), "episodic-content-current"),
+        ]
+    ]
+    behaviour["musubi_artifact"] = [[_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    mismatches = [
+        error
+        for row in doc["broken"]
+        for error in row["errors"]
+        if error["type"] == "retraction_artifact_mismatch"
+    ]
+    assert any("artifact_ref" in error["loc"] for error in mismatches)
+
+
+def test_retraction_evidence_stale_generation_remains_pointer_generation_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [
+        [
+            _Rec(_retracted_episodic_anchor(), "anchor-current"),
+            _Rec(_episodic_content(generation="stale-generation"), "episodic-content-current"),
+        ]
+    ]
+    behaviour["musubi_artifact"] = [[_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    errors = [error for row in doc["broken"] for error in row["errors"]]
+    assert any(error["type"] == "pointer_generation_mismatch" for error in errors)
+    assert not any(error["type"] == "retraction_evidence_mismatch" for error in errors)
+
+
+def test_partial_pagination_neither_blesses_nor_condemns_unseen_retraction_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class HalfBroken(FakeQdrant):
+        def scroll(self, *, collection_name: str, limit: int, offset: Any, **kw: Any) -> Any:
+            if collection_name == "musubi_episodic" and offset is not None:
+                raise ConnectionError("connection reset before content point")
+            if collection_name == "musubi_episodic":
+                return [_Rec(_retracted_episodic_anchor(), "anchor-current")], "1"
+            if collection_name == "musubi_artifact":
+                return [_Rec(_escrow_head(), "3GJhJKrgAOyI9ebWT8dLYUtUMGL")], None
+            return super().scroll(collection_name=collection_name, limit=limit, offset=offset)
+
+    fake = HalfBroken(ALL_EMPTY)
+    monkeypatch.setattr("musubi.cli.validate.QdrantClient", lambda **_: fake)
+    result = runner.invoke(app, ["validate", "rows", "--json"])
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == EXIT_INCOMPLETE
+    assert doc["verdict"] == "incomplete"
+    assert doc["integrity"] == "unknown"
+    assert doc["broken_total"] == 0
+
+
+def test_existing_inline_legacy_tombstone_remains_valid_without_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    legacy = {
+        **GOOD_EPISODIC,
+        "content": "[RETRACTED]\nOriginal content retained inline: a readable memory",
+        "committed_operation_id": "legacy-retraction",
+    }
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(legacy, "legacy-current")]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["broken_total"] == 0
 
 
 def test_resolved_logical_object_still_uses_strict_domain_model(

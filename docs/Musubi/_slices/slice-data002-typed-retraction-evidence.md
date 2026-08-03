@@ -29,9 +29,9 @@ retraction without weakening ordinary projection-divergence checks.
   accounting, original-vector basis, preserved pointer, opaque operation
   identity hash, and canonical request digest.
 - VAL-002 permits divergence only for episodic v2 anchors whose evidence binds
-  the current storage pointer and the current immutable content snapshot. It
-  never permits curated divergence and never trusts evidence to attest its own
-  target bytes.
+  the current storage pointer, the current immutable content snapshot, and the
+  exact stored-unindexed escrow artifact head. It never permits curated
+  divergence and never trusts evidence to attest its own target bytes.
 - Legacy inline full-original tombstones remain valid. This slice adds no
   public endpoint, escrow write, or episodic mutation path.
 - Endpoint construction, tombstone prose, immutable content/vector invariance
@@ -55,8 +55,27 @@ retraction without weakening ordinary projection-divergence checks.
 
 ## Test contract
 
-The exact executable contract will be committed test-first after Aoi attacks
-the evidence/storage binding boundary.
+1. Strict typed evidence round-trips through the public episodic model without
+   exposing DATA-001 layout fields.
+2. Wrong artifact-id shape, non-whole-artifact references, noncanonical hashes,
+   extra fields, partial evidence, a non-sibling artifact namespace, inconsistent
+   byte accounting, or an ambiguous preserved-pointer shape fail closed.
+3. Ordinary accidental episodic and curated projection divergence remains
+   broken.
+4. A fully bound v2 retraction divergence is clean only when pointer,
+   generation, stored original digest/length, non-empty literal prefix,
+   omitted-byte accounting, and exact stored-unindexed escrow head all verify
+   against scanned storage.
+5. Wrong live point, original digest/length, prefix accounting, stale
+   generation, valid-but-wrong deterministic artifact id, missing artifact,
+   wrong artifact state, or artifact digest/length mismatch each fails closed
+   with a discriminating error.
+6. A partial episodic scan with an unseen content target returns
+   incomplete/unknown and makes neither a broken nor a clean cross-row claim.
+7. Existing inline legacy tombstones remain valid without evidence.
+8. Whole-dict content-point and vector invariance across the actual mutation is
+   owned and mechanically required by #646; this schema/validator lane writes
+   no episodic row and does not manufacture a mutation proof.
 
 ## Work log
 
@@ -64,3 +83,25 @@ the evidence/storage binding boundary.
   Read-only mapping confirmed the validator already proves storage pointer
   identity and generation before projection comparison; this lane adds one
   episodic-only exception at that seam rather than a parallel pointer system.
+- 2026-08-03 — Aoi's plan attack found the only evidence field still bound to
+  nothing: `artifact_ref.artifact_id`. A purged escrow would otherwise leave a
+  permanently clean-looking tombstone pointing at no supported original. The
+  contract now requires VAL-002 to resolve the deterministic address against
+  the scanned artifact plane and verify stored-unindexed state, digest, and
+  length. Cross-plane conclusions are suppressed when either required scan is
+  incomplete. Prefix length is `>= 1`; zero would make literal containment
+  vacuous. #646 owns the fixed requirement that every server-built tombstone
+  embeds that literal storage-derived prefix.
+- 2026-08-03 — Test Contract closure for the broad episodic-memory spec keeps
+  these pre-existing bullets explicitly out of this schema/validator lane:
+  `test_maturation_sets_matured_after_ttl_and_scores_importance` and
+  `test_maturation_skips_already_matured` belong to the completed
+  `slice-lifecycle-maturation`; `test_query_hybrid_returns_scored_results_in_descending_order`
+  belongs to completed `slice-retrieval-hybrid`;
+  `test_forward_compat_reads_schema_version_0_point` remains owned by a future
+  schema-migration slice; `test_perf_create_under_100ms_p95_on_reference_host`
+  and `test_perf_dedup_query_under_30ms_p95` belong to the integration/perf
+  harness; `hypothesis: idempotency — re-ingesting same content N times produces 1 memory with reinforcement_count == N`
+  and `hypothesis: lifecycle monotonicity — state transitions never go backwards (except explicit revive operation)`
+  belong to `slice-plane-episodic-followup`. DATA-002 changes neither plane
+  behavior nor these deferred contracts.

@@ -3,10 +3,34 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 import pytest
 
 from musubi.types import EpisodicMemory
+
+_ARTIFACT_ID = "3GJhJKrgAOyI9ebWT8dLYUtUMGL"
+
+
+def _retraction_evidence(**changes: Any) -> dict[str, Any]:
+    evidence: dict[str, Any] = {
+        "kind": "artifact_escrow_v1",
+        "artifact_namespace": "eric/claude-code/artifact",
+        "artifact_ref": {"artifact_id": _ARTIFACT_ID},
+        "original_sha256": "a" * 64,
+        "original_utf8_bytes": 17,
+        "quoted_prefix_utf8_bytes": 10,
+        "omitted_bytes": 7,
+        "vector_basis": "original",
+        "preserved_pointer": {
+            "kind": "v2",
+            "live_point": "episodic-content-current",
+        },
+        "operation_identity_hash": "b" * 64,
+        "request_digest": "c" * 64,
+    }
+    evidence.update(changes)
+    return evidence
 
 
 def test_defaults_to_provisional(sample_episodic: EpisodicMemory) -> None:
@@ -99,3 +123,113 @@ def test_all_fields_round_trip_through_model_dump_model_validate(episodic_namesp
     )
     restored = EpisodicMemory.model_validate(mem.model_dump())
     assert restored == mem
+
+
+def test_retraction_evidence_strict_shape_round_trips_without_storage_fields() -> None:
+    memory = EpisodicMemory(
+        namespace="eric/claude-code/episodic",
+        content="[RETRACTED] quoted prefix: a readable",
+        state="matured",
+        retraction_evidence=_retraction_evidence(),
+    )
+
+    dumped = memory.model_dump(mode="json")
+    restored = EpisodicMemory.model_validate(dumped)
+
+    assert restored == memory
+    assert dumped["retraction_evidence"] == _retraction_evidence()
+    assert (
+        not {
+            "point_kind",
+            "live_point",
+            "pointer_version",
+            "committed_operation_id",
+            "vector_layout_version",
+        }
+        & dumped.keys()
+    )
+
+
+@pytest.mark.parametrize(
+    "change,match",
+    [
+        ({"artifact_ref": {"artifact_id": "not-a-ksuid"}}, "KSUID"),
+        ({"artifact_ref": {"artifact_id": _ARTIFACT_ID, "chunk_id": _ARTIFACT_ID}}, "chunk_id"),
+        ({"artifact_ref": {"artifact_id": _ARTIFACT_ID, "quote": "original"}}, "quote"),
+        ({"original_sha256": "A" * 64}, "original_sha256"),
+        ({"operation_identity_hash": "b" * 63}, "operation_identity_hash"),
+        ({"request_digest": "g" * 64}, "request_digest"),
+        ({"vector_basis": "tombstone"}, "vector_basis"),
+        (
+            {"quoted_prefix_utf8_bytes": 0, "omitted_bytes": 17},
+            "quoted_prefix_utf8_bytes",
+        ),
+        ({"unexpected": True}, "unexpected"),
+    ],
+)
+def test_retraction_evidence_rejects_malformed_or_noncanonical_fields(
+    change: dict[str, Any], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        EpisodicMemory(
+            namespace="eric/claude-code/episodic",
+            content="[RETRACTED]",
+            state="matured",
+            retraction_evidence=_retraction_evidence(**change),
+        )
+
+
+def test_retraction_evidence_requires_derived_sibling_artifact_namespace() -> None:
+    with pytest.raises(ValueError, match="sibling artifact namespace"):
+        EpisodicMemory(
+            namespace="eric/claude-code/episodic",
+            content="[RETRACTED]",
+            state="matured",
+            retraction_evidence=_retraction_evidence(
+                artifact_namespace="aoi/command-chair/artifact"
+            ),
+        )
+
+
+def test_retraction_evidence_rejects_partial_shape() -> None:
+    evidence = _retraction_evidence()
+    del evidence["request_digest"]
+
+    with pytest.raises(ValueError, match="request_digest"):
+        EpisodicMemory(
+            namespace="eric/claude-code/episodic",
+            content="[RETRACTED]",
+            state="matured",
+            retraction_evidence=evidence,
+        )
+
+
+def test_retraction_evidence_prefix_and_omitted_bytes_reconcile_with_original_length() -> None:
+    with pytest.raises(ValueError, match=r"quoted_prefix_utf8_bytes.*omitted_bytes"):
+        EpisodicMemory(
+            namespace="eric/claude-code/episodic",
+            content="[RETRACTED]",
+            state="matured",
+            retraction_evidence=_retraction_evidence(omitted_bytes=8),
+        )
+
+
+def test_retraction_evidence_requires_exactly_one_typed_preserved_pointer_shape() -> None:
+    legacy = EpisodicMemory(
+        namespace="eric/claude-code/episodic",
+        content="[RETRACTED]",
+        state="matured",
+        retraction_evidence=_retraction_evidence(preserved_pointer={"kind": "legacy_self"}),
+    )
+    assert legacy.retraction_evidence is not None
+    assert legacy.retraction_evidence.preserved_pointer.kind == "legacy_self"
+
+    with pytest.raises(ValueError, match="preserved_pointer"):
+        EpisodicMemory(
+            namespace="eric/claude-code/episodic",
+            content="[RETRACTED]",
+            state="matured",
+            retraction_evidence=_retraction_evidence(
+                preserved_pointer={"kind": "legacy_self", "live_point": "smuggled"}
+            ),
+        )
