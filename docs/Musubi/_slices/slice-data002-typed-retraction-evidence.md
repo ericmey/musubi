@@ -4,12 +4,12 @@ slice_id: slice-data002-typed-retraction-evidence
 issue: 645
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "1-schema"
-tags: [section/slices, status/in-progress, type/slice, data-001, data-integrity, idempotency]
+tags: [section/slices, status/done, type/slice, data-001, data-integrity, idempotency]
 updated: 2026-08-03
-reviewed: false
+reviewed: true
 depends-on: [slice-art004-exact-byte-escrow]
 blocks: []
 ---
@@ -136,3 +136,10 @@ retraction without weakening ordinary projection-divergence checks.
   schema's forbidden-key set to those same runtime rejections: snapshot parity
   proves two API descriptions agree, while this test proves behavior conforms to
   the description.
+- 2026-08-03 — Aoi approved the storage-binding implementation at `6592f1c`
+  after independently executing the whole-reference positive control and both
+  explicit-null rejections, and carried approval to `3e9c9e6` after executing
+  the added serialization-schema/runtime conformance guard. Exact-head local
+  gate: 2,563 passed, 195 skipped, 140 deselected, 3 xfailed; Test Contract
+  closure 27 passing + 8 named out-of-scope; agent check clean with warnings
+  only. Terminal metadata carries no executable or contract change.
