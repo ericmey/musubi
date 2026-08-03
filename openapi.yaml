@@ -3493,6 +3493,7 @@ components:
           - indexing
           - indexed
           - failed
+          - stored_unindexed
           title: Artifact State
           default: indexing
         failure_reason:
@@ -3536,11 +3537,13 @@ components:
 
         ``state`` tracks the *lifecycle* axis (archived/matured), while
 
-        ``artifact_state`` tracks the *indexing* axis (indexing/indexed/failed). The
+        ``artifact_state`` tracks the *indexing* axis
 
-        two are orthogonal — an artifact is typically ``state=matured`` its whole
+        (indexing/indexed/failed/stored_unindexed). The two are orthogonal — an
 
-        life and moves only on the indexing axis.'
+        artifact is typically ``state=matured`` its whole life and moves only on
+
+        the indexing axis.'
     StatusResponse:
       properties:
         status:

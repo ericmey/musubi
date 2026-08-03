@@ -178,7 +178,7 @@ Indexes are created idempotently at boot via `musubi/store/indexes.py`. The full
 | `source_system` | KEYWORD | Provenance. |
 | `source_ref` | KEYWORD | Back-ref to original. |
 | `ingested_by` | KEYWORD | Auditing. |
-| `artifact_state` | KEYWORD | `indexing` / `indexed` / `failed`. |
+| `artifact_state` | KEYWORD | `indexing` / `indexed` / `failed` / `stored_unindexed`. |
 | `derived_from` | KEYWORD | Chain. |
 
 ### `musubi_thought` (deltas)

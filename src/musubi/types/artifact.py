@@ -18,9 +18,10 @@ class SourceArtifact(MusubiObject):
     """A raw uploaded file (PDF, VTT, markdown dump, etc.).
 
     ``state`` tracks the *lifecycle* axis (archived/matured), while
-    ``artifact_state`` tracks the *indexing* axis (indexing/indexed/failed). The
-    two are orthogonal — an artifact is typically ``state=matured`` its whole
-    life and moves only on the indexing axis.
+    ``artifact_state`` tracks the *indexing* axis
+    (indexing/indexed/failed/stored_unindexed). The two are orthogonal — an
+    artifact is typically ``state=matured`` its whole life and moves only on
+    the indexing axis.
     """
 
     state: Literal["matured", "archived", "superseded"] = "matured"
@@ -60,6 +61,20 @@ class SourceArtifact(MusubiObject):
             raise ValueError("artifact_state=failed requires failure_reason to be set")
         if self.artifact_state == "indexed" and self.chunk_count < 1:
             raise ValueError("artifact_state=indexed requires chunk_count >= 1")
+        if self.artifact_state == "stored_unindexed":
+            indexing_owned_fields = {
+                "chunk_count": self.chunk_count != 0,
+                "committed_generation": self.committed_generation is not None,
+                "committed_owner": self.committed_owner is not None,
+                "index_operation_id": self.index_operation_id is not None,
+                "failure_reason": self.failure_reason is not None,
+            }
+            invalid = [field for field, populated in indexing_owned_fields.items() if populated]
+            if invalid:
+                raise ValueError(
+                    "artifact_state=stored_unindexed forbids indexing-owned fields: "
+                    + ", ".join(invalid)
+                )
         # C4 invariant #1: an ``indexed`` head names exactly one committed generation+owner. This is
         # re-tightened to a hard requirement once the committed-generation indexer replaces the legacy
         # unfenced ``index()`` producer (this slice); enforcing it before that migration would reject

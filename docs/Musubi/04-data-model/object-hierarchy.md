@@ -118,7 +118,7 @@ class SourceArtifact(MusubiObject):
     chunk_count: int
     ingestion_metadata: dict      # source system, URL, uploader, etc.
     chunker: str                  # "markdown-headings-v1", "vtt-turns-v1", "token-sliding-v1"
-    artifact_state: Literal["indexing", "indexed", "failed"]
+    artifact_state: Literal["indexing", "indexed", "failed", "stored_unindexed"]
     failure_reason: str | None
 ```
 

@@ -36,7 +36,7 @@ LifecycleState = Literal[
     "superseded",
 ]
 
-ArtifactIndexingState = Literal["indexing", "indexed", "failed"]
+ArtifactIndexingState = Literal["indexing", "indexed", "failed", "stored_unindexed"]
 """Second-axis state on ``SourceArtifact`` — independent of the main lifecycle axis."""
 
 Modality = Literal["text", "voice-transcript", "tool-call", "system-event"]

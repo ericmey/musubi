@@ -87,3 +87,7 @@ chunks and never claims indexing success, failure, or active admission.
   distinct reds against 37 passing controls. The slice also assigns initial
   `publication_version` and the surviving legacy `ArtifactPlane.index()` door to
   ART-004 so neither falls between lanes.
+- 2026-08-03 — Added the additive enum member and strict stored-unindexed
+  invariant without constraining `publication_version`; updated the committed
+  OpenAPI schema and artifact model docs. Focused model/plane proof is 44 passed,
+  9 skipped, and runtime-vs-snapshot OpenAPI parity is 1 passed.
