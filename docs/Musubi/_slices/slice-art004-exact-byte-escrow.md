@@ -73,7 +73,9 @@ mutation is permitted.
 4. Head-publication failure followed by retry reuses only exact verified bytes
    and publishes one version-zero head.
 5. A pre-existing truncated or divergent final blob fails closed and is never
-   overwritten.
+   overwritten. A semantically divergent head at the deterministic address also
+   fails closed and remains unchanged; deterministic adoption ignores only its
+   four creation/readback timestamp fields.
 6. Concurrent identical attempts converge on one exact blob and one identical
    artifact head.
 7. A verified escrow is exactly readable by id, has zero chunks, and creates no
@@ -141,3 +143,16 @@ mutation is permitted.
   passed, 195 skipped, 140 deselected, 3 xfailed, all checks passed in 130s.
   The configured-filesystem real-Qdrant integration remains a separate remote
   gate and is not inferred from this local result.
+- 2026-08-03 — Invalidated the first production head before review after
+  challenging its own head-equality boundary. The allowlist omitted general
+  lifecycle state, schema version, identity family, and Musubi object version.
+  Exact adoption now compares the entire serialized model except the four
+  timestamps/epochs that legitimately differ across deterministic retries; a
+  four-mutation regression proves each formerly omitted field fails closed.
+- 2026-08-03 — Aoi independently found the omitted lifecycle `state`; Yua also
+  found identity family, schema version, and Musubi version. Aoi's proposed
+  access-telemetry exclusions were rejected with a discriminating model-field
+  control: `SourceArtifact` inherits `MusubiObject` directly and has none of
+  those fields, while the `EpisodicMemory` positive control has all three. The
+  replacement full gate is 2530 passed, 195 skipped, 140 deselected, 3 xfailed,
+  all checks passed in 123s.

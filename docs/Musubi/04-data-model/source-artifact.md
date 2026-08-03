@@ -211,17 +211,18 @@ Stored-unindexed state:
 27. `test_escrow_blob_readback_failure_exposes_no_head`
 28. `test_escrow_head_failure_retry_reuses_verified_bytes_at_version_zero`
 29. `test_escrow_corrupt_final_blob_fails_closed_without_overwrite`
-30. `test_concurrent_identical_escrows_converge_on_one_blob_and_head`
-31. `test_verified_escrow_is_readable_with_zero_chunks_and_no_intent`
-32. `test_escrow_exact_text_search_misses_with_indexed_positive_control`
-33. `test_legacy_index_door_refuses_live_stored_head_from_stale_caller`
-34. `test_retention_refuses_stored_unindexed_artifact_policy_candidate`
-35. `test_real_storage_escrow_orders_verified_blob_before_head_and_reuses`
+30. `test_existing_divergent_escrow_head_fails_closed`
+31. `test_concurrent_identical_escrows_converge_on_one_blob_and_head`
+32. `test_verified_escrow_is_readable_with_zero_chunks_and_no_intent`
+33. `test_escrow_exact_text_search_misses_with_indexed_positive_control`
+34. `test_legacy_index_door_refuses_live_stored_head_from_stale_caller`
+35. `test_retention_refuses_stored_unindexed_artifact_policy_candidate`
+36. `test_real_storage_escrow_orders_verified_blob_before_head_and_reuses`
 
 Isolation:
 
-36. `test_namespace_isolation_reads`
-37. `test_cross_namespace_citation_in_supporting_ref_is_logged`
+37. `test_namespace_isolation_reads`
+38. `test_cross_namespace_citation_in_supporting_ref_is_logged`
 
 ## Prior art
 

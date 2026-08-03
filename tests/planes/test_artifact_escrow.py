@@ -237,6 +237,57 @@ async def test_escrow_corrupt_final_blob_fails_closed_without_overwrite(
     )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("identity_family", "attacker"),
+        ("schema_version", 2),
+        ("state", "archived"),
+        ("version", 2),
+    ],
+)
+@pytest.mark.asyncio
+async def test_existing_divergent_escrow_head_fails_closed(
+    plane: ArtifactPlane,
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    address = _address()
+    final = _blob_path(tmp_path)
+    final.parent.mkdir(parents=True)
+    final.write_bytes(_ORIGINAL)
+    exact = SourceArtifact(
+        object_id=address.artifact_id,
+        namespace=address.artifact_namespace,
+        title=address.title,
+        filename=address.filename,
+        sha256=_ORIGINAL_SHA256,
+        content_type="text/plain; charset=utf-8",
+        size_bytes=len(_ORIGINAL),
+        chunker="stored-unindexed-v1",
+        artifact_state="stored_unindexed",
+        publication_version=0,
+        ingestion_metadata={
+            "kind": "retraction_escrow_v1",
+            "source_namespace": _SOURCE_NAMESPACE,
+            "source_object_id": _SOURCE_OBJECT_ID,
+        },
+    )
+    divergent = exact.model_copy(update={field: value})
+    await plane.create(divergent)
+
+    result = await _store(_writer(plane, tmp_path))
+
+    assert isinstance(result, Err)
+    assert result.error.code == "head_mismatch"
+    assert (
+        await plane.get(namespace=address.artifact_namespace, object_id=address.artifact_id)
+        == divergent
+    )
+    assert final.read_bytes() == _ORIGINAL
+
+
 @pytest.mark.asyncio
 async def test_concurrent_identical_escrows_converge_on_one_blob_and_head(
     plane: ArtifactPlane, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

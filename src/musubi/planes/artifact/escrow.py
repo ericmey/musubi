@@ -273,25 +273,14 @@ class ArtifactEscrowWriter:
 
     @staticmethod
     def _heads_match(actual: SourceArtifact, expected: SourceArtifact) -> bool:
-        fields = (
-            "object_id",
-            "namespace",
-            "title",
-            "filename",
-            "sha256",
-            "content_type",
-            "size_bytes",
-            "chunker",
-            "artifact_state",
-            "chunk_count",
-            "committed_generation",
-            "committed_owner",
-            "index_operation_id",
-            "failure_reason",
-            "publication_version",
-            "ingestion_metadata",
+        # Creation/readback timestamps legitimately differ across deterministic
+        # retries. Every other current or future model field is load-bearing:
+        # an allowlist here would silently adopt a divergent head when the
+        # artifact schema grows.
+        temporal_fields = {"created_at", "created_epoch", "updated_at", "updated_epoch"}
+        return actual.model_dump(mode="json", exclude=temporal_fields) == expected.model_dump(
+            mode="json", exclude=temporal_fields
         )
-        return all(getattr(actual, field) == getattr(expected, field) for field in fields)
 
     @staticmethod
     def _error(code: str, detail: str, address: EscrowAddress) -> ArtifactEscrowError:
