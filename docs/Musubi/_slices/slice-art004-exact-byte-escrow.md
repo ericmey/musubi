@@ -132,3 +132,12 @@ mutation is permitted.
   cleanup was serial: a failed Qdrant purge could mask the original assertion
   and prevent filesystem cleanup. The unique blob child is now removed first
   and unconditionally; Qdrant purge and close are independently protected.
+- 2026-08-03 — Production implementation maps the contract narrowly: a
+  protocol-based escrow writer publishes temp+file-fsync+hard-link+directory-
+  fsync, exact-readback-verifies before head creation, and adopts only an exact
+  deterministic head; the legacy index door checks the live head before its
+  broad failure handler; retention skips only stored-unindexed artifact rows.
+  Focused artifact coverage is 58 passed / 9 named skips. `make check` is 2526
+  passed, 195 skipped, 140 deselected, 3 xfailed, all checks passed in 130s.
+  The configured-filesystem real-Qdrant integration remains a separate remote
+  gate and is not inferred from this local result.

@@ -65,7 +65,7 @@ def _writer(plane: ArtifactPlane, tmp_path: Path) -> Any:
 
 def _blob_path(tmp_path: Path) -> Path:
     address = _address()
-    return tmp_path / address.artifact_namespace / address.artifact_id
+    return tmp_path / str(address.artifact_namespace) / str(address.artifact_id)
 
 
 async def _store(writer: Any, content: bytes = _ORIGINAL) -> Any:

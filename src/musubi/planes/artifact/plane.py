@@ -16,6 +16,7 @@ from musubi.embedding.base import Embedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator, TransitionPending
 from musubi.lifecycle.transitions import TransitionError, TransitionResult, transition
 from musubi.planes.artifact.chunking import KNOWN_CHUNKERS, get_chunker
+from musubi.planes.artifact.escrow import StoredUnindexedIndexingError
 from musubi.store.raw_lookup import point_exists, raw_payload
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
@@ -93,6 +94,15 @@ class ArtifactPlane:
         hides the prior tail — the orphaned-chunk bug is gone on the direct-call path too. The async,
         durably-retried, concurrency-safe path is :class:`ArtifactIndexer` via the lifecycle worker;
         this method is the single-writer synchronous equivalent."""
+        live_at_entry = self._get_sync(
+            namespace=artifact.namespace,
+            object_id=artifact.object_id,
+        )
+        if live_at_entry is not None and live_at_entry.artifact_state == "stored_unindexed":
+            raise StoredUnindexedIndexingError(
+                f"artifact {artifact.object_id!r} is stored_unindexed and cannot be indexed"
+            )
+
         staged_generation: str | None = None
         try:
             # Deterministic config guard: an unknown chunker is a TERMINAL failure — never a silent
