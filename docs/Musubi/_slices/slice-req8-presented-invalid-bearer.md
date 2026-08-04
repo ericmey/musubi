@@ -3,10 +3,10 @@ title: "Slice: REQ-8 presented-invalid bearer rejection"
 slice_id: slice-req8-presented-invalid-bearer
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: aoi
 phase: "8-ops"
-tags: [section/slices, status/in-review, type/slice, api, security, auth]
+tags: [section/slices, status/done, type/slice, api, security, auth]
 updated: 2026-08-04
 reviewed: true
 issue: 413
@@ -162,8 +162,11 @@ it was previously ignored.
 
 ## Deployment boundary
 
-**Nothing in this slice was deployed.** No host touched, no profile mutated, no service
-restarted. Deployment and live proof are the second seat's lane.
+The implementation shipped in Musubi `v1.23.4` and was deployed by the second seat to
+both `core` and `lifecycle-worker` at the signed digest
+`sha256:d77fd19c64ae6b9fd46e31ed36304ae03778b371cee7ff299eea9848abcb3b0c`.
+No Hermes profile bytes changed during this deployment; the four deployed providers
+remained byte-identical to their accepted canonical source.
 
 ## Closure evidence
 
@@ -192,6 +195,37 @@ Discriminating red — four mutants, each failing exactly the test that names it
 | restore the stale 401 hint | exactly 1 — truthful hint |
 
 Independently reproduced at the IMPLEMENTATION head by the second seat.
+
+Durable and live closeout:
+
+- PR #673 merged as `0453a137cb8dbe39d7a7a9fb6505f75a94268f97`. Release
+  PR #674 merged as `ca926473436bbdbc39b74e8e7085ecda348e16f0`; the signed
+  `v1.23.4` image digest is
+  `sha256:d77fd19c64ae6b9fd46e31ed36304ae03778b371cee7ff299eea9848abcb3b0c`.
+  Auto-pin PR #675 merged as `0a646ba13410fbc017283973fcfc9a11500d1b7d`.
+- The household deployment authority, `hw-ansible`, pinned `v1.23.4` in PR #14
+  (`9afa2d1e81cedc65f37ca9e84141b51ac5e9e8de`). A stale local source comparison
+  initially regressed the lifecycle-worker healthcheck; the second seat stopped on the
+  resulting unhealthy container, restored exact Musubi `origin/main` template parity in
+  hw-ansible PR #15 (`bc85419be246e752c8c7b2187752a390d6c287db`), and reran the
+  canonical update. The corrected play completed `ok=18 changed=4 failed=0`, asserted
+  both services on the pin, and appended the upgrade-history row.
+- Direct runtime inspection showed `core` and `lifecycle-worker` both `healthy`, both
+  running the signed digest above. `memory-data --json musubi status` returned
+  `status: ok`, `version: v1.23.4`, and all five dependencies healthy.
+- Live REQ-8 matrix on all five public routes (`/v1/ops/health`, `/v1/ops/status`,
+  `/v1/ops/metrics`, `/v1/docs`, `/v1/openapi.json`): absent bearer `200`; deliberately
+  invalid bearer canonical typed `401` with `code: UNAUTHORIZED` and non-empty detail;
+  real valid bearer `200`. Protected `/v1/namespaces` remained canonical typed `401`
+  for both absent and invalid controls.
+- Repository smoke wrappers passed while supplied an intentionally invalid
+  `MUSUBI_TOKEN`: API health plus all five components and both observability assertions
+  were green, proving public probes use the credential-free `public_get` path.
+- Nyla, Sumi, Shiori, and Tama each completed a value-free live recall through the
+  deployed Hermes provider at SHA-256
+  `2e8b3dd0a9bff4ae3fbc94e2185cfa0ae149fc6c5d3e9b2985cbb982fe9d5722`.
+  Each used its configured namespace and real secret-bootstrap path, returned `ok`, and
+  exposed `warnings: []`; no memory content or credential value was printed.
 
 ## Work log
 
@@ -224,3 +258,7 @@ Independently reproduced at the IMPLEMENTATION head by the second seat.
   canonical scope-denial detail.
 - 2026-08-04 — REQ-7 (#412) and D4 Phase 1 (#558) untouched. Suite `xfailed` count 3 → 2,
   which is the mechanical proof REQ-7's strict-xfail still stands.
+- 2026-08-04 — PR #673 merged without auto-closing #413. The second seat released and
+  deployed `v1.23.4`, corrected a self-introduced lifecycle healthcheck regression in the
+  deployment authority before accepting runtime state, then completed the public-route,
+  protected-control, smoke-wrapper, and four-seat Hermes proofs recorded above.
