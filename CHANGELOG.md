@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.4](https://github.com/ericmey/musubi/compare/v1.23.3...v1.23.4) (2026-08-04)
+
+
+### Bug Fixes
+
+* **auth:** reject a presented-invalid bearer on public routes (REQ-8, [#413](https://github.com/ericmey/musubi/issues/413)) ([#673](https://github.com/ericmey/musubi/issues/673)) ([0453a13](https://github.com/ericmey/musubi/commit/0453a137cb8dbe39d7a7a9fb6505f75a94268f97))
+
 ## [1.23.3](https://github.com/ericmey/musubi/compare/v1.23.2...v1.23.3) (2026-08-03)
 
 
