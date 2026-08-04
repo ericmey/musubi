@@ -44,8 +44,9 @@ not the Rev3 sketch:
   route-declared idempotency eligibility + pure-ASGI store-only observer), D4 Phase 0 (in-process
   lease, single-worker fail-closed, **no time-based reclaim of a live lease**), D6 (identity tuple).
 - **Deferred, exact:** D4 Phase 1 (durable cross-process); D5 (Phase C — design PROVEN @239029a,
-  implementation not started); REQ7 (identity tuple-consistency validation — xfail); REQ8 (public
-  absent-vs-invalid bearer — xfail).
+  implementation not started); REQ7 (identity tuple-consistency validation — xfail).
+  **REQ8 is no longer deferred** — the public absent-vs-invalid bearer pair is implemented and
+  passing (#413); its strict-xfail was removed once the test passed for the intended reason.
 
 Historical reminder: in the Rev 4 sections, "accepted" names the review-time stack state. Rev 5
 supersedes every old delivery-status claim: Phase A and replacement Phase B are now shipped.
@@ -266,7 +267,8 @@ principal's idempotency slot.
 > (domain-sep + content-type + exact bytes) persisted separately, is IMPLEMENTED and accepted (PR
 > #404). The tuple's internal-consistency VALIDATION is **NOT yet enforced**:
 > `tests/api/test_req7_token_identity_invariant.py` remains strict-xfail — **REQ7 is OPEN**
-> (deferred). (Related: REQ8, public absent-vs-invalid bearer, `test_req8_*` — also open/xfail.)
+> (deferred). (Related: REQ8, public absent-vs-invalid bearer, `test_req8_*` — **now CLOSED**;
+> implemented in #413. This paragraph's REQ7 statement is unchanged and still accurate.)
 
 This also resolves the rev-1 strategy comparison: "exact-token fingerprint" (A) is rejected
 precisely because it keys on the rotating secret; **(B) principal (issuer+subject+presence)
@@ -384,7 +386,7 @@ shipped through PR #403 and replacement PR #414 and are now production behavior.
 | faithful replay (headers/cookies/bytes/media, REQ-5) | accepted (#404) | D3 observer |
 | ineligible stream + key not buffered (B1) | accepted (#404) | D3 route-declared eligibility |
 | tuple issuer/subject/presence consistency (REQ-7) | XFAIL — OPEN | REQ7 deferred in #412 |
-| public absent-vs-invalid bearer (REQ-8) | XFAIL — OPEN | REQ8 deferred in #413 |
+| public absent-vs-invalid bearer (REQ-8) | PASSING | REQ8 implemented in #413, slice-req8-presented-invalid-bearer |
 | oversize multipart → 413 (D5) | deferred | Phase C (design proven @239029a) |
 
 ## Ownership / process (Yua's proposal, adopted)
@@ -409,7 +411,9 @@ Exact deferrals carried forward from the accepted stack:
   multi-worker or horizontally replicated API deployment.
 - **D5 Phase C** — multipart ingress-cap + streamed digest; design PROVEN @239029a, impl not started.
 - **REQ7** — identity tuple internal-consistency validation, deferred under #412.
-- **REQ8** — public route absent-vs-invalid bearer, deferred under #413.
+- **REQ8** — public route absent-vs-invalid bearer. **Implemented and closed under #413**
+  ([[_slices/slice-req8-presented-invalid-bearer]]); a presented-invalid bearer is a typed 401 on
+  every route, absent stays public. Kong re-enable precondition recorded in that slice.
 
 Pre-existing (different root cause / different ADR): `_operator_scope_hint` rate-tier read; DQ-001
 projection/summary; LIFE-007/008 / DATA-001 atomicity.
@@ -417,4 +421,6 @@ projection/summary; LIFE-007/008 / DATA-001 atomicity.
 ---
 
 **Status: ACCEPTED AND SHIPPED (rev 5).** PR #403 and replacement Phase B PR #414 are on `main` and
-deployed. True deferrals are D4 Phase 1 (#558), D5 Phase C, REQ7 (#412), and REQ8 (#413).
+deployed. True deferrals are D4 Phase 1 (#558), D5 Phase C, and REQ7 (#412). REQ8 (#413) is implemented
+and passing as of 2026-08-04; the rev-5 shipped claims about PR #403 / #414 at their heads are
+unchanged.

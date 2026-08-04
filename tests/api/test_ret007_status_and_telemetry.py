@@ -62,7 +62,6 @@ def _app(monkeypatch: pytest.MonkeyPatch, api_settings: Settings) -> TestClient:
 def _post(client: TestClient) -> Any:
     return client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={
             "namespace": "test/ns/episodic",
             "query_text": "q",

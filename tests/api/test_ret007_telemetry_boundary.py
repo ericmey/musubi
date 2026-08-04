@@ -182,7 +182,6 @@ def test_context_endpoint_counts_at_shared_boundary(
     client = _app(monkeypatch, api_settings)
     resp = client.post(
         "/v1/context",
-        headers={"Authorization": "Bearer fake"},
         json={"namespace": "test/ns", "query_text": "q", "planes": ["episodic"]},
     )
     assert resp.status_code == 200, resp.text
@@ -202,7 +201,6 @@ def test_retrieve_endpoint_no_double_count(
     client = _app(monkeypatch, api_settings)
     resp = client.post(
         "/v1/retrieve",
-        headers={"Authorization": "Bearer fake"},
         json={"namespace": "test/ns/episodic", "query_text": "q", "mode": "deep"},
     )
     assert resp.status_code == 200, resp.text
