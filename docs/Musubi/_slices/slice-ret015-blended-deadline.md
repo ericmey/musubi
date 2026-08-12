@@ -20,6 +20,11 @@ Repair the production `503 BACKEND_UNAVAILABLE` cliff observed when concurrent
 Hermes callers use the canonical blended request shape: three default planes,
 `limit=5`, provisional visibility, and lineage hydration.
 
+## Specs to implement
+
+- [[05-retrieval/deep-path]]
+- [[05-retrieval/orchestration]]
+
 ## Production evidence
 
 - Sequential control before and after the burst: `200` in 1.023 s and 0.949 s.
