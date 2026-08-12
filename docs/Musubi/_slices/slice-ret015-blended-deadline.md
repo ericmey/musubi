@@ -4,10 +4,10 @@ slice_id: slice-ret015-blended-deadline
 issue: 679
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice, retrieval, concurrency]
+tags: [section/slices, status/in-review, type/slice, retrieval, concurrency]
 updated: 2026-08-12
 reviewed: false
 depends-on: [slice-data001-phase2-immutable-vectors, slice-ret007-degradation]
@@ -109,3 +109,8 @@ Hermes callers use the canonical blended request shape: three default planes,
   LiveKit, and ops-GPU slices named by the adjacent skips; RET-015 adds the
   production-derived compressed concurrency proof and requires a live
   post-deploy replay of the exact Hermes burst instead.
+- 2026-08-12 — Handoff at `f6614d1` plus the final documentation commits:
+  whole-repo `make check` passed with 2,640 tests, 195 documented skips, 140
+  deselected, two expected xfails, and 90% coverage. `make tc-coverage` and
+  `make agent-check` are green (warnings only). Draft PR #680 is ready for the
+  required second-agent review; live deployment remains untouched.
