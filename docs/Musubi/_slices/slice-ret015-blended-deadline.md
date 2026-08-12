@@ -93,3 +93,20 @@ Hermes callers use the canonical blended request shape: three default planes,
   results before the unchanged five-second whole-call deadline. Focused retrieval
   suite: 93 passed, 16 documented skips. Whole-repo `make check`: 2,639 passed,
   195 skipped, 140 deselected, two expected xfails, 90% total coverage.
+- 2026-08-12 — Test Contract closure boundaries for inherited specs: the
+  pre-existing `test_reflection_prompts_resolved_via_deep_path` and
+  `test_reflection_results_include_provenance_for_audit` bullets remain outside
+  RET-015; they describe lifecycle reflection integration and belong to a
+  reflection/evals follow-up, not this concurrency repair. The inherited
+  property/integration bullets are also out of scope here: `hypothesis: deep
+  path result ordering is stable for fixed inputs and weights`, `integration:
+  LiveKit Slow Thinker scenario — pre-fetched context available within 2s while
+  user is speaking`, `integration: deep path vs fast path on the same query —
+  deep NDCG@10 higher by ≥ 5 points on evals corpus`, `integration: end-to-end
+  fast-path on 10K corpus with real TEI + Qdrant, p95 ≤ 400ms`, `integration:
+  end-to-end deep-path with rerank, NDCG@10 on golden set ≥ threshold`, and
+  `integration: kill TEI mid-request, pipeline returns with documented
+  degradation`. Their existing follow-up homes are the retrieval evals,
+  LiveKit, and ops-GPU slices named by the adjacent skips; RET-015 adds the
+  production-derived compressed concurrency proof and requires a live
+  post-deploy replay of the exact Hermes burst instead.
