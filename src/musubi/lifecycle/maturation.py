@@ -1023,7 +1023,10 @@ def _apply_enrichment(
 
     ``importance_scored`` records the LLM score-audit timestamp. The field
     existed on the model from day one but was never written, so every row
-    carried ``importance_last_scored_at: None`` even after a rescore.
+    carried ``importance_last_scored_at: None`` even after a rescore. Both
+    the datetime and its indexed epoch twin are written together, matching
+    the ``updated_at`` / ``updated_epoch`` convention (the epoch key backs
+    the ``importance_last_scored_epoch`` float index in store/specs.py).
     """
     now = utc_now()
     payload: dict[str, Any] = {
@@ -1035,6 +1038,7 @@ def _apply_enrichment(
     }
     if importance_scored:
         payload["importance_last_scored_at"] = now.isoformat()
+        payload["importance_last_scored_epoch"] = epoch_of(now)
     client.set_payload(
         collection_name=collection,
         payload=payload,

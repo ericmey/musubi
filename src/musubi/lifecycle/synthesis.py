@@ -97,8 +97,26 @@ class MemoryWithVector:
     vector: list[float]
 
 
+@dataclass
+class DecodeStats:
+    """Per-run counter of candidate rows that failed model validation.
+
+    Mutable on purpose — threaded through :func:`_resolve_candidate_memory`
+    so one sweep can report how many rows it had to skip. A non-zero count
+    is a DEGRADED (not failed) run: the skipped rows are logged with their
+    ids and the rest of the family still synthesizes.
+    """
+
+    failures: int = 0
+
+
 def _resolve_candidate_memory(
-    client: QdrantClient, collection: str, payload: dict[str, Any], vector: Any
+    client: QdrantClient,
+    collection: str,
+    payload: dict[str, Any],
+    vector: Any,
+    *,
+    stats: DecodeStats | None = None,
 ) -> MemoryWithVector | None:
     """Anchor-aware resolution of an episodic scroll/fetch record to ``(EpisodicMemory, dense vector)``
     for synthesis clustering (DATA-001 P2, Yua). Uses the caller's SINGLE anchor snapshot ``payload`` —
@@ -106,8 +124,36 @@ def _resolve_candidate_memory(
     validates that point is this anchor's content (kind + namespace + object_id), then pairs the
     anchor-over-content payload with THAT SAME point's dense vector. A concurrent pointer swap after the
     caller read can leave this snapshot slightly stale, but never TORN (never B's payload with A's
-    vector). A v1 row keeps its self payload + self vector. Fails closed (None) otherwise."""
+    vector). A v1 row keeps its self payload + self vector. Fails closed (None) otherwise.
+
+    BOTH branches strip Phase-2 layout-only keys before validation and fail
+    closed (None, counted in ``stats``) on a validation error. The inline
+    branch previously validated the raw payload: a v1-shaped row that a
+    committed publish path had stamped with ``committed_operation_id``
+    failed ``extra="forbid"`` validation, the exception propagated, and one
+    schema-drifted row aborted the entire identity family's daily pass —
+    the 2026-08-12 production failure across all eight 7DS families."""
+    from pydantic import ValidationError
+
     from musubi.store.immutable_vectors import ANCHOR_KIND, CONTENT_KIND, strip_layout_fields
+
+    def _validate(candidate: dict[str, Any], path: str) -> EpisodicMemory | None:
+        try:
+            return EpisodicMemory.model_validate(strip_layout_fields(candidate))
+        except ValidationError as exc:
+            # Counted + logged, never raised: candidate decode failures are
+            # isolated per row so schema drift degrades a sweep instead of
+            # aborting it.
+            logger.warning(
+                "synthesis-candidate-decode-failed namespace=%s object_id=%s path=%s err=%s",
+                payload.get("namespace"),
+                payload.get("object_id"),
+                path,
+                exc.error_count(),
+            )
+            if stats is not None:
+                stats.failures += 1
+            return None
 
     if payload.get("point_kind") == ANCHOR_KIND:
         live = payload.get("live_point")
@@ -130,12 +176,15 @@ def _resolve_candidate_memory(
             return None
         # anchor (the caller's single snapshot) OVER its own committed content — one consistent read.
         merged = {**content_payload, **payload}
-        memory = EpisodicMemory.model_validate(strip_layout_fields(merged))
+        memory = _validate(merged, "anchor")
+        if memory is None:
+            return None
         return MemoryWithVector(memory, cast(list[float], dense))
     if isinstance(vector, dict) and isinstance(vector.get(DENSE_VECTOR_NAME), list):
-        return MemoryWithVector(
-            EpisodicMemory.model_validate(payload), cast(list[float], vector[DENSE_VECTOR_NAME])
-        )
+        memory = _validate(payload, "inline")
+        if memory is None:
+            return None
+        return MemoryWithVector(memory, cast(list[float], vector[DENSE_VECTOR_NAME]))
     return None
 
 
@@ -411,6 +460,10 @@ class SynthesisReport:
     cursor_advanced_to: float | None = None
     candidates_pruned: int = 0
     candidates_carried_forward: int = 0
+    # Rows that failed EpisodicMemory validation during candidate
+    # resolution and were skipped (isolated per row, logged with ids).
+    # Non-zero means the sweep ran DEGRADED, not that it failed.
+    candidates_decode_failed: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +510,7 @@ async def synthesis_run(
     cursor_val = cursor.get(family)
     memories_with_vectors: list[MemoryWithVector] = []
     seen_ids: set[str] = set()
+    decode_stats = DecodeStats()
 
     conc_ns = f"{family}/{_FAMILY_SYNTHESIS_PRESENCE}/concept"
 
@@ -486,7 +540,11 @@ async def synthesis_run(
             # DATA-001 P2: the state filter matches a v2 ANCHOR (or a v1 row); resolve the authoritative
             # payload + the committed content vector before clustering — never the anchor's zero vector.
             resolved = _resolve_candidate_memory(
-                client, collection_for_plane("episodic"), dict(r.payload), r.vector
+                client,
+                collection_for_plane("episodic"),
+                dict(r.payload),
+                r.vector,
+                stats=decode_stats,
             )
             if resolved is None:
                 continue
@@ -527,7 +585,11 @@ async def synthesis_run(
         if payload.get("state") != "matured":
             continue
         resolved = _resolve_candidate_memory(
-            client, collection_for_plane("episodic"), payload, recs[0].vector
+            client,
+            collection_for_plane("episodic"),
+            payload,
+            recs[0].vector,
+            stats=decode_stats,
         )
         if resolved is None:
             continue
@@ -555,6 +617,7 @@ async def synthesis_run(
             cursor_advanced_to=max_epoch,
             candidates_pruned=pruned,
             candidates_carried_forward=len(memories_with_vectors),
+            candidates_decode_failed=decode_stats.failures,
         )
 
     # Step 2: Clustering
@@ -751,6 +814,14 @@ async def synthesis_run(
     # Step 6: Cursor (high-water mark only — eligibility is in candidates)
     cursor.set(family, max_epoch)
 
+    if decode_stats.failures:
+        logger.warning(
+            "synthesis-run-degraded family=%s decode_failed=%d "
+            "(schema-drifted rows skipped; see synthesis-candidate-decode-failed lines for ids)",
+            family,
+            decode_stats.failures,
+        )
+
     return SynthesisReport(
         namespace=family,
         memories_selected=len(memories_with_vectors),
@@ -761,6 +832,7 @@ async def synthesis_run(
         cursor_advanced_to=max_epoch,
         candidates_pruned=pruned,
         candidates_carried_forward=len(unclustered_ids),
+        candidates_decode_failed=decode_stats.failures,
     )
 
 
@@ -859,7 +931,8 @@ def build_synthesis_jobs(
                 )
                 logger.info(
                     "synthesis-done family=%s selected=%d clusters=%d created=%d "
-                    "reinforced=%d contradictions=%d candidates_carried=%d pruned=%d",
+                    "reinforced=%d contradictions=%d candidates_carried=%d pruned=%d "
+                    "decode_failed=%d",
                     report.namespace,
                     report.memories_selected,
                     report.clusters_formed,
@@ -868,6 +941,7 @@ def build_synthesis_jobs(
                     report.contradictions_detected,
                     report.candidates_carried_forward,
                     report.candidates_pruned,
+                    report.candidates_decode_failed,
                 )
             except Exception:
                 logger.exception("synthesis-failed family=%s", family)

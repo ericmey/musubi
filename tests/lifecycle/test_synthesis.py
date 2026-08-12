@@ -142,8 +142,15 @@ async def _inject_episodic(
     tags: list[str] | None = None,
     state: str = "matured",
     importance: int = 5,
+    payload_extra: dict[str, Any] | None = None,
 ) -> EpisodicMemory:
-    """Inject a memory directly bypassing dedup."""
+    """Inject a memory directly bypassing dedup.
+
+    ``payload_extra`` merges raw keys into the stored payload AFTER model
+    dump — used to reproduce production rows carrying internal layout keys
+    (``committed_operation_id``) or outright schema drift that the
+    ``extra="forbid"`` model would never emit itself.
+    """
     memory = EpisodicMemory(
         namespace=namespace,
         content=content,
@@ -154,13 +161,16 @@ async def _inject_episodic(
     dense = (await embedder.embed_dense([content]))[0]
     from musubi.planes.episodic.plane import _point_id
 
+    payload = memory.model_dump(mode="json")
+    if payload_extra:
+        payload.update(payload_extra)
     client.upsert(
         collection_name=collection_for_plane("episodic"),
         points=[
             models.PointStruct(
                 id=_point_id(memory.object_id),
                 vector={DENSE_VECTOR_NAME: dense},
-                payload=memory.model_dump(mode="json"),
+                payload=payload,
             )
         ],
     )
@@ -979,6 +989,78 @@ async def test_mega_cluster_sampled_to_llm_cap(
         cursor.get_candidates(family, ttl_sec=30 * 86400, now_epoch=utc_now().timestamp())
     )
     assert {m.object_id for m in injected} - sent_ids <= carried
+
+
+async def test_inline_vector_row_with_layout_fields_synthesizes(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """Red/green for the 2026-08-12 production crash.
+
+    A v1 inline-vector row that a committed publish path stamped with
+    ``committed_operation_id`` (a Phase-2 layout-only key) previously hit
+    ``EpisodicMemory.model_validate(payload)`` unstripped on the inline
+    branch of ``_resolve_candidate_memory``: pydantic's ``extra="forbid"``
+    raised, the exception propagated out of ``synthesis_run``, and one such
+    row aborted the whole identity family's daily pass — every 7DS family
+    failed at exactly this seam in the 03:00 UTC run. The inline branch
+    must strip layout keys just like the anchor branch always did.
+    """
+    eps_ns = _ns(ns, "episodic")
+    for i in range(3):
+        await _inject_episodic(
+            qdrant,
+            embedder,
+            eps_ns,
+            "cluster",
+            payload_extra={
+                "committed_operation_id": f"op-{i}",
+                "vector_layout_version": 2,
+            },
+        )
+
+    report = await synthesis_run(qdrant, sink, FakeSynthesisOllama(), embedder, cursor, ns)
+
+    assert report.concepts_created == 1
+    assert report.candidates_decode_failed == 0
+
+
+async def test_one_undecodable_row_degrades_run_without_aborting_family(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """One schema-drifted row must not cost the family its daily pass.
+
+    The drifted row here carries a non-layout unknown key, so it still
+    fails validation AFTER stripping — the fail-closed per-row path. The
+    valid cluster in the same family synthesizes, and the skip is counted
+    on the report as a degraded (not failed) run.
+    """
+    eps_ns = _ns(ns, "episodic")
+    for i in range(3):
+        await _inject_episodic(qdrant, embedder, eps_ns, "cluster", tags=["tag1"])
+    await _inject_episodic(
+        qdrant,
+        embedder,
+        eps_ns,
+        "drifted row",
+        tags=["tag1"],
+        payload_extra={"field_from_a_future_schema": True},
+    )
+
+    report = await synthesis_run(qdrant, sink, FakeSynthesisOllama(), embedder, cursor, ns)
+
+    assert report.concepts_created == 1
+    assert report.candidates_decode_failed == 1
+    # The valid members were consumed by the cluster; the drifted row is
+    # skipped (not a candidate — it cannot be decoded at all).
+    assert report.memories_selected == 3
 
 
 @pytest.mark.skip(reason="synthesis_run implementation is currently one-by-one, not atomic batch")

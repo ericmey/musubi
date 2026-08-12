@@ -354,7 +354,10 @@ async def test_importance_rescored_via_llm(
     # The score-audit stamp lands with the rescore. The field existed on
     # the model from day one but was never written; every production row
     # carried `importance_last_scored_at: None` even after a rescore.
+    # Its indexed epoch twin is written in the same set_payload so the
+    # `importance_last_scored_epoch` float index is queryable.
     assert refreshed.importance_last_scored_at is not None
+    assert refreshed.importance_last_scored_epoch is not None
 
 
 async def test_importance_fallback_on_ollama_unavailable(
