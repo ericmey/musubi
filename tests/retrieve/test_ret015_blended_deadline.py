@@ -32,9 +32,7 @@ def _scored_hit(object_id: str = "hit-1", *, plane: str = "episodic") -> ScoredH
     )
 
 
-def _hit(
-    object_id: str = "hit-1", *, plane: str = "episodic", rrf_score: float = 0.5
-) -> Hit:
+def _hit(object_id: str = "hit-1", *, plane: str = "episodic", rrf_score: float = 0.5) -> Hit:
     return Hit(
         object_id=object_id,
         plane=plane,
