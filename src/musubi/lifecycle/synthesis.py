@@ -380,6 +380,16 @@ class SynthesisConfig:
     # weeks still find each other; truly stranded memories eventually
     # age out instead of dragging on every sweep forever.
     candidate_ttl_sec: int = 30 * 86400
+    # Upper bound on how many cluster members are sent to the LLM for one
+    # synthesis call. Threshold clustering has no size ceiling — with
+    # missing topics the tag fallback can transitively connect hundreds of
+    # near-identical rows into one mega-cluster, and serializing them all
+    # (up to 1,500 chars each) overruns a small local model's context
+    # every time. 20 members ≈ 30K chars worst case, comfortably within
+    # qwen-class context windows while still being far more evidence than
+    # the min_cluster_size=3 a concept requires. Oversized clusters are
+    # sampled deterministically (importance-first); see synthesis_run.
+    max_llm_cluster_members: int = 20
 
 
 @dataclass(frozen=True)
@@ -578,23 +588,47 @@ async def synthesis_run(
 
     for cluster_mwvs in clusters:
         cluster_memories = [mwv.memory for mwv in cluster_mwvs]
+        if len(cluster_memories) > cfg.max_llm_cluster_members:
+            # Degenerate mega-clusters happen when topic enrichment is
+            # missing and the tag fallback lumps a family's whole corpus
+            # into one group: transitive 0.70-cosine linking then connects
+            # hundreds of near-identical rows. Sending them all would blow
+            # the LLM context and fail the cluster every night. Synthesize
+            # from a deterministic representative sample instead (highest
+            # importance first, KSUID as the stable tiebreaker). Unsampled
+            # members are NOT marked clustered below, so they stay in the
+            # candidates pool and can reinforce this concept on the next
+            # sweep via the existing-match path.
+            logger.info(
+                "synthesis-cluster-capped family=%s size=%d cap=%d",
+                family,
+                len(cluster_memories),
+                cfg.max_llm_cluster_members,
+            )
+            cluster_memories = sorted(cluster_memories, key=lambda m: (-m.importance, m.object_id))[
+                : cfg.max_llm_cluster_members
+            ]
         try:
             output = await ollama.synthesize_cluster(SynthesisInput(cluster_memories))
-            if not output:
-                logger.error("LLM unavailable during synthesis_run, skipping run")
-                # Don't advance the cursor or remove candidates on early
-                # exit — let the next sweep retry from the same state.
-                return SynthesisReport(
-                    namespace=family,
-                    memories_selected=len(memories_with_vectors),
-                    clusters_formed=len(clusters),
-                    concepts_created=concepts_created,
-                    concepts_reinforced=concepts_reinforced,
-                    contradictions_detected=contradictions_detected,
-                    candidates_carried_forward=len(candidate_ids),
-                )
         except Exception as e:
             logger.warning("Synthesis failed for cluster, skipping: %s", e)
+            continue
+        if output is None:
+            # Contract per HttpxOllamaClient.synthesize_cluster: None means
+            # "outage or parse failure; skip this cluster, try next run."
+            # The previous behavior returned early here WITHOUT advancing
+            # the cursor, so one failing cluster (in practice: the first,
+            # biggest one) livelocked synthesis for the entire family —
+            # rebuilt first every night, failing the same way, forever.
+            # Skipping is safe: the cluster's members are not marked
+            # clustered, so the candidates-pool upsert below keeps them
+            # eligible for the next sweep. The cursor is a scan
+            # optimization, not an eligibility gate (see SynthesisCursor).
+            logger.warning(
+                "synthesis-cluster-llm-failed family=%s size=%d; skipping cluster",
+                family,
+                len(cluster_memories),
+            )
             continue
 
         # Cluster successfully synthesized — mark its members as clustered.

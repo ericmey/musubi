@@ -141,10 +141,15 @@ async def _inject_episodic(
     content: str,
     tags: list[str] | None = None,
     state: str = "matured",
+    importance: int = 5,
 ) -> EpisodicMemory:
     """Inject a memory directly bypassing dedup."""
     memory = EpisodicMemory(
-        namespace=namespace, content=content, tags=tags or [], state=cast(Any, state)
+        namespace=namespace,
+        content=content,
+        tags=tags or [],
+        state=cast(Any, state),
+        importance=importance,
     )
     dense = (await embedder.embed_dense([content]))[0]
     from musubi.planes.episodic.plane import _point_id
@@ -861,21 +866,119 @@ async def test_concept_demotes_after_30d_no_reinforcement(
 # ---------------------------------------------------------------------------
 
 
-async def test_ollama_down_does_not_advance_cursor(
+async def test_ollama_down_keeps_memories_eligible_via_candidates(
     qdrant: QdrantClient,
     ns: str,
     sink: LifecycleEventSink,
     cursor: SynthesisCursor,
     embedder: FakeEmbedder,
 ) -> None:
-    """Bullet 21 — outage handling."""
+    """Bullet 21 — outage handling, post-candidates-pool contract.
+
+    Pre-v1.5.5 outage safety was "don't advance the cursor"; that
+    coupling is what let one permanently-failing cluster livelock a
+    family forever (the run aborted before the cursor moved, rebuilt
+    the same cluster first every night, and never progressed). The
+    candidates pool now owns eligibility: an outage advances the scan
+    cursor but every affected memory is carried forward as a candidate
+    and is re-pulled on the next sweep. Nothing is lost; nothing
+    livelocks.
+    """
     eps_ns = _ns(ns, "episodic")
+    memories = []
     for i in range(3):
-        await _inject_episodic(qdrant, embedder, eps_ns, "cluster")
+        memories.append(await _inject_episodic(qdrant, embedder, eps_ns, "cluster"))
 
     ollama = FakeSynthesisOllama(available=False)
-    await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
-    assert cursor.get(ns) == 0.0
+    report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
+
+    assert report.concepts_created == 0
+    # Scan cursor moves (it is an optimization, not an eligibility gate)…
+    assert cursor.get(ns) > 0.0
+    # …and every member of the failed cluster remains eligible.
+    family = ns.split("/", 1)[0]
+    carried = set(
+        cursor.get_candidates(family, ttl_sec=30 * 86400, now_epoch=utc_now().timestamp())
+    )
+    assert {m.object_id for m in memories} <= carried
+
+    # Recovery: the next sweep re-pulls the candidates and synthesizes.
+    ollama.available = True
+    report2 = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
+    assert report2.concepts_created == 1
+
+
+async def test_llm_none_skips_cluster_not_entire_run(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """A ``None`` from ``synthesize_cluster`` means "skip this cluster,
+    try next run" (HttpxOllamaClient contract) — it must not abort the
+    family's whole sweep the way it did pre-fix."""
+    eps_ns = _ns(ns, "episodic")
+    for i in range(3):
+        await _inject_episodic(qdrant, embedder, eps_ns, "fail", tags=["tag1"])
+    for i in range(3):
+        await _inject_episodic(qdrant, embedder, eps_ns, "ok", tags=["tag2"])
+
+    class NoneForFailClusters(FakeSynthesisOllama):
+        async def synthesize_cluster(self, cluster: SynthesisInput) -> SynthesisOutput | None:
+            if any("fail" in m.content for m in cluster.memories):
+                self.synthesize_calls.append(cluster)
+                return None
+            return await super().synthesize_cluster(cluster)
+
+    ollama = NoneForFailClusters()
+    report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
+
+    assert report.clusters_formed == 2
+    assert report.concepts_created == 1  # the ok-cluster still landed
+    assert cursor.get(ns) > 0.0
+
+
+async def test_mega_cluster_sampled_to_llm_cap(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """An oversized cluster is synthesized from a deterministic,
+    importance-first sample instead of overrunning the LLM context.
+    Unsampled members stay in the candidates pool."""
+    eps_ns = _ns(ns, "episodic")
+    injected = []
+    for i in range(8):
+        injected.append(
+            await _inject_episodic(
+                qdrant, embedder, eps_ns, "cluster", tags=["tag1"], importance=(i % 4) + 3
+            )
+        )
+
+    config = SynthesisConfig(max_llm_cluster_members=5)
+    ollama = FakeSynthesisOllama()
+    report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns, config)
+
+    assert report.concepts_created == 1
+    sent = ollama.synthesize_calls[0].memories
+    assert len(sent) == 5
+    # Importance-first: the sample is the top-5 by importance with the
+    # KSUID tiebreak — no member outside the sample outranks one inside.
+    sample_min = min(m.importance for m in sent)
+    sent_ids = {m.object_id for m in sent}
+    for m in injected:
+        if m.object_id not in sent_ids:
+            assert m.importance <= sample_min
+
+    # Unsampled members remain eligible candidates for the next sweep.
+    family = ns.split("/", 1)[0]
+    carried = set(
+        cursor.get_candidates(family, ttl_sec=30 * 86400, now_epoch=utc_now().timestamp())
+    )
+    assert {m.object_id for m in injected} - sent_ids <= carried
 
 
 @pytest.mark.skip(reason="synthesis_run implementation is currently one-by-one, not atomic batch")

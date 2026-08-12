@@ -351,6 +351,10 @@ async def test_importance_rescored_via_llm(
     assert refreshed.importance == 9
     # And the LLM was actually called.
     assert ollama.score_calls, "OllamaClient.score_importance was never invoked"
+    # The score-audit stamp lands with the rescore. The field existed on
+    # the model from day one but was never written; every production row
+    # carried `importance_last_scored_at: None` even after a rescore.
+    assert refreshed.importance_last_scored_at is not None
 
 
 async def test_importance_fallback_on_ollama_unavailable(
@@ -374,6 +378,10 @@ async def test_importance_fallback_on_ollama_unavailable(
     refreshed = await plane.get(namespace=ns, object_id=seeded.object_id)
     assert refreshed is not None
     assert refreshed.importance == captured_importance
+    # No LLM verdict ⇒ no score-audit stamp: a fallback is not a scoring
+    # event, and stamping it would hide the row from a future
+    # "re-score never-scored rows" pass.
+    assert refreshed.importance_last_scored_at is None
 
 
 def test_tags_normalized_lowercase_and_hyphenated() -> None:
