@@ -43,6 +43,9 @@ Hermes callers use the canonical blended request shape: three default planes,
 - Do not raise the 5 s deadline as the repair; that only moves the cliff.
 - Client fallback is a separate fleet-tools change: one blended attempt, then
   one fast attempt on the first 503, never a second blended retry.
+- Preserve existing whole-request and TEI metrics. This slice adds bounded
+  degradation logs at the newly enforced stage boundaries; a new metrics
+  vocabulary is outside the public-behaviour repair.
 
 ## Owned paths
 
@@ -79,3 +82,9 @@ Hermes callers use the canonical blended request shape: three default planes,
   isolated the interaction to three-plane fanout plus lineage, and verified the
   blocking Qdrant reads directly in the deployed source. Claimed Issue #679 and
   opened draft PR #680 before code changes.
+- 2026-08-12 — Tests-first repair offloads authoritative-anchor resolution and
+  lineage hydration from the event-loop thread, enforces configurable 800 ms
+  rerank and 500 ms per-hit lineage budgets, and degrades to hybrid/unhydrated
+  results before the unchanged five-second whole-call deadline. Focused retrieval
+  suite: 93 passed, 16 documented skips. Whole-repo `make check`: 2,639 passed,
+  195 skipped, 140 deselected, two expected xfails, 90% total coverage.

@@ -127,11 +127,20 @@ Softer than fast path — deep path callers generally can retry or degrade:
 | Failure | Response |
 |---|---|
 | Rerank down | Fall back to hybrid-only relevance + warning. |
-| Lineage hydrate partial | Return hits with partial lineage + warning. |
+| Lineage hydrate partial | Return hits with partial lineage + structured log. |
 | One plane slow | Wait up to per-plane timeout, then return without that plane + warning. |
 | TEI query encoding slow | Timeout at 150ms; fall back to cached embedding if within TTL. |
 
 No 5xx on deep path unless everything's down.
+
+Operationally, rerank and lineage are bounded optional stages. The defaults are
+`retrieval_rerank_timeout_s=0.8` and
+`retrieval_lineage_timeout_s=0.5`; both are validated positive settings. A
+rerank timeout returns the pre-rerank hybrid order with the structured
+`reranker_failed` warning. A lineage timeout returns the unhydrated hit and logs
+the object id plus budget. Qdrant-backed authoritative resolution and lineage
+reads run outside the event-loop thread so concurrent blended callers do not
+starve one another before the five-second whole-call deadline.
 
 ## Observability
 
