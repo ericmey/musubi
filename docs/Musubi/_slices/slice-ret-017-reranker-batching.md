@@ -4,10 +4,10 @@ slice_id: slice-ret-017-reranker-batching
 issue: 687
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "3 Retrieval"
-tags: [section/slices, status/in-review, type/slice, retrieval, rerank]
+tags: [section/slices, status/done, type/slice, retrieval, rerank]
 updated: 2026-08-12
 reviewed: false
 depends-on: [slice-ret015-blended-deadline]
