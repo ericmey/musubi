@@ -201,10 +201,29 @@ boundary exactly once:
 | Whole `retrieve()` | 400ms | 5s |
 | Query encoding | 80ms | 150ms |
 | Per-plane hybrid | 250ms | 1500ms |
-| Reranker | — | 800ms |
+| Reranker | — | 1500ms |
 | Lineage hydrate | — | 500ms |
 
 Whole-call timeout wraps everything with `asyncio.wait_for`. Sub-timeouts use `asyncio.wait_for` individually and produce warnings on hit.
+
+The deep-stage budgets are runtime settings, not call-site literals:
+`retrieval_rerank_timeout_s` defaults to `1.5` and
+`retrieval_lineage_timeout_s` defaults to `0.5`. Both must remain positive and
+below the whole-call budget in production configuration. Rerank expiry returns
+the hybrid ordering with `reranker_failed`; lineage expiry returns the affected
+hit without hydrated lineage. Neither optional stage may consume the whole-call
+budget and turn an otherwise healthy retrieval into a 503.
+
+Authoritative-anchor resolution and lineage hydration use the synchronous
+Qdrant client. The retrieval orchestrator offloads those reads from the asyncio
+event-loop thread; under concurrent blended calls they must not serialize
+unrelated requests behind one caller's Qdrant round trips.
+
+The 1.5 s rerank default is calibrated from the 2026-08-12 production-shaped
+ten-caller burst: p50 0.684 s, p95 1.226 s, and p99 1.268 s for 200 candidate
+predictions. The prior 800 ms value sat only 125 ms above an observed 675 ms
+average and would have converted the 503 cliff into routine hybrid-only
+degradation under load.
 
 ## Error propagation
 

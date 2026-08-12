@@ -245,7 +245,7 @@ async def hybrid_search(
             )
         )
 
-    hits = _hits_from_response(
+    hits = await _resolve_hits_async(
         response,
         client=client,
         collection=collection,
@@ -255,6 +255,35 @@ async def hybrid_search(
         at_epoch=epoch_of(utc_now()),
     )
     return Ok(value=HybridSearchResult(hits=hits, warnings=warnings))
+
+
+async def _resolve_hits_async(
+    response: Any,
+    *,
+    client: QdrantClient | None = None,
+    collection: str | None = None,
+    anchor_aware: bool = False,
+    visible_states: set[str] | None = None,
+    limit: int | None = None,
+    at_epoch: float = 0.0,
+) -> list[HybridHit]:
+    """Resolve Qdrant hits without blocking the retrieval event loop.
+
+    DATA-001 authoritative-anchor resolution uses the synchronous Qdrant
+    client and may perform several reads per overfetched candidate. Keeping
+    that work on the event loop serialized otherwise independent blended
+    plane legs and concurrent callers until the whole-call deadline expired.
+    """
+    return await asyncio.to_thread(
+        _hits_from_response,
+        response,
+        client=client,
+        collection=collection,
+        anchor_aware=anchor_aware,
+        visible_states=visible_states,
+        limit=limit,
+        at_epoch=at_epoch,
+    )
 
 
 async def hybrid_search_many(
