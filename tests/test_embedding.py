@@ -24,6 +24,7 @@ Contract (from the spec + the slice brief):
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import weakref
 from collections.abc import AsyncIterator
@@ -198,6 +199,71 @@ async def test_tei_reranker_client_posts_correct_payload_shape(
     assert req is not None
     body = req.content.decode()
     assert '"query"' in body and '"texts"' in body
+
+
+async def test_reranker_batches_candidates_without_exceeding_client_batch_size(
+    httpx_mock: HTTPXMock,
+) -> None:
+    first_batch = [{"index": i, "score": float(i)} for i in range(32)]
+    second_batch = [{"index": i, "score": float(i + 32)} for i in range(8)]
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=first_batch,
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=second_batch,
+    )
+
+    client = TEIRerankerClient(base_url="http://tei-reranker", max_batch_size=32)
+    scores = await client.rerank("q", [f"candidate-{i}" for i in range(40)])
+
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 2
+    payloads = [json.loads(request.content.decode()) for request in requests]
+    assert [len(payload["texts"]) for payload in payloads] == [32, 8]
+    assert scores == [float(i) for i in range(40)]
+
+
+async def test_reranker_preserves_global_candidate_order_across_batches(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": i, "score": float(i)} for i in reversed(range(32))],
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": i, "score": float(i + 32)} for i in reversed(range(3))],
+    )
+
+    client = TEIRerankerClient(base_url="http://tei-reranker", max_batch_size=32)
+    scores = await client.rerank("q", [f"candidate-{i}" for i in range(35)])
+
+    assert scores == [float(i) for i in range(35)]
+
+
+async def test_reranker_missing_score_reports_global_candidate_index(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": i, "score": float(i)} for i in range(32)],
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": 0, "score": 32.0}, {"index": 1, "score": 33.0}],
+    )
+    client = TEIRerankerClient(base_url="http://tei-reranker", max_batch_size=32)
+
+    with pytest.raises(EmbeddingError, match=r"candidate indexes \[34\]"):
+        await client.rerank("q", [f"candidate-{i}" for i in range(35)])
 
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,7 @@ from musubi.embedding.base import EmbeddingError
 
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_BATCH_SIZE = 64
+_DEFAULT_MAX_RERANK_BATCH_SIZE = 32
 
 # Char-level safety belts. Split per-client because each model has a
 # different input contract and not every call site is wrapped in a
@@ -363,12 +364,14 @@ class TEIRerankerClient:
         *,
         base_url: str,
         timeout: float = _DEFAULT_TIMEOUT,
+        max_batch_size: int = _DEFAULT_MAX_RERANK_BATCH_SIZE,
         max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS_RERANKER,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
         limits: httpx.Limits = _DEFAULT_LIMITS,
     ) -> None:
         self._base_url = base_url
         self._timeout = timeout
+        self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
         self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
@@ -376,30 +379,37 @@ class TEIRerankerClient:
     async def rerank(self, query: str, candidates: list[str]) -> list[float]:
         if not candidates:
             return []
-        data = await _post_json(
-            self._client.get(),
-            self._base_url,
-            "/rerank",
-            {
-                "query": _truncate(query, self._max_input_chars),
-                "texts": [_truncate(candidate, self._max_input_chars) for candidate in candidates],
-            },
-            retry_backoff=self._retry_backoff,
-        )
-        # data: list[{"index": int, "score": float}] — possibly out of order.
-        scores = [0.0] * len(candidates)
-        seen = [False] * len(candidates)
-        for entry in data:
-            idx = int(entry["index"])
-            if 0 <= idx < len(candidates):
-                scores[idx] = float(entry["score"])
-                seen[idx] = True
-        if not all(seen):
-            missing = [i for i, got in enumerate(seen) if not got]
-            raise EmbeddingError(
-                f"TEI reranker response missing scores for indexes {missing}",
-                status_code=None,
+        scores: list[float] = []
+        truncated_query = _truncate(query, self._max_input_chars)
+        for batch in _chunks(candidates, self._max_batch_size):
+            batch_offset = len(scores)
+            data = await _post_json(
+                self._client.get(),
+                self._base_url,
+                "/rerank",
+                {
+                    "query": truncated_query,
+                    "texts": [_truncate(candidate, self._max_input_chars) for candidate in batch],
+                },
+                retry_backoff=self._retry_backoff,
             )
+            # TEI indexes are local to each request and may arrive in score
+            # order. Restore candidate order within the batch before appending
+            # so the combined list still matches the caller's global order.
+            batch_scores = [0.0] * len(batch)
+            seen = [False] * len(batch)
+            for entry in data:
+                idx = int(entry["index"])
+                if 0 <= idx < len(batch):
+                    batch_scores[idx] = float(entry["score"])
+                    seen[idx] = True
+            if not all(seen):
+                missing = [batch_offset + i for i, got in enumerate(seen) if not got]
+                raise EmbeddingError(
+                    f"TEI reranker response missing scores for candidate indexes {missing}",
+                    status_code=None,
+                )
+            scores.extend(batch_scores)
         return scores
 
     async def aclose(self) -> None:
