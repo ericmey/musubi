@@ -57,7 +57,6 @@ Hermes callers use the canonical blended request shape: three default planes,
 - `src/musubi/retrieve/hybrid.py`
 - `src/musubi/retrieve/deep.py`
 - `src/musubi/settings.py` (retrieval stage budgets only)
-- `tests/test_config.py` (retrieval stage budget validation only)
 - `tests/retrieve/test_ret015_blended_deadline.py`
 - `docs/Musubi/05-retrieval/deep-path.md` (deadline/degradation contract only)
 - `docs/Musubi/05-retrieval/orchestration.md` (deadline/degradation contract only)
