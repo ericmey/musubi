@@ -247,6 +247,25 @@ async def test_reranker_preserves_global_candidate_order_across_batches(
     assert scores == [float(i) for i in range(35)]
 
 
+async def test_reranker_missing_score_reports_global_candidate_index(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": i, "score": float(i)} for i in range(32)],
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": 0, "score": 32.0}, {"index": 1, "score": 33.0}],
+    )
+    client = TEIRerankerClient(base_url="http://tei-reranker", max_batch_size=32)
+
+    with pytest.raises(EmbeddingError, match=r"candidate indexes \[34\]"):
+        await client.rerank("q", [f"candidate-{i}" for i in range(35)])
+
+
 # ---------------------------------------------------------------------------
 # 7. Typed error on 5xx
 # ---------------------------------------------------------------------------

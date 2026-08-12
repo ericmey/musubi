@@ -382,6 +382,7 @@ class TEIRerankerClient:
         scores: list[float] = []
         truncated_query = _truncate(query, self._max_input_chars)
         for batch in _chunks(candidates, self._max_batch_size):
+            batch_offset = len(scores)
             data = await _post_json(
                 self._client.get(),
                 self._base_url,
@@ -403,9 +404,9 @@ class TEIRerankerClient:
                     batch_scores[idx] = float(entry["score"])
                     seen[idx] = True
             if not all(seen):
-                missing = [i for i, got in enumerate(seen) if not got]
+                missing = [batch_offset + i for i, got in enumerate(seen) if not got]
                 raise EmbeddingError(
-                    f"TEI reranker response missing scores for batch indexes {missing}",
+                    f"TEI reranker response missing scores for candidate indexes {missing}",
                     status_code=None,
                 )
             scores.extend(batch_scores)
