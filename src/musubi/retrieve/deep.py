@@ -23,7 +23,7 @@ from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.retrieve.hybrid import HybridHit, HybridSearchResult, hybrid_search
-from musubi.retrieve.rerank import RerankResult, rerank
+from musubi.retrieve.rerank import RerankResult, hybrid_fallback, rerank
 from musubi.retrieve.scoring import Hit, ScoredHit, rank_hits
 from musubi.retrieve.warnings import RetrievalWarning, reranker_failed
 from musubi.settings import Settings
@@ -227,7 +227,7 @@ async def _rerank_with_timeout(
             timeout_s,
         )
         return RerankResult(
-            hits=candidates[:top_k],
+            hits=hybrid_fallback(candidates, top_k=top_k),
             warnings=(reranker_failed(plane),),
         )
 

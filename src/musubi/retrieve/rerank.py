@@ -16,6 +16,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def hybrid_fallback(candidates: list[Hit], *, top_k: int) -> list[Hit]:
+    """Return the deterministic fused-RRF order when cross-encoder ranking is unavailable."""
+    return sorted(candidates, key=lambda hit: (-hit.rrf_score, hit.object_id))[:top_k]
+
+
 @dataclass(frozen=True)
 class RerankResult:
     """The result of :func:`rerank`: the top-k ``hits`` plus a RET-007 ``reranker_failed`` warning
@@ -52,10 +57,16 @@ async def rerank(
             "Reranker failed (TEI down or timeout); falling back to hybrid-only. error=%s",
             exc,
         )
-        return RerankResult(hits=candidates[:top_k], warnings=(reranker_failed(plane),))
+        return RerankResult(
+            hits=hybrid_fallback(candidates, top_k=top_k),
+            warnings=(reranker_failed(plane),),
+        )
     except Exception as exc:
         logger.error("Unexpected error in reranker: %s", exc, exc_info=True)
-        return RerankResult(hits=candidates[:top_k], warnings=(reranker_failed(plane),))
+        return RerankResult(
+            hits=hybrid_fallback(candidates, top_k=top_k),
+            warnings=(reranker_failed(plane),),
+        )
 
     # Apply scores to new Hit instances (original is frozen)
     scored = [replace(c, rerank_score=score) for c, score in zip(candidates, scores, strict=True)]

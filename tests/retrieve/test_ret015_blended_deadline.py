@@ -32,12 +32,14 @@ def _scored_hit(object_id: str = "hit-1", *, plane: str = "episodic") -> ScoredH
     )
 
 
-def _hit(object_id: str = "hit-1", *, plane: str = "episodic") -> Hit:
+def _hit(
+    object_id: str = "hit-1", *, plane: str = "episodic", rrf_score: float = 0.5
+) -> Hit:
     return Hit(
         object_id=object_id,
         plane=plane,
         state="matured",
-        rrf_score=0.5,
+        rrf_score=rrf_score,
         batch_max_rrf=0.5,
         updated_epoch=0.0,
         payload={"content": f"content for {object_id}"},
@@ -99,7 +101,14 @@ async def test_lineage_hydration_does_not_block_the_event_loop(
 async def test_reranker_timeout_degrades_to_hybrid_with_warning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    candidates = [_hit(str(index)) for index in range(6)]
+    candidates = [
+        _hit("low", rrf_score=0.1),
+        _hit("highest", rrf_score=0.9),
+        _hit("mid", rrf_score=0.5),
+        _hit("high", rrf_score=0.8),
+        _hit("lowest", rrf_score=0.0),
+        _hit("middle", rrf_score=0.4),
+    ]
 
     async def stalled_rerank(*_args: Any, **_kwargs: Any) -> RerankResult:
         await asyncio.sleep(1.0)
@@ -114,7 +123,13 @@ async def test_reranker_timeout_degrades_to_hybrid_with_warning(
         timeout=0.1,
     )
 
-    assert result.hits == candidates[:5]
+    assert [hit.object_id for hit in result.hits] == [
+        "highest",
+        "high",
+        "mid",
+        "middle",
+        "low",
+    ]
     assert [(warning.code, warning.plane) for warning in result.warnings] == [
         ("reranker_failed", "episodic")
     ]

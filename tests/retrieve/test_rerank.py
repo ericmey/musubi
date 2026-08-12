@@ -185,12 +185,13 @@ async def test_rerank_tei_error_returns_hybrid_results_with_warning(
 ) -> None:
     # Same as test_rerank_degrades_to_rrf_when_tei_down
     client = _FakeTEIRerankerClient(error=EmbeddingError("TEI 500", status_code=500))
-    candidates = [_hit(f"h{i}", rrf_score=1.0) for i in range(10)]
+    candidates = [_hit(f"h{i}", rrf_score=float(i)) for i in range(10)]
 
     with caplog.at_level(logging.WARNING):
         result = await rerank(_client(client), "query", candidates, top_k=5)
 
     assert len(result.hits) == 5
+    assert [hit.object_id for hit in result.hits] == ["h9", "h8", "h7", "h6", "h5"]
     assert "Reranker failed" in caplog.text
 
 
