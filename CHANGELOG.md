@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.7](https://github.com/ericmey/musubi/compare/v1.23.6...v1.23.7) (2026-08-12)
+
+
+### Bug Fixes
+
+* **lifecycle:** unblock the synthesis livelock; stamp importance_last_scored_at ([#684](https://github.com/ericmey/musubi/issues/684)) ([cbe526c](https://github.com/ericmey/musubi/commit/cbe526cd168e3bc1c6afbb71139c3cc76eb9bff6))
+
 ## [1.23.6](https://github.com/ericmey/musubi/compare/v1.23.5...v1.23.6) (2026-08-12)
 
 
