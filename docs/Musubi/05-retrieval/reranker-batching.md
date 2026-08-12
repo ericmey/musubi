@@ -6,6 +6,7 @@ status: complete
 tags: [section/retrieval, type/spec, status/complete, rerank, batching]
 updated: 2026-08-12
 reviewed: false
+implements: ["src/musubi/embedding/tei.py", "src/musubi/retrieve/rerank.py", "tests/test_embedding.py", "tests/retrieve/test_rerank.py"]
 ---
 
 # TEI reranker batching
