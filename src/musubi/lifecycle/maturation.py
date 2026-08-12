@@ -995,17 +995,19 @@ def _enrichment_changed(
     """Avoid an unnecessary write when nothing about the enrichment fields
     changed — keeps idempotent sweeps from churning Qdrant on re-run.
 
-    ``importance_scored`` forces a write when the LLM scored this row but
-    the score-audit stamp hasn't landed yet — an LLM verdict that happens
-    to equal the captured value is still a scoring event, and without the
-    stamp any future "re-score stale rows" pass would treat the row as
-    never scored.
+    ``importance_scored`` forces a write whenever the LLM scored this row —
+    unconditionally, not merely when the stamp is null. A verdict that
+    happens to equal the current value is still a scoring event, and
+    ``importance_last_scored_at`` must mean *last scored*: a stale-row
+    sweep that rescores an already-stamped row to the same value must
+    advance the stamp, or the row reads as perpetually stale and is
+    selected again on every pass.
     """
     return (
-        list(row.get("tags", [])) != normalized_tags
+        importance_scored
+        or list(row.get("tags", [])) != normalized_tags
         or int(row.get("importance", 5)) != new_importance
         or list(row.get("linked_to_topics", [])) != new_topics
-        or (importance_scored and row.get("importance_last_scored_at") is None)
     )
 
 

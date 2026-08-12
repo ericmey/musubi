@@ -27,6 +27,7 @@ from musubi.lifecycle.synthesis import (
     SynthesisOllamaClient,
     SynthesisOutput,
     _discover_episodic_namespaces,
+    build_synthesis_jobs,
     synthesis_run,
 )
 from musubi.observability import default_registry, render_text_format
@@ -132,6 +133,18 @@ def _duration_count(job: str) -> int:
         if line.startswith(prefix):
             return int(line.removeprefix(prefix))
     return 0
+
+
+def _family_counter(name: str, family: str) -> float:
+    """Read a family-labeled counter's current value from the process
+    registry. Counters are process-global across tests — callers must
+    assert DELTAS, never absolute values."""
+    text = render_text_format(default_registry())
+    prefix = f'{name}{{family="{family}"}} '
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return float(line.removeprefix(prefix))
+    return 0.0
 
 
 async def _inject_episodic(
@@ -1054,6 +1067,9 @@ async def test_one_undecodable_row_degrades_run_without_aborting_family(
         payload_extra={"field_from_a_future_schema": True},
     )
 
+    family = ns.split("/", 1)[0]
+    skips_before = _family_counter("musubi_lifecycle_synthesis_decode_skips_total", family)
+
     report = await synthesis_run(qdrant, sink, FakeSynthesisOllama(), embedder, cursor, ns)
 
     assert report.concepts_created == 1
@@ -1061,6 +1077,53 @@ async def test_one_undecodable_row_degrades_run_without_aborting_family(
     # The valid members were consumed by the cluster; the drifted row is
     # skipped (not a candidate — it cannot be decoded at all).
     assert report.memories_selected == 3
+    # The skip reached the OPERATIONAL counter, not just the report/log —
+    # a log-only failure signal is how the original incident ran five
+    # nights unobserved.
+    skips_after = _family_counter("musubi_lifecycle_synthesis_decode_skips_total", family)
+    assert skips_after == skips_before + 1
+
+
+def test_family_exception_increments_failure_metric_without_reraise(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    embedder: FakeEmbedder,
+    tmp_path: Path,
+) -> None:
+    """An exception caught by the job's per-family loop must produce a
+    metric sample. `build_synthesis_jobs` deliberately catches everything
+    to preserve family isolation, which also means the outer
+    `musubi_lifecycle_job_errors_total` NEVER sees these failures — the
+    exact observability hole the 2026-08-12 decode crash lived in.
+
+    Sync test on purpose: the Job's func drives its own `asyncio.run`.
+    """
+
+    class ExplodingCursor(SynthesisCursor):
+        def get(self, namespace_or_family: str) -> float:
+            raise RuntimeError("cursor storage corrupted (test)")
+
+    # One decodable row so family discovery finds the family at all.
+    asyncio.run(_inject_episodic(qdrant, embedder, _ns(ns, "episodic"), "cluster"))
+    family = ns.split("/", 1)[0]
+    failures_before = _family_counter("musubi_lifecycle_synthesis_family_failures_total", family)
+
+    job = build_synthesis_jobs(
+        client=qdrant,
+        sink=sink,
+        ollama=FakeSynthesisOllama(),
+        embedder=embedder,
+        cursor=ExplodingCursor(db_path=tmp_path / "exploding-cursor.db"),
+        lock_dir=tmp_path / "locks",
+    )[0]
+
+    # Family isolation: the job function swallows the failure (no raise)…
+    job.func()
+
+    # …but the failure is now visible on the metrics plane.
+    failures_after = _family_counter("musubi_lifecycle_synthesis_family_failures_total", family)
+    assert failures_after == failures_before + 1
 
 
 @pytest.mark.skip(reason="synthesis_run implementation is currently one-by-one, not atomic batch")

@@ -19,6 +19,7 @@ from musubi.embedding.base import Embedder
 from musubi.embedding.cosine import cosine_similarity
 from musubi.lifecycle import LifecycleEventSink, store
 from musubi.lifecycle.scheduler import Job, file_lock
+from musubi.observability.registry import default_registry
 from musubi.planes.concept import ConceptPlane
 from musubi.store.names import collection_for_plane
 from musubi.store.specs import DENSE_VECTOR_NAME
@@ -26,6 +27,25 @@ from musubi.types.concept import SynthesizedConcept
 from musubi.types.episodic import EpisodicMemory
 
 logger = logging.getLogger(__name__)
+
+# Operational counters — the 2026-08-12 incident recurred nightly for five
+# days with zero metric samples because every failure signal lived only in
+# logs. Both counters label by identity family (bounded cardinality: one
+# label value per family in the deploy).
+_REG = default_registry()
+_DECODE_SKIPS = _REG.counter(
+    "musubi_lifecycle_synthesis_decode_skips_total",
+    "Candidate rows skipped by a synthesis sweep after failing model "
+    "validation (schema drift). Non-zero rate = degraded sweeps.",
+    labelnames=("family",),
+)
+_FAMILY_FAILURES = _REG.counter(
+    "musubi_lifecycle_synthesis_family_failures_total",
+    "Synthesis family runs aborted by an unexpected exception. Family "
+    "isolation is preserved (other families still run) but the family's "
+    "nightly pass produced nothing.",
+    labelnames=("family",),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +616,14 @@ async def synthesis_run(
         memories_with_vectors.append(resolved)
         seen_ids.add(resolved.memory.object_id)
 
+    # Both candidate pulls are complete — flush the decode-skip count to the
+    # operational counter HERE so every exit path (early return below, full
+    # run, or a later exception) has already published the sample. A
+    # log-only failure signal is how the original incident ran for five
+    # nights unobserved.
+    if decode_stats.failures:
+        _DECODE_SKIPS.labels(family=family).inc(decode_stats.failures)
+
     if len(memories_with_vectors) < cfg.min_cluster_size:
         # Not enough memories to form even the smallest cluster. Every
         # one of them gets upserted as a candidate so it stays eligible
@@ -944,6 +972,13 @@ def build_synthesis_jobs(
                     report.candidates_decode_failed,
                 )
             except Exception:
+                # Family isolation preserved deliberately: no re-raise, the
+                # remaining families still run. But the failure must reach
+                # the metrics plane, not just the log — the outer
+                # musubi_lifecycle_job_errors_total never sees exceptions
+                # caught here, which is exactly how the production decode
+                # crash recurred nightly with zero metric samples.
+                _FAMILY_FAILURES.labels(family=family).inc()
                 logger.exception("synthesis-failed family=%s", family)
 
     def _runner() -> None:

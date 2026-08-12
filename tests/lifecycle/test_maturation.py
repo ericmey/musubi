@@ -387,6 +387,61 @@ async def test_importance_fallback_on_ollama_unavailable(
     assert refreshed.importance_last_scored_at is None
 
 
+async def test_unchanged_rescore_still_advances_audit_stamp(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """`importance_last_scored_at` must mean LAST scored, not first scored.
+
+    A row that already carries an old stamp and is rescored to the SAME
+    importance (tags and topics also unchanged) must still get a fresh
+    stamp — otherwise a stale-row sweep can never mark the row current
+    and reselects it forever. Regression for the write-only-when-null
+    gate in `_enrichment_changed`.
+    """
+    from qdrant_client import models as qmodels
+
+    seeded = await _seed_provisional(plane, ns, content="already-stamped", tags=[])
+    old_stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    plane._client.set_payload(
+        collection_name="musubi_episodic",
+        payload={
+            "importance_last_scored_at": old_stamp.isoformat(),
+            "importance_last_scored_epoch": old_stamp.timestamp(),
+        },
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=seeded.object_id)
+                )
+            ]
+        ),
+    )
+
+    # LLM returns the captured importance unchanged; no topic mapping, so
+    # topics fall back unchanged too. Every legacy change-detector input
+    # is identical — only the scoring event itself forces the write.
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=seeded.importance),
+        cursor=cursor,
+        config=_config(),
+    )
+
+    refreshed = await plane.get(namespace=ns, object_id=seeded.object_id)
+    assert refreshed is not None
+    assert refreshed.importance == seeded.importance
+    assert refreshed.importance_last_scored_at is not None
+    assert refreshed.importance_last_scored_at > old_stamp
+    assert refreshed.importance_last_scored_epoch is not None
+    assert refreshed.importance_last_scored_epoch > old_stamp.timestamp()
+
+
 def test_tags_normalized_lowercase_and_hyphenated() -> None:
     """Bullet 6 — tag normalization lowercases + converts spaces → hyphens."""
     out = normalize_tags(["GPU Setup", "  CUDA  ", "NVIDIA"], aliases={})
