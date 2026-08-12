@@ -126,7 +126,7 @@ Softer than fast path — deep path callers generally can retry or degrade:
 
 | Failure | Response |
 |---|---|
-| Rerank request failure | Fall back to hybrid-only relevance + warning. |
+| Rerank down | Fall back to hybrid-only relevance + warning. |
 | Lineage hydrate partial | Return hits with partial lineage + structured log. |
 | One plane slow | Wait up to per-plane timeout, then return without that plane + warning. |
 | TEI query encoding slow | Timeout at 150ms; fall back to cached embedding if within TTL. |
@@ -147,15 +147,6 @@ The rerank budget is production-derived rather than inherited from the earlier
 approximately p50 0.684 s, p95 1.226 s, and p99 1.268 s across 200 candidate
 predictions. The 1.5 s default clears that loaded p99 while leaving the lineage
 stage and whole-call deadline bounded.
-
-The TEI reranker client submits candidate texts in batches of at most 32, which
-matches the deployed reranker's client-batch ceiling. TEI indexes are local to
-each request, so the client restores candidate order within every batch before
-concatenating scores into the original global order. A failure in any batch
-fails the complete rerank and takes the hybrid fallback; partially reranked
-results are never presented as a healthy ranking. This batching belongs at the
-TEI boundary rather than in callers, so valid retrieval limits do not encode a
-deployment-specific service ceiling.
 
 ## Observability
 

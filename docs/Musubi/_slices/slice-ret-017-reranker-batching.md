@@ -20,6 +20,10 @@ Repair the production `reranker_failed` degradation that begins at ordinary
 retrieval limits because deep retrieval over-fetches four candidates per
 requested result while TEI accepts at most 32 texts per rerank request.
 
+## Specs to implement
+
+- [[05-retrieval/reranker-batching]]
+
 ## Production evidence
 
 - `limit=8` sends 32 candidates and reranks successfully.
@@ -48,7 +52,7 @@ requested result while TEI accepts at most 32 texts per rerank request.
 - `src/musubi/retrieve/rerank.py` (accurate degradation log only)
 - `tests/test_embedding.py` (reranker batching contract only)
 - `tests/retrieve/test_rerank.py` (degradation wording only)
-- `docs/Musubi/05-retrieval/deep-path.md` (reranker batching contract only)
+- `docs/Musubi/05-retrieval/reranker-batching.md`
 - `docs/Musubi/_slices/slice-ret-017-reranker-batching.md`
 - `docs/Musubi/_inbox/locks/slice-ret-017-reranker-batching.lock`
 
