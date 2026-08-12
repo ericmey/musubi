@@ -103,7 +103,7 @@ Return JSON:
 }
 ```
 
-LLM is Qwen2.5-7B-Instruct via Ollama. Temperature 0.2 — we want consistent synthesis. Output parsed strictly. Parse failure → skip this cluster, log, continue.
+LLM is Qwen2.5-7B-Instruct via Ollama. Temperature 0.2 — we want consistent synthesis. Output parsed strictly. Parse failure → skip this cluster, log, continue. An oversized cluster (more than `max_llm_cluster_members`, default 20) is synthesized from a deterministic importance-first sample rather than sent whole — threshold clustering has no size ceiling, and a degenerate mega-cluster's serialized prompt would overrun a local model's context on every attempt.
 
 ### Step 3b — Match vs existing
 
@@ -194,8 +194,10 @@ We test both.
 
 | Failure | Behavior |
 |---|---|
-| LLM down (Ollama) | Entire synthesis run skipped; cursor NOT advanced; logged with retry; next run picks up where we left off. |
-| LLM returns invalid JSON for a cluster | That cluster skipped; cursor advances past it (we tried); re-evaluated next run if new memories push the cluster above threshold. |
+| LLM down (Ollama) | Each failing cluster is skipped and the run continues; the cursor advances. Eligibility is owned by the candidates pool (v1.5.5+): every member of a skipped cluster is upserted as a candidate and re-pulled on the next run. **Deliberate contract change (2026-08-12):** the pre-candidates-pool behavior ("entire run skipped; cursor NOT advanced") let one permanently-failing cluster livelock a family forever — rebuilt first every night, failing the same way, cursor frozen. A whole-service outage and a single cluster's failure now share the skip path on purpose; the accepted consequence is that an outage longer than `candidate_ttl_sec` (30 days) ages the affected candidates out. If that exposure ever matters in practice, the escape hatch is a cheap Ollama liveness probe that pauses cursor advance only on a confirmed outage — filed as a possible follow-up, not required now. |
+| LLM returns invalid JSON / `None` for a cluster | That cluster skipped; members stay candidates; cursor advances past it (we tried); re-evaluated next run. Same path as the outage row above. |
+| Candidate row fails model validation (schema drift) | Skipped per row, never raised: both resolve branches strip Phase-2 layout-only keys before validating, and a row that still fails is logged with its id and counted on the report (`candidates_decode_failed`). A non-zero count is a DEGRADED run, not a failed one — one drifted row must never cost an identity family its daily pass (2026-08-12 production incident: an inline-vector row stamped with `committed_operation_id` aborted all eight families at the resolve seam). |
+| Cluster exceeds `max_llm_cluster_members` (20) | Synthesized from a deterministic importance-first sample (KSUID tiebreak); unsampled members stay candidates and reinforce the concept on later runs via match-vs-existing. |
 | Qdrant write fails | Current behavior: concepts write one-at-a-time per cluster. A mid-run Qdrant failure leaves earlier clusters persisted; the cursor still advances for memories consumed before the failure, so re-run is safe but not atomic. Batch-atomic write is a deferred optimization to be filed as a follow-up slice. |
 | Contradiction detection LLM fails | Concepts written WITHOUT contradiction links; a separate daily "contradiction-rerun" job re-evaluates. |
 
@@ -252,9 +254,20 @@ Lifecycle:
 
 Failures:
 
-21. `test_ollama_down_does_not_advance_cursor`
+21. `test_ollama_down_keeps_memories_eligible_via_candidates` — superseded
+    `test_ollama_down_does_not_advance_cursor` on 2026-08-12 with the
+    candidates-pool outage contract (see Failure handling): cursor advances,
+    affected memories carry forward as candidates, next run with a
+    recovered LLM synthesizes them.
 22. `test_qdrant_batch_fails_no_partial_state`
 23. `test_invalid_json_for_cluster_skipped_not_failed_run`
+
+Robustness (added 2026-08-12):
+
+28. `test_llm_none_skips_cluster_not_entire_run`
+29. `test_inline_vector_row_with_layout_fields_synthesizes`
+30. `test_one_undecodable_row_degrades_run_without_aborting_family`
+31. `test_mega_cluster_sampled_to_llm_cap`
 
 Property:
 

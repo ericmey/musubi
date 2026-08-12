@@ -27,6 +27,7 @@ from musubi.lifecycle.synthesis import (
     SynthesisOllamaClient,
     SynthesisOutput,
     _discover_episodic_namespaces,
+    build_synthesis_jobs,
     synthesis_run,
 )
 from musubi.observability import default_registry, render_text_format
@@ -134,6 +135,18 @@ def _duration_count(job: str) -> int:
     return 0
 
 
+def _family_counter(name: str, family: str) -> float:
+    """Read a family-labeled counter's current value from the process
+    registry. Counters are process-global across tests — callers must
+    assert DELTAS, never absolute values."""
+    text = render_text_format(default_registry())
+    prefix = f'{name}{{family="{family}"}} '
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return float(line.removeprefix(prefix))
+    return 0.0
+
+
 async def _inject_episodic(
     client: QdrantClient,
     embedder: FakeEmbedder,
@@ -141,21 +154,36 @@ async def _inject_episodic(
     content: str,
     tags: list[str] | None = None,
     state: str = "matured",
+    importance: int = 5,
+    payload_extra: dict[str, Any] | None = None,
 ) -> EpisodicMemory:
-    """Inject a memory directly bypassing dedup."""
+    """Inject a memory directly bypassing dedup.
+
+    ``payload_extra`` merges raw keys into the stored payload AFTER model
+    dump — used to reproduce production rows carrying internal layout keys
+    (``committed_operation_id``) or outright schema drift that the
+    ``extra="forbid"`` model would never emit itself.
+    """
     memory = EpisodicMemory(
-        namespace=namespace, content=content, tags=tags or [], state=cast(Any, state)
+        namespace=namespace,
+        content=content,
+        tags=tags or [],
+        state=cast(Any, state),
+        importance=importance,
     )
     dense = (await embedder.embed_dense([content]))[0]
     from musubi.planes.episodic.plane import _point_id
 
+    payload = memory.model_dump(mode="json")
+    if payload_extra:
+        payload.update(payload_extra)
     client.upsert(
         collection_name=collection_for_plane("episodic"),
         points=[
             models.PointStruct(
                 id=_point_id(memory.object_id),
                 vector={DENSE_VECTOR_NAME: dense},
-                payload=memory.model_dump(mode="json"),
+                payload=payload,
             )
         ],
     )
@@ -861,21 +889,241 @@ async def test_concept_demotes_after_30d_no_reinforcement(
 # ---------------------------------------------------------------------------
 
 
-async def test_ollama_down_does_not_advance_cursor(
+async def test_ollama_down_keeps_memories_eligible_via_candidates(
     qdrant: QdrantClient,
     ns: str,
     sink: LifecycleEventSink,
     cursor: SynthesisCursor,
     embedder: FakeEmbedder,
 ) -> None:
-    """Bullet 21 — outage handling."""
+    """Bullet 21 — outage handling, post-candidates-pool contract.
+
+    Pre-v1.5.5 outage safety was "don't advance the cursor"; that
+    coupling is what let one permanently-failing cluster livelock a
+    family forever (the run aborted before the cursor moved, rebuilt
+    the same cluster first every night, and never progressed). The
+    candidates pool now owns eligibility: an outage advances the scan
+    cursor but every affected memory is carried forward as a candidate
+    and is re-pulled on the next sweep. Nothing is lost; nothing
+    livelocks.
+    """
     eps_ns = _ns(ns, "episodic")
+    memories = []
     for i in range(3):
-        await _inject_episodic(qdrant, embedder, eps_ns, "cluster")
+        memories.append(await _inject_episodic(qdrant, embedder, eps_ns, "cluster"))
 
     ollama = FakeSynthesisOllama(available=False)
-    await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
-    assert cursor.get(ns) == 0.0
+    report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
+
+    assert report.concepts_created == 0
+    # Scan cursor moves (it is an optimization, not an eligibility gate)…
+    assert cursor.get(ns) > 0.0
+    # …and every member of the failed cluster remains eligible.
+    family = ns.split("/", 1)[0]
+    carried = set(
+        cursor.get_candidates(family, ttl_sec=30 * 86400, now_epoch=utc_now().timestamp())
+    )
+    assert {m.object_id for m in memories} <= carried
+
+    # Recovery: the next sweep re-pulls the candidates and synthesizes.
+    ollama.available = True
+    report2 = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
+    assert report2.concepts_created == 1
+
+
+async def test_llm_none_skips_cluster_not_entire_run(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """A ``None`` from ``synthesize_cluster`` means "skip this cluster,
+    try next run" (HttpxOllamaClient contract) — it must not abort the
+    family's whole sweep the way it did pre-fix."""
+    eps_ns = _ns(ns, "episodic")
+    for i in range(3):
+        await _inject_episodic(qdrant, embedder, eps_ns, "fail", tags=["tag1"])
+    for i in range(3):
+        await _inject_episodic(qdrant, embedder, eps_ns, "ok", tags=["tag2"])
+
+    class NoneForFailClusters(FakeSynthesisOllama):
+        async def synthesize_cluster(self, cluster: SynthesisInput) -> SynthesisOutput | None:
+            if any("fail" in m.content for m in cluster.memories):
+                self.synthesize_calls.append(cluster)
+                return None
+            return await super().synthesize_cluster(cluster)
+
+    ollama = NoneForFailClusters()
+    report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns)
+
+    assert report.clusters_formed == 2
+    assert report.concepts_created == 1  # the ok-cluster still landed
+    assert cursor.get(ns) > 0.0
+
+
+async def test_mega_cluster_sampled_to_llm_cap(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """An oversized cluster is synthesized from a deterministic,
+    importance-first sample instead of overrunning the LLM context.
+    Unsampled members stay in the candidates pool."""
+    eps_ns = _ns(ns, "episodic")
+    injected = []
+    for i in range(8):
+        injected.append(
+            await _inject_episodic(
+                qdrant, embedder, eps_ns, "cluster", tags=["tag1"], importance=(i % 4) + 3
+            )
+        )
+
+    config = SynthesisConfig(max_llm_cluster_members=5)
+    ollama = FakeSynthesisOllama()
+    report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns, config)
+
+    assert report.concepts_created == 1
+    sent = ollama.synthesize_calls[0].memories
+    assert len(sent) == 5
+    # Importance-first: the sample is the top-5 by importance with the
+    # KSUID tiebreak — no member outside the sample outranks one inside.
+    sample_min = min(m.importance for m in sent)
+    sent_ids = {m.object_id for m in sent}
+    for m in injected:
+        if m.object_id not in sent_ids:
+            assert m.importance <= sample_min
+
+    # Unsampled members remain eligible candidates for the next sweep.
+    family = ns.split("/", 1)[0]
+    carried = set(
+        cursor.get_candidates(family, ttl_sec=30 * 86400, now_epoch=utc_now().timestamp())
+    )
+    assert {m.object_id for m in injected} - sent_ids <= carried
+
+
+async def test_inline_vector_row_with_layout_fields_synthesizes(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """Red/green for the 2026-08-12 production crash.
+
+    A v1 inline-vector row that a committed publish path stamped with
+    ``committed_operation_id`` (a Phase-2 layout-only key) previously hit
+    ``EpisodicMemory.model_validate(payload)`` unstripped on the inline
+    branch of ``_resolve_candidate_memory``: pydantic's ``extra="forbid"``
+    raised, the exception propagated out of ``synthesis_run``, and one such
+    row aborted the whole identity family's daily pass — every 7DS family
+    failed at exactly this seam in the 03:00 UTC run. The inline branch
+    must strip layout keys just like the anchor branch always did.
+    """
+    eps_ns = _ns(ns, "episodic")
+    for i in range(3):
+        await _inject_episodic(
+            qdrant,
+            embedder,
+            eps_ns,
+            "cluster",
+            payload_extra={
+                "committed_operation_id": f"op-{i}",
+                "vector_layout_version": 2,
+            },
+        )
+
+    report = await synthesis_run(qdrant, sink, FakeSynthesisOllama(), embedder, cursor, ns)
+
+    assert report.concepts_created == 1
+    assert report.candidates_decode_failed == 0
+
+
+async def test_one_undecodable_row_degrades_run_without_aborting_family(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """One schema-drifted row must not cost the family its daily pass.
+
+    The drifted row here carries a non-layout unknown key, so it still
+    fails validation AFTER stripping — the fail-closed per-row path. The
+    valid cluster in the same family synthesizes, and the skip is counted
+    on the report as a degraded (not failed) run.
+    """
+    eps_ns = _ns(ns, "episodic")
+    for i in range(3):
+        await _inject_episodic(qdrant, embedder, eps_ns, "cluster", tags=["tag1"])
+    await _inject_episodic(
+        qdrant,
+        embedder,
+        eps_ns,
+        "drifted row",
+        tags=["tag1"],
+        payload_extra={"field_from_a_future_schema": True},
+    )
+
+    family = ns.split("/", 1)[0]
+    skips_before = _family_counter("musubi_lifecycle_synthesis_decode_skips_total", family)
+
+    report = await synthesis_run(qdrant, sink, FakeSynthesisOllama(), embedder, cursor, ns)
+
+    assert report.concepts_created == 1
+    assert report.candidates_decode_failed == 1
+    # The valid members were consumed by the cluster; the drifted row is
+    # skipped (not a candidate — it cannot be decoded at all).
+    assert report.memories_selected == 3
+    # The skip reached the OPERATIONAL counter, not just the report/log —
+    # a log-only failure signal is how the original incident ran five
+    # nights unobserved.
+    skips_after = _family_counter("musubi_lifecycle_synthesis_decode_skips_total", family)
+    assert skips_after == skips_before + 1
+
+
+def test_family_exception_increments_failure_metric_without_reraise(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    embedder: FakeEmbedder,
+    tmp_path: Path,
+) -> None:
+    """An exception caught by the job's per-family loop must produce a
+    metric sample. `build_synthesis_jobs` deliberately catches everything
+    to preserve family isolation, which also means the outer
+    `musubi_lifecycle_job_errors_total` NEVER sees these failures — the
+    exact observability hole the 2026-08-12 decode crash lived in.
+
+    Sync test on purpose: the Job's func drives its own `asyncio.run`.
+    """
+
+    class ExplodingCursor(SynthesisCursor):
+        def get(self, namespace_or_family: str) -> float:
+            raise RuntimeError("cursor storage corrupted (test)")
+
+    # One decodable row so family discovery finds the family at all.
+    asyncio.run(_inject_episodic(qdrant, embedder, _ns(ns, "episodic"), "cluster"))
+    family = ns.split("/", 1)[0]
+    failures_before = _family_counter("musubi_lifecycle_synthesis_family_failures_total", family)
+
+    job = build_synthesis_jobs(
+        client=qdrant,
+        sink=sink,
+        ollama=FakeSynthesisOllama(),
+        embedder=embedder,
+        cursor=ExplodingCursor(db_path=tmp_path / "exploding-cursor.db"),
+        lock_dir=tmp_path / "locks",
+    )[0]
+
+    # Family isolation: the job function swallows the failure (no raise)…
+    job.func()
+
+    # …but the failure is now visible on the metrics plane.
+    failures_after = _family_counter("musubi_lifecycle_synthesis_family_failures_total", family)
+    assert failures_after == failures_before + 1
 
 
 @pytest.mark.skip(reason="synthesis_run implementation is currently one-by-one, not atomic batch")

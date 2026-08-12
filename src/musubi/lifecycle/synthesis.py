@@ -19,6 +19,7 @@ from musubi.embedding.base import Embedder
 from musubi.embedding.cosine import cosine_similarity
 from musubi.lifecycle import LifecycleEventSink, store
 from musubi.lifecycle.scheduler import Job, file_lock
+from musubi.observability.registry import default_registry
 from musubi.planes.concept import ConceptPlane
 from musubi.store.names import collection_for_plane
 from musubi.store.specs import DENSE_VECTOR_NAME
@@ -26,6 +27,25 @@ from musubi.types.concept import SynthesizedConcept
 from musubi.types.episodic import EpisodicMemory
 
 logger = logging.getLogger(__name__)
+
+# Operational counters — the 2026-08-12 incident recurred nightly for five
+# days with zero metric samples because every failure signal lived only in
+# logs. Both counters label by identity family (bounded cardinality: one
+# label value per family in the deploy).
+_REG = default_registry()
+_DECODE_SKIPS = _REG.counter(
+    "musubi_lifecycle_synthesis_decode_skips_total",
+    "Candidate rows skipped by a synthesis sweep after failing model "
+    "validation (schema drift). Non-zero rate = degraded sweeps.",
+    labelnames=("family",),
+)
+_FAMILY_FAILURES = _REG.counter(
+    "musubi_lifecycle_synthesis_family_failures_total",
+    "Synthesis family runs aborted by an unexpected exception. Family "
+    "isolation is preserved (other families still run) but the family's "
+    "nightly pass produced nothing.",
+    labelnames=("family",),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -97,8 +117,26 @@ class MemoryWithVector:
     vector: list[float]
 
 
+@dataclass
+class DecodeStats:
+    """Per-run counter of candidate rows that failed model validation.
+
+    Mutable on purpose — threaded through :func:`_resolve_candidate_memory`
+    so one sweep can report how many rows it had to skip. A non-zero count
+    is a DEGRADED (not failed) run: the skipped rows are logged with their
+    ids and the rest of the family still synthesizes.
+    """
+
+    failures: int = 0
+
+
 def _resolve_candidate_memory(
-    client: QdrantClient, collection: str, payload: dict[str, Any], vector: Any
+    client: QdrantClient,
+    collection: str,
+    payload: dict[str, Any],
+    vector: Any,
+    *,
+    stats: DecodeStats | None = None,
 ) -> MemoryWithVector | None:
     """Anchor-aware resolution of an episodic scroll/fetch record to ``(EpisodicMemory, dense vector)``
     for synthesis clustering (DATA-001 P2, Yua). Uses the caller's SINGLE anchor snapshot ``payload`` —
@@ -106,8 +144,36 @@ def _resolve_candidate_memory(
     validates that point is this anchor's content (kind + namespace + object_id), then pairs the
     anchor-over-content payload with THAT SAME point's dense vector. A concurrent pointer swap after the
     caller read can leave this snapshot slightly stale, but never TORN (never B's payload with A's
-    vector). A v1 row keeps its self payload + self vector. Fails closed (None) otherwise."""
+    vector). A v1 row keeps its self payload + self vector. Fails closed (None) otherwise.
+
+    BOTH branches strip Phase-2 layout-only keys before validation and fail
+    closed (None, counted in ``stats``) on a validation error. The inline
+    branch previously validated the raw payload: a v1-shaped row that a
+    committed publish path had stamped with ``committed_operation_id``
+    failed ``extra="forbid"`` validation, the exception propagated, and one
+    schema-drifted row aborted the entire identity family's daily pass —
+    the 2026-08-12 production failure across all eight 7DS families."""
+    from pydantic import ValidationError
+
     from musubi.store.immutable_vectors import ANCHOR_KIND, CONTENT_KIND, strip_layout_fields
+
+    def _validate(candidate: dict[str, Any], path: str) -> EpisodicMemory | None:
+        try:
+            return EpisodicMemory.model_validate(strip_layout_fields(candidate))
+        except ValidationError as exc:
+            # Counted + logged, never raised: candidate decode failures are
+            # isolated per row so schema drift degrades a sweep instead of
+            # aborting it.
+            logger.warning(
+                "synthesis-candidate-decode-failed namespace=%s object_id=%s path=%s err=%s",
+                payload.get("namespace"),
+                payload.get("object_id"),
+                path,
+                exc.error_count(),
+            )
+            if stats is not None:
+                stats.failures += 1
+            return None
 
     if payload.get("point_kind") == ANCHOR_KIND:
         live = payload.get("live_point")
@@ -130,12 +196,15 @@ def _resolve_candidate_memory(
             return None
         # anchor (the caller's single snapshot) OVER its own committed content — one consistent read.
         merged = {**content_payload, **payload}
-        memory = EpisodicMemory.model_validate(strip_layout_fields(merged))
+        memory = _validate(merged, "anchor")
+        if memory is None:
+            return None
         return MemoryWithVector(memory, cast(list[float], dense))
     if isinstance(vector, dict) and isinstance(vector.get(DENSE_VECTOR_NAME), list):
-        return MemoryWithVector(
-            EpisodicMemory.model_validate(payload), cast(list[float], vector[DENSE_VECTOR_NAME])
-        )
+        memory = _validate(payload, "inline")
+        if memory is None:
+            return None
+        return MemoryWithVector(memory, cast(list[float], vector[DENSE_VECTOR_NAME]))
     return None
 
 
@@ -380,6 +449,16 @@ class SynthesisConfig:
     # weeks still find each other; truly stranded memories eventually
     # age out instead of dragging on every sweep forever.
     candidate_ttl_sec: int = 30 * 86400
+    # Upper bound on how many cluster members are sent to the LLM for one
+    # synthesis call. Threshold clustering has no size ceiling — with
+    # missing topics the tag fallback can transitively connect hundreds of
+    # near-identical rows into one mega-cluster, and serializing them all
+    # (up to 1,500 chars each) overruns a small local model's context
+    # every time. 20 members ≈ 30K chars worst case, comfortably within
+    # qwen-class context windows while still being far more evidence than
+    # the min_cluster_size=3 a concept requires. Oversized clusters are
+    # sampled deterministically (importance-first); see synthesis_run.
+    max_llm_cluster_members: int = 20
 
 
 @dataclass(frozen=True)
@@ -401,6 +480,10 @@ class SynthesisReport:
     cursor_advanced_to: float | None = None
     candidates_pruned: int = 0
     candidates_carried_forward: int = 0
+    # Rows that failed EpisodicMemory validation during candidate
+    # resolution and were skipped (isolated per row, logged with ids).
+    # Non-zero means the sweep ran DEGRADED, not that it failed.
+    candidates_decode_failed: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +530,7 @@ async def synthesis_run(
     cursor_val = cursor.get(family)
     memories_with_vectors: list[MemoryWithVector] = []
     seen_ids: set[str] = set()
+    decode_stats = DecodeStats()
 
     conc_ns = f"{family}/{_FAMILY_SYNTHESIS_PRESENCE}/concept"
 
@@ -476,7 +560,11 @@ async def synthesis_run(
             # DATA-001 P2: the state filter matches a v2 ANCHOR (or a v1 row); resolve the authoritative
             # payload + the committed content vector before clustering — never the anchor's zero vector.
             resolved = _resolve_candidate_memory(
-                client, collection_for_plane("episodic"), dict(r.payload), r.vector
+                client,
+                collection_for_plane("episodic"),
+                dict(r.payload),
+                r.vector,
+                stats=decode_stats,
             )
             if resolved is None:
                 continue
@@ -517,12 +605,24 @@ async def synthesis_run(
         if payload.get("state") != "matured":
             continue
         resolved = _resolve_candidate_memory(
-            client, collection_for_plane("episodic"), payload, recs[0].vector
+            client,
+            collection_for_plane("episodic"),
+            payload,
+            recs[0].vector,
+            stats=decode_stats,
         )
         if resolved is None:
             continue
         memories_with_vectors.append(resolved)
         seen_ids.add(resolved.memory.object_id)
+
+    # Both candidate pulls are complete — flush the decode-skip count to the
+    # operational counter HERE so every exit path (early return below, full
+    # run, or a later exception) has already published the sample. A
+    # log-only failure signal is how the original incident ran for five
+    # nights unobserved.
+    if decode_stats.failures:
+        _DECODE_SKIPS.labels(family=family).inc(decode_stats.failures)
 
     if len(memories_with_vectors) < cfg.min_cluster_size:
         # Not enough memories to form even the smallest cluster. Every
@@ -545,6 +645,7 @@ async def synthesis_run(
             cursor_advanced_to=max_epoch,
             candidates_pruned=pruned,
             candidates_carried_forward=len(memories_with_vectors),
+            candidates_decode_failed=decode_stats.failures,
         )
 
     # Step 2: Clustering
@@ -578,23 +679,47 @@ async def synthesis_run(
 
     for cluster_mwvs in clusters:
         cluster_memories = [mwv.memory for mwv in cluster_mwvs]
+        if len(cluster_memories) > cfg.max_llm_cluster_members:
+            # Degenerate mega-clusters happen when topic enrichment is
+            # missing and the tag fallback lumps a family's whole corpus
+            # into one group: transitive 0.70-cosine linking then connects
+            # hundreds of near-identical rows. Sending them all would blow
+            # the LLM context and fail the cluster every night. Synthesize
+            # from a deterministic representative sample instead (highest
+            # importance first, KSUID as the stable tiebreaker). Unsampled
+            # members are NOT marked clustered below, so they stay in the
+            # candidates pool and can reinforce this concept on the next
+            # sweep via the existing-match path.
+            logger.info(
+                "synthesis-cluster-capped family=%s size=%d cap=%d",
+                family,
+                len(cluster_memories),
+                cfg.max_llm_cluster_members,
+            )
+            cluster_memories = sorted(cluster_memories, key=lambda m: (-m.importance, m.object_id))[
+                : cfg.max_llm_cluster_members
+            ]
         try:
             output = await ollama.synthesize_cluster(SynthesisInput(cluster_memories))
-            if not output:
-                logger.error("LLM unavailable during synthesis_run, skipping run")
-                # Don't advance the cursor or remove candidates on early
-                # exit — let the next sweep retry from the same state.
-                return SynthesisReport(
-                    namespace=family,
-                    memories_selected=len(memories_with_vectors),
-                    clusters_formed=len(clusters),
-                    concepts_created=concepts_created,
-                    concepts_reinforced=concepts_reinforced,
-                    contradictions_detected=contradictions_detected,
-                    candidates_carried_forward=len(candidate_ids),
-                )
         except Exception as e:
             logger.warning("Synthesis failed for cluster, skipping: %s", e)
+            continue
+        if output is None:
+            # Contract per HttpxOllamaClient.synthesize_cluster: None means
+            # "outage or parse failure; skip this cluster, try next run."
+            # The previous behavior returned early here WITHOUT advancing
+            # the cursor, so one failing cluster (in practice: the first,
+            # biggest one) livelocked synthesis for the entire family —
+            # rebuilt first every night, failing the same way, forever.
+            # Skipping is safe: the cluster's members are not marked
+            # clustered, so the candidates-pool upsert below keeps them
+            # eligible for the next sweep. The cursor is a scan
+            # optimization, not an eligibility gate (see SynthesisCursor).
+            logger.warning(
+                "synthesis-cluster-llm-failed family=%s size=%d; skipping cluster",
+                family,
+                len(cluster_memories),
+            )
             continue
 
         # Cluster successfully synthesized — mark its members as clustered.
@@ -717,6 +842,14 @@ async def synthesis_run(
     # Step 6: Cursor (high-water mark only — eligibility is in candidates)
     cursor.set(family, max_epoch)
 
+    if decode_stats.failures:
+        logger.warning(
+            "synthesis-run-degraded family=%s decode_failed=%d "
+            "(schema-drifted rows skipped; see synthesis-candidate-decode-failed lines for ids)",
+            family,
+            decode_stats.failures,
+        )
+
     return SynthesisReport(
         namespace=family,
         memories_selected=len(memories_with_vectors),
@@ -727,6 +860,7 @@ async def synthesis_run(
         cursor_advanced_to=max_epoch,
         candidates_pruned=pruned,
         candidates_carried_forward=len(unclustered_ids),
+        candidates_decode_failed=decode_stats.failures,
     )
 
 
@@ -825,7 +959,8 @@ def build_synthesis_jobs(
                 )
                 logger.info(
                     "synthesis-done family=%s selected=%d clusters=%d created=%d "
-                    "reinforced=%d contradictions=%d candidates_carried=%d pruned=%d",
+                    "reinforced=%d contradictions=%d candidates_carried=%d pruned=%d "
+                    "decode_failed=%d",
                     report.namespace,
                     report.memories_selected,
                     report.clusters_formed,
@@ -834,8 +969,16 @@ def build_synthesis_jobs(
                     report.contradictions_detected,
                     report.candidates_carried_forward,
                     report.candidates_pruned,
+                    report.candidates_decode_failed,
                 )
             except Exception:
+                # Family isolation preserved deliberately: no re-raise, the
+                # remaining families still run. But the failure must reach
+                # the metrics plane, not just the log — the outer
+                # musubi_lifecycle_job_errors_total never sees exceptions
+                # caught here, which is exactly how the production decode
+                # crash recurred nightly with zero metric samples.
+                _FAMILY_FAILURES.labels(family=family).inc()
                 logger.exception("synthesis-failed family=%s", family)
 
     def _runner() -> None:

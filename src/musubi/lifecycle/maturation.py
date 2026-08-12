@@ -492,7 +492,10 @@ async def episodic_maturation_sweep(
         # Enrichment write — non-state fields, applied via set_payload on
         # the same point id. Not a state change → no separate ledger entry.
         # ------------------------------------------------------------------
-        if _enrichment_changed(row, normalized, new_importance, new_topics):
+        importance_scored = importance_by_id is not None and object_id in importance_by_id
+        if _enrichment_changed(
+            row, normalized, new_importance, new_topics, importance_scored=importance_scored
+        ):
             _apply_enrichment(
                 client,
                 collection=_EPISODIC_COLLECTION,
@@ -500,6 +503,7 @@ async def episodic_maturation_sweep(
                 tags=normalized,
                 importance=new_importance,
                 topics=new_topics,
+                importance_scored=importance_scored,
             )
             enriched += 1
 
@@ -985,11 +989,23 @@ def _enrichment_changed(
     normalized_tags: list[str],
     new_importance: int,
     new_topics: list[str],
+    *,
+    importance_scored: bool = False,
 ) -> bool:
     """Avoid an unnecessary write when nothing about the enrichment fields
-    changed — keeps idempotent sweeps from churning Qdrant on re-run."""
+    changed — keeps idempotent sweeps from churning Qdrant on re-run.
+
+    ``importance_scored`` forces a write whenever the LLM scored this row —
+    unconditionally, not merely when the stamp is null. A verdict that
+    happens to equal the current value is still a scoring event, and
+    ``importance_last_scored_at`` must mean *last scored*: a stale-row
+    sweep that rescores an already-stamped row to the same value must
+    advance the stamp, or the row reads as perpetually stale and is
+    selected again on every pass.
+    """
     return (
-        list(row.get("tags", [])) != normalized_tags
+        importance_scored
+        or list(row.get("tags", [])) != normalized_tags
         or int(row.get("importance", 5)) != new_importance
         or list(row.get("linked_to_topics", [])) != new_topics
     )
@@ -1003,18 +1019,31 @@ def _apply_enrichment(
     tags: list[str],
     importance: int,
     topics: list[str],
+    importance_scored: bool = False,
 ) -> None:
-    """Apply non-state enrichment fields to one row."""
+    """Apply non-state enrichment fields to one row.
+
+    ``importance_scored`` records the LLM score-audit timestamp. The field
+    existed on the model from day one but was never written, so every row
+    carried ``importance_last_scored_at: None`` even after a rescore. Both
+    the datetime and its indexed epoch twin are written together, matching
+    the ``updated_at`` / ``updated_epoch`` convention (the epoch key backs
+    the ``importance_last_scored_epoch`` float index in store/specs.py).
+    """
     now = utc_now()
+    payload: dict[str, Any] = {
+        "tags": tags,
+        "importance": importance,
+        "linked_to_topics": topics,
+        "updated_at": now.isoformat(),
+        "updated_epoch": epoch_of(now),
+    }
+    if importance_scored:
+        payload["importance_last_scored_at"] = now.isoformat()
+        payload["importance_last_scored_epoch"] = epoch_of(now)
     client.set_payload(
         collection_name=collection,
-        payload={
-            "tags": tags,
-            "importance": importance,
-            "linked_to_topics": topics,
-            "updated_at": now.isoformat(),
-            "updated_epoch": epoch_of(now),
-        },
+        payload=payload,
         points=models.Filter(
             must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
         ),

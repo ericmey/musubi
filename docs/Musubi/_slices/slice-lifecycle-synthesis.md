@@ -62,6 +62,38 @@ Plus slice-specific:
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
 
+### 2026-08-12 15:30 — claude-opus-5 — synthesis livelock + decode isolation (PR #684)
+
+Production incident 2026-08-12: zero concepts ever created. Two stacked
+causes fixed in PR #684; spec updated in the same PR (`spec-update:`
+trailer) per the same-PR spec rule.
+
+- **Decode crash before clustering:** the inline-vector branch of
+  `_resolve_candidate_memory` validated the raw payload; a v1 row stamped
+  with `committed_operation_id` failed `extra="forbid"` and the exception
+  aborted the whole family's pass (all eight 7DS families, 03:00 UTC).
+  Both branches now strip layout keys and fail closed per row, counted on
+  `SynthesisReport.candidates_decode_failed` (degraded ≠ failed).
+- **Contract change, Bullet 21:** `None` from `synthesize_cluster` now
+  skips that cluster (members stay candidates) instead of aborting the run
+  with a frozen cursor — the abort path livelocked on the first failing
+  cluster. Bullet renamed `test_ollama_down_keeps_memories_eligible_via_candidates`;
+  outage vs per-cluster failure share the skip path deliberately; the
+  30-day `candidate_ttl_sec` exposure is documented in the spec's Failure
+  handling table.
+- **New cap:** `SynthesisConfig.max_llm_cluster_members` (20),
+  importance-first deterministic sampling for degenerate mega-clusters.
+
+#### Test Contract Coverage (delta vs 2026-04-19 matrix)
+
+| # | Bullet | State | Evidence |
+|---|---|---|---|
+| 21 | `test_ollama_down_keeps_memories_eligible_via_candidates` | passing | renamed from `test_ollama_down_does_not_advance_cursor`; asserts cursor advance + candidate carry-forward + recovery synthesis |
+| 28 | `test_llm_none_skips_cluster_not_entire_run` | passing | |
+| 29 | `test_inline_vector_row_with_layout_fields_synthesizes` | passing | red/green for the 2026-08-12 decode crash |
+| 30 | `test_one_undecodable_row_degrades_run_without_aborting_family` | passing | mixed valid+drifted family |
+| 31 | `test_mega_cluster_sampled_to_llm_cap` | passing | |
+
 ### 2026-04-19 14:00 — gemini-2-0-flash — handoff
 
 - Reverted out-of-bounds `maturation.py` change.

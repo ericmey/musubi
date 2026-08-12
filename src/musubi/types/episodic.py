@@ -115,25 +115,36 @@ class EpisodicMemory(MemoryObject):
     )
     topics: list[str] = Field(default_factory=list)
     importance_last_scored_at: datetime | None = None
+    # Real stored field, NOT a computed property, deliberately mirroring the
+    # created_epoch / updated_epoch pattern on MemoryObject: the value must
+    # round-trip through Qdrant payloads under `extra="forbid"`. (As a plain
+    # @property it was absent from the model schema, so the indexed
+    # `importance_last_scored_epoch` payload key could never be written
+    # without making the row fail validation on every subsequent read.)
+    # Derived from `importance_last_scored_at` when omitted — see
+    # `_normalise_times`.
+    importance_last_scored_epoch: float | None = None
     retraction_evidence: RetractionEvidence | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
 
-    @property
-    def importance_last_scored_epoch(self) -> float | None:
-        from musubi.types.common import epoch_of
-
-        return epoch_of(self.importance_last_scored_at) if self.importance_last_scored_at else None
-
     @model_validator(mode="after")
     def _normalise_times(self) -> EpisodicMemory:
+        from musubi.types.common import epoch_of
+
         object.__setattr__(self, "event_at", ensure_utc(self.event_at))
         object.__setattr__(self, "ingested_at", ensure_utc(self.ingested_at))
         if self.importance_last_scored_at is not None:
             object.__setattr__(
                 self, "importance_last_scored_at", ensure_utc(self.importance_last_scored_at)
             )
+            if self.importance_last_scored_epoch is None:
+                object.__setattr__(
+                    self,
+                    "importance_last_scored_epoch",
+                    epoch_of(self.importance_last_scored_at),
+                )
         if self.retraction_evidence is not None:
             family, presence, _plane = self.namespace.split("/")
             sibling = f"{family}/{presence}/artifact"

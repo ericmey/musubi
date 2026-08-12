@@ -351,6 +351,13 @@ async def test_importance_rescored_via_llm(
     assert refreshed.importance == 9
     # And the LLM was actually called.
     assert ollama.score_calls, "OllamaClient.score_importance was never invoked"
+    # The score-audit stamp lands with the rescore. The field existed on
+    # the model from day one but was never written; every production row
+    # carried `importance_last_scored_at: None` even after a rescore.
+    # Its indexed epoch twin is written in the same set_payload so the
+    # `importance_last_scored_epoch` float index is queryable.
+    assert refreshed.importance_last_scored_at is not None
+    assert refreshed.importance_last_scored_epoch is not None
 
 
 async def test_importance_fallback_on_ollama_unavailable(
@@ -374,6 +381,65 @@ async def test_importance_fallback_on_ollama_unavailable(
     refreshed = await plane.get(namespace=ns, object_id=seeded.object_id)
     assert refreshed is not None
     assert refreshed.importance == captured_importance
+    # No LLM verdict ⇒ no score-audit stamp: a fallback is not a scoring
+    # event, and stamping it would hide the row from a future
+    # "re-score never-scored rows" pass.
+    assert refreshed.importance_last_scored_at is None
+
+
+async def test_unchanged_rescore_still_advances_audit_stamp(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """`importance_last_scored_at` must mean LAST scored, not first scored.
+
+    A row that already carries an old stamp and is rescored to the SAME
+    importance (tags and topics also unchanged) must still get a fresh
+    stamp — otherwise a stale-row sweep can never mark the row current
+    and reselects it forever. Regression for the write-only-when-null
+    gate in `_enrichment_changed`.
+    """
+    from qdrant_client import models as qmodels
+
+    seeded = await _seed_provisional(plane, ns, content="already-stamped", tags=[])
+    old_stamp = datetime(2026, 1, 1, tzinfo=UTC)
+    plane._client.set_payload(
+        collection_name="musubi_episodic",
+        payload={
+            "importance_last_scored_at": old_stamp.isoformat(),
+            "importance_last_scored_epoch": old_stamp.timestamp(),
+        },
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=seeded.object_id)
+                )
+            ]
+        ),
+    )
+
+    # LLM returns the captured importance unchanged; no topic mapping, so
+    # topics fall back unchanged too. Every legacy change-detector input
+    # is identical — only the scoring event itself forces the write.
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=seeded.importance),
+        cursor=cursor,
+        config=_config(),
+    )
+
+    refreshed = await plane.get(namespace=ns, object_id=seeded.object_id)
+    assert refreshed is not None
+    assert refreshed.importance == seeded.importance
+    assert refreshed.importance_last_scored_at is not None
+    assert refreshed.importance_last_scored_at > old_stamp
+    assert refreshed.importance_last_scored_epoch is not None
+    assert refreshed.importance_last_scored_epoch > old_stamp.timestamp()
 
 
 def test_tags_normalized_lowercase_and_hyphenated() -> None:
