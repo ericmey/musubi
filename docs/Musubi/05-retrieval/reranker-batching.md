@@ -1,9 +1,9 @@
 ---
 title: TEI reranker batching
-section: retrieval
+section: 05-retrieval
 type: spec
 status: implemented
-tags: [section/retrieval, type/spec, rerank, batching]
+tags: [section/retrieval, type/spec, status/implemented, rerank, batching]
 updated: 2026-08-12
 reviewed: false
 ---

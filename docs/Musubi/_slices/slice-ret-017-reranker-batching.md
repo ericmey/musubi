@@ -4,10 +4,10 @@ slice_id: slice-ret-017-reranker-batching
 issue: 687
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "3 Retrieval"
-tags: [section/slices, status/in-progress, type/slice, retrieval, rerank]
+tags: [section/slices, status/in-review, type/slice, retrieval, rerank]
 updated: 2026-08-12
 reviewed: false
 depends-on: [slice-ret015-blended-deadline]
@@ -78,3 +78,8 @@ requested result while TEI accepts at most 32 texts per rerank request.
   restores local response indexes to global candidate order, and preserves the
   whole-rerank fallback contract when any batch fails. The Hermes limit remains
   10; no client-side encoding of the server's batch ceiling is needed.
+- 2026-08-12 — Handoff: focused suite 56 passed with 18 documented skips;
+  whole-repo `make check` passed with 2,649 tests, 195 documented skips, 140
+  deselected, two expected xfails, and 90% coverage. Test Contract coverage is
+  3/3 and `make agent-check` is clean with warnings only. Follow-up Issue #689
+  owns the separate public-warning vocabulary decision.
