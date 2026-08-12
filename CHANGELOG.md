@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.6](https://github.com/ericmey/musubi/compare/v1.23.5...v1.23.6) (2026-08-12)
+
+
+### Bug Fixes
+
+* **retrieve:** keep blended lineage within deadline ([#680](https://github.com/ericmey/musubi/issues/680)) ([cfcccb4](https://github.com/ericmey/musubi/commit/cfcccb4eb39f632fc9e8e627527f858c62620725))
+
 ## [1.23.5](https://github.com/ericmey/musubi/compare/v1.23.4...v1.23.5) (2026-08-04)
 
 
