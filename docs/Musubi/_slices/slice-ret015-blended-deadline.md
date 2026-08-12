@@ -87,7 +87,7 @@ Hermes callers use the canonical blended request shape: three default planes,
   blocking Qdrant reads directly in the deployed source. Claimed Issue #679 and
   opened draft PR #680 before code changes.
 - 2026-08-12 — Tests-first repair offloads authoritative-anchor resolution and
-  lineage hydration from the event-loop thread, enforces configurable 800 ms
+  lineage hydration from the event-loop thread, enforces configurable 1.5 s
   rerank and 500 ms per-hit lineage budgets, and degrades to hybrid/unhydrated
   results before the unchanged five-second whole-call deadline. Focused retrieval
   suite: 93 passed, 16 documented skips. Whole-repo `make check`: 2,639 passed,
@@ -109,6 +109,14 @@ Hermes callers use the canonical blended request shape: three default planes,
   LiveKit, and ops-GPU slices named by the adjacent skips; RET-015 adds the
   production-derived compressed concurrency proof and requires a live
   post-deploy replay of the exact Hermes burst instead.
+- 2026-08-12 — Aoi's review challenged the inherited 800 ms rerank budget and
+  the unbounded default-executor/per-hit-event-loop seams. A live ten-caller
+  burst measured reranker duration across 200 candidate predictions at p50
+  0.684 s, p95 1.226 s, and p99 1.268 s; queue p95 was 1.181 s while inference
+  p95 was 0.345 s. The default is therefore 1.5 s, clearing the loaded p99 with
+  measured headroom. Default-executor saturation beyond ten callers and the
+  per-hit `asyncio.run()` adapter are explicit follow-up Issue #681 rather than
+  unclaimed residual risk.
 - 2026-08-12 — Handoff at `f6614d1` plus the final documentation commits:
   whole-repo `make check` passed with 2,640 tests, 195 documented skips, 140
   deselected, two expected xfails, and 90% coverage. `make tc-coverage` and

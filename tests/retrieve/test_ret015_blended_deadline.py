@@ -210,7 +210,7 @@ def test_retrieval_stage_budgets_are_tunable_positive_settings() -> None:
     rerank = Settings.model_fields.get("retrieval_rerank_timeout_s")
     lineage = Settings.model_fields.get("retrieval_lineage_timeout_s")
 
-    assert rerank is not None and rerank.default == 0.8
+    assert rerank is not None and rerank.default == 1.5
     assert lineage is not None and lineage.default == 0.5
     assert rerank.metadata and getattr(rerank.metadata[0], "gt", None) == 0
     assert lineage.metadata and getattr(lineage.metadata[0], "gt", None) == 0

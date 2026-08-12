@@ -134,13 +134,19 @@ Softer than fast path — deep path callers generally can retry or degrade:
 No 5xx on deep path unless everything's down.
 
 Operationally, rerank and lineage are bounded optional stages. The defaults are
-`retrieval_rerank_timeout_s=0.8` and
+`retrieval_rerank_timeout_s=1.5` and
 `retrieval_lineage_timeout_s=0.5`; both are validated positive settings. A
 rerank timeout returns the pre-rerank hybrid order with the structured
 `reranker_failed` warning. A lineage timeout returns the unhydrated hit and logs
 the object id plus budget. Qdrant-backed authoritative resolution and lineage
 reads run outside the event-loop thread so concurrent blended callers do not
 starve one another before the five-second whole-call deadline.
+
+The rerank budget is production-derived rather than inherited from the earlier
+800 ms spec: a ten-caller burst on 2026-08-12 measured reranker duration at
+approximately p50 0.684 s, p95 1.226 s, and p99 1.268 s across 200 candidate
+predictions. The 1.5 s default clears that loaded p99 while leaving the lineage
+stage and whole-call deadline bounded.
 
 ## Observability
 

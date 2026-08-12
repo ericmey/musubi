@@ -98,7 +98,7 @@ class Settings(BaseSettings):
         ),
     )
     retrieval_rerank_timeout_s: float = Field(
-        default=0.8,
+        default=1.5,
         gt=0,
         description=(
             "Optional cross-encoder stage budget in seconds. On expiry, deep retrieval returns "
