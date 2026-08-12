@@ -12,8 +12,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from typing import Any, Protocol, cast
 
+from pydantic import ValidationError
 from qdrant_client import QdrantClient
 
+from musubi.config import get_settings
 from musubi.embedding.base import Embedder
 from musubi.embedding.tei import TEIRerankerClient
 from musubi.planes.artifact.plane import ArtifactPlane
@@ -29,11 +31,8 @@ from musubi.types.common import Err, LifecycleState, Ok, Result, utc_now
 
 logger = logging.getLogger(__name__)
 
-# The layered budgets are the accepted retrieval contract in
-# docs/Musubi/05-retrieval/orchestration.md. They sit below the 5 s whole-call
-# deadline so an optional stage degrades before the entire request is lost.
-RERANK_TIMEOUT_S = 0.8
-LINEAGE_HYDRATE_TIMEOUT_S = 0.5
+_DEFAULT_RERANK_TIMEOUT_S = 0.8
+_DEFAULT_LINEAGE_HYDRATE_TIMEOUT_S = 0.5
 
 
 @dataclass(frozen=True)
@@ -84,6 +83,8 @@ async def run_deep_retrieve(
     """
     if llm is None:
         llm = _NotConfiguredDeepLLM()
+
+    rerank_timeout_s, lineage_timeout_s = _retrieval_stage_timeouts()
 
     # 1. LLM Query Expansion
     expanded_query = query.query_text
@@ -171,7 +172,7 @@ async def run_deep_retrieve(
         query_text=query.query_text,
         candidates=hits,
         top_k=query.limit,
-        timeout_s=RERANK_TIMEOUT_S,
+        timeout_s=rerank_timeout_s,
     )
     reranked_hits = rerank_result.hits
     warnings.extend(rerank_result.warnings)
@@ -186,10 +187,19 @@ async def run_deep_retrieve(
             scored,
             client,
             embedder,
-            timeout_s=LINEAGE_HYDRATE_TIMEOUT_S,
+            timeout_s=lineage_timeout_s,
         )
 
     return Ok(value=DeepResult(hits=scored, warnings=tuple(warnings)))
+
+
+def _retrieval_stage_timeouts() -> tuple[float, float]:
+    """Load tunable stage budgets, retaining deterministic unit-test defaults."""
+    try:
+        settings = get_settings()
+    except ValidationError:
+        return _DEFAULT_RERANK_TIMEOUT_S, _DEFAULT_LINEAGE_HYDRATE_TIMEOUT_S
+    return settings.retrieval_rerank_timeout_s, settings.retrieval_lineage_timeout_s
 
 
 async def _rerank_with_timeout(

@@ -97,6 +97,22 @@ class Settings(BaseSettings):
             "Routing config through Settings keeps os.environ out of app code."
         ),
     )
+    retrieval_rerank_timeout_s: float = Field(
+        default=0.8,
+        gt=0,
+        description=(
+            "Optional cross-encoder stage budget in seconds. On expiry, deep retrieval returns "
+            "the hybrid ordering with a reranker_failed warning before the whole-call deadline."
+        ),
+    )
+    retrieval_lineage_timeout_s: float = Field(
+        default=0.5,
+        gt=0,
+        description=(
+            "Per-hit lineage hydration budget in seconds. On expiry, retrieval returns the "
+            "unhydrated hit before the whole-call deadline."
+        ),
+    )
     vault_path: Path = Field(description="Host path to the Obsidian vault mount.")
     artifact_blob_path: Path = Field(description="Host path to content-addressed blobs.")
     lifecycle_sqlite_path: Path = Field(description="Host path to lifecycle-work sqlite.")
