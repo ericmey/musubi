@@ -221,7 +221,7 @@ async def test_reranker_batches_candidates_without_exceeding_client_batch_size(
     scores = await client.rerank("q", [f"candidate-{i}" for i in range(40)])
 
     requests = httpx_mock.get_requests()
-    assert [len(request.read().decode()) > 0 for request in requests] == [True, True]
+    assert len(requests) == 2
     payloads = [json.loads(request.content.decode()) for request in requests]
     assert [len(payload["texts"]) for payload in payloads] == [32, 8]
     assert scores == [float(i) for i in range(40)]
