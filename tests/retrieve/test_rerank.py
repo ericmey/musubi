@@ -208,6 +208,35 @@ async def test_rerank_partial_batch_failure_rescored_for_rest() -> None:
     assert all(h.rerank_score is None for h in result.hits)
 
 
+@pytest.mark.asyncio
+async def test_reranker_batch_failure_degrades_the_whole_rerank(
+    httpx_mock: Any,
+) -> None:
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": i, "score": float(i)} for i in range(32)],
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        status_code=413,
+        text="batch rejected",
+    )
+    client = TEIRerankerClient(
+        base_url="http://tei-reranker",
+        max_batch_size=32,
+        retry_backoff=0.0,
+    )
+    candidates = [_hit(f"h{i}", rrf_score=1.0 - i / 100) for i in range(40)]
+
+    result = await rerank(client, "query", candidates, top_k=10)
+
+    assert [hit.object_id for hit in result.hits] == [f"h{i}" for i in range(10)]
+    assert all(hit.rerank_score is None for hit in result.hits)
+    assert [warning.code for warning in result.warnings] == ["reranker_failed"]
+
+
 @pytest.mark.skip(reason="deferred to slice-ops-gpu: live p95 requires reference host")
 def test_integration_deep_path_p95_latency_under_2s_with_100_candidates() -> None:
     pass
