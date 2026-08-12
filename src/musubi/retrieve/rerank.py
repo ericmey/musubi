@@ -54,7 +54,7 @@ async def rerank(
         scores = await client.rerank(query_text, texts)
     except EmbeddingError as exc:
         logger.warning(
-            "Reranker failed (TEI down or timeout); falling back to hybrid-only. error=%s",
+            "Reranker failed (TEI request error); falling back to hybrid-only. error=%s",
             exc,
         )
         return RerankResult(

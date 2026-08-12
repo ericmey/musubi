@@ -70,4 +70,7 @@ requested result while TEI accepts at most 32 texts per rerank request.
 
 - 2026-08-12 — `codex-gpt5` reproduced the exact production boundary from
   Musubi logs, claimed Issue #687, and opened draft PR #688 before code changes.
-
+- 2026-08-12 — Test-first implementation batches at the TEI client boundary,
+  restores local response indexes to global candidate order, and preserves the
+  whole-rerank fallback contract when any batch fails. The Hermes limit remains
+  10; no client-side encoding of the server's batch ceiling is needed.

@@ -24,6 +24,7 @@ Contract (from the spec + the slice brief):
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import weakref
 from collections.abc import AsyncIterator
