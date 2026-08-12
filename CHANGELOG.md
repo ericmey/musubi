@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.5](https://github.com/ericmey/musubi/compare/v1.23.4...v1.23.5) (2026-08-04)
+
+
+### Documentation
+
+* close REQ-8 with live proof ([#676](https://github.com/ericmey/musubi/issues/676)) ([3c23899](https://github.com/ericmey/musubi/commit/3c23899304d457421bdb4d4540b823a04229a9cc))
+
 ## [1.23.4](https://github.com/ericmey/musubi/compare/v1.23.3...v1.23.4) (2026-08-04)
 
 
