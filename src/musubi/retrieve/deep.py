@@ -21,13 +21,19 @@ from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.retrieve.hybrid import HybridHit, HybridSearchResult, hybrid_search
-from musubi.retrieve.rerank import rerank
+from musubi.retrieve.rerank import RerankResult, rerank
 from musubi.retrieve.scoring import Hit, ScoredHit, rank_hits
-from musubi.retrieve.warnings import RetrievalWarning
+from musubi.retrieve.warnings import RetrievalWarning, reranker_failed
 from musubi.store.names import collection_for_plane
 from musubi.types.common import Err, LifecycleState, Ok, Result, utc_now
 
 logger = logging.getLogger(__name__)
+
+# The layered budgets are the accepted retrieval contract in
+# docs/Musubi/05-retrieval/orchestration.md. They sit below the 5 s whole-call
+# deadline so an optional stage degrades before the entire request is lost.
+RERANK_TIMEOUT_S = 0.8
+LINEAGE_HYDRATE_TIMEOUT_S = 0.5
 
 
 @dataclass(frozen=True)
@@ -160,11 +166,12 @@ async def run_deep_retrieve(
 
     # 4. Rerank
     # Use the original query text for reranking to preserve strict relevance scoring
-    rerank_result = await rerank(
+    rerank_result = await _rerank_with_timeout(
         client=reranker,
         query_text=query.query_text,
         candidates=hits,
         top_k=query.limit,
+        timeout_s=RERANK_TIMEOUT_S,
     )
     reranked_hits = rerank_result.hits
     warnings.extend(rerank_result.warnings)
@@ -175,20 +182,84 @@ async def run_deep_retrieve(
 
     # 6. Hydrate Lineage
     if query.include_lineage and scored:
-        hydrate_coros = [_hydrate_one(hit, client, embedder) for hit in scored]
-        # Use return_exceptions to degrade gracefully if a plane times out
-        hydrated_results = await asyncio.gather(*hydrate_coros, return_exceptions=True)
-
-        final_scored: list[ScoredHit] = []
-        for i, hydrated_res in enumerate(hydrated_results):
-            if isinstance(hydrated_res, Exception):
-                logger.warning(f"Lineage hydrate failed for {scored[i].object_id}: {hydrated_res}")
-                final_scored.append(scored[i])
-            else:
-                final_scored.append(cast(ScoredHit, hydrated_res))
-        scored = final_scored
+        scored = await _hydrate_lineage_async(
+            scored,
+            client,
+            embedder,
+            timeout_s=LINEAGE_HYDRATE_TIMEOUT_S,
+        )
 
     return Ok(value=DeepResult(hits=scored, warnings=tuple(warnings)))
+
+
+async def _rerank_with_timeout(
+    client: TEIRerankerClient,
+    query_text: str,
+    candidates: list[Hit],
+    *,
+    top_k: int,
+    timeout_s: float,
+) -> RerankResult:
+    """Bound the optional cross-encoder stage and preserve hybrid ordering on timeout."""
+    try:
+        return await asyncio.wait_for(
+            rerank(client, query_text, candidates, top_k=top_k),
+            timeout=timeout_s,
+        )
+    except TimeoutError:
+        plane = candidates[0].plane if candidates else "episodic"
+        logger.warning(
+            "Reranker exceeded stage budget; falling back to hybrid-only. plane=%s timeout_s=%s",
+            plane,
+            timeout_s,
+        )
+        return RerankResult(
+            hits=candidates[:top_k],
+            warnings=(reranker_failed(plane),),
+        )
+
+
+def _run_hydrate_one(
+    hit: ScoredHit,
+    client: QdrantClient,
+    embedder: Embedder,
+) -> ScoredHit:
+    """Run the sync-Qdrant lineage coroutine entirely on a worker thread."""
+    return asyncio.run(_hydrate_one(hit, client, embedder))
+
+
+async def _hydrate_lineage_async(
+    hits: list[ScoredHit],
+    client: QdrantClient,
+    embedder: Embedder,
+    *,
+    timeout_s: float,
+) -> list[ScoredHit]:
+    """Hydrate hits concurrently, degrading each timed-out or failed hit in place."""
+
+    async def hydrate_or_original(hit: ScoredHit) -> ScoredHit:
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(_run_hydrate_one, hit, client, embedder),
+                timeout=timeout_s,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Lineage hydrate exceeded stage budget; returning unhydrated hit. object_id=%s "
+                "timeout_s=%s",
+                hit.object_id,
+                timeout_s,
+            )
+            return hit
+        except Exception as exc:
+            logger.warning(
+                "Lineage hydrate failed; returning unhydrated hit. object_id=%s error=%s",
+                hit.object_id,
+                exc,
+            )
+            return hit
+
+    return list(await asyncio.gather(*(hydrate_or_original(hit) for hit in hits)))
 
 
 async def _hydrate_one(

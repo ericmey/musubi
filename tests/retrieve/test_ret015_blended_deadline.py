@@ -159,9 +159,7 @@ async def test_default_blended_shape_finishes_concurrently_before_the_whole_call
     # The compressed deadline makes event-loop serialization deterministically red:
     # 50 x 20 ms cannot fit, while worker-offloaded hydration can.
     results = await asyncio.wait_for(
-        asyncio.gather(
-            *(hydrate(hits, object(), object(), timeout_s=0.2) for _ in range(10))
-        ),
+        asyncio.gather(*(hydrate(hits, object(), object(), timeout_s=0.2) for _ in range(10))),
         timeout=0.45,
     )
 
