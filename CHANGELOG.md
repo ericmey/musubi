@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.23.8](https://github.com/ericmey/musubi/compare/v1.23.7...v1.23.8) (2026-08-12)
+
+
+### Bug Fixes
+
+* **retrieve:** batch TEI reranker requests ([#688](https://github.com/ericmey/musubi/issues/688)) ([b11bea0](https://github.com/ericmey/musubi/commit/b11bea00f7c9b3513c6cbf1c5ff454ab0ebb1327))
+
 ## [1.23.7](https://github.com/ericmey/musubi/compare/v1.23.6...v1.23.7) (2026-08-12)
 
 
