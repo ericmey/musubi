@@ -1,0 +1,15 @@
+{
+  "agent": "codex-gpt5",
+  "branch": "slice/ret015-blended-deadline",
+  "owns_paths": [
+    "docs/Musubi/05-retrieval/deep-path.md",
+    "docs/Musubi/05-retrieval/orchestration.md",
+    "docs/Musubi/_inbox/locks/slice-ret015-blended-deadline.lock",
+    "docs/Musubi/_slices/slice-ret015-blended-deadline.md",
+    "src/musubi/retrieve/deep.py",
+    "src/musubi/retrieve/hybrid.py",
+    "tests/retrieve/test_ret015_blended_deadline.py"
+  ],
+  "reason": "RET-015: keep blended lineage retrieval within its concurrency deadline",
+  "timestamp": "2026-08-12T15:07:00Z"
+}
