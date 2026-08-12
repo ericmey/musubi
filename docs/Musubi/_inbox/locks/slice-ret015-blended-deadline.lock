@@ -8,7 +8,9 @@
     "docs/Musubi/_slices/slice-ret015-blended-deadline.md",
     "src/musubi/retrieve/deep.py",
     "src/musubi/retrieve/hybrid.py",
-    "tests/retrieve/test_ret015_blended_deadline.py"
+    "src/musubi/settings.py",
+    "tests/retrieve/test_ret015_blended_deadline.py",
+    "tests/test_config.py"
   ],
   "reason": "RET-015: keep blended lineage retrieval within its concurrency deadline",
   "timestamp": "2026-08-12T15:07:00Z"

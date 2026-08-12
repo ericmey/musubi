@@ -11,6 +11,7 @@ import pytest
 from musubi.retrieve import deep, hybrid
 from musubi.retrieve.rerank import RerankResult
 from musubi.retrieve.scoring import Hit, ScoreComponents, ScoredHit
+from musubi.settings import Settings
 
 
 def _scored_hit(object_id: str = "hit-1", *, plane: str = "episodic") -> ScoredHit:
@@ -203,3 +204,13 @@ async def test_retrieval_semantics_are_preserved_after_async_offload(
         "limit": 5,
         "at_epoch": 123.0,
     }
+
+
+def test_retrieval_stage_budgets_are_tunable_positive_settings() -> None:
+    rerank = Settings.model_fields.get("retrieval_rerank_timeout_s")
+    lineage = Settings.model_fields.get("retrieval_lineage_timeout_s")
+
+    assert rerank is not None and rerank.default == 0.8
+    assert lineage is not None and lineage.default == 0.5
+    assert rerank.metadata and getattr(rerank.metadata[0], "gt", None) == 0
+    assert lineage.metadata and getattr(lineage.metadata[0], "gt", None) == 0

@@ -48,6 +48,8 @@ Hermes callers use the canonical blended request shape: three default planes,
 
 - `src/musubi/retrieve/hybrid.py`
 - `src/musubi/retrieve/deep.py`
+- `src/musubi/settings.py` (retrieval stage budgets only)
+- `tests/test_config.py` (retrieval stage budget validation only)
 - `tests/retrieve/test_ret015_blended_deadline.py`
 - `docs/Musubi/05-retrieval/deep-path.md` (deadline/degradation contract only)
 - `docs/Musubi/05-retrieval/orchestration.md` (deadline/degradation contract only)
@@ -69,6 +71,7 @@ Hermes callers use the canonical blended request shape: three default planes,
 - `test_lineage_timeout_returns_unhydrated_hit_instead_of_failing_the_request`
 - `test_default_blended_shape_finishes_concurrently_before_the_whole_call_deadline`
 - `test_retrieval_semantics_are_preserved_after_async_offload`
+- `test_retrieval_stage_budgets_are_tunable_positive_settings`
 
 ## Work log
 
@@ -76,4 +79,3 @@ Hermes callers use the canonical blended request shape: three default planes,
   isolated the interaction to three-plane fanout plus lineage, and verified the
   blocking Qdrant reads directly in the deployed source. Claimed Issue #679 and
   opened draft PR #680 before code changes.
-
