@@ -26,13 +26,16 @@ from musubi.retrieve.hybrid import HybridHit, HybridSearchResult, hybrid_search
 from musubi.retrieve.rerank import RerankResult, rerank
 from musubi.retrieve.scoring import Hit, ScoredHit, rank_hits
 from musubi.retrieve.warnings import RetrievalWarning, reranker_failed
+from musubi.settings import Settings
 from musubi.store.names import collection_for_plane
 from musubi.types.common import Err, LifecycleState, Ok, Result, utc_now
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_RERANK_TIMEOUT_S = 0.8
-_DEFAULT_LINEAGE_HYDRATE_TIMEOUT_S = 0.5
+_DEFAULT_RERANK_TIMEOUT_S = float(Settings.model_fields["retrieval_rerank_timeout_s"].default)
+_DEFAULT_LINEAGE_HYDRATE_TIMEOUT_S = float(
+    Settings.model_fields["retrieval_lineage_timeout_s"].default
+)
 
 
 @dataclass(frozen=True)
@@ -261,11 +264,10 @@ async def _hydrate_lineage_async(
                 timeout_s,
             )
             return hit
-        except Exception as exc:
-            logger.warning(
-                "Lineage hydrate failed; returning unhydrated hit. object_id=%s error=%s",
+        except Exception:
+            logger.exception(
+                "Lineage hydrate failed; returning unhydrated hit. object_id=%s",
                 hit.object_id,
-                exc,
             )
             return hit
 
