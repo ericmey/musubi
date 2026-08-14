@@ -4,10 +4,10 @@ slice_id: slice-data001-layout-leak-697
 issue: 697
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-progress, type/slice, data-integrity]
+tags: [section/slices, status/in-review, type/slice, data-integrity]
 updated: 2026-08-14
 reviewed: false
 depends-on: [slice-data001-phase2-immutable-vectors]
@@ -41,6 +41,11 @@ a healthy logical object.
 - `docs/Musubi/_slices/slice-data001-layout-leak-697.md`
 - `CHANGELOG.md`
 
+## Specs to implement
+
+- [[_slices/slice-data001-layout-leak-697]] — this slice's physical writer
+  boundary and `## Test Contract` below.
+
 ## Test Contract
 
 - `test_curated_projection_decides_vector_change`
@@ -54,3 +59,12 @@ a healthy logical object.
   with in-memory Qdrant. The payload-only episodic test failed because the raw
   anchor contained content `generation` and `owner_token`, even though the
   resolved logical object remained valid. Deployment of v1.24.0 remains held.
+- 2026-08-14 — Stripped the resolved storage envelope to domain state before
+  rebase and projection comparison while retaining the raw read for exact
+  operation replay and version fencing. Added default-gate physical-envelope
+  regressions alongside the original Phase 2 discriminators. Test Contract:
+  4/4 passing. `make check`: 2,668 passed, 195 skipped, 140 deselected, 2
+  expected xfails; 88.59% coverage; Ruff and strict mypy passed. `make
+  tc-coverage SLICE=slice-data001-layout-leak-697` and `make agent-check` both
+  passed (agent-check warnings only). Production repair and deployment remain
+  separately held on snapshot, explicit disposition, and a clean full sweep.
