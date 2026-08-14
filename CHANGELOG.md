@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.0](https://github.com/ericmey/musubi/compare/v1.24.6...v1.25.0) (2026-08-14)
+
+
+### Features
+
+* **retrieval:** distinguish reranker degradation causes ([#721](https://github.com/ericmey/musubi/issues/721)) ([e11dc9d](https://github.com/ericmey/musubi/commit/e11dc9d99387c2fd07235591c04daea80f1a49a1))
+
 ## [1.24.6](https://github.com/ericmey/musubi/compare/v1.24.5...v1.24.6) (2026-08-14)
 
 
