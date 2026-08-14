@@ -168,6 +168,8 @@ LLM output JSON parse failures are logged with the raw response in a debug direc
 
 If the LLM returns 8 items instead of 10: match by ID, update the 8, log the missing 2, they'll be re-selected next hour (state is still `provisional`).
 
+If a whole batch fails (transport error, parse failure — the client returns `None` for that call): that batch is isolated — its items fall back exactly as in "Ollama down" — while every other batch's enrichment lands. Failed batches increment `musubi_lifecycle_enrichment_batch_failures_total{kind}` so sustained enrichment degradation is an operational signal, not a log line. (Historic note: the first implementation read this section as all-or-nothing and nulled the entire sweep's field on one failed batch; ADR 0043 aligned the code with this spec.)
+
 ## Throughput
 
 At our capture rate (~500/day episodic typical, ~5000/day peak), an hourly sweep with batch=500 is well-sized. Per-run time on Ollama:
@@ -197,35 +199,37 @@ Enrichment:
 8. `test_tags_deduped`
 9. `test_topics_inferred_from_llm`
 10. `test_topics_empty_on_unknown`
+11. `test_batched_call_isolates_failed_batches`
+12. `test_batched_call_all_batches_failing_returns_empty_not_none`
 
 Supersession:
 
-11. `test_supersession_inferred_from_hint_keyword`
-12. `test_supersession_not_inferred_without_hint`
-13. `test_supersession_sets_both_sides_of_link`
+13. `test_supersession_inferred_from_hint_keyword`
+14. `test_supersession_not_inferred_without_hint`
+15. `test_supersession_sets_both_sides_of_link`
 
 Transitions:
 
-14. `test_state_transitions_to_matured`
-15. `test_transition_uses_typed_function`
-16. `test_lifecycle_event_emitted`
-17. `test_ollama_outage_still_matures_without_enrichment`
+16. `test_state_transitions_to_matured`
+17. `test_transition_uses_typed_function`
+18. `test_lifecycle_event_emitted`
+19. `test_ollama_outage_still_matures_without_enrichment`
 
 TTL:
 
-18. `test_provisional_older_than_7d_archived`
-19. `test_archival_emits_lifecycle_event`
+20. `test_provisional_older_than_7d_archived`
+21. `test_archival_emits_lifecycle_event`
 
 Concurrency:
 
-20. `test_file_lock_prevents_double_execution`
+22. `test_file_lock_prevents_double_execution`
 
 Property:
 
-21. `hypothesis: no matured memory has created_epoch in the future`
-22. `hypothesis: provisional memories older than 7d are always archived after one sweep`
+23. `hypothesis: no matured memory has created_epoch in the future`
+24. `hypothesis: provisional memories older than 7d are always archived after one sweep`
 
 Integration:
 
-23. `integration: real Ollama, 50 synthetic provisional memories mature in one sweep, importance distribution is plausible`
-24. `integration: ollama-offline scenario — maturation completes without enrichment, re-enrichment sweep picks them up later`
+25. `integration: real Ollama, 50 synthetic provisional memories mature in one sweep, importance distribution is plausible`
+26. `integration: ollama-offline scenario — maturation completes without enrichment, re-enrichment sweep picks them up later`

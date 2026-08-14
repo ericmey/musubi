@@ -56,6 +56,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -75,6 +76,24 @@ from musubi.lifecycle.transitions import LineageUpdates, TransitionError, transi
 from musubi.types.common import KSUID, Ok, epoch_of, utc_now
 
 log = logging.getLogger(__name__)
+
+
+@cache
+def _get_enrichment_failure_counter() -> Any:
+    """Family-bounded counter for enrichment batches that returned None.
+
+    Lazy import: observability must not become an import cycle for the
+    many tests that import this module without the registry.
+    """
+    from musubi.observability.registry import default_registry
+
+    return default_registry().counter(
+        "musubi_lifecycle_enrichment_batch_failures_total",
+        "Maturation LLM enrichment batches that failed and were isolated "
+        "(their items fall back; the rest of the sweep proceeds).",
+        labelnames=("kind",),
+    )
+
 
 DEFAULT_TAG_ALIASES: dict[str, str] = {
     "nvidia-gpu": "nvidia",
@@ -158,10 +177,20 @@ class _NotConfiguredOllama:
 
 
 def default_ollama_client() -> OllamaClient:
-    """Return the production :class:`OllamaClient`.
+    """Return the production lifecycle LLM client.
 
-    Reads ``Settings.ollama_url`` and ``Settings.llm_model`` and returns
-    an :class:`musubi.llm.HttpxOllamaClient` wired to that endpoint.
+    Backend selection is settings-driven (ADR 0043): with the defaults
+    (``lifecycle_llm_api="ollama"`` and the lifecycle overrides unset)
+    this is byte-for-byte the historical behavior — ``ollama_url`` +
+    ``llm_model`` over Ollama's native API. Setting
+    ``lifecycle_llm_api="openai"`` plus the ``lifecycle_llm_*``
+    overrides points every lifecycle LLM task (importance, topics,
+    synthesis, contradiction) at an OpenAI-compatible endpoint —
+    LiteLLM ``house/backup`` in this deployment, chosen because the
+    lifecycle workload is serial nightly batch (its concurrency
+    penalty never applies) and the synthesis prompt needs more context
+    and capability than the co-located 4B provides.
+
     Falls back to :class:`_NotConfiguredOllama` (fail-loud) if settings
     are unavailable — tests and CI that don't set the env vars will
     still raise ``NotImplementedError`` on call, matching the "ADR-
@@ -182,10 +211,16 @@ def default_ollama_client() -> OllamaClient:
     if maturation_debug is not None:
         debug_dir = Path(str(maturation_debug))
 
+    api = getattr(settings, "lifecycle_llm_api", "ollama")
+    base_url = getattr(settings, "lifecycle_llm_base_url", None) or settings.ollama_url
+    model = getattr(settings, "lifecycle_llm_model", None) or settings.llm_model
+    key = getattr(settings, "lifecycle_llm_api_key", None)
     return HttpxOllamaClient(
-        base_url=str(settings.ollama_url).rstrip("/"),
-        model=settings.llm_model,
+        base_url=str(base_url).rstrip("/"),
+        model=model,
         debug_dir=debug_dir,
+        api=api,
+        api_key=key.get_secret_value() if key is not None else None,
     )
 
 
@@ -1058,41 +1093,62 @@ def _apply_enrichment(
 async def _ollama_score_in_batches(
     ollama: OllamaClient,
     items: list[OllamaImportance],
-) -> dict[KSUID, int] | None:
-    """Call ``score_importance`` in batches; ``None`` on outage."""
-    return await _batched_call(items, ollama.score_importance)
+) -> dict[KSUID, int]:
+    """Call ``score_importance`` in batches; failed batches are isolated."""
+    return await _batched_call(items, ollama.score_importance, kind="importance")
 
 
 async def _ollama_topics_in_batches(
     ollama: OllamaClient,
     items: list[OllamaTopic],
-) -> dict[KSUID, list[str]] | None:
-    """Call ``infer_topics`` in batches; ``None`` on outage."""
-    return await _batched_call(items, ollama.infer_topics)
+) -> dict[KSUID, list[str]]:
+    """Call ``infer_topics`` in batches; failed batches are isolated."""
+    return await _batched_call(items, ollama.infer_topics, kind="topics")
 
 
 async def _batched_call[T, R](
     items: list[T],
     call: Any,
     *,
+    kind: str,
     batch_size: int = _DEFAULT_LLM_BATCH,
-) -> dict[KSUID, R] | None:
-    """Drive ``call`` in batches and merge results.
+) -> dict[KSUID, R]:
+    """Drive ``call`` in batches and merge results, isolating failures
+    PER BATCH.
 
-    A single batch returning ``None`` poisons the whole sweep's
-    enrichment for that field — matches the spec's all-or-nothing
-    failure-mode handling. Per-item parse failures (different concern)
-    are the OllamaClient's responsibility.
+    Contract change (ADR 0043, supersedes the original all-or-nothing
+    handling): a batch returning ``None`` no longer nulls the whole
+    sweep's enrichment for that field. Its items simply stay absent from
+    the merged map — the sweep's per-row fallback covers them — while
+    every other batch's results land. Measured motivation: one flaky
+    structured-output batch out of ~five was erasing topics for entire
+    sweeps, which starved synthesis clustering down to capture-source
+    tags. Failed batches are counted on
+    ``musubi_lifecycle_enrichment_batch_failures_total{kind}`` so the
+    degradation is an operational signal, not a log line (the #684
+    lesson). Per-item parse failures (different concern) remain the
+    LLM client's responsibility.
     """
     if not items:
         return {}
     merged: dict[KSUID, R] = {}
+    failed = 0
     for start in range(0, len(items), batch_size):
         batch = items[start : start + batch_size]
         result = await call(batch)
         if result is None:
-            return None
+            failed += 1
+            _get_enrichment_failure_counter().labels(kind=kind).inc()
+            continue
         merged.update(result)
+    if failed:
+        log.warning(
+            "maturation-enrichment-degraded kind=%s failed_batches=%d/%d items_recovered=%d",
+            kind,
+            failed,
+            math.ceil(len(items) / batch_size),
+            len(merged),
+        )
     return merged
 
 

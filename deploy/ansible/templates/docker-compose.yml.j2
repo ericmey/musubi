@@ -39,6 +39,7 @@ services:
     environment:
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
       QDRANT_API_KEY: ${QDRANT_API_KEY}
+      LIFECYCLE_LLM_API_KEY: ${LIFECYCLE_LLM_API_KEY}
     command: ["python", "-m", "musubi.lifecycle.runner"]
     # `/metrics` exposition for Prometheus scrape — see
     # docs/Musubi/09-operations/observability.md § Lifecycle metrics.

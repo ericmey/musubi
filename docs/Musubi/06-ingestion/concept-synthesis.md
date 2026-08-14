@@ -103,7 +103,7 @@ Return JSON:
 }
 ```
 
-LLM is Qwen2.5-7B-Instruct via Ollama. Temperature 0.2 — we want consistent synthesis. Output parsed strictly. Parse failure → skip this cluster, log, continue. An oversized cluster (more than `max_llm_cluster_members`, default 20) is synthesized from a deterministic importance-first sample rather than sent whole — threshold clustering has no size ceiling, and a degenerate mega-cluster's serialized prompt would overrun a local model's context on every attempt.
+The LLM backend is deployment-selected per ADR 0043 (`LIFECYCLE_LLM_API`): Ollama-native or any OpenAI-compatible endpoint with strict `json_schema` output. Approved deployment target: `house/backup` (Qwen 3.6 35B A3B, 131K ctx) behind LiteLLM — chosen after the co-located 4B measured 0% structured-output success on this schema across two nightly passes. This remains a target, not current-state documentation, until the worker rollout is verified. Temperature 0 — we want consistent synthesis. Output parsed strictly. Parse failure → skip this cluster, log, continue. An oversized cluster (more than `max_llm_cluster_members`, default 20) is synthesized from a deterministic importance-first sample rather than sent whole — threshold clustering has no size ceiling, and a degenerate mega-cluster's serialized prompt would overrun a local model's context on every attempt.
 
 ### Step 3b — Match vs existing
 
