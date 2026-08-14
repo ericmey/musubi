@@ -52,8 +52,11 @@ class RetrievalWarning:
 
 
 def is_allowlisted(warning: RetrievalWarning) -> bool:
-    """True iff ``warning`` carries an allowlisted code AND a fixed plane. A ``plane_*_`` code's
-    suffix must also name a fixed plane and match the structured ``plane`` field."""
+    """True iff every structured warning field belongs to its bounded vocabulary.
+
+    A ``plane_*_`` code's suffix must name a fixed plane and match the
+    structured ``plane`` field. Only ``reranker_failed`` may carry ``cause``.
+    """
     if warning.plane not in FIXED_PLANES:
         return False
     code = warning.code
@@ -64,7 +67,7 @@ def is_allowlisted(warning: RetrievalWarning) -> bool:
     for prefix in _PLANE_PREFIXES:
         if code.startswith(prefix):
             suffix = code[len(prefix) :]
-            return suffix in FIXED_PLANES and suffix == warning.plane
+            return warning.cause is None and suffix in FIXED_PLANES and suffix == warning.plane
     return False
 
 

@@ -82,3 +82,7 @@ observable without removing the stable warning old consumers already know.
   wire helper could preserve `reranker_failed`. The warning factory now
   normalizes every unknown runtime cause to bounded `unexpected_error`; a
   regression proves both the stable base and bounded detail survive.
+- 2026-08-14 — Copilot review closed two adjacent contract gaps: canonical
+  docs now state one detail per degraded rerank rather than one per merged
+  response, and the allowlist explicitly rejects `cause` on every non-reranker
+  warning. A regression proves free text cannot survive on a plane warning.

@@ -51,6 +51,9 @@ def test_reranker_failure_cause_is_bounded_and_wire_additive() -> None:
     assert not is_allowlisted(
         RetrievalWarning(code="reranker_failed", plane="episodic", cause="HTTP 413: raw body")
     )
+    assert not is_allowlisted(
+        RetrievalWarning(code="plane_timeout_episodic", plane="episodic", cause="free text")
+    )
 
     unknown = reranker_failed("episodic", cause="future_embedder_failure")
     assert unknown.cause == "unexpected_error"
