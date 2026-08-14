@@ -16,8 +16,10 @@ import pytest
 from qdrant_client import QdrantClient
 from starlette.testclient import TestClient
 
+from musubi.retrieve.orchestration import RetrievalEnvelope
 from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import raw_payload
+from musubi.types.common import Ok
 
 pytestmark = pytest.mark.anyio
 
@@ -79,20 +81,25 @@ def test_context_accounting_failure_returns_internal_not_raw(
     caller gets a clean INTERNAL 500, never a raw traceback. (best-effort was rejected.)"""
     import musubi.api.routers.context as ctx
 
+    orchestration_calls = 0
+
+    async def _empty_retrieval(*_a: object, **_k: object) -> Ok[RetrievalEnvelope]:
+        nonlocal orchestration_calls
+        orchestration_calls += 1
+        return Ok(value=RetrievalEnvelope(results=[]))
+
     async def _boom(*_a: object, **_k: object) -> None:
         raise RuntimeError("qdrant write exploded")
 
+    monkeypatch.setattr(ctx, "run_orchestration_retrieve", _empty_retrieval)
     monkeypatch.setattr(ctx, "account_delivered", _boom)
     hdr = {"Authorization": f"Bearer {valid_token}"}
-    resp = client.post(
-        "/v1/episodic", headers=hdr, json={"namespace": _NS, "content": "context failure marker"}
-    )
-    assert resp.status_code // 100 == 2, resp.text
-
     r = client.post(
         "/v1/context",
         headers=hdr,
         json={"namespace": _NS, "query_text": "context failure", "planes": ["episodic"]},
     )
+    assert orchestration_calls == 2, "probe must reach accounting after recent and ranked retrieval"
     assert r.status_code == 500
     assert r.json()["error"]["code"] == "INTERNAL"
+    assert "qdrant write exploded" not in r.text
