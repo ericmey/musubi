@@ -4,10 +4,10 @@ slice_id: slice-ret019-tei-batch-contract-690
 issue: 690
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "3 Retrieval"
-tags: [section/slices, status/in-progress, type/slice, retrieval, embedding, rerank]
+tags: [section/slices, status/in-review, type/slice, retrieval, embedding, rerank]
 updated: 2026-08-14
 reviewed: false
 depends-on: [slice-ret-017-reranker-batching]
@@ -74,3 +74,7 @@ degradation or silently adds avoidable sequential requests.
   behavior. A live 80-candidate rerank at the advertised 32-item ceiling ran
   as three sequential chunks: ten runs measured 0.091 s minimum, 0.094 s
   median, and 0.146 s maximum, all below the 1.5-second RET-015 budget.
+- 2026-08-14 — Handoff: Test Contract 7/7; focused construction and consumer
+  suites 61 passed; whole-repo `make check` passed with 2,676 tests, 195
+  documented skips, 140 deselected, two expected xfails, and coverage above
+  the 85% gate. `make agent-check` is clean with warnings only.
