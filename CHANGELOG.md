@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.6](https://github.com/ericmey/musubi/compare/v1.24.5...v1.24.6) (2026-08-14)
+
+
+### Bug Fixes
+
+* **embedding:** derive TEI batch ceilings from runtime contract ([#717](https://github.com/ericmey/musubi/issues/717)) ([54e2c6f](https://github.com/ericmey/musubi/commit/54e2c6ff2caa498669558654be30ad647e54c76e))
+
 ## [1.24.5](https://github.com/ericmey/musubi/compare/v1.24.4...v1.24.5) (2026-08-14)
 
 
