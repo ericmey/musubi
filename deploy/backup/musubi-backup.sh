@@ -105,6 +105,7 @@ require docker
 require rsync
 require sha256sum
 require jq
+require mktemp
 
 # Single-runner guard — prevents overlapping timers from corrupting a snapshot.
 exec 9>"$LOCK_FILE"
