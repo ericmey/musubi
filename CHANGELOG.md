@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.5](https://github.com/ericmey/musubi/compare/v1.24.4...v1.24.5) (2026-08-14)
+
+
+### Bug Fixes
+
+* **ops:** keep backup diagnostics out of collection data ([#716](https://github.com/ericmey/musubi/issues/716)) ([d9ef878](https://github.com/ericmey/musubi/commit/d9ef8781811742985081c657f88a06c8d06d65c4))
+
 ## [1.24.4](https://github.com/ericmey/musubi/compare/v1.24.3...v1.24.4) (2026-08-14)
 
 
