@@ -85,6 +85,20 @@ def test_script_calls_qdrant_snapshot_api() -> None:
     assert "api-key" in text.lower()
 
 
+def test_script_uses_container_secret_without_host_materialization() -> None:
+    """The host driver must not expect material secrets in persistent env files.
+
+    Production injects ``QDRANT_API_KEY`` into the lifecycle-worker with
+    ``op run``.  Every Qdrant request executes inside that container, so the
+    host script must neither parse nor export the key itself.
+    """
+    text = SCRIPT.read_text()
+    assert "grep -E '^QDRANT_API_KEY='" not in text
+    assert "export QDRANT_API_KEY" not in text
+    assert "exec -T lifecycle-worker" in text
+    assert "os.environ['QDRANT_API_KEY']" in text
+
+
 def test_script_backs_up_lifecycle_sqlite() -> None:
     text = SCRIPT.read_text()
     assert "/var/lib/musubi/lifecycle/work.sqlite" in text
