@@ -4,14 +4,14 @@ slice_id: slice-ops-backup-secret-699
 issue: 699
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice, operations]
+tags: [section/slices, status/done, type/slice, operations]
 updated: 2026-08-14
-reviewed: false
+reviewed: true
 depends-on: [slice-ops-backup]
-blocks: []
+blocks: [slice-ops-backup-compose-warning-706]
 ---
 
 # Slice: Backup driver container-secret boundary

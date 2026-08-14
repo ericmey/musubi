@@ -45,10 +45,9 @@ set -euo pipefail
 # Configuration
 # ---------------------------------------------------------------------------
 
-MUSUBI_HOME="${MUSUBI_HOME:-/etc/musubi}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/lib/musubi/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
-COMPOSE_FILE="${COMPOSE_FILE:-${MUSUBI_HOME}/docker-compose.yml}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-musubi}"
 
 # Discover collections dynamically via the Qdrant API at run time. A
 # hardcoded list drifts every time the store layout changes (e.g. the
@@ -88,11 +87,24 @@ require rsync
 require sha256sum
 require jq
 
-[[ -r "$COMPOSE_FILE" ]] || die "compose file not readable: $COMPOSE_FILE"
-
 # Single-runner guard — prevents overlapping timers from corrupting a snapshot.
 exec 9>"$LOCK_FILE"
 flock -n 9 || die "another musubi-backup is already running"
+
+# Resolve the already-running worker by its Docker Compose labels, then use
+# direct docker exec for every in-container operation. Invoking the Compose CLI
+# here reparses docker-compose.yml and emits warnings for runtime-only secret
+# substitutions. Discovery captures stderr so those warnings can become fake
+# collection names and corrupt the manifest. Exactly one worker is required.
+mapfile -t lifecycle_containers < <(
+ docker ps \
+ --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
+ --filter "label=com.docker.compose.service=lifecycle-worker" \
+ --format '{{.ID}}'
+)
+[[ ${#lifecycle_containers[@]} -eq 1 ]] || \
+ die "expected one running lifecycle-worker for project ${COMPOSE_PROJECT}; found ${#lifecycle_containers[@]}"
+LIFECYCLE_CONTAINER="${lifecycle_containers[0]}"
 
 # ---------------------------------------------------------------------------
 # Backup
@@ -110,7 +122,7 @@ STATUS=0
 # One round-trip to Qdrant to enumerate. If this fails, every collection
 # snapshot below would fail too — bail early with a clear error.
 discovered="$(
- docker compose -f "$COMPOSE_FILE" exec -T lifecycle-worker \
+ docker exec -i "$LIFECYCLE_CONTAINER" \
  python -c "
 import os, sys, httpx, json
 r = httpx.get('http://qdrant:6333/collections',
@@ -148,7 +160,7 @@ for coll in "${QDRANT_COLLECTIONS[@]}"; do
  # image every run. Use a one-shot python from the lifecycle-worker
  # container which we know has httpx.
  result="$(
- docker compose -f "$COMPOSE_FILE" exec -T lifecycle-worker \
+ docker exec -i "$LIFECYCLE_CONTAINER" \
  python -c "
 import os, sys
 import httpx
@@ -199,7 +211,7 @@ fi
 SQLITE_SRC="/var/lib/musubi/lifecycle/work.sqlite"
 if [[ -r "${SQLITE_SRC}" ]]; then
  sqlite3_via_docker() {
- docker compose -f "$COMPOSE_FILE" exec -T lifecycle-worker \
+ docker exec -i "$LIFECYCLE_CONTAINER" \
  python -c "
 import sqlite3, sys
 src, dst = sys.argv[1], sys.argv[2]
