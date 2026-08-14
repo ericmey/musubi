@@ -3,12 +3,12 @@ title: "Slice: lifecycle OpenAI-compatible LLM backend"
 slice_id: slice-lifecycle-openai-llm
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: claude-opus-5
 phase: "6 Lifecycle"
-tags: [section/slices, status/in-review, type/slice, lifecycle, llm, deployment]
+tags: [section/slices, status/done, type/slice, lifecycle, llm, deployment]
 updated: 2026-08-14
-reviewed: false
+reviewed: true
 issue: 694
 depends-on: []
 blocks: []
@@ -76,3 +76,8 @@ maturation spec already requires.
   house-specific current-state claims from checked-in examples/spec prose,
   closed the maturation Test Contract, and created issue #694 as the actual
   cross-contract ownership record.
+- 2026-08-14, codex-yua: Handoff complete. Targeted tests, strict mypy, ruff,
+  vault hygiene, and Test Contract coverage pass; the live `house/backup`
+  route enforced a deliberately conflicting strict JSON schema. PR #693 is
+  ready to merge; deployment remains a separate human-reviewed image/config
+  change with post-rollout synthesis acceptance.
