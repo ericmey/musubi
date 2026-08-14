@@ -17,8 +17,17 @@ from musubi.store.immutable_vectors import (
     read_anchor,
 )
 from musubi.store.names import collection_for_plane
+from musubi.store.specs import LAYOUT_ONLY_FIELDS
 
 _NAMESPACE = "eric/data001-layout-leak/episodic"
+_ANCHOR_LAYOUT_FIELDS = {
+    "point_kind",
+    "live_point",
+    "pointer_version",
+    "committed_operation_id",
+    "vector_layout_version",
+}
+_CONTENT_ONLY_LAYOUT_FIELDS = LAYOUT_ONLY_FIELDS - _ANCHOR_LAYOUT_FIELDS
 
 
 def _harness(tmp_path: Path) -> tuple[QdrantClient, str, LifecycleTransitionCoordinator, Any]:
@@ -84,8 +93,7 @@ def test_payload_only_rebase_strips_layout_fields_from_anchor(tmp_path: Path) ->
         )
 
         anchor = _raw_anchor(client, collection, "payload-only")
-        assert "generation" not in anchor
-        assert "owner_token" not in anchor
+        assert set(anchor).isdisjoint(_CONTENT_ONLY_LAYOUT_FIELDS)
         assert _raw_content(client, collection, "payload-only") == content_before
     finally:
         client.close()
@@ -108,8 +116,7 @@ def test_vector_change_rebase_preserves_strict_physical_envelopes(tmp_path: Path
         )
 
         anchor = _raw_anchor(client, collection, "vector-change")
-        assert "generation" not in anchor
-        assert "owner_token" not in anchor
+        assert set(anchor).isdisjoint(_CONTENT_ONLY_LAYOUT_FIELDS)
         content = _raw_content(client, collection, "vector-change")
         assert set(content) == {
             "object_id",

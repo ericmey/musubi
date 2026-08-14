@@ -987,8 +987,17 @@ def test_curated_projection_decides_vector_change(
     pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"title": "T2"})
     a1 = _anchor(qdrant, collection, "cur-1")
     assert a1.pointer_version > a0.pointer_version and a1.live_point != a0.live_point
+    from musubi.store.specs import LAYOUT_ONLY_FIELDS
+
     anchor_payload = _raw_anchor_payload(qdrant, collection, "cur-1")
-    assert "generation" not in anchor_payload and "owner_token" not in anchor_payload, (
+    anchor_layout_fields = {
+        "point_kind",
+        "live_point",
+        "pointer_version",
+        "committed_operation_id",
+        "vector_layout_version",
+    }
+    assert set(anchor_payload).isdisjoint(LAYOUT_ONLY_FIELDS - anchor_layout_fields), (
         "a vector-changing rebase must not copy content-point layout fields onto the anchor"
     )
     content_payload = _raw_live_content_payload(qdrant, collection, "cur-1")
@@ -1103,8 +1112,17 @@ def test_episodic_reinforce_with_summary_is_projection_based(
     assert committed["summary"] == "the-summary"  # preserved
     assert sorted(committed["tags"]) == ["a", "b"]  # tag union
     assert committed["reinforcement_count"] == 1
+    from musubi.store.specs import LAYOUT_ONLY_FIELDS
+
     anchor_payload = _raw_anchor_payload(qdrant, collection, "ep-sum")
-    assert "generation" not in anchor_payload and "owner_token" not in anchor_payload, (
+    anchor_layout_fields = {
+        "point_kind",
+        "live_point",
+        "pointer_version",
+        "committed_operation_id",
+        "vector_layout_version",
+    }
+    assert set(anchor_payload).isdisjoint(LAYOUT_ONLY_FIELDS - anchor_layout_fields), (
         "payload-only rebase must not copy content-point layout fields onto the anchor"
     )
     assert _raw_live_content_payload(qdrant, collection, "ep-sum") == content_before, (

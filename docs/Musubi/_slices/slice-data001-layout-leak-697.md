@@ -29,6 +29,9 @@ a healthy logical object.
 - Strip layout-only fields before the resolved object enters rebase or embedding
   projection comparison; retain the unstripped read only for replay and version
   fencing.
+- If stripping leaves no domain fields, treat the object as needing a full
+  publish rather than preserving a layout-only shell through a payload-only
+  mutation. This is an intentional fail-safe behavior change.
 - Do not relax the strict physical validators or domain models.
 - Do not infer that this defect caused the separate mutable-domain metadata found
   on the production content point; that path is not established by current code.
