@@ -28,6 +28,7 @@ import json
 import math
 import weakref
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 import pytest
@@ -41,6 +42,7 @@ from musubi.embedding import (
     TEIDenseClient,
     TEIRerankerClient,
     TEISparseClient,
+    build_tei_clients,
 )
 from musubi.store.specs import DENSE_SIZE
 
@@ -264,6 +266,96 @@ async def test_reranker_missing_score_reports_global_candidate_index(
 
     with pytest.raises(EmbeddingError, match=r"candidate indexes \[34\]"):
         await client.rerank("q", [f"candidate-{i}" for i in range(35)])
+
+
+def test_lower_deployed_tei_batch_ceiling_overrides_static_client_fallback(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url="http://tei-dense/info", method="GET", json={"max_client_batch_size": 8}
+    )
+    httpx_mock.add_response(
+        url="http://tei-sparse/info", method="GET", json={"max_client_batch_size": 12}
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/info", method="GET", json={"max_client_batch_size": 16}
+    )
+
+    clients = build_tei_clients(
+        dense_url="http://tei-dense",
+        sparse_url="http://tei-sparse",
+        reranker_url="http://tei-reranker",
+    )
+
+    assert clients.dense.max_batch_size == 8
+    assert clients.sparse.max_batch_size == 12
+    assert clients.reranker.max_batch_size == 16
+
+
+async def test_higher_deployed_tei_batch_ceiling_avoids_silent_under_batching(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url="http://tei-dense/info", method="GET", json={"max_client_batch_size": 32}
+    )
+    httpx_mock.add_response(
+        url="http://tei-sparse/info", method="GET", json={"max_client_batch_size": 64}
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/info", method="GET", json={"max_client_batch_size": 128}
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": i, "score": float(i)} for i in range(80)],
+    )
+
+    clients = build_tei_clients(
+        dense_url="http://tei-dense",
+        sparse_url="http://tei-sparse",
+        reranker_url="http://tei-reranker",
+    )
+    scores = await clients.reranker.rerank("q", [f"candidate-{i}" for i in range(80)])
+
+    rerank_requests = [
+        request for request in httpx_mock.get_requests() if request.url.path == "/rerank"
+    ]
+    assert len(rerank_requests) == 1
+    assert scores == [float(i) for i in range(80)]
+
+
+def test_unavailable_or_malformed_tei_batch_contract_uses_safe_fallbacks(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_exception(httpx.ConnectError("unreachable"), url="http://tei-dense/info")
+    httpx_mock.add_response(
+        url="http://tei-sparse/info", method="GET", json={"max_client_batch_size": "many"}
+    )
+    httpx_mock.add_response(
+        url="http://tei-reranker/info", method="GET", json={"max_client_batch_size": 0}
+    )
+
+    clients = build_tei_clients(
+        dense_url="http://tei-dense",
+        sparse_url="http://tei-sparse",
+        reranker_url="http://tei-reranker",
+    )
+
+    assert clients.dense.max_batch_size == 16
+    assert clients.sparse.max_batch_size == 16
+    assert clients.reranker.max_batch_size == 32
+
+
+def test_production_tei_clients_are_built_from_runtime_batch_contract() -> None:
+    root = Path(__file__).resolve().parents[1]
+    construction_paths = (
+        root / "src/musubi/api/bootstrap.py",
+        root / "src/musubi/lifecycle/runner.py",
+        root / "src/musubi/vault/runtime.py",
+        root / "src/musubi/evals/live_gate.py",
+    )
+    for path in construction_paths:
+        assert "build_tei_clients(" in path.read_text(), path
 
 
 # ---------------------------------------------------------------------------
