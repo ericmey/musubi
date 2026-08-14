@@ -15,6 +15,7 @@ from musubi.embedding.base import Embedder
 from musubi.embedding.tei import TEIRerankerClient
 from musubi.observability import get_tracer
 from musubi.observability.retrieval_metrics import (
+    RERANKER_DEGRADATION_CAUSES_TOTAL,
     RETRIEVAL_ERRORS_TOTAL,
     RETRIEVAL_WARNINGS_TOTAL,
 )
@@ -264,8 +265,18 @@ def _finalize(
         RETRIEVAL_ERRORS_TOTAL.labels(kind=result.error.kind).inc()
         return result
     warnings = tuple(w for w in dedupe(result.value.warnings) if is_allowlisted(w))
+    counted_base: set[tuple[str, str]] = set()
+    counted_cause: set[tuple[str, str]] = set()
     for w in warnings:
-        RETRIEVAL_WARNINGS_TOTAL.labels(warning=w.code, plane=w.plane).inc()
+        base_key = (w.code, w.plane)
+        if base_key not in counted_base:
+            RETRIEVAL_WARNINGS_TOTAL.labels(warning=w.code, plane=w.plane).inc()
+            counted_base.add(base_key)
+        if w.code == "reranker_failed" and w.cause is not None:
+            cause_key = (w.cause, w.plane)
+            if cause_key not in counted_cause:
+                RERANKER_DEGRADATION_CAUSES_TOTAL.labels(cause=w.cause, plane=w.plane).inc()
+                counted_cause.add(cause_key)
     return Ok(value=RetrievalEnvelope(results=result.value.results, warnings=warnings))
 
 

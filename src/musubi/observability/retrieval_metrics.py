@@ -17,6 +17,12 @@ RETRIEVAL_WARNINGS_TOTAL: Counter = default_registry().counter(
     ("warning", "plane"),
 )
 
+RERANKER_DEGRADATION_CAUSES_TOTAL: Counter = default_registry().counter(
+    "musubi_reranker_degradation_causes_total",
+    "Count of reranker degradation by bounded cause and plane.",
+    ("cause", "plane"),
+)
+
 RETRIEVAL_ERRORS_TOTAL: Counter = default_registry().counter(
     "musubi_retrieval_errors_total",
     "Count of total-failure retrieval requests, by bounded error kind.",
@@ -24,4 +30,8 @@ RETRIEVAL_ERRORS_TOTAL: Counter = default_registry().counter(
 )
 
 
-__all__ = ["RETRIEVAL_ERRORS_TOTAL", "RETRIEVAL_WARNINGS_TOTAL"]
+__all__ = [
+    "RERANKER_DEGRADATION_CAUSES_TOTAL",
+    "RETRIEVAL_ERRORS_TOTAL",
+    "RETRIEVAL_WARNINGS_TOTAL",
+]

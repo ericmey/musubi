@@ -228,7 +228,7 @@ async def _rerank_with_timeout(
         )
         return RerankResult(
             hits=hybrid_fallback(candidates, top_k=top_k),
-            warnings=(reranker_failed(plane),),
+            warnings=(reranker_failed(plane, cause="timeout"),),
         )
 
 

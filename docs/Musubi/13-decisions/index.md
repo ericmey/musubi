@@ -71,6 +71,7 @@ SORT file.name ASC
 - [[13-decisions/0038-network-protect-read-only-ops-endpoints]] — Keep health, status, and metrics bearer-unauthenticated behind a testable trusted-network boundary.
 - [[13-decisions/0041-truthful-hybrid-channel-controls]] — Replace dead numeric hybrid weights with explicit channel booleans while preserving unweighted server-side RRF.
 - [[13-decisions/0042-escrow-backed-episodic-retraction]] — Escrow exact original episodic bytes as a stored-unindexed artifact before a bounded, evidence-backed, non-reembedding retraction.
+- [[13-decisions/0044-additive-reranker-degradation-causes]] — Preserve `reranker_failed` while adding bounded cause detail and separate cause telemetry.
 - [[13-decisions/sources]] — Public sources that informed these decisions.
 - [[13-decisions/template-weights-change]] — Template ADR for retrieval scoring weight changes.
 

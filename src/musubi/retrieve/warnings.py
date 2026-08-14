@@ -19,6 +19,7 @@ router flattens ``code`` onto the additive wire ``warnings`` array and dedupes b
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 #: The fixed plane vocabulary. A warning's ``plane`` is always one of these.
 FIXED_PLANES = frozenset({"episodic", "curated", "concept", "artifact", "thought"})
@@ -28,6 +29,17 @@ _SIMPLE_CODES = frozenset({"sparse_embedding_failed", "reranker_failed"})
 
 _PLANE_PREFIXES = ("plane_timeout_", "plane_error_")
 
+RerankerFailureCause = Literal[
+    "timeout",
+    "request_rejected",
+    "unavailable",
+    "invalid_response",
+    "unexpected_error",
+]
+RERANKER_FAILURE_CAUSES = frozenset(
+    {"timeout", "request_rejected", "unavailable", "invalid_response", "unexpected_error"}
+)
+
 
 @dataclass(frozen=True, slots=True)
 class RetrievalWarning:
@@ -35,6 +47,7 @@ class RetrievalWarning:
 
     code: str
     plane: str
+    cause: str | None = None
 
 
 def is_allowlisted(warning: RetrievalWarning) -> bool:
@@ -44,7 +57,9 @@ def is_allowlisted(warning: RetrievalWarning) -> bool:
         return False
     code = warning.code
     if code in _SIMPLE_CODES:
-        return True
+        if code != "reranker_failed":
+            return warning.cause is None
+        return warning.cause is None or warning.cause in RERANKER_FAILURE_CAUSES
     for prefix in _PLANE_PREFIXES:
         if code.startswith(prefix):
             suffix = code[len(prefix) :]
@@ -67,25 +82,48 @@ def sparse_embedding_failed(plane: str) -> RetrievalWarning:
     return RetrievalWarning(code="sparse_embedding_failed", plane=plane)
 
 
-def reranker_failed(plane: str) -> RetrievalWarning:
+def reranker_failed(
+    plane: str, *, cause: RerankerFailureCause | None = None
+) -> RetrievalWarning:
     """The reranker degraded within a leg; retrieval fell back to the fused ranking."""
-    return RetrievalWarning(code="reranker_failed", plane=plane)
+    return RetrievalWarning(code="reranker_failed", plane=plane, cause=cause)
 
 
 def dedupe(warnings: tuple[RetrievalWarning, ...]) -> tuple[RetrievalWarning, ...]:
-    """Collapse to distinct ``(code, plane)`` at the request boundary, preserving first-seen order."""
-    seen: set[tuple[str, str]] = set()
+    """Collapse to distinct ``(code, plane, cause)`` while preserving first-seen order."""
+    seen: set[tuple[str, str, str | None]] = set()
     out: list[RetrievalWarning] = []
     for w in warnings:
-        key = (w.code, w.plane)
+        key = (w.code, w.plane, w.cause)
         if key not in seen:
             seen.add(key)
             out.append(w)
     return tuple(out)
 
 
+def wire_codes(warnings: tuple[RetrievalWarning, ...]) -> tuple[str, ...]:
+    """Flatten structured warnings into backward-compatible bounded wire codes.
+
+    Every reranker cause is additive: the stable ``reranker_failed`` base code
+    remains first, followed by a bounded ``reranker_failed_<cause>`` detail.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for warning in warnings:
+        codes = [warning.code]
+        if warning.code == "reranker_failed" and warning.cause in RERANKER_FAILURE_CAUSES:
+            codes.append(f"reranker_failed_{warning.cause}")
+        for code in codes:
+            if code not in seen:
+                seen.add(code)
+                out.append(code)
+    return tuple(out)
+
+
 __all__ = [
     "FIXED_PLANES",
+    "RERANKER_FAILURE_CAUSES",
+    "RerankerFailureCause",
     "RetrievalWarning",
     "dedupe",
     "is_allowlisted",
@@ -93,4 +131,5 @@ __all__ = [
     "plane_timeout",
     "reranker_failed",
     "sparse_embedding_failed",
+    "wire_codes",
 ]

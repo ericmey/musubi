@@ -210,7 +210,8 @@ The deep-stage budgets are runtime settings, not call-site literals:
 `retrieval_rerank_timeout_s` defaults to `1.5` and
 `retrieval_lineage_timeout_s` defaults to `0.5`. Both must remain positive and
 below the whole-call budget in production configuration. Rerank expiry returns
-the hybrid ordering with `reranker_failed`; lineage expiry returns the affected
+the hybrid ordering with `reranker_failed` plus a bounded additive cause code;
+lineage expiry returns the affected
 hit without hydrated lineage. Neither optional stage may consume the whole-call
 budget and turn an otherwise healthy retrieval into a 503.
 

@@ -28,6 +28,7 @@ from musubi.retrieve.context_pack import (
     build_context_pack,
 )
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
+from musubi.retrieve.warnings import wire_codes
 from musubi.settings import Settings
 from musubi.types.common import Err
 
@@ -211,12 +212,7 @@ async def context_pack(
         candidates_dict[(c.namespace, c.plane, c.object_id)] = c
 
     candidates = list(candidates_dict.values())
-    seen_warnings: set[str] = set()
-    combined_warnings: list[str] = []
-    for warning in list(recent_env.warnings) + list(fast_env.warnings):
-        if warning.code not in seen_warnings:
-            seen_warnings.add(warning.code)
-            combined_warnings.append(warning.code)
+    combined_warnings = list(wire_codes(recent_env.warnings + fast_env.warnings))
 
     # RET-007: thread the bounded degradation codes onto the pack so /v1/context is NOT a surface where
     # degraded context is indistinguishable from healthy.

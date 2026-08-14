@@ -68,6 +68,7 @@ from musubi.auth import authenticate_request
 from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
+from musubi.retrieve.warnings import wire_codes
 from musubi.settings import Settings
 from musubi.store import collection_for_plane
 from musubi.types.common import Err
@@ -680,13 +681,13 @@ async def retrieve(
             results=recent_rows[: body.limit],
             mode="recent",
             limit=body.limit,
-            warnings=[warning.code for warning in envelope.warnings],
+            warnings=list(wire_codes(envelope.warnings)),
         )
     return RankedRetrieveResponse(
         results=ranked_rows[: body.limit],
         mode=body.mode,
         limit=body.limit,
-        warnings=[warning.code for warning in envelope.warnings],
+        warnings=list(wire_codes(envelope.warnings)),
     )
 
 

@@ -43,6 +43,7 @@ from musubi.auth import authenticate_request
 from musubi.auth.scopes import enforce_namespace_policy
 from musubi.embedding import Embedder, TEIRerankerClient
 from musubi.retrieve.orchestration import retrieve as run_orchestration_retrieve
+from musubi.retrieve.warnings import wire_codes
 from musubi.settings import Settings
 from musubi.types.common import Err
 
@@ -153,7 +154,7 @@ async def retrieve_stream(
         raise APIError(status_code=status, code=error_code, detail=retrieval_err.detail)
 
     envelope = orchestration_result.value
-    warnings_json = json.dumps([warning.code for warning in envelope.warnings])
+    warnings_json = json.dumps(wire_codes(envelope.warnings))
 
     headers = {
         "X-Musubi-Mode": body.mode,
