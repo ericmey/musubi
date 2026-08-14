@@ -9,6 +9,12 @@ every six hours on `musubi.example.local`. It is self-contained — no Ansible,
 no secondary host, no vault password at run time. Recovery does not depend
 on the ansible control host being up.
 
+The host driver does not read material secrets from `.env.production`.
+Qdrant discovery and snapshot requests run through `docker compose exec
+lifecycle-worker`; that container already receives `QDRANT_API_KEY` from the
+service's 1Password Connect startup path. Keep the key out of host files, argv,
+and logs.
+
 Install + enable (one-shot, from the host):
 
 ```bash

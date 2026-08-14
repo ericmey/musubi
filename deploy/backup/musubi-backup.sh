@@ -14,9 +14,9 @@
 # which doesn't exist in the compose-era (Qdrant is bound to the
 # `musubi_default` bridge only). This script shells into the qdrant
 # container's local network via the shared docker daemon.
-# - No vault password needed at runtime. Secrets are sourced from
-# `.env.production` (already readable on the host) rather than
-# `ansible-vault decrypt` of `vault.yml`.
+# - No host-side secret materialization needed. Qdrant calls execute inside
+# the lifecycle-worker container, where the service startup already injects
+# `QDRANT_API_KEY` from 1Password Connect.
 #
 # On-disk layout produced:
 #
@@ -48,7 +48,6 @@ set -euo pipefail
 MUSUBI_HOME="${MUSUBI_HOME:-/etc/musubi}"
 BACKUP_ROOT="${BACKUP_ROOT:-/var/lib/musubi/backups}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
-ENV_FILE="${ENV_FILE:-${MUSUBI_HOME}/.env.production}"
 COMPOSE_FILE="${COMPOSE_FILE:-${MUSUBI_HOME}/docker-compose.yml}"
 
 # Discover collections dynamically via the Qdrant API at run time. A
@@ -89,18 +88,7 @@ require rsync
 require sha256sum
 require jq
 
-[[ -r "$ENV_FILE" ]] || die "env file not readable: $ENV_FILE"
 [[ -r "$COMPOSE_FILE" ]] || die "compose file not readable: $COMPOSE_FILE"
-
-# Pull QDRANT_API_KEY out of the env file without exec'ing it. Strip any
-# surrounding single- or double-quotes that shell-safe env files add.
-raw_key="$(grep -E '^QDRANT_API_KEY=' "$ENV_FILE" | head -n 1 | cut -d= -f2-)"
-QDRANT_API_KEY="${raw_key%\"}"
-QDRANT_API_KEY="${QDRANT_API_KEY#\"}"
-QDRANT_API_KEY="${QDRANT_API_KEY%\'}"
-QDRANT_API_KEY="${QDRANT_API_KEY#\'}"
-[[ -n "$QDRANT_API_KEY" ]] || die "QDRANT_API_KEY not found in $ENV_FILE"
-export QDRANT_API_KEY
 
 # Single-runner guard — prevents overlapping timers from corrupting a snapshot.
 exec 9>"$LOCK_FILE"
