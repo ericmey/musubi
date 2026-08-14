@@ -268,6 +268,7 @@ Robustness (added 2026-08-12):
 29. `test_inline_vector_row_with_layout_fields_synthesizes`
 30. `test_one_undecodable_row_degrades_run_without_aborting_family`
 31. `test_mega_cluster_sampled_to_llm_cap`
+32. `test_oversized_clusters_deduplicate_after_sampling`
 
 Property:
 
