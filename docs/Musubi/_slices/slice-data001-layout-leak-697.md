@@ -37,6 +37,7 @@ a healthy logical object.
 
 - `src/musubi/store/immutable_vectors.py`
 - `tests/store/test_data001_phase2_immutable_vectors.py`
+- `tests/store/test_data001_layout_field_leak.py`
 - `docs/Musubi/_slices/slice-data001-layout-leak-697.md`
 - `CHANGELOG.md`
 
@@ -44,6 +45,8 @@ a healthy logical object.
 
 - `test_curated_projection_decides_vector_change`
 - `test_episodic_reinforce_with_summary_is_projection_based`
+- `test_payload_only_rebase_strips_layout_fields_from_anchor`
+- `test_vector_change_rebase_preserves_strict_physical_envelopes`
 
 ## Work log
 
@@ -51,4 +54,3 @@ a healthy logical object.
   with in-memory Qdrant. The payload-only episodic test failed because the raw
   anchor contained content `generation` and `owner_token`, even though the
   resolved logical object remained valid. Deployment of v1.24.0 remains held.
-
