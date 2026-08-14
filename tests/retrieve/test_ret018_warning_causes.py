@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import cast
 
+from musubi.embedding.tei import TEIRerankerClient
 from musubi.observability.registry import default_registry
 from musubi.retrieve.orchestration import RetrievalEnvelope, _finalize
+from musubi.retrieve.deep import _rerank_with_timeout
+from musubi.retrieve.scoring import Hit
 from musubi.retrieve.warnings import (
     RetrievalWarning,
     dedupe,
@@ -77,3 +81,32 @@ def test_reranker_failure_causes_dedupe_without_double_counting_base_warning() -
         ("timeout", "episodic"): 1.0,
         ("invalid_response", "episodic"): 1.0,
     }
+
+
+async def test_deep_stage_timeout_surfaces_timeout_cause() -> None:
+    class SlowReranker:
+        async def rerank(self, query: str, candidates: list[str]) -> list[float]:
+            await asyncio.sleep(0.05)
+            return [0.0] * len(candidates)
+
+    candidates = [
+        Hit(
+            object_id=f"hit-{index}",
+            plane="episodic",
+            state="matured",
+            rrf_score=1.0 - index / 10,
+            batch_max_rrf=1.0,
+            updated_epoch=1.0,
+            payload={"content": f"candidate {index}"},
+        )
+        for index in range(6)
+    ]
+    result = await _rerank_with_timeout(
+        cast(TEIRerankerClient, SlowReranker()),
+        "query",
+        candidates,
+        top_k=5,
+        timeout_s=0.001,
+    )
+
+    assert result.warnings == (reranker_failed("episodic", cause="timeout"),)
