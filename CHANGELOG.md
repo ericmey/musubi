@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.1](https://github.com/ericmey/musubi/compare/v1.25.0...v1.25.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **synthesis:** deduplicate capped cluster samples ([#726](https://github.com/ericmey/musubi/issues/726)) ([5d70256](https://github.com/ericmey/musubi/commit/5d70256c992c2ee5df226aa60b9f79c165b7ce77))
+
 ## [1.25.0](https://github.com/ericmey/musubi/compare/v1.24.6...v1.25.0) (2026-08-14)
 
 
