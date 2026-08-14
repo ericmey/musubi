@@ -91,6 +91,12 @@ def test_payload_only_rebase_strips_layout_fields_from_anchor(tmp_path: Path) ->
                 merge_strategy="longer-wins",
             )
         )
+        publisher.publish(
+            coordinator,
+            object_id="payload-only",
+            namespace=_NAMESPACE,
+            content_payload={"generation": "caller", "owner_token": "caller"},
+        )
 
         anchor = _raw_anchor(client, collection, "payload-only")
         assert set(anchor).isdisjoint(_CONTENT_ONLY_LAYOUT_FIELDS)
@@ -112,7 +118,11 @@ def test_vector_change_rebase_preserves_strict_physical_envelopes(tmp_path: Path
             coordinator,
             object_id="vector-change",
             namespace=_NAMESPACE,
-            set_fields={"title": "after"},
+            set_fields={
+                "title": "after",
+                "generation": "caller",
+                "owner_token": "caller",
+            },
         )
 
         anchor = _raw_anchor(client, collection, "vector-change")
@@ -128,5 +138,7 @@ def test_vector_change_rebase_preserves_strict_physical_envelopes(tmp_path: Path
             "content",
             "summary",
         }
+        assert content["generation"] != "caller"
+        assert content["owner_token"] != "caller"
     finally:
         client.close()

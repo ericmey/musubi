@@ -29,6 +29,9 @@ a healthy logical object.
 - Strip layout-only fields before the resolved object enters rebase or embedding
   projection comparison; retain the unstripped read only for replay and version
   fencing.
+- Strip the rebased result again at the durable writer boundary so a malformed
+  or legacy descriptor cannot reintroduce layout fields through `set_fields` or
+  `new_memory`, even if an upstream validator regresses.
 - If stripping leaves no domain fields, treat the object as needing a full
   publish rather than preserving a layout-only shell through a payload-only
   mutation. This is an intentional fail-safe behavior change.

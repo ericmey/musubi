@@ -868,6 +868,10 @@ class ImmutableVectorPublisher:
         obs_pv = anchor.pointer_version if anchor is not None else 0
         embed_kind = str(descriptor["embed_kind"])
         new_full, _, _ = _rebase(descriptor, logical_fresh)
+        # The durable descriptor is a stored boundary too.  Even if an upstream domain validator
+        # regresses—or an old/corrupt outbox row is replayed—layout fields supplied through
+        # ``set_fields`` / ``new_memory`` must not cross back into either physical envelope.
+        new_full = strip_layout_fields(new_full)
         # never let a caller patch carry lease-owned fields onto the anchor.
         for f in _LEASE_OWNED_ON_ANCHOR:
             new_full.pop(f, None)
