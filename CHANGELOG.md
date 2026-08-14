@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.1](https://github.com/ericmey/musubi/compare/v1.24.0...v1.24.1) (2026-08-14)
+
+
+### Bug Fixes
+
+* **data001:** keep layout fields out of logical rebases ([#698](https://github.com/ericmey/musubi/issues/698)) ([d24dfb8](https://github.com/ericmey/musubi/commit/d24dfb86eae782f76a360d7f7c2344ba7bd81013))
+
 ## [1.24.0](https://github.com/ericmey/musubi/compare/v1.23.8...v1.24.0) (2026-08-14)
 
 
