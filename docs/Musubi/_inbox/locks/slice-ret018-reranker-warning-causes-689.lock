@@ -1,0 +1,29 @@
+{
+  "agent": "codex-gpt5-yua",
+  "branch": "slice/ret018-reranker-warning-causes-689",
+  "owns_paths": [
+    "docs/Musubi/_inbox/locks/slice-ret018-reranker-warning-causes-689.lock",
+    "docs/Musubi/_slices/slice-ret018-reranker-warning-causes-689.md",
+    "docs/Musubi/13-decisions/0044-additive-reranker-degradation-causes.md",
+    "docs/Musubi/13-decisions/index.md",
+    "docs/Musubi/05-retrieval/orchestration.md",
+    "docs/Musubi/07-interfaces/canonical-api.md",
+    "src/musubi/embedding/base.py",
+    "src/musubi/embedding/tei.py",
+    "src/musubi/observability/retrieval_metrics.py",
+    "src/musubi/retrieve/deep.py",
+    "src/musubi/retrieve/orchestration.py",
+    "src/musubi/retrieve/rerank.py",
+    "src/musubi/retrieve/warnings.py",
+    "src/musubi/api/routers/context.py",
+    "src/musubi/api/routers/retrieve.py",
+    "src/musubi/api/routers/writes_retrieve_stream.py",
+    "tests/retrieve/test_ret018_warning_causes.py",
+    "tests/retrieve/test_rerank.py",
+    "tests/test_embedding.py",
+    "tests/api/test_ret018_warning_causes.py",
+    "tests/adapters/test_ret007_adapter_warnings.py"
+  ],
+  "reason": "RET-018: bounded, backward-compatible reranker degradation causes",
+  "timestamp": "2026-08-14T21:45:00Z"
+}
