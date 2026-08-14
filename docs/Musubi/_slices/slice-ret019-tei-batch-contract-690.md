@@ -21,6 +21,10 @@ while each deployed TEI service independently exposes its actual
 `max_client_batch_size` through `/info`. Divergence either produces HTTP 413
 degradation or silently adds avoidable sequential requests.
 
+## Specs to implement
+
+- [[05-retrieval/reranker-batching]]
+
 ## Decision boundary
 
 - Read each endpoint's `max_client_batch_size` from `/info` when production
@@ -43,6 +47,7 @@ degradation or silently adds avoidable sequential requests.
 - `tests/test_embedding.py`
 - `docs/Musubi/05-retrieval/reranker-batching.md`
 - `docs/Musubi/_slices/slice-ret019-tei-batch-contract-690.md`
+- `docs/Musubi/_inbox/locks/slice-ret019-tei-batch-contract-690.lock`
 
 ## Forbidden paths
 

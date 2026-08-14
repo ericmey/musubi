@@ -1,0 +1,18 @@
+{
+  "agent": "codex-gpt5",
+  "branch": "slice/ret019-tei-batch-contract-690",
+  "owns_paths": [
+    "docs/Musubi/05-retrieval/reranker-batching.md",
+    "docs/Musubi/_inbox/locks/slice-ret019-tei-batch-contract-690.lock",
+    "docs/Musubi/_slices/slice-ret019-tei-batch-contract-690.md",
+    "src/musubi/api/bootstrap.py",
+    "src/musubi/embedding/__init__.py",
+    "src/musubi/embedding/tei.py",
+    "src/musubi/evals/live_gate.py",
+    "src/musubi/lifecycle/runner.py",
+    "src/musubi/vault/runtime.py",
+    "tests/test_embedding.py"
+  ],
+  "reason": "RET-019: derive TEI batch ceilings from deployed service contract",
+  "timestamp": "2026-08-14T21:28:00Z"
+}
