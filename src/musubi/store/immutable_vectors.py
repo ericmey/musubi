@@ -852,14 +852,26 @@ class ImmutableVectorPublisher:
                 ctx.object_id, ctx.namespace, keep=fresh.get("live_point")
             )
 
-        # REBASE ON FRESH AUTHORITATIVE STATE (Yua): apply ONLY the intended generic ops to fresh, take
-        # lease/access fields from FRESH (never the caller patch), and decide content/vector-change HERE.
+        # REBASE ON FRESH AUTHORITATIVE DOMAIN STATE (DATA-001): the resolved payload deliberately
+        # merges anchor + content so readers can see one authoritative object, but that read surface also
+        # contains layout-only fields from both physical rows.  Never feed those fields back into a write:
+        # doing so lets content ``generation`` / ``owner_token`` leak onto the anchor during a payload-only
+        # reinforcement.  Keep the raw payload above for replay/version fencing, and strip only for the
+        # logical rebase/projection below.
+        logical_fresh = strip_layout_fields(fresh) if fresh is not None else None
+
+        # Apply ONLY the intended generic ops to fresh, take lease/access fields from FRESH (never the
+        # caller patch), and decide content/vector-change HERE.
         # A stale caller snapshot can never overwrite a concurrent unrelated mutation because we recompute
         # against fresh + fence on the observed version below.
         obs_version = int((fresh or {}).get("version", 0))
         obs_pv = anchor.pointer_version if anchor is not None else 0
         embed_kind = str(descriptor["embed_kind"])
-        new_full, _, _ = _rebase(descriptor, fresh)
+        new_full, _, _ = _rebase(descriptor, logical_fresh)
+        # The durable descriptor is a stored boundary too.  Even if an upstream domain validator
+        # regresses—or an old/corrupt outbox row is replayed—layout fields supplied through
+        # ``set_fields`` / ``new_memory`` must not cross back into either physical envelope.
+        new_full = strip_layout_fields(new_full)
         # never let a caller patch carry lease-owned fields onto the anchor.
         for f in _LEASE_OWNED_ON_ANCHOR:
             new_full.pop(f, None)
@@ -874,7 +886,9 @@ class ImmutableVectorPublisher:
         # title/summary/content change re-embeds; a metadata-only mutation OUTSIDE the projection (e.g.
         # importance, tags) stays payload-only even though new_full differs from fresh.
         new_projection = _projection(embed_kind, new_full)
-        vector_changed = (new_projection != _projection(embed_kind, fresh or {})) or not fresh
+        vector_changed = (
+            new_projection != _projection(embed_kind, logical_fresh or {})
+        ) or not logical_fresh
         if not vector_changed:
             # PAYLOAD-ONLY: narrow fenced set_payload on the identity row, fenced on the observed version.
             # No new content point. A concurrent version bump fails the fence -> retry against fresh.
