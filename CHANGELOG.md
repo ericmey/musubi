@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.2](https://github.com/ericmey/musubi/compare/v1.24.1...v1.24.2) (2026-08-14)
+
+
+### Bug Fixes
+
+* **ops:** keep backup secrets inside containers ([#701](https://github.com/ericmey/musubi/issues/701)) ([e74c552](https://github.com/ericmey/musubi/commit/e74c552552dd2d588c899d6ba89c192688c320db))
+
 ## [1.24.1](https://github.com/ericmey/musubi/compare/v1.24.0...v1.24.1) (2026-08-14)
 
 
