@@ -4,12 +4,12 @@ slice_id: slice-obs-http-route-labels-709
 issue: 709
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice, observability]
+tags: [section/slices, status/done, type/slice, observability]
 updated: 2026-08-14
-reviewed: false
+reviewed: true
 depends-on: []
 blocks: []
 ---
