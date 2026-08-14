@@ -64,3 +64,8 @@ degradation or silently adds avoidable sequential requests.
   contract from the Musubi consumer host: dense 16, sparse 32, and reranker 32.
   Tests were written before implementation for lower, higher, malformed, and
   unreachable contracts plus all four production construction surfaces.
+- 2026-08-14 — The production factory now validates each `/info` ceiling and
+  uses conservative 16/16/32 fallbacks without changing direct-client pinned
+  behavior. A live 80-candidate rerank at the advertised 32-item ceiling ran
+  as three sequential chunks: ten runs measured 0.091 s minimum, 0.094 s
+  median, and 0.146 s maximum, all below the 1.5-second RET-015 budget.

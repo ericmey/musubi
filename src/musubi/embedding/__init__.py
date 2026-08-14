@@ -26,7 +26,13 @@ from musubi.embedding.base import Embedder, EmbeddingError
 from musubi.embedding.cache import CachedEmbedder
 from musubi.embedding.chunked import ChunkedEmbedder
 from musubi.embedding.fake import FakeEmbedder
-from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
+from musubi.embedding.tei import (
+    TEIClients,
+    TEIDenseClient,
+    TEIRerankerClient,
+    TEISparseClient,
+    build_tei_clients,
+)
 
 __all__ = [
     "CachedEmbedder",
@@ -34,7 +40,9 @@ __all__ = [
     "Embedder",
     "EmbeddingError",
     "FakeEmbedder",
+    "TEIClients",
     "TEIDenseClient",
     "TEIRerankerClient",
     "TEISparseClient",
+    "build_tei_clients",
 ]

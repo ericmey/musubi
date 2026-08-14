@@ -168,7 +168,7 @@ def build_settings_backends() -> LiveBackends:
     Mirrors the wiring in :mod:`musubi.api.bootstrap`. CI-exercised path."""
     import asyncio
 
-    from musubi.embedding import TEIDenseClient, TEIRerankerClient, TEISparseClient
+    from musubi.embedding import build_tei_clients
     from musubi.embedding.base import EmbeddingError
     from musubi.embedding.chunked import ChunkedEmbedder
     from musubi.settings import Settings
@@ -179,9 +179,14 @@ def build_settings_backends() -> LiveBackends:
     except Exception as exc:  # unconfigured settings → cannot run the live gate
         raise LiveGateUnavailable(f"live gate settings unavailable: {exc}") from exc
 
-    dense = TEIDenseClient(base_url=str(settings.tei_dense_url))
-    sparse = TEISparseClient(base_url=str(settings.tei_sparse_url))
-    reranker = TEIRerankerClient(base_url=str(settings.tei_reranker_url))
+    tei_clients = build_tei_clients(
+        dense_url=str(settings.tei_dense_url),
+        sparse_url=str(settings.tei_sparse_url),
+        reranker_url=str(settings.tei_reranker_url),
+    )
+    dense = tei_clients.dense
+    sparse = tei_clients.sparse
+    reranker = tei_clients.reranker
     embedder = ChunkedEmbedder(_TEIComposite(dense=dense, sparse=sparse, reranker=reranker))
     # Use the PRODUCTION Qdrant factory (not a raw client): passing api_key to QdrantClient defaults
     # https=True, which SSL-fails against the plaintext test stack — the bug the first seeded run hit.
