@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.4](https://github.com/ericmey/musubi/compare/v1.24.3...v1.24.4) (2026-08-14)
+
+
+### Bug Fixes
+
+* **obs:** bound HTTP endpoint metric labels ([#710](https://github.com/ericmey/musubi/issues/710)) ([21d8ae2](https://github.com/ericmey/musubi/commit/21d8ae23eacf4250db8f3cd557610bfb989a4dc8))
+
 ## [1.24.3](https://github.com/ericmey/musubi/compare/v1.24.2...v1.24.3) (2026-08-14)
 
 
