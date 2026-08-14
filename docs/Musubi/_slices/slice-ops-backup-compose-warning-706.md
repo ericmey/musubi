@@ -4,12 +4,12 @@ slice_id: slice-ops-backup-compose-warning-706
 issue: 706
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8 Ops"
-tags: [section/slices, status/in-review, type/slice, backup]
+tags: [section/slices, status/done, type/slice, backup]
 updated: 2026-08-14
-reviewed: false
+reviewed: true
 depends-on: [slice-ops-backup-secret-699]
 blocks: []
 ---
