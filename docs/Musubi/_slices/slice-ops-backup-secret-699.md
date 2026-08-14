@@ -27,6 +27,10 @@ correctly injects material secrets into containers through 1Password Connect.
 - Do not materialize `QDRANT_API_KEY` in a host env file, process argv, or log.
 - Execute Qdrant discovery and snapshot requests inside `lifecycle-worker`,
   which already has the key in its container environment.
+- Bound the claim to backup execution: Compose still receives the secret in
+  host process memory during service startup so it can inject the container.
+  This slice removes backup-time host parsing and export; it does not claim the
+  secret never transits the host or close a broader host-exposure question.
 - Preserve locking, full-store coverage, failure status, checksums, and
   green-only retention semantics.
 - Treat `deploy/backup/musubi-backup.sh` in this repository as the canonical
