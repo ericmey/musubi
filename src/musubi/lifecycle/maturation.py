@@ -56,6 +56,7 @@ import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -77,6 +78,7 @@ from musubi.types.common import KSUID, Ok, epoch_of, utc_now
 log = logging.getLogger(__name__)
 
 
+@cache
 def _get_enrichment_failure_counter() -> Any:
     """Family-bounded counter for enrichment batches that returned None.
 
@@ -1104,9 +1106,6 @@ async def _ollama_topics_in_batches(
     return await _batched_call(items, ollama.infer_topics, kind="topics")
 
 
-_ENRICH_BATCH_FAILURES = _get_enrichment_failure_counter()
-
-
 async def _batched_call[T, R](
     items: list[T],
     call: Any,
@@ -1139,7 +1138,7 @@ async def _batched_call[T, R](
         result = await call(batch)
         if result is None:
             failed += 1
-            _ENRICH_BATCH_FAILURES.labels(kind=kind).inc()
+            _get_enrichment_failure_counter().labels(kind=kind).inc()
             continue
         merged.update(result)
     if failed:
