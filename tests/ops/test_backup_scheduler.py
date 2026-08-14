@@ -81,7 +81,7 @@ def test_script_discovers_collections_dynamically() -> None:
 def test_successful_backup_command_keeps_stderr_out_of_stdout_data() -> None:
     """A successful warning must remain diagnostic data, never collection data."""
     probe = r'''
-source <(sed -n '/^capture_command()/,/^}/p' "$1")
+eval "$(sed -n '/^capture_command()/,/^}/p' "$1")"
 stdout=""
 stderr=""
 capture_command stdout stderr bash -c \

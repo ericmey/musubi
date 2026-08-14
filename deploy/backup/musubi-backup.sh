@@ -78,6 +78,25 @@ require() {
  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
 }
 
+capture_command() {
+ # Keep command data on stdout and diagnostics on stderr while preserving the
+ # original exit status. Successful warnings must never become collection or
+ # snapshot names.
+ local stdout_var="$1"
+ local stderr_var="$2"
+ local stderr_file captured_stdout captured_stderr rc=0
+ shift 2
+
+ stderr_file="$(mktemp)" || return 1
+ captured_stdout="$("$@" 2>"${stderr_file}")" || rc=$?
+ captured_stderr="$(<"${stderr_file}")"
+ rm -f "${stderr_file}"
+
+ printf -v "${stdout_var}" '%s' "${captured_stdout}"
+ printf -v "${stderr_var}" '%s' "${captured_stderr}"
+ return "${rc}"
+}
+
 # ---------------------------------------------------------------------------
 # Preconditions
 # ---------------------------------------------------------------------------
@@ -94,8 +113,9 @@ flock -n 9 || die "another musubi-backup is already running"
 # Resolve the already-running worker by its Docker Compose labels, then use
 # direct docker exec for every in-container operation. Invoking the Compose CLI
 # here reparses docker-compose.yml and emits warnings for runtime-only secret
-# substitutions. Discovery captures stderr so those warnings can become fake
-# collection names and corrupt the manifest. Exactly one worker is required.
+# substitutions. Data and diagnostics are captured separately below so an
+# unrelated warning cannot become a collection or snapshot name. Exactly one
+# worker is required.
 mapfile -t lifecycle_containers < <(
  docker ps \
  --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
@@ -121,7 +141,9 @@ STATUS=0
 
 # One round-trip to Qdrant to enumerate. If this fails, every collection
 # snapshot below would fail too — bail early with a clear error.
-discovered="$(
+discovered=""
+discovery_stderr=""
+if ! capture_command discovered discovery_stderr \
  docker exec -i "$LIFECYCLE_CONTAINER" \
  python -c "
 import os, sys, httpx, json
@@ -131,11 +153,10 @@ if r.status_code != 200:
  print('FAIL', r.status_code, r.text[:200], file=sys.stderr); sys.exit(1)
 for c in r.json().get('result', {}).get('collections', []):
  print(c.get('name', ''))
-" 2>&1
-)" || {
- log ERROR "qdrant-collection-discovery-failed out=${discovered}"
+"; then
+ log ERROR "qdrant-collection-discovery-failed out=${discovered} err=${discovery_stderr}"
  die "cannot enumerate Qdrant collections" 2
-}
+fi
 
 while IFS= read -r line; do
  name="$(echo "${line}" | tr -d '[:space:]')"
@@ -159,7 +180,9 @@ for coll in "${QDRANT_COLLECTIONS[@]}"; do
  # --network musubi_default curlimages/curl` — but that pulls a new
  # image every run. Use a one-shot python from the lifecycle-worker
  # container which we know has httpx.
- result="$(
+ result=""
+ snapshot_stderr=""
+ if ! capture_command result snapshot_stderr \
  docker exec -i "$LIFECYCLE_CONTAINER" \
  python -c "
 import os, sys
@@ -175,14 +198,13 @@ if r.status_code != 200:
  sys.exit(1)
 data = r.json().get('result', {})
 print(data.get('name', ''))
-" 2>&1
- )" || {
- log ERROR "qdrant-snapshot-api-failed coll=${coll} out=${result}"
+"; then
+ log ERROR "qdrant-snapshot-api-failed coll=${coll} out=${result} err=${snapshot_stderr}"
  STATUS=2
  continue
- }
+ fi
 
- snapshot_name="$(echo "${result}" | tail -n 1 | tr -d '[:space:]')"
+ snapshot_name="$(echo "${result}" | tr -d '[:space:]')"
  if [[ -z "${snapshot_name}" ]]; then
  log ERROR "qdrant-snapshot-empty-name coll=${coll}"
  STATUS=2
