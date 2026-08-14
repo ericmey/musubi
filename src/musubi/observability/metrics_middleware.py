@@ -20,6 +20,16 @@ from musubi.observability.registry import Registry, default_registry
 
 _INSTALLED_FLAG = "_musubi_metrics_installed"
 _SELF_SKIP_PATHS: frozenset[str] = frozenset({"/v1/ops/metrics", "/metrics"})
+_UNMATCHED_ENDPOINT = "<unmatched>"
+
+
+def _endpoint_label(request: Request) -> str:
+    """Return a bounded endpoint label after Starlette routing has run."""
+    route = request.scope.get("route")
+    route_path = getattr(route, "path", None)
+    if isinstance(route_path, str) and route_path:
+        return route_path
+    return _UNMATCHED_ENDPOINT
 
 
 def install_metrics_middleware(
@@ -55,24 +65,27 @@ def install_metrics_middleware(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        path = request.url.path
-        if path in _SELF_SKIP_PATHS:
+        if request.url.path in _SELF_SKIP_PATHS:
             return await call_next(request)
         method = request.method
         start = time.monotonic()
         try:
             response = await call_next(request)
         except Exception:
+            endpoint = _endpoint_label(request)
             elapsed_ms = (time.monotonic() - start) * 1000.0
-            duration_ms.labels(endpoint=path, method=method).observe(elapsed_ms)
-            requests_total.labels(endpoint=path, method=method, status="500").inc()
-            five_xx_total.labels(endpoint=path).inc()
+            duration_ms.labels(endpoint=endpoint, method=method).observe(elapsed_ms)
+            requests_total.labels(endpoint=endpoint, method=method, status="500").inc()
+            five_xx_total.labels(endpoint=endpoint).inc()
             raise
+        endpoint = _endpoint_label(request)
         elapsed_ms = (time.monotonic() - start) * 1000.0
-        duration_ms.labels(endpoint=path, method=method).observe(elapsed_ms)
-        requests_total.labels(endpoint=path, method=method, status=str(response.status_code)).inc()
+        duration_ms.labels(endpoint=endpoint, method=method).observe(elapsed_ms)
+        requests_total.labels(
+            endpoint=endpoint, method=method, status=str(response.status_code)
+        ).inc()
         if response.status_code >= 500:
-            five_xx_total.labels(endpoint=path).inc()
+            five_xx_total.labels(endpoint=endpoint).inc()
         return response
 
     app.state._musubi_metrics_installed = True

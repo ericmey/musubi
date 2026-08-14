@@ -29,6 +29,7 @@ from typing import Any, cast
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from musubi.observability import (
@@ -141,6 +142,63 @@ def test_every_endpoint_emits_latency_histogram() -> None:
     client.get("/v1/probe-ok")
     text = render_text_format(reg)
     assert 'musubi_http_request_duration_ms_count{endpoint="/v1/probe-ok",method="GET"} 1' in text
+
+
+def test_dynamic_routes_use_template_labels_not_literal_ids() -> None:
+    app = FastAPI()
+    reg = Registry()
+    install_metrics_middleware(app, registry=reg)
+
+    @app.get("/v1/episodic/{object_id}")
+    async def get_object(object_id: str) -> dict[str, str]:
+        return {"object_id": object_id}
+
+    client = TestClient(app)
+    client.get("/v1/episodic/object-alpha")
+    client.get("/v1/episodic/object-beta")
+
+    text = render_text_format(reg)
+    assert (
+        'musubi_http_requests_total{endpoint="/v1/episodic/{object_id}",method="GET",status="200"} 2'
+        in text
+    )
+    assert 'endpoint="/v1/episodic/{object_id}"' in text
+    assert "object-alpha" not in text
+    assert "object-beta" not in text
+
+
+def test_unmatched_routes_share_one_bounded_endpoint_label() -> None:
+    app = FastAPI()
+    reg = Registry()
+    install_metrics_middleware(app, registry=reg)
+    client = TestClient(app)
+
+    client.get("/not-a-route/object-alpha")
+    client.get("/another-missing-path/object-beta")
+
+    text = render_text_format(reg)
+    assert 'musubi_http_requests_total{endpoint="<unmatched>",method="GET",status="404"} 2' in text
+    assert "object-alpha" not in text
+    assert "object-beta" not in text
+
+
+def test_dynamic_route_exceptions_use_the_same_template_label() -> None:
+    app = FastAPI()
+    reg = Registry()
+    install_metrics_middleware(app, registry=reg)
+
+    @app.get("/v1/episodic/{object_id}/explode")
+    async def explode(object_id: str) -> None:
+        raise RuntimeError(f"boom: {object_id}")
+
+    client = TestClient(app, raise_server_exceptions=False)
+    client.get("/v1/episodic/object-alpha/explode")
+    client.get("/v1/episodic/object-beta/explode")
+
+    text = render_text_format(reg)
+    assert 'musubi_5xx_total{endpoint="/v1/episodic/{object_id}/explode"} 2' in text
+    assert "object-alpha" not in text
+    assert "object-beta" not in text
 
 
 def test_errors_increment_errors_total() -> None:
@@ -619,8 +677,6 @@ def test_metrics_middleware_skips_metrics_path_to_avoid_self_probe() -> None:
     """Hitting /v1/ops/metrics must not increment the request counter
     for itself (would make the gauge wobble during scrape)."""
     app, reg = _app_with_metrics()
-
-    from fastapi import FastAPI
 
     inner: FastAPI = app
 
