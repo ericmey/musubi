@@ -449,7 +449,7 @@ async def _main_async() -> None:
 
     from musubi.config import get_settings
     from musubi.embedding.chunked import ChunkedEmbedder
-    from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
+    from musubi.embedding.tei import build_tei_clients
     from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
     from musubi.lifecycle.demotion import DemotionDeps, build_demotion_jobs
     from musubi.lifecycle.emitters import (
@@ -536,11 +536,17 @@ async def _main_async() -> None:
     # bootstrap (src/musubi/api/bootstrap.py) wraps the same way; without
     # this, vault_reconcile / synthesis / any lifecycle-side embed of a
     # long input HTTP 413s. See musubi#367.
+    tei_clients = await asyncio.to_thread(
+        build_tei_clients,
+        dense_url=str(settings.tei_dense_url),
+        sparse_url=str(settings.tei_sparse_url),
+        reranker_url=str(settings.tei_reranker_url),
+    )
     embedder = ChunkedEmbedder(
         _TEICompositeEmbedder(
-            dense=TEIDenseClient(base_url=str(settings.tei_dense_url)),
-            sparse=TEISparseClient(base_url=str(settings.tei_sparse_url)),
-            reranker=TEIRerankerClient(base_url=str(settings.tei_reranker_url)),
+            dense=tei_clients.dense,
+            sparse=tei_clients.sparse,
+            reranker=tei_clients.reranker,
         )
     )
 
