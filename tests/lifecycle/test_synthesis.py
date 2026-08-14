@@ -1004,6 +1004,52 @@ async def test_mega_cluster_sampled_to_llm_cap(
     assert {m.object_id for m in injected} - sent_ids <= carried
 
 
+async def test_oversized_clusters_deduplicate_after_sampling(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """Distinct oversized groups that collapse to one sample run the LLM once."""
+    eps_ns = _ns(ns, "episodic")
+    shared = []
+    for _ in range(5):
+        shared.append(
+            await _inject_episodic(
+                qdrant,
+                embedder,
+                eps_ns,
+                "shared-high",
+                tags=["tag1", "tag2"],
+                importance=9,
+            )
+        )
+    tag1_only = await _inject_episodic(
+        qdrant, embedder, eps_ns, "shared-high", tags=["tag1"], importance=1
+    )
+    tag2_only = await _inject_episodic(
+        qdrant, embedder, eps_ns, "shared-high", tags=["tag2"], importance=1
+    )
+
+    config = SynthesisConfig(max_llm_cluster_members=5)
+    ollama = FakeSynthesisOllama()
+    report = await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns, config)
+
+    assert report.clusters_formed == 2
+    assert report.concepts_created == 1
+    assert len(ollama.synthesize_calls) == 1
+    assert {m.object_id for m in ollama.synthesize_calls[0].memories} == {
+        m.object_id for m in shared
+    }
+
+    family = ns.split("/", 1)[0]
+    carried = set(
+        cursor.get_candidates(family, ttl_sec=30 * 86400, now_epoch=utc_now().timestamp())
+    )
+    assert {tag1_only.object_id, tag2_only.object_id} <= carried
+
+
 async def test_inline_vector_row_with_layout_fields_synthesizes(
     qdrant: QdrantClient,
     ns: str,

@@ -676,6 +676,7 @@ async def synthesis_run(
     contradictions_detected = 0
     current_run_concepts: list[SynthesizedConcept] = []
     clustered_memory_ids: set[str] = set()
+    seen_effective_cluster_fingerprints: set[frozenset[str]] = set()
 
     for cluster_mwvs in clusters:
         cluster_memories = [mwv.memory for mwv in cluster_mwvs]
@@ -699,6 +700,15 @@ async def synthesis_run(
             cluster_memories = sorted(cluster_memories, key=lambda m: (-m.importance, m.object_id))[
                 : cfg.max_llm_cluster_members
             ]
+        effective_fingerprint = frozenset(m.object_id for m in cluster_memories)
+        if effective_fingerprint in seen_effective_cluster_fingerprints:
+            logger.info(
+                "synthesis-cluster-sample-duplicate family=%s size=%d; skipping duplicate input",
+                family,
+                len(cluster_memories),
+            )
+            continue
+        seen_effective_cluster_fingerprints.add(effective_fingerprint)
         try:
             output = await ollama.synthesize_cluster(SynthesisInput(cluster_memories))
         except Exception as e:
