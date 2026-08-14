@@ -102,6 +102,7 @@ capture_command() {
 # ---------------------------------------------------------------------------
 
 require docker
+require flock
 require rsync
 require sha256sum
 require jq
