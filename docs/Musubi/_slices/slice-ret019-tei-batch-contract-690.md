@@ -4,12 +4,12 @@ slice_id: slice-ret019-tei-batch-contract-690
 issue: 690
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "3 Retrieval"
-tags: [section/slices, status/in-review, type/slice, retrieval, embedding, rerank]
+tags: [section/slices, status/done, type/slice, retrieval, embedding, rerank]
 updated: 2026-08-14
-reviewed: false
+reviewed: true
 depends-on: [slice-ret-017-reranker-batching]
 blocks: []
 ---
@@ -83,3 +83,6 @@ degradation or silently adds avoidable sequential requests.
   ceiling of eight produce exactly three requests. Lifecycle-worker discovery
   now runs through `asyncio.to_thread`, so three bounded synchronous `/info`
   probes cannot block its active event loop during startup.
+- 2026-08-14 — Independent exact-head review mutation-tested the discovered
+  lower ceiling and verified both the event-loop boundary and all four
+  production construction surfaces. No blocking findings remain.
