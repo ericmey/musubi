@@ -492,6 +492,34 @@ def _anchor(qdrant: QdrantClient, collection: str, object_id: str) -> Any:
     return a
 
 
+def _raw_anchor_payload(
+    qdrant: QdrantClient, collection: str, object_id: str
+) -> dict[str, Any]:
+    from musubi.store.immutable_vectors import anchor_point_id
+
+    points = qdrant.retrieve(
+        collection_name=collection,
+        ids=[anchor_point_id(_NS, object_id)],
+        with_payload=True,
+    )
+    assert len(points) == 1 and points[0].payload is not None
+    return dict(points[0].payload)
+
+
+def _raw_live_content_payload(
+    qdrant: QdrantClient, collection: str, object_id: str
+) -> dict[str, Any]:
+    anchor = _anchor(qdrant, collection, object_id)
+    assert anchor.live_point is not None
+    points = qdrant.retrieve(
+        collection_name=collection,
+        ids=[anchor.live_point],
+        with_payload=True,
+    )
+    assert len(points) == 1 and points[0].payload is not None
+    return dict(points[0].payload)
+
+
 def _count_content_points(qdrant: QdrantClient, collection: str, object_id: str) -> int:
     from musubi.store.immutable_vectors import ANCHOR_KIND
 
@@ -961,6 +989,21 @@ def test_curated_projection_decides_vector_change(
     pub.curated_publish(coord, object_id="cur-1", namespace=_NS, set_fields={"title": "T2"})
     a1 = _anchor(qdrant, collection, "cur-1")
     assert a1.pointer_version > a0.pointer_version and a1.live_point != a0.live_point
+    anchor_payload = _raw_anchor_payload(qdrant, collection, "cur-1")
+    assert "generation" not in anchor_payload and "owner_token" not in anchor_payload, (
+        "a vector-changing rebase must not copy content-point layout fields onto the anchor"
+    )
+    content_payload = _raw_live_content_payload(qdrant, collection, "cur-1")
+    assert set(content_payload) == {
+        "object_id",
+        "namespace",
+        "point_kind",
+        "generation",
+        "owner_token",
+        "title",
+        "content",
+        "summary",
+    }, "the immutable content point must contain only identity, ownership, and projection fields"
     # the live vector must be built from the COMPOSITE projection (T2 + 2 newlines + S), not raw content.
     assert _live_dense(qdrant, collection, "cur-1") == pytest.approx(_embed("T2\n\nS")[0], abs=1e-4)
     assert _live_dense(qdrant, collection, "cur-1") != pytest.approx(_embed("C")[0], abs=1e-4), (
@@ -1035,6 +1078,7 @@ def test_episodic_reinforce_with_summary_is_projection_based(
         content_payload={"content": "short", "summary": "the-summary", "tags": ["a"]},
     )
     a0 = _anchor(qdrant, collection, "ep-sum")
+    content_before = _raw_live_content_payload(qdrant, collection, "ep-sum")
     committed = asyncio.run(
         pub.reinforce_publish(
             coord,
@@ -1061,6 +1105,13 @@ def test_episodic_reinforce_with_summary_is_projection_based(
     assert committed["summary"] == "the-summary"  # preserved
     assert sorted(committed["tags"]) == ["a", "b"]  # tag union
     assert committed["reinforcement_count"] == 1
+    anchor_payload = _raw_anchor_payload(qdrant, collection, "ep-sum")
+    assert "generation" not in anchor_payload and "owner_token" not in anchor_payload, (
+        "payload-only rebase must not copy content-point layout fields onto the anchor"
+    )
+    assert _raw_live_content_payload(qdrant, collection, "ep-sum") == content_before, (
+        "payload-only reinforcement must leave the immutable content snapshot unchanged"
+    )
 
 
 # --------------------------------------------------------------------------------------------------
