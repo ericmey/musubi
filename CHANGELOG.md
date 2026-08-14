@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.3](https://github.com/ericmey/musubi/compare/v1.24.2...v1.24.3) (2026-08-14)
+
+
+### Bug Fixes
+
+* **ops:** isolate backup discovery from compose warnings ([#707](https://github.com/ericmey/musubi/issues/707)) ([303823b](https://github.com/ericmey/musubi/commit/303823b183f4c8571a2312a47299e3f940184ca1))
+
 ## [1.24.2](https://github.com/ericmey/musubi/compare/v1.24.1...v1.24.2) (2026-08-14)
 
 
