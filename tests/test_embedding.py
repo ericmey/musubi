@@ -23,6 +23,7 @@ Contract (from the spec + the slice brief):
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import math
@@ -368,7 +369,21 @@ def test_production_tei_clients_are_built_from_runtime_batch_contract() -> None:
         root / "src/musubi/evals/live_gate.py",
     )
     for path in construction_paths:
-        assert "build_tei_clients(" in path.read_text(), path
+        tree = ast.parse(path.read_text())
+        calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+        direct = any(
+            isinstance(call.func, ast.Name) and call.func.id == "build_tei_clients"
+            for call in calls
+        )
+        threaded = any(
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "to_thread"
+            and call.args
+            and isinstance(call.args[0], ast.Name)
+            and call.args[0].id == "build_tei_clients"
+            for call in calls
+        )
+        assert direct or threaded, path
 
 
 # ---------------------------------------------------------------------------
