@@ -75,6 +75,50 @@ class Settings(BaseSettings):
     llm_model: str = Field(description="Ollama-tagged LLM model.")
 
     # ------------------------------------------------------------------
+    # Lifecycle LLM backend (ADR 0043)
+    #
+    # The lifecycle worker's LLM tasks form a measured difficulty
+    # gradient (2026-08-14, qwen3:4b on the co-located Ollama):
+    # importance scoring ~always succeeded, topic inference landed on
+    # ~14% of matured rows, cluster synthesis produced zero concepts
+    # across two nightly passes. Structured-output reliability scales
+    # with model capability, and the co-located GPU also carries all
+    # three TEI models. These fields let the worker target any
+    # OpenAI-compatible endpoint (LiteLLM -> house/backup 35B in this
+    # deployment) without touching the interactive lane. Defaults
+    # preserve the existing Ollama behavior exactly.
+    # ------------------------------------------------------------------
+    lifecycle_llm_api: str = Field(
+        default="ollama",
+        pattern="^(ollama|openai)$",
+        description=(
+            "Wire protocol for the lifecycle worker's LLM calls: 'ollama' "
+            "(native /api/chat with format-schema) or 'openai' "
+            "(/v1/chat/completions with response_format json_schema)."
+        ),
+    )
+    lifecycle_llm_base_url: AnyHttpUrl | None = Field(
+        default=None,
+        description=(
+            "Base URL for the lifecycle LLM endpoint. Defaults to "
+            "`ollama_url` when unset. For api='openai', with or without a "
+            "trailing /v1 (normalized by the client)."
+        ),
+    )
+    lifecycle_llm_model: str | None = Field(
+        default=None,
+        description="Model id for lifecycle LLM calls. Defaults to `llm_model`.",
+    )
+    lifecycle_llm_api_key: SecretStr | None = Field(
+        default=None,
+        description=(
+            "Bearer key for the lifecycle LLM endpoint (sent as "
+            "Authorization: Bearer). Optional — omit for keyless local "
+            "endpoints."
+        ),
+    )
+
+    # ------------------------------------------------------------------
     # Core service
     # ------------------------------------------------------------------
     brain_port: int = Field(default=8100, ge=1, le=65535)

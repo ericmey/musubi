@@ -168,6 +168,8 @@ LLM output JSON parse failures are logged with the raw response in a debug direc
 
 If the LLM returns 8 items instead of 10: match by ID, update the 8, log the missing 2, they'll be re-selected next hour (state is still `provisional`).
 
+If a whole batch fails (transport error, parse failure — the client returns `None` for that call): that batch is isolated — its items fall back exactly as in "Ollama down" — while every other batch's enrichment lands. Failed batches increment `musubi_lifecycle_enrichment_batch_failures_total{kind}` so sustained enrichment degradation is an operational signal, not a log line. (Historic note: the first implementation read this section as all-or-nothing and nulled the entire sweep's field on one failed batch; ADR 0043 aligned the code with this spec.)
+
 ## Throughput
 
 At our capture rate (~500/day episodic typical, ~5000/day peak), an hourly sweep with batch=500 is well-sized. Per-run time on Ollama:

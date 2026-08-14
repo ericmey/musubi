@@ -112,20 +112,43 @@ def _load_prompt(name: str, version: str) -> str:
 class HttpxOllamaClient:
     """Production :class:`OllamaClient` backed by ``httpx.AsyncClient``.
 
+    Speaks either wire protocol behind one surface (ADR 0043):
+
+    - ``api="ollama"`` (default): native ``/api/chat`` with Ollama's
+      ``format``-schema structured output — the original co-located
+      qwen path. Unchanged behavior.
+    - ``api="openai"``: ``/v1/chat/completions`` with
+      ``response_format: json_schema (strict)`` — any OpenAI-compatible
+      endpoint (LiteLLM, vLLM, llama.cpp server). This is how the
+      lifecycle worker reaches the 35B house lane, whose structured
+      output actually survives the synthesis schema; the co-located
+      4B measured 0% on it (see the ADR for the full gradient).
+
+    Everything above the transport — prompt loading, payload shaping,
+    pydantic validation, debug dumps, the return-None-on-failure
+    contract — is identical across both, so callers cannot tell which
+    wire they are on. That is the point: model quality becomes a
+    deployment decision, not a code path.
+
     Parameters
     ----------
     base_url:
-        Base URL of the Ollama HTTP endpoint (e.g.
-        ``http://ollama:11434``).
+        Base URL of the endpoint. For ``api="openai"``, with or without
+        a trailing ``/v1`` (normalized).
     model:
-        Ollama-tagged model name (e.g. ``qwen3:4b``).
+        Model id as the endpoint knows it (``qwen3:4b`` for local
+        Ollama; ``house/backup`` behind LiteLLM).
     timeout_s:
-        Per-request timeout. Defaults to 120s — Qwen-4B on CPU fallback
-        can take ~60s for a batch of 10; leave headroom.
+        Per-request timeout. Defaults to 120s — leave headroom for a
+        cold batch on either lane.
     debug_dir:
         Optional directory to dump raw responses on parse/validation
         failure. Callers supply ``/var/lib/musubi/maturation-debug``
         in production.
+    api:
+        Wire protocol, ``"ollama"`` or ``"openai"``.
+    api_key:
+        Optional bearer for the endpoint (LiteLLM). Never logged.
     """
 
     def __init__(
@@ -135,11 +158,17 @@ class HttpxOllamaClient:
         model: str,
         timeout_s: float = _DEFAULT_TIMEOUT_S,
         debug_dir: Path | None = None,
+        api: str = "ollama",
+        api_key: str | None = None,
     ) -> None:
+        if api not in ("ollama", "openai"):
+            raise ValueError(f"unsupported llm api {api!r} (expected 'ollama' or 'openai')")
         self._base_url = base_url.rstrip("/")
         self._model = model
         self._timeout_s = timeout_s
         self._debug_dir = debug_dir
+        self._api = api
+        self._api_key = api_key
         if debug_dir is not None:
             debug_dir.mkdir(parents=True, exist_ok=True)
 
@@ -321,24 +350,56 @@ class HttpxOllamaClient:
         kind: str,
         schema: dict[str, Any] | None = None,
     ) -> str | None:
-        """POST to /api/chat; return the assistant message content or None.
+        """POST one chat turn on the configured wire; return the assistant
+        message content or None.
 
-        When ``schema`` is provided, it is passed as the ``format`` value
-        to engage Ollama's structured-output mode (≥0.5.0); the model
-        is then constrained to emit JSON conforming to the schema. When
-        ``schema`` is ``None``, falls back to free-form JSON mode.
+        ``api="ollama"``: ``/api/chat`` with the schema as the ``format``
+        value (Ollama structured-output mode, ≥0.5.0), or free-form JSON
+        mode when ``schema`` is None.
+
+        ``api="openai"``: ``/v1/chat/completions`` with
+        ``response_format: {type: json_schema, strict: true}``, or
+        ``{type: json_object}`` when ``schema`` is None. If the backend
+        only best-efforts the constraint, the existing validate-or-None
+        contract downstream absorbs it (the caller skips and retries
+        next sweep — made non-fatal in #684).
         """
-        url = f"{self._base_url}/api/chat"
-        payload: dict[str, Any] = {
-            "model": self._model,
-            "messages": messages,
-            "stream": False,
-            "format": schema if schema is not None else "json",
-            "options": {"temperature": 0},
-        }
+        headers: dict[str, str] = {}
+        if self._api == "openai":
+            base = self._base_url
+            url = (
+                f"{base}/chat/completions"
+                if base.endswith("/v1")
+                else f"{base}/v1/chat/completions"
+            )
+            response_format: dict[str, Any] = (
+                {
+                    "type": "json_schema",
+                    "json_schema": {"name": f"musubi_{kind}", "schema": schema, "strict": True},
+                }
+                if schema is not None
+                else {"type": "json_object"}
+            )
+            payload: dict[str, Any] = {
+                "model": self._model,
+                "messages": messages,
+                "temperature": 0,
+                "response_format": response_format,
+            }
+            if self._api_key:
+                headers["Authorization"] = f"Bearer {self._api_key}"
+        else:
+            url = f"{self._base_url}/api/chat"
+            payload = {
+                "model": self._model,
+                "messages": messages,
+                "stream": False,
+                "format": schema if schema is not None else "json",
+                "options": {"temperature": 0},
+            }
         try:
             async with httpx.AsyncClient(timeout=self._timeout_s) as client:
-                response = await client.post(url, json=payload)
+                response = await client.post(url, json=payload, headers=headers)
         except httpx.HTTPError as exc:
             log.warning(
                 "ollama-%s-network-error type=%s err=%s",
@@ -363,7 +424,11 @@ class HttpxOllamaClient:
             log.warning("ollama-%s-envelope-not-json err=%s", kind, exc)
             return None
 
-        content = _extract_message_content(body)
+        content = (
+            _extract_openai_content(body)
+            if self._api == "openai"
+            else _extract_message_content(body)
+        )
         if not content:
             self._write_debug(kind, response.text, reason="empty-message-content")
             log.warning("ollama-%s-empty-content body=%s", kind, str(body)[:500])
@@ -399,6 +464,20 @@ def _extract_message_content(body: Any) -> str | None:
     resp = body.get("response")
     if isinstance(resp, str) and resp.strip():
         return resp
+    return None
+
+
+def _extract_openai_content(body: Any) -> str | None:
+    """Pull the assistant content out of an OpenAI-format chat completion."""
+    if not isinstance(body, dict):
+        return None
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices:
+        msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, str) and content.strip():
+                return content
     return None
 
 

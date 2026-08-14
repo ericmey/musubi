@@ -58,6 +58,22 @@ Plus slice-specific:
 
 ## Work log
 
+### 2026-08-14 13:20 — claude-opus-5 — lifecycle LLM backend + batch isolation (ADR 0043)
+
+- `_batched_call` now isolates failed batches per the spec's actual
+  "Partial batch failure" contract (the code had implemented a stricter
+  all-or-nothing reading; one flaky batch was erasing topics for whole
+  sweeps — measured ~86% empty on 2026-08-14). Failed batches count on
+  `musubi_lifecycle_enrichment_batch_failures_total{kind}`.
+- `default_ollama_client` is now settings-driven (ADR 0043):
+  `LIFECYCLE_LLM_API=openai` + overrides target an OpenAI-compatible
+  endpoint (`house/backup` 35B behind LiteLLM in this deployment).
+  Defaults preserve Ollama behavior byte-for-byte.
+- New tests: per-batch isolation (+counter delta), total-outage-to-{},
+  OpenAI-wire client suite (tests/llm/test_openai_compat.py), settings
+  roundtrip/rejection.
+
+
 Agents append one entry per work session. Format:
 `### YYYY-MM-DD HH:MM — <agent-id> — <what changed>`
 

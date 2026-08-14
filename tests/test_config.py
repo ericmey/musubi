@@ -373,3 +373,42 @@ def test_settings_values_match_env(
     assert s.qdrant_host == "host-under-test"
     # Comparison against actual process env must use the accessor, not os.environ:
     assert s.qdrant_host == os.environ["QDRANT_HOST"]
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle LLM backend selection (ADR 0043)
+# ---------------------------------------------------------------------------
+
+
+def test_lifecycle_llm_defaults_preserve_ollama_behavior(
+    minimal_env: Path, _reset_cache: None
+) -> None:
+    s = get_settings()
+    assert s.lifecycle_llm_api == "ollama"
+    assert s.lifecycle_llm_base_url is None
+    assert s.lifecycle_llm_model is None
+    assert s.lifecycle_llm_api_key is None
+
+
+def test_lifecycle_llm_openai_override_roundtrip(
+    minimal_env: Path, _reset_cache: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LIFECYCLE_LLM_API", "openai")
+    monkeypatch.setenv("LIFECYCLE_LLM_BASE_URL", "http://litellm:4000/v1")
+    monkeypatch.setenv("LIFECYCLE_LLM_MODEL", "house/backup")
+    monkeypatch.setenv("LIFECYCLE_LLM_API_KEY", "sk-test")
+    s = get_settings()
+    assert s.lifecycle_llm_api == "openai"
+    assert str(s.lifecycle_llm_base_url).rstrip("/") == "http://litellm:4000/v1"
+    assert s.lifecycle_llm_model == "house/backup"
+    assert s.lifecycle_llm_api_key is not None
+    assert s.lifecycle_llm_api_key.get_secret_value() == "sk-test"
+    assert "sk-test" not in repr(s)
+
+
+def test_lifecycle_llm_api_rejects_unknown_value(
+    minimal_env: Path, _reset_cache: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LIFECYCLE_LLM_API", "typo")
+    with pytest.raises(Exception, match=r"lifecycle_llm_api|pattern"):
+        get_settings()

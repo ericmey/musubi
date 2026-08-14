@@ -53,6 +53,7 @@ from musubi.lifecycle.maturation import (
     OllamaClient,
     OllamaImportance,
     OllamaTopic,
+    _batched_call,
     detect_supersession_hint,
     episodic_maturation_sweep,
     normalize_tags,
@@ -1230,3 +1231,73 @@ async def test_supersession_no_predecessor_match(
     assert refreshed is not None
     assert refreshed.state == "matured"
     assert refreshed.supersedes == []
+
+
+# ---------------------------------------------------------------------------
+# Per-batch failure isolation (ADR 0043 — aligns code with the spec's
+# "Partial batch failure" section; the old code nulled the whole field)
+# ---------------------------------------------------------------------------
+
+
+def _metric_value(kind: str) -> float:
+    from musubi.observability import default_registry, render_text_format
+
+    text = render_text_format(default_registry())
+    prefix = f'musubi_lifecycle_enrichment_batch_failures_total{{kind="{kind}"}} '
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            return float(line.removeprefix(prefix))
+    return 0.0
+
+
+async def test_batched_call_isolates_failed_batches() -> None:
+    """One failed batch must not erase the other batches' enrichment.
+
+    This exact coupling starved synthesis: one flaky topics batch out of
+    ~five nulled linked_to_topics for the entire sweep, so clustering
+    fell back to capture-source tags and formed the mega-cluster. The
+    counter delta proves the degradation is an operational signal.
+    """
+    items = _importance_items_for_batch_test(6)
+    calls: list[list[str]] = []
+
+    async def flaky(batch: list[OllamaImportance]) -> dict[str, int] | None:
+        calls.append([i.object_id for i in batch])
+        # Fail exactly the middle batch.
+        if items[2].object_id in {i.object_id for i in batch}:
+            return None
+        return {i.object_id: 9 for i in batch}
+
+    before = _metric_value("importance")
+    merged = await _batched_call(items, flaky, kind="importance", batch_size=2)
+
+    assert len(calls) == 3  # all three batches attempted — no early return
+    assert set(merged) == {
+        items[0].object_id,
+        items[1].object_id,
+        items[4].object_id,
+        items[5].object_id,
+    }
+    assert _metric_value("importance") == before + 1
+
+
+async def test_batched_call_all_batches_failing_returns_empty_not_none() -> None:
+    """Total outage degrades to {} — the sweep's per-id fallback covers
+    every row, matching the spec's 'Ollama down' behavior."""
+
+    async def down(_batch: list[OllamaImportance]) -> dict[str, int] | None:
+        return None
+
+    merged = await _batched_call(
+        _importance_items_for_batch_test(4), down, kind="importance", batch_size=2
+    )
+    assert merged == {}
+
+
+def _importance_items_for_batch_test(n: int) -> list[OllamaImportance]:
+    from musubi.types.common import generate_ksuid
+
+    return [
+        OllamaImportance(object_id=generate_ksuid(), content=f"row {i}", captured_importance=5)
+        for i in range(n)
+    ]
