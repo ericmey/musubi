@@ -44,6 +44,13 @@ class _WarningClient:
         }
 
 
+class _RerankerCauseClient(_WarningClient):
+    async def retrieve(self, **kwargs: Any) -> dict[str, Any]:
+        response = await super().retrieve(**kwargs)
+        response["warnings"] = ["reranker_failed", "reranker_failed_request_rejected"]
+        return response
+
+
 # --------------------------------------------------------------------------- #
 # MCP
 # --------------------------------------------------------------------------- #
@@ -85,3 +92,20 @@ async def test_livekit_slow_thinker_surfaces_warnings() -> None:
         raise DefectStillPresent(
             "SlowThinker discarded the retrieval warnings — no channel surfaces them to ChatContext"
         )
+
+
+async def test_mcp_and_livekit_preserve_reranker_cause_detail() -> None:
+    client = cast(Any, _RerankerCauseClient())
+    mcp_output = await _do_search(
+        client, namespace="test/ns", query="q", limit=5, planes=["episodic"]
+    )
+    assert "reranker_failed" in mcp_output
+    assert "reranker_failed_request_rejected" in mcp_output
+
+    fast = FastTalker(client=client, namespace="test/ns", cache=ContextCache())
+    await fast.get_context("q")
+    assert fast.last_warnings == ["reranker_failed", "reranker_failed_request_rejected"]
+
+    slow = SlowThinker(client=client, namespace="test/ns", cache=ContextCache())
+    await slow._prefetch("q")
+    assert slow.last_warnings == ["reranker_failed", "reranker_failed_request_rejected"]

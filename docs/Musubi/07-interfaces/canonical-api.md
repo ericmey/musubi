@@ -683,6 +683,15 @@ Requests receive:
 - `X-Musubi-Duration-Ms` on responses.
 - `X-Musubi-Warnings` (comma-separated codes) on responses with non-fatal issues.
 
+Reranker degradation is backward-compatible and additive. Every response with
+a degraded rerank includes `reranker_failed`. Each degraded rerank with a known
+cause additionally contributes one bounded cause code, so a merged multi-plane
+response may carry more than one: `reranker_failed_timeout`,
+`reranker_failed_request_rejected`, `reranker_failed_unavailable`,
+`reranker_failed_invalid_response`, or `reranker_failed_unexpected_error`.
+Clients must not parse exception text or HTTP bodies from warning codes; none
+are exposed. See [[13-decisions/0044-additive-reranker-degradation-causes]].
+
 Clients can propagate `X-Request-Id` through their own logs for cross-system tracing.
 
 ## Test Contract

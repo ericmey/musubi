@@ -90,6 +90,7 @@ def _raise_for_httpx(exc: httpx.HTTPError) -> None:
     raise EmbeddingError(
         f"TEI request failed: {type(exc).__name__}: {exc}",
         status_code=None,
+        kind="timeout" if isinstance(exc, httpx.TimeoutException) else "unavailable",
     ) from exc
 
 
@@ -106,6 +107,7 @@ def _raise_for_status(response: httpx.Response) -> None:
     raise EmbeddingError(
         f"TEI returned {response.status_code}: {message}",
         status_code=response.status_code,
+        kind="request_rejected" if 400 <= response.status_code <= 499 else "unavailable",
     )
 
 
@@ -136,7 +138,14 @@ async def _post_json(
             await _sleep_with_jitter(retry_backoff)
             continue
         _raise_for_status(response)
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise EmbeddingError(
+                "TEI returned invalid JSON",
+                status_code=response.status_code,
+                kind="invalid_response",
+            ) from exc
     raise AssertionError("retry loop must return or raise")  # pragma: no cover
 
 
@@ -419,16 +428,28 @@ class TEIRerankerClient:
             # so the combined list still matches the caller's global order.
             batch_scores = [0.0] * len(batch)
             seen = [False] * len(batch)
-            for entry in data:
-                idx = int(entry["index"])
-                if 0 <= idx < len(batch):
-                    batch_scores[idx] = float(entry["score"])
-                    seen[idx] = True
+            try:
+                if not isinstance(data, list):
+                    raise TypeError("reranker response must be a list")
+                for entry in data:
+                    if not isinstance(entry, dict):
+                        raise TypeError("reranker entries must be objects")
+                    idx = int(entry["index"])
+                    if 0 <= idx < len(batch):
+                        batch_scores[idx] = float(entry["score"])
+                        seen[idx] = True
+            except (KeyError, TypeError, ValueError) as exc:
+                raise EmbeddingError(
+                    "TEI reranker returned an invalid response shape",
+                    status_code=200,
+                    kind="invalid_response",
+                ) from exc
             if not all(seen):
                 missing = [batch_offset + i for i, got in enumerate(seen) if not got]
                 raise EmbeddingError(
                     f"TEI reranker response missing scores for candidate indexes {missing}",
                     status_code=None,
+                    kind="invalid_response",
                 )
             scores.extend(batch_scores)
         return scores

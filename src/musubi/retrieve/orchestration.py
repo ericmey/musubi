@@ -15,6 +15,7 @@ from musubi.embedding.base import Embedder
 from musubi.embedding.tei import TEIRerankerClient
 from musubi.observability import get_tracer
 from musubi.observability.retrieval_metrics import (
+    RERANKER_DEGRADATION_CAUSES_TOTAL,
     RETRIEVAL_ERRORS_TOTAL,
     RETRIEVAL_WARNINGS_TOTAL,
 )
@@ -256,7 +257,8 @@ def _finalize(
     ``/v1/context``, and any direct orchestration caller — passes through here exactly once, so:
 
     - **Telemetry is counted once here**, not per-router: ``errors_total{kind}`` on a total failure;
-      ``warnings_total{warning,plane}`` once per distinct (code, plane) on a degraded success.
+      ``warnings_total{warning,plane}`` once per distinct base warning on a degraded success;
+      bounded reranker cause detail is counted separately.
     - **Boundedness fails closed**: only allowlisted warnings survive onto the envelope, so a free-text
       or out-of-vocabulary code/plane can NEVER become an unbounded Prometheus label or reach the wire.
     """
@@ -264,8 +266,18 @@ def _finalize(
         RETRIEVAL_ERRORS_TOTAL.labels(kind=result.error.kind).inc()
         return result
     warnings = tuple(w for w in dedupe(result.value.warnings) if is_allowlisted(w))
+    counted_base: set[tuple[str, str]] = set()
+    counted_cause: set[tuple[str, str]] = set()
     for w in warnings:
-        RETRIEVAL_WARNINGS_TOTAL.labels(warning=w.code, plane=w.plane).inc()
+        base_key = (w.code, w.plane)
+        if base_key not in counted_base:
+            RETRIEVAL_WARNINGS_TOTAL.labels(warning=w.code, plane=w.plane).inc()
+            counted_base.add(base_key)
+        if w.code == "reranker_failed" and w.cause is not None:
+            cause_key = (w.cause, w.plane)
+            if cause_key not in counted_cause:
+                RERANKER_DEGRADATION_CAUSES_TOTAL.labels(cause=w.cause, plane=w.plane).inc()
+                counted_cause.add(cause_key)
     return Ok(value=RetrievalEnvelope(results=result.value.results, warnings=warnings))
 
 
@@ -490,7 +502,7 @@ async def _retrieve_uncounted(
             best_by_id.values(),
             key=lambda r: (-r.score, r.object_id, r.plane),
         )
-        # Dedupe warnings to distinct (code, plane) ONLY at the final request boundary.
+        # Dedupe warnings to distinct (code, plane, cause) ONLY at the final request boundary.
         return Ok(
             value=RetrievalEnvelope(
                 results=merged[: parsed_query.limit], warnings=dedupe(tuple(warnings))

@@ -269,6 +269,34 @@ async def test_reranker_missing_score_reports_global_candidate_index(
         await client.rerank("q", [f"candidate-{i}" for i in range(35)])
 
 
+async def test_tei_reranker_classifies_timeout_rejection_unavailable_and_invalid_response(
+    httpx_mock: HTTPXMock,
+) -> None:
+    cases = (
+        ("timeout", httpx.ReadTimeout("slow"), "timeout"),
+        ("rejected", (413, "batch rejected"), "request_rejected"),
+        ("unavailable", (503, "warming"), "unavailable"),
+        ("invalid", (200, "not-json"), "invalid_response"),
+    )
+    for host, response, expected_kind in cases:
+        url = f"http://tei-{host}/rerank"
+        if isinstance(response, Exception):
+            httpx_mock.add_exception(response, url=url)
+        else:
+            status_code, body = response
+            for _ in range(2 if status_code >= 500 else 1):
+                httpx_mock.add_response(
+                    url=url,
+                    status_code=status_code,
+                    content=body.encode(),
+                    headers={"content-type": "application/json"},
+                )
+        client = TEIRerankerClient(base_url=f"http://tei-{host}", retry_backoff=0.0)
+        with pytest.raises(EmbeddingError) as excinfo:
+            await client.rerank("q", ["candidate"])
+        assert excinfo.value.kind == expected_kind
+
+
 async def test_lower_deployed_tei_batch_ceiling_overrides_static_client_fallback(
     httpx_mock: HTTPXMock,
 ) -> None:

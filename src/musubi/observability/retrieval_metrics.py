@@ -1,10 +1,10 @@
-"""RET-007 — the two bounded retrieval-degradation counters.
+"""RET-007/RET-018 — bounded retrieval-degradation counters.
 
 Both are registered on the process-wide default registry at import time (the retrieve router imports
 this module), so the ``/ops/metrics`` scrape and the contract tests see them. Labels are BOUNDED: the
 warning counter is keyed by ``(warning, plane)`` over the fixed code/plane vocabulary, the error
-counter by ``kind`` over the four ``RetrievalError`` kinds — no unbounded/free-text label ever enters
-Prometheus.
+counter by ``kind`` over the four ``RetrievalError`` kinds, and reranker cause detail by a separate
+bounded ``(cause, plane)`` counter — no unbounded/free-text label ever enters Prometheus.
 """
 
 from __future__ import annotations
@@ -17,6 +17,12 @@ RETRIEVAL_WARNINGS_TOTAL: Counter = default_registry().counter(
     ("warning", "plane"),
 )
 
+RERANKER_DEGRADATION_CAUSES_TOTAL: Counter = default_registry().counter(
+    "musubi_reranker_degradation_causes_total",
+    "Count of reranker degradation by bounded cause and plane.",
+    ("cause", "plane"),
+)
+
 RETRIEVAL_ERRORS_TOTAL: Counter = default_registry().counter(
     "musubi_retrieval_errors_total",
     "Count of total-failure retrieval requests, by bounded error kind.",
@@ -24,4 +30,8 @@ RETRIEVAL_ERRORS_TOTAL: Counter = default_registry().counter(
 )
 
 
-__all__ = ["RETRIEVAL_ERRORS_TOTAL", "RETRIEVAL_WARNINGS_TOTAL"]
+__all__ = [
+    "RERANKER_DEGRADATION_CAUSES_TOTAL",
+    "RETRIEVAL_ERRORS_TOTAL",
+    "RETRIEVAL_WARNINGS_TOTAL",
+]
