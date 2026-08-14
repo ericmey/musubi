@@ -268,7 +268,7 @@ async def test_reranker_missing_score_reports_global_candidate_index(
         await client.rerank("q", [f"candidate-{i}" for i in range(35)])
 
 
-def test_lower_deployed_tei_batch_ceiling_overrides_static_client_fallback(
+async def test_lower_deployed_tei_batch_ceiling_overrides_static_client_fallback(
     httpx_mock: HTTPXMock,
 ) -> None:
     httpx_mock.add_response(
@@ -280,6 +280,12 @@ def test_lower_deployed_tei_batch_ceiling_overrides_static_client_fallback(
     httpx_mock.add_response(
         url="http://tei-reranker/info", method="GET", json={"max_client_batch_size": 16}
     )
+    for _ in range(3):
+        httpx_mock.add_response(
+            url="http://tei-dense/embed",
+            method="POST",
+            json=[[0.0] * DENSE_SIZE for _ in range(8)],
+        )
 
     clients = build_tei_clients(
         dense_url="http://tei-dense",
@@ -290,6 +296,13 @@ def test_lower_deployed_tei_batch_ceiling_overrides_static_client_fallback(
     assert clients.dense.max_batch_size == 8
     assert clients.sparse.max_batch_size == 12
     assert clients.reranker.max_batch_size == 16
+
+    vectors = await clients.dense.embed_dense([f"text-{i}" for i in range(24)])
+    dense_requests = [
+        request for request in httpx_mock.get_requests() if request.url.path == "/embed"
+    ]
+    assert len(dense_requests) == 3
+    assert len(vectors) == 24
 
 
 async def test_higher_deployed_tei_batch_ceiling_avoids_silent_under_batching(

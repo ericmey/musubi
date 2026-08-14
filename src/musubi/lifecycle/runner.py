@@ -536,7 +536,8 @@ async def _main_async() -> None:
     # bootstrap (src/musubi/api/bootstrap.py) wraps the same way; without
     # this, vault_reconcile / synthesis / any lifecycle-side embed of a
     # long input HTTP 413s. See musubi#367.
-    tei_clients = build_tei_clients(
+    tei_clients = await asyncio.to_thread(
+        build_tei_clients,
         dense_url=str(settings.tei_dense_url),
         sparse_url=str(settings.tei_sparse_url),
         reranker_url=str(settings.tei_reranker_url),

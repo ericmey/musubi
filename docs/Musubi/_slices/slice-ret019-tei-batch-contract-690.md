@@ -78,3 +78,8 @@ degradation or silently adds avoidable sequential requests.
   suites 61 passed; whole-repo `make check` passed with 2,676 tests, 195
   documented skips, 140 deselected, two expected xfails, and coverage above
   the 85% gate. `make agent-check` is clean with warnings only.
+- 2026-08-14 — Review strengthened the lower-ceiling contract from a stored-
+  value assertion to a behavioral proof: 24 dense inputs against an advertised
+  ceiling of eight produce exactly three requests. Lifecycle-worker discovery
+  now runs through `asyncio.to_thread`, so three bounded synchronous `/info`
+  probes cannot block its active event loop during startup.
