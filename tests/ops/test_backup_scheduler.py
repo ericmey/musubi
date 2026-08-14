@@ -77,6 +77,35 @@ def test_script_discovers_collections_dynamically() -> None:
     assert 0 <= list_idx < post_idx, "collection discovery must precede snapshot loop"
 
 
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
+def test_successful_backup_command_keeps_stderr_out_of_stdout_data() -> None:
+    """A successful warning must remain diagnostic data, never collection data."""
+    probe = r'''
+source <(sed -n '/^capture_command()/,/^}/p' "$1")
+stdout=""
+stderr=""
+capture_command stdout stderr bash -c \
+  'printf "episodic\nsemantic\n"; printf "runtime warning\n" >&2'
+printf 'OUT=<%s>\nERR=<%s>\n' "$stdout" "$stderr"
+'''
+    result = subprocess.run(
+        ["bash", "-c", probe, "backup-capture-probe", str(SCRIPT)],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "OUT=<episodic\nsemantic>\nERR=<runtime warning>\n"
+
+
+def test_discovery_and_snapshot_parse_only_captured_stdout() -> None:
+    text = SCRIPT.read_text()
+    assert "capture_command discovered discovery_stderr" in text
+    assert "capture_command result snapshot_stderr" in text
+    assert "qdrant-collection-discovery-failed out=${discovered} err=${discovery_stderr}" in text
+    assert "qdrant-snapshot-api-failed coll=${coll} out=${result} err=${snapshot_stderr}" in text
+
+
 def test_script_calls_qdrant_snapshot_api() -> None:
     text = SCRIPT.read_text()
     assert "/collections/" in text
