@@ -4,10 +4,10 @@ slice_id: slice-ret018-reranker-warning-causes-689
 issue: 689
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5-yua
 phase: "3 Retrieval"
-tags: [section/slices, status/in-progress, type/slice, retrieval, rerank, api]
+tags: [section/slices, status/in-review, type/slice, retrieval, rerank, api]
 updated: 2026-08-14
 reviewed: false
 depends-on: [slice-ret019-tei-batch-contract-690]
@@ -55,3 +55,25 @@ observable without removing the stable warning old consumers already know.
 - 2026-08-14 — Decision/test contract opened while RET-019 was in final CI.
   The shared TEI client remains untouched until RET-019 lands and is merged
   into this branch.
+- 2026-08-14 — Implemented one backward-compatible warning vocabulary:
+  `reranker_failed` remains the stable public signal and exactly one bounded
+  detail code identifies timeout, rejected request, unavailable service,
+  invalid response, or unexpected error. Existing warning telemetry remains
+  unchanged; a separate bounded cause counter records the new dimension.
+- 2026-08-14 — Preserved the additive detail across retrieve, context, stream,
+  MCP, and LiveKit surfaces without exposing exception text, response bodies,
+  URLs, or candidate content. Timeout classification is explicit at both the
+  TEI transport and deep-stage deadline boundaries.
+- 2026-08-14 — Merged RET-019 after its reviewed merge to main. The one test
+  conflict retained both contracts: runtime `/info` remains authoritative for
+  TEI batch ceilings, while typed TEI failures now supply RET-018 causes.
+  Combined focused verification passed 59 tests with 16 intentional skips.
+- 2026-08-14 — Final verification on the merged ancestry: `make check` passed
+  with 2,685 tests, 195 skips, 140 deselections, and 2 expected xfails;
+  formatting, lint, strict mypy, and coverage all passed. `make tc-coverage`
+  closed 78/78 stated bullets, including all six slice bullets, and
+  `make agent-check` completed clean with warnings only.
+- 2026-08-14 — The three pre-existing live integration/performance bullets in
+  the orchestration spec (10K fast-path p95, deep-path NDCG, and kill-TEI
+  degradation) remain outside this API-contract slice; their existing
+  retrieval-eval and live-stack homes are unchanged.
