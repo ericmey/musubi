@@ -80,14 +80,14 @@ def test_script_discovers_collections_dynamically() -> None:
 @pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
 def test_successful_backup_command_keeps_stderr_out_of_stdout_data() -> None:
     """A successful warning must remain diagnostic data, never collection data."""
-    probe = r'''
+    probe = r"""
 eval "$(sed -n '/^capture_command()/,/^}/p' "$1")"
 stdout=""
 stderr=""
 capture_command stdout stderr bash -c \
   'printf "episodic\nsemantic\n"; printf "runtime warning\n" >&2'
 printf 'OUT=<%s>\nERR=<%s>\n' "$stdout" "$stderr"
-'''
+"""
     result = subprocess.run(
         ["bash", "-c", probe, "backup-capture-probe", str(SCRIPT)],
         capture_output=True,
