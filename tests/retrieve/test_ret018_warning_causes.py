@@ -52,6 +52,14 @@ def test_reranker_failure_cause_is_bounded_and_wire_additive() -> None:
         RetrievalWarning(code="reranker_failed", plane="episodic", cause="HTTP 413: raw body")
     )
 
+    unknown = reranker_failed("episodic", cause="future_embedder_failure")
+    assert unknown.cause == "unexpected_error"
+    assert is_allowlisted(unknown)
+    assert wire_codes((unknown,)) == (
+        "reranker_failed",
+        "reranker_failed_unexpected_error",
+    )
+
 
 def test_reranker_failure_causes_dedupe_without_double_counting_base_warning() -> None:
     warnings = dedupe(

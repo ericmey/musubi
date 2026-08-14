@@ -77,3 +77,8 @@ observable without removing the stable warning old consumers already know.
   the orchestration spec (10K fast-path p95, deep-path NDCG, and kill-TEI
   degradation) remain outside this API-contract slice; their existing
   retrieval-eval and live-stack homes are unchanged.
+- 2026-08-14 — Independent exact-head review found a latent runtime seam: an
+  out-of-vocabulary cause from a future Embedder would be rejected before the
+  wire helper could preserve `reranker_failed`. The warning factory now
+  normalizes every unknown runtime cause to bounded `unexpected_error`; a
+  regression proves both the stable base and bounded detail survive.

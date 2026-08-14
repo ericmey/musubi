@@ -83,9 +83,19 @@ def sparse_embedding_failed(plane: str) -> RetrievalWarning:
     return RetrievalWarning(code="sparse_embedding_failed", plane=plane)
 
 
-def reranker_failed(plane: str, *, cause: RerankerFailureCause | None = None) -> RetrievalWarning:
-    """The reranker degraded within a leg; retrieval fell back to the fused ranking."""
-    return RetrievalWarning(code="reranker_failed", plane=plane, cause=cause)
+def reranker_failed(plane: str, *, cause: str | None = None) -> RetrievalWarning:
+    """The reranker degraded within a leg; retrieval fell back to the fused ranking.
+
+    Runtime callers are not constrained by the static ``Literal`` vocabulary.
+    Normalize an unknown non-empty cause to the bounded catch-all so a future
+    embedder cannot make the stable base warning disappear at finalization.
+    """
+    normalized_cause: str | None
+    if cause is None or cause in RERANKER_FAILURE_CAUSES:
+        normalized_cause = cause
+    else:
+        normalized_cause = "unexpected_error"
+    return RetrievalWarning(code="reranker_failed", plane=plane, cause=normalized_cause)
 
 
 def dedupe(warnings: tuple[RetrievalWarning, ...]) -> tuple[RetrievalWarning, ...]:
