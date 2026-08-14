@@ -5,7 +5,7 @@ issue: 725
 section: _slices
 type: slice
 status: done
-owner: codex-gpt5
+owner: Yua Tsukimori
 phase: "6 Lifecycle"
 tags: [section/slices, status/done, type/slice, lifecycle, synthesis]
 updated: 2026-08-14
