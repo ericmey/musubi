@@ -492,9 +492,7 @@ def _anchor(qdrant: QdrantClient, collection: str, object_id: str) -> Any:
     return a
 
 
-def _raw_anchor_payload(
-    qdrant: QdrantClient, collection: str, object_id: str
-) -> dict[str, Any]:
+def _raw_anchor_payload(qdrant: QdrantClient, collection: str, object_id: str) -> dict[str, Any]:
     from musubi.store.immutable_vectors import anchor_point_id
 
     points = qdrant.retrieve(

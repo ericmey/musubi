@@ -123,4 +123,3 @@ def test_vector_change_rebase_preserves_strict_physical_envelopes(tmp_path: Path
         }
     finally:
         client.close()
-
