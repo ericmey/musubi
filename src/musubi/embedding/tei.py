@@ -288,7 +288,7 @@ class TEIDenseClient:
 
     @property
     def max_batch_size(self) -> int:
-        """Validated maximum number of inputs sent in one TEI request."""
+        """Configured maximum number of inputs sent in one TEI request."""
         return self._max_batch_size
 
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
@@ -339,7 +339,7 @@ class TEISparseClient:
 
     @property
     def max_batch_size(self) -> int:
-        """Validated maximum number of inputs sent in one TEI request."""
+        """Configured maximum number of inputs sent in one TEI request."""
         return self._max_batch_size
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
@@ -394,7 +394,7 @@ class TEIRerankerClient:
 
     @property
     def max_batch_size(self) -> int:
-        """Validated maximum number of candidates sent in one TEI request."""
+        """Configured maximum number of candidates sent in one TEI request."""
         return self._max_batch_size
 
     async def rerank(self, query: str, candidates: list[str]) -> list[float]:
