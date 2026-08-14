@@ -61,6 +61,7 @@ from musubi.lifecycle.maturation import (
 )
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store import bootstrap
+from musubi.types.common import KSUID
 from musubi.types.episodic import EpisodicMemory
 
 # ---------------------------------------------------------------------------
@@ -1269,7 +1270,7 @@ async def test_batched_call_isolates_failed_batches() -> None:
         return {i.object_id: 9 for i in batch}
 
     before = _metric_value("importance")
-    merged = await _batched_call(items, flaky, kind="importance", batch_size=2)
+    merged: dict[KSUID, int] = await _batched_call(items, flaky, kind="importance", batch_size=2)
 
     assert len(calls) == 3  # all three batches attempted — no early return
     assert set(merged) == {
@@ -1288,7 +1289,7 @@ async def test_batched_call_all_batches_failing_returns_empty_not_none() -> None
     async def down(_batch: list[OllamaImportance]) -> dict[str, int] | None:
         return None
 
-    merged = await _batched_call(
+    merged: dict[KSUID, int] = await _batched_call(
         _importance_items_for_batch_test(4), down, kind="importance", batch_size=2
     )
     assert merged == {}

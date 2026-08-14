@@ -412,3 +412,26 @@ def test_lifecycle_llm_api_rejects_unknown_value(
     monkeypatch.setenv("LIFECYCLE_LLM_API", "typo")
     with pytest.raises(Exception, match=r"lifecycle_llm_api|pattern"):
         get_settings()
+
+
+def test_lifecycle_llm_openai_requires_explicit_base_url(
+    minimal_env: Path, _reset_cache: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LIFECYCLE_LLM_API", "openai")
+    monkeypatch.setenv("LIFECYCLE_LLM_MODEL", "house/backup")
+    with pytest.raises(Exception, match="lifecycle_llm_base_url"):
+        get_settings()
+
+
+@pytest.mark.parametrize("model", ["", "   "])
+def test_lifecycle_llm_openai_requires_explicit_nonblank_model(
+    model: str,
+    minimal_env: Path,
+    _reset_cache: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIFECYCLE_LLM_API", "openai")
+    monkeypatch.setenv("LIFECYCLE_LLM_BASE_URL", "http://litellm:4000/v1")
+    monkeypatch.setenv("LIFECYCLE_LLM_MODEL", model)
+    with pytest.raises(Exception, match="lifecycle_llm_model"):
+        get_settings()

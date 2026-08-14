@@ -199,35 +199,37 @@ Enrichment:
 8. `test_tags_deduped`
 9. `test_topics_inferred_from_llm`
 10. `test_topics_empty_on_unknown`
+11. `test_batched_call_isolates_failed_batches`
+12. `test_batched_call_all_batches_failing_returns_empty_not_none`
 
 Supersession:
 
-11. `test_supersession_inferred_from_hint_keyword`
-12. `test_supersession_not_inferred_without_hint`
-13. `test_supersession_sets_both_sides_of_link`
+13. `test_supersession_inferred_from_hint_keyword`
+14. `test_supersession_not_inferred_without_hint`
+15. `test_supersession_sets_both_sides_of_link`
 
 Transitions:
 
-14. `test_state_transitions_to_matured`
-15. `test_transition_uses_typed_function`
-16. `test_lifecycle_event_emitted`
-17. `test_ollama_outage_still_matures_without_enrichment`
+16. `test_state_transitions_to_matured`
+17. `test_transition_uses_typed_function`
+18. `test_lifecycle_event_emitted`
+19. `test_ollama_outage_still_matures_without_enrichment`
 
 TTL:
 
-18. `test_provisional_older_than_7d_archived`
-19. `test_archival_emits_lifecycle_event`
+20. `test_provisional_older_than_7d_archived`
+21. `test_archival_emits_lifecycle_event`
 
 Concurrency:
 
-20. `test_file_lock_prevents_double_execution`
+22. `test_file_lock_prevents_double_execution`
 
 Property:
 
-21. `hypothesis: no matured memory has created_epoch in the future`
-22. `hypothesis: provisional memories older than 7d are always archived after one sweep`
+23. `hypothesis: no matured memory has created_epoch in the future`
+24. `hypothesis: provisional memories older than 7d are always archived after one sweep`
 
 Integration:
 
-23. `integration: real Ollama, 50 synthetic provisional memories mature in one sweep, importance distribution is plausible`
-24. `integration: ollama-offline scenario — maturation completes without enrichment, re-enrichment sweep picks them up later`
+25. `integration: real Ollama, 50 synthetic provisional memories mature in one sweep, importance distribution is plausible`
+26. `integration: ollama-offline scenario — maturation completes without enrichment, re-enrichment sweep picks them up later`

@@ -71,6 +71,22 @@ def test_reference_templates_contain_only_expected_op_paths() -> None:
     assert "vault_" not in secrets_text + qdrant_text
 
 
+def test_lifecycle_llm_key_uses_runtime_secret_boundary() -> None:
+    env_text = ENV.read_text()
+    secrets_text = SECRETS_TEMPLATE.read_text()
+    compose_text = COMPOSE.read_text()
+    core_block, worker_and_rest = compose_text.split("  lifecycle-worker:", maxsplit=1)
+    worker_block = worker_and_rest.split("  qdrant:", maxsplit=1)[0]
+
+    assert "LIFECYCLE_LLM_API_KEY" not in env_text
+    assert (
+        "LIFECYCLE_LLM_API_KEY=op://Harem World/command-chair-litellm-api-key/credential"
+        in secrets_text
+    )
+    assert "LIFECYCLE_LLM_API_KEY" not in core_block
+    assert "LIFECYCLE_LLM_API_KEY: ${LIFECYCLE_LLM_API_KEY}" in worker_block
+
+
 def test_config_play_renders_op_reference_templates_and_restarts_on_change() -> None:
     text = CONFIG.read_text()
 

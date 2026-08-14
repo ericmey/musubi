@@ -1,8 +1,21 @@
+---
+title: "ADR 0043: Lifecycle LLM via OpenAI-compatible endpoint"
+section: 13-decisions
+type: adr
+status: accepted
+date: 2026-08-14
+updated: 2026-08-14
+deciders: [Eric]
+tags: [architecture, lifecycle, llm, deployment, type/adr, status/accepted]
+supersedes: ""
+superseded-by: ""
+---
+
 # ADR 0043: Lifecycle LLM via OpenAI-compatible endpoint
 
 - **Status:** Accepted
 - **Date:** 2026-08-14
-- **Deciders:** Eric (model-lane selection), Yua (review), Claude (evidence + implementation)
+- **Decider:** Eric (model-lane selection)
 
 ## Context
 
@@ -75,8 +88,9 @@ capture-source tags (the mega-cluster precondition from #684).
 - Model capability for the memory pipeline becomes a deployment decision
   (env), not a code path. The gradient can be re-measured against any lane
   by flipping four env values.
-- One new secret in the worker env (the LiteLLM key), delivered like every
-  other secret in `env.production`.
+- One new secret in the worker environment (the LiteLLM key), materialized
+  from a committed 1Password reference by `op run`; it is never rendered into
+  the persistent non-secret `.env.production` file.
 - If the LiteLLM backend only best-efforts `json_schema` (backend-dependent),
   the existing validate-or-None contract absorbs it: failed calls skip and
   retry next sweep, and the failure lands on the #684 counters.
@@ -99,3 +113,19 @@ capture-source tags (the mega-cluster precondition from #684).
   `<family>/shared/concept` by the agents' own tokens, and
   `enrichment_batch_failures_total` rate visibly below the ~86% the 4B
   produced.
+
+## Test Contract
+
+1. `test_lifecycle_llm_defaults_preserve_ollama_behavior`
+2. `test_lifecycle_llm_openai_override_roundtrip`
+3. `test_lifecycle_llm_api_rejects_unknown_value`
+4. `test_lifecycle_llm_openai_requires_explicit_base_url`
+5. `test_lifecycle_llm_openai_requires_explicit_nonblank_model`
+6. `test_score_importance_happy_path_openai`
+7. `test_request_shape_bearer_and_strict_json_schema`
+8. `test_base_url_with_trailing_v1_is_not_doubled`
+9. `test_no_api_key_sends_no_authorization_header`
+10. `test_http_error_returns_none`
+11. `test_synthesize_cluster_happy_path_openai`
+12. `test_unknown_api_value_fails_loudly`
+13. `test_lifecycle_llm_key_uses_runtime_secret_boundary`

@@ -389,6 +389,27 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_lifecycle_llm_openai_config(self) -> Settings:
+        """OpenAI transport must never inherit Ollama endpoint identity.
+
+        The native Ollama path deliberately keeps its historical defaults.
+        Selecting the OpenAI wire is different: both endpoint and model are
+        part of that transport's identity and must be stated explicitly.
+        """
+        if self.lifecycle_llm_api != "openai":
+            return self
+        missing: list[str] = []
+        if self.lifecycle_llm_base_url is None:
+            missing.append("lifecycle_llm_base_url")
+        if self.lifecycle_llm_model is None or not self.lifecycle_llm_model.strip():
+            missing.append("lifecycle_llm_model")
+        if missing:
+            raise ValueError(
+                "lifecycle_llm_api='openai' requires explicit nonblank " + " and ".join(missing)
+            )
+        return self
+
     # ------------------------------------------------------------------
     # repr: pydantic-settings already masks SecretStr as ``**********``;
     # override to prune internal pydantic noise for a cleaner log line.
