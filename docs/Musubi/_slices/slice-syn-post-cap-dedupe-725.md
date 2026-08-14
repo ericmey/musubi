@@ -4,12 +4,12 @@ slice_id: slice-syn-post-cap-dedupe-725
 issue: 725
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "6 Lifecycle"
-tags: [section/slices, status/in-review, type/slice, lifecycle, synthesis]
+tags: [section/slices, status/done, type/slice, lifecycle, synthesis]
 updated: 2026-08-14
-reviewed: false
+reviewed: true
 depends-on: [slice-lifecycle-synthesis]
 blocks: []
 ---
@@ -59,5 +59,9 @@ sampling then collapsed both groups to the same effective LLM input.
   2 expected failures; formatting, lint, type checking, and 88.93% coverage
   passed. Slice Test Contract closure passed 32/32 machine-readable entries
   (25 passing tests, 3 documented skips, 4 non-test entries).
+- 2026-08-14 — Independent exact-head review mutation-tested both boundaries:
+  disabling the duplicate skip failed this regression, while forcing one
+  constant fingerprint failed four synthesis tests. Fresh CI passed on the
+  reviewed implementation head.
 
 spec-update: docs/Musubi/06-ingestion/concept-synthesis.md
