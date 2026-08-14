@@ -10,10 +10,10 @@ no secondary host, no vault password at run time. Recovery does not depend
 on the ansible control host being up.
 
 The host driver does not read material secrets from `.env.production`.
-Qdrant discovery and snapshot requests run through `docker compose exec
-lifecycle-worker`; that container already receives `QDRANT_API_KEY` from the
-service's 1Password Connect startup path. Keep the key out of host files, argv,
-and logs.
+It resolves the running lifecycle worker from Docker Compose labels, then runs
+Qdrant discovery and snapshot requests through direct `docker exec`; that
+container already receives `QDRANT_API_KEY` from the service's 1Password
+Connect startup path. Keep the key out of host files, argv, and logs.
 
 Install + enable (one-shot, from the host):
 
@@ -58,6 +58,12 @@ sudo jq .status /var/lib/musubi/backups/<TIMESTAMP>/manifest.json # → 0
 A `status` of `0` means every store backed up; `2` means at least one
 Qdrant collection or sqlite step failed and retention was held open
 pending operator review.
+
+The driver resolves the running lifecycle worker through Docker Compose labels
+and uses `docker exec` directly. Do not replace that boundary with
+`docker compose exec`: Compose reparses the stack file and can emit runtime-secret
+interpolation warnings into captured command output, which previously became
+fake collection names and invalid manifest JSON.
 
 ## 2. Ansible-driven full backup (kept for drills + offsite push)
 

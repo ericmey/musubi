@@ -95,7 +95,12 @@ def test_script_uses_container_secret_without_host_materialization() -> None:
     text = SCRIPT.read_text()
     assert "grep -E '^QDRANT_API_KEY='" not in text
     assert "export QDRANT_API_KEY" not in text
-    assert "exec -T lifecycle-worker" in text
+    assert "com.docker.compose.service=lifecycle-worker" in text
+    assert 'docker exec -i "$LIFECYCLE_CONTAINER"' in text
+    executable_text = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert re.search(r"\bdocker\s+compose\b", executable_text) is None
     assert "os.environ['QDRANT_API_KEY']" in text
 
 
