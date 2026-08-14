@@ -33,9 +33,11 @@ Error handling contract:
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import threading
 import weakref
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -45,6 +47,8 @@ from musubi.embedding.base import EmbeddingError
 _DEFAULT_TIMEOUT = 30.0
 _DEFAULT_MAX_BATCH_SIZE = 64
 _DEFAULT_MAX_RERANK_BATCH_SIZE = 32
+_DEFAULT_INFO_TIMEOUT = 1.0
+_SAFE_MAX_EMBED_BATCH_SIZE = 16
 
 # Char-level safety belts. Split per-client because each model has a
 # different input contract and not every call site is wrapped in a
@@ -77,6 +81,8 @@ _DEFAULT_RETRY_BACKOFF = 0.05
 # recommends for a long-lived service-to-service client; it's the size of
 # the idle pool we hold open between bursts.
 _DEFAULT_LIMITS = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+
+logger = logging.getLogger(__name__)
 
 
 def _raise_for_httpx(exc: httpx.HTTPError) -> None:
@@ -280,6 +286,11 @@ class TEIDenseClient:
         self._retry_backoff = retry_backoff
         self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
 
+    @property
+    def max_batch_size(self) -> int:
+        """Configured maximum number of inputs sent in one TEI request."""
+        return self._max_batch_size
+
     async def embed_dense(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
@@ -325,6 +336,11 @@ class TEISparseClient:
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
         self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
+
+    @property
+    def max_batch_size(self) -> int:
+        """Configured maximum number of inputs sent in one TEI request."""
+        return self._max_batch_size
 
     async def embed_sparse(self, texts: list[str]) -> list[dict[int, float]]:
         if not texts:
@@ -376,6 +392,11 @@ class TEIRerankerClient:
         self._retry_backoff = retry_backoff
         self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
 
+    @property
+    def max_batch_size(self) -> int:
+        """Configured maximum number of candidates sent in one TEI request."""
+        return self._max_batch_size
+
     async def rerank(self, query: str, candidates: list[str]) -> list[float]:
         if not candidates:
             return []
@@ -417,4 +438,87 @@ class TEIRerankerClient:
         await self._client.aclose()
 
 
-__all__ = ["TEIDenseClient", "TEIRerankerClient", "TEISparseClient"]
+@dataclass(frozen=True, slots=True)
+class TEIClients:
+    """Production TEI clients bound to one discovered runtime contract."""
+
+    dense: TEIDenseClient
+    sparse: TEISparseClient
+    reranker: TEIRerankerClient
+
+
+def _discover_max_client_batch_size(
+    client: httpx.Client,
+    *,
+    base_url: str,
+    fallback: int,
+) -> int:
+    """Read and validate TEI's authoritative ``/info`` batch ceiling.
+
+    Discovery is an optimization and drift guard, not a startup dependency.
+    An unavailable or malformed endpoint uses the conservative fallback and
+    records why; ordinary endpoint health probes still own startup liveness.
+    """
+    url = f"{base_url.rstrip('/')}/info"
+    try:
+        response = client.get(url)
+        response.raise_for_status()
+        payload = response.json()
+        value = payload.get("max_client_batch_size") if isinstance(payload, dict) else None
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError("max_client_batch_size must be a positive integer")
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning(
+            "TEI batch contract unavailable; using conservative fallback. endpoint=%s "
+            "fallback=%d error=%s",
+            url,
+            fallback,
+            exc,
+        )
+        return fallback
+    return value
+
+
+def build_tei_clients(
+    *,
+    dense_url: str,
+    sparse_url: str,
+    reranker_url: str,
+    info_timeout: float = _DEFAULT_INFO_TIMEOUT,
+) -> TEIClients:
+    """Construct production clients from each deployed TEI ``/info`` contract.
+
+    Direct client constructors retain explicit static ceilings for tests and
+    deliberately pinned callers. Production surfaces use this factory so the
+    deployed service, rather than a duplicated constant, sets each ceiling.
+    """
+    with httpx.Client(timeout=info_timeout) as info_client:
+        dense_batch_size = _discover_max_client_batch_size(
+            info_client,
+            base_url=dense_url,
+            fallback=_SAFE_MAX_EMBED_BATCH_SIZE,
+        )
+        sparse_batch_size = _discover_max_client_batch_size(
+            info_client,
+            base_url=sparse_url,
+            fallback=_SAFE_MAX_EMBED_BATCH_SIZE,
+        )
+        reranker_batch_size = _discover_max_client_batch_size(
+            info_client,
+            base_url=reranker_url,
+            fallback=_DEFAULT_MAX_RERANK_BATCH_SIZE,
+        )
+    return TEIClients(
+        dense=TEIDenseClient(base_url=dense_url, max_batch_size=dense_batch_size),
+        sparse=TEISparseClient(base_url=sparse_url, max_batch_size=sparse_batch_size),
+        reranker=TEIRerankerClient(base_url=reranker_url, max_batch_size=reranker_batch_size),
+    )
+
+
+__all__ = [
+    "TEIClients",
+    "TEIDenseClient",
+    "TEIRerankerClient",
+    "TEISparseClient",
+    "build_tei_clients",
+]

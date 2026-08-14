@@ -52,6 +52,7 @@ from musubi.embedding import (
     TEIDenseClient,
     TEIRerankerClient,
     TEISparseClient,
+    build_tei_clients,
 )
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.artifact import ArtifactPlane
@@ -204,9 +205,14 @@ def bootstrap_production_app(
 
     bootstrap_collections(qdrant)
 
-    dense = TEIDenseClient(base_url=str(settings.tei_dense_url))
-    sparse = TEISparseClient(base_url=str(settings.tei_sparse_url))
-    reranker = TEIRerankerClient(base_url=str(settings.tei_reranker_url))
+    tei_clients = build_tei_clients(
+        dense_url=str(settings.tei_dense_url),
+        sparse_url=str(settings.tei_sparse_url),
+        reranker_url=str(settings.tei_reranker_url),
+    )
+    dense = tei_clients.dense
+    sparse = tei_clients.sparse
+    reranker = tei_clients.reranker
     _retry(
         lambda: _probe_tei(str(settings.tei_dense_url)),
         dep="tei",

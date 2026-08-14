@@ -42,7 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from musubi.config import Settings, get_settings
 from musubi.embedding.chunked import ChunkedEmbedder
-from musubi.embedding.tei import TEIDenseClient, TEIRerankerClient, TEISparseClient
+from musubi.embedding.tei import build_tei_clients
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.planes.curated import CuratedPlane
@@ -174,9 +174,14 @@ def build_vault_sync_runtime(*, settings: Settings | None = None) -> VaultSyncRu
 
     bootstrap_collections(qdrant)
 
-    dense = TEIDenseClient(base_url=str(settings.tei_dense_url))
-    sparse = TEISparseClient(base_url=str(settings.tei_sparse_url))
-    reranker = TEIRerankerClient(base_url=str(settings.tei_reranker_url))
+    tei_clients = build_tei_clients(
+        dense_url=str(settings.tei_dense_url),
+        sparse_url=str(settings.tei_sparse_url),
+        reranker_url=str(settings.tei_reranker_url),
+    )
+    dense = tei_clients.dense
+    sparse = tei_clients.sparse
+    reranker = tei_clients.reranker
     # Wrap in ChunkedEmbedder so sparse inputs > 510 tokens are
     # sliding-window-chunked + max-pooled before they hit tei-sparse
     # (SPLADE-v3 has a hard 512-token model cap). Same wrap the API
