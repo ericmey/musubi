@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.24.0](https://github.com/ericmey/musubi/compare/v1.23.8...v1.24.0) (2026-08-14)
+
+
+### Features
+
+* **lifecycle:** OpenAI-compatible LLM backend + per-batch enrichment isolation (ADR 0043) ([#693](https://github.com/ericmey/musubi/issues/693)) ([56c1e37](https://github.com/ericmey/musubi/commit/56c1e37a268056240afc91e7a475c1c7c381d1d9))
+
 ## [1.23.8](https://github.com/ericmey/musubi/compare/v1.23.7...v1.23.8) (2026-08-12)
 
 
