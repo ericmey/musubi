@@ -7,8 +7,8 @@ from typing import cast
 
 from musubi.embedding.tei import TEIRerankerClient
 from musubi.observability.registry import default_registry
-from musubi.retrieve.orchestration import RetrievalEnvelope, _finalize
 from musubi.retrieve.deep import _rerank_with_timeout
+from musubi.retrieve.orchestration import RetrievalEnvelope, _finalize
 from musubi.retrieve.scoring import Hit
 from musubi.retrieve.warnings import (
     RetrievalWarning,

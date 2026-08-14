@@ -7,7 +7,14 @@ either against a real TEI endpoint (via httpx) or in-process (the fake).
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
+
+EmbeddingFailureKind = Literal[
+    "timeout",
+    "request_rejected",
+    "unavailable",
+    "invalid_response",
+]
 
 
 class EmbeddingError(Exception):
@@ -19,9 +26,21 @@ class EmbeddingError(Exception):
     service".
     """
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        kind: EmbeddingFailureKind | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        if kind is not None:
+            self.kind = kind
+        elif status_code is not None and 400 <= status_code <= 499:
+            self.kind = "request_rejected"
+        else:
+            self.kind = "unavailable"
 
 
 @runtime_checkable
@@ -53,4 +72,4 @@ class Embedder(Protocol):
         ...
 
 
-__all__ = ["Embedder", "EmbeddingError"]
+__all__ = ["Embedder", "EmbeddingError", "EmbeddingFailureKind"]

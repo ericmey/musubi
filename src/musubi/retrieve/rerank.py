@@ -59,13 +59,13 @@ async def rerank(
         )
         return RerankResult(
             hits=hybrid_fallback(candidates, top_k=top_k),
-            warnings=(reranker_failed(plane),),
+            warnings=(reranker_failed(plane, cause=exc.kind),),
         )
     except Exception as exc:
         logger.error("Unexpected error in reranker: %s", exc, exc_info=True)
         return RerankResult(
             hits=hybrid_fallback(candidates, top_k=top_k),
-            warnings=(reranker_failed(plane),),
+            warnings=(reranker_failed(plane, cause="unexpected_error"),),
         )
 
     # Apply scores to new Hit instances (original is frozen)

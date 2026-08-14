@@ -281,12 +281,13 @@ async def test_tei_reranker_classifies_timeout_rejection_unavailable_and_invalid
             httpx_mock.add_exception(response, url=url)
         else:
             status_code, body = response
-            httpx_mock.add_response(
-                url=url,
-                status_code=status_code,
-                content=body.encode(),
-                headers={"content-type": "application/json"},
-            )
+            for _ in range(2 if status_code >= 500 else 1):
+                httpx_mock.add_response(
+                    url=url,
+                    status_code=status_code,
+                    content=body.encode(),
+                    headers={"content-type": "application/json"},
+                )
         client = TEIRerankerClient(base_url=f"http://tei-{host}", retry_backoff=0.0)
         with pytest.raises(EmbeddingError) as excinfo:
             await client.rerank("q", ["candidate"])
