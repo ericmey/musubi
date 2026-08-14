@@ -36,10 +36,9 @@ every object ID. On 2026-08-14, `musubi-core` occupied 111,791 of Mimir's
 
 ## Test Contract
 
-- Multiple literal object IDs produce one route-template label.
-- Raw object IDs do not appear in rendered metrics.
-- Arbitrary 404 paths produce one bounded sentinel label.
-- Exception-path counters and 5xx metrics use the same route template.
+- `test_dynamic_routes_use_template_labels_not_literal_ids`
+- `test_unmatched_routes_share_one_bounded_endpoint_label`
+- `test_dynamic_route_exceptions_use_the_same_template_label`
 
 ## Work log
 
