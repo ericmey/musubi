@@ -78,3 +78,12 @@ the mismatched ceiling.
   and not stable across proxies or client libraries.
 - **Add `cause` to the existing warning metric:** changes a frozen label set
   and fragments the established base-warning time series.
+
+## Test Contract
+
+1. `test_reranker_failure_cause_is_bounded_and_wire_additive`
+2. `test_reranker_failure_causes_dedupe_without_double_counting_base_warning`
+3. `test_tei_reranker_classifies_timeout_rejection_unavailable_and_invalid_response`
+4. `test_deep_stage_timeout_surfaces_timeout_cause`
+5. `test_retrieve_context_and_stream_share_reranker_cause_codes`
+6. `test_mcp_and_livekit_preserve_reranker_cause_detail`

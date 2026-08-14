@@ -1,7 +1,8 @@
 """RET-007 — the one warning language for retrieval degradation.
 
 A :class:`RetrievalWarning` is a **structured, bounded** signal that a retrieval leg degraded but did
-not fail the whole request: a machine-readable ``code`` plus the ``plane`` it happened on. It is a
+not fail the whole request: a machine-readable ``code``, the ``plane`` it happened on, and an
+optional allowlisted reranker ``cause``. It is a
 frozen dataclass (NOT a ``str`` subclass — the code and the plane are distinct fields, not one string
 carrying smuggled metadata), so it survives slicing / sorting / cross-plane merges without loss.
 
@@ -13,7 +14,7 @@ warning language, no free-text-to-code translation seam. The bounded vocabulary:
   other planes survived.
 
 ``code`` is always exactly one allowlisted value; ``plane`` is always one of the fixed planes. The
-router flattens ``code`` onto the additive wire ``warnings`` array and dedupes by ``(code, plane)``.
+router keeps the base code and additively flattens a bounded reranker cause onto the wire.
 """
 
 from __future__ import annotations
@@ -43,7 +44,7 @@ RERANKER_FAILURE_CAUSES = frozenset(
 
 @dataclass(frozen=True, slots=True)
 class RetrievalWarning:
-    """A bounded, structured retrieval-degradation signal: an allowlisted ``code`` + its ``plane``."""
+    """A bounded retrieval-degradation signal: allowlisted ``code``/``plane`` and cause."""
 
     code: str
     plane: str
@@ -82,9 +83,7 @@ def sparse_embedding_failed(plane: str) -> RetrievalWarning:
     return RetrievalWarning(code="sparse_embedding_failed", plane=plane)
 
 
-def reranker_failed(
-    plane: str, *, cause: RerankerFailureCause | None = None
-) -> RetrievalWarning:
+def reranker_failed(plane: str, *, cause: RerankerFailureCause | None = None) -> RetrievalWarning:
     """The reranker degraded within a leg; retrieval fell back to the fused ranking."""
     return RetrievalWarning(code="reranker_failed", plane=plane, cause=cause)
 

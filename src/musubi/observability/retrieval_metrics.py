@@ -1,10 +1,10 @@
-"""RET-007 — the two bounded retrieval-degradation counters.
+"""RET-007/RET-018 — bounded retrieval-degradation counters.
 
 Both are registered on the process-wide default registry at import time (the retrieve router imports
 this module), so the ``/ops/metrics`` scrape and the contract tests see them. Labels are BOUNDED: the
 warning counter is keyed by ``(warning, plane)`` over the fixed code/plane vocabulary, the error
-counter by ``kind`` over the four ``RetrievalError`` kinds — no unbounded/free-text label ever enters
-Prometheus.
+counter by ``kind`` over the four ``RetrievalError`` kinds, and reranker cause detail by a separate
+bounded ``(cause, plane)`` counter — no unbounded/free-text label ever enters Prometheus.
 """
 
 from __future__ import annotations

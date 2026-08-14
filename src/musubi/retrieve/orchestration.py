@@ -257,7 +257,8 @@ def _finalize(
     ``/v1/context``, and any direct orchestration caller — passes through here exactly once, so:
 
     - **Telemetry is counted once here**, not per-router: ``errors_total{kind}`` on a total failure;
-      ``warnings_total{warning,plane}`` once per distinct (code, plane) on a degraded success.
+      ``warnings_total{warning,plane}`` once per distinct base warning on a degraded success;
+      bounded reranker cause detail is counted separately.
     - **Boundedness fails closed**: only allowlisted warnings survive onto the envelope, so a free-text
       or out-of-vocabulary code/plane can NEVER become an unbounded Prometheus label or reach the wire.
     """
@@ -501,7 +502,7 @@ async def _retrieve_uncounted(
             best_by_id.values(),
             key=lambda r: (-r.score, r.object_id, r.plane),
         )
-        # Dedupe warnings to distinct (code, plane) ONLY at the final request boundary.
+        # Dedupe warnings to distinct (code, plane, cause) ONLY at the final request boundary.
         return Ok(
             value=RetrievalEnvelope(
                 results=merged[: parsed_query.limit], warnings=dedupe(tuple(warnings))
