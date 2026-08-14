@@ -65,6 +65,11 @@ and uses `docker exec` directly. Do not replace that boundary with
 interpolation warnings into captured command output, which previously became
 fake collection names and invalid manifest JSON.
 
+The driver also keeps command stdout and stderr separate. Only stdout is parsed
+as collection or snapshot data; stderr is retained for the failure log. Do not
+merge those streams: a successful Python warning must remain diagnostic text,
+not silently become a Qdrant identifier.
+
 ## 2. Ansible-driven full backup (kept for drills + offsite push)
 
 ## Stores
