@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from fastapi.testclient import TestClient
@@ -39,7 +39,7 @@ def _body(version: int) -> dict[str, Any]:
 def _seed(
     *,
     layout: str,
-    state: str,
+    state: Literal["provisional", "matured"],
     plane: EpisodicPlane,
     publisher: ImmutableVectorPublisher,
     coordinator: Any,
@@ -66,7 +66,7 @@ def _seed(
 @pytest.mark.parametrize("state", ["provisional", "matured"])
 def test_retraction_archives_legacy_and_v2_rows_from_any_active_state(
     layout: str,
-    state: str,
+    state: Literal["provisional", "matured"],
     client: TestClient,
     valid_token: str,
     episodic: EpisodicPlane,
@@ -145,7 +145,7 @@ def test_retracted_provisional_row_cannot_reenter_maturation_after_one_hour(
                 client=qdrant,
                 sink=sink,
                 coordinator=coordinator,
-                ollama=_NoEnrichment(),  # type: ignore[arg-type]
+                ollama=_NoEnrichment(),
                 cursor=cursor,
                 config=MaturationConfig(min_age_sec=3600),
                 now=retracted.updated_at + timedelta(hours=2),
