@@ -7,7 +7,7 @@ type: slice
 status: in-review
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, idempotency, data-integrity, api]
+tags: [section/slices, status/in-review, type/slice, idempotency, data-integrity, api]
 updated: 2026-08-17
 reviewed: false
 depends-on: [slice-idem007-escrow-retraction-saga]
