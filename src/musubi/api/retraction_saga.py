@@ -380,6 +380,7 @@ async def execute_retraction(
         "content": tombstone,
         "summary": body.summary or "Retracted false memory",
         "tags": sorted(set(body.tags) | {"retracted"}),
+        "state": "archived",
         "importance": 1,
         "updated_at": retracted_at.isoformat(),
         "updated_epoch": epoch_of(retracted_at),
