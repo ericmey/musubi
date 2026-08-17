@@ -95,10 +95,7 @@ def _layout(client: QdrantClient, object_id: str) -> list[dict[str, Any]]:
         with_vectors=True,
     )
     return sorted(
-        [
-            {"payload": dict(row.payload or {}), "vector": row.vector}
-            for row in rows
-        ],
+        [{"payload": dict(row.payload or {}), "vector": row.vector} for row in rows],
         key=lambda row: row["payload"].get("point_kind", "legacy"),
     )
 
@@ -117,11 +114,7 @@ def test_retraction_advances_updated_at_and_matching_updated_epoch_in_the_same_c
 ) -> None:
     publisher = _immutable_publishers[0]
     assert isinstance(publisher, ImmutableVectorPublisher)
-    memory = (
-        _seed_legacy(episodic)
-        if layout == "legacy"
-        else _seed_v2(publisher, coordinator)
-    )
+    memory = _seed_legacy(episodic) if layout == "legacy" else _seed_v2(publisher, coordinator)
     before = _layout(qdrant, memory.object_id)
     before_logical = asyncio.run(episodic.get(namespace=_NS, object_id=memory.object_id))
     assert before_logical is not None
