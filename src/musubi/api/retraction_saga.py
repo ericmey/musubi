@@ -32,7 +32,7 @@ from musubi.store.immutable_vectors import (
 from musubi.store.raw_lookup import retrieve_by_point_id
 from musubi.store.retraction_evidence import retraction_evidence_binding_errors
 from musubi.store.specs import strip_layout_fields
-from musubi.types.common import Err
+from musubi.types.common import Err, epoch_of, utc_now
 from musubi.types.episodic import EpisodicMemory, RetractionArtifactRef, RetractionEvidence
 
 EPISODIC_CONTENT_LIMIT_BYTES = 32_768
@@ -375,11 +375,14 @@ async def execute_retraction(
             "request_digest": request_digest,
         }
     )
+    retracted_at = utc_now()
     changes = {
         "content": tombstone,
         "summary": body.summary or "Retracted false memory",
         "tags": sorted(set(body.tags) | {"retracted"}),
         "importance": 1,
+        "updated_at": retracted_at.isoformat(),
+        "updated_epoch": epoch_of(retracted_at),
     }
     # Validate the exact would-be canonical row before durable escrow or CAS.
     # A post-CAS validation would report an unreadable row only after persisting it.
