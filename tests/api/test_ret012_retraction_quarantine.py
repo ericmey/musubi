@@ -12,7 +12,11 @@ from fastapi.testclient import TestClient
 from qdrant_client import QdrantClient
 
 from musubi.lifecycle import LifecycleEventSink
-from musubi.lifecycle.maturation import MaturationConfig, MaturationCursor, episodic_maturation_sweep
+from musubi.lifecycle.maturation import (
+    MaturationConfig,
+    MaturationCursor,
+    episodic_maturation_sweep,
+)
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store.immutable_vectors import ImmutableVectorPublisher
 from musubi.types.common import generate_ksuid
