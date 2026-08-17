@@ -4,7 +4,7 @@ slice_id: slice-api-v1-idem008-retraction-timestamps
 issue: 729
 section: _slices
 type: slice
-status: in-progress
+status: in-review
 owner: codex-gpt5
 phase: "8-ops"
 tags: [section/slices, status/in-progress, type/slice, idempotency, data-integrity, api]
@@ -70,3 +70,9 @@ observed-version CAS that advances the version and installs the tombstone.
   advanced version 1 to 2 while retaining the original `updated_at`. Scope is a
   one-timestamp correction inside the existing saga; operator-token widening,
   wire changes, and store-primitive changes are explicitly excluded.
+- 2026-08-17 — Implemented one `utc_now()` stamp in the evidence-gated CAS.
+  Focused IDEM-007/008 suite: 31 passed. Full `make check`: 2,691 passed,
+  195 skipped, 2 expected failures; formatting, lint, typing, and 85% coverage
+  gate passed. Test Contract unchanged. Independent QA separately found that
+  retracted provisional rows can mature; that lifecycle quarantine is a
+  blocking follow-up and is not hidden inside this timestamp slice.
