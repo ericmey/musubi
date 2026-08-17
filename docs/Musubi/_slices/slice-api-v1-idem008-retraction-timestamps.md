@@ -20,6 +20,10 @@ Stamp an escrow-backed episodic retraction as a real mutation: one server-owned
 request timestamp must advance `updated_at` and `updated_epoch` in the same
 observed-version CAS that advances the version and installs the tombstone.
 
+## Specs to implement
+
+- [[13-decisions/0042-escrow-backed-episodic-retraction]]
+
 ## Decision boundary
 
 - This is a behavioral correction to the existing v1 endpoint, not a wire-schema
