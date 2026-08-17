@@ -22,7 +22,7 @@ observed-version CAS that advances the version and installs the tombstone.
 
 ## Specs to implement
 
-- [[13-decisions/0042-escrow-backed-episodic-retraction]]
+- [[07-interfaces/canonical-api]]
 
 ## Decision boundary
 
