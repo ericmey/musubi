@@ -80,7 +80,7 @@ def test_lifecycle_llm_key_uses_runtime_secret_boundary() -> None:
 
     assert "LIFECYCLE_LLM_API_KEY" not in env_text
     assert (
-        "LIFECYCLE_LLM_API_KEY=op://Harem World/command-chair-litellm-api-key/credential"
+        "LIFECYCLE_LLM_API_KEY=op://Harem World/litellm-musubi-service-account/credential"
         in secrets_text
     )
     assert "LIFECYCLE_LLM_API_KEY" not in core_block
