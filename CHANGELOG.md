@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.2](https://github.com/ericmey/musubi/compare/v1.25.1...v1.25.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* **embedding:** delegate dense truncation to TEI's own tokenizer ([#735](https://github.com/ericmey/musubi/issues/735)) ([0d98a37](https://github.com/ericmey/musubi/commit/0d98a37b6cc0f5228fe81ca54336fd137b2e7b18))
+
 ## [1.25.1](https://github.com/ericmey/musubi/compare/v1.25.0...v1.25.1) (2026-08-14)
 
 
