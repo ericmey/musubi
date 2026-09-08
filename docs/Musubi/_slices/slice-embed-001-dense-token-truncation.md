@@ -5,7 +5,7 @@ issue: 734
 section: _slices
 type: slice
 status: done
-owner: aoi
+owner: claude-code-opus5
 phase: "Retrieval"
 tags: [section/slices, status/done, type/slice]
 updated: 2026-09-08
@@ -24,8 +24,7 @@ blocks: []
 > deployed TEI apply the model's own tokenizer and runtime
 > `max_input_length`.
 
-**Phase:** Retrieval · **Status:** `done` (on merge) · **Owner:** `aoi`
-(tool: `claude-code-opus5`)
+**Phase:** Retrieval · **Status:** `done` (on merge) · **Owner:** `claude-code-opus5`
 
 ## Specs to implement
 
@@ -106,13 +105,22 @@ so they are controls, not incidental passes.
 
 Frontmatter is `done` because this PR carries `Closes #734`, and the Vault
 gate requires the post-merge state to be consistent at merge time (AGENTS
-§Done). It is **not** a claim that review happened: `reviewed: false`, and the
-release gate is separately owned by Yua. Flip `reviewed: true` when she signs
-off.
+§Done). It is **not** a claim that review happened.
+
+`reviewed:` stays **false**. Per
+[[00-index/conventions]] that field means *"has Eric read and mentally
+accepted this?"* — it is Eric's acceptance of the slice document, and no
+reviewer's approval flips it. An earlier revision of this note wrongly
+instructed the code reviewer to set it; corrected on Yua's must-fix.
+
+Two separate gates, neither of which is `reviewed:`:
+
+- **Code review** — Yua, independent, on PR #735.
+- **Release gate** — Yua, separately owned: publish, digest pin, deploy.
 
 ## Work log
 
-**2026-09-08 — aoi (`claude-code-opus5`)**
+**2026-09-08 — `claude-code-opus5` (Aoi)**
 
 Found by Shiori (reconcile error set + root cause in `tei.py:73` /
 `chunked.py:120`). Verified independently, scoped, and planned by Aoi. Fix
