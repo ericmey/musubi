@@ -309,7 +309,21 @@ class TEIDenseClient:
                 self._client.get(),
                 self._base_url,
                 "/embed",
-                {"inputs": [_truncate(text, self._max_input_chars) for text in batch]},
+                {
+                    "inputs": [_truncate(text, self._max_input_chars) for text in batch],
+                    # Let TEI truncate with the MODEL's own tokenizer. The
+                    # character clip above is a wire-payload bound, not a token
+                    # guard: BGE-M3 limits input to 8192 TOKENS, and token-dense
+                    # markdown reaches ~2.1 chars/token, so a text can satisfy
+                    # the character limit and still be rejected 413 — which
+                    # dropped the caller's write. Delegating avoids hardcoding
+                    # 8192, special-token off-by-one, tokenizer-version drift,
+                    # and runtime max_input_length drift. Sparse must NOT copy
+                    # this: it chunks with its own SPLADE tokenizer, and
+                    # DistilBERT WordPiece token counts are not interchangeable
+                    # with BGE-M3's XLM-R/SentencePiece counts.
+                    "truncate": True,
+                },
                 retry_backoff=self._retry_backoff,
             )
             # TEI returns list[list[float]] in input order.

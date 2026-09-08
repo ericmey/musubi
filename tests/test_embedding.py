@@ -1066,3 +1066,114 @@ def test_tei_dense_client_isolates_clients_across_concurrent_loops() -> None:
     assert max(cache_size_observed) == 2, (
         "WeakKeyDictionary should briefly hold both loops' clients during concurrent ticks"
     )
+
+
+# ---------------------------------------------------------------------------
+# 13. EMBED-001 — dense truncation is delegated to TEI's own tokenizer
+#
+# The dense path guarded oversize input with a CHARACTER limit
+# (_DEFAULT_MAX_INPUT_CHARS_DENSE) standing in for BGE-M3's real 8192-TOKEN
+# limit. Token-dense markdown reaches ~2.1 chars/token, so a document could
+# pass the character guard and still be rejected by TEI with HTTP 413,
+# dropping the write. Sending ``truncate: true`` lets the deployed TEI apply
+# its own model tokenizer and runtime max_input_length, which avoids
+# hardcoding 8192, special-token off-by-one, and tokenizer-version drift.
+#
+# Sparse and reranker behaviour are deliberately unchanged: SPLADE v3 is
+# DistilBERT WordPiece while BGE-M3 is XLM-R/SentencePiece, so their token
+# counts are not interchangeable and sparse already chunks with its own
+# tokenizer.
+# ---------------------------------------------------------------------------
+
+
+async def test_dense_embed_request_sets_truncate_true(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """The outgoing dense /embed payload carries ``truncate: true``."""
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[0.0] * DENSE_SIZE],
+    )
+    client = TEIDenseClient(base_url="http://tei-dense")
+    await client.embed_dense(["hello"])
+    req = httpx_mock.get_request()
+    assert req is not None
+    payload = json.loads(req.content.decode())
+    assert payload["truncate"] is True
+
+
+async def test_dense_embed_returns_vectors_for_token_dense_oversize_input(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """A token-dense input far past the model limit still yields a vector.
+
+    The client no longer has to predict the token count; TEI truncates and
+    answers 200. Guards the regression where such an input raised
+    EmbeddingError and the caller's write was dropped.
+    """
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[0.0] * DENSE_SIZE],
+    )
+    oversize = "`verify` the [[instrument]] — 2026-09-08; " * 4000
+    client = TEIDenseClient(base_url="http://tei-dense")
+    out = await client.embed_dense([oversize])
+    assert len(out) == 1
+    assert len(out[0]) == DENSE_SIZE
+
+
+async def test_dense_embed_still_clips_to_max_input_chars(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """The character clip is retained as a wire-payload bound.
+
+    It is no longer load-bearing for correctness — TEI enforces the real
+    token limit — but it keeps absurdly large bodies off the socket.
+    """
+    httpx_mock.add_response(
+        url="http://tei-dense/embed",
+        method="POST",
+        json=[[0.0] * DENSE_SIZE],
+    )
+    client = TEIDenseClient(base_url="http://tei-dense", max_input_chars=10)
+    await client.embed_dense(["abcdefghijklmnopqrstuvwxyz"])
+    req = httpx_mock.get_request()
+    assert req is not None
+    payload = json.loads(req.content.decode())
+    assert payload["inputs"] == ["abcdefghij"]
+
+
+async def test_sparse_embed_request_does_not_set_truncate(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Sparse keeps its own chunking; it must not gain TEI-side truncation."""
+    httpx_mock.add_response(
+        url="http://tei-sparse/embed_sparse",
+        method="POST",
+        json=[[{"index": 3, "value": 0.8}]],
+    )
+    client = TEISparseClient(base_url="http://tei-sparse")
+    await client.embed_sparse(["hello"])
+    req = httpx_mock.get_request()
+    assert req is not None
+    payload = json.loads(req.content.decode())
+    assert "truncate" not in payload
+
+
+async def test_reranker_request_does_not_set_truncate(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Reranker inputs are short by convention; behaviour is unchanged."""
+    httpx_mock.add_response(
+        url="http://tei-reranker/rerank",
+        method="POST",
+        json=[{"index": 0, "score": 0.9}],
+    )
+    client = TEIRerankerClient(base_url="http://tei-reranker")
+    await client.rerank("q", ["a"])
+    req = httpx_mock.get_request()
+    assert req is not None
+    payload = json.loads(req.content.decode())
+    assert "truncate" not in payload
