@@ -4,10 +4,10 @@ slice_id: slice-embed-001-dense-token-truncation
 issue: 734
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: aoi
 phase: "Retrieval"
-tags: [section/slices, status/in-review, type/slice]
+tags: [section/slices, status/done, type/slice]
 updated: 2026-09-08
 reviewed: false
 depends-on: []
@@ -24,7 +24,7 @@ blocks: []
 > deployed TEI apply the model's own tokenizer and runtime
 > `max_input_length`.
 
-**Phase:** Retrieval · **Status:** `in-review` · **Owner:** `aoi`
+**Phase:** Retrieval · **Status:** `done` (on merge) · **Owner:** `aoi`
 (tool: `claude-code-opus5`)
 
 ## Specs to implement
@@ -101,6 +101,14 @@ so they are controls, not incidental passes.
 - The **21 already-rejected episodic writes are NOT recoverable.** That path
   has no durable queue. This fix prevents future drops; it cannot
   reconstruct those.
+
+## Status note
+
+Frontmatter is `done` because this PR carries `Closes #734`, and the Vault
+gate requires the post-merge state to be consistent at merge time (AGENTS
+§Done). It is **not** a claim that review happened: `reviewed: false`, and the
+release gate is separately owned by Yua. Flip `reviewed: true` when she signs
+off.
 
 ## Work log
 
