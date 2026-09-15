@@ -111,7 +111,7 @@ WantedBy=multi-user.target
 
 The Musubi host itself does **not** terminate TLS and does **not** expose a :443 port. TLS terminates at **Kong on `<kong-gateway>` (`<kong-ip>`)**; Kong's only upstream for Musubi is `http://<musubi-ip>:8100`. See [[08-deployment/kong]] for the gateway config.
 
-All inference services run on Docker's compose bridge — not exposed on the host network. Inter-service traffic uses compose DNS (`qdrant:6333`, `tei-dense:80`, etc.). Admin access to these services is via `ssh <musubi-host>` + `docker exec`, not host ports.
+Inference services run on Docker's compose bridge and are not exposed on the host network, with one exception: `tei-dense` is published on `<musubi-ip>:<tei-dense-port>` for the house model gateway's embeddings route, and the `musubi-tei-firewall` DOCKER-USER allow-list admits only `<tei-dense-allowed-source>` (see [[08-deployment/compose-stack]]). Inter-service traffic uses compose DNS (`qdrant:6333`, `tei-dense:80`, etc.). Admin access to the other services is via `ssh <musubi-host>` + `docker exec`, not host ports.
 
 ## User / process model
 

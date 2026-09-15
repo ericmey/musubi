@@ -109,6 +109,7 @@ def test_playbook_idempotent_on_clean_vm() -> None:
         "ansible.builtin.copy",
         "ansible.builtin.file",
         "ansible.builtin.get_url",
+        "ansible.builtin.import_tasks",
         "ansible.builtin.group",
         "ansible.builtin.lineinfile",
         "ansible.builtin.service",
@@ -162,6 +163,8 @@ def test_compose_file_renders_to_valid_yaml() -> None:
         rendered = rendered.replace(token, "example/image:sha256-placeholder")
     rendered = rendered.replace("{{ musubi_core_port }}", "8100")
     rendered = rendered.replace("{{ musubi_ollama_model }}", "qwen3:4b")
+    rendered = rendered.replace("{{ musubi_lan_bind }}", "10.0.0.45")
+    rendered = rendered.replace("{{ musubi_tei_dense_port }}", "8081")
 
     compose = yaml.safe_load(rendered)
     assert compose["services"]["ollama"]["environment"]["OLLAMA_KEEP_ALIVE"] == "24h"

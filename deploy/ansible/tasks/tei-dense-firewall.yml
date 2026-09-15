@@ -1,0 +1,27 @@
+---
+# Installs and applies the tei-dense source allow-list before Compose can
+# publish the endpoint. Idempotent; the unit reapplies it on every Docker start.
+- name: Install the tei-dense firewall script
+  ansible.builtin.template:
+    src: templates/musubi-tei-firewall.sh.j2
+    dest: /usr/local/sbin/musubi-tei-firewall
+    owner: root
+    group: root
+    mode: "0750"
+  register: musubi_tei_firewall_script
+
+- name: Install the tei-dense firewall unit
+  ansible.builtin.template:
+    src: templates/musubi-tei-firewall.service.j2
+    dest: /etc/systemd/system/musubi-tei-firewall.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: musubi_tei_firewall_unit
+
+- name: Enable and apply the tei-dense firewall
+  ansible.builtin.systemd_service:
+    name: musubi-tei-firewall.service
+    enabled: true
+    state: "{{ 'restarted' if (musubi_tei_firewall_script.changed or musubi_tei_firewall_unit.changed) else 'started' }}"
+    daemon_reload: true

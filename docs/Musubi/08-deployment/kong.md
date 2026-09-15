@@ -153,7 +153,7 @@ With Kong as the gateway, the Musubi host's ingress policy is:
 | 22   | admin subnet                  | SSH for ops                                  |
 | 8100 | `<kong-gateway>` (`<kong-ip>/32`) | Kong upstream — Musubi Core API              |
 
-No other LAN ingress. `ufw` rules codified in [[08-deployment/ansible-layout#firewall]].
+`ufw` rules are codified in [[08-deployment/ansible-layout#firewall]]. The one other LAN ingress is the published `tei-dense` port, which Docker forwards past `ufw`. The `musubi-tei-firewall` DOCKER-USER chain admits only `<tei-dense-allowed-source>` to it (see [[08-deployment/compose-stack]]).
 
 ## Failure modes
 

@@ -99,6 +99,11 @@ services:
   tei-dense:
     image: {{ musubi_tei_image }}
     command: --model-id BAAI/bge-m3 --max-batch-tokens 32768 --max-client-batch-size 16
+    # Published on the host's LAN address for the house model gateway, and
+    # reachable only from musubi_tei_dense_allowed_source (musubi-tei-firewall,
+    # a DOCKER-USER allow-list). Sparse and reranker stay internal.
+    ports:
+      - "{{ musubi_lan_bind }}:{{ musubi_tei_dense_port }}:80"
     volumes:
       - tei-models:/data
     deploy:

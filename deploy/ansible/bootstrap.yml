@@ -109,6 +109,9 @@
         enabled: true
         state: started
 
+    - name: Validate the published tei-dense endpoint
+      ansible.builtin.import_tasks: tasks/tei-dense-preflight.yml
+
   tasks:
     - name: Create Musubi group
       ansible.builtin.group:
@@ -190,6 +193,9 @@
       ansible.builtin.command: nvidia-ctk runtime configure --runtime=docker
       changed_when: false
       notify: Restart Docker
+
+    - name: Restrict the published tei-dense endpoint to its allowed source
+      ansible.builtin.import_tasks: tasks/tei-dense-firewall.yml
 
     - name: Render docker-compose anchor
       ansible.builtin.template:

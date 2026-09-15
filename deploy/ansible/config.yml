@@ -25,6 +25,9 @@
       check_mode: false
       no_log: true
 
+    - name: Validate the published tei-dense endpoint
+      ansible.builtin.import_tasks: tasks/tei-dense-preflight.yml
+
   tasks:
     - name: Render non-secret production environment
       ansible.builtin.template:
@@ -35,6 +38,9 @@
         mode: "0640"
       no_log: true
       notify: Restart Musubi stack
+
+    - name: Restrict the published tei-dense endpoint to its allowed source
+      ansible.builtin.import_tasks: tasks/tei-dense-firewall.yml
 
     - name: Render docker-compose anchor
       ansible.builtin.template:

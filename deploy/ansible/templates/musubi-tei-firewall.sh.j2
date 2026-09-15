@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Managed by Ansible (musubi). Restricts the published tei-dense endpoint to one
+# allow-listed source, in a Musubi-owned chain jumped from DOCKER-USER. This is
+# an IP allow-list, not authentication.
+#
+# Fail-closed swap: the new policy is built in a staging chain and jumped to
+# before the old chain is retired, so the endpoint is never left unfiltered.
+set -euo pipefail
+
+IPT="${IPTABLES:-iptables}"
+CHAIN="MUSUBI-TEI-DENSE"
+STAGE="MUSUBI-TEI-DENSE-NEW"
+BIND="{{ musubi_lan_bind }}"
+PORT="{{ musubi_tei_dense_port }}"
+SOURCE="{{ musubi_tei_dense_allowed_source }}"
+
+# Docker owns DOCKER-USER; without it there is nothing to attach to yet.
+"$IPT" -w -n -L DOCKER-USER >/dev/null
+
+# Build the new policy in a clean staging chain.
+if "$IPT" -w -n -L "$STAGE" >/dev/null 2>&1; then
+  "$IPT" -w -F "$STAGE"
+else
+  "$IPT" -w -N "$STAGE"
+fi
+"$IPT" -w -A "$STAGE" -p tcp -s "$SOURCE" -m conntrack --ctorigdst "$BIND" --ctorigdstport "$PORT" -j RETURN
+"$IPT" -w -A "$STAGE" -p tcp -m conntrack --ctorigdst "$BIND" --ctorigdstport "$PORT" -j DROP
+
+# Activate it first, at the top of DOCKER-USER.
+"$IPT" -w -I DOCKER-USER 1 -j "$STAGE"
+
+# Only then retire the old chain: every jump to it, then the chain.
+while "$IPT" -w -D DOCKER-USER -j "$CHAIN" 2>/dev/null; do :; done
+if "$IPT" -w -n -L "$CHAIN" >/dev/null 2>&1; then
+  "$IPT" -w -F "$CHAIN"
+  "$IPT" -w -X "$CHAIN"
+fi
+"$IPT" -w -E "$STAGE" "$CHAIN"
+
+# Exactly one jump: drop any duplicates left by an interrupted earlier run,
+# always the lowest one, so the top jump stays.
+jumps() { "$IPT" -w -n -L DOCKER-USER --line-numbers | awk -v c="$CHAIN" '$2 == c'; }
+while [ "$(jumps | wc -l)" -gt 1 ]; do
+  "$IPT" -w -D DOCKER-USER "$(jumps | awk 'END {print $1}')"
+done
+
+# Verify the final state; a failure here fails the unit loudly.
+"$IPT" -w -C DOCKER-USER -j "$CHAIN"
+"$IPT" -w -C "$CHAIN" -p tcp -s "$SOURCE" -m conntrack --ctorigdst "$BIND" --ctorigdstport "$PORT" -j RETURN
+"$IPT" -w -C "$CHAIN" -p tcp -m conntrack --ctorigdst "$BIND" --ctorigdstport "$PORT" -j DROP

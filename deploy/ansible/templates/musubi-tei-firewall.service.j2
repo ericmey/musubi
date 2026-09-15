@@ -1,0 +1,14 @@
+# Managed by Ansible (musubi). Reapplies the tei-dense source allow-list whenever
+# Docker starts or restarts (Docker rebuilds its chains), and at boot.
+[Unit]
+Description=Musubi tei-dense source allow-list (DOCKER-USER)
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/musubi-tei-firewall
+
+[Install]
+WantedBy=docker.service multi-user.target

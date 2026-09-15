@@ -50,6 +50,9 @@ musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # `hopper-*` (H100/H200), `cpu-*` (no GPU). See
 # https://github.com/huggingface/text-embeddings-inference for the full list.
 musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference:86-1.2.0"
+# Host port for the published tei-dense endpoint. Its address and allowed
+# source come from the inventory (musubi_lan_bind, musubi_tei_dense_allowed_source).
+musubi_tei_dense_port: 8081
 musubi_ollama_image: "ollama/ollama:latest"
 musubi_ollama_model: "qwen3:4b"
 # Prometheus: pinned to an LTS-ish minor so the scrape-config syntax

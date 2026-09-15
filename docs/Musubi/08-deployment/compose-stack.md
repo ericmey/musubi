@@ -48,7 +48,9 @@ Bind mounts stay on the host (`/var/lib/musubi/...`) for easy backup + external 
 
 One user-defined network `musubi-net`. All services on it; Core reaches peers via service-name DNS (`qdrant:6333`, `tei-dense:80`, etc.).
 
-Kong (on `<kong-gateway>`, `<kong-ip>`) reaches Core via `http://<musubi-ip>:8100`. Core's only host-exposed port.
+Kong (on `<kong-gateway>`, `<kong-ip>`) reaches Core via `http://<musubi-ip>:8100`.
+
+`tei-dense` is also published, on `<musubi-ip>:<tei-dense-port>` only (`musubi_lan_bind`, `musubi_tei_dense_port`), for the house model gateway's embeddings route. A Musubi-owned chain jumped from `DOCKER-USER` (`musubi-tei-firewall`) admits only `<tei-dense-allowed-source>`. It is an IP allow-list. `ufw` doesn't filter Docker-published ports, because they are forwarded rather than delivered to the host. `tei-sparse`, the reranker and every other service stay unpublished.
 
 ## Health checks
 

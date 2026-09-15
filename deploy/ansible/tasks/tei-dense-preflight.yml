@@ -1,0 +1,18 @@
+---
+# Shared by every compose-render path (bootstrap, config, deploy, update), so
+# the checks cannot fork. Runs before any compose render or firewall change.
+- name: Require private addresses and a valid port for the published tei-dense endpoint
+  ansible.builtin.assert:
+    that:
+      - musubi_lan_bind is string
+      - musubi_lan_bind is match('^(10([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|192[.]168([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){2}|172[.](1[6-9]|2[0-9]|3[01])([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){2})$')
+      - musubi_tei_dense_allowed_source is string
+      - musubi_tei_dense_allowed_source is match('^(10([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|192[.]168([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){2}|172[.](1[6-9]|2[0-9]|3[01])([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){2})$')
+      - musubi_tei_dense_allowed_source != musubi_lan_bind
+      - musubi_tei_dense_port is integer
+      - musubi_tei_dense_port is not boolean
+      - musubi_tei_dense_port >= 1
+      - musubi_tei_dense_port <= 65535
+    fail_msg: >-
+      tei-dense preflight failed: musubi_lan_bind and musubi_tei_dense_allowed_source
+      must be distinct RFC1918 IPv4 addresses, and musubi_tei_dense_port an integer 1..65535

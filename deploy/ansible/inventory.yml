@@ -25,5 +25,7 @@ all:
           ansible_become: true
           musubi_hostname: "{{ musubi_host }}"
           musubi_core_bind: "{{ musubi_ip }}"
+          musubi_lan_bind: "{{ musubi_ip }}"
+          musubi_tei_dense_allowed_source: "{{ tei_dense_allowed_source | default('') }}"
           musubi_kong_gateway: "{{ kong_gateway | default('') }}"
           musubi_kong_ip: "{{ kong_ip | default('') }}"

@@ -88,7 +88,13 @@
       check_mode: false
       no_log: true
 
+    - name: Validate the published tei-dense endpoint
+      ansible.builtin.import_tasks: tasks/tei-dense-preflight.yml
+
   tasks:
+    - name: Restrict the published tei-dense endpoint to its allowed source
+      ansible.builtin.import_tasks: tasks/tei-dense-firewall.yml
+
     - name: Re-render docker-compose anchor (may have new services / mounts / env refs)
       ansible.builtin.template:
         src: templates/docker-compose.yml.j2
