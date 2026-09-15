@@ -240,3 +240,69 @@ def test_only_tei_dense_is_published_on_the_inventory_host_address() -> None:
         name for name, svc in services.items() if name.startswith("tei-") and "ports" in svc
     )
     assert published == ["tei-dense"]
+
+
+PREFLIGHT = "Require a private LAN bind for the published tei-dense port"
+
+
+def _tei_preflight(playbook: str) -> dict[str, Any]:
+    """The preflight in the play of `playbook` that renders the compose file."""
+    plays = _load_yaml(PLAYBOOKS[playbook])
+    play = next(p for p in plays if "docker-compose.yml.j2" in yaml.safe_dump(p.get("tasks", [])))
+    found = [t for t in play["pre_tasks"] if t.get("name") == PREFLIGHT]
+    assert len(found) == 1, (
+        f"{playbook}: exactly one tei-dense preflight, in pre_tasks (before the render)"
+    )
+    return found[0]  # type: ignore[no-any-return]
+
+
+def _preflight_passes(task: dict[str, Any], bind: object, port: object) -> bool:
+    """Evaluate the assert's `that:` exactly as Ansible does (each item a bare
+    Jinja expression; `match` is Ansible's re.match test)."""
+    import re
+
+    import jinja2
+
+    env = jinja2.Environment()
+    env.tests["match"] = lambda value, pattern: re.match(pattern, value) is not None
+    for condition in task["ansible.builtin.assert"]["that"]:
+        template = env.from_string("{% if " + condition + " %}1{% endif %}")
+        if template.render(musubi_core_bind=bind, musubi_tei_dense_port=port) != "1":
+            return False
+    return True
+
+
+@pytest.mark.parametrize("playbook", ["bootstrap", "config", "deploy", "update"])
+def test_every_compose_render_path_refuses_a_public_or_bad_tei_bind(playbook: str) -> None:
+    """TEI has no auth (Yua, #740): the runtime musubi_ip, not a test fixture,
+    must be RFC1918 IPv4, and the port a non-bool integer 1..65535, before any
+    playbook renders the compose file."""
+    task = _tei_preflight(playbook)
+    for bind, port in [
+        ("10.0.20.45", 8081),
+        ("192.168.1.10", 8081),
+        ("172.16.0.1", 1),
+        ("172.31.255.255", 65535),
+    ]:
+        assert _preflight_passes(task, bind, port), (bind, port)
+    bad: list[tuple[object, object]] = [
+        ("8.8.8.8", 8081),  # public
+        ("203.0.113.5", 8081),  # public (documentation range)
+        ("0.0.0.0", 8081),  # wildcard
+        ("::", 8081),  # wildcard v6
+        ("172.32.0.1", 8081),  # just outside 172.16/12
+        ("10.0.20.256", 8081),  # not an address
+        ("10.0.20.45 ", 8081),  # trailing junk
+        ("musubi.local", 8081),  # a name, not an address
+        ("10.0.20.45", 0),
+        ("10.0.20.45", 65536),
+        ("10.0.20.45", True),  # bool is an int subclass
+        ("10.0.20.45", "8081"),  # a string
+    ]
+    for bad_bind, bad_port in bad:
+        assert not _preflight_passes(task, bad_bind, bad_port), (bad_bind, bad_port)
+
+
+def test_the_tei_preflight_is_identical_on_every_path() -> None:
+    tasks = [_tei_preflight(p) for p in ("bootstrap", "config", "deploy", "update")]
+    assert all(t == tasks[0] for t in tasks)

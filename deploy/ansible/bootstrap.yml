@@ -109,6 +109,19 @@
         enabled: true
         state: started
 
+    - name: Require a private LAN bind for the published tei-dense port
+      # TEI has no auth: its published port binds musubi_core_bind (= musubi_ip),
+      # which must be an RFC1918 IPv4 address, never public or a wildcard (Yua, #740).
+      ansible.builtin.assert:
+        that:
+          - musubi_core_bind is string
+          - musubi_core_bind is match('^(10([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}|192[.]168([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){2}|172[.](1[6-9]|2[0-9]|3[01])([.](25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){2})$')
+          - musubi_tei_dense_port is integer
+          - musubi_tei_dense_port is not boolean
+          - musubi_tei_dense_port >= 1
+          - musubi_tei_dense_port <= 65535
+        fail_msg: "tei-dense publish preflight failed: musubi_core_bind must be RFC1918 IPv4 and musubi_tei_dense_port an integer 1..65535"
+
   tasks:
     - name: Create Musubi group
       ansible.builtin.group:
