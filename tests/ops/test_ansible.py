@@ -162,6 +162,7 @@ def test_compose_file_renders_to_valid_yaml() -> None:
         rendered = rendered.replace(token, "example/image:sha256-placeholder")
     rendered = rendered.replace("{{ musubi_core_port }}", "8100")
     rendered = rendered.replace("{{ musubi_ollama_model }}", "qwen3:4b")
+    rendered = rendered.replace("{{ musubi_tei_dense_publish }}", "10.0.20.45:8081")
 
     compose = yaml.safe_load(rendered)
     assert compose["services"]["ollama"]["environment"]["OLLAMA_KEEP_ALIVE"] == "24h"
@@ -192,3 +193,37 @@ def test_update_playbook_respects_digest_pins() -> None:
     assert "pull --policy missing" in playbook_text
     assert "up -d --pull missing" in playbook_text
     assert "--policy always" not in playbook_text
+
+
+def test_only_tei_dense_is_published_and_only_on_a_lan_address() -> None:
+    """bge-m3 is published for LiteLLM's embeddings route (Eric, 2026-09-15).
+    TEI has no auth: the bind names an address, never all interfaces, and the
+    sparse and reranker models stay on the internal network."""
+    import re
+
+    template = COMPOSE_TEMPLATE.read_text()
+    assert '"{{ musubi_tei_dense_publish }}:80"' in template
+    vars_text = (COMPOSE_TEMPLATE.parents[1] / "group_vars" / "all.yml").read_text()
+    found = re.search(r'^musubi_tei_dense_publish:\s*"([^"]*)"', vars_text, re.M)
+    assert found, "musubi_tei_dense_publish must be set in group_vars/all.yml"
+    publish = found.group(1)
+    host, _, port = publish.rpartition(":")
+    assert host and host not in ("0.0.0.0", "::", "[::]") and port.isdigit()
+    rendered = template
+    for token in (
+        "{{ musubi_core_image }}",
+        "{{ musubi_qdrant_image }}",
+        "{{ musubi_tei_image }}",
+        "{{ musubi_ollama_image }}",
+        "{{ musubi_prometheus_image }}",
+        "{{ musubi_node_exporter_image }}",
+    ):
+        rendered = rendered.replace(token, "example/image:test")
+    rendered = (
+        rendered.replace("{{ musubi_core_port }}", "8100")
+        .replace("{{ musubi_ollama_model }}", "qwen3:4b")
+        .replace("{{ musubi_tei_dense_publish }}", publish)
+    )
+    services = yaml.safe_load(rendered)["services"]
+    assert services["tei-dense"]["ports"] == [f"{publish}:80"]
+    assert "ports" not in services["tei-sparse"] and "ports" not in services.get("tei-reranker", {})

@@ -50,6 +50,9 @@ musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # `hopper-*` (H100/H200), `cpu-*` (no GPU). See
 # https://github.com/huggingface/text-embeddings-inference for the full list.
 musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference:86-1.2.0"
+# tei-dense (BAAI/bge-m3) on the LAN for LiteLLM's house/embed-bge-m3 route.
+# "<lan-ip>:<port>". Never 0.0.0.0 or a bare port: TEI has no auth.
+musubi_tei_dense_publish: "10.0.20.45:8081"
 musubi_ollama_image: "ollama/ollama:latest"
 musubi_ollama_model: "qwen3:4b"
 # Prometheus: pinned to an LTS-ish minor so the scrape-config syntax

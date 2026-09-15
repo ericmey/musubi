@@ -99,6 +99,11 @@ services:
   tei-dense:
     image: {{ musubi_tei_image }}
     command: --model-id BAAI/bge-m3 --max-batch-tokens 32768 --max-client-batch-size 16
+    # Published for the house LiteLLM gateway only (house/embed-bge-m3, the
+    # 7ds-agent /v1/embeddings route; Eric, 2026-09-15). TEI has no auth, so the
+    # bind is the LAN address, never 0.0.0.0. Sparse and reranker stay internal.
+    ports:
+      - "{{ musubi_tei_dense_publish }}:80"
     volumes:
       - tei-models:/data
     deploy:

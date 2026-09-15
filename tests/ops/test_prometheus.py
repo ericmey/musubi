@@ -137,6 +137,7 @@ def _render_compose() -> dict[str, Any]:
         "{{ musubi_node_exporter_image }}": "prom/node-exporter:test",
         "{{ musubi_core_port }}": "8100",
         "{{ musubi_ollama_model }}": "qwen3:4b",
+        "{{ musubi_tei_dense_publish }}": "10.0.20.45:8081",
     }
     for k, v in tokens.items():
         rendered = rendered.replace(k, v)
