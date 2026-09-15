@@ -162,7 +162,8 @@ def test_compose_file_renders_to_valid_yaml() -> None:
         rendered = rendered.replace(token, "example/image:sha256-placeholder")
     rendered = rendered.replace("{{ musubi_core_port }}", "8100")
     rendered = rendered.replace("{{ musubi_ollama_model }}", "qwen3:4b")
-    rendered = rendered.replace("{{ musubi_tei_dense_publish }}", "10.0.20.45:8081")
+    rendered = rendered.replace("{{ musubi_core_bind }}", "10.0.20.45")
+    rendered = rendered.replace("{{ musubi_tei_dense_port }}", "8081")
 
     compose = yaml.safe_load(rendered)
     assert compose["services"]["ollama"]["environment"]["OLLAMA_KEEP_ALIVE"] == "24h"
@@ -195,20 +196,28 @@ def test_update_playbook_respects_digest_pins() -> None:
     assert "--policy always" not in playbook_text
 
 
-def test_only_tei_dense_is_published_and_only_on_a_lan_address() -> None:
+def test_only_tei_dense_is_published_on_the_inventory_host_address() -> None:
     """bge-m3 is published for LiteLLM's embeddings route (Eric, 2026-09-15).
-    TEI has no auth: the bind names an address, never all interfaces, and the
-    sparse and reranker models stay on the internal network."""
+    TEI has no auth, so the bind comes from the inventory's own host address
+    (musubi_core_bind = musubi_ip), never a hardcoded or wildcard host; only a
+    numeric port lives in group_vars; sparse and reranker stay internal (Yua)."""
     import re
 
     template = COMPOSE_TEMPLATE.read_text()
-    assert '"{{ musubi_tei_dense_publish }}:80"' in template
+    dense = template.split("\n  tei-dense:\n", 1)[1].split("\n  tei-sparse:", 1)[0]
+    assert re.findall(r'^\s+- "(.*):80"$', dense, re.M) == [
+        "{{ musubi_core_bind }}:{{ musubi_tei_dense_port }}"
+    ]
+    inventory = (COMPOSE_TEMPLATE.parents[1] / "inventory.yml").read_text()
+    assert re.search(r'^\s+musubi_core_bind: "\{\{ musubi_ip \}\}"$', inventory, re.M)
     vars_text = (COMPOSE_TEMPLATE.parents[1] / "group_vars" / "all.yml").read_text()
-    found = re.search(r'^musubi_tei_dense_publish:\s*"([^"]*)"', vars_text, re.M)
-    assert found, "musubi_tei_dense_publish must be set in group_vars/all.yml"
-    publish = found.group(1)
-    host, _, port = publish.rpartition(":")
-    assert host and host not in ("0.0.0.0", "::", "[::]") and port.isdigit()
+    found = re.search(r"^musubi_tei_dense_port:\s*(\d+)\s*$", vars_text, re.M)
+    assert found, "musubi_tei_dense_port must be a bare number in group_vars/all.yml"
+    port = int(found.group(1))
+    assert 1 <= port <= 65535
+    assert not re.search(
+        r"^musubi_tei_dense_\w*:.*\d+\.\d+\.\d+\.\d+", vars_text, re.M
+    )  # no host in vars
     rendered = template
     for token in (
         "{{ musubi_core_image }}",
@@ -222,8 +231,12 @@ def test_only_tei_dense_is_published_and_only_on_a_lan_address() -> None:
     rendered = (
         rendered.replace("{{ musubi_core_port }}", "8100")
         .replace("{{ musubi_ollama_model }}", "qwen3:4b")
-        .replace("{{ musubi_tei_dense_publish }}", publish)
+        .replace("{{ musubi_core_bind }}", "10.0.20.45")  # today's inventory value
+        .replace("{{ musubi_tei_dense_port }}", str(port))
     )
     services = yaml.safe_load(rendered)["services"]
-    assert services["tei-dense"]["ports"] == [f"{publish}:80"]
-    assert "ports" not in services["tei-sparse"] and "ports" not in services.get("tei-reranker", {})
+    assert services["tei-dense"]["ports"] == [f"10.0.20.45:{port}:80"]
+    published = sorted(
+        name for name, svc in services.items() if name.startswith("tei-") and "ports" in svc
+    )
+    assert published == ["tei-dense"]
