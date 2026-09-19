@@ -152,6 +152,12 @@
         group: "{{ musubi_service_group }}"
         mode: "0750"
 
+    - name: Create the private shared inference network
+      ansible.builtin.shell:
+        cmd: docker network inspect musubi-shared-inference >/dev/null 2>&1 || docker network create musubi-shared-inference
+      register: inference_network
+      changed_when: "'musubi-shared-inference' in inference_network.stdout"
+
     - name: Configure UFW default deny
       community.general.ufw:
         policy: deny
@@ -200,6 +206,30 @@
         mode: "0640"
       diff: false
 
+    - name: Render shared inference Compose file
+      ansible.builtin.template:
+        src: templates/shared-inference-compose.yml.j2
+        dest: "{{ musubi_config_dir }}/shared-inference-compose.yml"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render shared inference ingress
+      ansible.builtin.template:
+        src: templates/shared-inference-ingress.nginx.conf.j2
+        dest: "{{ musubi_config_dir }}/shared-inference-ingress.conf"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render shared inference credential references
+      ansible.builtin.template:
+        src: templates/shared-inference.htpasswd.tpl.j2
+        dest: "{{ musubi_config_dir }}/shared-inference.htpasswd.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
     - name: Render non-secret production environment
       ansible.builtin.template:
         src: templates/env.production.j2
@@ -234,6 +264,15 @@
       ansible.builtin.template:
         src: templates/musubi.service.j2
         dest: /etc/systemd/system/musubi.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Reload systemd
+
+    - name: Install independent shared inference systemd unit
+      ansible.builtin.template:
+        src: templates/shared-inference.service.j2
+        dest: /etc/systemd/system/shared-inference.service
         owner: root
         group: root
         mode: "0644"

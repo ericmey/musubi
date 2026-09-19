@@ -8,6 +8,9 @@ services:
     environment:
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
       QDRANT_API_KEY: ${QDRANT_API_KEY}
+      TEI_DENSE_URL: ${TEI_DENSE_URL}
+      TEI_SPARSE_URL: ${TEI_SPARSE_URL}
+      TEI_RERANKER_URL: ${TEI_RERANKER_URL}
     ports:
       - "{{ musubi_core_port }}:{{ musubi_core_port }}"
     volumes:
@@ -18,12 +21,9 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
-      tei-dense:
-        condition: service_healthy
-      tei-sparse:
-        condition: service_healthy
       ollama:
         condition: service_healthy
+    networks: [default, shared-inference]
     restart: unless-stopped
 
   # Lifecycle worker. Shares the core image — same code, different entrypoint.
@@ -40,6 +40,9 @@ services:
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
       QDRANT_API_KEY: ${QDRANT_API_KEY}
       LIFECYCLE_LLM_API_KEY: ${LIFECYCLE_LLM_API_KEY}
+      TEI_DENSE_URL: ${TEI_DENSE_URL}
+      TEI_SPARSE_URL: ${TEI_SPARSE_URL}
+      TEI_RERANKER_URL: ${TEI_RERANKER_URL}
     command: ["python", "-m", "musubi.lifecycle.runner"]
     # `/metrics` exposition for Prometheus scrape — see
     # docs/Musubi/09-operations/observability.md § Lifecycle metrics.
@@ -72,6 +75,7 @@ services:
         condition: service_healthy
       ollama:
         condition: service_healthy
+    networks: [default, shared-inference]
     restart: unless-stopped
 
   qdrant:
@@ -94,72 +98,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-    restart: unless-stopped
-
-  tei-dense:
-    image: {{ musubi_tei_image }}
-    command: --model-id BAAI/bge-m3 --max-batch-tokens 32768 --max-client-batch-size 16
-    volumes:
-      - tei-models:/data
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
-    healthcheck:
-      # TEI image is minimal (no curl/wget/nc). Use bash's /dev/tcp pseudo-
-      # device to verify port 80 is accepting connections. Liveness-only;
-      # model-load errors show up in docker logs if they happen.
-      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 60s
-    restart: unless-stopped
-
-  tei-sparse:
-    image: {{ musubi_tei_image }}
-    command: --model-id naver/splade-v3 --pooling splade --max-batch-tokens 16384
-    volumes:
-      - tei-models:/data
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
-    healthcheck:
-      # TEI image is minimal (no curl/wget/nc). Use bash's /dev/tcp pseudo-
-      # device to verify port 80 is accepting connections. Liveness-only;
-      # model-load errors show up in docker logs if they happen.
-      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 60s
-    restart: unless-stopped
-
-  tei-reranker:
-    image: {{ musubi_tei_image }}
-    # Reranker models are cross-encoders; TEI auto-detects from the model
-    # config and runs them as rerankers. No `--pooling` flag — the value
-    # `rerank` doesn't exist in TEI 1.x (only cls / mean / splade).
-    command: --model-id BAAI/bge-reranker-v2-m3
-    volumes:
-      - tei-models:/data
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
-    healthcheck:
-      # TEI image is minimal (no curl/wget/nc). Use bash's /dev/tcp pseudo-
-      # device to verify port 80 is accepting connections. Liveness-only;
-      # model-load errors show up in docker logs if they happen.
-      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 60s
     restart: unless-stopped
 
   # Prometheus — scrapes musubi-core's /v1/ops/metrics every 15s and
@@ -256,15 +194,14 @@ services:
     restart: unless-stopped
 
 volumes:
-  tei-models:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: /var/lib/musubi/tei-models
   ollama-models:
     driver: local
     driver_opts:
       type: none
       o: bind
       device: /var/lib/musubi/ollama-models
+
+networks:
+  shared-inference:
+    name: musubi-shared-inference
+    external: true

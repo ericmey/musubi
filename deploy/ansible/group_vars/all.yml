@@ -50,6 +50,9 @@ musubi_qdrant_image: "qdrant/qdrant:v1.17.1"
 # `hopper-*` (H100/H200), `cpu-*` (no GPU). See
 # https://github.com/huggingface/text-embeddings-inference for the full list.
 musubi_tei_image: "ghcr.io/huggingface/text-embeddings-inference:86-1.2.0"
+musubi_inference_ingress_image: "nginx:1.27-alpine"
+musubi_curl_image: "curlimages/curl:8.12.1"
+musubi_inference_port: 8102
 musubi_ollama_image: "ollama/ollama:latest"
 musubi_ollama_model: "qwen3:4b"
 # Prometheus: pinned to an LTS-ish minor so the scrape-config syntax

@@ -1,6 +1,6 @@
 [Unit]
 Description=Musubi stack
-After=docker.service network-online.target
+After=docker.service network-online.target shared-inference.service
 Requires=docker.service
 
 [Service]

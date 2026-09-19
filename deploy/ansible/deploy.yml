@@ -3,6 +3,23 @@
   hosts: musubi
   become: true
   pre_tasks:
+    - name: Inspect existing Compose ownership before full deploy
+      ansible.builtin.shell:
+        cmd: >-
+          test ! -f {{ musubi_config_dir }}/docker-compose.yml ||
+          ! grep -Eq '^  tei-(dense|sparse|reranker):' {{ musubi_config_dir }}/docker-compose.yml
+      register: shared_inference_migrated
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse to bypass the bounded shared inference migration
+      ansible.builtin.assert:
+        that: shared_inference_migrated.rc == 0
+        fail_msg: >-
+          The live Musubi Compose file still owns TEI. Run
+          shared-inference-migrate.yml first; a normal deploy cannot safely
+          perform the single-GPU ownership handoff.
+
     - name: Inspect 1Password Connect environment file
       ansible.builtin.stat:
         path: /etc/musubi/connect.env
@@ -26,6 +43,44 @@
       no_log: true
 
   tasks:
+    - name: Create the private shared inference network
+      ansible.builtin.shell:
+        cmd: docker network inspect musubi-shared-inference >/dev/null 2>&1 || docker network create musubi-shared-inference
+      register: inference_network
+      changed_when: "'musubi-shared-inference' in inference_network.stdout"
+
+    - name: Render shared inference Compose file
+      ansible.builtin.template:
+        src: templates/shared-inference-compose.yml.j2
+        dest: "{{ musubi_config_dir }}/shared-inference-compose.yml"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render shared inference ingress
+      ansible.builtin.template:
+        src: templates/shared-inference-ingress.nginx.conf.j2
+        dest: "{{ musubi_config_dir }}/shared-inference-ingress.conf"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render shared inference credential references
+      ansible.builtin.template:
+        src: templates/shared-inference.htpasswd.tpl.j2
+        dest: "{{ musubi_config_dir }}/shared-inference.htpasswd.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Install independent shared inference systemd unit
+      ansible.builtin.template:
+        src: templates/shared-inference.service.j2
+        dest: /etc/systemd/system/shared-inference.service
+        owner: root
+        group: root
+        mode: "0644"
+
     - name: Render non-secret production environment
       ansible.builtin.template:
         src: templates/env.production.j2
@@ -100,14 +155,25 @@
       changed_when: true
       no_log: true
 
-    - name: Start inference and storage services and wait for healthy
+    - name: Read service state without changing shared inference lifecycle
+      ansible.builtin.service_facts:
+
+    - name: Require independently managed shared inference to be running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['shared-inference.service'].state == 'running'
+        fail_msg: >-
+          shared-inference.service is not running. Start or migrate the independent
+          inference unit explicitly; a Musubi application deploy will not restart it.
+
+    - name: Start storage services and wait for healthy
       ansible.builtin.shell:
         cmd: >-
           set -a && . /etc/musubi/connect.env && set +a &&
           exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
           /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
           up -d --pull missing --remove-orphans --wait --wait-timeout 300
-          qdrant tei-dense tei-sparse tei-reranker ollama
+          qdrant ollama
         executable: /bin/bash
       changed_when: true
       no_log: true
