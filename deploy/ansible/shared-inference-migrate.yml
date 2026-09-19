@@ -137,6 +137,10 @@
               'for url in "$TEI_DENSE_URL" "$TEI_SPARSE_URL" "$TEI_RERANKER_URL";
                do curl --fail --silent --show-error "$url/health" >/dev/null; done'
             executable: /bin/bash
+          register: inference_parity
+          retries: 24
+          delay: 5
+          until: inference_parity.rc == 0
           changed_when: false
           no_log: true
 
