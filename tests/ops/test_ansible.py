@@ -24,6 +24,7 @@ PLAYBOOKS = {
 GROUP_VARS = ANSIBLE / "group_vars" / "all.yml"
 VAULT_EXAMPLE = ANSIBLE / "vault.example.yml"
 COMPOSE_TEMPLATE = ANSIBLE / "templates" / "docker-compose.yml.j2"
+SHARED_INFERENCE_COMPOSE_TEMPLATE = ANSIBLE / "templates" / "shared-inference-compose.yml.j2"
 ENV_TEMPLATE = ANSIBLE / "templates" / "env.production.j2"
 SYSTEMD_TEMPLATE = ANSIBLE / "templates" / "musubi.service.j2"
 
@@ -112,6 +113,7 @@ def test_playbook_idempotent_on_clean_vm() -> None:
         "ansible.builtin.group",
         "ansible.builtin.lineinfile",
         "ansible.builtin.service",
+        "ansible.builtin.service_facts",
         "ansible.builtin.stat",
         "ansible.builtin.systemd_service",
         "ansible.builtin.template",
@@ -166,7 +168,18 @@ def test_compose_file_renders_to_valid_yaml() -> None:
     compose = yaml.safe_load(rendered)
     assert compose["services"]["ollama"]["environment"]["OLLAMA_KEEP_ALIVE"] == "24h"
     assert compose["services"]["ollama"]["environment"]["OLLAMA_MAX_LOADED_MODELS"] == "1"
-    assert compose["services"]["tei-dense"]["volumes"] == ["tei-models:/data"]
+    # TEI is independently managed now, so its persistent model cache belongs
+    # to the shared-inference Compose project rather than the application one.
+    inference_rendered = SHARED_INFERENCE_COMPOSE_TEMPLATE.read_text()
+    for token in (
+        "{{ musubi_tei_image }}",
+        "{{ musubi_inference_ingress_image }}",
+        "{{ musubi_inference_port }}",
+        "{{ musubi_config_dir }}",
+    ):
+        inference_rendered = inference_rendered.replace(token, "example-value")
+    inference_compose = yaml.safe_load(inference_rendered)
+    assert inference_compose["services"]["tei-dense"]["volumes"] == ["tei-models:/data"]
     # Qdrant gets two bind mounts: persistent storage + the snapshot path
     # that `deploy/backup/musubi-backup.sh` reads from. Without the second
     # mount, Qdrant snapshots are ephemeral container storage.

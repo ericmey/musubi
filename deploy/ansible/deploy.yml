@@ -155,12 +155,16 @@
       changed_when: true
       no_log: true
 
-    - name: Reload systemd and start shared inference
-      ansible.builtin.systemd_service:
-        name: shared-inference
-        daemon_reload: true
-        enabled: true
-        state: restarted
+    - name: Read service state without changing shared inference lifecycle
+      ansible.builtin.service_facts:
+
+    - name: Require independently managed shared inference to be running
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['shared-inference.service'].state == 'running'
+        fail_msg: >-
+          shared-inference.service is not running. Start or migrate the independent
+          inference unit explicitly; a Musubi application deploy will not restart it.
 
     - name: Start storage services and wait for healthy
       ansible.builtin.shell:

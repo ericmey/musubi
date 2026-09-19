@@ -58,7 +58,7 @@ while adding application authentication and per-consumer credentials.
 2. `test_tei_backends_are_not_host_published`
 3. `test_every_shared_endpoint_requires_authentication`
 4. `test_consumers_receive_distinct_runtime_credentials`
-5. `test_interrupted_policy_stage_never_becomes_the_only_live_policy`
+5. `test_normal_app_deploy_does_not_restart_shared_inference`
 6. `test_failed_cutover_keeps_the_old_authenticated_endpoint_protected`
 7. `test_musubi_can_cut_over_and_roll_back_by_configuration`
 8. `test_live_values_do_not_enter_public_sources`

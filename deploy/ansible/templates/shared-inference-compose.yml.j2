@@ -16,7 +16,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
-    networks: [shared-inference]
+    networks: [inference-backend]
     restart: unless-stopped
 
   tei-sparse:
@@ -35,7 +35,7 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
-    networks: [shared-inference]
+    networks: [inference-backend]
     restart: unless-stopped
 
   tei-reranker:
@@ -54,16 +54,18 @@ services:
       timeout: 5s
       retries: 10
       start_period: 60s
-    networks: [shared-inference]
+    networks: [inference-backend]
     restart: unless-stopped
 
   inference-ingress:
     image: {{ musubi_inference_ingress_image }}
     ports:
-      - "{{ musubi_inference_port }}:8080"
+      - "{{ musubi_inference_port }}:8443"
     volumes:
       - "{{ musubi_config_dir }}/shared-inference-ingress.conf:/etc/nginx/conf.d/default.conf:ro"
       - "/run/shared-inference-secrets/shared-inference.htpasswd:/run/secrets/shared-inference.htpasswd:ro"
+      - "/run/shared-inference-secrets/tls.crt:/run/secrets/tls.crt:ro"
+      - "/run/shared-inference-secrets/tls.key:/run/secrets/tls.key:ro"
     depends_on:
       tei-dense:
         condition: service_healthy
@@ -71,7 +73,7 @@ services:
         condition: service_healthy
       tei-reranker:
         condition: service_healthy
-    networks: [shared-inference]
+    networks: [inference-backend, shared-inference]
     restart: unless-stopped
 
 volumes:
@@ -83,6 +85,9 @@ volumes:
       device: /var/lib/musubi/tei-models
 
 networks:
+  inference-backend:
+    # Separate from the consumer network so Musubi and Chord cannot resolve raw
+    # TEI services. Ordinary bridge egress remains available for model pulls.
   shared-inference:
     name: musubi-shared-inference
     external: true

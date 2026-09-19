@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any, cast
 
 import yaml
-
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "deploy" / "ansible"
@@ -21,15 +21,23 @@ INGRESS = ANSIBLE / "templates" / "shared-inference-ingress.nginx.conf.j2"
 SECRETS = ANSIBLE / "templates" / "shared-inference.htpasswd.tpl.j2"
 APP_SECRETS = ANSIBLE / "templates" / "secrets.tpl.j2"
 ENV = ANSIBLE / "templates" / "env.production.j2"
+ADR = ROOT / "docs" / "Musubi" / "13-decisions" / "0045-authenticated-shared-inference-services.md"
+SLICE = ROOT / "docs" / "Musubi" / "_slices" / "slice-ops-shared-inference.md"
 
 
-def _services(path: Path) -> dict:
+def _services(path: Path) -> dict[str, Any]:
     rendered = re.sub(r"\{\{[^\n]+?\}\}", "template_value", path.read_text())
-    return yaml.safe_load(rendered)["services"]
+    return cast(dict[str, Any], yaml.safe_load(rendered)["services"])
+
+
+def _compose(path: Path) -> dict[str, Any]:
+    rendered = re.sub(r"\{\{[^\n]+?\}\}", "template_value", path.read_text())
+    return cast(dict[str, Any], yaml.safe_load(rendered))
 
 
 def test_shared_inference_is_owned_by_a_separate_deployment_unit() -> None:
-    services = _services(INFERENCE_COMPOSE)
+    document = _compose(INFERENCE_COMPOSE)
+    services = document["services"]
     assert {"tei-dense", "tei-sparse", "tei-reranker", "inference-ingress"} <= set(services)
     app_services = _services(APP_COMPOSE)
     assert not ({"tei-dense", "tei-sparse", "tei-reranker"} & set(app_services))
@@ -44,16 +52,27 @@ def test_shared_inference_is_owned_by_a_separate_deployment_unit() -> None:
         "shared-inference.service",
     ):
         assert artifact in deploy
-    assert "name: shared-inference" in deploy
+    assert "Require independently managed shared inference to be running" in deploy
     bootstrap = (ANSIBLE / "bootstrap.yml").read_text()
     assert "shared-inference-compose.yml" in bootstrap
     assert "shared-inference.service" in bootstrap
 
 
 def test_tei_backends_are_not_host_published() -> None:
-    services = _services(INFERENCE_COMPOSE)
+    document = _compose(INFERENCE_COMPOSE)
+    services = document["services"]
     publishers = {name for name, service in services.items() if service.get("ports")}
     assert publishers == {"inference-ingress"}
+    for name in ("tei-dense", "tei-sparse", "tei-reranker"):
+        assert services[name]["networks"] == ["inference-backend"]
+    assert set(services["inference-ingress"]["networks"]) == {
+        "inference-backend",
+        "shared-inference",
+    }
+    assert "inference-backend" in document["networks"]
+    app_services = _services(APP_COMPOSE)
+    for consumer in ("core", "lifecycle-worker"):
+        assert "inference-backend" not in app_services[consumer]["networks"]
 
 
 def test_every_shared_endpoint_requires_authentication() -> None:
@@ -67,6 +86,11 @@ def test_every_shared_endpoint_requires_authentication() -> None:
     assert "proxy_pass http://tei-reranker:80" in ingress
     assert "access_log off" in ingress
     assert "log_format" not in ingress
+    assert "listen 8443 ssl" in ingress
+    assert "ssl_certificate " in ingress and "ssl_certificate_key " in ingress
+    migration = (ANSIBLE / "shared-inference-migrate.yml").read_text()
+    assert "Prove ingress logs retain no request payload or payload hash" in migration
+    assert 'case "$logs" in *"$sentinel"*|*"$digest"*) exit 96' in migration
 
 
 def test_consumers_receive_distinct_runtime_credentials() -> None:
@@ -86,28 +110,64 @@ def test_failed_cutover_keeps_the_old_authenticated_endpoint_protected() -> None
     deploy = (ANSIBLE / "shared-inference-migrate.yml").read_text()
     assert "block:" in deploy
     assert "rescue:" in deploy
-    assert "docker-compose.pre-shared-inference.yml" in deploy
+    assert "Allocate a per-attempt rollback directory" in deploy
+    assert "Preserve every coupled live artifact for this attempt" in deploy
     assert "Rollback shared inference ownership" in deploy
     assert "tei-dense tei-sparse tei-reranker" in deploy
     assert deploy.index("Stop Compose-owned TEI for the bounded handoff") < deploy.index(
-        "Verify shared inference parity")
+        "Verify shared inference parity"
+    )
     assert deploy.index("Verify shared inference parity") < deploy.index(
-        "Commit shared inference ownership")
+        "Commit shared inference ownership"
+    )
+    assert deploy.index("Prove a real Musubi consumer") < deploy.index(
+        "Record completed ownership migration"
+    )
 
 
 def test_musubi_can_cut_over_and_roll_back_by_configuration() -> None:
     env = APP_SECRETS.read_text()
     for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"):
         assert re.search(rf"^{key}=op://", env, re.M)
-    assert all(f"{key}=" not in ENV.read_text() for key in
-               ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"))
+    assert all(
+        f"{key}=" not in ENV.read_text()
+        for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL")
+    )
+    app = APP_COMPOSE.read_text()
+    for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"):
+        assert app.count(f"{key}: ${{{key}}}") == 2
+
+
+def test_normal_app_deploy_does_not_restart_shared_inference() -> None:
+    deploy = (ANSIBLE / "deploy.yml").read_text()
+    assert "Require independently managed shared inference to be running" in deploy
+    assert (
+        "state: restarted\n"
+        not in deploy[deploy.index("shared-inference") : deploy.index("Start storage services")]
+    )
+    unit = (ANSIBLE / "templates" / "musubi.service.j2").read_text()
+    assert "Requires=docker.service shared-inference.service" not in unit
 
 
 def test_live_values_do_not_enter_public_sources() -> None:
-    paths = (INFERENCE_COMPOSE, INFERENCE_UNIT, INGRESS, SECRETS, APP_SECRETS, ENV)
+    paths = (
+        INFERENCE_COMPOSE,
+        INFERENCE_UNIT,
+        INGRESS,
+        SECRETS,
+        APP_SECRETS,
+        ENV,
+        ANSIBLE / "bootstrap.yml",
+        ANSIBLE / "deploy.yml",
+        ANSIBLE / "shared-inference-migrate.yml",
+        ANSIBLE / "group_vars" / "all.yml",
+        ADR,
+        SLICE,
+    )
     ipv4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
     hostname = re.compile(r"\b(?:musubi|mizuki)\.mey\.house\b", re.I)
+    allowed_examples = {"127.0.0.1", "10.0.0.0"}
     for path in paths:
         text = path.read_text()
-        assert not [value for value in ipv4.findall(text) if not value.startswith("127.")], path
+        assert not [value for value in ipv4.findall(text) if value not in allowed_examples], path
         assert not hostname.search(text), path

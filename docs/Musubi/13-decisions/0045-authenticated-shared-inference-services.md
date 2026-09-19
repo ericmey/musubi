@@ -112,12 +112,9 @@ whose contracts match their output; they are not coerced into
 
 ## Test contract
 
-1. The shared inference Compose file and systemd unit are independent of the
-   Musubi application unit.
-2. The set of services with host-published ports is exactly the ingress.
-3. Every inference route requires authentication and the ingress does not log
-   payload-derived data.
-4. Musubi and Chord credentials are separate 1Password-backed values.
-5. The cutover verifies parity before retiring old ownership and carries an
-   executable rollback.
-6. Public sources contain no live address or credential material.
+1. `test_shared_inference_is_owned_by_a_separate_deployment_unit`
+2. `test_tei_backends_are_not_host_published`
+3. `test_every_shared_endpoint_requires_authentication`
+4. `test_consumers_receive_distinct_runtime_credentials`
+5. `test_failed_cutover_keeps_the_old_authenticated_endpoint_protected`
+6. `test_live_values_do_not_enter_public_sources`

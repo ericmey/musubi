@@ -1,6 +1,10 @@
 server {
-    listen 8080;
+    listen 8443 ssl;
     server_name _;
+
+    ssl_certificate /run/secrets/tls.crt;
+    ssl_certificate_key /run/secrets/tls.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
 
     # Request payloads are corpus content in transit. Do not create a second
     # cross-tenant store at the ingress.
