@@ -215,16 +215,21 @@ def test_check_mode_allocates_and_cleans_the_real_backup_directory() -> None:
 
 
 def test_migration_requires_the_private_tls_hostname() -> None:
-    playbook = yaml.safe_load((ANSIBLE / "shared-inference-migrate.yml").read_text())
-    requirement = next(
-        task
-        for task in playbook[0]["tasks"]
-        if task["name"] == "Require the private shared inference hostname"
-    )
-    assertions = requirement["ansible.builtin.assert"]["that"]
-    assert "musubi_inference_hostname is defined" in assertions
-    assert "musubi_inference_hostname | length > 0" in assertions
-    assert 'musubi_inference_hostname != "example.invalid"' in assertions
+    for filename, section in (
+        ("bootstrap.yml", "pre_tasks"),
+        ("deploy.yml", "pre_tasks"),
+        ("shared-inference-migrate.yml", "tasks"),
+    ):
+        playbook = yaml.safe_load((ANSIBLE / filename).read_text())
+        requirement = next(
+            task
+            for task in playbook[0][section]
+            if task["name"] == "Require the private shared inference hostname"
+        )
+        assertions = requirement["ansible.builtin.assert"]["that"]
+        assert "musubi_inference_hostname is defined" in assertions
+        assert "musubi_inference_hostname | length > 0" in assertions
+        assert 'musubi_inference_hostname != "example.invalid"' in assertions
     setup = (ANSIBLE / "setup-control-host.sh").read_text()
     assert 'musubi_inference_hostname: ""' in setup
     assert "musubi_inference_hostname" in (ANSIBLE / "README.md").read_text()
