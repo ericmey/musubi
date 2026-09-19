@@ -108,6 +108,15 @@ def test_nginx_workers_can_read_only_the_ephemeral_password_hash() -> None:
     assert "chmod 0444" not in unit
 
 
+def test_log_privacy_probe_uses_the_curl_image_entrypoint_once() -> None:
+    migration = (ANSIBLE / "shared-inference-migrate.yml").read_text()
+    probe = migration.split(
+        "- name: Prove ingress logs retain no request payload or payload hash", maxsplit=1
+    )[1].split("- name: Commit shared inference ownership", maxsplit=1)[0]
+    assert probe.count("{{ musubi_curl_image }}") == 2
+    assert "{{ musubi_curl_image }}\n                curl " not in probe
+
+
 def test_consumers_receive_distinct_runtime_credentials() -> None:
     secrets = SECRETS.read_text()
     assert "musubi:op://" in secrets
