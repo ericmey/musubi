@@ -164,9 +164,7 @@ def test_check_mode_allocates_and_cleans_the_real_backup_directory() -> None:
         if task["name"] == "Start authenticated shared inference"
     )
     commit_secrets = next(
-        task
-        for task in migration["block"]
-        if task["name"] == "Commit authenticated inference URLs"
+        task for task in migration["block"] if task["name"] == "Commit authenticated inference URLs"
     )
     assert allocation["check_mode"] is False
     assert start["when"] == "not ansible_check_mode"
