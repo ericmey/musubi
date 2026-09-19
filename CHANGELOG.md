@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.1](https://github.com/ericmey/musubi/compare/v1.26.0...v1.26.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* wait for shared inference readiness ([#746](https://github.com/ericmey/musubi/issues/746)) ([224498f](https://github.com/ericmey/musubi/commit/224498f96242657a182833c88c82a110e200aac9))
+
 ## [1.26.0](https://github.com/ericmey/musubi/compare/v1.25.2...v1.26.0) (2026-09-19)
 
 
