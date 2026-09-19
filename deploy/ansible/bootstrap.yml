@@ -27,6 +27,17 @@
       check_mode: false
       no_log: true
 
+    - name: Require the private shared inference hostname
+      ansible.builtin.assert:
+        that:
+          - musubi_inference_hostname is defined
+          - musubi_inference_hostname | length > 0
+          - musubi_inference_hostname != "example.invalid"
+        fail_msg: >-
+          musubi_inference_hostname must come from private inventory so the
+          internal Docker alias matches the certificate without publishing live
+          topology in this repository.
+
     # ---- Prereqs for adding third-party apt sources ---------------------
     - name: Install prerequisites for adding third-party apt repos
       ansible.builtin.apt:

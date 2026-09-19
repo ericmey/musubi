@@ -69,6 +69,10 @@ def test_tei_backends_are_not_host_published() -> None:
         "inference-backend",
         "shared-inference",
     }
+    assert services["inference-ingress"]["networks"]["shared-inference"] == {
+        "aliases": ["template_value"]
+    }
+    assert "musubi_inference_hostname" in INFERENCE_COMPOSE.read_text()
     assert "inference-backend" in document["networks"]
     app_services = _services(APP_COMPOSE)
     for consumer in ("core", "lifecycle-worker"):
@@ -208,6 +212,27 @@ def test_check_mode_allocates_and_cleans_the_real_backup_directory() -> None:
     assert commit_secrets["when"] == "not ansible_check_mode"
     assert cleanup["check_mode"] is False
     assert cleanup["ansible.builtin.file"]["path"] == "{{ migration_backup.path }}"
+
+
+def test_migration_requires_the_private_tls_hostname() -> None:
+    for filename, section in (
+        ("bootstrap.yml", "pre_tasks"),
+        ("deploy.yml", "pre_tasks"),
+        ("shared-inference-migrate.yml", "tasks"),
+    ):
+        playbook = yaml.safe_load((ANSIBLE / filename).read_text())
+        requirement = next(
+            task
+            for task in playbook[0][section]
+            if task["name"] == "Require the private shared inference hostname"
+        )
+        assertions = requirement["ansible.builtin.assert"]["that"]
+        assert "musubi_inference_hostname is defined" in assertions
+        assert "musubi_inference_hostname | length > 0" in assertions
+        assert 'musubi_inference_hostname != "example.invalid"' in assertions
+    setup = (ANSIBLE / "setup-control-host.sh").read_text()
+    assert 'musubi_inference_hostname: ""' in setup
+    assert "musubi_inference_hostname" in (ANSIBLE / "README.md").read_text()
 
 
 def test_musubi_can_cut_over_and_roll_back_by_configuration() -> None:
