@@ -1,0 +1,22 @@
+[Unit]
+Description=Authenticated shared inference services
+After=docker.service network-online.target
+Requires=docker.service
+Before=musubi.service
+
+[Service]
+Type=simple
+WorkingDirectory={{ musubi_config_dir }}
+EnvironmentFile=/etc/musubi/connect.env
+RuntimeDirectory=shared-inference-secrets
+RuntimeDirectoryMode=0711
+UMask=0077
+ExecStartPre=/usr/bin/op inject -i {{ musubi_config_dir }}/shared-inference.htpasswd.tpl -o /run/shared-inference-secrets/shared-inference.htpasswd
+ExecStartPre=/usr/bin/chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd
+ExecStart=/usr/bin/docker compose -p shared-inference -f {{ musubi_config_dir }}/shared-inference-compose.yml up
+ExecStop=/usr/bin/docker compose -p shared-inference -f {{ musubi_config_dir }}/shared-inference-compose.yml down
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

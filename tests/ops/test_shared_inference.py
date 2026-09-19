@@ -24,7 +24,8 @@ ENV = ANSIBLE / "templates" / "env.production.j2"
 
 
 def _services(path: Path) -> dict:
-    return yaml.safe_load(path.read_text())["services"]
+    rendered = re.sub(r"\{\{[^\n]+?\}\}", "template_value", path.read_text())
+    return yaml.safe_load(rendered)["services"]
 
 
 def test_shared_inference_is_owned_by_a_separate_deployment_unit() -> None:
@@ -35,6 +36,18 @@ def test_shared_inference_is_owned_by_a_separate_deployment_unit() -> None:
     unit = INFERENCE_UNIT.read_text()
     assert "shared-inference-compose.yml" in unit
     assert "PartOf=musubi.service" not in unit
+    deploy = (ANSIBLE / "deploy.yml").read_text()
+    for artifact in (
+        "shared-inference-compose.yml",
+        "shared-inference-ingress.conf",
+        "shared-inference.htpasswd.tpl",
+        "shared-inference.service",
+    ):
+        assert artifact in deploy
+    assert "name: shared-inference" in deploy
+    bootstrap = (ANSIBLE / "bootstrap.yml").read_text()
+    assert "shared-inference-compose.yml" in bootstrap
+    assert "shared-inference.service" in bootstrap
 
 
 def test_tei_backends_are_not_host_published() -> None:
@@ -45,7 +58,7 @@ def test_tei_backends_are_not_host_published() -> None:
 
 def test_every_shared_endpoint_requires_authentication() -> None:
     ingress = INGRESS.read_text()
-    for path in ("/dense/*", "/sparse/*", "/reranker/*"):
+    for path in ("location /dense/", "location /sparse/", "location /reranker/"):
         assert path in ingress
     assert "auth_basic" in ingress
     assert "auth_basic_user_file /run/secrets/shared-inference.htpasswd" in ingress
@@ -61,18 +74,25 @@ def test_consumers_receive_distinct_runtime_credentials() -> None:
     assert "musubi:op://" in secrets
     assert "chord:op://" in secrets
     assert "op://" in secrets
+    assert not secrets.startswith("#")
     compose = INFERENCE_COMPOSE.read_text()
-    assert "/run/musubi-secrets/shared-inference.htpasswd" in compose
+    assert "/run/shared-inference-secrets/shared-inference.htpasswd" in compose
     app_secrets = APP_SECRETS.read_text()
     for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"):
         assert re.search(rf"^{key}=op://", app_secrets, re.M)
 
 
 def test_failed_cutover_keeps_the_old_authenticated_endpoint_protected() -> None:
-    deploy = (ANSIBLE / "deploy.yml").read_text()
-    assert "shared inference parity" in deploy.lower()
-    assert "remove Compose-owned TEI" in deploy
-    assert deploy.index("shared inference parity") < deploy.index("remove Compose-owned TEI")
+    deploy = (ANSIBLE / "shared-inference-migrate.yml").read_text()
+    assert "block:" in deploy
+    assert "rescue:" in deploy
+    assert "docker-compose.pre-shared-inference.yml" in deploy
+    assert "Rollback shared inference ownership" in deploy
+    assert "tei-dense tei-sparse tei-reranker" in deploy
+    assert deploy.index("Stop Compose-owned TEI for the bounded handoff") < deploy.index(
+        "Verify shared inference parity")
+    assert deploy.index("Verify shared inference parity") < deploy.index(
+        "Commit shared inference ownership")
 
 
 def test_musubi_can_cut_over_and_roll_back_by_configuration() -> None:

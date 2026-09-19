@@ -1,0 +1,31 @@
+server {
+    listen 8080;
+    server_name _;
+
+    # Request payloads are corpus content in transit. Do not create a second
+    # cross-tenant store at the ingress.
+    access_log off;
+    error_log /dev/stderr warn;
+
+    auth_basic "shared inference";
+    auth_basic_user_file /run/secrets/shared-inference.htpasswd;
+
+    location /dense/ {
+        rewrite ^/dense/(.*)$ /$1 break;
+        proxy_pass http://tei-dense:80;
+    }
+
+    location /sparse/ {
+        rewrite ^/sparse/(.*)$ /$1 break;
+        proxy_pass http://tei-sparse:80;
+    }
+
+    location /reranker/ {
+        rewrite ^/reranker/(.*)$ /$1 break;
+        proxy_pass http://tei-reranker:80;
+    }
+
+    location / {
+        return 404;
+    }
+}

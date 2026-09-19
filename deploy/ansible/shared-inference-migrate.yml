@@ -1,0 +1,164 @@
+---
+- name: Migrate TEI ownership to authenticated shared inference
+  hosts: musubi
+  become: true
+  tasks:
+    - name: Preserve the last Compose file that owns TEI
+      ansible.builtin.copy:
+        src: "{{ musubi_config_dir }}/docker-compose.yml"
+        dest: "{{ musubi_config_dir }}/docker-compose.pre-shared-inference.yml"
+        remote_src: true
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+        force: false
+
+    - name: Create the private shared inference network
+      ansible.builtin.shell:
+        cmd: docker network inspect musubi-shared-inference >/dev/null 2>&1 || docker network create musubi-shared-inference
+      register: inference_network
+      changed_when: "'musubi-shared-inference' in inference_network.stdout"
+
+    - name: Render shared inference Compose file
+      ansible.builtin.template:
+        src: templates/shared-inference-compose.yml.j2
+        dest: "{{ musubi_config_dir }}/shared-inference-compose.yml"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render shared inference ingress
+      ansible.builtin.template:
+        src: templates/shared-inference-ingress.nginx.conf.j2
+        dest: "{{ musubi_config_dir }}/shared-inference-ingress.conf"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Render shared inference credential references
+      ansible.builtin.template:
+        src: templates/shared-inference.htpasswd.tpl.j2
+        dest: "{{ musubi_config_dir }}/shared-inference.htpasswd.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+
+    - name: Install the independent shared inference unit
+      ansible.builtin.template:
+        src: templates/shared-inference.service.j2
+        dest: /etc/systemd/system/shared-inference.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Validate the candidate deployment before touching the live owner
+      ansible.builtin.command:
+        cmd: docker compose -p shared-inference -f {{ musubi_config_dir }}/shared-inference-compose.yml config --quiet
+      changed_when: false
+
+    - name: Reload systemd for the candidate unit
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Perform the bounded single-GPU ownership handoff
+      block:
+        - name: Stop Musubi consumers during the model-owner handoff
+          ansible.builtin.command:
+            cmd: docker compose -f {{ musubi_config_dir }}/docker-compose.pre-shared-inference.yml stop core lifecycle-worker
+          changed_when: true
+
+        - name: Stop Compose-owned TEI for the bounded handoff
+          ansible.builtin.command:
+            cmd: docker compose -f {{ musubi_config_dir }}/docker-compose.pre-shared-inference.yml stop tei-dense tei-sparse tei-reranker
+          changed_when: true
+
+        - name: Remove stopped Compose-owned TEI containers
+          ansible.builtin.command:
+            cmd: docker compose -f {{ musubi_config_dir }}/docker-compose.pre-shared-inference.yml rm -f tei-dense tei-sparse tei-reranker
+          changed_when: true
+
+        - name: Start authenticated shared inference
+          ansible.builtin.systemd_service:
+            name: shared-inference
+            enabled: true
+            state: restarted
+
+        - name: Verify shared inference parity through authentication
+          ansible.builtin.shell:
+            cmd: >-
+              set -a && . /etc/musubi/connect.env && set +a &&
+              exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
+              /usr/bin/docker run --rm --network musubi-shared-inference
+              -e TEI_DENSE_URL -e TEI_SPARSE_URL -e TEI_RERANKER_URL
+              {{ musubi_curl_image }} sh -ec
+              'for url in "$TEI_DENSE_URL" "$TEI_SPARSE_URL" "$TEI_RERANKER_URL";
+               do curl --fail --silent --show-error "$url/health" >/dev/null; done'
+            executable: /bin/bash
+          changed_when: false
+          no_log: true
+
+        - name: Commit shared inference ownership in the Musubi Compose file
+          ansible.builtin.template:
+            src: templates/docker-compose.yml.j2
+            dest: "{{ musubi_config_dir }}/docker-compose.yml"
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+
+        - name: Commit authenticated inference URLs
+          ansible.builtin.template:
+            src: templates/secrets.tpl.j2
+            dest: "{{ musubi_config_dir }}/secrets.tpl"
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          no_log: true
+
+        - name: Restart Musubi against shared inference
+          ansible.builtin.systemd_service:
+            name: musubi
+            state: restarted
+
+        - name: Record completed ownership migration
+          ansible.builtin.copy:
+            content: "shared-inference owns TEI\n"
+            dest: "{{ musubi_config_dir }}/shared-inference-migrated"
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+
+      rescue:
+        - name: Stop the failed shared inference candidate
+          ansible.builtin.systemd_service:
+            name: shared-inference
+            state: stopped
+          failed_when: false
+
+        - name: Rollback shared inference ownership
+          ansible.builtin.copy:
+            src: "{{ musubi_config_dir }}/docker-compose.pre-shared-inference.yml"
+            dest: "{{ musubi_config_dir }}/docker-compose.yml"
+            remote_src: true
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+
+        - name: Restore the previous TEI owner
+          ansible.builtin.shell:
+            cmd: >-
+              set -a && . /etc/musubi/connect.env && set +a &&
+              exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.tpl --
+              /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
+              up -d --wait --wait-timeout 300 tei-dense tei-sparse tei-reranker
+            executable: /bin/bash
+          changed_when: true
+          no_log: true
+
+        - name: Restore Musubi consumers
+          ansible.builtin.systemd_service:
+            name: musubi
+            state: restarted
+
+        - name: Refuse a failed migration after rollback
+          ansible.builtin.fail:
+            msg: Shared inference migration failed and the previous TEI owner was restored

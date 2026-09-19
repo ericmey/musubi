@@ -1,0 +1,88 @@
+# Managed by deploy/ansible/ — independent from the Musubi application stack.
+services:
+  tei-dense:
+    image: {{ musubi_tei_image }}
+    command: --model-id BAAI/bge-m3 --max-batch-tokens 32768 --max-client-batch-size 16
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [shared-inference]
+    restart: unless-stopped
+
+  tei-sparse:
+    image: {{ musubi_tei_image }}
+    command: --model-id naver/splade-v3 --pooling splade --max-batch-tokens 16384
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [shared-inference]
+    restart: unless-stopped
+
+  tei-reranker:
+    image: {{ musubi_tei_image }}
+    command: --model-id BAAI/bge-reranker-v2-m3
+    volumes:
+      - tei-models:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 6<>/dev/tcp/localhost/80"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [shared-inference]
+    restart: unless-stopped
+
+  inference-ingress:
+    image: {{ musubi_inference_ingress_image }}
+    ports:
+      - "{{ musubi_inference_port }}:8080"
+    volumes:
+      - "{{ musubi_config_dir }}/shared-inference-ingress.conf:/etc/nginx/conf.d/default.conf:ro"
+      - "/run/shared-inference-secrets/shared-inference.htpasswd:/run/secrets/shared-inference.htpasswd:ro"
+    depends_on:
+      tei-dense:
+        condition: service_healthy
+      tei-sparse:
+        condition: service_healthy
+      tei-reranker:
+        condition: service_healthy
+    networks: [shared-inference]
+    restart: unless-stopped
+
+volumes:
+  tei-models:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/lib/musubi/tei-models
+
+networks:
+  shared-inference:
+    name: musubi-shared-inference
+    external: true
