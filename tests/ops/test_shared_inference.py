@@ -97,6 +97,17 @@ def test_every_shared_endpoint_requires_authentication() -> None:
     assert 'case "$logs" in *"$sentinel"*|*"$digest"*) exit 96' in migration
 
 
+def test_nginx_workers_can_read_only_the_ephemeral_password_hash() -> None:
+    unit = INFERENCE_UNIT.read_text()
+    assert "chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd" in unit
+    assert "chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd" in unit
+    assert (
+        "chmod 0400 /run/shared-inference-secrets/tls.crt "
+        "/run/shared-inference-secrets/tls.key" in unit
+    )
+    assert "chmod 0444" not in unit
+
+
 def test_consumers_receive_distinct_runtime_credentials() -> None:
     secrets = SECRETS.read_text()
     assert "musubi:op://" in secrets

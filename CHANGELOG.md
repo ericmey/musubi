@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.26.3](https://github.com/ericmey/musubi/compare/v1.26.2...v1.26.3) (2026-09-19)
+
+
+### Bug Fixes
+
+* **deploy:** let ingress workers read htpasswd ([#750](https://github.com/ericmey/musubi/issues/750)) ([f91d702](https://github.com/ericmey/musubi/commit/f91d70284898fac5675c36bc938db5083f4d3a4c))
+
+## [1.26.2](https://github.com/ericmey/musubi/compare/v1.26.1...v1.26.2) (2026-09-19)
+
+
+### Bug Fixes
+
+* route Musubi through the internal inference alias ([#748](https://github.com/ericmey/musubi/issues/748)) ([2fe7a3e](https://github.com/ericmey/musubi/commit/2fe7a3e341368351ad5a9cae7185f83b7a0dcb4c))
+
 ## [1.26.1](https://github.com/ericmey/musubi/compare/v1.26.0...v1.26.1) (2026-09-19)
 
 
