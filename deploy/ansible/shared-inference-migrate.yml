@@ -141,17 +141,15 @@
           ansible.builtin.shell:
             cmd: >-
               set -a && . /etc/musubi/connect.env && set +a &&
-              exec /usr/bin/timeout --signal=TERM --kill-after=2s 12s
+              exec /usr/bin/timeout --signal=TERM --kill-after=1s 5s
               /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.shared-inference-candidate.tpl --
               /usr/bin/docker run --rm --network musubi-shared-inference
               -e TEI_DENSE_URL -e TEI_SPARSE_URL -e TEI_RERANKER_URL
               {{ musubi_curl_image }} sh -ec
-              'for url in "$TEI_DENSE_URL" "$TEI_SPARSE_URL" "$TEI_RERANKER_URL";
-               do curl --fail --silent --show-error --connect-timeout 2 --max-time 3
-                 "$url/health" >/dev/null; done'
+              'curl --parallel --parallel-immediate --fail --fail-early --silent --show-error --connect-timeout 2 --max-time 3 --output /dev/null "$TEI_DENSE_URL/health" --output /dev/null "$TEI_SPARSE_URL/health" --output /dev/null "$TEI_RERANKER_URL/health"'
             executable: /bin/bash
           register: inference_parity
-          retries: 5
+          retries: 8
           delay: 5
           until: inference_parity.rc == 0
           changed_when: false
@@ -166,14 +164,9 @@
               sentinel="shared-inference-log-sentinel-$(date +%s%N)";
               digest="$(printf %s "$sentinel" | sha256sum | cut -d" " -f1)";
               payload="{\"inputs\":\"$sentinel\"}";
-              docker run --rm --network musubi-shared-inference {{ musubi_curl_image }}
-                --fail --silent --show-error -H "content-type: application/json"
-                -d "$payload" "$TEI_DENSE_URL/embed" >/dev/null;
-              docker run --rm --network musubi-shared-inference {{ musubi_curl_image }}
-                --silent --show-error -u invalid:invalid -H "content-type: application/json"
-                -d "$payload" "$TEI_DENSE_URL/embed" >/dev/null;
-              logs="$(docker compose -p shared-inference
-                -f {{ musubi_config_dir }}/shared-inference-compose.yml logs --no-color inference-ingress)";
+              docker run --rm --network musubi-shared-inference {{ musubi_curl_image }} --fail --silent --show-error -H "content-type: application/json" -d "$payload" "$TEI_DENSE_URL/embed" >/dev/null;
+              docker run --rm --network musubi-shared-inference {{ musubi_curl_image }} --silent --show-error -u invalid:invalid -H "content-type: application/json" -d "$payload" "$TEI_DENSE_URL/embed" >/dev/null;
+              logs="$(docker compose -p shared-inference -f {{ musubi_config_dir }}/shared-inference-compose.yml logs --no-color inference-ingress)";
               case "$logs" in *"$sentinel"*|*"$digest"*) exit 96;; esac'
             executable: /bin/bash
           changed_when: false

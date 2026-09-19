@@ -158,19 +158,45 @@ def test_cutover_waits_for_candidate_readiness_before_rolling_back() -> None:
         if task["name"] == "Verify shared inference parity through authentication"
     )
     assert parity["register"] == "inference_parity"
-    assert parity["retries"] == 5
+    # A cold candidate took 31 seconds to become request-ready in production.
+    # Probe the three independent routes in parallel so that the additional
+    # readiness window does not weaken the existing whole-operation deadline.
+    assert parity["retries"] == 8
     assert parity["delay"] == 5
     assert parity["until"] == "inference_parity.rc == 0"
     assert parity["no_log"] is True
     command = parity["ansible.builtin.shell"]["cmd"]
-    assert "/usr/bin/timeout --signal=TERM --kill-after=2s 12s" in command
+    assert "/usr/bin/timeout --signal=TERM --kill-after=1s 5s" in command
+    assert "curl --parallel --parallel-immediate" in command
+    assert "--fail --fail-early" in command
+    assert command.count("--output /dev/null") == 3
+    inner_script = command.split("sh -ec '", 1)[1].rsplit("'", 1)[0]
+    assert "\n" not in inner_script, "a folded command must not execute its options as commands"
     assert "--connect-timeout 2" in command
     assert "--max-time 3" in command
-    outer_deadline = 12 + 2
+    outer_deadline = 5 + 1
     worst_case_seconds = (parity["retries"] + 1) * outer_deadline + parity["retries"] * parity[
         "delay"
     ]
     assert worst_case_seconds < 120
+
+
+def test_log_privacy_probe_continues_commands_across_preserved_yaml_lines() -> None:
+    playbook = yaml.safe_load((ANSIBLE / "shared-inference-migrate.yml").read_text())
+    migration = next(task for task in playbook[0]["tasks"] if "block" in task)
+    privacy = next(
+        task
+        for task in migration["block"]
+        if task["name"] == "Prove ingress logs retain no request payload or payload hash"
+    )
+    command = privacy["ansible.builtin.shell"]["cmd"]
+    inner_script = command.split("/bin/bash -ec '", 1)[1].rsplit("'", 1)[0]
+    lines = inner_script.splitlines()
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("-"):
+            assert index > 0 and lines[index - 1].rstrip().endswith("\\"), (
+                f"line {index + 1} would execute {line.strip().split()[0]} as a command"
+            )
 
 
 def test_backup_compose_uses_the_live_project_identity() -> None:
