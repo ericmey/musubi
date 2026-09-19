@@ -148,7 +148,8 @@ def test_backup_compose_uses_the_live_project_identity() -> None:
 
 def test_check_mode_allocates_and_cleans_the_real_backup_directory() -> None:
     playbook = yaml.safe_load((ANSIBLE / "shared-inference-migrate.yml").read_text())
-    tasks = playbook[0]["tasks"]
+    play = playbook[0]
+    tasks = play["tasks"]
     allocation = next(
         task for task in tasks if task["name"] == "Allocate a per-attempt rollback directory"
     )
@@ -167,6 +168,18 @@ def test_check_mode_allocates_and_cleans_the_real_backup_directory() -> None:
         task for task in migration["block"] if task["name"] == "Commit authenticated inference URLs"
     )
     assert allocation["check_mode"] is False
+    assert play["force_handlers"] is True
+    assert allocation["notify"] == "Remove rollback material after an early failure"
+    early_failure_cleanup = next(
+        handler
+        for handler in play["handlers"]
+        if handler["name"] == "Remove rollback material after an early failure"
+    )
+    assert early_failure_cleanup["check_mode"] is False
+    assert early_failure_cleanup["ansible.builtin.file"] == {
+        "path": "{{ migration_backup.path }}",
+        "state": "absent",
+    }
     assert start["when"] == "not ansible_check_mode"
     assert commit_secrets["when"] == "not ansible_check_mode"
     assert cleanup["check_mode"] is False

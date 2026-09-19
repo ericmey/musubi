@@ -2,6 +2,13 @@
 - name: Migrate TEI ownership to authenticated shared inference
   hosts: musubi
   become: true
+  force_handlers: true
+  handlers:
+    - name: Remove rollback material after an early failure
+      ansible.builtin.file:
+        path: "{{ migration_backup.path }}"
+        state: absent
+      check_mode: false
   tasks:
     - name: Allocate a per-attempt rollback directory
       ansible.builtin.tempfile:
@@ -9,8 +16,10 @@
         prefix: musubi-shared-inference-rollback.
       register: migration_backup
       # The backup copy tasks need a real destination even during the required
-      # pre-deploy --check run. The play's always block removes it either way.
+      # pre-deploy --check run. The forced handler covers failures before the
+      # bounded handoff's always block is entered.
       check_mode: false
+      notify: Remove rollback material after an early failure
 
     - name: Preserve every coupled live artifact for this attempt
       ansible.builtin.copy:
