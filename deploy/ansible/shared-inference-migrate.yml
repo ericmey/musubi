@@ -2,12 +2,24 @@
 - name: Migrate TEI ownership to authenticated shared inference
   hosts: musubi
   become: true
+  force_handlers: true
+  handlers:
+    - name: Remove rollback material after an early failure
+      ansible.builtin.file:
+        path: "{{ migration_backup.path }}"
+        state: absent
+      check_mode: false
   tasks:
     - name: Allocate a per-attempt rollback directory
       ansible.builtin.tempfile:
         state: directory
         prefix: musubi-shared-inference-rollback.
       register: migration_backup
+      # The backup copy tasks need a real destination even during the required
+      # pre-deploy --check run. The forced handler covers failures before the
+      # bounded handoff's always block is entered.
+      check_mode: false
+      notify: Remove rollback material after an early failure
 
     - name: Preserve every coupled live artifact for this attempt
       ansible.builtin.copy:
@@ -110,6 +122,9 @@
             name: shared-inference
             enabled: true
             state: restarted
+          # The unit does not exist until this same check-mode run renders it.
+          # Querying systemd for it would turn a clean preview into a false red.
+          when: not ansible_check_mode
 
         - name: Verify shared inference parity through authentication
           ansible.builtin.shell:
@@ -164,6 +179,9 @@
             group: "{{ musubi_service_group }}"
             mode: "0640"
           no_log: true
+          # The candidate template is intentionally only previewed in check
+          # mode, so there are no remote bytes to copy into the live path.
+          when: not ansible_check_mode
 
         - name: Restart Musubi against shared inference
           ansible.builtin.systemd_service:
@@ -249,3 +267,4 @@
           ansible.builtin.file:
             path: "{{ migration_backup.path }}"
             state: absent
+          check_mode: false

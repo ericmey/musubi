@@ -146,6 +146,46 @@ def test_backup_compose_uses_the_live_project_identity() -> None:
         assert "-f {{ migration_backup.path }}/docker-compose.yml" in command
 
 
+def test_check_mode_allocates_and_cleans_the_real_backup_directory() -> None:
+    playbook = yaml.safe_load((ANSIBLE / "shared-inference-migrate.yml").read_text())
+    play = playbook[0]
+    tasks = play["tasks"]
+    allocation = next(
+        task for task in tasks if task["name"] == "Allocate a per-attempt rollback directory"
+    )
+    migration = next(task for task in tasks if "block" in task)
+    cleanup = next(
+        task
+        for task in migration["always"]
+        if task["name"] == "Remove per-attempt rollback material"
+    )
+    start = next(
+        task
+        for task in migration["block"]
+        if task["name"] == "Start authenticated shared inference"
+    )
+    commit_secrets = next(
+        task for task in migration["block"] if task["name"] == "Commit authenticated inference URLs"
+    )
+    assert allocation["check_mode"] is False
+    assert play["force_handlers"] is True
+    assert allocation["notify"] == "Remove rollback material after an early failure"
+    early_failure_cleanup = next(
+        handler
+        for handler in play["handlers"]
+        if handler["name"] == "Remove rollback material after an early failure"
+    )
+    assert early_failure_cleanup["check_mode"] is False
+    assert early_failure_cleanup["ansible.builtin.file"] == {
+        "path": "{{ migration_backup.path }}",
+        "state": "absent",
+    }
+    assert start["when"] == "not ansible_check_mode"
+    assert commit_secrets["when"] == "not ansible_check_mode"
+    assert cleanup["check_mode"] is False
+    assert cleanup["ansible.builtin.file"]["path"] == "{{ migration_backup.path }}"
+
+
 def test_musubi_can_cut_over_and_roll_back_by_configuration() -> None:
     env = APP_SECRETS.read_text()
     for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"):
