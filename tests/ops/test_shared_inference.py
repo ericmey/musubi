@@ -134,10 +134,13 @@ def test_cutover_waits_for_candidate_readiness_before_rolling_back() -> None:
         if task["name"] == "Verify shared inference parity through authentication"
     )
     assert parity["register"] == "inference_parity"
-    assert parity["retries"] == 24
+    assert parity["retries"] == 8
     assert parity["delay"] == 5
     assert parity["until"] == "inference_parity.rc == 0"
     assert parity["no_log"] is True
+    command = parity["ansible.builtin.shell"]["cmd"]
+    assert "--connect-timeout 2" in command
+    assert "--max-time 3" in command
 
 
 def test_backup_compose_uses_the_live_project_identity() -> None:

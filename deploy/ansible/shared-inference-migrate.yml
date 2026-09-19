@@ -135,10 +135,11 @@
               -e TEI_DENSE_URL -e TEI_SPARSE_URL -e TEI_RERANKER_URL
               {{ musubi_curl_image }} sh -ec
               'for url in "$TEI_DENSE_URL" "$TEI_SPARSE_URL" "$TEI_RERANKER_URL";
-               do curl --fail --silent --show-error "$url/health" >/dev/null; done'
+               do curl --fail --silent --show-error --connect-timeout 2 --max-time 3
+                 "$url/health" >/dev/null; done'
             executable: /bin/bash
           register: inference_parity
-          retries: 24
+          retries: 8
           delay: 5
           until: inference_parity.rc == 0
           changed_when: false
