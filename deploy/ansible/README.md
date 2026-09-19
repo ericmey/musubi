@@ -52,7 +52,7 @@ existing files are preserved.
 After it prints the next-steps banner:
 
 1. Edit `~/.musubi-secrets/inventory-vars.yml` — fill in `musubi_host`,
- `musubi_ip`, `operator_ssh_user` (and Kong vars if/when Kong is
+ `musubi_ip`, `musubi_inference_hostname`, `operator_ssh_user` (and Kong vars if/when Kong is
  re-enabled per [ADR 0024](../../docs/Musubi/13-decisions/0024-kong-deferred-for-musubi-v1.md)).
 2. Edit `~/.musubi-secrets/vault.yml` with real secret values (see
  `vault.example.yml` for the key list).

@@ -49,6 +49,10 @@ operator_ssh_user: "ericmey"
 musubi_host: "" # e.g. musubi.example.local
 musubi_ip: "" # e.g. 10.0.0.45
 
+# TLS hostname presented by the authenticated shared-inference ingress. This
+# also becomes its private Docker-network alias; it is not a password.
+musubi_inference_hostname: "" # e.g. inference.example.local
+
 # Kong API gateway — only needed if/when Kong re-enters the deploy path
 # (see docs/Musubi/13-decisions/0024-kong-deferred-for-musubi-v1.md).
 # Leave empty for VLAN-internal v1 deploys.
@@ -120,7 +124,7 @@ echo
 echo "=== Next steps ==="
 
 if [[ "$INVENTORY_VARS_CREATED" -eq 1 ]]; then
- echo "1. Edit $INVENTORY_VARS — fill in musubi_host, musubi_ip, operator_ssh_user."
+ echo "1. Edit $INVENTORY_VARS — fill in musubi_host, musubi_ip, musubi_inference_hostname, operator_ssh_user."
 fi
 
 if [[ "$VAULT_CREATED" -eq 1 ]]; then

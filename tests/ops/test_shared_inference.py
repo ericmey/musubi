@@ -224,6 +224,9 @@ def test_migration_requires_the_private_tls_hostname() -> None:
     assertions = requirement["ansible.builtin.assert"]["that"]
     assert "musubi_inference_hostname is defined" in assertions
     assert 'musubi_inference_hostname != "example.invalid"' in assertions
+    setup = (ANSIBLE / "setup-control-host.sh").read_text()
+    assert 'musubi_inference_hostname: ""' in setup
+    assert "musubi_inference_hostname" in (ANSIBLE / "README.md").read_text()
 
 
 def test_musubi_can_cut_over_and_roll_back_by_configuration() -> None:
