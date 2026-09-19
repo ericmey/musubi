@@ -130,7 +130,8 @@
           ansible.builtin.shell:
             cmd: >-
               set -a && . /etc/musubi/connect.env && set +a &&
-              exec /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.shared-inference-candidate.tpl --
+              exec /usr/bin/timeout --signal=TERM --kill-after=2s 12s
+              /usr/bin/op run --env-file={{ musubi_config_dir }}/secrets.shared-inference-candidate.tpl --
               /usr/bin/docker run --rm --network musubi-shared-inference
               -e TEI_DENSE_URL -e TEI_SPARSE_URL -e TEI_RERANKER_URL
               {{ musubi_curl_image }} sh -ec
@@ -139,7 +140,7 @@
                  "$url/health" >/dev/null; done'
             executable: /bin/bash
           register: inference_parity
-          retries: 8
+          retries: 6
           delay: 5
           until: inference_parity.rc == 0
           changed_when: false
