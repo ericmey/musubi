@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.0](https://github.com/ericmey/musubi/compare/v1.25.2...v1.26.0) (2026-09-19)
+
+
+### Features
+
+* **ops:** extract authenticated shared inference services ([#743](https://github.com/ericmey/musubi/issues/743)) ([13055ac](https://github.com/ericmey/musubi/commit/13055ac98192123b354c43fc5fc2898a62102614))
+
 ## [1.25.2](https://github.com/ericmey/musubi/compare/v1.25.1...v1.25.2) (2026-09-08)
 
 
