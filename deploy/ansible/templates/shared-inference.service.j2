@@ -14,6 +14,7 @@ UMask=0077
 ExecStartPre=/usr/bin/op inject -i {{ musubi_config_dir }}/shared-inference.htpasswd.tpl -o /run/shared-inference-secrets/shared-inference.htpasswd
 ExecStartPre=/usr/bin/op read --out-file /run/shared-inference-secrets/tls.crt 'op://Harem World/shared-inference/tls_cert'
 ExecStartPre=/usr/bin/op read --out-file /run/shared-inference-secrets/tls.key 'op://Harem World/shared-inference/tls_key'
+ExecStartPre=/usr/bin/chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd
 ExecStartPre=/usr/bin/chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd
 ExecStartPre=/usr/bin/chmod 0400 /run/shared-inference-secrets/tls.crt /run/shared-inference-secrets/tls.key
 ExecStart=/usr/bin/docker compose -p shared-inference -f {{ musubi_config_dir }}/shared-inference-compose.yml up
