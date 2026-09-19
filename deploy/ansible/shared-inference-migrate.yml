@@ -83,17 +83,26 @@
       block:
         - name: Stop Musubi consumers during the model-owner handoff
           ansible.builtin.command:
-            cmd: docker compose -f {{ migration_backup.path }}/docker-compose.yml stop core lifecycle-worker
+            cmd: >-
+              docker compose --project-directory {{ musubi_config_dir }}
+              -f {{ migration_backup.path }}/docker-compose.yml
+              stop core lifecycle-worker
           changed_when: true
 
         - name: Stop Compose-owned TEI for the bounded handoff
           ansible.builtin.command:
-            cmd: docker compose -f {{ migration_backup.path }}/docker-compose.yml stop tei-dense tei-sparse tei-reranker
+            cmd: >-
+              docker compose --project-directory {{ musubi_config_dir }}
+              -f {{ migration_backup.path }}/docker-compose.yml
+              stop tei-dense tei-sparse tei-reranker
           changed_when: true
 
         - name: Remove stopped Compose-owned TEI containers
           ansible.builtin.command:
-            cmd: docker compose -f {{ migration_backup.path }}/docker-compose.yml rm -f tei-dense tei-sparse tei-reranker
+            cmd: >-
+              docker compose --project-directory {{ musubi_config_dir }}
+              -f {{ migration_backup.path }}/docker-compose.yml
+              rm -f tei-dense tei-sparse tei-reranker
           changed_when: true
 
         - name: Start authenticated shared inference

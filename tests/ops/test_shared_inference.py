@@ -125,6 +125,27 @@ def test_failed_cutover_keeps_the_old_authenticated_endpoint_protected() -> None
     )
 
 
+def test_backup_compose_uses_the_live_project_identity() -> None:
+    """A random backup directory must not become a new Compose project."""
+    playbook = yaml.safe_load((ANSIBLE / "shared-inference-migrate.yml").read_text())
+    tasks = playbook[0]["tasks"]
+    migration = next(task for task in tasks if "block" in task)
+    commands = {
+        task["name"]: task["ansible.builtin.command"]["cmd"]
+        for task in migration["block"]
+        if task["name"]
+        in {
+            "Stop Musubi consumers during the model-owner handoff",
+            "Stop Compose-owned TEI for the bounded handoff",
+            "Remove stopped Compose-owned TEI containers",
+        }
+    }
+    assert len(commands) == 3
+    for command in commands.values():
+        assert "--project-directory {{ musubi_config_dir }}" in command
+        assert "-f {{ migration_backup.path }}/docker-compose.yml" in command
+
+
 def test_musubi_can_cut_over_and_roll_back_by_configuration() -> None:
     env = APP_SECRETS.read_text()
     for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"):
