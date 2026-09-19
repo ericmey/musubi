@@ -134,7 +134,7 @@ def test_cutover_waits_for_candidate_readiness_before_rolling_back() -> None:
         if task["name"] == "Verify shared inference parity through authentication"
     )
     assert parity["register"] == "inference_parity"
-    assert parity["retries"] == 6
+    assert parity["retries"] == 5
     assert parity["delay"] == 5
     assert parity["until"] == "inference_parity.rc == 0"
     assert parity["no_log"] is True
@@ -142,6 +142,11 @@ def test_cutover_waits_for_candidate_readiness_before_rolling_back() -> None:
     assert "/usr/bin/timeout --signal=TERM --kill-after=2s 12s" in command
     assert "--connect-timeout 2" in command
     assert "--max-time 3" in command
+    outer_deadline = 12 + 2
+    worst_case_seconds = (parity["retries"] + 1) * outer_deadline + parity["retries"] * parity[
+        "delay"
+    ]
+    assert worst_case_seconds < 120
 
 
 def test_backup_compose_uses_the_live_project_identity() -> None:
