@@ -72,6 +72,7 @@ SORT file.name ASC
 - [[13-decisions/0041-truthful-hybrid-channel-controls]] — Replace dead numeric hybrid weights with explicit channel booleans while preserving unweighted server-side RRF.
 - [[13-decisions/0042-escrow-backed-episodic-retraction]] — Escrow exact original episodic bytes as a stored-unindexed artifact before a bounded, evidence-backed, non-reembedding retraction.
 - [[13-decisions/0044-additive-reranker-degradation-causes]] — Preserve `reranker_failed` while adding bounded cause detail and separate cause telemetry.
+- [[13-decisions/0045-authenticated-shared-inference-services]] — Extract TEI into an independently managed, authenticated shared-inference boundary without publishing raw model ports.
 - [[13-decisions/sources]] — Public sources that informed these decisions.
 - [[13-decisions/template-weights-change]] — Template ADR for retrieval scoring weight changes.
 
