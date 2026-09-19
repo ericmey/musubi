@@ -73,7 +73,11 @@ services:
         condition: service_healthy
       tei-reranker:
         condition: service_healthy
-    networks: [inference-backend, shared-inference]
+    networks:
+      inference-backend:
+      shared-inference:
+        aliases:
+          - "{{ musubi_inference_hostname }}"
     restart: unless-stopped
 
 volumes:

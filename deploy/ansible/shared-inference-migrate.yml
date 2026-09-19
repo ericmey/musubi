@@ -10,6 +10,17 @@
         state: absent
       check_mode: false
   tasks:
+    - name: Require the private shared inference hostname
+      ansible.builtin.assert:
+        that:
+          - musubi_inference_hostname is defined
+          - musubi_inference_hostname | length > 0
+          - musubi_inference_hostname != "example.invalid"
+        fail_msg: >-
+          musubi_inference_hostname must come from private inventory so the
+          internal Docker alias matches the certificate without publishing live
+          topology in this repository.
+
     - name: Allocate a per-attempt rollback directory
       ansible.builtin.tempfile:
         state: directory
