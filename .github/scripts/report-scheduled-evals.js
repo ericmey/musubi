@@ -1,86 +1,98 @@
 const INCIDENT_MARKER = "<!-- scheduled-evals-incident -->";
-const INCIDENT_TITLE = "Scheduled Evals live-quality gate is failing";
+const RUN_MARKER = /<!-- scheduled-evals-run:(\d+):(\d+):([^ ]+) -->/;
 
-async function reconcileScheduledEvals({ github, context, result, runUrl }) {
-  const listIncidents = async () => {
-    const issues = await github.paginate(github.rest.issues.listForRepo, {
-      ...context.repo,
-      state: "all",
-      per_page: 100,
-    });
-    return issues
-      .filter((issue) => !issue.pull_request && issue.body?.includes(INCIDENT_MARKER))
-      .sort((left, right) => left.number - right.number);
+function parseRunMarker(body) {
+  const match = body?.match(RUN_MARKER);
+  if (!match) return null;
+  return {
+    runId: BigInt(match[1]),
+    runAttempt: BigInt(match[2]),
+    result: match[3],
   };
+}
 
-  let incidents = await listIncidents();
+function compareRuns(left, right) {
+  if (left.runId !== right.runId) return left.runId < right.runId ? -1 : 1;
+  if (left.runAttempt === right.runAttempt) return 0;
+  return left.runAttempt < right.runAttempt ? -1 : 1;
+}
+
+async function reconcileScheduledEvals({
+  github,
+  context,
+  incidentNumber,
+  result,
+  runAttempt,
+  runId,
+  runUrl,
+}) {
+  if (!Number.isInteger(incidentNumber) || incidentNumber <= 0) {
+    throw new Error("scheduled Evals incident number must be a positive integer");
+  }
+  if (!/^\d+$/.test(runId) || !/^\d+$/.test(runAttempt)) {
+    throw new Error("scheduled Evals run identity must be numeric");
+  }
+
+  const incidentResponse = await github.rest.issues.get({
+    ...context.repo,
+    issue_number: incidentNumber,
+  });
+  const incident = incidentResponse.data;
+  if (incident.pull_request || !incident.body?.includes(INCIDENT_MARKER)) {
+    throw new Error(`Issue #${incidentNumber} is not the scheduled Evals incident`);
+  }
+
   const evidence = `Scheduled Evals result: **${result}** — ${runUrl}`;
-
-  if (result === "success" && incidents.length === 0) {
-    return;
-  }
-
-  if (incidents.length === 0) {
-    await github.rest.issues.create({
-      ...context.repo,
-      title: INCIDENT_TITLE,
-      assignees: [context.repo.owner],
-      labels: ["bug", "infrastructure", "tests", "status:in-progress"],
-      body:
-        `${INCIDENT_MARKER}\n` +
-        "This Issue is maintained by the scheduled Evals workflow. " +
-        "It remains open until a later scheduled or manually dispatched run succeeds.",
-    });
-    // Multiple reporters may observe an empty set concurrently. Re-read after creation,
-    // elect the lowest Issue number, and retire every losing candidate. This preserves
-    // every reporter run without relying on Actions concurrency, whose pending slot drops
-    // older events when a third run arrives.
-    incidents = await listIncidents();
-    if (incidents.length === 0) {
-      throw new Error("created scheduled Evals incident was not discoverable");
-    }
-  }
-
-  const [incident, ...duplicates] = incidents;
-  for (const duplicate of duplicates) {
-    await github.rest.issues.update({
-      ...context.repo,
-      issue_number: duplicate.number,
-      state: "closed",
-      state_reason: "not_planned",
-      body: `Superseded duplicate of #${incident.number} after concurrent reconciliation.`,
-    });
-  }
-
-  if (result === "success") {
-    if (incident.state === "open") {
-      await github.rest.issues.createComment({
-        ...context.repo,
-        issue_number: incident.number,
-        body: `Recovery observed. ${evidence}`,
-      });
-      await github.rest.issues.update({
-        ...context.repo,
-        issue_number: incident.number,
-        state: "closed",
-        state_reason: "completed",
-      });
-    }
-    return;
-  }
-
-  if (incident.state !== "open") {
-    await github.rest.issues.update({
-      ...context.repo,
-      issue_number: incident.number,
-      state: "open",
-    });
-  }
+  const prefix = result === "success" ? "Recovery observed. " : "";
   await github.rest.issues.createComment({
     ...context.repo,
-    issue_number: incident.number,
-    body: evidence,
+    issue_number: incidentNumber,
+    body: `<!-- scheduled-evals-run:${runId}:${runAttempt}:${result} -->\n${prefix}${evidence}`,
   });
+
+  const latestReportedRun = async () => {
+    const comments = await github.paginate(github.rest.issues.listComments, {
+      ...context.repo,
+      issue_number: incidentNumber,
+      per_page: 100,
+    });
+    return comments
+      .map((comment) => parseRunMarker(comment.body))
+      .filter((run) => run !== null)
+      .sort(compareRuns)
+      .at(-1);
+  };
+
+  const applyResult = async (run) => {
+    const update = {
+      ...context.repo,
+      issue_number: incidentNumber,
+      state: run.result === "success" ? "closed" : "open",
+    };
+    if (run.result === "success") {
+      update.state_reason = "completed";
+    } else {
+      update.assignees = [context.repo.owner];
+    }
+    await github.rest.issues.update(update);
+  };
+
+  let applied = await latestReportedRun();
+  if (!applied) {
+    throw new Error("scheduled Evals run evidence was not discoverable");
+  }
+  await applyResult(applied);
+
+  // A newer reporter can append evidence between our list and update. Re-read after
+  // applying so the last finisher converges the Issue to the newest durable run record.
+  const confirmed = await latestReportedRun();
+  if (!confirmed) {
+    throw new Error("scheduled Evals run evidence disappeared during reconciliation");
+  }
+  if (compareRuns(applied, confirmed) !== 0) {
+    applied = confirmed;
+    await applyResult(applied);
+  }
 }
 
 module.exports = { reconcileScheduledEvals };

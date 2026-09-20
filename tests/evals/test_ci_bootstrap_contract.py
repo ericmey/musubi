@@ -423,9 +423,11 @@ class _ReporterCall(TypedDict):
 def _run_scheduled_incident_reporter(
     *,
     result: str,
-    issues: list[dict[str, object]],
+    incident: dict[str, object] | None = None,
+    comments: list[dict[str, object]] | None = None,
     fail_listing: bool = False,
-    simulate_concurrent_create: bool = False,
+    inject_newer_on_second_list: bool = False,
+    run_id: str = "814",
 ) -> subprocess.CompletedProcess[str]:
     """Execute the real reporter module against an in-memory GitHub API recorder."""
     repo_root = Path(__file__).parent.parent.parent
@@ -434,22 +436,26 @@ def _run_scheduled_incident_reporter(
 const { reconcileScheduledEvals } = require(process.argv[1]);
 const input = JSON.parse(process.argv[2]);
 const calls = [];
+let listCount = 0;
 const issuesApi = {
-  listForRepo: async () => input.issues,
-  create: async (args) => {
-    calls.push({method: 'create', args});
-    input.issues.push({number: 900, state: 'open', body: args.body});
-    if (input.simulateConcurrentCreate) {
-      input.issues.push({number: 901, state: 'open', body: args.body});
-    }
+  get: async () => ({data: input.incident}),
+  listComments: async () => input.comments,
+  createComment: async (args) => {
+    calls.push({method: 'createComment', args});
+    input.comments.push({body: args.body});
   },
-  createComment: async (args) => calls.push({method: 'createComment', args}),
   update: async (args) => calls.push({method: 'update', args}),
 };
 const github = {
   paginate: async () => {
     if (input.failListing) throw new Error('simulated list failure');
-    return input.issues;
+    listCount += 1;
+    if (input.injectNewerOnSecondList && listCount === 2) {
+      input.comments.push({
+        body: '<!-- scheduled-evals-run:815:1:success -->\nnewer recovery',
+      });
+    }
+    return input.comments;
   },
   rest: {issues: issuesApi},
 };
@@ -458,7 +464,10 @@ const context = {repo: {owner: 'ericmey', repo: 'musubi'}};
 reconcileScheduledEvals({
   github,
   context,
+  incidentNumber: 817,
   result: input.result,
+  runAttempt: '1',
+  runId: input.runId,
   runUrl: 'https://github.example/actions/runs/814',
 }).then(() => {
   process.stdout.write(JSON.stringify(calls));
@@ -476,9 +485,16 @@ reconcileScheduledEvals({
             json.dumps(
                 {
                     "result": result,
-                    "issues": issues,
+                    "incident": incident
+                    or {
+                        "number": 817,
+                        "state": "open",
+                        "body": "<!-- scheduled-evals-incident -->",
+                    },
+                    "comments": comments or [],
                     "failListing": fail_listing,
-                    "simulateConcurrentCreate": simulate_concurrent_create,
+                    "injectNewerOnSecondList": inject_newer_on_second_list,
+                    "runId": run_id,
                 }
             ),
         ],
@@ -488,8 +504,15 @@ reconcileScheduledEvals({
     )
 
 
-def _reporter_calls(*, result: str, issues: list[dict[str, object]]) -> list[_ReporterCall]:
-    completed = _run_scheduled_incident_reporter(result=result, issues=issues)
+def _reporter_calls(
+    *,
+    result: str,
+    incident: dict[str, object] | None = None,
+    comments: list[dict[str, object]] | None = None,
+) -> list[_ReporterCall]:
+    completed = _run_scheduled_incident_reporter(
+        result=result, incident=incident, comments=comments
+    )
     assert completed.returncode == 0, completed.stderr
     return cast(list[_ReporterCall], json.loads(completed.stdout))
 
@@ -548,6 +571,12 @@ def _assert_scheduled_incident_contract(content: str) -> None:
 
     assert "needs.scheduled.result" in content, (
         "Reporter MUST consume the actual scheduled job result, not infer it from a later step"
+    )
+    assert "INCIDENT_ISSUE_NUMBER" in content, (
+        "Reporter MUST target the pre-provisioned singleton incident instead of racing to create one"
+    )
+    assert "github.run_id" in content and "github.run_attempt" in content, (
+        "Reporter MUST durably order every run result by run identity"
     )
     assert "report-scheduled-evals.js" in script, (
         "Reporter MUST execute the behaviorally tested reconciliation module"
@@ -648,103 +677,87 @@ jobs:
         _assert_scheduled_incident_contract(broken)
 
 
-def test_failure_creates_or_updates_one_assigned_incident() -> None:
-    """Failures create the assigned singleton once, then append evidence to that Issue."""
-    create_calls = _reporter_calls(result="failure", issues=[])
+def test_failure_opens_or_updates_the_one_assigned_incident() -> None:
+    """A failure appends durable evidence and opens the provisioned assigned singleton."""
+    calls = _reporter_calls(result="failure")
 
-    assert [call["method"] for call in create_calls] == ["create", "createComment"]
-    create = create_calls[0]["args"]
-    assert create["assignees"] == ["ericmey"]
-    assert "<!-- scheduled-evals-incident -->" in create["body"]
-    evidence = create_calls[1]["args"]
-    assert evidence["issue_number"] == 900
+    assert [call["method"] for call in calls] == ["createComment", "update"]
+    evidence = calls[0]["args"]
+    assert evidence["issue_number"] == 817
+    assert "<!-- scheduled-evals-run:814:1:failure -->" in evidence["body"]
     assert "**failure**" in evidence["body"]
     assert "https://github.example/actions/runs/814" in evidence["body"]
+    update = calls[1]["args"]
+    assert update == {
+        "owner": "ericmey",
+        "repo": "musubi",
+        "issue_number": 817,
+        "state": "open",
+        "assignees": ["ericmey"],
+    }
 
-    update_calls = _reporter_calls(
+    repeated = _reporter_calls(
         result="cancelled",
-        issues=[
-            {
-                "number": 900,
-                "state": "open",
-                "body": "<!-- scheduled-evals-incident -->",
-            }
-        ],
+        comments=[{"body": "<!-- scheduled-evals-run:813:1:failure -->\nprior failure"}],
     )
-
-    assert [call["method"] for call in update_calls] == ["createComment"]
-    comment = update_calls[0]["args"]
-    assert comment["issue_number"] == 900
-    assert "**cancelled**" in comment["body"]
-    assert "https://github.example/actions/runs/814" in comment["body"]
+    assert [call["method"] for call in repeated] == ["createComment", "update"]
+    evidence = repeated[0]["args"]
+    assert evidence["issue_number"] == 817
+    assert "**cancelled**" in evidence["body"]
 
 
 def test_scheduled_incident_reporter_failure_reopens_recovered_issue() -> None:
     """A regression reopens the singleton incident before appending new evidence."""
     calls = _reporter_calls(
         result="failure",
-        issues=[
-            {
-                "number": 900,
-                "state": "closed",
-                "body": "<!-- scheduled-evals-incident -->",
-            }
-        ],
+        incident={
+            "number": 817,
+            "state": "closed",
+            "body": "<!-- scheduled-evals-incident -->",
+        },
     )
 
-    assert [call["method"] for call in calls] == ["update", "createComment"]
-    assert calls[0]["args"] == {
+    assert [call["method"] for call in calls] == ["createComment", "update"]
+    assert calls[1]["args"] == {
         "owner": "ericmey",
         "repo": "musubi",
-        "issue_number": 900,
+        "issue_number": 817,
         "state": "open",
+        "assignees": ["ericmey"],
     }
 
 
 def test_recovery_comments_on_and_closes_the_incident() -> None:
     """A successful run records recovery and closes the active incident."""
-    calls = _reporter_calls(
-        result="success",
-        issues=[
-            {
-                "number": 900,
-                "state": "open",
-                "body": "<!-- scheduled-evals-incident -->",
-            }
-        ],
-    )
+    calls = _reporter_calls(result="success")
 
     assert [call["method"] for call in calls] == ["createComment", "update"]
     assert "Recovery observed" in calls[0]["args"]["body"]
+    assert "<!-- scheduled-evals-run:814:1:success -->" in calls[0]["args"]["body"]
     assert calls[1]["args"] == {
         "owner": "ericmey",
         "repo": "musubi",
-        "issue_number": 900,
+        "issue_number": 817,
         "state": "closed",
         "state_reason": "completed",
     }
 
 
-def test_scheduled_incident_reporter_concurrent_creation_converges_on_singleton() -> None:
-    """Concurrent first failures elect one incident and retire the losing candidate."""
-    completed = _run_scheduled_incident_reporter(
-        result="failure", issues=[], simulate_concurrent_create=True
-    )
+def test_scheduled_incident_reporter_concurrent_results_converge_on_newest_run() -> None:
+    """A newer durable recovery wins even when an older failure reporter finishes last."""
+    completed = _run_scheduled_incident_reporter(result="failure", inject_newer_on_second_list=True)
     assert completed.returncode == 0, completed.stderr
     calls = cast(list[_ReporterCall], json.loads(completed.stdout))
 
-    assert [call["method"] for call in calls] == ["create", "update", "createComment"]
-    duplicate = calls[1]["args"]
-    assert duplicate["issue_number"] == 901
-    assert duplicate["state"] == "closed"
-    assert duplicate["state_reason"] == "not_planned"
-    assert "<!-- scheduled-evals-incident -->" not in duplicate["body"]
-    assert calls[2]["args"]["issue_number"] == 900
+    assert [call["method"] for call in calls] == ["createComment", "update", "update"]
+    assert calls[1]["args"]["state"] == "open"
+    assert calls[2]["args"]["state"] == "closed"
+    assert calls[2]["args"]["state_reason"] == "completed"
 
 
 def test_reporter_failure_is_visible() -> None:
     """A GitHub API failure rejects the reporter rather than silently dropping notification."""
-    completed = _run_scheduled_incident_reporter(result="failure", issues=[], fail_listing=True)
+    completed = _run_scheduled_incident_reporter(result="failure", fail_listing=True)
 
     assert completed.returncode != 0
     assert "simulated list failure" in completed.stderr
