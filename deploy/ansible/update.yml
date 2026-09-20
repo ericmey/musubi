@@ -38,6 +38,8 @@
   become: true
   vars:
     changed_services: ["core"]
+    candidate_credential_preflight_passed: false
+    candidate_credential_preflight_image: ""
     # Every task below uses THIS, never `changed_services` directly.
     # Only JSON-looking strings are parsed; anything else passes through
     # unchanged so the assert below reports it with a usable message instead
@@ -65,6 +67,19 @@
           Pass it as JSON extra-vars:
           -e '{"changed_services":["core","lifecycle-worker"]}'
         quiet: true
+
+    - name: Require candidate-image credential preflight before a Core update
+      ansible.builtin.assert:
+        that:
+          - candidate_credential_preflight_passed | bool
+          - candidate_credential_preflight_image == musubi_core_image
+        fail_msg: >-
+          Core update is not armed: run scripts/musubi-deploy so all configured
+          live credentials are validated inside the exact pinned candidate image.
+        quiet: true
+      when:
+        - not ansible_check_mode
+        - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
 
     - name: Inspect 1Password Connect environment file
       ansible.builtin.stat:

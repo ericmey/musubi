@@ -226,6 +226,13 @@ def test_apply_wrapper_runs_candidate_image_credential_preflight_before_ansible(
     assert '"$candidate_image"' in text
     assert "--entrypoint python" in text
     assert "--credential-dir /credentials" in text
+    assert "candidate_credential_preflight_passed" in text
+    assert "candidate_credential_preflight_image" in text
+
+    playbook = UPDATE_PLAYBOOK.read_text()
+    assert "Require candidate-image credential preflight before a Core update" in playbook
+    assert "candidate_credential_preflight_passed | bool" in playbook
+    assert "candidate_credential_preflight_image == musubi_core_image" in playbook
 
 
 def test_candidate_preflight_manifest_declares_twelve_live_and_one_template() -> None:

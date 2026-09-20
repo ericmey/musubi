@@ -19,7 +19,7 @@ KEY = "idem006-exact-known-key"
 DIGEST = bytes.fromhex("ab" * 32)
 TARGET = (
     ISSUER,
-    "yua-command-chair",
+    "yua/command-chair",
     "yua/command-chair",
     "POST",
     OPERATION,
@@ -37,7 +37,7 @@ def _token(
     settings: Settings,
     *,
     scopes: list[str],
-    subject: str = "aoi-command-chair",
+    subject: str = "aoi/command-chair",
     presence: str = "aoi/command-chair",
 ) -> str:
     now = datetime.now(UTC)
@@ -125,7 +125,7 @@ def test_cross_principal_exact_audit_returns_found_with_server_observer(
     assert payload["status"] == "found"
     assert payload["observer_attestation"] == "server_attested"
     assert payload["observer_issuer"] == ISSUER
-    assert payload["observer_subject"] == "aoi-command-chair"
+    assert payload["observer_subject"] == "aoi/command-chair"
     assert payload["observer_presence"] == "aoi/command-chair"
     assert payload["observer_effective_scopes"] == ["operator", "**:r"]
     assert payload["namespace"] == NAMESPACE
@@ -165,7 +165,7 @@ def test_owning_principal_keeps_conflict_fidelity(
     app_factory.state.idempotency_receipt_store = _store(tmp_path / "receipts.sqlite")  # type: ignore[attr-defined]
     token = _combined_token(
         api_settings,
-        subject="yua-command-chair",
+        subject="yua/command-chair",
         presence="yua/command-chair",
     )
     with TestClient(app_factory) as client:  # type: ignore[arg-type]

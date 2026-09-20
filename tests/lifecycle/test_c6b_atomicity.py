@@ -7756,7 +7756,7 @@ def _r21_token(settings: Settings, *, scopes: list[str], presence: str = "eric/c
     now = datetime.now(UTC)
     payload = {
         "iss": _R21_ISSUER,
-        "sub": "eric-claude-code",
+        "sub": "eric/claude-code",
         "aud": "musubi",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=1)).timestamp()),

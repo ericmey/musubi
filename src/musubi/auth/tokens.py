@@ -216,7 +216,7 @@ def _identity_consistency_error(
     ):
         return "token presence claim must be a concrete tenant/presence identity"
 
-    if subject != presence.replace("/", "-"):
+    if subject != presence:
         return "token subject is inconsistent with presence identity"
 
     presence_tenant = presence_parts[0]

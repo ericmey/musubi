@@ -68,7 +68,7 @@ def rsa_keypair() -> Iterator[tuple[AllowedPrivateKeys, dict[str, object]]]:
 def _payload(
     *,
     issuer: str = "https://auth.example.test",
-    subject: str = "eric-claude-code",
+    subject: str = "eric/claude-code",
     scopes: list[str] | None = None,
     presence: str = "eric/claude-code",
     expires_delta: timedelta = timedelta(hours=1),
@@ -167,7 +167,7 @@ def test_scope_match_grants_access(
 
 def test_recursive_scope_grants_read_without_write() -> None:
     context = AuthContext(
-        subject="aoi-phone",
+        subject="aoi/voice",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("**:r",),
@@ -205,7 +205,7 @@ def test_recursive_rw_scope_does_not_grant_cross_namespace_write() -> None:
 
 def test_segment_wildcard_rw_scope_still_grants_matching_write() -> None:
     context = AuthContext(
-        subject="aoi-voice",
+        subject="aoi/voice",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("aoi/voice/*:rw",),
@@ -241,7 +241,7 @@ def test_scope_mismatch_returns_403_with_detail(auth_settings: Settings) -> None
 
 def test_operator_scope_required_for_admin_endpoints() -> None:
     without_operator = AuthContext(
-        subject="eric-claude-code",
+        subject="eric/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("eric/claude-code/episodic:rw",),
@@ -269,7 +269,7 @@ def test_operator_scope_required_for_admin_endpoints() -> None:
 
 def test_blended_query_expands_and_checks_plane_scopes() -> None:
     context = AuthContext(
-        subject="eric-claude-code",
+        subject="eric/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("eric/claude-code/episodic:r", "eric/_shared/curated:r"),
@@ -343,7 +343,7 @@ def test_signing_key_rotation_dual_verify_period(
 def test_every_auth_decision_emits_audit_line(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level("INFO", logger="musubi.auth.scopes")
     context = AuthContext(
-        subject="eric-claude-code",
+        subject="eric/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("eric/claude-code/episodic:r",),
@@ -527,7 +527,7 @@ def test_middleware_attaches_context_and_maps_operator_requirements(
 
 def test_special_glob_and_invalid_namespace_scopes() -> None:
     context = AuthContext(
-        subject="eric-claude-code",
+        subject="eric/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=(
@@ -539,7 +539,7 @@ def test_special_glob_and_invalid_namespace_scopes() -> None:
         token_id="token-123",
     )
     malformed_context = AuthContext(
-        subject="eric-claude-code",
+        subject="eric/claude-code",
         issuer="https://auth.example.test",
         audience="musubi",
         scopes=("malformed",),
@@ -569,7 +569,7 @@ def test_special_glob_and_invalid_namespace_scopes() -> None:
 def test_token_payload_parser_rejects_missing_required_claims() -> None:
     base = {
         "iss": "https://auth.example.test",
-        "sub": "eric-claude-code",
+        "sub": "eric/claude-code",
         "aud": "musubi",
         "scope": ["eric/claude-code/episodic:r"],
         "presence": "eric/claude-code",

@@ -7,9 +7,19 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import jwt
+import pytest
+from pydantic import AnyHttpUrl, SecretStr
 
 from musubi.auth.credential_preflight import run_preflight
 from musubi.settings import Settings
+
+
+@pytest.fixture
+def api_settings() -> Settings:
+    return Settings.model_construct(
+        jwt_signing_key=SecretStr("a-very-long-test-signing-key-for-hs256-tokens-32+bytes"),
+        oauth_authority=AnyHttpUrl("https://auth.example.test"),
+    )
 
 
 def _token(settings: Settings, presence: str, *, subject: str | None = None) -> str:

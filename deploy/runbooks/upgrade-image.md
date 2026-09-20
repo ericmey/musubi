@@ -101,20 +101,22 @@ has changed yet.
 **Command:**
 
 ```bash
-# After the PR is approved and merged:
+# After the PR is approved and merged, from the operator workstation:
 gh pr merge <number> --squash
-ssh <ansible-host>
 cd ~/musubi
 git pull --ff-only
-ansible-playbook -i ~/.musubi-secrets/inventory-vars.yml \
- deploy/ansible/deploy.yml --ask-vault-pass
+ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/.vault_pass \
+  scripts/musubi-deploy --apply core,lifecycle-worker
 ```
 
-For a narrower surface on an image-only bump, use
-`deploy/ansible/update.yml` instead of `deploy.yml` — it force-pulls
-the new digest and recreates only the changed containers (defaults
-to `[core, lifecycle-worker]`), skipping host-level bootstrap tasks.
-See `deploy/runbooks/upgrade.md` for the operator procedure.
+The wrapper first pulls the exact pinned candidate image locally and runs that
+image's validator against the complete live-credential manifest. Missing or
+rejected live credentials and a non-discriminating negative control abort
+before Ansible can recreate Core. The wrapper then arms `update.yml` for that
+exact digest; direct Core updates without a matching preflight attestation fail
+closed. `MUSUBI_CREDENTIAL_DIR` may override the default `~/.musubi` directory.
+The `musubi-mcp.env` mint-path template is reported separately and is not part
+of the eligible live set.
 
 **Expected output:** `deploy.yml` reports one changed task (the
 `docker_compose_v2` task that recreates `core`). Everything else

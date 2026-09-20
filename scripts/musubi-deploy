@@ -118,6 +118,32 @@ else
       exit 0
       ;;
   esac
+
+  candidate_image="$(sed -n 's/^musubi_core_image: *"\([^"]*\)".*/\1/p' \
+    "$MUSUBI_REPO/deploy/ansible/group_vars/all.yml")"
+  [[ -n "$candidate_image" ]] || die "could not resolve musubi_core_image" 2
+  credential_dir="${MUSUBI_CREDENTIAL_DIR:-$HOME/.musubi}"
+  authority_env="${MUSUBI_PREFLIGHT_AUTHORITY_ENV:-$credential_dir/musubi-mcp-aoi.env}"
+  manifest="$MUSUBI_REPO/deploy/credential-preflight.json"
+  [[ -d "$credential_dir" ]] || die "credential directory not found at $credential_dir" 2
+  [[ -f "$authority_env" ]] || die "preflight authority env not found at $authority_env" 2
+  [[ -f "$manifest" ]] || die "credential manifest not found at $manifest" 2
+  command -v docker >/dev/null 2>&1 || die "docker is required for candidate preflight" 2
+
+  echo "musubi-deploy: validating configured credentials inside $candidate_image"
+  docker pull "$candidate_image"
+  docker run --rm --entrypoint python \
+    --env-file "$authority_env" \
+    --mount "type=bind,src=$credential_dir,dst=/credentials,readonly" \
+    --mount "type=bind,src=$manifest,dst=/preflight/manifest.json,readonly" \
+    "$candidate_image" \
+    -m musubi.auth.credential_preflight \
+    --manifest /preflight/manifest.json \
+    --credential-dir /credentials
+  cmd+=(
+    -e
+    "{\"candidate_credential_preflight_passed\":true,\"candidate_credential_preflight_image\":\"$candidate_image\"}"
+  )
 fi
 
 echo "+ ${cmd[*]}"
