@@ -154,6 +154,7 @@ def transition(
     correlation_id: str = "",
     sink: LifecycleEventSink | None = None,
     expected_version: int | None = None,
+    namespace: str | None = None,
 ) -> Result[TransitionResult | TransitionPending, TransitionError]:
     """Apply a state change to ``object_id``, recording an audit event.
 
@@ -172,7 +173,18 @@ def transition(
             )
         )
 
-    located = _locate_object(client, object_id=object_id)
+    try:
+        located = _locate_object(client, object_id=object_id, namespace=namespace)
+    except AmbiguousObjectId as exc:
+        # Refusing beats guessing: picking one of two namespaces would transition a
+        # stranger's row and count it as this caller's (musubi#771).
+        return Err(
+            error=TransitionError(
+                code="ambiguous_object_id",
+                message=str(exc),
+                to_state=target_state,
+            )
+        )
     if located is None:
         return Err(
             error=TransitionError(
@@ -300,17 +312,41 @@ def transition(
 # ---------------------------------------------------------------------------
 
 
-def _locate_object(client: QdrantClient, *, object_id: KSUID) -> tuple[str, dict[str, Any]] | None:
-    """Scan each plane collection for ``object_id``. Returns ``(collection, payload)``."""
+class AmbiguousObjectId(Exception):
+    """Two namespaces carry this object_id and the caller did not say which it meant.
+
+    `object_id` is NOT globally unique (`tests/api/test_data001_episodic_patch_fence.py`
+    relies on that). The lookup used `limit=1`, so a duplicate resolved to whichever row
+    the scroll returned first -- silently transitioning a stranger's row and counting it
+    as this caller's (Copilot/Yua, musubi#771). Refusing is the only safe answer when
+    the caller has not qualified the id."""
+
+
+def _locate_object(
+    client: QdrantClient, *, object_id: KSUID, namespace: str | None = None
+) -> tuple[str, dict[str, Any]] | None:
+    """Scan each plane collection for ``object_id``. Returns ``(collection, payload)``.
+
+    ``namespace`` is optional so existing callers are source-compatible. Supplying it
+    qualifies the lookup; omitting it now REFUSES an ambiguous id rather than picking
+    one arbitrarily."""
     for collection in _COLLECTION_TO_OBJECT_TYPE:
-        records = _scroll_by_object_id(client, collection=collection, object_id=object_id)
-        if records:
-            return collection, records[0]
+        records = _scroll_by_object_id(
+            client, collection=collection, object_id=object_id, namespace=namespace
+        )
+        if not records:
+            continue
+        if namespace is None and len({str(r.get("namespace")) for r in records}) > 1:
+            raise AmbiguousObjectId(
+                f"object_id={object_id!r} exists in "
+                f"{sorted({str(r.get('namespace')) for r in records})}; qualify the namespace"
+            )
+        return collection, records[0]
     return None
 
 
 def _scroll_by_object_id(
-    client: QdrantClient, *, collection: str, object_id: KSUID
+    client: QdrantClient, *, collection: str, object_id: KSUID, namespace: str | None = None
 ) -> list[dict[str, Any]]:
     """Return the AUTHORITATIVE identity payload dict(s) for ``object_id`` in ``collection``, if any.
 
@@ -322,7 +358,18 @@ def _scroll_by_object_id(
             collection_name=collection,
             scroll_filter=models.Filter(
                 must=[
-                    models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=object_id)
+                    ),
+                    *(
+                        [
+                            models.FieldCondition(
+                                key="namespace", match=models.MatchValue(value=namespace)
+                            )
+                        ]
+                        if namespace is not None
+                        else []
+                    ),
                 ],
                 must_not=[
                     models.FieldCondition(
@@ -330,7 +377,10 @@ def _scroll_by_object_id(
                     )
                 ],
             ),
-            limit=1,
+            # 2, not 1: an unqualified lookup has to observe a second namespace to
+            # refuse it. With limit=1 a duplicate id is invisible and resolves to
+            # whichever row the scroll happens to return first.
+            limit=1 if namespace is not None else 2,
             with_payload=True,
         )
     except Exception:

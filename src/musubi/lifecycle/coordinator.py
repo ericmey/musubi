@@ -1013,6 +1013,17 @@ class LifecycleTransitionCoordinator:
                     models.FieldCondition(
                         key="version", match=models.MatchValue(value=expected_version)
                     ),
+                    # A row under an active mutation lease belongs to another writer.
+                    # Without this, the lease that the retraction saga fences its CAS
+                    # with is honoured by the retraction path and IGNORED here: a
+                    # lifecycle transition could mature a row mid-retraction, the
+                    # version-fenced repair would then lose, and the retracted row
+                    # would stay active (Copilot via Aoi, musubi#732/#771).
+                    #
+                    # Fail-closed by design. A stale `done:*` token blocks lifecycle
+                    # writes until the saga's recovery path clears it, which is what
+                    # that recovery path exists for.
+                    models.IsEmptyCondition(is_empty=models.PayloadField(key="update_lease_token")),
                 ]
             ),
         )

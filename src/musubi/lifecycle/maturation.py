@@ -490,6 +490,9 @@ async def episodic_maturation_sweep(
             reason="maturation-sweep",
             lineage_updates=lineage_updates,
             sink=sink,
+            # Qualify the canonical lookup: `object_id` is not globally unique, and an
+            # unqualified transition could mature a stranger's row and count it here.
+            namespace=row["namespace"],
         )
         if not isinstance(result, Ok):
             failed += 1
@@ -554,6 +557,23 @@ async def episodic_maturation_sweep(
             )
             if applied:
                 enriched += 1
+            else:
+                # The version fence refused: something moved the row between this
+                # sweep's transition and its enrichment write. The transition itself
+                # stands, so the row is no longer `provisional` and will NOT be
+                # re-selected by a later sweep -- this enrichment is lost, not deferred.
+                #
+                # Recorded rather than swallowed. `enriched` must not count it (the
+                # write did not happen) and silence would make the loss invisible in
+                # the one report an operator reads (Copilot/Yua, musubi#771).
+                failed += 1
+                log.warning(
+                    "maturation-enrichment-refused object_id=%s namespace=%s version=%s "
+                    "(row moved after transition; enrichment not applied and not retried)",
+                    object_id,
+                    row["namespace"],
+                    matured_version,
+                )
 
         transitioned += 1
         row_epoch = float(row.get("updated_epoch", 0.0))

@@ -32,7 +32,6 @@ Architecture notes:
 from __future__ import annotations
 
 import asyncio
-import pathlib
 import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -1450,18 +1449,34 @@ async def test_v2_content_point_is_never_enriched(
     qdrant: QdrantClient,
     ns: str,
     sink: Any,
-    cursor: Any,
 ) -> None:
-    """The enrichment filter matched EVERY point carrying the object_id, so for a v2
-    row it wrote to the immutable content point as well as the anchor.
+    """The immutable content point must never take an enrichment write.
 
-    The `state` fence excludes content points because they carry no `state` key. That
-    is correct but incidental, so it is pinned here: if `state` is ever added to a
-    content payload, this cell fails rather than the immutability guarantee."""
+    The fence's `state` term is what excludes it -- content points carry no `state`
+    key, and a FieldCondition cannot match a point missing the field.
+
+    THE FIXTURE IS THE POINT. My first version gave the content sibling no `version`
+    either, so it stayed excluded by the VERSION term even with the state term deleted:
+    the cell passed for a reason it was not testing and could not fail for the reason it
+    existed (Copilot via Aoi, musubi#771). It now carries the matching post-transition
+    version, which isolates `state` as the only thing keeping it out -- remove that term
+    and this cell reds."""
     from qdrant_client import models as qmodels
 
-    row = await _seed_provisional(plane, ns, content="two-point row", age_seconds=7200)
-    # A content-shaped sibling: same object_id, no `state`, as v2 publishes.
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="two-point row"))
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    live = await plane.get(namespace=ns, object_id=row.object_id)
+    assert live is not None
+
     qdrant.upsert(
         collection_name="musubi_episodic",
         points=[
@@ -1473,6 +1488,8 @@ async def test_v2_content_point_is_never_enriched(
                     "namespace": ns,
                     "point_kind": "content",
                     "importance": 8,
+                    # Matching version, so the version term cannot be what excludes it.
+                    "version": live.version,
                 },
             )
         ],
@@ -1482,51 +1499,22 @@ async def test_v2_content_point_is_never_enriched(
         p for p in _payload(qdrant, str(row.object_id)) if p.get("point_kind") == "content"
     )
 
-    await episodic_maturation_sweep(
-        client=qdrant,
-        sink=sink,
-        coordinator=_coordinator(qdrant, sink),
-        ollama=FakeOllama(topic_map={}),
-        cursor=cursor,
-        config=_config(min_age_sec=3600),
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=live.version,
+        tags=["enriched"],
+        importance=3,
+        topics=["hardware/gpu"],
     )
 
+    assert applied, "the fence refused the anchor; this cell would prove nothing"
     after = next(
         p for p in _payload(qdrant, str(row.object_id)) if p.get("point_kind") == "content"
     )
     assert after == before, "enrichment wrote to the immutable content point"
-
-
-def test_the_enrichment_fence_qualifies_on_namespace() -> None:
-    """`object_id` is NOT globally unique, so the fence must name the namespace too
-    (Copilot, musubi#771).
-
-    Structural companion to `test_enrichment_does_not_cross_namespaces_at_runtime`,
-    which is the behavioural proof. This one reds if the condition is deleted even
-    when a harness cannot exercise the write.
-
-    Kept because of how it came to exist. My first red-proof deleted "the namespace
-    condition" with a one-line string replace, and this module contains TWO of them --
-    it removed the other one every time, the behavioural cell stayed green, and I
-    concluded the behavioural cell was inert and discarded it. The plant was wrong, not
-    the cell: right check, wrong object, committed while red-proofing a fix for that
-    exact class of bug. Anchored on surrounding context both cells red immediately.
-
-    A plant must be verified to have landed on the object you meant, not merely to have
-    changed something.
-    """
-    # Read the file, not `inspect.getsource`: linecache caches the module source at
-    # import time, so a mutation-test plant applied afterwards is invisible to it --
-    # this cell passed against a deleted namespace condition until I found that.
-    source = pathlib.Path(maturation.__file__).read_text()
-    fence = source[
-        source.index("conditions: list[models.Condition]") : source.index("fence = models.Filter")
-    ]
-    for key in ("namespace", "object_id", "state", "version"):
-        assert f'key="{key}"' in fence, (
-            f"the enrichment fence does not qualify on {key!r}; an unqualified filter "
-            f"can write to a row this sweep never selected"
-        )
 
 
 async def test_a_refused_enrichment_is_not_counted_as_enriched(
@@ -1788,3 +1776,139 @@ async def test_a_row_restored_to_matured_does_not_accept_stale_enrichment(
     after = await plane.get(namespace=ns, object_id=row.object_id)
     assert after is not None
     assert "stale" not in after.tags, "the restored row accepted enrichment from an old snapshot"
+
+
+async def test_a_leased_row_cannot_be_transitioned_by_lifecycle(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """A row under an active mutation lease belongs to another writer.
+
+    `_apply_conditional` fenced on namespace/object/version and ignored
+    `update_lease_token`, so the lease the retraction saga fences its CAS with was
+    honoured by the retraction path and ignored by the lifecycle path: a pre-RET-012
+    row could be matured between the adoption read and the repair, the version-fenced
+    repair would then lose, and the retracted row would stay active
+    (Copilot via Aoi, musubi#732)."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="leased"))
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": "done:1:crashed-committer"},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    transition(
+        qdrant,
+        coordinator=_coordinator(qdrant, sink),
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert after.state == "provisional", (
+        f"a leased row was transitioned to {after.state!r}; the lifecycle CAS ignored "
+        f"another writer's mutation lease"
+    )
+
+
+async def test_an_unleased_row_still_transitions(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """THE CONTROL. A lease condition that refused every write would satisfy the cell
+    above while stopping the lifecycle entirely."""
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="ordinary"))
+
+    transition(
+        qdrant,
+        coordinator=_coordinator(qdrant, sink),
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None and after.state == "matured", (
+        "the lease condition refused an ordinary token-empty write"
+    )
+
+
+async def test_a_refused_enrichment_is_recorded_as_a_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """A refused enrichment must be visible in the report.
+
+    The version fence can refuse after a successful transition. The row is no longer
+    `provisional`, so no later sweep re-selects it -- the enrichment is LOST, not
+    deferred. Counting it nowhere made that loss invisible in the only record an
+    operator reads (Copilot/Yua, musubi#771)."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="racer", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+
+    def transition_then_archive(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        quarantined = utc_now()
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={
+                "state": "archived",
+                "importance": 1,
+                "updated_at": quarantined.isoformat(),
+                "updated_epoch": epoch_of(quarantined),
+            },
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_archive)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert report.enriched == 0, "a refused write was counted as an enrichment"
+    assert report.failed == 1, (
+        "a refused enrichment was not recorded anywhere; the loss is invisible to the "
+        "operator reading this report"
+    )
