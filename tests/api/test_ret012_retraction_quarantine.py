@@ -16,7 +16,7 @@ from qdrant_client import QdrantClient, models
 
 from musubi.api.idempotency import _GLOBAL_LEASE_CACHE
 from musubi.api.idempotency_receipts import DurableReceiptStore
-from musubi.lifecycle import LifecycleEventSink
+from musubi.lifecycle import LifecycleEventSink, TransitionResult
 from musubi.lifecycle.maturation import (
     MaturationConfig,
     MaturationCursor,
@@ -24,7 +24,7 @@ from musubi.lifecycle.maturation import (
 )
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store.immutable_vectors import ImmutableVectorPublisher
-from musubi.types.common import generate_ksuid
+from musubi.types.common import Ok, generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 
 _NS = "eric/claude-code/episodic"
@@ -67,7 +67,24 @@ def _seed(
         importance=8,
     )
     if layout == "legacy":
-        return asyncio.run(plane.create(memory))
+        saved = asyncio.run(plane.create(memory))
+        if state == "provisional":
+            return saved
+        result = asyncio.run(
+            plane.transition(
+                namespace=saved.namespace,
+                object_id=saved.object_id,
+                to_state="matured",
+                actor="test-fixture",
+                reason="seed requested RET-012 state",
+                coordinator=coordinator,
+            )
+        )
+        assert isinstance(result, Ok), result
+        assert isinstance(result.value, TransitionResult)
+        matured = asyncio.run(plane.get(namespace=saved.namespace, object_id=saved.object_id))
+        assert matured is not None
+        return matured
     publisher.publish(
         coordinator,
         object_id=memory.object_id,
@@ -118,6 +135,12 @@ def test_retraction_archives_legacy_and_v2_rows_from_any_active_state(
         coordinator=coordinator,
     )
     before = _layout(qdrant, memory.object_id)
+    authoritative = [
+        row["payload"] for row in before if row["payload"].get("point_kind") != "content"
+    ]
+    assert len(authoritative) == 1
+    assert authoritative[0]["state"] == state
+    assert authoritative[0]["version"] == memory.version
 
     response = client.post(
         f"/v1/episodic/{memory.object_id}/retract",
