@@ -206,6 +206,17 @@ def test_tei_basic_auth_is_complete_and_masked(
     assert "do-not-log-this" not in repr(settings)
 
 
+def test_empty_tei_basic_auth_environment_is_absent(
+    monkeypatch: pytest.MonkeyPatch, minimal_env: Path, _reset_cache: None
+) -> None:
+    monkeypatch.setenv("TEI_BASIC_AUTH_USERNAME", "")
+    monkeypatch.setenv("TEI_BASIC_AUTH_PASSWORD", "")
+    settings = get_settings()
+    assert settings.tei_basic_auth_username is None
+    assert settings.tei_basic_auth_password is None
+    assert settings.tei_basic_auth is None
+
+
 @pytest.mark.parametrize("only", ["username", "password"])
 def test_tei_basic_auth_refuses_partial_credentials(
     only: str,

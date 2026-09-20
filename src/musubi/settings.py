@@ -418,6 +418,16 @@ class Settings(BaseSettings):
             )
         return self
 
+    @field_validator(
+        "tei_basic_auth_username",
+        "tei_basic_auth_password",
+        mode="before",
+    )
+    @classmethod
+    def _empty_tei_basic_auth_is_absent(cls, value: Any) -> Any:
+        """Treat Compose's empty optional auth variables as unset."""
+        return None if value == "" else value
+
     @model_validator(mode="after")
     def _validate_tei_basic_auth_pair(self) -> Settings:
         """TEI Basic auth is either complete or absent.
