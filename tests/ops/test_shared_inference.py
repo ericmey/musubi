@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+from jinja2 import Environment, StrictUndefined
 
 ROOT = Path(__file__).resolve().parents[2]
 ANSIBLE = ROOT / "deploy" / "ansible"
@@ -35,6 +36,11 @@ def _services(path: Path) -> dict[str, Any]:
 def _compose(path: Path) -> dict[str, Any]:
     rendered = re.sub(r"\{\{[^\n]+?\}\}", "template_value", path.read_text())
     return cast(dict[str, Any], yaml.safe_load(rendered))
+
+
+def _render_expression(expression: str, **values: Any) -> Any:
+    rendered = Environment(undefined=StrictUndefined).from_string(expression).render(**values)
+    return yaml.safe_load(rendered)
 
 
 def test_shared_inference_is_owned_by_a_separate_deployment_unit() -> None:
@@ -169,11 +175,56 @@ def test_exposed_credential_rotation_overlaps_old_and_new_before_cutover() -> No
 
     playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
     tasks = playbook[0]["tasks"]
+    names_all = [task["name"] for task in tasks]
+    assert names_all.index("Inspect completed authentication migration marker") < names_all.index(
+        "Allocate auth rollback material"
+    )
+    assert names_all.index("Verify the completed migration is still healthy") < names_all.index(
+        "Stop after validating an already completed migration"
+    )
+    assert names_all.index(
+        "Verify the completed migration still reaches every authenticated route"
+    ) < names_all.index("Stop after validating an already completed migration")
+    completed = {task["name"]: task for task in tasks}
+    for name in (
+        "Verify the completed migration is still healthy",
+        "Verify the completed migration still reaches every authenticated route",
+        "Stop after validating an already completed migration",
+    ):
+        assert completed[name]["when"] == "completed_auth_migration.stat.exists"
+    assert (
+        completed["Stop after validating an already completed migration"]["ansible.builtin.meta"]
+        == "end_host"
+    )
+    completed_probe = completed[
+        "Verify the completed migration still reaches every authenticated route"
+    ]["ansible.builtin.command"]["cmd"]
+    assert "docker compose -f" in completed_probe
+    assert "exec -T core python -c" in completed_probe
+    assert "docker exec musubi-core-1" not in completed_probe
     rotation = next(task for task in tasks if "block" in task)
     names = [task["name"] for task in rotation["block"]]
+    for staged_name in (
+        "Stage overlapping ingress credential references",
+        "Stage replacement Musubi credential references",
+    ):
+        assert staged_name in names_all
+        assert staged_name not in names
+    early_cleanup = playbook[0]["handlers"][0]
+    assert early_cleanup["loop"] == [
+        "{{ auth_rotation_backup.path }}",
+        "{{ musubi_config_dir }}/shared-inference.htpasswd.rotation.tpl",
+        "{{ musubi_config_dir }}/secrets.shared-inference-v2.tpl",
+    ]
     assert names.index("Install the overlapping credential set") < names.index(
-        "Prove both old and replacement credentials during overlap"
+        "Render the replacement shared-inference Compose definition"
     )
+    assert names.index("Render the replacement shared-inference Compose definition") < names.index(
+        "Reconcile the producer network before starting its consumers"
+    )
+    assert names.index(
+        "Reconcile the producer network before starting its consumers"
+    ) < names.index("Prove both old and replacement credentials during overlap")
     assert names.index("Prove both old and replacement credentials during overlap") < names.index(
         "Render the replacement Musubi Compose definition"
     )
@@ -196,20 +247,64 @@ def test_exposed_credential_rotation_overlaps_old_and_new_before_cutover() -> No
         "Prove the exposed credential is rejected"
     )
 
+    cleanup = next(
+        task for task in rotation["always"] if task["name"] == "Remove staged auth templates"
+    )
+    assert cleanup["loop"] == [
+        "{{ musubi_config_dir }}/shared-inference.htpasswd.rotation.tpl",
+        "{{ musubi_config_dir }}/secrets.shared-inference-v2.tpl",
+    ]
+
     by_name = {task["name"]: task for task in rotation["block"]}
+    install = by_name["Install the overlapping credential set"]["ansible.builtin.shell"]["cmd"]
+    assert (
+        "/usr/bin/timeout --signal=TERM --kill-after=5s 60s /usr/bin/op inject --force" in install
+    )
+    assert 'mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd' in install
+    assert "docker compose" not in install
+
     for name in (
-        "Install the overlapping credential set",
         "Remove the exposed credential from the ingress",
+        "Remount overlapping credentials without restarting ready producers",
     ):
-        command = by_name[name]["ansible.builtin.shell"]["cmd"]
-        assert (
-            "/usr/bin/timeout --signal=TERM --kill-after=5s 60s /usr/bin/op inject --force"
-            in command
+        action = by_name[name].get("ansible.builtin.shell") or by_name[name].get(
+            "ansible.builtin.command"
         )
-        assert 'cat "$candidate" >' not in command
+        assert action is not None
+        command = action["cmd"]
+        if name == "Remove the exposed credential from the ingress":
+            assert (
+                "/usr/bin/timeout --signal=TERM --kill-after=5s 60s /usr/bin/op inject --force"
+                in command
+            )
+            assert 'cat "$candidate" >' not in command
+            assert (
+                'mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd'
+                in command
+            )
+        assert "/usr/bin/timeout --signal=TERM --kill-after=5s 30s" in command
+        assert "up -d --no-deps --force-recreate inference-ingress" in command
+        assert "exec -T inference-ingress nginx -s reload" not in command
+
+    for name, result_name in (
+        ("Prove both old and replacement credentials during overlap", "auth_overlap_probe"),
+        ("Prove the exposed credential is rejected", "retired_credential_probe"),
+    ):
+        probe = by_name[name]
+        expected_operations = 2 if result_name == "auth_overlap_probe" else 1
         assert (
-            'mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd' in command
+            probe["ansible.builtin.shell"]["cmd"].count(
+                "/usr/bin/timeout --signal=TERM --kill-after=1s 5s /usr/bin/op run"
+            )
+            == expected_operations
         )
+        assert probe["ansible.builtin.shell"]["cmd"].count("--connect-timeout 2 --max-time 3") == (
+            expected_operations
+        )
+        assert probe["register"] == result_name
+        assert probe["retries"] == 30
+        assert probe["delay"] == 1
+        assert probe["until"] == f"{result_name}.rc == 0"
 
 
 def test_old_credential_probes_support_url_or_header_auth() -> None:
@@ -239,13 +334,13 @@ def test_credential_rotation_rolls_back_every_coupled_artifact() -> None:
     for artifact in (
         "secrets.tpl",
         "docker-compose.yml",
+        "shared-inference-compose.yml",
         ".env.production",
         "shared-inference.htpasswd.tpl",
         "shared-inference.htpasswd",
     ):
         assert artifact in backed_up
         assert artifact in rescue
-    assert "Reload the restored ingress credential" in rescue
     assert "Restart Musubi with the restored credential" in rescue
     restore_runtime = next(
         task
@@ -264,6 +359,165 @@ def test_credential_rotation_rolls_back_every_coupled_artifact() -> None:
         'mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd'
         in restore_command
     )
+    assert "docker compose" not in restore_command
+    assert "exec -T inference-ingress nginx -s reload" not in restore_command
+    restore_topology = next(
+        task
+        for task in rotation["rescue"]
+        if task["name"]
+        == "Restore the previous producer topology after a first-time migration failure"
+    )
+    topology_command = restore_topology["ansible.builtin.command"]["cmd"]
+    assert "/usr/bin/timeout --signal=TERM --kill-after=5s 320s" in topology_command
+    assert "up -d --force-recreate --wait --wait-timeout 300" in topology_command
+    assert restore_topology["when"] == "producer_reconcile_required"
+    remount = next(
+        task
+        for task in rotation["rescue"]
+        if task["name"] == "Remount the restored ingress credential without restarting producers"
+    )
+    remount_command = remount["ansible.builtin.command"]["cmd"]
+    assert "/usr/bin/timeout --signal=TERM --kill-after=5s 30s" in remount_command
+    assert "up -d --no-deps --force-recreate inference-ingress" in remount_command
+    assert remount["when"] == "not producer_reconcile_required"
+    restored_probe = next(
+        task
+        for task in rotation["rescue"]
+        if task["name"] == "Prove the restored ingress credential is ready"
+    )
+    assert (
+        restored_probe["ansible.builtin.shell"]["cmd"].count(
+            "/usr/bin/timeout --signal=TERM --kill-after=1s 5s /usr/bin/op run"
+        )
+        == 1
+    )
+    assert "--connect-timeout 2 --max-time 3" in restored_probe["ansible.builtin.shell"]["cmd"]
+    assert restored_probe["register"] == "restored_credential_probe"
+    assert restored_probe["retries"] == 30
+    assert restored_probe["delay"] == 1
+    assert restored_probe["until"] == "restored_credential_probe.rc == 0"
+
+
+def test_auth_migration_reconciles_the_producer_network_before_consumers() -> None:
+    playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
+    top_level = {task["name"]: task for task in playbook[0]["tasks"]}
+    inspect = top_level["Inspect every shared-inference producer before rotation"]
+    assert inspect["loop"] == ["tei-dense", "tei-sparse", "tei-reranker"]
+    projection = top_level["Project producer readiness without assuming a container exists"][
+        "ansible.builtin.set_fact"
+    ]["producer_status"]
+    for safe_default in (
+        "item.exists | default(false)",
+        "(item.container | default({})).get('State', {}).get('Running', false)",
+        ".get('Health', {}).get(",
+        ".get('NetworkSettings', {}).get('Networks', {})",
+    ):
+        assert safe_default in projection
+    decision = top_level["Decide whether producer topology requires reconciliation"][
+        "ansible.builtin.set_fact"
+    ]["producer_reconcile_required"]
+    for condition in (
+        "not producer_backend_network.exists",
+        "producer_status",
+        "selectattr('exists', 'equalto', true)",
+        "selectattr('running', 'equalto', true)",
+        "selectattr('health', 'equalto', 'healthy')",
+        "selectattr('attached', 'equalto', true)",
+    ):
+        assert condition in decision
+    rotation = next(task for task in playbook[0]["tasks"] if "block" in task)
+    by_name = {task["name"]: task for task in rotation["block"]}
+    names = list(by_name)
+
+    assert (
+        names.index("Render the replacement shared-inference Compose definition")
+        < names.index("Reconcile the producer network before starting its consumers")
+        < names.index("Prove both old and replacement credentials during overlap")
+    )
+    reconcile = by_name["Reconcile the producer network before starting its consumers"]
+    command = reconcile["ansible.builtin.command"]["cmd"]
+    assert "/usr/bin/timeout --signal=TERM --kill-after=5s 320s" in command
+    assert "docker compose -p shared-inference" in command
+    assert "up -d --force-recreate --wait --wait-timeout 300" in command
+    assert reconcile["when"] == "producer_reconcile_required"
+
+    restore_names = [task["name"] for task in rotation["rescue"]]
+    assert restore_names.index("Restore the previous shared-inference Compose definition") < (
+        restore_names.index("Restore the previous runtime shared-inference.htpasswd")
+    )
+
+
+def test_producer_reconciliation_decision_executes_for_absent_or_healthless_containers() -> None:
+    playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
+    top_level = {task["name"]: task for task in playbook[0]["tasks"]}
+    projection = top_level["Project producer readiness without assuming a container exists"][
+        "ansible.builtin.set_fact"
+    ]["producer_status"]
+    decision = top_level["Decide whether producer topology requires reconciliation"][
+        "ansible.builtin.set_fact"
+    ]["producer_reconcile_required"]
+
+    healthy = {
+        "exists": True,
+        "container": {
+            "State": {"Running": True, "Health": {"Status": "healthy"}},
+            "NetworkSettings": {"Networks": {"musubi-inference-backend": {}}},
+        },
+    }
+    missing = {"exists": False}
+    healthless = {
+        "exists": True,
+        "container": {
+            "State": {"Running": True},
+            "NetworkSettings": {"Networks": {"musubi-inference-backend": {}}},
+        },
+    }
+
+    def projected(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        status: list[dict[str, Any]] = []
+        for item in items:
+            status = cast(
+                list[dict[str, Any]],
+                _render_expression(projection, producer_status=status, item=item),
+            )
+        return status
+
+    def requires_reconciliation(items: list[dict[str, Any]]) -> bool:
+        return cast(
+            bool,
+            _render_expression(
+                decision,
+                producer_backend_network={"exists": True},
+                producer_status=projected(items),
+            ),
+        )
+
+    assert requires_reconciliation([healthy, healthy, missing]) is True
+    assert requires_reconciliation([healthy, healthy, healthless]) is True
+    assert requires_reconciliation([healthy, healthy, healthy]) is False
+
+
+def test_every_compose_recreate_is_bounded_and_routine_rotations_are_ingress_only() -> None:
+    playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
+    rotation = next(task for task in playbook[0]["tasks"] if "block" in task)
+    compose_tasks: list[tuple[dict[str, Any], str]] = []
+    for task in [*rotation["block"], *rotation["rescue"]]:
+        action = task.get("ansible.builtin.shell") or task.get("ansible.builtin.command") or {}
+        command = action.get("cmd", "")
+        if " up -d " in f" {command} ":
+            compose_tasks.append((task, command))
+
+    assert len(compose_tasks) == 5
+    for task, command in compose_tasks:
+        assert re.search(
+            r"/usr/bin/timeout --signal=TERM --kill-after=\S+ \S+\s+"
+            r"(?:/usr/bin/)?docker compose",
+            command,
+        )
+        if "up -d --no-deps --force-recreate inference-ingress" in command:
+            continue
+        assert "up -d --force-recreate --wait --wait-timeout 300" in command
+        assert task["when"] == "producer_reconcile_required"
 
 
 def test_auth_migration_deploys_and_verifies_the_pinned_consumer_image() -> None:
@@ -273,6 +527,7 @@ def test_auth_migration_deploys_and_verifies_the_pinned_consumer_image() -> None
 
     pull = by_name["Pull the pinned replacement Musubi image"]
     command = pull["ansible.builtin.shell"]["cmd"]
+    assert "/usr/bin/timeout --signal=TERM --kill-after=1s 109s /usr/bin/op run" in command
     assert "secrets.shared-inference-v2.tpl" in command
     assert "pull --policy always core lifecycle-worker" in command
     assert pull["no_log"] is True

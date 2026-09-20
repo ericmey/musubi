@@ -4,19 +4,52 @@
   become: true
   force_handlers: true
   handlers:
-    - name: Remove auth rollback material after an early failure
+    - name: Remove auth rollback and staged material after an early failure
       ansible.builtin.file:
-        path: "{{ auth_rotation_backup.path }}"
+        path: "{{ item }}"
         state: absent
+      loop:
+        - "{{ auth_rotation_backup.path }}"
+        - "{{ musubi_config_dir }}/shared-inference.htpasswd.rotation.tpl"
+        - "{{ musubi_config_dir }}/secrets.shared-inference-v2.tpl"
       check_mode: false
   tasks:
+    - name: Inspect completed authentication migration marker
+      ansible.builtin.stat:
+        path: "{{ musubi_config_dir }}/shared-inference-auth-v2"
+      register: completed_auth_migration
+
+    - name: Verify the completed migration is still healthy
+      ansible.builtin.uri:
+        url: "{{ musubi_health_urls.core }}"
+        status_code: 200
+      changed_when: false
+      when: completed_auth_migration.stat.exists
+
+    - name: Verify the completed migration still reaches every authenticated route
+      ansible.builtin.command:
+        cmd: >-
+          /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
+          exec -T core python -c
+          'import httpx,os;
+          auth=httpx.BasicAuth(os.environ["TEI_BASIC_AUTH_USERNAME"],os.environ["TEI_BASIC_AUTH_PASSWORD"]);
+          urls=[os.environ[k] for k in ("TEI_DENSE_URL","TEI_SPARSE_URL","TEI_RERANKER_URL")];
+          [httpx.get(u+"/health",auth=auth,timeout=20).raise_for_status() for u in urls]'
+      changed_when: false
+      no_log: true
+      when: completed_auth_migration.stat.exists
+
+    - name: Stop after validating an already completed migration
+      ansible.builtin.meta: end_host
+      when: completed_auth_migration.stat.exists
+
     - name: Allocate auth rollback material
       ansible.builtin.tempfile:
         state: directory
         prefix: musubi-shared-inference-auth-rollback.
       register: auth_rotation_backup
       check_mode: false
-      notify: Remove auth rollback material after an early failure
+      notify: Remove auth rollback and staged material after an early failure
 
     - name: Preserve every coupled authentication artifact
       ansible.builtin.copy:
@@ -31,6 +64,8 @@
           dest: secrets.tpl
         - src: "{{ musubi_config_dir }}/docker-compose.yml"
           dest: docker-compose.yml
+        - src: "{{ musubi_config_dir }}/shared-inference-compose.yml"
+          dest: shared-inference-compose.yml
         - src: "{{ musubi_config_dir }}/.env.production"
           dest: .env.production
         - src: "{{ musubi_config_dir }}/shared-inference.htpasswd.tpl"
@@ -57,6 +92,60 @@
         mode: "0640"
       no_log: true
 
+    - name: Inspect the stable producer network before rotation
+      community.docker.docker_network_info:
+        name: musubi-inference-backend
+      register: producer_backend_network
+      changed_when: false
+
+    - name: Inspect every shared-inference producer before rotation
+      community.docker.docker_container_info:
+        name: "shared-inference-{{ item }}-1"
+      loop:
+        - tei-dense
+        - tei-sparse
+        - tei-reranker
+      register: producer_container_info
+      changed_when: false
+
+    - name: Initialize non-secret producer readiness projection
+      ansible.builtin.set_fact:
+        producer_status: []
+      changed_when: false
+
+    - name: Project producer readiness without assuming a container exists
+      ansible.builtin.set_fact:
+        producer_status: >-
+          {{ producer_status + [{
+               'exists': item.exists | default(false),
+               'running':
+                 (item.container | default({})).get('State', {}).get('Running', false),
+               'health':
+                 (item.container | default({})).get('State', {}).get('Health', {}).get(
+                   'Status', 'missing'),
+               'attached':
+                 'musubi-inference-backend' in
+                 (item.container | default({})).get('NetworkSettings', {}).get('Networks', {})
+             }] }}
+      loop: "{{ producer_container_info.results }}"
+      changed_when: false
+
+    - name: Decide whether producer topology requires reconciliation
+      ansible.builtin.set_fact:
+        producer_reconcile_required: >-
+          {{
+            not producer_backend_network.exists or
+            (producer_status |
+             selectattr('exists', 'equalto', true) | list | length != 3) or
+            (producer_status |
+             selectattr('running', 'equalto', true) | list | length != 3) or
+            (producer_status |
+             selectattr('health', 'equalto', 'healthy') | list | length != 3) or
+            (producer_status |
+             selectattr('attached', 'equalto', true) | list | length != 3)
+          }}
+      changed_when: false
+
     - name: Rotate the exposed Musubi credential transactionally
       block:
         - name: Install the overlapping credential set
@@ -70,19 +159,46 @@
               -o "$candidate" &&
               chown 101:101 "$candidate" &&
               chmod 0400 "$candidate" &&
-              mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd &&
-              docker compose -p shared-inference
-              -f {{ musubi_config_dir }}/shared-inference-compose.yml
-              exec -T inference-ingress nginx -s reload
+              mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd
             executable: /bin/bash
           changed_when: true
           no_log: true
+
+        - name: Render the replacement shared-inference Compose definition
+          ansible.builtin.template:
+            src: templates/shared-inference-compose.yml.j2
+            dest: "{{ musubi_config_dir }}/shared-inference-compose.yml"
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          diff: false
+
+        - name: Reconcile the producer network before starting its consumers
+          ansible.builtin.command:
+            cmd: >-
+              /usr/bin/timeout --signal=TERM --kill-after=5s 320s
+              /usr/bin/docker compose -p shared-inference
+              -f {{ musubi_config_dir }}/shared-inference-compose.yml
+              up -d --force-recreate --wait --wait-timeout 300
+          changed_when: true
+          when: producer_reconcile_required
+
+        - name: Remount overlapping credentials without restarting ready producers
+          ansible.builtin.command:
+            cmd: >-
+              /usr/bin/timeout --signal=TERM --kill-after=5s 30s
+              /usr/bin/docker compose -p shared-inference
+              -f {{ musubi_config_dir }}/shared-inference-compose.yml
+              up -d --no-deps --force-recreate inference-ingress
+          changed_when: true
+          no_log: true
+          when: not producer_reconcile_required
 
         - name: Prove both old and replacement credentials during overlap
           ansible.builtin.shell:
             cmd: >-
               set -a && . /etc/musubi/connect.env && set +a &&
-              /usr/bin/op run
+              /usr/bin/timeout --signal=TERM --kill-after=1s 5s /usr/bin/op run
               --env-file={{ auth_rotation_backup.path }}/secrets.tpl --
               /bin/bash -ec '
               {
@@ -93,17 +209,23 @@
               printf "url = \"%s/health\"\n" "$TEI_DENSE_URL";
               } |
               docker run --rm -i --network musubi-shared-inference
-              {{ musubi_curl_image }} --config - --fail --silent --show-error >/dev/null' &&
-              /usr/bin/op run
+              {{ musubi_curl_image }} --config - --connect-timeout 2 --max-time 3
+              --fail --silent --show-error >/dev/null' &&
+              /usr/bin/timeout --signal=TERM --kill-after=1s 5s /usr/bin/op run
               --env-file={{ musubi_config_dir }}/secrets.shared-inference-v2.tpl --
               /bin/bash -ec '
               printf "user = \"%s:%s\"\nurl = \"%s/health\"\n"
               "$TEI_BASIC_AUTH_USERNAME" "$TEI_BASIC_AUTH_PASSWORD" "$TEI_DENSE_URL" |
               docker run --rm -i --network musubi-shared-inference
-              {{ musubi_curl_image }} --config - --fail --silent --show-error >/dev/null'
+              {{ musubi_curl_image }} --config - --connect-timeout 2 --max-time 3
+              --fail --silent --show-error >/dev/null'
             executable: /bin/bash
           changed_when: false
           no_log: true
+          register: auth_overlap_probe
+          retries: 30
+          delay: 1
+          until: auth_overlap_probe.rc == 0
 
         - name: Render the replacement Musubi Compose definition
           ansible.builtin.template:
@@ -127,7 +249,7 @@
           ansible.builtin.shell:
             cmd: >-
               set -a && . /etc/musubi/connect.env && set +a &&
-              exec /usr/bin/op run
+              exec /usr/bin/timeout --signal=TERM --kill-after=1s 109s /usr/bin/op run
               --env-file={{ musubi_config_dir }}/secrets.shared-inference-v2.tpl --
               /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
               pull --policy always core lifecycle-worker
@@ -244,9 +366,10 @@
               chown 101:101 "$candidate" &&
               chmod 0400 "$candidate" &&
               mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd &&
+              /usr/bin/timeout --signal=TERM --kill-after=5s 30s
               docker compose -p shared-inference
               -f {{ musubi_config_dir }}/shared-inference-compose.yml
-              exec -T inference-ingress nginx -s reload
+              up -d --no-deps --force-recreate inference-ingress
             executable: /bin/bash
           changed_when: true
           no_log: true
@@ -255,7 +378,7 @@
           ansible.builtin.shell:
             cmd: >-
               set -a && . /etc/musubi/connect.env && set +a &&
-              exec /usr/bin/op run
+              exec /usr/bin/timeout --signal=TERM --kill-after=1s 5s /usr/bin/op run
               --env-file={{ auth_rotation_backup.path }}/secrets.tpl --
               /bin/bash -ec '
               status=$({
@@ -266,11 +389,16 @@
               printf "url = \"%s/health\"\n" "$TEI_DENSE_URL";
               } |
               docker run --rm -i --network musubi-shared-inference
-              {{ musubi_curl_image }} --config - --silent --output /dev/null --write-out "%{http_code}");
+              {{ musubi_curl_image }} --config - --connect-timeout 2 --max-time 3
+              --silent --output /dev/null --write-out "%{http_code}");
               test "$status" = 401'
             executable: /bin/bash
           changed_when: false
           no_log: true
+          register: retired_credential_probe
+          retries: 30
+          delay: 1
+          until: retired_credential_probe.rc == 0
 
         - name: Record completed authentication migration
           ansible.builtin.copy:
@@ -281,6 +409,15 @@
             mode: "0640"
 
       rescue:
+        - name: Restore the previous shared-inference Compose definition
+          ansible.builtin.copy:
+            src: "{{ auth_rotation_backup.path }}/shared-inference-compose.yml"
+            dest: "{{ musubi_config_dir }}/shared-inference-compose.yml"
+            remote_src: true
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+
         - name: Restore the previous Musubi Compose definition
           ansible.builtin.copy:
             src: "{{ auth_rotation_backup.path }}/docker-compose.yml"
@@ -333,13 +470,52 @@
           changed_when: true
           no_log: true
 
-        - name: Reload the restored ingress credential
+        - name: Restore the previous producer topology after a first-time migration failure
           ansible.builtin.command:
             cmd: >-
-              docker compose -p shared-inference
+              /usr/bin/timeout --signal=TERM --kill-after=5s 320s
+              /usr/bin/docker compose -p shared-inference
               -f {{ musubi_config_dir }}/shared-inference-compose.yml
-              exec -T inference-ingress nginx -s reload
+              up -d --force-recreate --wait --wait-timeout 300
           changed_when: true
+          no_log: true
+          when: producer_reconcile_required
+
+        - name: Remount the restored ingress credential without restarting producers
+          ansible.builtin.command:
+            cmd: >-
+              /usr/bin/timeout --signal=TERM --kill-after=5s 30s
+              /usr/bin/docker compose -p shared-inference
+              -f {{ musubi_config_dir }}/shared-inference-compose.yml
+              up -d --no-deps --force-recreate inference-ingress
+          changed_when: true
+          no_log: true
+          when: not producer_reconcile_required
+
+        - name: Prove the restored ingress credential is ready
+          ansible.builtin.shell:
+            cmd: >-
+              set -a && . /etc/musubi/connect.env && set +a &&
+              /usr/bin/timeout --signal=TERM --kill-after=1s 5s /usr/bin/op run
+              --env-file={{ auth_rotation_backup.path }}/secrets.tpl --
+              /bin/bash -ec '
+              {
+              if [[ -n "${TEI_BASIC_AUTH_USERNAME:-}" || -n "${TEI_BASIC_AUTH_PASSWORD:-}" ]]; then
+                [[ -n "${TEI_BASIC_AUTH_USERNAME:-}" && -n "${TEI_BASIC_AUTH_PASSWORD:-}" ]] || exit 2;
+                printf "user = \"%s:%s\"\n" "$TEI_BASIC_AUTH_USERNAME" "$TEI_BASIC_AUTH_PASSWORD";
+              fi;
+              printf "url = \"%s/health\"\n" "$TEI_DENSE_URL";
+              } |
+              docker run --rm -i --network musubi-shared-inference
+              {{ musubi_curl_image }} --config - --connect-timeout 2 --max-time 3
+              --fail --silent --show-error >/dev/null'
+            executable: /bin/bash
+          changed_when: false
+          no_log: true
+          register: restored_credential_probe
+          retries: 30
+          delay: 1
+          until: restored_credential_probe.rc == 0
 
         - name: Restart Musubi with the restored credential
           ansible.builtin.systemd_service:
