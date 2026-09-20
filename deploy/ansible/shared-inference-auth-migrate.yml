@@ -29,6 +29,10 @@
       loop:
         - src: "{{ musubi_config_dir }}/secrets.tpl"
           dest: secrets.tpl
+        - src: "{{ musubi_config_dir }}/docker-compose.yml"
+          dest: docker-compose.yml
+        - src: "{{ musubi_config_dir }}/.env.production"
+          dest: .env.production
         - src: "{{ musubi_config_dir }}/shared-inference.htpasswd.tpl"
           dest: shared-inference.htpasswd.tpl
         - src: /run/shared-inference-secrets/shared-inference.htpasswd
@@ -101,6 +105,36 @@
           changed_when: false
           no_log: true
 
+        - name: Render the replacement Musubi Compose definition
+          ansible.builtin.template:
+            src: templates/docker-compose.yml.j2
+            dest: "{{ musubi_config_dir }}/docker-compose.yml"
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          diff: false
+
+        - name: Render the replacement Musubi environment
+          ansible.builtin.template:
+            src: templates/env.production.j2
+            dest: "{{ musubi_config_dir }}/.env.production"
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          no_log: true
+
+        - name: Pull the pinned replacement Musubi image
+          ansible.builtin.shell:
+            cmd: >-
+              set -a && . /etc/musubi/connect.env && set +a &&
+              exec /usr/bin/op run
+              --env-file={{ musubi_config_dir }}/secrets.shared-inference-v2.tpl --
+              /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
+              pull --policy always core lifecycle-worker
+            executable: /bin/bash
+          changed_when: true
+          no_log: true
+
         - name: Commit replacement Musubi credential references
           ansible.builtin.copy:
             src: "{{ musubi_config_dir }}/secrets.shared-inference-v2.tpl"
@@ -115,6 +149,54 @@
           ansible.builtin.systemd_service:
             name: musubi
             state: restarted
+
+        - name: Wait for the replacement Musubi core to become healthy
+          ansible.builtin.uri:
+            url: "{{ musubi_health_urls.core }}"
+            status_code: 200
+          register: migrated_core_health
+          retries: 12
+          delay: 5
+          until: migrated_core_health.status == 200
+          changed_when: false
+
+        - name: Inspect migrated Musubi consumers
+          community.docker.docker_container_info:
+            name: "musubi-{{ item }}-1"
+          loop:
+            - core
+            - lifecycle-worker
+          register: migrated_consumer_info
+          no_log: true
+
+        - name: Project non-secret migrated consumer status
+          ansible.builtin.set_fact:
+            migrated_consumer_status: >-
+              {{ (migrated_consumer_status | default([])) + [{
+                   'service': item.item,
+                   'image': item.container.Config.Image,
+                   'running': item.container.State.Running,
+                   'health': item.container.State.Health.Status | default('not-configured')
+                 }] }}
+          loop: "{{ migrated_consumer_info.results }}"
+          no_log: true
+
+        - name: Require migrated consumers to run the pinned image
+          ansible.builtin.assert:
+            that:
+              - item.image == musubi_core_image
+              - item.running
+              - >-
+                item.service != 'lifecycle-worker' or
+                item.health == 'healthy'
+            fail_msg: >-
+              {{ item.service }} migration readiness failed
+              (image_match={{ item.image == musubi_core_image }},
+              running={{ item.running }}, health={{ item.health }})
+            quiet: true
+          loop: "{{ migrated_consumer_status }}"
+          loop_control:
+            label: "{{ item.service }}"
 
         - name: Prove the real Musubi consumer uses the replacement credential
           ansible.builtin.shell:
@@ -186,6 +268,25 @@
             mode: "0640"
 
       rescue:
+        - name: Restore the previous Musubi Compose definition
+          ansible.builtin.copy:
+            src: "{{ auth_rotation_backup.path }}/docker-compose.yml"
+            dest: "{{ musubi_config_dir }}/docker-compose.yml"
+            remote_src: true
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+
+        - name: Restore the previous Musubi environment
+          ansible.builtin.copy:
+            src: "{{ auth_rotation_backup.path }}/.env.production"
+            dest: "{{ musubi_config_dir }}/.env.production"
+            remote_src: true
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          no_log: true
+
         - name: Restore the previous Musubi credential references
           ansible.builtin.copy:
             src: "{{ auth_rotation_backup.path }}/secrets.tpl"

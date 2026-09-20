@@ -175,7 +175,19 @@ def test_exposed_credential_rotation_overlaps_old_and_new_before_cutover() -> No
         "Prove both old and replacement credentials during overlap"
     )
     assert names.index("Prove both old and replacement credentials during overlap") < names.index(
+        "Render the replacement Musubi Compose definition"
+    )
+    assert names.index("Render the replacement Musubi Compose definition") < names.index(
+        "Pull the pinned replacement Musubi image"
+    )
+    assert names.index("Pull the pinned replacement Musubi image") < names.index(
         "Restart Musubi with the replacement credential"
+    )
+    assert names.index("Restart Musubi with the replacement credential") < names.index(
+        "Wait for the replacement Musubi core to become healthy"
+    )
+    assert names.index("Wait for the replacement Musubi core to become healthy") < names.index(
+        "Inspect migrated Musubi consumers"
     )
     assert names.index("Restart Musubi with the replacement credential") < names.index(
         "Remove the exposed credential from the ingress"
@@ -202,16 +214,54 @@ def test_old_credential_probes_support_url_or_header_auth() -> None:
 
 def test_credential_rotation_rolls_back_every_coupled_artifact() -> None:
     playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
-    rotation = next(task for task in playbook[0]["tasks"] if "block" in task)
+    tasks = playbook[0]["tasks"]
+    preserved = next(
+        task for task in tasks if task["name"] == "Preserve every coupled authentication artifact"
+    )
+    backed_up = {item["dest"] for item in preserved["loop"]}
+    rotation = next(task for task in tasks if "block" in task)
     rescue = "\n".join(str(task) for task in rotation["rescue"])
     for artifact in (
         "secrets.tpl",
+        "docker-compose.yml",
+        ".env.production",
         "shared-inference.htpasswd.tpl",
         "shared-inference.htpasswd",
     ):
+        assert artifact in backed_up
         assert artifact in rescue
     assert "Reload the restored ingress credential" in rescue
     assert "Restart Musubi with the restored credential" in rescue
+
+
+def test_auth_migration_deploys_and_verifies_the_pinned_consumer_image() -> None:
+    playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
+    rotation = next(task for task in playbook[0]["tasks"] if "block" in task)
+    by_name = {task["name"]: task for task in rotation["block"]}
+
+    pull = by_name["Pull the pinned replacement Musubi image"]
+    command = pull["ansible.builtin.shell"]["cmd"]
+    assert "secrets.shared-inference-v2.tpl" in command
+    assert "pull --policy always core lifecycle-worker" in command
+    assert pull["no_log"] is True
+
+    inspect = by_name["Inspect migrated Musubi consumers"]
+    assert inspect["loop"] == ["core", "lifecycle-worker"]
+    projection = by_name["Project non-secret migrated consumer status"]
+    assert projection["no_log"] is True
+    projected = projection["ansible.builtin.set_fact"]["migrated_consumer_status"]
+    for field in ("service", "image", "running", "health"):
+        assert f"'{field}'" in projected
+    verify = by_name["Require migrated consumers to run the pinned image"]
+    assert "item.image == musubi_core_image" in verify["ansible.builtin.assert"]["that"]
+    assert "item.running" in verify["ansible.builtin.assert"]["that"]
+    health_predicate = " ".join(verify["ansible.builtin.assert"]["that"][2].split())
+    assert "item.service != 'lifecycle-worker'" in health_predicate
+    assert "item.health == 'healthy'" in health_predicate
+    fail_msg = verify["ansible.builtin.assert"]["fail_msg"]
+    for diagnostic in ("item.service", "image_match=", "running=", "health="):
+        assert diagnostic in fail_msg
+    assert "no_log" not in verify
 
 
 def test_credential_rotation_keeps_secret_material_out_of_host_argv() -> None:
