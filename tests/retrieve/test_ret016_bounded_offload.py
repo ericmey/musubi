@@ -6,12 +6,13 @@ import asyncio
 import threading
 import time
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import models
 
 from musubi.retrieve import deep, hybrid
+from musubi.retrieve.offload import QDRANT_OFFLOAD_WORKERS, run_qdrant_offload
 from musubi.retrieve.scoring import ScoreComponents, ScoredHit
 
 
@@ -50,9 +51,8 @@ async def test_qdrant_offload_never_uses_the_shared_default_executor(
 async def test_qdrant_offload_caps_simultaneous_blocking_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from musubi.retrieve.offload import QDRANT_OFFLOAD_WORKERS
-
     lock = threading.Lock()
+    all_workers_started = threading.Barrier(QDRANT_OFFLOAD_WORKERS)
     active = 0
     peak = 0
 
@@ -61,7 +61,7 @@ async def test_qdrant_offload_caps_simultaneous_blocking_calls(
         with lock:
             active += 1
             peak = max(peak, active)
-        time.sleep(0.03)
+        all_workers_started.wait(timeout=1.0)
         with lock:
             active -= 1
         return []
@@ -79,11 +79,10 @@ async def test_qdrant_offload_caps_simultaneous_blocking_calls(
 
 @pytest.mark.asyncio
 async def test_query_points_calls_share_the_configured_qdrant_ceiling() -> None:
-    from musubi.retrieve.offload import QDRANT_OFFLOAD_WORKERS
-
     class BlockingClient:
         def __init__(self) -> None:
             self.lock = threading.Lock()
+            self.all_workers_started = threading.Barrier(QDRANT_OFFLOAD_WORKERS)
             self.active = 0
             self.peak = 0
 
@@ -91,7 +90,7 @@ async def test_query_points_calls_share_the_configured_qdrant_ceiling() -> None:
             with self.lock:
                 self.active += 1
                 self.peak = max(self.peak, self.active)
-            time.sleep(0.03)
+            self.all_workers_started.wait(timeout=1.0)
             with self.lock:
                 self.active -= 1
             return object()
@@ -129,29 +128,47 @@ async def test_lineage_hydration_creates_no_per_hit_event_loops(
     monkeypatch.setattr(deep, "_hydrate_one", sync_hydrate)
     monkeypatch.setattr(asyncio, "run", forbidden_run)
 
-    result = await deep._hydrate_lineage_async([hit], object(), object(), timeout_s=0.2)
+    result = await deep._hydrate_lineage_async(
+        [hit], cast(Any, object()), cast(Any, object()), timeout_s=0.2
+    )
 
     assert result[0].payload["hydrated"] is True
+
+
+def test_lineage_sync_seam_rejects_loop_bound_awaits() -> None:
+    async def suspending_read() -> int:
+        await asyncio.sleep(0)
+        return 1
+
+    with pytest.raises(
+        RuntimeError, match="lineage plane get suspended; add a genuine synchronous read seam"
+    ):
+        deep._complete_without_suspension(suspending_read())
 
 
 @pytest.mark.asyncio
 async def test_saturated_lineage_offload_degrades_in_place_without_request_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from musubi.retrieve.offload import QDRANT_OFFLOAD_WORKERS
-
     hits = [_hit(str(index)) for index in range(QDRANT_OFFLOAD_WORKERS + 5)]
+    release_workers = threading.Event()
 
     def saturated_hydrate(item: ScoredHit, *_args: Any) -> ScoredHit:
-        time.sleep(0.2)
+        release_workers.wait(timeout=1.0)
         return replace(item, payload={**item.payload, "late": True})
 
     monkeypatch.setattr(deep, "_hydrate_one", saturated_hydrate)
 
-    result = await asyncio.wait_for(
-        deep._hydrate_lineage_async(hits, object(), object(), timeout_s=0.01),
-        timeout=0.15,
-    )
+    try:
+        result = await asyncio.wait_for(
+            deep._hydrate_lineage_async(
+                hits, cast(Any, object()), cast(Any, object()), timeout_s=0.01
+            ),
+            timeout=0.15,
+        )
+    finally:
+        release_workers.set()
+        await run_qdrant_offload(lambda: None)
 
     assert result == hits
 
@@ -171,7 +188,9 @@ async def test_twenty_concurrent_callers_complete_with_bounded_offload(
     results = await asyncio.wait_for(
         asyncio.gather(
             *(
-                deep._hydrate_lineage_async(hits, object(), object(), timeout_s=0.3)
+                deep._hydrate_lineage_async(
+                    hits, cast(Any, object()), cast(Any, object()), timeout_s=0.3
+                )
                 for _ in range(20)
             )
         ),
