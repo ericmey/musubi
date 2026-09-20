@@ -82,18 +82,50 @@ The standard gate EXCLUDES integration-marked tests by construction. Three of th
 files this slice touches are integration-marked, so they appeared as `69 deselected` in
 every gate run today — including the ones that certified the round-29 removal as green.
 
-**Current result, and it is PASSING.** Read the two figures below as a before/after, not
-as the slice's shipping state — Copilot round 31 read the `15 failed` as current, which
-it was not, and that misreading is the document's fault rather than the reader's.
+**Current result, and it is PASSING.** Read the figures below as a before/after, not as
+the slice's shipping state — Copilot round 31 read `15 failed` as current, which it was
+not, and that misreading is the document's fault rather than the reader's.
 
-| when | command | result |
+**Each row names the object it measured.** The first version of this table did not, and
+carried a second error underneath the one it was written to fix: it reported `15 failed,
+9 passed` — 24 tests, which is `identity_consumers` ALONE — in a row whose command column
+claimed the three-file run, while the prose below it quoted the three-file figure of 43.
+Two correct measurements of two different objects, presented as one. Corrected 2026-09-20
+after checking the arithmetic against the per-file counts rather than re-reading the prose.
+
+Per-file in BOTH columns, so every total is checkable rather than asserted. The
+before-column was captured independently by Aoi from a separate worktree; the after-column
+was re-derived by both of us at several heads.
+
+| file | before (`3f6874d0`) | after (head under gate) |
 |---|---|---|
-| at discovery, head `05a67a0f` | explicit integration run | **15 failed, 9 passed** |
-| now, head under gate | same explicit run | **68 passed, 0 failed** |
+| `tests/store/test_data001_phase2_identity_consumers.py` | 15 failed, 9 passed | 24 passed |
+| `tests/store/test_data001_phase2_immutable_vectors.py` | 22 failed, 10 passed | 31 passed |
+| `tests/retrieve/test_data001_phase2_hybrid.py` | 6 failed, 7 passed | 13 passed |
+| **total** | **43 failed, 26 passed — 69 collected** | **68 passed, 0 failed — 68 collected** |
+
+**The 69 → 68 is real and it is not a miscount.** Reconciled by diffing collected test ids
+between the two heads rather than by assuming the totals should match:
+
+- `test_anchor_never_ranks_in_vector_search` **removed** (−1). Deliberate, documented at
+  its former site in `test_data001_phase2_immutable_vectors.py`, with coverage transferred
+  to `test_hybrid_anchor_never_ranks_on_either_leg` and the transfer independently verified.
+  Its premise — a *created* anchor's zero vector — became unreachable when round 29 removed
+  the create path; a *migrated* anchor keeps the legacy row's real vector and is excluded by
+  `point_kind` in the reader instead.
+- `test_delete_removes_brand_new_v2_layout` → `test_delete_removes_migrated_v2_layout`
+  (rename, net 0) — the same object, reached through the migration seeder rather than the
+  removed create path.
+
+69 − 1 = 68. Anyone re-deriving these totals will hit that one-test gap; this is where it
+went. **The `15 failed, 9 passed` row above is `identity_consumers` ALONE** — it is 24
+tests, and the earlier version of this table printed it in a row labelled as the
+three-file run.
 
 The 43 → 0 repair was re-derived independently by Aoi from a separate worktree against a
-baseline captured before these files were touched, so the passing figure rests on two
-instruments rather than on one run of mine.
+baseline captured before these files were touched, and re-run at each subsequent head, so
+the passing figure rests on two instruments and several trees rather than on one run of
+mine.
 
 **A green `make check` is still not evidence about this surface, and no amount of
 re-running it ever will be** — that is the durable lesson and it does not expire when the
