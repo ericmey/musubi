@@ -7,7 +7,7 @@ artifact before one evidence-gated, non-reembedding episodic CAS is attempted.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import regex
@@ -315,7 +315,17 @@ async def _release_adopted_done_token(
             code="CONFLICT",
             detail="committed retraction token changed during adoption",
         )
-    return refreshed
+    # Answer from the PRE-RELEASE committed snapshot, never from this reread.
+    #
+    # The reread exists for exactly one purpose: confirming the token is gone. It is NOT
+    # the state this request committed. A concurrent PATCH landing between the
+    # `delete_payload` above and `_read_original` bumps the version, and returning
+    # `refreshed` would hand the caller that other writer's version as the receipt for
+    # THIS retraction -- a replay would then report a row the saga never wrote.
+    #
+    # `stored` is the row the committed CAS produced, minus the token this function just
+    # released, which the checks above prove is gone (Copilot round 22 on musubi#732).
+    return replace(stored, raw={k: v for k, v in stored.raw.items() if k != "update_lease_token"})
 
 
 async def execute_retraction(

@@ -1431,6 +1431,29 @@ class LifecycleTransitionCoordinator:
             )
             counts["pending"] += 1
             return
+        # A custom intent NEVER reaches `_apply_conditional`, so the completed-retraction
+        # guard there does not cover this path. An intent admitted BEFORE a retraction is
+        # already durable in the outbox; without this check it replays afterwards and
+        # mutates the vectors and content of a quarantined row. Admission-time refusal
+        # cannot close that -- the admission legitimately predates the retraction -- so
+        # the refusal has to be here, at the apply, on every drive.
+        #
+        # Terminal rather than pending: a retraction does not clear, so rescheduling would
+        # retry forever against a row that will never accept the write
+        # (Copilot round 22 on musubi#732; same contract as the guard in
+        # `_apply_conditional`, which this deliberately mirrors).
+        held, held_count, _ = self._read_object_with_id(coll, oid, ns)
+        if held_count == 1 and held.get("retraction_evidence") is not None:
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
+            return
         ctx = CustomIntentContext(
             operation_key=opk,
             object_id=oid,

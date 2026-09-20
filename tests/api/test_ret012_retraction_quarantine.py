@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 import time
 from collections.abc import Iterator
@@ -706,3 +707,64 @@ def test_ordinary_archived_row_without_retraction_evidence_still_restores(
     )
     assert isinstance(restored, Ok), f"ordinary archived restore was refused: {restored}"
     assert _raw_authoritative(qdrant, memory.object_id)["state"] == "matured"
+
+
+def test_custom_publish_intent_admitted_before_retraction_cannot_mutate_after(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+) -> None:
+    """The interleaving the coordinator guard alone did not cover.
+
+    A custom immutable-vector publish never reaches `_apply_conditional`, so the
+    completed-retraction guard there does not see it. An intent admitted BEFORE the
+    retraction is already durable in the outbox; it must not replay afterwards and
+    rewrite a quarantined row's content (Copilot round 22 on musubi#732).
+    """
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout="legacy",
+        state="provisional",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+    # Admit a custom intent FIRST, so it legitimately predates the retraction.
+    opk = f"immutable_vector_publish:{memory.object_id}:preretraction"
+    status = coordinator.enqueue_custom_intent(
+        kind="immutable_vector_publish",
+        object_id=memory.object_id,
+        namespace=_NS,
+        collection="musubi_episodic",
+        patch_json=json.dumps({"op": "set", "set_fields": {"content": "REWRITTEN AFTER RETRACTION"}}),
+        operation_key=opk,
+    )
+    assert status == "admitted", status
+
+    response = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers={
+            "Authorization": f"Bearer {valid_token}",
+            "Idempotency-Key": "quarantine-custom-intent-interleave",
+        },
+        json=_body(memory.version),
+    )
+    assert response.status_code == 200, response.text
+
+    before = _raw_authoritative(qdrant, memory.object_id)
+    assert before.get("retraction_evidence") is not None
+    content_before = before["content"]
+
+    # Now drive the pre-admitted intent. It must refuse terminally, not rewrite.
+    coordinator.drive_intent(opk)
+
+    after = _raw_authoritative(qdrant, memory.object_id)
+    assert after["content"] == content_before, (
+        "a pre-retraction custom intent rewrote a quarantined row's content"
+    )
+    assert "REWRITTEN AFTER RETRACTION" not in str(after["content"])
+    assert after.get("retraction_evidence") is not None
