@@ -4,12 +4,12 @@ slice_id: slice-api-v1-idem008-retraction-timestamps
 issue: 729
 section: _slices
 type: slice
-status: in-review
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-review, type/slice, idempotency, data-integrity, api]
+tags: [section/slices, status/done, type/slice, idempotency, data-integrity, api]
 updated: 2026-08-17
-reviewed: false
+reviewed: true
 depends-on: [slice-idem007-escrow-retraction-saga]
 blocks: []
 ---

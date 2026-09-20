@@ -28,6 +28,7 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding import FakeEmbedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.store import bootstrap
+from musubi.store.immutable_vectors import CONTENT_KIND
 from musubi.store.names import collection_for_plane
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 
@@ -89,6 +90,40 @@ def _content(text: str) -> dict[str, Any]:
     return {"content": text, "tags": ["p2"]}
 
 
+def _seed_v1(qdrant: QdrantClient, collection: str, oid: str, namespace: str | None = None) -> None:
+    """A v1 legacy identity for an object this file is about to publish to.
+
+    This file was written when `publish()` on an ABSENT object created the anchor. That
+    branch was removed at round 29 (musubi#732): the publisher is an update/reinforce
+    path, and an anchor it creates is an anchor it can resurrect after a retraction.
+
+    The seeded content DIFFERS from what the tests publish, deliberately. The embedding
+    projection is `summary or content`, so an identical seed would make the first publish
+    project the same string, take the payload-only branch, and never convert to v2.
+    """
+    from musubi.planes.episodic.plane import episodic_point_id
+
+    qdrant.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=episodic_point_id(oid),
+                payload={
+                    "object_id": oid,
+                    "namespace": namespace or _NS,
+                    "content": f"{oid}-pre-migration",
+                    "state": "matured",
+                },
+                vector={
+                    DENSE_VECTOR_NAME: _embed(f"{oid}-pre-migration")[0],
+                    SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+
+
 def _embed(text: str) -> tuple[list[float], dict[int, float]]:
     """Deterministic FakeEmbedder vectors of the collection's real dims, for direct-upsert fixtures."""
     import asyncio
@@ -112,6 +147,7 @@ def test_old_owner_late_write_never_becomes_visible(
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     oid = "obj-late-write"
+    _seed_v1(qdrant, collection, oid)
     assert (
         pub.admit_publish(coord, object_id=oid, namespace=_NS, content_payload=_content("A"))
         == "admitted"
@@ -182,6 +218,7 @@ def test_crash_before_pointer_replays_from_disk(
     coord1 = LifecycleTransitionCoordinator(client=qdrant, db_path=db)
     pub1 = _publisher(qdrant, collection)
     pub1.register(coord1)
+    _seed_v1(qdrant, collection, "obj-replay")
     pub1.admit_publish(
         coord1,
         object_id="obj-replay",
@@ -208,6 +245,7 @@ def test_crash_after_pointer_no_double_apply(
 ) -> None:
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-idem")
     pub.admit_publish(
         coord,
         object_id="obj-idem",
@@ -232,6 +270,7 @@ def test_cleanup_failure_returns_retry_pointer_stays_attributable(
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     # first publish
+    _seed_v1(qdrant, collection, "obj-clean")
     pub.admit_publish(
         coord,
         object_id="obj-clean",
@@ -270,6 +309,7 @@ def test_concurrent_access_lease_composition(
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-lease")
     pub.admit_publish(
         coord,
         object_id="obj-lease",
@@ -306,6 +346,7 @@ def test_no_future_mutation_orphan_reconciled(
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     pub.stall_after_staging_once()  # owner stages a content point then never returns
+    _seed_v1(qdrant, collection, "obj-orphan")
     pub.admit_publish(
         coord,
         object_id="obj-orphan",
@@ -327,6 +368,7 @@ def test_read_follows_committed_pointer_only(
 ) -> None:
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-read")
     pub.admit_publish(
         coord,
         object_id="obj-read",
@@ -348,28 +390,28 @@ def test_read_follows_committed_pointer_only(
 # --------------------------------------------------------------------------------------------------
 # 9. The anchor's zero vector never ranks in a vector search.
 # --------------------------------------------------------------------------------------------------
-def test_anchor_never_ranks_in_vector_search(
-    qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
-) -> None:
-    pub = _publisher(qdrant, collection)
-    pub.register(coord)
-    pub.admit_publish(
-        coord,
-        object_id="obj-rank",
-        namespace=_NS,
-        content_payload=_content("body"),
-    )
-    coord.reconcile_once()
-    from musubi.store.immutable_vectors import ANCHOR_KIND
-
-    # a vector query must return content points only — anchors are excluded by kind + zero vector
-    d, _ = _embed("body")
-    res = qdrant.query_points(
-        collection_name=collection, query=d, using=DENSE_VECTOR_NAME, limit=10, with_payload=True
-    ).points
-    assert all((p.payload or {}).get("point_kind") != ANCHOR_KIND for p in res), (
-        "anchor must not rank"
-    )
+# `test_anchor_never_ranks_in_vector_search` REMOVED at musubi#732 round 30.
+#
+# It queried Qdrant raw -- no point_kind filter -- and asserted no anchor came back.
+# That holds only for a freshly CREATED anchor, which carried a zero vector. A MIGRATED
+# anchor keeps the legacy row's real vector and ranks; production knows this and excludes
+# anchors by point_kind in the READER, not by the vector. Round 29 removed the only path
+# that produced the created-anchor layout, so the premise became unreachable.
+#
+# COVERAGE TRANSFERRED to tests/retrieve/test_data001_phase2_hybrid.py::
+# test_hybrid_anchor_never_ranks_on_either_leg, which exercises the real point_kind
+# exclusion through the production read path and is green.
+#
+# The transfer is SOUND rather than merely convenient, for a specific reason: the target
+# carries a POSITIVE CONTROL (`assert v2 in by_id` and that its content is the probe,
+# :307-310). "No hit is an anchor" passes trivially on zero hits, so without that control
+# the replacement would have the same vacuous-pass shape as the assertion being deleted
+# from test_delete_removes_migrated_v2_layout in the sibling file. It asserts the
+# contract for BOTH layouts -- created and migrated -- where this test asserted the
+# vector-level mechanism that was only ever true of created ones.
+#
+# The created-anchor zero-vector property is NOT lost, it MOVED: `plane._upsert` still
+# creates anchors, which is the plane-create follow-up (C). Recorded there.
 
 
 # --------------------------------------------------------------------------------------------------
@@ -494,11 +536,11 @@ def _anchor(qdrant: QdrantClient, collection: str, object_id: str) -> Any:
 
 
 def _raw_anchor_payload(qdrant: QdrantClient, collection: str, object_id: str) -> dict[str, Any]:
-    from musubi.store.immutable_vectors import anchor_point_id
-
+    # Resolve the anchor rather than computing its id -- a migrated anchor keeps the
+    # legacy point id, so `anchor_point_id(ns, oid)` names nothing (musubi#732 r30).
     points = qdrant.retrieve(
         collection_name=collection,
-        ids=[anchor_point_id(_NS, object_id)],
+        ids=[_anchor_id(qdrant, collection, object_id)],
         with_payload=True,
     )
     assert len(points) == 1 and points[0].payload is not None
@@ -520,15 +562,26 @@ def _raw_live_content_payload(
 
 
 def _count_content_points(qdrant: QdrantClient, collection: str, object_id: str) -> int:
-    from musubi.store.immutable_vectors import ANCHOR_KIND
+    """Count CONTENT points, positively.
 
+    This previously counted "everything that is not an anchor", which is not the same
+    set: a v1 LEGACY identity row carries no `point_kind` at all, so it was counted as a
+    content point. That was invisible while these fixtures created v2 objects outright —
+    there was no legacy row to miscount. Since round 29 they seed a legacy identity and
+    migrate it, so the negative filter counts the identity alongside the content and an
+    assertion like `<= 1` fails on a correct store (musubi#732 round 30).
+
+    Right check, wrong object: the name said content, the filter said not-anchor.
+    """
     recs, _ = qdrant.scroll(
         collection_name=collection,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))],
-            must_not=[
-                models.FieldCondition(key="point_kind", match=models.MatchValue(value=ANCHOR_KIND))
-            ],
+            must=[
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+                models.FieldCondition(
+                    key="point_kind", match=models.MatchValue(value=CONTENT_KIND)
+                ),
+            ]
         ),
         limit=100,
     )
@@ -575,6 +628,7 @@ def test_publish_synchronous_committed_return_and_pending_raise(
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     # (1) happy path: publish() drives the named intent inline and RETURNS the committed content.
+    _seed_v1(qdrant, collection, "obj-sync")
     committed = pub.publish(
         coord, object_id="obj-sync", namespace=_NS, content_payload=_content("sync")
     )
@@ -598,10 +652,9 @@ def test_reinforce_rebases_on_fresh_unrelated_mutation_survives(
     reinforcement_count increments exactly."""
     import asyncio
 
-    from musubi.store.immutable_vectors import anchor_point_id
-
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-reb")
     pub.publish(
         coord,
         object_id="obj-reb",
@@ -617,7 +670,7 @@ def test_reinforce_rebases_on_fresh_unrelated_mutation_survives(
     qdrant.set_payload(
         collection_name=collection,
         payload={"importance": 9},
-        points=[anchor_point_id(_NS, "obj-reb")],
+        points=[_anchor_id(qdrant, collection, "obj-reb")],
     )
     committed = asyncio.run(
         pub.reinforce_publish(
@@ -709,10 +762,10 @@ def test_v1_bootstrap_in_place_fence_preserves_concurrent_mutation(
 def test_payload_only_confirm_is_attributable_not_version_equality(
     qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
 ) -> None:
-    from musubi.store.immutable_vectors import anchor_point_id
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-attrib")
     pub.publish(
         coord,
         object_id="obj-attrib",
@@ -731,7 +784,7 @@ def test_payload_only_confirm_is_attributable_not_version_equality(
                 "committed_operation_id": "foreign",
                 "importance": 7,
             },
-            points=[anchor_point_id(_NS, "obj-attrib")],
+            points=[_anchor_id(qdrant, collection, "obj-attrib")],
         )
 
     pub.inject_pre_publish_once(_foreign_bump)
@@ -761,6 +814,7 @@ def test_publish_fails_loud_when_another_intent_active(
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-active")
     pub.publish(coord, object_id="obj-active", namespace=_NS, content_payload=_content("v1"))
     # a second intent for the SAME object is admitted (worker-owned) and left ACTIVE (not reconciled).
     assert (
@@ -787,6 +841,7 @@ def test_cleanup_deletes_all_superseded_beyond_256(
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-big")
     pub.publish(coord, object_id="obj-big", namespace=_NS, content_payload=_content("v1-body"))
     # stage 300 stray/superseded content points (a large historical fan-out) directly.
     d, _ = _embed("stray")
@@ -833,6 +888,7 @@ def test_dangling_live_point_fails_closed(
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-dangle")
     pub.publish(coord, object_id="obj-dangle", namespace=_NS, content_payload=_content("body"))
     _dangle_anchor = read_anchor(qdrant, collection, namespace=_NS, object_id="obj-dangle")
     assert _dangle_anchor is not None
@@ -851,11 +907,12 @@ def test_dangling_live_point_fails_closed(
 def test_cross_object_live_point_fails_closed(
     qdrant: QdrantClient, collection: str, coord: LifecycleTransitionCoordinator
 ) -> None:
-    from musubi.store.immutable_vectors import anchor_point_id
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
     # two distinct committed objects, each with its own anchor + content point.
+    _seed_v1(qdrant, collection, "obj-a")
+    _seed_v1(qdrant, collection, "obj-b")
     pub.publish(coord, object_id="obj-a", namespace=_NS, content_payload=_content("a-body"))
     pub.publish(coord, object_id="obj-b", namespace=_NS, content_payload=_content("b-body"))
     from musubi.store.immutable_vectors import read_anchor
@@ -867,7 +924,7 @@ def test_cross_object_live_point_fails_closed(
     qdrant.set_payload(
         collection_name=collection,
         payload={"live_point": b_live},
-        points=[anchor_point_id(_NS, "obj-a")],
+        points=[_anchor_id(qdrant, collection, "obj-a")],
     )
     assert resolve_or_none(qdrant, collection, "obj-a") is None, (
         "a live_point whose content belongs to another object must fail closed, never be served as "
@@ -976,6 +1033,7 @@ def test_curated_projection_decides_vector_change(
     same live_point/pointer_version but the field still commits on the anchor."""
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1_curated(qdrant, collection, "cur-1")
     pub.curated_publish(
         coord,
         object_id="cur-1",
@@ -1049,6 +1107,7 @@ def test_curated_content_change_without_summary_is_vector_change(
 ) -> None:
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1_curated(qdrant, collection, "cur-2")
     pub.curated_publish(
         coord, object_id="cur-2", namespace=_NS, set_fields={"title": "T", "content": "C"}
     )
@@ -1079,6 +1138,7 @@ def test_episodic_reinforce_with_summary_is_projection_based(
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "ep-sum")
     pub.publish(
         coord,
         object_id="ep-sum",
@@ -1145,6 +1205,7 @@ def test_coordinator_read_object_excludes_content_shell(
 
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, "obj-ro")
     pub.publish(coord, object_id="obj-ro", namespace=_NS, content_payload=_content("body"))
     assert _content_point_ids(qdrant, collection, "obj-ro"), "the object has a content point"
     payload, count = coord._read_object(collection, "obj-ro", _NS)
@@ -1201,6 +1262,12 @@ def test_collection_aware_dispatch_routes_both_planes_and_rejects_unknown(
         )
         # ONE dispatcher for the shared kind — NOT two register() calls (which would overwrite).
         register_immutable_vector_dispatch(coord, {ep_coll: ep_pub, cur_coll: cur_pub})
+
+        # Both objects must exist before they can be published to -- the publisher stopped
+        # creating anchors at round 29 (musubi#732). Each seed goes into ITS OWN
+        # collection, and the curated one into its own namespace.
+        _seed_v1(qdrant, ep_coll, "disp-ep")
+        _seed_v1(qdrant, cur_coll, "disp-cur", namespace=cur_ns)
 
         # admit one durable intent to EACH collection (worker-driven, left PENDING).
         assert (
@@ -1310,6 +1377,11 @@ def test_cold_start_positive_registration_before_first_reconcile_commits(
     try:
         db = tmp_path / "coldstart-pos.db"
         # a prior process left BOTH an episodic and a curated durable intent pending (crash).
+        # Both objects must EXIST for those intents to apply to -- the publisher stopped
+        # creating anchors at round 29 (musubi#732). Each into its own collection, and the
+        # curated one into its own namespace.
+        _seed_v1(qdrant, collection, "cold-pos")
+        _seed_v1(qdrant, cur_coll, "cold-pos-cur", namespace=cur_ns)
         _seed_pending_episodic_intent(qdrant, collection, db, "cold-pos")
         crashed = LifecycleTransitionCoordinator(client=qdrant, db_path=db)
         crashed.enqueue_custom_intent(
@@ -1416,12 +1488,78 @@ def _seed_duplicate_legacy_rows(
     return payload
 
 
-def _duplicate_anchor(qdrant: QdrantClient, collection: str, object_id: str) -> None:
-    from musubi.store.immutable_vectors import anchor_point_id
+def _anchor_id(qdrant: QdrantClient, collection: str, object_id: str) -> Any:
+    """The anchor's ACTUAL physical id, resolved rather than computed.
 
-    rows = qdrant.retrieve(
+    `anchor_point_id(ns, oid)` names the anchor only when it was CREATED there. One
+    converted in place by the migration path keeps its original legacy id, so a
+    `set_payload(points=[anchor_point_id(...)])` meant to simulate a concurrent anchor
+    mutation targets a point that does not exist -- it matches zero, lands nothing, and
+    the test proceeds believing it mutated the anchor (musubi#732 round 30).
+    """
+    rows, _ = qdrant.scroll(
         collection_name=collection,
-        ids=[anchor_point_id(_NS, object_id)],
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value="anchor")),
+            ]
+        ),
+        limit=2,
+    )
+    assert len(rows) == 1, f"expected exactly one anchor for {object_id!r}, found {len(rows)}"
+    return rows[0].id
+
+
+def _seed_v1_curated(qdrant: QdrantClient, collection: str, oid: str) -> None:
+    """A v1 legacy CURATED identity, for the curated-projection cells.
+
+    The episodic `_seed_v1` writes an episodic-shaped row; a curated object is a
+    different thing with a different projection (`title + summary-or-content`), so it
+    gets its own seeder rather than a flag. Seeded title and content both differ from
+    what the tests publish, so the first curated publish actually moves the projection
+    and converts, instead of taking the payload-only branch (musubi#732 round 30).
+    """
+    from musubi.planes.episodic.plane import episodic_point_id
+
+    qdrant.upsert(
+        collection_name=collection,
+        points=[
+            models.PointStruct(
+                id=episodic_point_id(oid),
+                payload={
+                    "object_id": oid,
+                    "namespace": _NS,
+                    "title": f"{oid}-pre-title",
+                    "content": f"{oid}-pre-migration",
+                    "state": "matured",
+                },
+                vector={
+                    DENSE_VECTOR_NAME: _embed(f"{oid}-pre-migration")[0],
+                    SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
+                },
+            )
+        ],
+        wait=True,
+    )
+
+
+def _duplicate_anchor(qdrant: QdrantClient, collection: str, object_id: str) -> None:
+    # RESOLVE the anchor by filter instead of computing `anchor_point_id(ns, oid)`.
+    # An anchor sits at that id only when it was CREATED there; one converted in place by
+    # the migration path keeps its original legacy id. Since round 29 removed the create
+    # path these fixtures migrate, so the computed id names nothing and the retrieve comes
+    # back empty. Production never looks anchors up that way either -- `read_anchor` uses
+    # a filter and `immutable_vectors.py:772` retrieves BOTH id spaces (musubi#732 r30).
+    rows, _ = qdrant.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value="anchor")),
+            ]
+        ),
+        limit=2,
         with_payload=True,
         with_vectors=True,
     )
@@ -1496,6 +1634,7 @@ def test_pointer_publication_refuses_duplicate_v2_anchors_without_mutation(
     object_id = "obj-duplicate-pointer"
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, object_id)
     pub.publish(coord, object_id=object_id, namespace=_NS, content_payload=_content("old"))
     _duplicate_anchor(qdrant, collection, object_id)
     before = _authoritative_identity_rows(qdrant, collection, object_id)
@@ -1516,6 +1655,7 @@ def test_payload_only_publication_refuses_duplicate_v2_anchors_without_mutation(
     object_id = "obj-duplicate-payload-only"
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, object_id)
     pub.publish(
         coord,
         object_id=object_id,
@@ -1542,15 +1682,17 @@ def test_sync_publish_returns_exact_commit_when_duplicate_arrives_after_finaliza
     coord: LifecycleTransitionCoordinator,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from musubi.store.immutable_vectors import anchor_point_id
 
     object_id = "obj-post-final-duplicate"
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, object_id)
     pub.publish(coord, object_id=object_id, namespace=_NS, content_payload=_content("old"))
+    # Resolve the anchor rather than computing its id: a migrated anchor keeps the legacy
+    # point id (musubi#732 round 30). Sixth site in this suite with that assumption.
     anchor_rows = qdrant.retrieve(
         collection_name=collection,
-        ids=[anchor_point_id(_NS, object_id)],
+        ids=[_anchor_id(qdrant, collection, object_id)],
         with_payload=True,
         with_vectors=True,
     )
