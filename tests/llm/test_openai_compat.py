@@ -40,14 +40,18 @@ def _completion_body(payload: dict[str, object]) -> dict[str, object]:
 
 
 def _importance_items(n: int) -> list[OllamaImportance]:
-    return [
-        OllamaImportance(
-            object_id=generate_ksuid(),
-            content=f"item {i} content",
-            captured_importance=5,
+    items: list[OllamaImportance] = []
+    for i in range(n):
+        object_id = generate_ksuid()
+        items.append(
+            OllamaImportance(
+                object_id=object_id,
+                content=f"item {i} content",
+                captured_importance=5,
+                correlation_id=f"importance:{i}",
+            )
         )
-        for i in range(n)
-    ]
+    return items
 
 
 def _client(base: str = _BASE, key: str | None = _KEY) -> HttpxOllamaClient:
@@ -62,14 +66,14 @@ async def test_score_importance_happy_path_openai(httpx_mock: HTTPXMock) -> None
         json=_completion_body(
             {
                 "items": [
-                    {"id": items[0].object_id, "importance": 7},
-                    {"id": items[1].object_id, "importance": 3},
+                    {"id": items[0].correlation_id, "importance": 7},
+                    {"id": items[1].correlation_id, "importance": 3},
                 ]
             }
         ),
     )
     result = await _client().score_importance(items)
-    assert result == {items[0].object_id: 7, items[1].object_id: 3}
+    assert result == {items[0].correlation_id: 7, items[1].correlation_id: 3}
 
 
 async def test_request_shape_bearer_and_strict_json_schema(httpx_mock: HTTPXMock) -> None:

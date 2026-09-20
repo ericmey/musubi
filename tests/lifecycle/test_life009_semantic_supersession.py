@@ -144,10 +144,10 @@ class _FakeOllama:
         self._topic_map: dict[str, list[str]] = dict(topic_map or {})
 
     async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
-        return {item.object_id: 8 for item in items}
+        return {item.correlation_id: 8 for item in items}
 
     async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
-        return {item.object_id: self._topic_map.get(item.content, []) for item in items}
+        return {item.correlation_id: self._topic_map.get(item.content, []) for item in items}
 
 
 # --------------------------------------------------------------------------- #

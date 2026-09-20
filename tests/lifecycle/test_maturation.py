@@ -66,7 +66,7 @@ from musubi.planes.episodic import EpisodicPlane
 from musubi.planes.episodic.plane import episodic_point_id
 from musubi.store import bootstrap
 from musubi.store.specs import DENSE_SIZE
-from musubi.types.common import KSUID, Err, Ok, epoch_of, utc_now
+from musubi.types.common import Err, Ok, epoch_of, utc_now
 from musubi.types.episodic import EpisodicMemory
 
 # ---------------------------------------------------------------------------
@@ -146,13 +146,13 @@ class FakeOllama:
         self.score_calls.append(list(items))
         if not self.available:
             return None
-        return {item.object_id: self.importance for item in items}
+        return {item.correlation_id: self.importance for item in items}
 
     async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
         self.topic_calls.append(list(items))
         if not self.available:
             return None
-        return {item.object_id: self.topic_map.get(item.content, []) for item in items}
+        return {item.correlation_id: self.topic_map.get(item.content, []) for item in items}
 
 
 # Sanity: FakeOllama satisfies the OllamaClient Protocol.
@@ -380,6 +380,92 @@ async def test_importance_rescored_via_llm(
     # `importance_last_scored_epoch` float index is queryable.
     assert refreshed.importance_last_scored_at is not None
     assert refreshed.importance_last_scored_epoch is not None
+
+
+async def test_llm_results_remain_bound_to_same_id_rows_across_namespaces(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: MaturationCursor,
+) -> None:
+    """Opaque correlation IDs keep content-derived results on their input row.
+
+    ``object_id`` is namespace-scoped, not globally unique. Keying either LLM
+    response map by object ID silently collapsed these two inputs: both
+    transitions and both enrichment writes succeeded, but one namespace got
+    topics and importance inferred from the other namespace's content
+    (Copilot, musubi#771 round 19).
+    """
+    from qdrant_client import models as qmodels
+
+    mine = await _seed_provisional(plane, ns, content="mine-content")
+    records, _ = qdrant.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(mine.object_id))
+                ),
+            ]
+        ),
+        limit=2,
+        with_payload=True,
+        with_vectors=True,
+    )
+    assert len(records) == 1
+    original = records[0]
+    stranger_ns = "someone/else/episodic"
+    stranger_payload = dict(original.payload or {})
+    stranger_payload.update(
+        namespace=stranger_ns,
+        content="stranger-content",
+        importance=1,
+        linked_to_topics=[],
+    )
+    qdrant.upsert(
+        collection_name="musubi_episodic",
+        points=[
+            qmodels.PointStruct(
+                id="00000000-0000-4000-8000-00000019ba7c",
+                vector=original.vector,  # type: ignore[arg-type]
+                payload=stranger_payload,
+            )
+        ],
+        wait=True,
+    )
+
+    class DistinctOllama:
+        async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
+            return {
+                item.correlation_id: 3 if item.content == "mine-content" else 9 for item in items
+            }
+
+        async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
+            return {
+                item.correlation_id: [f"topic/{item.content.removesuffix('-content')}"]
+                for item in items
+            }
+
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=DistinctOllama(),
+        cursor=cursor,
+        config=_config(),
+    )
+
+    mine_after = await plane.get(namespace=ns, object_id=mine.object_id)
+    stranger_after = await plane.get(namespace=stranger_ns, object_id=mine.object_id)
+    assert report.transitioned == 2
+    assert mine_after is not None and stranger_after is not None
+    assert (mine_after.importance, mine_after.linked_to_topics) == (3, ["topic/mine"])
+    assert (stranger_after.importance, stranger_after.linked_to_topics) == (
+        9,
+        ["topic/stranger"],
+    )
 
 
 async def test_importance_fallback_on_ollama_unavailable(
@@ -1367,17 +1453,17 @@ async def test_batched_call_isolates_failed_batches() -> None:
         # Fail exactly the middle batch.
         if items[2].object_id in {i.object_id for i in batch}:
             return None
-        return {i.object_id: 9 for i in batch}
+        return {i.correlation_id: 9 for i in batch}
 
     before = _metric_value("importance")
-    merged: dict[KSUID, int] = await _batched_call(items, flaky, kind="importance", batch_size=2)
+    merged: dict[str, int] = await _batched_call(items, flaky, kind="importance", batch_size=2)
 
     assert len(calls) == 3  # all three batches attempted — no early return
     assert set(merged) == {
-        items[0].object_id,
-        items[1].object_id,
-        items[4].object_id,
-        items[5].object_id,
+        items[0].correlation_id,
+        items[1].correlation_id,
+        items[4].correlation_id,
+        items[5].correlation_id,
     }
     assert _metric_value("importance") == before + 1
 
@@ -1389,7 +1475,7 @@ async def test_batched_call_all_batches_failing_returns_empty_not_none() -> None
     async def down(_batch: list[OllamaImportance]) -> dict[str, int] | None:
         return None
 
-    merged: dict[KSUID, int] = await _batched_call(
+    merged: dict[str, int] = await _batched_call(
         _importance_items_for_batch_test(4), down, kind="importance", batch_size=2
     )
     assert merged == {}
@@ -1399,7 +1485,12 @@ def _importance_items_for_batch_test(n: int) -> list[OllamaImportance]:
     from musubi.types.common import generate_ksuid
 
     return [
-        OllamaImportance(object_id=generate_ksuid(), content=f"row {i}", captured_importance=5)
+        OllamaImportance(
+            object_id=generate_ksuid(),
+            content=f"row {i}",
+            captured_importance=5,
+            correlation_id=f"row:{i}",
+        )
         for i in range(n)
     ]
 

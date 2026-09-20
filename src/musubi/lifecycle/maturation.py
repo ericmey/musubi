@@ -138,6 +138,7 @@ class OllamaImportance:
     object_id: KSUID
     content: str
     captured_importance: int
+    correlation_id: str
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,7 @@ class OllamaTopic:
 
     object_id: KSUID
     content: str
+    correlation_id: str
     existing_tags: list[str] = field(default_factory=list)
 
 
@@ -154,12 +156,14 @@ class OllamaClient(Protocol):
 
     Both methods return ``None`` to signal "Ollama is unavailable" — the
     spec's failure-mode contract. A successful call returns a mapping of
-    ``object_id`` to enrichment value (importance int, or topics list).
+    each input's opaque ``correlation_id`` to its enrichment value (importance
+    int, or topics list). The sweep supplies a per-row key because object IDs
+    are not globally unique across namespaces.
     """
 
-    async def score_importance(self, items: list[OllamaImportance]) -> dict[KSUID, int] | None: ...
+    async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None: ...
 
-    async def infer_topics(self, items: list[OllamaTopic]) -> dict[KSUID, list[str]] | None: ...
+    async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None: ...
 
 
 class _NotConfiguredOllama:
@@ -173,7 +177,7 @@ class _NotConfiguredOllama:
     that reads ``Settings.ollama_url``.
     """
 
-    async def score_importance(self, items: list[OllamaImportance]) -> dict[KSUID, int] | None:
+    async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
         raise NotImplementedError(
             "OllamaClient is not configured. The maturation sweep cannot run "
             "in production without a real OllamaClient wired in (see the "
@@ -181,7 +185,7 @@ class _NotConfiguredOllama:
             "instantiate a real client."
         )
 
-    async def infer_topics(self, items: list[OllamaTopic]) -> dict[KSUID, list[str]] | None:
+    async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
         raise NotImplementedError(
             "OllamaClient is not configured. The maturation sweep cannot run "
             "in production without a real OllamaClient wired in (see the "
@@ -422,8 +426,9 @@ async def episodic_maturation_sweep(
             object_id=row["object_id"],
             content=row.get("content", ""),
             captured_importance=int(row.get("importance", 5)),
+            correlation_id=f"row:{index}",
         )
-        for row in candidates
+        for index, row in enumerate(candidates)
     ]
     importance_by_id = await _ollama_score_in_batches(ollama, importance_inputs)
 
@@ -432,8 +437,9 @@ async def episodic_maturation_sweep(
             object_id=row["object_id"],
             content=row.get("content", ""),
             existing_tags=list(row.get("tags", [])),
+            correlation_id=f"row:{index}",
         )
-        for row in candidates
+        for index, row in enumerate(candidates)
     ]
     topics_by_id = await _ollama_topics_in_batches(ollama, topic_inputs)
 
@@ -443,17 +449,18 @@ async def episodic_maturation_sweep(
     deferred: list[TransitionPending] = []
     max_epoch = cursor_value
 
-    for row in candidates:
+    for row_index, row in enumerate(candidates):
         object_id: KSUID = row["object_id"]
+        correlation_id = f"row:{row_index}"
         normalized = normalize_tags(row.get("tags", []), aliases=cfg.tag_aliases)
         new_importance = (
-            importance_by_id[object_id]
-            if importance_by_id is not None and object_id in importance_by_id
+            importance_by_id[correlation_id]
+            if importance_by_id is not None and correlation_id in importance_by_id
             else int(row.get("importance", 5))
         )
         new_topics = (
-            topics_by_id[object_id]
-            if topics_by_id is not None and object_id in topics_by_id
+            topics_by_id[correlation_id]
+            if topics_by_id is not None and correlation_id in topics_by_id
             else list(row.get("linked_to_topics", []))
         )
 
@@ -562,7 +569,7 @@ async def episodic_maturation_sweep(
         # Enrichment write — non-state fields, applied via set_payload on
         # the same point id. Not a state change → no separate ledger entry.
         # ------------------------------------------------------------------
-        importance_scored = importance_by_id is not None and object_id in importance_by_id
+        importance_scored = importance_by_id is not None and correlation_id in importance_by_id
         if _enrichment_changed(
             row, normalized, new_importance, new_topics, importance_scored=importance_scored
         ):
@@ -1318,7 +1325,7 @@ def _apply_enrichment(
 async def _ollama_score_in_batches(
     ollama: OllamaClient,
     items: list[OllamaImportance],
-) -> dict[KSUID, int]:
+) -> dict[str, int]:
     """Call ``score_importance`` in batches; failed batches are isolated."""
     return await _batched_call(items, ollama.score_importance, kind="importance")
 
@@ -1326,7 +1333,7 @@ async def _ollama_score_in_batches(
 async def _ollama_topics_in_batches(
     ollama: OllamaClient,
     items: list[OllamaTopic],
-) -> dict[KSUID, list[str]]:
+) -> dict[str, list[str]]:
     """Call ``infer_topics`` in batches; failed batches are isolated."""
     return await _batched_call(items, ollama.infer_topics, kind="topics")
 
@@ -1337,7 +1344,7 @@ async def _batched_call[T, R](
     *,
     kind: str,
     batch_size: int = _DEFAULT_LLM_BATCH,
-) -> dict[KSUID, R]:
+) -> dict[str, R]:
     """Drive ``call`` in batches and merge results, isolating failures
     PER BATCH.
 
@@ -1356,7 +1363,7 @@ async def _batched_call[T, R](
     """
     if not items:
         return {}
-    merged: dict[KSUID, R] = {}
+    merged: dict[str, R] = {}
     failed = 0
     for start in range(0, len(items), batch_size):
         batch = items[start : start + batch_size]

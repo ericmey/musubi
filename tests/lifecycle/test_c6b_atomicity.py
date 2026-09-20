@@ -8237,10 +8237,10 @@ class _FakeOllama:
     """Deterministic in-process OllamaClient — no network. Constant importance, empty topics."""
 
     async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
-        return {item.object_id: 8 for item in items}
+        return {item.correlation_id: 8 for item in items}
 
     async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
-        return {item.object_id: [] for item in items}
+        return {item.correlation_id: [] for item in items}
 
 
 _: OllamaClient = _FakeOllama()  # sanity: the fake satisfies the Protocol
