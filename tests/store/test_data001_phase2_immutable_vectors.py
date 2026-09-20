@@ -28,6 +28,7 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding import FakeEmbedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.store import bootstrap
+from musubi.store.immutable_vectors import CONTENT_KIND
 from musubi.store.names import collection_for_plane
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 
@@ -89,7 +90,7 @@ def _content(text: str) -> dict[str, Any]:
     return {"content": text, "tags": ["p2"]}
 
 
-def _seed_v1(qdrant: QdrantClient, collection: str, oid: str) -> None:
+def _seed_v1(qdrant: QdrantClient, collection: str, oid: str, namespace: str | None = None) -> None:
     """A v1 legacy identity for an object this file is about to publish to.
 
     This file was written when `publish()` on an ABSENT object created the anchor. That
@@ -109,7 +110,7 @@ def _seed_v1(qdrant: QdrantClient, collection: str, oid: str) -> None:
                 id=episodic_point_id(oid),
                 payload={
                     "object_id": oid,
-                    "namespace": _NS,
+                    "namespace": namespace or _NS,
                     "content": f"{oid}-pre-migration",
                     "state": "matured",
                 },
@@ -561,15 +562,26 @@ def _raw_live_content_payload(
 
 
 def _count_content_points(qdrant: QdrantClient, collection: str, object_id: str) -> int:
-    from musubi.store.immutable_vectors import ANCHOR_KIND
+    """Count CONTENT points, positively.
 
+    This previously counted "everything that is not an anchor", which is not the same
+    set: a v1 LEGACY identity row carries no `point_kind` at all, so it was counted as a
+    content point. That was invisible while these fixtures created v2 objects outright —
+    there was no legacy row to miscount. Since round 29 they seed a legacy identity and
+    migrate it, so the negative filter counts the identity alongside the content and an
+    assertion like `<= 1` fails on a correct store (musubi#732 round 30).
+
+    Right check, wrong object: the name said content, the filter said not-anchor.
+    """
     recs, _ = qdrant.scroll(
         collection_name=collection,
         scroll_filter=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))],
-            must_not=[
-                models.FieldCondition(key="point_kind", match=models.MatchValue(value=ANCHOR_KIND))
-            ],
+            must=[
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+                models.FieldCondition(
+                    key="point_kind", match=models.MatchValue(value=CONTENT_KIND)
+                ),
+            ]
         ),
         limit=100,
     )
@@ -1251,6 +1263,12 @@ def test_collection_aware_dispatch_routes_both_planes_and_rejects_unknown(
         # ONE dispatcher for the shared kind — NOT two register() calls (which would overwrite).
         register_immutable_vector_dispatch(coord, {ep_coll: ep_pub, cur_coll: cur_pub})
 
+        # Both objects must exist before they can be published to -- the publisher stopped
+        # creating anchors at round 29 (musubi#732). Each seed goes into ITS OWN
+        # collection, and the curated one into its own namespace.
+        _seed_v1(qdrant, ep_coll, "disp-ep")
+        _seed_v1(qdrant, cur_coll, "disp-cur", namespace=cur_ns)
+
         # admit one durable intent to EACH collection (worker-driven, left PENDING).
         assert (
             ep_pub.admit_publish(
@@ -1359,6 +1377,11 @@ def test_cold_start_positive_registration_before_first_reconcile_commits(
     try:
         db = tmp_path / "coldstart-pos.db"
         # a prior process left BOTH an episodic and a curated durable intent pending (crash).
+        # Both objects must EXIST for those intents to apply to -- the publisher stopped
+        # creating anchors at round 29 (musubi#732). Each into its own collection, and the
+        # curated one into its own namespace.
+        _seed_v1(qdrant, collection, "cold-pos")
+        _seed_v1(qdrant, cur_coll, "cold-pos-cur", namespace=cur_ns)
         _seed_pending_episodic_intent(qdrant, collection, db, "cold-pos")
         crashed = LifecycleTransitionCoordinator(client=qdrant, db_path=db)
         crashed.enqueue_custom_intent(
@@ -1659,15 +1682,17 @@ def test_sync_publish_returns_exact_commit_when_duplicate_arrives_after_finaliza
     coord: LifecycleTransitionCoordinator,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from musubi.store.immutable_vectors import anchor_point_id
 
     object_id = "obj-post-final-duplicate"
     pub = _publisher(qdrant, collection)
     pub.register(coord)
+    _seed_v1(qdrant, collection, object_id)
     pub.publish(coord, object_id=object_id, namespace=_NS, content_payload=_content("old"))
+    # Resolve the anchor rather than computing its id: a migrated anchor keeps the legacy
+    # point id (musubi#732 round 30). Sixth site in this suite with that assumption.
     anchor_rows = qdrant.retrieve(
         collection_name=collection,
-        ids=[anchor_point_id(_NS, object_id)],
+        ids=[_anchor_id(qdrant, collection, object_id)],
         with_payload=True,
         with_vectors=True,
     )
