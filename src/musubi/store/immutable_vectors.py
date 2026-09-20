@@ -1293,6 +1293,32 @@ class ImmutableVectorPublisher:
                 # parameter, no server version, and no vendor behaviour to re-verify on
                 # upgrade (ruling: Yua, 2026-09-20).
                 #
+                # CLEANUP FIRST, THEN ROUTE. Neither exit from here commits this
+                # generation, so the staged content is dead either way and nothing below
+                # needs it. Doing it in this order is what makes "no orphan" hold on
+                # EVERY post-staging exit rather than on the two we thought about: the
+                # re-read can itself raise -- two rows appearing concurrently gives
+                # `ImmutableVectorIdentityAmbiguous`, and a backend failure gives an
+                # OSError -- and with the delete after it, that snapshot was orphaned
+                # while the intent abandoned. Invisible to every anchor-aware read, and
+                # nothing ever collects it (Copilot round 32 on musubi#732).
+                #
+                # NOT a `try/finally` around the read, which was the obvious shape and is
+                # worse: a raise from the cleanup inside `finally` REPLACES the in-flight
+                # exception, so an `ImmutableVectorIdentityAmbiguous` (terminal, abandons)
+                # would surface as a bare backend error (`unknown`, reschedules forever).
+                # Ordering cannot mask a classification; a finally can.
+                #
+                # WHY ONLY THIS EXIT, having enumerated the others rather than assumed.
+                # Every other post-staging exit either cleans up immediately before it, or
+                # retries -- and a retry's orphan is collected, because the next successful
+                # publish runs `_cleanup_and_confirm(keep=live_point)`, which sweeps every
+                # content generation for the object but the live one. THIS branch is the
+                # only one that is TERMINAL for an object that has no identity, so no later
+                # publish ever runs for it and nothing ever comes back. Transient orphan
+                # everywhere else; permanent orphan here. That asymmetry is the whole
+                # reason the ordering matters at this site and not at the others.
+                self._delete_content_generation(ctx.object_id, ctx.namespace, generation)
                 # Re-read to tell the two cases apart. The read is NOT a fence -- it only
                 # routes; neither branch writes to the identity.
                 appeared = _read_unique_identity_record(
@@ -1301,15 +1327,14 @@ class ImmutableVectorPublisher:
                     namespace=ctx.namespace,
                     object_id=ctx.object_id,
                 )
-                self._delete_content_generation(ctx.object_id, ctx.namespace, generation)
                 if appeared is not None:
                     # An identity exists now that did not when this intent read fresh.
                     # Retry drives it back through the FILTERABLE conversion path above,
                     # where the evidence predicate applies.
                     return "retry"
                 # Genuine absence: there is nothing to update and this path must not
-                # create. Staged content for this operation is already removed above, so
-                # the failure leaves nothing behind.
+                # create. Staged content for this operation was removed before the route,
+                # so the failure leaves nothing behind.
                 raise ImmutableVectorIdentityAbsent(
                     f"publish for ({ctx.namespace!r}, {ctx.object_id!r}) found no identity to "
                     "update; this path does not create anchors"

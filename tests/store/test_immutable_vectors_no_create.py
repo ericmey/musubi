@@ -214,6 +214,77 @@ def test_ambiguous_exception_is_marked_terminal_for_the_classifier(wired: Any) -
     assert coordinator._classify(ImmutableVectorIdentityAmbiguous("two rows")) == "terminal"
 
 
+# -- 3. the exit this file CLAIMED to cover and did not ---------------------------------------- #
+
+
+def test_staged_content_is_removed_when_the_routing_reread_itself_raises(
+    wired: Any, tmp_path: Path
+) -> None:
+    """The object is absent at the fresh read, then TWO identities appear before the route.
+
+    This is the case the first cell's "nothing orphaned" claim did not reach. That cell
+    exercises the path where the re-read SUCCEEDS and returns ``None``; here the re-read
+    raises `ImmutableVectorIdentityAmbiguous`, which with cleanup ordered after the route
+    orphans the staged snapshot -- invisible to every anchor-aware read, collected by
+    nothing (Copilot round 32 on musubi#732, "previously missed": the code had not changed).
+
+    The window is real, not contrived: the branch exists precisely BECAUSE another writer
+    can create the identity between this intent's fresh read and its publish. Two writers
+    doing that is the same race, once more.
+    """
+    client, coordinator, publisher = wired
+    oid = "3JbNOCREATEREREADRAISES001"
+    assert _rows(client, oid) == [], "precondition: absent at the fresh read"
+
+    real_upsert = client.upsert
+    planted = {"done": False}
+
+    def upsert_then_plant_two_identities(**kwargs: Any) -> Any:
+        """Plant the ambiguity AFTER this operation's content point is staged.
+
+        Hooking the upsert is what puts the plant inside the window. Seeding beforehand
+        would fail the precondition and take the publisher down a different branch
+        entirely -- it would never stage content, so there would be nothing to orphan and
+        the cell would pass while measuring nothing.
+        """
+        result = real_upsert(**kwargs)
+        points = kwargs.get("points") or []
+        staged_content = any(
+            (getattr(p, "payload", None) or {}).get(POINT_KIND_FIELD) == CONTENT_KIND
+            and (getattr(p, "payload", None) or {}).get("object_id") == oid
+            for p in points
+        )
+        if staged_content and not planted["done"]:
+            planted["done"] = True
+            _seed_two_identity_rows(client, oid)
+        return result
+
+    client.upsert = upsert_then_plant_two_identities
+    try:
+        with pytest.raises(ImmutableVectorPublishPending):
+            publisher.publish(
+                coordinator,
+                object_id=oid,
+                namespace=_NS,
+                content_payload={"content": "staged, then stranded", "state": "matured"},
+            )
+    finally:
+        client.upsert = real_upsert
+
+    assert planted["done"], (
+        "the plant never fired, so this cell did not reach the window it exists for -- "
+        "it would have passed without ever staging content"
+    )
+    kinds = _kinds(client, oid)
+    assert CONTENT_KIND not in kinds, (
+        f"staged content was orphaned when the routing re-read raised: {kinds}. Cleanup "
+        "must happen BEFORE the route, so no post-staging exit can skip it."
+    )
+    assert kinds == ["<legacy>", "<legacy>"], (
+        f"expected only the two planted identity rows to remain, got {kinds}"
+    )
+
+
 def _seed_two_identity_rows(client: QdrantClient, object_id: str) -> dict[Any, dict[str, Any]]:
     """Plant exactly two authoritative-looking rows for one (namespace, object_id)."""
     info = client.get_collection(collection_name=_COLL)
