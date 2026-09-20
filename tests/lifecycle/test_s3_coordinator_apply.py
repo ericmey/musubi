@@ -537,3 +537,34 @@ def test_conflicting_key_full_cap_toctou_returns_conflict(
     assert loser.error.code == "operation_key_conflict"
     assert _counts(db) == (1, 1)
     assert _qdrant_state(client, seed) == (seed.version + 1, "matured")
+
+
+def test_a_leased_row_fences_server_side(env: tuple[QdrantClient, _Seed, Path]) -> None:
+    # A row carrying `update_lease_token` belongs to another writer mid-saga. The retraction
+    # adoption path fences its repair CAS on that token; without the matching condition HERE
+    # the lifecycle writer ignores it, matures the row, and the version-fenced repair then
+    # loses -- leaving a retracted row active with evidence already written (musubi#732/#771).
+    #
+    # This drives the REAL coordinator path, not a raw set_payload. An earlier version of this
+    # proof bumped the version with `client.set_payload` directly, which never traverses
+    # `_apply_conditional` and therefore could not go green for the right reason (Tama caught
+    # it before it was added).
+    client, seed, db = env
+    client.set_payload(
+        collection_name=seed.collection,
+        payload={"update_lease_token": f"done:{int(__import__('time').time() * 1_000_000)}:live"},
+        points=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=seed.object_id)
+                )
+            ]
+        ),
+        wait=True,
+    )
+    before = _qdrant_state(client, seed)
+
+    leased = _coord(client, db).transition(_intent(seed, "matured", opk="leased"))
+
+    assert isinstance(leased, Err), f"a leased row was mutated: {leased}"
+    assert _qdrant_state(client, seed) == before  # the fence must not mutate

@@ -51,6 +51,7 @@ from qdrant_client import models
 
 from musubi.lifecycle import store
 from musubi.observability.registry import Counter, Gauge, default_registry
+from musubi.store.mutation_lease import is_expired_done_token
 from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
@@ -999,6 +1000,54 @@ class LifecycleTransitionCoordinator:
         namespace = self._namespace_for(opk)
         expected_version = int(str(patch["version"])) - 1
         client = self._require_client()
+
+        # LEASE HANDLING. A row under a live mutation lease belongs to another writer:
+        # without this, the lease the retraction saga fences its CAS with is honoured by
+        # the retraction path and ignored here, so a lifecycle transition could mature a
+        # row mid-retraction and the version-fenced repair would lose (found by Aoi).
+        #
+        # The server-side `IsEmpty` condition below is what actually closes the race. A
+        # python-only pre-check would be TOCTOU: a writer could acquire a token between
+        # the read and the write, and the lifecycle write would land through a live
+        # lease (Tama).
+        #
+        # But `IsEmpty` alone is too strict, because `update_lease_token` is the GENERIC
+        # lease every `owned_update` takes -- not a retraction-specific one. A crashed
+        # ORDINARY patch leaves a `done:*` token with no saga coming to clear it, and a
+        # bare IsEmpty would block lifecycle writes on that row permanently. Aoi raised
+        # exactly that; I argued it away with a premise that was checkable and false.
+        #
+        # So: clear an EXPIRED ORDINARY token first, behind its own exact fence, and
+        # then let IsEmpty do the real gating. A writer that acquires in between makes
+        # IsEmpty fail, so the cleanup cannot open a window.
+        held, _ = self._read_object(collection, object_id, namespace)
+        token = held.get("update_lease_token")
+        if token is not None:
+            if held.get("retraction_evidence") is not None:
+                # A retraction owns this row's recovery, whatever the token's age.
+                return "fence"
+            if not is_expired_done_token(token):
+                return "fence"  # live or malformed: belongs to someone
+            client.delete_payload(
+                collection_name=collection,
+                keys=["update_lease_token"],
+                points=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=object_id)
+                        ),
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=namespace)
+                        ),
+                        models.FieldCondition(
+                            key="version", match=models.MatchValue(value=expected_version)
+                        ),
+                        models.FieldCondition(
+                            key="update_lease_token", match=models.MatchValue(value=token)
+                        ),
+                    ]
+                ),
+            )
         client.set_payload(
             collection_name=collection,
             payload=dict(patch),
@@ -1013,34 +1062,6 @@ class LifecycleTransitionCoordinator:
                     models.FieldCondition(
                         key="version", match=models.MatchValue(value=expected_version)
                     ),
-                    # A row under an active mutation lease belongs to another writer.
-                    # Without this, the lease that the retraction saga fences its CAS
-                    # with is honoured by the retraction path and IGNORED here: a
-                    # lifecycle transition could mature a row mid-retraction, the
-                    # version-fenced repair would then lose, and the retracted row
-                    # would stay active (Copilot via Aoi, musubi#732/#771).
-                    #
-                    # Fail-closed by design. A stale `done:*` token blocks lifecycle
-                    # writes until the saga's recovery path clears it, which is what
-                    # that recovery path exists for: a row carrying a crashed
-                    # retraction's token is retracted-but-unquarantined, and it SHOULD
-                    # be unmaturable until the saga finishes it.
-                    #
-                    # Deliberately NOT expiry-aware. `mutation_lease.is_expired_done_token`
-                    # exists and treats expired `done` tokens as takeover-eligible; using
-                    # it here would let a lifecycle writer mature exactly the row a
-                    # crashed retraction left behind, which is the case this condition is
-                    # for.
-                    #
-                    # KNOWN CONSEQUENCE, recorded so the next reader finds a decision
-                    # rather than a surprise: nothing sweeps orphaned tokens. Nothing in
-                    # `src/musubi/` schedules `is_expired_done_token`; the only clear is
-                    # the saga's own fenced release. So a row whose retraction crashed and
-                    # which no later retraction revisits stays unmaturable indefinitely.
-                    # That is the safe direction -- it withholds lifecycle progress rather
-                    # than losing a retraction -- but if orphan volume ever matters, the
-                    # fix is a reaper that clears EXPIRED tokens, not loosening this
-                    # condition. (Raised by Aoi, musubi#771.)
                     models.IsEmptyCondition(is_empty=models.PayloadField(key="update_lease_token")),
                 ]
             ),

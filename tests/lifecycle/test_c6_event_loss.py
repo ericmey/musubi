@@ -550,6 +550,7 @@ def test_transition_ignores_retired_legacy_sink_boundary(tmp_path: Path) -> None
             client=client, db_path=tmp_path / "lifecycle.db"
         ),
         object_id=object_id,
+        namespace="test/presence/episodic",
         target_state="matured",
         actor="test",
         reason="test lifecycle event refusal",

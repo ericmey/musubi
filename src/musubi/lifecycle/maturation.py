@@ -518,6 +518,11 @@ async def episodic_maturation_sweep(
                 client,
                 coordinator=coordinator,
                 object_id=superseded_target_id,
+                # The predecessor is, by construction, in the same namespace:
+                # `_find_supersession_candidate` returns "the unique matured row in the
+                # SAME namespace". This back-link was one of four identical unqualified
+                # sites, one per plane (Aoi's enumeration, musubi#771).
+                namespace=row["namespace"],
                 target_state="superseded",
                 actor=_LIFECYCLE_ACTOR,
                 reason="maturation-sweep-supersession",
@@ -639,6 +644,7 @@ async def provisional_ttl_sweep(
             client,
             coordinator=coordinator,
             object_id=object_id,
+            namespace=row["namespace"],
             target_state="archived",
             actor=_LIFECYCLE_ACTOR,
             reason="provisional-ttl",
@@ -711,6 +717,7 @@ async def episodic_demotion_sweep(
             client,
             coordinator=coordinator,
             object_id=row["object_id"],
+            namespace=row["namespace"],
             target_state="demoted",
             actor=_LIFECYCLE_ACTOR,
             reason="maturation-demotion",
@@ -784,6 +791,7 @@ async def concept_maturation_sweep(
             client,
             coordinator=coordinator,
             object_id=row["object_id"],
+            namespace=row["namespace"],
             target_state="matured",
             actor=_LIFECYCLE_ACTOR,
             reason="concept-maturation",
@@ -835,6 +843,7 @@ async def concept_demotion_sweep(
             client,
             coordinator=coordinator,
             object_id=row["object_id"],
+            namespace=row["namespace"],
             target_state="demoted",
             actor=_LIFECYCLE_ACTOR,
             reason="concept-demotion",
@@ -1136,8 +1145,30 @@ def _apply_enrichment(
         # transitioned.
         models.FieldCondition(key="version", match=models.MatchValue(value=expected_version)),
     ]
-    fence = models.Filter(must=conditions)
-    client.set_payload(collection_name=collection, payload=payload, points=fence)
+
+    # THE LEASE CHECK IS THE WRITE'S OWN CONDITION, not a preceding read.
+    #
+    # This was a python pre-read -- scroll, inspect `update_lease_token`, then
+    # `set_payload` on a fence that did not mention the lease. That is a TOCTOU: a
+    # writer acquiring the lease between the scroll and the write sails straight
+    # through, because the thing that was checked is not the thing that gated the
+    # write. Same defect class as enriching on `state` while `version` identifies the
+    # row -- right check, wrong object (Tama, musubi#771).
+    #
+    # Refusal here is STRICT: any token present, fresh or expired, refuses. That is
+    # sound only because expired-ordinary-token TAKEOVER happens in the coordinator
+    # BEFORE the transition, so by the time enrichment runs the row is known to have
+    # been lease-free at transition time. A token observed now was therefore acquired
+    # AFTER the transition -- genuinely concurrent, never a crashed-patch fossil -- and
+    # the liveness argument for tolerating expired tokens (Aoi's, and correct) does not
+    # reach this call site.
+    write_fence = models.Filter(
+        must=[
+            *conditions,
+            models.IsEmptyCondition(is_empty=models.PayloadField(key="update_lease_token")),
+        ]
+    )
+    client.set_payload(collection_name=collection, payload=payload, points=write_fence)
     # Success is read back from DURABLE STATE, never inferred from having issued the
     # write. A pre-write count cannot prove a post-write outcome: count sees `matured`,
     # a retraction archives the row, the fenced write then matches zero rows, and the

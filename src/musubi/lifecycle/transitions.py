@@ -154,9 +154,19 @@ def transition(
     correlation_id: str = "",
     sink: LifecycleEventSink | None = None,
     expected_version: int | None = None,
-    namespace: str | None = None,
+    namespace: str | None,
 ) -> Result[TransitionResult | TransitionPending, TransitionError]:
     """Apply a state change to ``object_id``, recording an audit event.
+
+    ``namespace`` is REQUIRED but nullable, and that shape is deliberate. It has no
+    default, so every caller must decide: pass the namespace, or pass ``None`` to mean
+    "I genuinely do not have one." Making it optional-with-a-default let thirteen call
+    sites omit it silently and inherit cross-namespace resolution -- Copilot found three
+    of those, one per review round; mypy names all thirteen in one pass once the default
+    is gone (musubi#771).
+
+    ``None`` is safe rather than lax: an unqualified lookup now refuses an ambiguous id
+    instead of resolving to whichever row scrolls first.
 
     Lookup, legal-transition checks, lineage-cycle validation, and deterministic
     intent construction remain here. The required injected ``coordinator`` owns
@@ -235,6 +245,7 @@ def transition(
         client,
         collection=collection,
         object_id=object_id,
+        namespace=namespace,
         new_superseded_by=lineage_patch.get("superseded_by"),
     ):
         return Err(
@@ -323,13 +334,24 @@ class AmbiguousObjectId(Exception):
 
 
 def _locate_object(
-    client: QdrantClient, *, object_id: KSUID, namespace: str | None = None
+    client: QdrantClient, *, object_id: KSUID, namespace: str | None
 ) -> tuple[str, dict[str, Any]] | None:
     """Scan each plane collection for ``object_id``. Returns ``(collection, payload)``.
 
-    ``namespace`` is optional so existing callers are source-compatible. Supplying it
-    qualifies the lookup; omitting it now REFUSES an ambiguous id rather than picking
-    one arbitrarily."""
+    ``namespace`` is REQUIRED but nullable -- no default. Making it optional-with-a-
+    default is what created this whole class: fourteen callers silently inherited
+    cross-namespace resolution, and a fifteenth sat in this very file (the lineage walk
+    at the bottom), surviving a fix that only made `transition()` strict. A runtime
+    refusal cannot be seen by the compiler; a missing argument can."""
+    # EVERY collection is scanned, never "until the first hit". The early return made
+    # this function unable to see a cross-PLANE duplicate at all: the same
+    # (namespace, object_id) in two collections resolved to whichever plane happens to
+    # sit first in `_COLLECTION_TO_OBJECT_TYPE` -- iteration order deciding which
+    # object a transition lands on, silently (Copilot, musubi#771). Refusing requires
+    # looking at all of them, so the loop must not stop early even though the common
+    # case matches exactly one. That is a handful of scrolls against an indexed field,
+    # paid on a lifecycle transition; the alternative is a wrong object.
+    found: list[tuple[str, dict[str, Any]]] = []
     for collection in _COLLECTION_TO_OBJECT_TYPE:
         records = _scroll_by_object_id(
             client, collection=collection, object_id=object_id, namespace=namespace
@@ -341,12 +363,21 @@ def _locate_object(
                 f"object_id={object_id!r} exists in "
                 f"{sorted({str(r.get('namespace')) for r in records})}; qualify the namespace"
             )
-        return collection, records[0]
-    return None
+        found.append((collection, records[0]))
+
+    if len(found) > 1:
+        # Qualifying the namespace does NOT disambiguate this one -- both rows can carry
+        # the same namespace in different planes -- so there is no argument the caller
+        # could have passed to make it safe. Refuse and name the collections.
+        raise AmbiguousObjectId(
+            f"object_id={object_id!r} exists in collections "
+            f"{sorted(c for c, _ in found)}; a transition cannot choose between planes"
+        )
+    return found[0] if found else None
 
 
 def _scroll_by_object_id(
-    client: QdrantClient, *, collection: str, object_id: KSUID, namespace: str | None = None
+    client: QdrantClient, *, collection: str, object_id: KSUID, namespace: str | None
 ) -> list[dict[str, Any]]:
     """Return the AUTHORITATIVE identity payload dict(s) for ``object_id`` in ``collection``, if any.
 
@@ -426,6 +457,7 @@ def _would_cause_supersession_cycle(
     collection: str,
     object_id: KSUID,
     new_superseded_by: KSUID | None,
+    namespace: str | None,
 ) -> bool:
     """Return ``True`` iff setting ``object_id.superseded_by = new`` would cycle.
 
@@ -447,7 +479,9 @@ def _would_cause_supersession_cycle(
         if cursor in seen:
             return False  # pre-existing unrelated loop — not our problem
         seen.add(cursor)
-        records = _scroll_by_object_id(client, collection=collection, object_id=cursor)
+        records = _scroll_by_object_id(
+            client, collection=collection, object_id=cursor, namespace=namespace
+        )
         if not records:
             return False
         cursor = records[0].get("superseded_by")

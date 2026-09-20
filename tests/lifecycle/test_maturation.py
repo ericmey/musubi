@@ -1784,7 +1784,11 @@ async def test_a_leased_row_cannot_be_transitioned_by_lifecycle(
     ns: str,
     sink: Any,
 ) -> None:
-    """A row under an active mutation lease belongs to another writer.
+    """A row under a LIVE mutation lease belongs to another writer.
+
+    The token must be live, not merely present. `update_lease_token` is the GENERIC
+    lease every `owned_update` takes, so an EXPIRED ordinary token is takeover-eligible
+    and must NOT block the lifecycle forever -- see the companion cell below.
 
     `_apply_conditional` fenced on namespace/object/version and ignored
     `update_lease_token`, so the lease the retraction saga fences its CAS with was
@@ -1799,7 +1803,7 @@ async def test_a_leased_row_cannot_be_transitioned_by_lifecycle(
     row = await plane.create(EpisodicMemory(namespace=ns, content="leased"))
     qdrant.set_payload(
         collection_name="musubi_episodic",
-        payload={"update_lease_token": "done:1:crashed-committer"},
+        payload={"update_lease_token": f"done:{int(utc_now().timestamp() * 1_000_000)}:live"},
         points=qmodels.Filter(
             must=[
                 qmodels.FieldCondition(
@@ -1911,4 +1915,139 @@ async def test_a_refused_enrichment_is_recorded_as_a_failure(
     assert report.failed == 1, (
         "a refused enrichment was not recorded anywhere; the loss is invisible to the "
         "operator reading this report"
+    )
+
+
+async def test_an_expired_ordinary_lease_does_not_block_the_lifecycle_forever(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """THE LIVENESS CONTROL, and the reason the fence is not a bare `IsEmpty`.
+
+    `update_lease_token` is the generic mutation lease. A crashed ORDINARY patch on any
+    row leaves a `done:*` token behind with no retraction saga coming to clear it. A
+    fence that refused every non-empty token would block that row's lifecycle
+    permanently. An expired token with no retraction evidence is takeover-eligible, so
+    the coordinator clears that exact token behind its own fence and proceeds.
+
+    Aoi raised this; I argued it away with a premise that was checkable and false, and
+    she deferred to it. Her first instinct was right (musubi#771)."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.transitions import transition
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="crashed ordinary patch"))
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": "done:1:long-expired"},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    transition(
+        qdrant,
+        coordinator=_coordinator(qdrant, sink),
+        object_id=row.object_id,
+        target_state="matured",
+        actor="test",
+        reason="maturation-sweep",
+        namespace=ns,
+    )
+
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert after.state == "matured", (
+        "an EXPIRED ordinary lease blocked the lifecycle; a crashed patch would strand "
+        "this row permanently because no saga is coming to clear it"
+    )
+
+
+async def test_a_lease_taken_between_transition_and_enrichment_refuses(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """THE INTERLEAVING CELL. Tama's, and the one a pre-read cannot pass.
+
+    The regression she stopped: a Python scroll for `update_lease_token`, then a write
+    fenced on namespace/object/state/version. That CAS is real but CANNOT SEE A LEASE --
+    taking one does not bump `version` -- so a writer acquiring the token between the
+    read and the write sails through. Right check, wrong object, again.
+
+    So take the lease in exactly that gap, using the same post-transition hook
+    `test_a_row_archived_mid_sweep_is_not_enriched` uses, and require enrichment to
+    lose. Nothing here is satisfiable by reading first; only the server-side
+    `IsEmptyCondition` in the write's own `must` list can win it.
+
+    The token is FRESH. Its expired sibling,
+    `test_an_expired_ordinary_lease_does_not_block_the_lifecycle_forever`, must stay
+    green: ordinary takeover happens in the coordinator, BEFORE the transition."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="enrich me", age_seconds=7200)
+    # The discriminator is DERIVED from the seed, never a literal: a hard-coded 5
+    # silently collided with the row's own captured importance and the cell could not
+    # have failed for its own reason. Assert they differ so it can never go inert.
+    seed_importance = _payload(qdrant, str(row.object_id))[0]["importance"]
+    enriched_importance = seed_importance + 3
+    assert enriched_importance != seed_importance
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    planted: dict[str, Any] = {}
+
+    def transition_then_take_the_lease(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        # The window: matured, not yet enriched. A concurrent `owned_update` acquires
+        # the generic mutation lease here and bumps nothing the old fence reads.
+        planted["token"] = f"done:{int(utc_now().timestamp() * 1_000_000)}:racer"
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={"update_lease_token": planted["token"]},
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_take_the_lease)
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=enriched_importance),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert planted, (
+        "the hook never fired -- the sweep did not transition this row, so the cell "
+        "proved nothing about the fence (inert, not passing)"
+    )
+    payloads = _payload(qdrant, str(row.object_id))
+    assert payloads, "row vanished"
+    live = [p for p in payloads if p.get("state") == "matured"]
+    assert len(live) == 1, f"expected exactly one matured row, got {len(live)}"
+    assert live[0].get("update_lease_token") == planted["token"], (
+        "the lease was cleared by the enrichment path; enrichment must refuse a "
+        "concurrent lease, never take it over -- takeover belongs in the coordinator"
+    )
+    assert live[0].get("importance") == seed_importance, (
+        f"enrichment wrote importance {live[0].get('importance')} onto a row whose "
+        f"lease was taken after the transition (seed was {seed_importance}); the "
+        f"pre-read saw an empty token and the write never re-checked it"
     )

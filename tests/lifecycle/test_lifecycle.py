@@ -29,6 +29,7 @@ from unittest.mock import patch
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from qdrant_client import QdrantClient
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -148,6 +149,7 @@ async def test_valid_transition_succeeds_and_emits_event(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
+        namespace=ns,
         target_state="matured",
         actor="test-suite",
         reason="unit",
@@ -179,6 +181,7 @@ async def test_invalid_transition_returns_typed_error(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
+        namespace=ns,
         target_state="demoted",
         actor="test-suite",
         reason="unit",
@@ -210,6 +213,7 @@ async def test_transition_bumps_version_and_updated_epoch(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
+        namespace=ns,
         target_state="matured",
         actor="t",
         reason="u",
@@ -239,6 +243,7 @@ async def test_transition_preserves_lineage_through_supersession(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=old.object_id,
+        namespace=ns,
         target_state="superseded",
         actor="rewrite",
         reason="new version written",
@@ -270,6 +275,7 @@ async def test_circular_supersession_rejected(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=a.object_id,
+        namespace=ns,
         target_state="superseded",
         actor="t",
         reason="first",
@@ -282,6 +288,7 @@ async def test_circular_supersession_rejected(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=b.object_id,
+        namespace=ns,
         target_state="superseded",
         actor="t",
         reason="cycle",
@@ -304,6 +311,7 @@ async def test_demotion_requires_reason(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=matured.object_id,
+        namespace=ns,
         target_state="demoted",
         actor="t",
         reason="",  # empty reason
@@ -367,6 +375,7 @@ async def test_event_written_for_every_transition(
             qdrant,
             coordinator=_coordinator(qdrant, sink),
             object_id=saved.object_id,
+            namespace=ns,
             target_state=target,
             actor="t",
             reason="step",
@@ -395,6 +404,7 @@ async def test_concurrent_transitions_stale_expected_version_fence_violation(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
+        namespace=ns,
         target_state="demoted",
         actor="worker-a",
         reason="a-demote",
@@ -415,6 +425,7 @@ async def test_concurrent_transitions_stale_expected_version_fence_violation(
             qdrant,
             coordinator=coordinator,
             object_id=saved.object_id,
+            namespace=ns,
             target_state="superseded",
             actor="worker-b",
             reason="b-supersede",
@@ -460,6 +471,7 @@ async def test_event_batch_flushed_within_5s_under_load(
             qdrant,
             coordinator=_coordinator(qdrant, short_sink),
             object_id=seeded.object_id,
+            namespace=ns,
             target_state="demoted",
             actor="t",
             reason="flush-test",
@@ -499,6 +511,7 @@ async def test_sqlite_event_db_survives_worker_restart(
             qdrant,
             coordinator=_coordinator(qdrant, first),
             object_id=seeded.object_id,
+            namespace=ns,
             target_state="demoted",
             actor="worker-1",
             reason="before-restart",
@@ -825,6 +838,7 @@ async def test_lifecycle_events_batched_and_flushed(
                 qdrant,
                 coordinator=_coordinator(qdrant, batch_sink),
                 object_id=saved.object_id,
+                namespace=ns,
                 target_state="matured",
                 actor="t",
                 reason="batch",
@@ -862,6 +876,7 @@ async def test_events_survive_worker_restart(
             qdrant,
             coordinator=_coordinator(qdrant, s1),
             object_id=seeded.object_id,
+            namespace=ns,
             target_state="demoted",
             actor="worker-1",
             reason="restart",
@@ -1083,6 +1098,8 @@ def test_transition_not_found_returns_typed_error(qdrant: QdrantClient, tmp_path
             client=qdrant, db_path=tmp_path / "not-found.db"
         ),
         object_id="z" * 27,
+        # No such row anywhere, so there is no namespace to qualify with.
+        namespace=None,
         target_state="matured",
         actor="t",
         reason="r",
@@ -1139,6 +1156,7 @@ async def test_transition_records_supersession_lineage(
             qdrant,
             coordinator=_coordinator(qdrant, sink),
             object_id=a.object_id,
+            namespace=ns,
             target_state="matured",
             actor="t",
             reason="warm",
@@ -1149,6 +1167,7 @@ async def test_transition_records_supersession_lineage(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=a.object_id,
+        namespace=ns,
         target_state="superseded",
         actor="t",
         reason="dup",
@@ -1158,3 +1177,79 @@ async def test_transition_records_supersession_lineage(
     assert isinstance(r, Ok)
     assert isinstance(r.value, TransitionResult)
     assert r.value.event.lineage_changes["superseded_by"] == b.object_id
+
+
+# ---------------------------------------------------------------------------
+# _locate_object refuses rather than guessing (Copilot, musubi#771)
+# ---------------------------------------------------------------------------
+
+
+def _collection_with(client: QdrantClient, name: str, payloads: list[dict[str, object]]) -> None:
+    from qdrant_client import models as qmodels
+
+    client.create_collection(
+        name, vectors_config=qmodels.VectorParams(size=2, distance=qmodels.Distance.COSINE)
+    )
+    client.upsert(
+        name,
+        points=[
+            qmodels.PointStruct(id=i + 1, vector=[0.1, 0.2], payload=p)
+            for i, p in enumerate(payloads)
+        ],
+    )
+
+
+def test_the_same_object_id_in_two_planes_refuses_instead_of_picking_one() -> None:
+    """THE CELL THE CROSS-PLANE FIX EXISTS FOR.
+
+    `_locate_object` scanned collections in dict order and returned on the first hit,
+    so an object_id present in two planes resolved by ITERATION ORDER -- a transition
+    landing on whichever collection happens to be declared first. Qualifying the
+    namespace cannot fix it: both rows can carry the same namespace in different
+    planes, so there is no argument the caller could pass. The only safe answer is to
+    look at every collection and refuse.
+
+    Note the namespace here is IDENTICAL on both rows. A cell that varied it would pass
+    against the old early-return code, because the within-collection check would never
+    see the second plane at all."""
+    from musubi.lifecycle.transitions import AmbiguousObjectId, _locate_object
+
+    client = QdrantClient(":memory:")
+    shared = {"object_id": "obj-in-two-planes", "namespace": "ns/a", "state": "provisional"}
+    _collection_with(client, "musubi_episodic", [dict(shared)])
+    _collection_with(client, "musubi_curated", [dict(shared)])
+
+    with pytest.raises(AmbiguousObjectId) as excinfo:
+        _locate_object(client, object_id="obj-in-two-planes", namespace="ns/a")
+
+    message = str(excinfo.value)
+    assert "musubi_episodic" in message and "musubi_curated" in message, (
+        f"the refusal must name both planes so an operator can act on it; got {message!r}"
+    )
+
+
+def test_an_unqualified_object_id_in_two_namespaces_refuses() -> None:
+    """The within-collection sibling, which had no cell either.
+
+    `object_id` is not globally unique. With `namespace=None` the scroll must be able to
+    SEE a second row in order to refuse it -- a `limit=1` lookup cannot, which is how
+    this resolved silently to whichever row came back first."""
+    from musubi.lifecycle.transitions import AmbiguousObjectId, _locate_object
+
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [
+            {"object_id": "dup", "namespace": "ns/a", "state": "provisional"},
+            {"object_id": "dup", "namespace": "ns/b", "state": "provisional"},
+        ],
+    )
+
+    with pytest.raises(AmbiguousObjectId):
+        _locate_object(client, object_id="dup", namespace=None)
+
+    # ...and qualifying it resolves cleanly, so the refusal is not just "always raise".
+    collection, payload = _locate_object(client, object_id="dup", namespace="ns/b")  # type: ignore[misc]
+    assert collection == "musubi_episodic"
+    assert payload["namespace"] == "ns/b"
