@@ -160,6 +160,19 @@
           until: migrated_core_health.status == 200
           changed_when: false
 
+        - name: Wait for the replacement lifecycle worker to become healthy
+          community.docker.docker_container_info:
+            name: musubi-lifecycle-worker-1
+          register: migrated_lifecycle_info
+          retries: 60
+          delay: 5
+          until: >-
+            migrated_lifecycle_info.exists and
+            migrated_lifecycle_info.container.State.Running and
+            migrated_lifecycle_info.container.State.Health.Status == 'healthy'
+          changed_when: false
+          no_log: true
+
         - name: Inspect migrated Musubi consumers
           community.docker.docker_container_info:
             name: "musubi-{{ item }}-1"

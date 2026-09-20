@@ -245,8 +245,29 @@ def test_auth_migration_deploys_and_verifies_the_pinned_consumer_image() -> None
     assert "pull --policy always core lifecycle-worker" in command
     assert pull["no_log"] is True
 
+    wait_lifecycle = by_name["Wait for the replacement lifecycle worker to become healthy"]
+    assert wait_lifecycle["community.docker.docker_container_info"]["name"] == (
+        "musubi-lifecycle-worker-1"
+    )
+    assert wait_lifecycle["retries"] == 60
+    assert wait_lifecycle["delay"] == 5
+    lifecycle_ready = " ".join(wait_lifecycle["until"].split())
+    for condition in (
+        "migrated_lifecycle_info.exists",
+        "migrated_lifecycle_info.container.State.Running",
+        "migrated_lifecycle_info.container.State.Health.Status == 'healthy'",
+    ):
+        assert condition in lifecycle_ready
+    assert wait_lifecycle["no_log"] is True
+
     inspect = by_name["Inspect migrated Musubi consumers"]
     assert inspect["loop"] == ["core", "lifecycle-worker"]
+    names = list(by_name)
+    assert (
+        names.index("Wait for the replacement Musubi core to become healthy")
+        < names.index("Wait for the replacement lifecycle worker to become healthy")
+        < names.index("Inspect migrated Musubi consumers")
+    )
     projection = by_name["Project non-secret migrated consumer status"]
     assert projection["no_log"] is True
     projected = projection["ansible.builtin.set_fact"]["migrated_consumer_status"]
