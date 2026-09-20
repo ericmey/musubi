@@ -230,14 +230,43 @@ def test_core_update_runs_candidate_image_credential_preflight_intrinsically() -
     argv = command["argv"]
     assert "{{ musubi_core_image }}" in argv
     assert "musubi.auth.credential_preflight" in argv
+    assert "--user" in argv
+    user_index = argv.index("--user")
+    assert argv[user_index + 1] == (
+        "{{ lookup('pipe', 'id -u') }}:{{ lookup('pipe', 'id -g') }}"
+    )
     assert pre_tasks[preflight_index]["delegate_to"] == "localhost"
     assert pre_tasks[preflight_index]["become"] is False
     assert pre_tasks[preflight_index].get("no_log") is not True
 
-    remote_pull_index = next(
-        idx for idx, task in enumerate(_tasks(play)) if "--policy always" in str(task)
-    )
-    assert preflight_index < len(pre_tasks) + remote_pull_index
+    assert pre_tasks[preflight_index] in pre_tasks
+    assert any("--policy always" in str(task) for task in _tasks(play))
+
+
+def test_core_update_verifies_candidate_signature_before_exposing_secrets() -> None:
+    pre_tasks = _play().get("pre_tasks") or []
+    names = [task.get("name") for task in pre_tasks]
+    verify_index = names.index("Verify the exact Core candidate image signature")
+    preflight_index = names.index("Validate every live credential inside the exact candidate image")
+    verify_argv = pre_tasks[verify_index]["ansible.builtin.command"]["argv"]
+
+    assert verify_index < preflight_index
+    assert verify_argv[0:2] == ["cosign", "verify"]
+    assert "{{ musubi_core_image }}" in verify_argv
+    assert "--env-file" not in verify_argv
+    assert "/credentials" not in str(verify_argv)
+
+
+def test_auto_digest_pin_requires_human_preflight_before_merge() -> None:
+    text = AUTO_DIGEST_WORKFLOW.read_text()
+    before_merge = text.index("## Before merge")
+    cosign = text.index("cosign verify", before_merge)
+    candidate_run = text.index("musubi.auth.credential_preflight", before_merge)
+
+    assert "gh pr merge" not in text
+    assert cosign < candidate_run
+    assert "--user" in text[candidate_run - 1000 : candidate_run]
+    assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text[before_merge:candidate_run]
 
 
 def test_core_update_preflight_cannot_be_satisfied_by_caller_attestation_vars() -> None:

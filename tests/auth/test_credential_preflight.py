@@ -51,8 +51,8 @@ def _manifest(path: Path) -> Path:
         json.dumps(
             {
                 "live": [
-                    {"file": "aoi.env", "presence": "aoi/command-chair"},
-                    {"file": "yua.env", "presence": "yua/command-chair"},
+                    {"file": "musubi-mcp-aoi.env", "presence": "aoi/command-chair"},
+                    {"file": "musubi-mcp-yua.env", "presence": "yua/command-chair"},
                 ],
                 "templates": [
                     {
@@ -69,8 +69,12 @@ def _manifest(path: Path) -> Path:
 def test_candidate_preflight_accepts_every_declared_live_credential_and_control(
     tmp_path: Path, api_settings: Settings
 ) -> None:
-    _write_env(tmp_path / "aoi.env", _token(api_settings, "aoi/command-chair"))
-    _write_env(tmp_path / "yua.env", _token(api_settings, "yua/command-chair"))
+    _write_env(
+        tmp_path / "musubi-mcp-aoi.env", _token(api_settings, "aoi/command-chair")
+    )
+    _write_env(
+        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
+    )
     (tmp_path / "musubi-mcp.env").write_text("MUSUBI_TOKEN=template-not-live\n")
     lines: list[str] = []
 
@@ -94,7 +98,9 @@ def test_candidate_preflight_accepts_every_declared_live_credential_and_control(
 def test_candidate_preflight_fails_closed_when_expected_live_credential_is_missing(
     tmp_path: Path, api_settings: Settings
 ) -> None:
-    _write_env(tmp_path / "aoi.env", _token(api_settings, "aoi/command-chair"))
+    _write_env(
+        tmp_path / "musubi-mcp-aoi.env", _token(api_settings, "aoi/command-chair")
+    )
     lines: list[str] = []
 
     result = run_preflight(
@@ -117,8 +123,8 @@ def test_candidate_preflight_fails_closed_on_rejection_without_printing_token(
         "yua/command-chair",
         subject="yua-command-chair",
     )
-    _write_env(tmp_path / "aoi.env", accepted)
-    _write_env(tmp_path / "yua.env", rejected)
+    _write_env(tmp_path / "musubi-mcp-aoi.env", accepted)
+    _write_env(tmp_path / "musubi-mcp-yua.env", rejected)
     lines: list[str] = []
 
     result = run_preflight(
@@ -139,8 +145,12 @@ def test_candidate_preflight_fails_closed_on_rejection_without_printing_token(
 def test_candidate_preflight_does_not_validate_declared_templates(
     tmp_path: Path, api_settings: Settings
 ) -> None:
-    _write_env(tmp_path / "aoi.env", _token(api_settings, "aoi/command-chair"))
-    _write_env(tmp_path / "yua.env", _token(api_settings, "yua/command-chair"))
+    _write_env(
+        tmp_path / "musubi-mcp-aoi.env", _token(api_settings, "aoi/command-chair")
+    )
+    _write_env(
+        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
+    )
     lines: list[str] = []
 
     result = run_preflight(
@@ -158,10 +168,12 @@ def test_candidate_preflight_reads_quoted_token_without_expanding_other_env(
     tmp_path: Path, api_settings: Settings
 ) -> None:
     token = _token(api_settings, "aoi/command-chair")
-    (tmp_path / "aoi.env").write_text(
+    (tmp_path / "musubi-mcp-aoi.env").write_text(
         f'# ignored\nOTHER=value=with=equals\nMUSUBI_TOKEN="{token}"\n'
     )
-    _write_env(tmp_path / "yua.env", _token(api_settings, "yua/command-chair"))
+    _write_env(
+        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
+    )
     lines: list[str] = []
 
     assert run_preflight(
@@ -171,6 +183,49 @@ def test_candidate_preflight_reads_quoted_token_without_expanding_other_env(
         emit=lines.append,
     )
     assert "PASS live aoi/command-chair" in lines
+
+
+def test_candidate_preflight_rejects_unclassified_discovered_credential(
+    tmp_path: Path, api_settings: Settings
+) -> None:
+    _write_env(
+        tmp_path / "musubi-mcp-aoi.env", _token(api_settings, "aoi/command-chair")
+    )
+    _write_env(
+        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
+    )
+    _write_env(
+        tmp_path / "musubi-mcp-unlisted.env",
+        _token(api_settings, "unlisted/command-chair"),
+    )
+    lines: list[str] = []
+
+    assert not run_preflight(
+        manifest_path=_manifest(tmp_path),
+        credential_dir=tmp_path,
+        settings=api_settings,
+        emit=lines.append,
+    )
+    assert "FAIL credential inventory unclassified musubi-mcp-unlisted.env" in lines
+
+
+def test_candidate_preflight_reads_mode_0600_live_credentials(
+    tmp_path: Path, api_settings: Settings
+) -> None:
+    for filename, presence in (
+        ("musubi-mcp-aoi.env", "aoi/command-chair"),
+        ("musubi-mcp-yua.env", "yua/command-chair"),
+    ):
+        path = tmp_path / filename
+        _write_env(path, _token(api_settings, presence))
+        path.chmod(0o600)
+
+    assert run_preflight(
+        manifest_path=_manifest(tmp_path),
+        credential_dir=tmp_path,
+        settings=api_settings,
+        emit=lambda _line: None,
+    )
 
 
 @pytest.mark.parametrize(
@@ -207,8 +262,12 @@ def test_candidate_preflight_cli_uses_runtime_settings_and_emits_summary(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    _write_env(tmp_path / "aoi.env", _token(api_settings, "aoi/command-chair"))
-    _write_env(tmp_path / "yua.env", _token(api_settings, "yua/command-chair"))
+    _write_env(
+        tmp_path / "musubi-mcp-aoi.env", _token(api_settings, "aoi/command-chair")
+    )
+    _write_env(
+        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
+    )
     monkeypatch.setattr(
         credential_preflight,
         "get_credential_preflight_settings",
