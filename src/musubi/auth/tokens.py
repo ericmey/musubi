@@ -177,6 +177,10 @@ def _context_from_payload(
     if parsed_scopes is None:
         return Err(error=InvalidTokenError(detail="token scope claim must be a string list"))
 
+    consistency_error = _identity_consistency_error(presence, parsed_scopes)
+    if consistency_error is not None:
+        return Err(error=InvalidTokenError(detail=consistency_error))
+
     return Ok(
         value=AuthContext(
             subject=subject,
@@ -195,6 +199,37 @@ def _parse_scopes(scopes: object) -> tuple[str, ...] | None:
     if isinstance(scopes, list) and all(isinstance(item, str) for item in scopes):
         return tuple(scopes)
     return None
+
+
+def _identity_consistency_error(presence: str, scopes: tuple[str, ...]) -> str | None:
+    """Return a bounded rejection reason when REQ-7 identity claims disagree."""
+
+    presence_parts = presence.split("/")
+    if (
+        len(presence_parts) != 2
+        or any(not part for part in presence_parts)
+        or any(part in {"*", "**"} for part in presence_parts)
+    ):
+        return "token presence claim must be a concrete tenant/presence identity"
+
+    presence_tenant = presence_parts[0]
+    for scope in scopes:
+        scope_tenant = _concrete_scope_tenant(scope)
+        if scope_tenant is not None and scope_tenant != presence_tenant:
+            return "token presence tenant is inconsistent with namespace scope tenant"
+    return None
+
+
+def _concrete_scope_tenant(scope: str) -> str | None:
+    """Extract a concrete tenant, excluding operator and global scope forms."""
+
+    if scope == "operator" or ":" not in scope:
+        return None
+    namespace, _access = scope.rsplit(":", 1)
+    tenant = namespace.split("/", 1)[0]
+    if tenant in {"*", "**"}:
+        return None
+    return tenant or None
 
 
 def _issuer(settings: Settings) -> str:

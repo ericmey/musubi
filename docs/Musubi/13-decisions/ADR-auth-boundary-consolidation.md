@@ -8,19 +8,25 @@ discoverer: eric
 reviewed_by: yua
 phase: "Security audit 2026-07-12/13"
 tags: [type/adr, status/accepted, security, auth, idempotency]
-updated: 2026-07-15
+updated: 2026-09-20
 supersedes: []
 ---
 
 # ADR: consolidated auth boundary — SEC-002/003/004 + IDEM-001
 
 **Discoverer of all four defects: Eric.** Source-confirmed and routed by Yua. Design: Aoi.
-**Status: ACCEPTED AND SHIPPED (rev 5).** Phase A merged in PR #403 (`0def0df`); the original
+**Status: ACCEPTED AND SHIPPED (rev 6).** Phase A merged in PR #403 (`0def0df`); the original
 stacked Phase B PR #404 was superseded and closed, and its production implementation merged in
 replacement PR #414 (`8167202`). Both are on `main` and have been included in deployed releases
 since v1.11.7; the production pin verified during the 2026-07-15 remediation closeout was v1.17.2.
 SEC-002/003/004 and IDEM-001 Phase 0 are therefore shipped, not an open production-vulnerability
-claim. The only work still open from this ADR is listed under **Deferred** below.
+claim. REQ-7 was implemented under Issue #412; the remaining work is listed under **Deferred**.
+
+## Rev 6 — REQ-7 identity consistency
+
+Issue #412 closes the deferred D6 identity-consistency contract. Token validation now requires a
+concrete two-segment presence and rejects concrete namespace scopes from another tenant before an
+`AuthContext` is constructed. Same-tenant shared scopes and operator/global forms remain valid.
 
 ## Rev 5 — shipped-state reconciliation (PR #403 + replacement PR #414)
 
@@ -43,8 +49,8 @@ not the Rev3 sketch:
   named Form/Path/body-field routes + contradictions fanout), D3 (routed AuthorizedWrite auth edge +
   route-declared idempotency eligibility + pure-ASGI store-only observer), D4 Phase 0 (in-process
   lease, single-worker fail-closed, **no time-based reclaim of a live lease**), D6 (identity tuple).
-- **Deferred, exact:** D4 Phase 1 (durable cross-process); D5 (Phase C — design PROVEN @239029a,
-  implementation not started); REQ7 (identity tuple-consistency validation — xfail).
+- **Deferred, exact at Rev 5:** D4 Phase 1 (durable cross-process); D5 (Phase C — design PROVEN
+  @239029a, implementation not started). REQ7 was deferred here and is closed by Rev 6.
   **REQ8 is no longer deferred** — the public absent-vs-invalid bearer pair is implemented and
   passing (#413); its strict-xfail was removed once the test passed for the intended reason.
 
@@ -262,13 +268,14 @@ subject's declared presence, not an arbitrary claim — so a token cannot presen
 `(issuer, subject)` it owns with a `presence` it does not, and thereby key into another
 principal's idempotency slot.
 
-> **Rev 4 (accepted, REQ7 OPEN):** the identity tuple `(issuer, subject, presence)` + method +
+> **Rev 6 (REQ7 implemented by Issue #412):** the identity tuple `(issuer, subject, presence)` + method +
 > `operation_id` + authorized namespace + Idempotency-Key, with a byte-exact canonical digest
-> (domain-sep + content-type + exact bytes) persisted separately, is IMPLEMENTED and accepted (PR
-> #404). The tuple's internal-consistency VALIDATION is **NOT yet enforced**:
-> `tests/api/test_req7_token_identity_invariant.py` remains strict-xfail — **REQ7 is OPEN**
-> (deferred). (Related: REQ8, public absent-vs-invalid bearer, `test_req8_*` — **now CLOSED**;
-> implemented in #413. This paragraph's REQ7 statement is unchanged and still accurate.)
+> (domain-sep + content-type + exact bytes) persisted separately, remains the accepted PR #404
+> identity. Token validation now requires a concrete `tenant/presence` claim and rejects any
+> concrete namespace scope from a different tenant. Same-tenant shared scopes and operator/global
+> forms remain valid. The former strict-xfail is now the passing REQ7 contract in
+> `tests/api/test_req7_token_identity_invariant.py`. (Related: REQ8, public absent-vs-invalid
+> bearer, `test_req8_*` — **CLOSED** in #413.)
 
 This also resolves the rev-1 strategy comparison: "exact-token fingerprint" (A) is rejected
 precisely because it keys on the rotating secret; **(B) principal (issuer+subject+presence)
@@ -385,7 +392,7 @@ shipped through PR #403 and replacement PR #414 and are now production behavior.
 | concurrent miss → no double-mutate (IDEM-001B) | accepted (#404) | D4 Phase 0 |
 | faithful replay (headers/cookies/bytes/media, REQ-5) | accepted (#404) | D3 observer |
 | ineligible stream + key not buffered (B1) | accepted (#404) | D3 route-declared eligibility |
-| tuple issuer/subject/presence consistency (REQ-7) | XFAIL — OPEN | REQ7 deferred in #412 |
+| tuple issuer/subject/presence consistency (REQ-7) | PASSING | REQ7 implemented in #412 |
 | public absent-vs-invalid bearer (REQ-8) | PASSING | REQ8 implemented in #413, slice-req8-presented-invalid-bearer |
 | oversize multipart → 413 (D5) | deferred | Phase C (design proven @239029a) |
 
@@ -410,7 +417,7 @@ Exact deferrals carried forward from the accepted stack:
 - **D4 Phase 1** — durable cross-process idempotency, tracked by #558. Reopen before any
   multi-worker or horizontally replicated API deployment.
 - **D5 Phase C** — multipart ingress-cap + streamed digest; design PROVEN @239029a, impl not started.
-- **REQ7** — identity tuple internal-consistency validation, deferred under #412.
+- **REQ7** — identity tuple internal-consistency validation, implemented under #412.
 - **REQ8** — public route absent-vs-invalid bearer. **Implemented and closed under #413**
   ([[_slices/slice-req8-presented-invalid-bearer]]); a presented-invalid bearer is a typed 401 on
   every route, absent stays public. Kong re-enable precondition recorded in that slice.
@@ -421,6 +428,6 @@ projection/summary; LIFE-007/008 / DATA-001 atomicity.
 ---
 
 **Status: ACCEPTED AND SHIPPED (rev 5).** PR #403 and replacement Phase B PR #414 are on `main` and
-deployed. True deferrals are D4 Phase 1 (#558), D5 Phase C, and REQ7 (#412). REQ8 (#413) is implemented
+deployed. True deferrals are D4 Phase 1 (#558) and D5 Phase C. REQ7 (#412) and REQ8 (#413) are implemented
 and passing as of 2026-08-04; the rev-5 shipped claims about PR #403 / #414 at their heads are
 unchanged.

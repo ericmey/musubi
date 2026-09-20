@@ -36,7 +36,10 @@ remains required, and the presence is made structurally usable as a
 
 - [[_slices/slice-req7-token-identity-consistency]] — this slice's executable
   contract is the `## Test Contract` below.
-- [[13-decisions/ADR-auth-boundary-consolidation]] — D6 / REQ-7.
+
+The governing design record is D6 / REQ-7 in
+`docs/Musubi/13-decisions/ADR-auth-boundary-consolidation.md`; it records the
+decision but does not carry a separate Test Contract.
 
 ## Owned paths
 
@@ -72,4 +75,3 @@ remains required, and the presence is made structurally usable as a
 - Claimed via the `pick-slice` workflow after the operator explicitly reopened
   deferred Issue #412. Draft PR #799; isolated branch
   `slice/req7-token-identity-consistency`.
-
