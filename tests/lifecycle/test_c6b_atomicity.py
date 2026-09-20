@@ -1936,7 +1936,8 @@ class _RefCoordinator:
         con = sqlite3.connect(self._db)
         con.execute(
             "CREATE TABLE IF NOT EXISTS lifecycle_outbox (operation_key TEXT PRIMARY KEY, object_id TEXT,"
-            " collection TEXT, target_state TEXT, expected_version INTEGER, patch_sha TEXT,"
+            " collection TEXT, namespace TEXT, target_state TEXT, expected_version INTEGER,"
+            " patch_sha TEXT,"
             " patch_json TEXT,"
             " intent_digest TEXT, state TEXT, event_id TEXT,"
             " attempts INTEGER DEFAULT 0, next_attempt_epoch REAL, failure_class TEXT,"
@@ -1968,9 +1969,15 @@ class _RefCoordinator:
         if self._mode not in ("no_unique_index", "non_atomic_cas"):
             # ATOMIC single-active-intent (Yua R11): a DB-enforced partial unique index, NOT a
             # check-then-insert. Two concurrent begins for one object can't both create a nonterminal row.
+            # NAMESPACE is part of the identity here too. This reference coordinator is
+            # the ORACLE the atomicity properties are checked against, so leaving it on
+            # the two-column index would encode the exact behaviour musubi#771 calls
+            # wrong -- a model that disagrees with production in the one dimension the
+            # change is about (Tama, musubi#771).
             con.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_active_intent ON lifecycle_outbox "
-                "(collection, object_id) WHERE state IN ('PENDING','APPLIED')"
+                "(collection, COALESCE(namespace, ''), object_id) "
+                "WHERE state IN ('PENDING','APPLIED')"
             )
         con.commit()
         con.close()
@@ -2357,6 +2364,12 @@ class _RefCoordinator:
             opk,
             i.object_id,
             i.collection,
+            # The oracle must WRITE the namespace, not merely have a column for it.
+            # Storing NULL here leaves `COALESCE(namespace, '')` folding every row onto
+            # one value, so the re-scoped index silently keeps the old two-part identity
+            # and the model's comment claims a property its writes do not produce
+            # (Tama, musubi#771).
+            i.namespace,
             i.target_state,
             i.expected_version,
             patch_sha,
@@ -2366,9 +2379,9 @@ class _RefCoordinator:
             event_id,
         )
         insert = (
-            "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,target_state,"
-            "expected_version,patch_sha,patch_json,intent_digest,state,event_id) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?)"
+            "INSERT INTO lifecycle_outbox (operation_key,object_id,collection,namespace,"
+            "target_state,expected_version,patch_sha,patch_json,intent_digest,state,event_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)"
         )
         # cap_after_qdrant/no_cap deliberately DO NOT gate at admission (their defect is exposed later).
         gate = self._mode not in ("no_cap", "cap_after_qdrant")

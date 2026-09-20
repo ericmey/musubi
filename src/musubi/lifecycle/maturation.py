@@ -573,8 +573,16 @@ async def episodic_maturation_sweep(
                 # the one report an operator reads (Copilot/Yua, musubi#771).
                 failed += 1
                 log.warning(
+                    # The fence has FOUR conditions and this path cannot tell which one
+                    # refused -- `state`/`version` movement and a concurrent mutation
+                    # lease produce the identical zero-match result. Naming one of them
+                    # sends an operator looking for a retraction when the real cause was
+                    # a lease, so the message names the OBSERVATION and lists the
+                    # possible causes (Copilot, musubi#771).
                     "maturation-enrichment-refused object_id=%s namespace=%s version=%s "
-                    "(row moved after transition; enrichment not applied and not retried)",
+                    "(fence matched no row: the row moved state/version after the "
+                    "transition, or a concurrent mutation lease was held; enrichment "
+                    "not applied and not retried)",
                     object_id,
                     row["namespace"],
                     matured_version,

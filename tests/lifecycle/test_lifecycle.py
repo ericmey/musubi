@@ -30,6 +30,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from qdrant_client import QdrantClient
+from qdrant_client import models as qmodels
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -1253,3 +1254,66 @@ def test_an_unqualified_object_id_in_two_namespaces_refuses() -> None:
     collection, payload = _locate_object(client, object_id="dup", namespace="ns/b")  # type: ignore[misc]
     assert collection == "musubi_episodic"
     assert payload["namespace"] == "ns/b"
+
+
+def test_an_ambiguous_supersession_target_refuses_with_the_typed_error(tmp_path: Path) -> None:
+    """THE LINEAGE-WALK CELL. The refusal has to travel the whole walk, not one step.
+
+    `_locate_object` refuses an unqualified duplicate at the ENTRY lookup. The
+    supersession cycle walk then followed the chain with its own
+    `_scroll_by_object_id(...)[0]` at every hop, so an ambiguous chain id was resolved by
+    scroll order -- a cycle could be missed, or lineage attached, based on whichever row
+    came back first (Copilot, musubi#771).
+
+    Two things are required and they are different: the walk must REFUSE, and the refusal
+    must arrive as a typed `Err`. `AmbiguousObjectId` is an exception, so an unmapped
+    raise escaping `transition()` is a 500 rather than the caller-error it is."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.lifecycle.transitions import transition
+    from musubi.types.common import generate_ksuid
+
+    subject = generate_ksuid()
+    target = generate_ksuid()
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [
+            # The row being transitioned -- unambiguous, so the ENTRY lookup succeeds and
+            # the cell cannot pass for the wrong reason.
+            {"object_id": subject, "namespace": "ns/a", "state": "provisional", "version": 1},
+            # The supersession TARGET, duplicated across namespaces: the ambiguity lives
+            # one hop into the walk, where the entry check never looks.
+            {"object_id": target, "namespace": "ns/a", "state": "matured", "version": 1},
+            {"object_id": target, "namespace": "ns/b", "state": "matured", "version": 1},
+        ],
+    )
+    coordinator = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "wk.db")
+
+    result = transition(
+        client,
+        coordinator=coordinator,
+        object_id=subject,
+        target_state="matured",
+        actor="operator",
+        reason="ambiguous-lineage",
+        namespace=None,
+        lineage_updates=LineageUpdates(superseded_by=target),
+    )
+
+    assert isinstance(result, Err), f"the ambiguous chain id was resolved, not refused: {result!r}"
+    assert result.error.code == "ambiguous_object_id", (
+        f"refused with {result.error.code!r}; an unmapped AmbiguousObjectId is a 500, and "
+        f"`circular_supersession` would name the wrong cause"
+    )
+
+    # ...and nothing moved. A refusal that still mutated would be the worse failure.
+    rows, _ = client.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=subject))]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert (rows[0].payload or {})["state"] == "provisional", "the subject transitioned anyway"

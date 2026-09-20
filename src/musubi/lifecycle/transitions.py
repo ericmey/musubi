@@ -121,6 +121,14 @@ class TransitionError:
     - ``invariant_violation``  — model validation failed on the updated payload.
     - ``lifecycle_event_write_failed`` — mutation committed, audit persistence refused.
     - ``version_fence_violation``     — expected_version did not match current_version.
+    - ``ambiguous_object_id``  — the id exists under more than one namespace (or in more
+      than one plane) and the caller did not qualify it. Distinct from ``not_found``:
+      the object EXISTS, and refusing is the safe answer because picking one would
+      transition a stranger's row. Callers map this to a 4xx.
+
+    This list is exhaustive and is part of the contract -- a new code that does not
+    appear here is invisible to every caller switching on ``code``
+    (Copilot, musubi#771).
     """
 
     code: str
@@ -241,13 +249,28 @@ def transition(
         )
 
     lineage_patch = lineage_updates.to_payload_patch() if lineage_updates else {}
-    if _would_cause_supersession_cycle(
-        client,
-        collection=collection,
-        object_id=object_id,
-        namespace=namespace,
-        new_superseded_by=lineage_patch.get("superseded_by"),
-    ):
+    try:
+        cycles = _would_cause_supersession_cycle(
+            client,
+            collection=collection,
+            object_id=object_id,
+            namespace=namespace,
+            new_superseded_by=lineage_patch.get("superseded_by"),
+        )
+    except AmbiguousObjectId as exc:
+        # The walk refuses rather than guessing, but an EXCEPTION escaping `transition()`
+        # is a 500 -- the caller's contract is a typed `Err`, and an ambiguous lineage id
+        # is a caller error, not a server fault. Mapping it here is what makes the
+        # refusal reachable as a 4xx instead of a stack trace (Copilot, musubi#771).
+        return Err(
+            error=TransitionError(
+                code="ambiguous_object_id",
+                message=str(exc),
+                from_state=current_state,
+                to_state=target_state,
+            )
+        )
+    if cycles:
         return Err(
             error=TransitionError(
                 code="circular_supersession",
@@ -484,6 +507,17 @@ def _would_cause_supersession_cycle(
         )
         if not records:
             return False
+        # The ambiguity refusal has to travel the WHOLE walk, not just its first step.
+        # `_locate_object` refuses an unqualified duplicate, then this loop followed the
+        # supersession chain and took `records[0]` at every hop -- so a cycle check could
+        # miss a cycle, or attach lineage, based on whichever row scrolled first
+        # (Copilot, musubi#771). Same defect as the entry lookup, one level down, which
+        # is why fixing only the cited line would have been the wrong repair.
+        if namespace is None and len({str(r.get("namespace")) for r in records}) > 1:
+            raise AmbiguousObjectId(
+                f"supersession chain id {cursor!r} exists in "
+                f"{sorted({str(r.get('namespace')) for r in records})}; qualify the namespace"
+            )
         cursor = records[0].get("superseded_by")
     return False
 

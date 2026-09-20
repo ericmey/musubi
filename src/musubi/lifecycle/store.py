@@ -137,8 +137,19 @@ CREATE TABLE IF NOT EXISTS lifecycle_outbox (
     failure_class TEXT,
     intent_kind TEXT
 );
+-- Active-intent uniqueness is scoped to the FULL identity. `object_id` is not
+-- globally unique -- the same id legitimately exists under a different namespace --
+-- so a `(collection, object_id)` index rejected two independent rows' concurrent
+-- transitions as `active_intent_exists` and one of them could never proceed
+-- (Copilot, musubi#771). See `_migrate_active_intent_index` for existing DBs.
+-- COALESCE is load-bearing, not defensive noise. SQLite treats NULLs as DISTINCT in a
+-- unique index, so a single row with a NULL namespace would not collide with ANYTHING --
+-- widening the index from two columns to three would silently switch the constraint OFF
+-- for such rows instead of tightening it. Folding NULL onto '' keeps legacy rows
+-- constrained exactly as they were before, so the widening can only ever add precision.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_active_intent
-    ON lifecycle_outbox (collection, object_id) WHERE state IN ('PENDING','APPLIED');
+    ON lifecycle_outbox (collection, COALESCE(namespace, ''), object_id)
+    WHERE state IN ('PENDING','APPLIED');
 
 CREATE TABLE IF NOT EXISTS lifecycle_apply_markers (
     operation_key TEXT PRIMARY KEY,
@@ -286,7 +297,59 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             # OperationalError (a genuine schema/lock fault must still surface).
             if "duplicate column name" not in str(exc).lower():
                 raise
+    _migrate_active_intent_index(conn)
     conn.commit()
+
+
+def _normalise_sql(sql: str) -> str:
+    """Lowercase with all whitespace removed, so the comparison is about STRUCTURE.
+
+    SQLite stores an index definition as written, so formatting differences are not
+    evidence of anything -- matching on the raw text would make the guard depend on how
+    somebody typed it."""
+    return "".join(sql.lower().split())
+
+
+_EXPECTED_ACTIVE_INTENT_KEY = "(collection,coalesce(namespace,''),object_id)"
+"""The exact ordered key expression ``ux_active_intent`` must have.
+
+Checking for the WORD `coalesce` was not enough: an index that coalesces the wrong
+field -- `COALESCE(collection,'')` -- contains it and would be accepted as current,
+leaving the NULL hazard exactly where it was. Testing for the presence of a mechanism
+instead of the mechanism being applied TO THE RIGHT OBJECT is the defect this whole
+change is about, and it reappeared inside the guard against it (Tama, musubi#771)."""
+
+
+def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
+    """Re-scope ``ux_active_intent`` to include ``namespace`` on an existing DB.
+
+    `CREATE UNIQUE INDEX IF NOT EXISTS` is a NO-OP when an index of that name already
+    exists, whatever its columns -- so a schema edit alone silently leaves every
+    pre-existing database on the old two-column index. The defect would persist exactly
+    where it matters (deployments with data) and disappear in tests (fresh DBs), which
+    is the worst possible split.
+
+    Widening a unique index can never fail on existing rows: more columns means fewer
+    collisions, so any set of rows legal under `(collection, object_id)` is legal under
+    `(collection, namespace, object_id)`. The reverse would not be safe.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
+    ).fetchone()
+    if row is None or row[0] is None:
+        return
+    # DETECT THE SHAPE, NOT THE COLUMN NAME. `"namespace" in sql` accepts a PLAIN
+    # three-column index -- which is precisely the unsafe form, because SQLite treats
+    # NULLs as distinct and a NULL-namespace row would then collide with nothing. A
+    # guard that passes the exact variant it exists to replace is the same defect this
+    # whole PR is about: right check, wrong object (Tama, musubi#771).
+    if _EXPECTED_ACTIVE_INTENT_KEY in _normalise_sql(str(row[0])):
+        return
+    conn.execute("DROP INDEX ux_active_intent")
+    conn.execute(
+        "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "
+        "(collection, COALESCE(namespace, ''), object_id) WHERE state IN ('PENDING','APPLIED')"
+    )
 
 
 __all__ = ["DEFAULT_BUSY_TIMEOUT_MS", "LifecycleStoreError", "connect", "ensure_schema"]

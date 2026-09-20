@@ -6,7 +6,8 @@
    to its recorded outcome with a stable event_id; the same key with a DIFFERENT intent digest
    is an ``operation_key_conflict``. A concurrent same-key insert race re-resolves on the PK.
 2. **Durable admission** (S2): write a ``PENDING`` row inside ONE ``BEGIN IMMEDIATE`` that
-   enforces a global non-terminal **cap** and **one active intent per ``(collection, object_id)``**
+   enforces a global non-terminal **cap** and **one active intent per
+   ``(collection, namespace, object_id)``**
    (the partial unique index ``ux_active_intent``). A bounded ``Err`` here leaves Qdrant untouched.
 3. **Persisted event before mutation** (S3): from an exact pre-apply read, build a canonical
    :class:`~musubi.types.lifecycle_event.LifecycleEvent` and persist its JSON on the outbox row
@@ -647,6 +648,23 @@ class LifecycleTransitionCoordinator:
             replay = self._replay(opk, digest)
             if replay is not None:
                 return replay
+            # (1b) COMPATIBILITY, not a rename. An outbox row admitted before namespace
+            # entered the canonical key is still in flight under its legacy key, and a
+            # retry of that same intent must REPLAY it rather than admit a second row for
+            # the same work. Stored keys are never rewritten -- a migration that renames
+            # in-flight rows would race the reconciler holding them.
+            #
+            # `intent_digest` is what makes the probe safe: it already binds namespace, so
+            # a legacy row belonging to a DIFFERENT namespace cannot match our digest. A
+            # non-matching legacy row is simply not ours -- ignore it and admit under the
+            # new key, never return a conflict (Tama, musubi#771).
+            legacy_opk = self._legacy_key(intent)
+            if legacy_opk is not None:
+                legacy_row = self._row_for_key(legacy_opk)
+                if legacy_row is not None and legacy_row[2] == digest:
+                    return self._resolve_existing(
+                        legacy_opk, legacy_row[0], legacy_row[1], legacy_row[2], digest
+                    )
             # (2) durable admission: cap gate + single-active + PENDING row, atomically. No Qdrant.
             self._write_pending(intent, opk, event_id)
         except _AlreadyExists as exc:
@@ -657,7 +675,8 @@ class LifecycleTransitionCoordinator:
             return Err(error=TransitionError(code="cap_exceeded"))
         except sqlite3.IntegrityError as exc:
             errorcode = getattr(exc, "sqlite_errorcode", None)
-            # ONLY the ux_active_intent partial-unique (collection, object_id) violation is
+            # ONLY the ux_active_intent partial-unique (collection, namespace, object_id)
+            # violation is
             # active_intent_exists (SQLITE_CONSTRAINT_UNIQUE).
             if errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE:
                 return Err(error=TransitionError(code="active_intent_exists"))
@@ -731,10 +750,31 @@ class LifecycleTransitionCoordinator:
     # -- internals ------------------------------------------------------------------ #
 
     def _key(self, intent: TransitionIntent) -> str:
-        """The stable canonical operation key when the intent supplies none."""
+        """The stable canonical operation key when the intent supplies none.
+
+        NAMESPACE IS PART OF THE IDENTITY. Without it, two legitimate rows sharing an
+        object_id in different namespaces derive the same key, and the second is refused
+        as `operation_key_conflict` -- it can never transition (Copilot, musubi#771).
+
+        The `canon2:` prefix is deliberate. A bare field insertion could, in principle,
+        produce a v2 key byte-identical to some v1 key (a namespace whose value reads
+        like an object_id), which would silently conflate two different intents. A
+        distinct prefix makes the two key spaces provably disjoint, which is what lets
+        `_legacy_key` probe the old space without ambiguity."""
         return (
             intent.operation_key
-            or f"canon:{intent.collection}:{intent.object_id}:"
+            or f"canon2:{intent.collection}:{intent.namespace}:{intent.object_id}:"
+            f"{intent.expected_version}:{intent.target_state}"
+        )
+
+    def _legacy_key(self, intent: TransitionIntent) -> str | None:
+        """The pre-namespace canonical key, or ``None`` when the caller supplied one.
+
+        An explicit `operation_key` was never derived, so it has no legacy form."""
+        if intent.operation_key is not None:
+            return None
+        return (
+            f"canon:{intent.collection}:{intent.object_id}:"
             f"{intent.expected_version}:{intent.target_state}"
         )
 
@@ -770,8 +810,9 @@ class LifecycleTransitionCoordinator:
         gate → ``INSERT`` → ``COMMIT`` in one write transaction so concurrent admissions
         serialize on the write lock. At/over the cap: raise ``_CapExceeded`` and write no
         row. The ``INSERT`` is not ``OR IGNORE`` — a partial-unique-index violation (a
-        second active intent for the object) raises ``IntegrityError`` so the loser is
-        rejected."""
+        second active intent for the same ``(collection, namespace, object_id)``; an
+        object_id alone does NOT identify a row) raises ``IntegrityError`` so the loser
+        is rejected."""
         self._checkpoint("before_pending_commit")
         patch = _intended_patch(intent)
         patch_sha = _canonical_patch_sha(patch)
@@ -1646,7 +1687,7 @@ class LifecycleTransitionCoordinator:
     ) -> str:
         """Durably admit ONE custom (non-transition) intent of ``kind`` — the generalization of
         :meth:`enqueue_index_intent`. Same cap gate + ``ux_active_intent`` idempotency (one active
-        intent per ``(collection, object_id)``); backpressure NEVER raises. ``patch_json`` is the
+        intent per ``(collection, namespace, object_id)``); backpressure NEVER raises. ``patch_json`` is the
         durable intent payload the handler replays from with no caller memory (DATA-001 P2); it is
         validated as JSON and size-bounded HERE, so a malformed/oversized payload fails truthfully at
         admission rather than silently mid-apply. ``operation_key`` may be supplied by a caller that
@@ -1684,7 +1725,8 @@ class LifecycleTransitionCoordinator:
                 con.execute("COMMIT")
                 return "admitted"
             except sqlite3.IntegrityError:
-                # ux_active_intent: an intent is already active for this (collection, object_id).
+                # ux_active_intent: an intent is already active for this
+                # (collection, namespace, object_id).
                 con.execute("ROLLBACK")
                 return "already_active"
         finally:

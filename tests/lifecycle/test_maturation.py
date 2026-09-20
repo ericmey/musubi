@@ -32,6 +32,7 @@ Architecture notes:
 from __future__ import annotations
 
 import asyncio
+import logging
 import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -2050,4 +2051,75 @@ async def test_a_lease_taken_between_transition_and_enrichment_refuses(
         f"enrichment wrote importance {live[0].get('importance')} onto a row whose "
         f"lease was taken after the transition (seed was {seed_importance}); the "
         f"pre-read saw an empty token and the write never re-checked it"
+    )
+
+
+async def test_the_enrichment_refusal_log_does_not_assert_a_cause_it_cannot_know(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """THE DIAGNOSTIC CELL. The message said `row moved after transition` -- always.
+
+    The fence has four conditions plus the lease term, and a zero-match result is
+    identical for all of them. So when a concurrent MUTATION LEASE refused the write,
+    the operator was told the row had moved: they go looking for a retraction that never
+    happened, and the real cause is invisible (Copilot, musubi#771).
+
+    This drives the LEASE path specifically -- the one the old wording misdiagnosed --
+    and requires the message to state what was observed rather than assert one cause."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="diagnose me", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+
+    def transition_then_take_the_lease(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={"update_lease_token": f"done:{int(utc_now().timestamp() * 1_000_000)}:racer"},
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_take_the_lease)
+    with caplog.at_level(logging.WARNING, logger=maturation.log.name):
+        await episodic_maturation_sweep(
+            client=qdrant,
+            sink=sink,
+            coordinator=_coordinator(qdrant, sink),
+            ollama=FakeOllama(importance=9),
+            cursor=cursor,
+            config=_config(min_age_sec=3600),
+        )
+
+    refusals = [r.getMessage() for r in caplog.records if "enrichment-refused" in r.getMessage()]
+    assert len(refusals) == 1, (
+        f"expected exactly one refusal record, got {len(refusals)}: {refusals} -- without "
+        f"one the assertions below would pass vacuously"
+    )
+    message = refusals[0]
+
+    assert "row moved after transition" not in message, (
+        f"the log states a cause this path cannot determine; the refusal here was a "
+        f"concurrent LEASE, not row movement: {message!r}"
+    )
+    # It must still be actionable: name the observation and both candidate causes.
+    assert "lease" in message, f"the lease cause is not mentioned at all: {message!r}"
+    assert "fence matched no row" in message, (
+        f"the message does not state what was actually observed: {message!r}"
+    )
+    assert str(row.object_id) in message and ns in message, (
+        f"the refusal does not identify which row it is about: {message!r}"
     )
