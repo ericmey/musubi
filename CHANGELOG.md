@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.15](https://github.com/ericmey/musubi/compare/v1.26.14...v1.26.15) (2026-09-20)
+
+
+### Bug Fixes
+
+* **deploy:** preserve multi-service extra vars ([#812](https://github.com/ericmey/musubi/issues/812)) ([dd96cc8](https://github.com/ericmey/musubi/commit/dd96cc8dff6c5cf2ed31e69a8820baea34fab9bf))
+
 ## [1.26.14](https://github.com/ericmey/musubi/compare/v1.26.13...v1.26.14) (2026-09-20)
 
 
