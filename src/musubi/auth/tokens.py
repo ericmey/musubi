@@ -257,7 +257,7 @@ __all__ = [
     "AuthContext",
     "ExpiredTokenError",
     "InvalidTokenError",
-    "TokenValidationSettings",
     "TokenValidationError",
+    "TokenValidationSettings",
     "validate_token",
 ]
