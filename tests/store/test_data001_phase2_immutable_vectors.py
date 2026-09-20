@@ -1534,3 +1534,58 @@ def test_payload_only_publication_refuses_duplicate_v2_anchors_without_mutation(
         )
 
     assert _authoritative_identity_rows(qdrant, collection, object_id) == before
+
+
+def test_sync_publish_returns_exact_commit_when_duplicate_arrives_after_finalization(
+    qdrant: QdrantClient,
+    collection: str,
+    coord: LifecycleTransitionCoordinator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from musubi.store.immutable_vectors import anchor_point_id
+
+    object_id = "obj-post-final-duplicate"
+    pub = _publisher(qdrant, collection)
+    pub.register(coord)
+    pub.publish(coord, object_id=object_id, namespace=_NS, content_payload=_content("old"))
+    anchor_rows = qdrant.retrieve(
+        collection_name=collection,
+        ids=[anchor_point_id(_NS, object_id)],
+        with_payload=True,
+        with_vectors=True,
+    )
+    assert len(anchor_rows) == 1 and anchor_rows[0].payload is not None
+    stale_payload = dict(anchor_rows[0].payload)
+    stale_vector = cast(Any, anchor_rows[0].vector)
+    real_drive = coord.drive_intent
+    inserted = False
+
+    def drive_then_duplicate(operation_key: str) -> Any:
+        nonlocal inserted
+        report = real_drive(operation_key)
+        if report.finalized and not inserted:
+            inserted = True
+            qdrant.upsert(
+                collection_name=collection,
+                points=[
+                    models.PointStruct(
+                        id=str(uuid.uuid4()),
+                        payload=stale_payload,
+                        vector=stale_vector,
+                    )
+                ],
+                wait=True,
+            )
+        return report
+
+    monkeypatch.setattr(coord, "drive_intent", drive_then_duplicate)
+
+    committed = pub.publish(
+        coord,
+        object_id=object_id,
+        namespace=_NS,
+        content_payload=_content("new"),
+    )
+
+    assert committed["content"] == "new"
+    assert len(_authoritative_identity_rows(qdrant, collection, object_id)) == 2
