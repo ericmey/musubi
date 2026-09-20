@@ -531,16 +531,18 @@ async def episodic_maturation_sweep(
         if _enrichment_changed(
             row, normalized, new_importance, new_topics, importance_scored=importance_scored
         ):
-            _apply_enrichment(
+            applied = _apply_enrichment(
                 client,
                 collection=_EPISODIC_COLLECTION,
+                namespace=row["namespace"],
                 object_id=object_id,
                 tags=normalized,
                 importance=new_importance,
                 topics=new_topics,
                 importance_scored=importance_scored,
             )
-            enriched += 1
+            if applied:
+                enriched += 1
 
         transitioned += 1
         row_epoch = float(row.get("updated_epoch", 0.0))
@@ -1050,12 +1052,13 @@ def _apply_enrichment(
     client: QdrantClient,
     *,
     collection: str,
+    namespace: str,
     object_id: KSUID,
     tags: list[str],
     importance: int,
     topics: list[str],
     importance_scored: bool = False,
-) -> None:
+) -> bool:
     """Apply non-state enrichment fields to one row.
 
     ``importance_scored`` records the LLM score-audit timestamp. The field
@@ -1090,16 +1093,23 @@ def _apply_enrichment(
     # State rather than version: the sweep does not hold the post-transition
     # version without an extra read, and state is the property that matters --
     # an archived row must never be enriched at ANY version.
-    client.set_payload(
-        collection_name=collection,
-        payload=payload,
-        points=models.Filter(
-            must=[
-                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
-                models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
-            ]
-        ),
+    fence = models.Filter(
+        must=[
+            # `object_id` is NOT globally unique -- the same id can exist under a
+            # different namespace, and an unqualified filter would enrich a
+            # stranger's row (Copilot, musubi#771).
+            models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+            models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+            models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
+        ]
     )
+    # Count under the SAME fence before writing, so the caller can report what it
+    # actually did. Reporting `enriched` for a write that matched zero rows makes
+    # the sweep's own report the least reliable record of it.
+    if client.count(collection_name=collection, count_filter=fence, exact=True).count == 0:
+        return False
+    client.set_payload(collection_name=collection, payload=payload, points=fence)
+    return True
 
 
 # ---------------------------------------------------------------------------
