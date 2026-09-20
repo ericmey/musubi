@@ -167,10 +167,13 @@ def test_cutover_waits_for_candidate_readiness_before_rolling_back() -> None:
     assert parity["no_log"] is True
     command = parity["ansible.builtin.shell"]["cmd"]
     assert "/usr/bin/timeout --signal=TERM --kill-after=1s 5s" in command
+    entrypoint = "--entrypoint /bin/sh"
+    image = "{{ musubi_curl_image }}"
+    assert command.index(entrypoint) < command.index(image) < command.index(" -ec '")
     assert "curl --parallel --parallel-immediate" in command
     assert "--fail --fail-early" in command
     assert command.count("--output /dev/null") == 3
-    inner_script = command.split("sh -ec '", 1)[1].rsplit("'", 1)[0]
+    inner_script = command.split(" -ec '", 1)[1].rsplit("'", 1)[0]
     assert "\n" not in inner_script, "a folded command must not execute its options as commands"
     assert "--connect-timeout 2" in command
     assert "--max-time 3" in command
