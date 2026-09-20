@@ -189,8 +189,15 @@ def _publish_non_embedding_payload(
     observed_payload: dict[str, Any],
     changes: dict[str, Any],
     tag_mode: Literal["replace", "merge"],
+    adopted_done_token: str | None = None,
 ) -> dict[str, Any]:
-    """Shared private one-shot CAS/readback/exact-token-release machinery."""
+    """Shared private one-shot CAS/readback/exact-token-release machinery.
+
+    Retraction recovery may adopt the exact ``done:*`` token left by the
+    committed write it is repairing.  In that mode the repair remains fenced
+    by the existing token through readback and releases it only after the
+    corrected payload is confirmed.
+    """
     if tag_mode not in {"replace", "merge"}:
         raise ValueError(f"unsupported tag_mode {tag_mode!r}")
     overlap = _PATCH_SEAM_FIELDS & changes.keys()
@@ -200,6 +207,27 @@ def _publish_non_embedding_payload(
     fence, observed_version, is_anchor = _non_embedding_patch_filter(
         namespace=namespace, object_id=object_id, observed_payload=observed_payload
     )
+    if adopted_done_token is not None:
+        if (
+            not adopted_done_token.startswith("done:")
+            or observed_payload.get("update_lease_token") != adopted_done_token
+        ):
+            raise ValueError("adopted mutation token is not the exact committed done token")
+        must = cast(
+            list[models.Condition],
+            [
+                condition
+                for condition in (fence.must or [])
+                if not isinstance(condition, models.IsEmptyCondition)
+            ],
+        )
+        must.append(
+            models.FieldCondition(
+                key="update_lease_token",
+                match=models.MatchValue(value=adopted_done_token),
+            )
+        )
+        fence = models.Filter(must=must, must_not=fence.must_not)
     narrow = dict(changes)
     if "tags" in narrow:
         requested = list(narrow["tags"])
@@ -209,7 +237,9 @@ def _publish_non_embedding_payload(
             else requested
         )
     next_version = observed_version + 1
-    done = f"done:{int(utc_now().timestamp() * 1_000_000)}:{secrets.token_hex(12)}"
+    done = adopted_done_token or (
+        f"done:{int(utc_now().timestamp() * 1_000_000)}:{secrets.token_hex(12)}"
+    )
     client.set_payload(
         collection_name=collection,
         payload={**narrow, "version": next_version, "update_lease_token": done},
@@ -332,6 +362,7 @@ def retract_non_embedding_payload(
     target_payload: dict[str, Any],
     changes: dict[str, Any],
     evidence: RetractionEvidence,
+    adopted_done_token: str | None = None,
 ) -> dict[str, Any]:
     """Commit one evidence-gated projection divergence without re-embedding.
 
@@ -364,6 +395,7 @@ def retract_non_embedding_payload(
         observed_payload=observed_payload,
         changes={**changes, "retraction_evidence": evidence.model_dump(mode="json")},
         tag_mode="replace",
+        adopted_done_token=adopted_done_token,
     )
 
 

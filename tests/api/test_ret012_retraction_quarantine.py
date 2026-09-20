@@ -283,6 +283,88 @@ def test_evidence_adoption_releases_committed_done_token_without_reapplying_retr
     )
 
 
+@pytest.mark.parametrize("layout", ["legacy", "v2"])
+def test_evidence_adoption_repairs_quarantine_before_releasing_committed_token(
+    layout: str,
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+    receipt_store: DurableReceiptStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout=layout,
+        state="matured",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+    headers = {
+        "Authorization": f"Bearer {valid_token}",
+        "Idempotency-Key": f"quarantine-atomic-repair-{layout}",
+    }
+    body = _body(memory.version)
+    first = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert first.status_code == 200, first.text
+    committed_logical = asyncio.run(episodic.get(namespace=_NS, object_id=memory.object_id))
+    assert committed_logical is not None
+    committed = _layout(qdrant, memory.object_id)
+
+    # Model the combined recovery case: the old commit retained active lifecycle
+    # fields and crashed after stamping its attributable done token.
+    done = "done:1:crashed-pre-quarantine-committer"
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"state": "matured", "importance": 6, "update_lease_token": done},
+        points=[committed[0]["id"]],
+        wait=True,
+    )
+    with sqlite3.connect(receipt_store.path) as connection:
+        connection.execute("DELETE FROM idempotency_receipts")
+    _GLOBAL_LEASE_CACHE._entries.clear()
+
+    releases: list[tuple[str | None, int | None]] = []
+    real_delete_payload = qdrant.delete_payload
+
+    def assert_quarantined_before_release(*args: Any, **kwargs: Any) -> Any:
+        if "update_lease_token" in kwargs.get("keys", []):
+            identity = _layout(qdrant, memory.object_id)[0]["payload"]
+            releases.append((identity.get("state"), identity.get("importance")))
+            assert releases[-1] == ("archived", 1), (
+                "the exact token must continue fencing lifecycle writers until "
+                "the quarantine repair is committed"
+            )
+        return real_delete_payload(*args, **kwargs)
+
+    monkeypatch.setattr(qdrant, "delete_payload", assert_quarantined_before_release)
+    adopted = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert adopted.status_code == 200, adopted.text
+    assert releases == [("archived", 1)]
+    assert adopted.json()["version"] == committed_logical.version + 1
+    repaired = _layout(qdrant, memory.object_id)
+    assert "update_lease_token" not in repaired[0]["payload"]
+    assert repaired[0]["payload"]["updated_at"] == committed[0]["payload"]["updated_at"]
+    assert repaired[0]["payload"]["updated_epoch"] == committed[0]["payload"]["updated_epoch"]
+    if layout == "v2":
+        assert repaired[1] == committed[1]
+        assert repaired[0]["vector"] == committed[0]["vector"]
+    else:
+        assert repaired[0]["vector"] == committed[0]["vector"]
+
+
 class _NoEnrichment:
     async def score_importance(self, _items: list[Any]) -> None:
         raise AssertionError("an archived retraction must never reach importance enrichment")

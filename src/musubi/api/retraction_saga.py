@@ -237,6 +237,20 @@ def _validate_adopted_artifact(
         )
 
 
+def _adopted_done_token(stored: _StoredOriginal) -> str | None:
+    """Return an attributable committed token, refusing active or malformed leases."""
+    token = stored.raw.get("update_lease_token")
+    if token is None:
+        return None
+    if not isinstance(token, str) or not token.startswith("done:"):
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail="committed retraction row has an active or malformed mutation lease",
+        )
+    return token
+
+
 async def _release_adopted_done_token(
     *,
     qdrant: QdrantClient,
@@ -244,6 +258,7 @@ async def _release_adopted_done_token(
     namespace: str,
     object_id: str,
     stored: _StoredOriginal,
+    token: str,
 ) -> _StoredOriginal:
     """Release only an attributable post-commit token during evidence adoption.
 
@@ -252,39 +267,32 @@ async def _release_adopted_done_token(
     finish.  Any other token may belong to a live writer and is never cleared by
     adoption.
     """
-    token = stored.raw.get("update_lease_token")
-    if token is None:
-        return stored
-    if not isinstance(token, str) or not token.startswith("done:"):
-        raise APIError(
-            status_code=409,
-            code="CONFLICT",
-            detail="committed retraction row has an active or malformed mutation lease",
-        )
 
-    must: list[models.Condition] = [
-        models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
-        models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
-        models.FieldCondition(
-            key="version", match=models.MatchValue(value=int(stored.raw.get("version", 0)))
-        ),
-        models.FieldCondition(key="update_lease_token", match=models.MatchValue(value=token)),
-    ]
-    must_not: list[models.Condition] = []
-    if stored.is_v2:
-        must.append(
-            models.FieldCondition(key="point_kind", match=models.MatchValue(value="anchor"))
-        )
-    else:
-        must_not.append(
-            models.FieldCondition(
-                key="point_kind", match=models.MatchAny(any=["anchor", "content"])
+    def token_filter(version: int) -> models.Filter:
+        must: list[models.Condition] = [
+            models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+            models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+            models.FieldCondition(key="version", match=models.MatchValue(value=version)),
+            models.FieldCondition(key="update_lease_token", match=models.MatchValue(value=token)),
+        ]
+        must_not: list[models.Condition] = []
+        if stored.is_v2:
+            must.append(
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value="anchor"))
             )
-        )
+        else:
+            must_not.append(
+                models.FieldCondition(
+                    key="point_kind", match=models.MatchAny(any=["anchor", "content"])
+                )
+            )
+        return models.Filter(must=must, must_not=must_not)
+
+    release_version = int(stored.raw.get("version", 0))
     qdrant.delete_payload(
         collection_name="musubi_episodic",
         keys=["update_lease_token"],
-        points=models.Filter(must=must, must_not=must_not),
+        points=token_filter(release_version),
         wait=True,
     )
     refreshed = await _read_original(
@@ -404,13 +412,7 @@ async def execute_retraction(
                     code="CONFLICT",
                     detail="committed retraction prefix is absent from episodic storage",
                 )
-        stored = await _release_adopted_done_token(
-            qdrant=qdrant,
-            episodic=episodic,
-            namespace=body.namespace,
-            object_id=object_id,
-            stored=stored,
-        )
+        adopted_done_token = _adopted_done_token(stored)
         adopted = stored.logical
         if adopted.state != "archived" or adopted.importance != 1:
             try:
@@ -423,6 +425,7 @@ async def execute_retraction(
                     target_payload=stored.target,
                     changes={"state": "archived", "importance": 1},
                     evidence=evidence,
+                    adopted_done_token=adopted_done_token,
                 )
             except NonEmbeddingPatchConflict as exc:
                 raise APIError(status_code=409, code="CONFLICT", detail=str(exc)) from exc
@@ -439,6 +442,16 @@ async def execute_retraction(
                     detail="committed retraction quarantine repair did not commit",
                 ) from exc
             adopted = EpisodicMemory.model_validate(strip_layout_fields(published))
+        elif adopted_done_token is not None:
+            stored = await _release_adopted_done_token(
+                qdrant=qdrant,
+                episodic=episodic,
+                namespace=body.namespace,
+                object_id=object_id,
+                stored=stored,
+                token=adopted_done_token,
+            )
+            adopted = stored.logical
         return RetractEpisodicResponse(
             object_id=object_id,
             version=adopted.version,

@@ -60,7 +60,9 @@ the escrow artifact remain available for correction and audit.
    proves a valid evidence-bearing pre-quarantine row is repaired during receipt-loss
    adoption without rewriting vectors, immutable content, or committed timestamps;
    `test_evidence_adoption_releases_committed_done_token_without_reapplying_retraction`
-   proves the same path finishes exact post-commit token release without reapplying the mutation.
+   proves the same path finishes exact post-commit token release without reapplying the mutation;
+   `test_evidence_adoption_repairs_quarantine_before_releasing_committed_token`
+   proves an old active row is repaired while the exact token still fences lifecycle writers.
 3. `test_retracted_provisional_row_cannot_reenter_maturation_after_one_hour`
    advances lifecycle time and proves zero selection, zero enrichment, archived
    state, and importance 1.
@@ -83,3 +85,20 @@ the escrow artifact remain available for correction and audit.
 - 2026-08-17 — Claimed #731 after production exact read proved Aoi's retracted
   provisional false row matured after one hour to importance 6. This slice uses
   the existing archived state and changes only the dedicated retraction saga.
+- 2026-09-20 — Implemented terminal quarantine in the evidence-gated retraction CAS and
+  receipt-loss adoption. The diff archives and demotes new retractions, repairs valid historical
+  evidence during adoption, and finishes exact committed-token recovery without opening an active
+  lifecycle window. Physical-layout assertions preserve legacy/v2 vectors, v2 immutable content,
+  committed timestamps, and exact replay behavior.
+- 2026-09-20 — Test Contract coverage: four layout/state new-write cells; two legacy/v2 historical
+  repair cells; two committed-token release cells; two atomic repair-before-release cells; one
+  time-advanced maturation exclusion cell; and the named IDEM-007/008 replay, timestamp, stale
+  version, and malformed-evidence regressions. The combined recovery cell was observed red on both
+  layouts before the atomic repair and green afterward.
+- 2026-09-20 — Production census found eleven escrow-backed historical rows still requiring the
+  separately controlled backfill before issue #731 can close. This slice stops new violations and
+  does not claim that deployment alone repairs rows that are never replayed.
+- 2026-09-20 — Frozen-candidate verification: `make check` completed with 2745 passed, 195 skipped,
+  140 deselected, and 2 documented xfails. Removing the adopted-token handoff made both legacy and
+  v2 atomic repair-before-release cells fail; restoring it returned them and the lifecycle
+  state-mutation closure gate to green.
