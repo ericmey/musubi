@@ -16,9 +16,9 @@ from musubi.retrieve.offload import (
     QDRANT_OPTIONAL_OFFLOAD_WORKERS,
     QDRANT_REQUIRED_OFFLOAD_WORKERS,
     run_optional_qdrant_offload,
-    run_qdrant_offload,
 )
 from musubi.retrieve.scoring import ScoreComponents, ScoredHit
+from musubi.types.common import Ok
 
 
 def _hit(object_id: str) -> ScoredHit:
@@ -194,12 +194,12 @@ async def test_twenty_concurrent_callers_complete_with_bounded_offload(
         asyncio.gather(
             *(
                 deep._hydrate_lineage_async(
-                    hits, cast(Any, object()), cast(Any, object()), timeout_s=0.3
+                    hits, cast(Any, object()), cast(Any, object()), timeout_s=0.5
                 )
                 for _ in range(20)
             )
         ),
-        timeout=0.5,
+        timeout=1.0,
     )
 
     assert all(
@@ -211,6 +211,15 @@ async def test_twenty_concurrent_callers_complete_with_bounded_offload(
 async def test_saturated_optional_lineage_cannot_starve_required_queries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Earlier timeout tests deliberately leave their non-cancellable worker call running. Occupy
+    # every slot with a barrier first so this test starts only after all earlier work has drained.
+    drain_barrier = threading.Barrier(QDRANT_OPTIONAL_OFFLOAD_WORKERS)
+    await asyncio.gather(
+        *(
+            run_optional_qdrant_offload(drain_barrier.wait)
+            for _ in range(QDRANT_OPTIONAL_OFFLOAD_WORKERS)
+        )
+    )
     all_optional_workers_started = threading.Event()
     release_optional_workers = threading.Event()
     lock = threading.Lock()
@@ -232,14 +241,15 @@ async def test_saturated_optional_lineage_cannot_starve_required_queries(
     hits = [_hit(str(index)) for index in range(QDRANT_OPTIONAL_OFFLOAD_WORKERS)]
     monkeypatch.setattr(deep, "_hydrate_one", stalled_hydrate)
     hydration = asyncio.create_task(
-        deep._hydrate_lineage_async(
-            hits, cast(Any, object()), cast(Any, object()), timeout_s=0.02
-        )
+        deep._hydrate_lineage_async(hits, cast(Any, object()), cast(Any, object()), timeout_s=0.1)
     )
 
-    try:
+    async def wait_until_optional_pool_is_full() -> None:
         while not all_optional_workers_started.is_set():
             await asyncio.sleep(0.001)
+
+    try:
+        await asyncio.wait_for(wait_until_optional_pool_is_full(), timeout=0.2)
         assert await hydration == hits
         await asyncio.wait_for(
             hybrid._query_points(
@@ -293,7 +303,7 @@ async def test_twenty_callers_complete_through_the_production_deep_path(
             timeout_s=timeout_s,
         )
         hits = await hybrid._resolve_hits_async(response, client=client, collection=collection)
-        return deep.Ok(value=hybrid.HybridSearchResult(hits=hits))
+        return Ok(value=hybrid.HybridSearchResult(hits=hits))
 
     def hydrate(item: ScoredHit, *_args: Any) -> ScoredHit:
         time.sleep(0.003)
@@ -320,7 +330,7 @@ async def test_twenty_callers_complete_through_the_production_deep_path(
     )
 
     assert all(
-        isinstance(result, deep.Ok)
+        isinstance(result, Ok)
         and len(result.value.hits) == 3
         and all(hit.payload.get("hydrated") is True for hit in result.value.hits)
         for result in results

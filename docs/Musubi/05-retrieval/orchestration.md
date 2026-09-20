@@ -218,13 +218,14 @@ budget and turn an otherwise healthy retrieval into a 503.
 Authoritative-anchor resolution and lineage hydration use the synchronous
 Qdrant client. The retrieval orchestrator offloads those reads from the asyncio
 event-loop thread; under concurrent blended calls they must not serialize
-unrelated requests behind one caller's Qdrant round trips. A dedicated
-16-worker executor is the per-process concurrency ceiling for authoritative
-resolution, Qdrant queries, and lineage hydration; excess calls queue without
-occupying the shared asyncio executor. The supported regression load is 20
-concurrent callers with five lineage hits each. Saturation is stage-local:
-expired lineage work degrades to the original hit and does not produce a
-whole-request 503.
+unrelated requests behind one caller's Qdrant round trips. Two dedicated pools
+provide a 16-worker per-process ceiling: eight slots for required Qdrant queries
+and authoritative resolution, plus eight isolated slots for optional lineage
+hydration. Excess calls queue without occupying the shared asyncio executor. The
+supported regression load is 20 concurrent callers through the public deep path
+with query, authoritative resolution, rerank, scoring, and lineage stages.
+Saturation is stage-local: expired lineage work degrades to the original hit,
+cannot occupy required-query capacity, and does not produce a whole-request 503.
 
 The lineage worker invokes a synchronous hydration seam, not `asyncio.run()`.
 Plane `get` methods used there must complete without suspending on a loop-bound

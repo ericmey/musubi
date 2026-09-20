@@ -141,12 +141,15 @@ rerank timeout returns the pre-rerank hybrid order with the structured
 the object id plus budget. Qdrant-backed authoritative resolution and lineage
 reads run outside the event-loop thread so concurrent blended callers do not
 starve one another before the five-second whole-call deadline. All blocking
-Qdrant retrieval work shares a dedicated executor capped at 16 active calls per
-API process; excess work queues behind that ceiling instead of consuming the
+Qdrant retrieval work uses two dedicated executors capped at 16 total active
+calls per API process: eight slots reserved for required query and
+authoritative-resolution work, and eight isolated slots for optional lineage
+hydration. Excess work queues behind its stage ceiling instead of consuming the
 asyncio default executor. The production-shaped regression covers 20 concurrent
-deep callers with five lineage hits each. When the executor is saturated, the
-per-hit lineage deadline still returns the original unhydrated hit rather than
-failing the whole request.
+callers through the public deep path, including query, authoritative resolution,
+rerank, scoring, and lineage stages. When the optional executor is saturated,
+the per-hit lineage deadline still returns the original unhydrated hit without
+starving a required query or failing the whole request.
 
 Lineage hydration has no per-hit event-loop adapter. Its worker-thread seam may
 only call plane reads that complete synchronously without suspending; if a plane

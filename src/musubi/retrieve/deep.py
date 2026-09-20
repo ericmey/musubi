@@ -23,7 +23,7 @@ from musubi.planes.concept.plane import ConceptPlane
 from musubi.planes.curated.plane import CuratedPlane
 from musubi.planes.episodic.plane import EpisodicPlane
 from musubi.retrieve.hybrid import HybridHit, HybridSearchResult, hybrid_search
-from musubi.retrieve.offload import run_qdrant_offload
+from musubi.retrieve.offload import run_optional_qdrant_offload
 from musubi.retrieve.rerank import RerankResult, hybrid_fallback, rerank
 from musubi.retrieve.scoring import Hit, ScoredHit, rank_hits
 from musubi.retrieve.warnings import RetrievalWarning, reranker_failed
@@ -254,7 +254,7 @@ async def _hydrate_lineage_async(
     async def hydrate_or_original(hit: ScoredHit) -> ScoredHit:
         try:
             return await asyncio.wait_for(
-                run_qdrant_offload(_run_hydrate_one, hit, client, embedder),
+                run_optional_qdrant_offload(_run_hydrate_one, hit, client, embedder),
                 timeout=timeout_s,
             )
         except TimeoutError:

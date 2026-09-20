@@ -7,13 +7,22 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 
-QDRANT_OFFLOAD_WORKERS = 16
-"""Maximum blocking Qdrant retrieval calls active in one API process."""
+QDRANT_REQUIRED_OFFLOAD_WORKERS = 8
+"""Capacity reserved for required query and authoritative-resolution work."""
 
+QDRANT_OPTIONAL_OFFLOAD_WORKERS = 8
+"""Capacity reserved for optional lineage hydration work."""
 
-_QDRANT_EXECUTOR = ThreadPoolExecutor(
-    max_workers=QDRANT_OFFLOAD_WORKERS,
-    thread_name_prefix="musubi-qdrant-retrieve",
+QDRANT_OFFLOAD_WORKERS = QDRANT_REQUIRED_OFFLOAD_WORKERS + QDRANT_OPTIONAL_OFFLOAD_WORKERS
+"""Total blocking Qdrant retrieval calls active in one API process."""
+
+_QDRANT_REQUIRED_EXECUTOR = ThreadPoolExecutor(
+    max_workers=QDRANT_REQUIRED_OFFLOAD_WORKERS,
+    thread_name_prefix="musubi-qdrant-required",
+)
+_QDRANT_OPTIONAL_EXECUTOR = ThreadPoolExecutor(
+    max_workers=QDRANT_OPTIONAL_OFFLOAD_WORKERS,
+    thread_name_prefix="musubi-qdrant-optional",
 )
 
 
@@ -23,7 +32,22 @@ async def run_qdrant_offload[T](
     """Run blocking retrieval I/O on the dedicated, deliberately sized executor."""
     loop = asyncio.get_running_loop()
     call = partial(function, *args, **kwargs)
-    return await loop.run_in_executor(_QDRANT_EXECUTOR, call)
+    return await loop.run_in_executor(_QDRANT_REQUIRED_EXECUTOR, call)
 
 
-__all__ = ["QDRANT_OFFLOAD_WORKERS", "run_qdrant_offload"]
+async def run_optional_qdrant_offload[T](
+    function: Callable[..., T], /, *args: object, **kwargs: object
+) -> T:
+    """Run optional lineage I/O without consuming capacity required for base retrieval."""
+    loop = asyncio.get_running_loop()
+    call = partial(function, *args, **kwargs)
+    return await loop.run_in_executor(_QDRANT_OPTIONAL_EXECUTOR, call)
+
+
+__all__ = [
+    "QDRANT_OFFLOAD_WORKERS",
+    "QDRANT_OPTIONAL_OFFLOAD_WORKERS",
+    "QDRANT_REQUIRED_OFFLOAD_WORKERS",
+    "run_optional_qdrant_offload",
+    "run_qdrant_offload",
+]
