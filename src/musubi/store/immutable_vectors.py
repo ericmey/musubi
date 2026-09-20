@@ -145,6 +145,39 @@ _PATCH_SEAM_FIELDS = LAYOUT_ONLY_FIELDS | {
 }
 
 
+def _legacy_fence_not_retracted(namespace: str, object_id: str, obs_version: int) -> models.Filter:
+    """`_legacy_conversion_filter` plus the evidence predicate.
+
+    The v1/legacy branches of both publisher write paths fall through to
+    `_legacy_conversion_filter`, so fencing only the v2 anchor branches would have left
+    the legacy layout -- the one most of RET-012's own cells exercise -- wide open. Same
+    defect shape as the guard this whole thread is about: correct at the site I was
+    looking at, absent at its sibling.
+    """
+    base = _legacy_conversion_filter(namespace, object_id, obs_version)
+    return models.Filter(must=[*(base.must or []), _not_retracted()])
+
+
+def _not_retracted() -> models.Condition:
+    """The evidence predicate, as a condition ON THE WRITE rather than ahead of it.
+
+    A preflight that reads the row and then calls a handler which does its OWN read and
+    write closes nothing: a retraction committing in that gap is rebased onto by the
+    handler, so the version fence passes and the write lands on a quarantined row. The
+    coordinator's preflight still refuses the common case early and cheaply, but it
+    cannot be what the contract rests on.
+
+    `IsEmpty` is correct here and `retraction_evidence` is genuinely absent rather than
+    empty on a live row: the saga sets it as a populated object in the same CAS that sets
+    `state=archived`. Contrast `update_lease_token`, where a present empty string is a
+    real stored value and `IsEmpty` does NOT match it (musubi#771/#782).
+
+    A pre-read is not a fence. The server-side condition on the write is what gates
+    (Copilot round 25 on musubi#732 -- against a rule I wrote on #771 and then broke).
+    """
+    return models.IsEmptyCondition(is_empty=models.PayloadField(key="retraction_evidence"))
+
+
 def _non_embedding_patch_filter(
     *, namespace: str, object_id: str, observed_payload: dict[str, Any]
 ) -> tuple[models.Filter, int, bool]:
@@ -1001,7 +1034,7 @@ class ImmutableVectorPublisher:
                 self._client.set_payload(
                     collection_name=self._collection,
                     payload={**publish, "access_count": base_access},
-                    points=_legacy_conversion_filter(ctx.namespace, ctx.object_id, obs_version),
+                    points=_legacy_fence_not_retracted(ctx.namespace, ctx.object_id, obs_version),
                 )
             else:
                 # Brand-new object (no legacy row): create the anchor separately with a zero vector.
@@ -1042,6 +1075,7 @@ class ImmutableVectorPublisher:
                         models.FieldCondition(
                             key="version", match=models.MatchValue(value=obs_version)
                         ),
+                        _not_retracted(),
                     ]
                 ),
             )
@@ -1083,7 +1117,7 @@ class ImmutableVectorPublisher:
             "committed_operation_id": ctx.operation_key,
         }
         if anchor is None:
-            fence = _legacy_conversion_filter(ctx.namespace, ctx.object_id, obs_version)
+            fence = _legacy_fence_not_retracted(ctx.namespace, ctx.object_id, obs_version)
         else:
             # v2: fence on the EXACT anchor identity (point_kind==anchor), not merely must_not content —
             # a stray legacy identity row for the same object would otherwise match too (Yua tightening).
@@ -1101,6 +1135,7 @@ class ImmutableVectorPublisher:
                     models.FieldCondition(
                         key="version", match=models.MatchValue(value=obs_version)
                     ),
+                    _not_retracted(),
                 ]
             )
         self._client.set_payload(collection_name=self._collection, payload=narrow, points=fence)

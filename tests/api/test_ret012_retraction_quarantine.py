@@ -904,3 +904,86 @@ def test_retracted_row_cannot_regain_importance_through_patch(
     after = _raw_authoritative(qdrant, memory.object_id)
     assert after["importance"] == 1, "a retracted row regained importance"
     assert after["state"] == "archived"
+
+
+def test_retraction_committing_after_the_preflight_still_cannot_be_overwritten(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+) -> None:
+    """The one window a read-only preflight can never close.
+
+    The custom-intent guard reads the row, sees no evidence, and hands off to a handler
+    that performs its OWN read and its OWN fenced write. Two orderings follow, and only
+    one of them is the defect::
+
+        preflight ok -> handler reads (N) -> retraction commits (N+1) -> write fenced on N
+            already blocked, by the VERSION fence
+
+        preflight ok -> retraction commits (N+1) -> handler reads (N+1) -> write fenced on N+1
+            LANDS on a quarantined row, and only an evidence predicate on the write stops it
+
+    `inject_pre_publish_once` fires after the handler has read, so it can only produce the
+    first ordering -- a cell built on it passes with the evidence predicate removed and
+    proves the version fence instead. This wraps the registered handler so the retraction
+    commits BEFORE the handler reads, which is the second ordering.
+
+    A pre-read is not a fence. The server-side condition on the write is what gates
+    (Copilot round 25 on musubi#732).
+    """
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout="legacy",
+        state="provisional",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+        content="A claim retracted between preflight and handler read.",
+    )
+
+    inner = coordinator._intent_handlers["immutable_vector_publish"]
+    fired: list[bool] = []
+
+    def retract_then_handle(ctx: Any) -> str:
+        # The coordinator preflight has ALREADY passed at this point (no evidence yet).
+        if not fired:
+            fired.append(True)
+            resp = client.post(
+                f"/v1/episodic/{memory.object_id}/retract",
+                headers={
+                    "Authorization": f"Bearer {valid_token}",
+                    "Idempotency-Key": "quarantine-after-preflight",
+                },
+                json=_body(memory.version),
+            )
+            assert resp.status_code == 200, resp.text
+        # The real handler now reads FRESH -- already retracted, version bumped -- and
+        # rebases onto it, so its version fence will pass.
+        return str(inner(ctx))
+
+    coordinator.register_intent_handler("immutable_vector_publish", retract_then_handle)
+    try:
+        try:
+            publisher.publish(
+                coordinator,
+                object_id=memory.object_id,
+                namespace=memory.namespace,
+                content_payload={"content": "OVERWRITTEN AFTER PREFLIGHT"},
+            )
+        except Exception:
+            pass  # losing the fence is the CORRECT outcome; the assertions are the proof
+    finally:
+        coordinator.register_intent_handler("immutable_vector_publish", inner)
+
+    assert fired, "the handler wrapper never ran; this cell proves nothing"
+
+    after = _raw_authoritative(qdrant, memory.object_id)
+    assert after.get("retraction_evidence") is not None, "the retraction did not commit"
+    assert after["state"] == "archived"
+    assert "OVERWRITTEN AFTER PREFLIGHT" not in str(after["content"]), (
+        "a publish that rebased past the preflight overwrote a quarantined row"
+    )
