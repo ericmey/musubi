@@ -96,7 +96,11 @@ test-integration:
 	  echo "make test-integration requires docker; install Docker Desktop or skip"; \
 	  exit 2; \
 	fi
-	MUSUBI_TEST_QDRANT_PORT=$${MUSUBI_TEST_QDRANT_PORT:-6333} uv run pytest \
+	set -a; . deploy/test-env/.env.test; set +a; \
+	  MUSUBI_TEST_QDRANT_PORT=$${MUSUBI_TEST_QDRANT_PORT:-6333}; \
+	  export MUSUBI_TEST_QDRANT_PORT; \
+	  export QDRANT_PORT=$$MUSUBI_TEST_QDRANT_PORT; \
+	  uv run pytest \
 	  tests/ -m integration -ra --strict-markers --no-cov
 
 # --------------------------------------------------------------------------

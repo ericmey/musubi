@@ -111,6 +111,13 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -o pipefail
+          set -a
+          . deploy/test-env/.env.test
+          set +a
+          # Settings-backed live tests read QDRANT_PORT, while store-level
+          # integration fixtures use MUSUBI_TEST_QDRANT_PORT. Keep both on
+          # the compose service selected by this job.
+          export QDRANT_PORT="$MUSUBI_TEST_QDRANT_PORT"
           uv run pytest tests/ -m integration -ra --strict-markers --no-cov -v \
             2>&1 | tee integration.log
         timeout-minutes: 12
