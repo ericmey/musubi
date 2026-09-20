@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, TypedDict, cast
 
 import pytest
 import yaml
@@ -414,6 +415,11 @@ jobs:
 # --- Durable operator incident for scheduled live-gate failures -------------------------------
 
 
+class _ReporterCall(TypedDict):
+    method: str
+    args: dict[str, Any]
+
+
 def _run_scheduled_incident_reporter(
     *, result: str, issues: list[dict[str, object]], fail_listing: bool = False
 ) -> subprocess.CompletedProcess[str]:
@@ -465,10 +471,10 @@ reconcileScheduledEvals({
     )
 
 
-def _reporter_calls(*, result: str, issues: list[dict[str, object]]) -> list[dict[str, object]]:
+def _reporter_calls(*, result: str, issues: list[dict[str, object]]) -> list[_ReporterCall]:
     completed = _run_scheduled_incident_reporter(result=result, issues=issues)
     assert completed.returncode == 0, completed.stderr
-    return json.loads(completed.stdout)
+    return cast(list[_ReporterCall], json.loads(completed.stdout))
 
 
 def _assert_scheduled_incident_contract(content: str) -> None:
