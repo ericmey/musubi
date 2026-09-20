@@ -1076,11 +1076,28 @@ def _apply_enrichment(
     if importance_scored:
         payload["importance_last_scored_at"] = now.isoformat()
         payload["importance_last_scored_epoch"] = epoch_of(now)
+    # FENCED on the state this sweep just established. The transition and this
+    # enrichment are two writes, so anything that moves the row in between --
+    # a retraction quarantining it to `archived`/importance 1 is the live case --
+    # was previously overwritten here, giving a retracted row a rescored
+    # importance and a post-retraction `updated_at` (musubi#732, 2026-09-20).
+    #
+    # This also excludes v2 immutable content points, which carry no `state` key
+    # at all: a FieldCondition cannot match a point that lacks the field. That
+    # exclusion is load-bearing rather than incidental, so
+    # `test_v2_content_point_is_never_enriched` pins it.
+    #
+    # State rather than version: the sweep does not hold the post-transition
+    # version without an extra read, and state is the property that matters --
+    # an archived row must never be enriched at ANY version.
     client.set_payload(
         collection_name=collection,
         payload=payload,
         points=models.Filter(
-            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
+            must=[
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+                models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
+            ]
         ),
     )
 
