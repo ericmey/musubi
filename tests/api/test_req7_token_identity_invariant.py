@@ -74,15 +74,24 @@ def test_cross_tenant_scope_among_matching_scopes_must_be_rejected(
 
 @pytest.mark.parametrize(
     "presence",
-    ["eric", "eric/", "/claude-code", "eric/claude-code/extra", "*/claude-code"],
+    [
+        "eric",
+        "eric/",
+        "/claude-code",
+        "eric/claude-code/extra",
+        "*/claude-code",
+        "eric*/claude-code",
+        "eric/claude*",
+    ],
 )
 def test_presence_must_be_a_two_segment_identity(
     api_settings: Settings,
     presence: str,
 ) -> None:
+    scope_tenant = presence.split("/", 1)[0] or "eric"
     token = mint_token(
         api_settings,
-        scopes=["eric/claude-code/episodic:r"],
+        scopes=[f"{scope_tenant}/probe/episodic:r"],
         presence=presence,
     )
     assert not _is_ok(validate_token(token, settings=api_settings))
@@ -177,10 +186,16 @@ def test_d6_identity_is_issuer_subject_presence_not_jti(api_settings: Settings) 
     tuple must be equal; a token with a different presence is a DIFFERENT caller. This asserts
     the tuple the replay cache must key on (req 9 will consume it), and that jti is excluded."""
     t1 = mint_token(
-        api_settings, scopes=["eric/claude-code/episodic:rw"], presence="eric/claude-code"
+        api_settings,
+        scopes=["eric/claude-code/episodic:rw"],
+        presence="eric/claude-code",
+        token_id="req7-token-one",
     )
     t2 = mint_token(
-        api_settings, scopes=["eric/claude-code/episodic:rw"], presence="eric/claude-code"
+        api_settings,
+        scopes=["eric/claude-code/episodic:rw"],
+        presence="eric/claude-code",
+        token_id="req7-token-two",
     )
     c1 = validate_token(t1, settings=api_settings)
     c2 = validate_token(t2, settings=api_settings)
@@ -189,7 +204,7 @@ def test_d6_identity_is_issuer_subject_presence_not_jti(api_settings: Settings) 
     id2 = (c2.value.issuer, c2.value.subject, c2.value.presence)
     assert id1 == id2, "same (iss,sub,presence) must be one identity regardless of jti"
     # jti (token_id) is present but must NOT be part of the identity tuple.
-    assert c1.value.token_id == c2.value.token_id == "test-token", "precondition: same jti here"
+    assert c1.value.token_id != c2.value.token_id, "precondition: tokens must differ in jti"
     # A different presence is a different caller.
     t3 = mint_token(api_settings, scopes=["other/pres/episodic:rw"], presence="other/pres")
     c3 = validate_token(t3, settings=api_settings)
