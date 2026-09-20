@@ -30,6 +30,14 @@ def test_workflow_selects_every_integration_marked_test_by_default() -> None:
     assert ".py" not in command, "workflow must not maintain a per-file pytest inventory"
 
 
+def test_workflow_loads_live_stack_settings_before_marker_wide_suite() -> None:
+    command = _integration_run_command()
+    source_index = command.index(". deploy/test-env/.env.test")
+    port_index = command.index('export QDRANT_PORT="$MUSUBI_TEST_QDRANT_PORT"')
+    pytest_index = command.index("uv run pytest tests/")
+    assert source_index < port_index < pytest_index
+
+
 def test_pull_request_trigger_covers_new_test_files_by_default() -> None:
     paths = _workflow()["on"]["pull_request"]["paths"]
     assert "tests/**" in paths
@@ -44,3 +52,13 @@ def test_local_integration_target_uses_the_same_marker_wide_selection() -> None:
     target = target.split("\n\n", 1)[0]
     assert "tests/ -m integration" in target
     assert ".py" not in target, "local target must not maintain a per-file pytest inventory"
+
+
+def test_local_integration_target_loads_settings_and_maps_custom_qdrant_port() -> None:
+    makefile = MAKEFILE.read_text()
+    target = makefile.split("test-integration:", 1)[1]
+    target = target.split("\n\n", 1)[0]
+    source_index = target.index(". deploy/test-env/.env.test")
+    port_index = target.index("export QDRANT_PORT=$$MUSUBI_TEST_QDRANT_PORT")
+    pytest_index = target.index("uv run pytest")
+    assert source_index < port_index < pytest_index
