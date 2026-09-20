@@ -115,3 +115,6 @@ the escrow artifact remain available for correction and audit.
   evidence-gated retraction CAS. Every other store path and ordinary writer behavior remains
   forbidden. The amendment is explicit here so the shared-boundary change is reviewable rather
   than hidden behind a green gate.
+- 2026-09-20 — After #767 advanced main, merged current main into the candidate and re-ran the exact
+  shipped tree at `cf6a0a3`: `make check` completed with 2750 passed, 195 skipped, 140 deselected,
+  and 2 documented xfails.
