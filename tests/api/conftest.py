@@ -246,7 +246,7 @@ def mint_token(
     now = datetime.now(UTC)
     payload = {
         "iss": _TEST_ISSUER,
-        "sub": subject or presence.replace("/", "-"),
+        "sub": subject or presence,
         "aud": "musubi",
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),

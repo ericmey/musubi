@@ -17,7 +17,16 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
+from pydantic import AnyHttpUrl, BaseModel, SecretStr
+
 from musubi.settings import Settings
+
+
+class CredentialPreflightSettings(BaseModel):
+    """Minimal auth configuration required by candidate credential validation."""
+
+    jwt_signing_key: SecretStr
+    oauth_authority: AnyHttpUrl
 
 
 def _dotenv_path() -> str:
@@ -42,4 +51,8 @@ def get_settings() -> Settings:
     return Settings(_env_file=_dotenv_path())  # type: ignore[call-arg]
 
 
-__all__ = ["Settings", "get_settings"]
+__all__ = [
+    "CredentialPreflightSettings",
+    "Settings",
+    "get_settings",
+]

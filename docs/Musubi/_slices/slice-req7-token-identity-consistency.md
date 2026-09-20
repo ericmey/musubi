@@ -26,8 +26,8 @@ remains required, and the presence is made structurally usable as a
 ## Scope
 
 - Validate the presence claim as exactly two non-empty, non-wildcard segments.
-- Require the subject to equal the presence identity with `/` encoded as `-`,
-  matching the authority's canonical principal-id format.
+- Require the subject to equal the slash-form presence identity exactly,
+  matching the deployed mint path and issuer contract.
 - Reject every concrete namespace scope whose tenant differs from the presence
   tenant, even when another scope matches.
 - Preserve same-tenant shared scopes and the existing operator/global scope
@@ -67,7 +67,7 @@ validator; the behavior each historical test proves is unchanged.
 - `tests/api/test_idem007_retraction_saga.py` — keep authorization-order and
   different-principal fixtures internally valid under REQ-7.
 - `tests/api/test_idem006_receipt_audit.py` — normalize observer and target
-  identities to the canonical subject encoding.
+  identities to exact subject/presence equality.
 - `tests/integration/conftest.py` and `tests/integration/test_harness.py` — make
   the live harness token satisfy REQ-7 and lock that identity relationship.
 
@@ -102,8 +102,8 @@ validator; the behavior each historical test proves is unchanged.
 ### 2026-09-20 15:02 - codex-gpt5 - implementation complete
 
 - Enforced the D6 identity tuple at token validation: presence must be a
-  concrete `tenant/presence`, subject must use the authority's canonical
-  slash-to-hyphen encoding, and every concrete scope must stay in the declared
+  concrete `tenant/presence`, subject must equal that slash-form identity, and
+  every concrete scope must stay in the declared
   tenant. Operator, global, and same-tenant shared scopes remain valid; `jti`
   remains outside stable identity.
 - Updated synthetic token helpers and narrowly corrected historical fixtures
@@ -123,3 +123,33 @@ validator; the behavior each historical test proves is unchanged.
 - PR #799 is ready for independent review. The vault status is `done` before
   merge as required by the PR-closing-slice gate; Issue #412 remains
   `status:in-review` until GitHub closes it on merge.
+
+### 2026-09-20 - codex-gpt5 - production compatibility correction
+
+- Issue #806 established that every configured live credential is minted with
+  exact `subject == presence`; no deployed authority produces the Rev 6
+  slash-to-hyphen form.
+- Corrected only the subject-format predicate. Concrete two-segment presence,
+  cross-tenant scope rejection, issuer/signature/audience/expiry enforcement,
+  and the stable D6 identity tuple remain intact.
+- Added a fail-closed candidate-image preflight for the exhaustive discovered
+  `musubi-mcp*.env` inventory: 12 live credentials, one separately classified
+  non-consumed template, and a signed inconsistent-identity control.
+- Review closeout made signature verification intrinsic before any secret
+  mount, runs the candidate container as the controller UID/GID for `0600`
+  files, and removed digest-pin auto-merge so the live preflight is pre-pin.
+- Review regressions prove an unlisted discovered credential fails, `0600`
+  credentials are readable under the controller identity, the exact signed
+  digest is verified before secrets, auto-merge is absent, and the pre-pin
+  command is present. Shiori's cross-list arithmetic assertion was replaced by
+  structural membership checks.
+- Verification: `make check` passed with 2,916 passed, 195 skipped, 145
+  deselected, one expected xfail, and 89% total coverage; the focused auth,
+  deployment, and release-contract set passed 114/114. Test Contract remains
+  10/10 with no deferrals.
+- Copilot closeout removed Docker `--env-file` injection for the authority
+  settings. The candidate now parses a read-only mount and accepts exactly one
+  `JWT_SIGNING_KEY` plus one `OAUTH_AUTHORITY`; unknown, duplicate, incomplete,
+  unreadable, and invalid-UTF-8 files fail with a bounded message. Credential
+  files likewise reject duplicate `MUSUBI_TOKEN` assignments and invalid UTF-8
+  instead of validating a non-effective value.

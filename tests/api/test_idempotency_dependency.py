@@ -41,7 +41,7 @@ NS = "eric/claude-code/episodic"
 
 def _auth() -> AuthContext:
     return AuthContext(
-        subject="eric-claude-code",
+        subject="eric/claude-code",
         issuer="https://auth.test",
         audience="musubi",
         scopes=(f"{NS}:rw",),

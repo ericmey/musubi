@@ -107,6 +107,17 @@ def test_subject_must_match_declared_presence(api_settings: Settings) -> None:
     assert not _is_ok(validate_token(token, settings=api_settings))
 
 
+def test_hyphen_encoded_subject_has_no_compatibility_grace(api_settings: Settings) -> None:
+    """The recovery is exact: the invented slash-to-hyphen form stays invalid."""
+    token = mint_token(
+        api_settings,
+        scopes=["eric/claude-code/episodic:r"],
+        presence="eric/claude-code",
+        subject="eric-claude-code",
+    )
+    assert not _is_ok(validate_token(token, settings=api_settings))
+
+
 def test_consistent_presence_and_scope_is_accepted(api_settings: Settings) -> None:
     """Feature preservation: a token whose presence matches its scope prefix must validate. Green
     before and after the fix — the fix must reject only the INCONSISTENT case."""
@@ -117,6 +128,7 @@ def test_consistent_presence_and_scope_is_accepted(api_settings: Settings) -> No
     )
     result = validate_token(token, settings=api_settings)
     assert _is_ok(result), f"a consistent token must validate, got {result}"
+    assert result.value.subject == result.value.presence
     assert result.value.presence == "eric/claude-code"
 
 
@@ -144,7 +156,7 @@ def test_wrong_issuer_is_rejected(api_settings: Settings) -> None:
     forged = jwt.encode(
         {
             "iss": "https://evil.example/",
-            "sub": "eric-claude-code",
+            "sub": "eric/claude-code",
             "aud": "musubi",
             "presence": "eric/claude-code",
             "scope": "eric/claude-code/episodic:r",
@@ -165,7 +177,7 @@ def test_missing_presence_is_rejected(api_settings: Settings) -> None:
     no_presence = jwt.encode(
         {
             "iss": _TEST_ISSUER,
-            "sub": "eric-claude-code",
+            "sub": "eric/claude-code",
             "aud": "musubi",
             "scope": "eric/claude-code/episodic:r",
             "iat": int(now.timestamp()),
