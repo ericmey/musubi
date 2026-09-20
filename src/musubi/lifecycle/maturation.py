@@ -72,7 +72,12 @@ from musubi.lifecycle.coordinator import (
 )
 from musubi.lifecycle.events import LifecycleEventSink
 from musubi.lifecycle.scheduler import Job, file_lock
-from musubi.lifecycle.transitions import LineageUpdates, TransitionError, transition
+from musubi.lifecycle.transitions import (
+    LineageUpdates,
+    TransitionError,
+    TransitionResult,
+    transition,
+)
 from musubi.types.common import KSUID, Ok, epoch_of, utc_now
 
 log = logging.getLogger(__name__)
@@ -497,6 +502,11 @@ async def episodic_maturation_sweep(
         if is_transition_pending(result.value):
             deferred.append(result.value)
             continue
+        # The version this sweep just established. Captured here, where the outcome
+        # is known final, so the enrichment fence below can name the exact row this
+        # transition produced rather than any row that happens to read `matured`.
+        assert isinstance(result.value, TransitionResult)  # narrowed by the check above
+        matured_version = result.value.version
 
         # If we marked an old row as the predecessor, flip it to
         # "superseded" with the back-pointer. Bullet 13 covers both sides.
@@ -536,6 +546,7 @@ async def episodic_maturation_sweep(
                 collection=_EPISODIC_COLLECTION,
                 namespace=row["namespace"],
                 object_id=object_id,
+                expected_version=matured_version,
                 tags=normalized,
                 importance=new_importance,
                 topics=new_topics,
@@ -1054,6 +1065,7 @@ def _apply_enrichment(
     collection: str,
     namespace: str,
     object_id: KSUID,
+    expected_version: int,
     tags: list[str],
     importance: int,
     topics: list[str],
@@ -1089,27 +1101,43 @@ def _apply_enrichment(
     # at all: a FieldCondition cannot match a point that lacks the field. That
     # exclusion is load-bearing rather than incidental, so
     # `test_v2_content_point_is_never_enriched` pins it.
+    conditions: list[models.Condition] = [
+        # `object_id` is NOT globally unique -- the same id can exist under a
+        # different namespace, and an unqualified filter would enrich a
+        # stranger's row (Copilot, musubi#771).
+        models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+        models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+        models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
+        # VERSION is the transition identity; `state` alone is not. An archived or
+        # demoted row can be restored to `matured`, and a stale snapshot would then
+        # satisfy a state-only fence and write enrichment computed for a row that
+        # has since moved (Copilot/Yua, musubi#771). A restore bumps the version, so
+        # this condition refuses anything that is not the exact row this sweep
+        # transitioned.
+        models.FieldCondition(key="version", match=models.MatchValue(value=expected_version)),
+    ]
+    fence = models.Filter(must=conditions)
+    client.set_payload(collection_name=collection, payload=payload, points=fence)
+    # Success is read back from DURABLE STATE, never inferred from having issued the
+    # write. A pre-write count cannot prove a post-write outcome: count sees `matured`,
+    # a retraction archives the row, the fenced write then matches zero rows, and the
+    # caller is told an enrichment happened (Yua, musubi#771). `set_payload` reports
+    # operation status, not how many points it matched, so the only honest signal is
+    # to look afterwards.
     #
-    # State rather than version: the sweep does not hold the post-transition
-    # version without an extra read, and state is the property that matters --
-    # an archived row must never be enriched at ANY version.
-    fence = models.Filter(
+    # `updated_epoch` is the discriminator because this call just set it: a row
+    # carrying exactly that value is one this write landed on. Range with equal
+    # bounds because the field is a float index.
+    applied = models.Filter(
         must=[
-            # `object_id` is NOT globally unique -- the same id can exist under a
-            # different namespace, and an unqualified filter would enrich a
-            # stranger's row (Copilot, musubi#771).
-            models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
-            models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
-            models.FieldCondition(key="state", match=models.MatchValue(value="matured")),
+            *conditions,
+            models.FieldCondition(
+                key="updated_epoch",
+                range=models.Range(gte=payload["updated_epoch"], lte=payload["updated_epoch"]),
+            ),
         ]
     )
-    # Count under the SAME fence before writing, so the caller can report what it
-    # actually did. Reporting `enriched` for a write that matched zero rows makes
-    # the sweep's own report the least reliable record of it.
-    if client.count(collection_name=collection, count_filter=fence, exact=True).count == 0:
-        return False
-    client.set_payload(collection_name=collection, payload=payload, points=fence)
-    return True
+    return client.count(collection_name=collection, count_filter=applied, exact=True).count == 1
 
 
 # ---------------------------------------------------------------------------

@@ -1501,25 +1501,28 @@ def test_the_enrichment_fence_qualifies_on_namespace() -> None:
     """`object_id` is NOT globally unique, so the fence must name the namespace too
     (Copilot, musubi#771).
 
-    STRUCTURAL, and the reason is worth recording.
+    Structural companion to `test_enrichment_does_not_cross_namespaces_at_runtime`,
+    which is the behavioural proof. This one reds if the condition is deleted even
+    when a harness cannot exercise the write.
 
-    My first red-proof for this deleted "the namespace condition" with a one-line
-    string replace -- and the file contains TWO `key="namespace"` conditions, so it
-    removed the other one every time and the cell stayed green. I concluded the cell
-    was inert and rewrote it twice before checking the plant itself. The plant was
-    wrong, not the cell: right check, wrong object, committed while red-proofing a fix
-    for that same class of bug.
+    Kept because of how it came to exist. My first red-proof deleted "the namespace
+    condition" with a one-line string replace, and this module contains TWO of them --
+    it removed the other one every time, the behavioural cell stayed green, and I
+    concluded the behavioural cell was inert and discarded it. The plant was wrong, not
+    the cell: right check, wrong object, committed while red-proofing a fix for that
+    exact class of bug. Anchored on surrounding context both cells red immediately.
 
-    Anchored on the surrounding two-line context it reds immediately. The lesson is
-    the rule this file already lives by -- a plant must be verified to have landed on
-    the object you meant, not merely to have changed something.
+    A plant must be verified to have landed on the object you meant, not merely to have
+    changed something.
     """
     # Read the file, not `inspect.getsource`: linecache caches the module source at
     # import time, so a mutation-test plant applied afterwards is invisible to it --
     # this cell passed against a deleted namespace condition until I found that.
     source = pathlib.Path(maturation.__file__).read_text()
-    fence = source[source.index("fence = models.Filter") : source.index("client.count")]
-    for key in ("namespace", "object_id", "state"):
+    fence = source[
+        source.index("conditions: list[models.Condition]") : source.index("fence = models.Filter")
+    ]
+    for key in ("namespace", "object_id", "state", "version"):
         assert f'key="{key}"' in fence, (
             f"the enrichment fence does not qualify on {key!r}; an unqualified filter "
             f"can write to a row this sweep never selected"
@@ -1579,3 +1582,209 @@ async def test_a_refused_enrichment_is_not_counted_as_enriched(
     assert report.enriched == 0, (
         f"the sweep reported {report.enriched} enrichment(s) for a write the fence refused"
     )
+
+
+async def test_a_row_archived_between_the_fence_and_the_write_is_not_reported(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """The window a pre-write count cannot see (Yua, musubi#771).
+
+    The first version counted under the fence BEFORE writing and returned True on a
+    non-zero count. That proves the row was eligible a moment ago, not that the write
+    landed: count sees `matured`, a retraction archives the row, the fenced write then
+    matches zero points, and the caller is told an enrichment happened.
+
+    Here the archive lands between the fence being built and `set_payload` running, so
+    only a post-write readback can get the answer right."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="racer"))
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+
+    real_set_payload = qdrant.set_payload
+
+    def archive_then_write(*args: Any, **kwargs: Any) -> Any:
+        # The retraction quarantine lands in the window.
+        real_set_payload(
+            collection_name="musubi_episodic",
+            payload={"state": "archived", "importance": 1},
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        monkeypatch.undo()
+        return real_set_payload(*args, **kwargs)
+
+    monkeypatch.setattr(qdrant, "set_payload", archive_then_write)
+
+    live = await plane.get(namespace=ns, object_id=row.object_id)
+    assert live is not None
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=live.version,
+        tags=["enriched"],
+        importance=3,
+        topics=["hardware/gpu"],
+    )
+
+    assert applied is False, (
+        "the enrichment reported success for a write that matched zero rows; "
+        "success must come from durable state, not from having issued the write"
+    )
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None and after.state == "archived"
+    assert after.importance == 1, "the archived row was enriched anyway"
+
+
+async def test_enrichment_does_not_cross_namespaces_at_runtime(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """`object_id` is not globally unique — two namespaces may carry the same id
+    (`tests/api/test_data001_episodic_patch_fence.py:113` relies on exactly that).
+
+    Behavioural rather than structural. My first attempt at this concluded the cell was
+    inert, but the plant I judged it with deleted the OTHER `key="namespace"` condition
+    in the module — right check, wrong object — so the cell was never given a fair
+    trial. Anchored correctly it reds."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="mine"))
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    stranger_ns = "someone/else/episodic"
+    qdrant.upsert(
+        collection_name="musubi_episodic",
+        points=[
+            qmodels.PointStruct(
+                id="00000000-0000-4000-8000-0000005747a1",
+                vector={},
+                payload={
+                    "object_id": str(row.object_id),
+                    "namespace": stranger_ns,
+                    "state": "matured",
+                    "importance": 9,
+                    "tags": ["untouched"],
+                    "updated_epoch": 1.0,
+                },
+            )
+        ],
+        wait=True,
+    )
+    before = next(p for p in _payload(qdrant, str(row.object_id)) if p["namespace"] == stranger_ns)
+
+    live = await plane.get(namespace=ns, object_id=row.object_id)
+    assert live is not None
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=live.version,
+        tags=["enriched"],
+        importance=3,
+        topics=["hardware/gpu"],
+    )
+
+    assert applied, "the fence refused my own matured row; this cell would prove nothing"
+    after = next(p for p in _payload(qdrant, str(row.object_id)) if p["namespace"] == stranger_ns)
+    assert after == before, (
+        "enrichment wrote to a row in another namespace that shares this object_id"
+    )
+
+
+async def test_a_row_restored_to_matured_does_not_accept_stale_enrichment(
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """`state == "matured"` is not a transition identity (Copilot/Yua, musubi#771).
+
+    An archived or demoted row can be restored to `matured`. A state-only fence would
+    then accept enrichment computed against the OLD snapshot -- tags, importance and
+    topics derived from content the row no longer has. The version this sweep
+    established is the identity; a restore bumps it, so the stale write is refused."""
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="round trip"))
+    coordinator = _coordinator(qdrant, sink)
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=coordinator,
+    )
+    matured = await plane.get(namespace=ns, object_id=row.object_id)
+    assert matured is not None
+    stale_version = matured.version
+
+    # The row leaves `matured` and comes back, exactly as a demote/restore would.
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="demoted",
+        actor="test",
+        reason="round-trip",
+        coordinator=coordinator,
+    )
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="round-trip",
+        coordinator=coordinator,
+    )
+    restored = await plane.get(namespace=ns, object_id=row.object_id)
+    assert restored is not None and restored.state == "matured"
+    assert restored.version != stale_version, "fixture drift: the restore did not bump version"
+
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=stale_version,
+        tags=["stale"],
+        importance=9,
+        topics=["stale/topic"],
+    )
+
+    assert applied is False, "a stale-version enrichment was applied to a restored row"
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert "stale" not in after.tags, "the restored row accepted enrichment from an old snapshot"
