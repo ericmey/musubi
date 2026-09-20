@@ -106,15 +106,19 @@ gh pr merge <number> --squash
 cd ~/musubi
 git pull --ff-only
 ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/.vault_pass \
+  MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
   scripts/musubi-deploy --apply core,lifecycle-worker
 ```
 
-The wrapper first pulls the exact pinned candidate image locally and runs that
-image's validator against the complete live-credential manifest. Missing or
-rejected live credentials and a non-discriminating negative control abort
-before Ansible can recreate Core. The wrapper then arms `update.yml` for that
-exact digest; direct Core updates without a matching preflight attestation fail
-closed. `MUSUBI_CREDENTIAL_DIR` may override the default `~/.musubi` directory.
+`update.yml` itself pulls the exact pinned candidate image on the Ansible
+controller and runs that image's validator against the complete live-credential
+manifest. Missing or rejected live credentials and a non-discriminating
+negative control abort before Ansible can recreate Core. This is intrinsic to
+the playbook rather than a caller-provided attestation, so direct Core updates
+run the same gate. `MUSUBI_PREFLIGHT_AUTHORITY_ENV` is required and must name an
+explicit server/preflight env containing `JWT_SIGNING_KEY` and
+`OAUTH_AUTHORITY`; it has no client-credential default. `MUSUBI_CREDENTIAL_DIR`
+may override the default `~/.musubi` directory.
 The `musubi-mcp.env` mint-path template is reported separately and is not part
 of the eligible live set.
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import jwt
+from pydantic import ValidationError
 
 from musubi.config import get_settings
 from musubi.settings import Settings
@@ -166,12 +167,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--credential-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    try:
+        settings = get_settings()
+    except ValidationError:
+        _stdout("FAIL preflight settings invalid")
+        return 1
     return (
         0
         if run_preflight(
             manifest_path=args.manifest,
             credential_dir=args.credential_dir,
-            settings=get_settings(),
+            settings=settings,
             emit=_stdout,
         )
         else 1

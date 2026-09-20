@@ -221,3 +221,21 @@ def test_candidate_preflight_cli_uses_runtime_settings_and_emits_summary(
 
     assert exit_code == 0
     assert "PASS summary live=2/2 control=1/1 templates=1" in capsys.readouterr().out
+
+
+def test_candidate_preflight_cli_fails_with_bounded_invalid_settings_message(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def invalid_settings() -> Settings:
+        return Settings.model_validate({})
+
+    monkeypatch.setattr(credential_preflight, "get_settings", invalid_settings)
+
+    exit_code = credential_preflight.main(
+        ["--manifest", str(tmp_path / "missing"), "--credential-dir", str(tmp_path)]
+    )
+
+    assert exit_code == 1
+    assert capsys.readouterr().out == "FAIL preflight settings invalid\n"

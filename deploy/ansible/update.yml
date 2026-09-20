@@ -38,8 +38,11 @@
   become: true
   vars:
     changed_services: ["core"]
-    candidate_credential_preflight_passed: false
-    candidate_credential_preflight_image: ""
+    candidate_credential_dir: >-
+      {{ lookup('env', 'MUSUBI_CREDENTIAL_DIR')
+         | default(lookup('env', 'HOME') + '/.musubi', true) }}
+    candidate_preflight_authority_env: "{{ lookup('env', 'MUSUBI_PREFLIGHT_AUTHORITY_ENV') }}"
+    candidate_preflight_manifest: "{{ playbook_dir }}/../credential-preflight.json"
     # Every task below uses THIS, never `changed_services` directly.
     # Only JSON-looking strings are parsed; anything else passes through
     # unchanged so the assert below reports it with a usable message instead
@@ -68,15 +71,88 @@
           -e '{"changed_services":["core","lifecycle-worker"]}'
         quiet: true
 
-    - name: Require candidate-image credential preflight before a Core update
+    - name: Require an explicit candidate preflight authority env
       ansible.builtin.assert:
         that:
-          - candidate_credential_preflight_passed | bool
-          - candidate_credential_preflight_image == musubi_core_image
+          - candidate_preflight_authority_env | length > 0
         fail_msg: >-
-          Core update is not armed: run scripts/musubi-deploy so all configured
-          live credentials are validated inside the exact pinned candidate image.
+          Set MUSUBI_PREFLIGHT_AUTHORITY_ENV to an explicit server/preflight
+          env containing JWT_SIGNING_KEY and OAUTH_AUTHORITY.
         quiet: true
+      delegate_to: localhost
+      become: false
+      when:
+        - not ansible_check_mode
+        - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
+
+    - name: Inspect candidate preflight inputs on the controller
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ candidate_credential_dir }}"
+        - "{{ candidate_preflight_authority_env }}"
+        - "{{ candidate_preflight_manifest }}"
+      register: candidate_preflight_inputs
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when:
+        - not ansible_check_mode
+        - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
+
+    - name: Require complete candidate preflight inputs on the controller
+      ansible.builtin.assert:
+        that:
+          - candidate_preflight_inputs.results[0].stat.isdir | default(false)
+          - candidate_preflight_inputs.results[1].stat.isreg | default(false)
+          - candidate_preflight_inputs.results[2].stat.isreg | default(false)
+        fail_msg: >-
+          Core update is not armed: set MUSUBI_PREFLIGHT_AUTHORITY_ENV to an
+          explicit server/preflight env and provide every configured credential.
+        quiet: true
+      delegate_to: localhost
+      become: false
+      when:
+        - not ansible_check_mode
+        - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
+
+    - name: Pull the exact Core candidate image on the controller
+      ansible.builtin.command:
+        argv:
+          - docker
+          - pull
+          - "{{ musubi_core_image }}"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+      when:
+        - not ansible_check_mode
+        - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
+
+    - name: Validate every live credential inside the exact candidate image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --rm
+          - --entrypoint
+          - python
+          - --env-file
+          - "{{ candidate_preflight_authority_env }}"
+          - --mount
+          - "type=bind,src={{ candidate_credential_dir }},dst=/credentials,readonly"
+          - --mount
+          - "type=bind,src={{ candidate_preflight_manifest }},dst=/preflight/manifest.json,readonly"
+          - "{{ musubi_core_image }}"
+          - -m
+          - musubi.auth.credential_preflight
+          - --manifest
+          - /preflight/manifest.json
+          - --credential-dir
+          - /credentials
+      delegate_to: localhost
+      become: false
+      changed_when: false
       when:
         - not ansible_check_mode
         - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0

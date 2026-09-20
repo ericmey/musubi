@@ -218,21 +218,39 @@ def test_update_asserts_recreated_core_services_match_the_pinned_digest() -> Non
     assert not missing, f"post-recreate digest guard missing: {missing!r}"
 
 
-def test_apply_wrapper_runs_candidate_image_credential_preflight_before_ansible() -> None:
-    text = DEPLOY_WRAPPER.read_text()
-    preflight = text.index("musubi.auth.credential_preflight")
-    deploy = text.index('exec "${cmd[@]}"')
-    assert preflight < deploy
-    assert '"$candidate_image"' in text
-    assert "--entrypoint python" in text
-    assert "--credential-dir /credentials" in text
-    assert "candidate_credential_preflight_passed" in text
-    assert "candidate_credential_preflight_image" in text
+def test_core_update_runs_candidate_image_credential_preflight_intrinsically() -> None:
+    play = _play()
+    pre_tasks = play.get("pre_tasks") or []
+    names = [task.get("name") for task in pre_tasks]
+    preflight_index = names.index("Validate every live credential inside the exact candidate image")
 
-    playbook = UPDATE_PLAYBOOK.read_text()
-    assert "Require candidate-image credential preflight before a Core update" in playbook
-    assert "candidate_credential_preflight_passed | bool" in playbook
-    assert "candidate_credential_preflight_image == musubi_core_image" in playbook
+    command = pre_tasks[preflight_index]["ansible.builtin.command"]
+    argv = command["argv"]
+    assert "{{ musubi_core_image }}" in argv
+    assert "musubi.auth.credential_preflight" in argv
+    assert pre_tasks[preflight_index]["delegate_to"] == "localhost"
+    assert pre_tasks[preflight_index]["become"] is False
+    assert pre_tasks[preflight_index].get("no_log") is not True
+
+    remote_pull_index = next(
+        idx for idx, task in enumerate(_tasks(play)) if "--policy always" in str(task)
+    )
+    assert preflight_index < len(pre_tasks) + remote_pull_index
+
+
+def test_core_update_preflight_cannot_be_satisfied_by_caller_attestation_vars() -> None:
+    text = UPDATE_PLAYBOOK.read_text()
+    assert "candidate_credential_preflight_passed" not in text
+    assert "candidate_credential_preflight_image" not in text
+    assert "docker" in text
+    assert "musubi.auth.credential_preflight" in text
+
+
+def test_apply_wrapper_requires_explicit_preflight_authority_env() -> None:
+    text = DEPLOY_WRAPPER.read_text()
+    assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text
+    assert "musubi-mcp-aoi.env" not in text
+    assert 'exec "${cmd[@]}"' in text
 
 
 def test_candidate_preflight_manifest_declares_twelve_live_and_one_template() -> None:
