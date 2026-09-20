@@ -215,10 +215,26 @@ lineage expiry returns the affected
 hit without hydrated lineage. Neither optional stage may consume the whole-call
 budget and turn an otherwise healthy retrieval into a 503.
 
-Authoritative-anchor resolution and lineage hydration use the synchronous
-Qdrant client. The retrieval orchestrator offloads those reads from the asyncio
-event-loop thread; under concurrent blended calls they must not serialize
-unrelated requests behind one caller's Qdrant round trips.
+Hybrid Qdrant queries, authoritative-anchor resolution, and deep lineage
+hydration use the synchronous Qdrant client. The deep/hybrid orchestrator
+offloads those reads from the asyncio event-loop thread; under concurrent
+blended calls they must not serialize unrelated requests behind one caller's
+Qdrant round trips. Two dedicated pools provide a 16-worker per-process ceiling:
+eight slots for required hybrid queries and authoritative resolution, plus eight
+isolated slots for optional lineage hydration. Excess calls queue without
+occupying the shared asyncio executor. The submitting request and trace context
+is copied into every worker call. The supported regression load is 20 concurrent
+callers through the public deep path with more than five candidates, exercising
+query, authoritative resolution, live reranking, scoring, and lineage stages.
+Saturation is stage-local: expired lineage work degrades to the original hit,
+cannot occupy required-query capacity, and does not produce a whole-request 503.
+
+The recent/context retrieval path is not covered by this executor ceiling.
+
+The lineage worker invokes a synchronous hydration seam, not `asyncio.run()`.
+Plane `get` methods used there must complete without suspending on a loop-bound
+awaitable; the seam detects suspension and fails explicitly so future async I/O
+cannot be driven on a fresh worker-thread event loop by accident.
 
 The 1.5 s rerank default is calibrated from the 2026-08-12 production-shaped
 ten-caller burst: p50 0.684 s, p95 1.226 s, and p99 1.268 s for 200 candidate
