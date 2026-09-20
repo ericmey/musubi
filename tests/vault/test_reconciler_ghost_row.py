@@ -194,8 +194,7 @@ async def test_reconciler_archives_ghost_with_frontmatter_namespace_that_differs
         to_state="archived",
         actor="system/vault-reconciler",
         reason=(
-            "Ghost row reconciliation (deleted from disk): "
-            "vault/reflections/2026-09/2026-09-08.md"
+            "Ghost row reconciliation (deleted from disk): vault/reflections/2026-09/2026-09-08.md"
         ),
         coordinator=mock_coordinator,
     )
