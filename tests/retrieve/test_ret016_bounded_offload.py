@@ -12,7 +12,12 @@ import pytest
 from qdrant_client import models
 
 from musubi.retrieve import deep, hybrid
-from musubi.retrieve.offload import QDRANT_OFFLOAD_WORKERS, run_qdrant_offload
+from musubi.retrieve.offload import (
+    QDRANT_OPTIONAL_OFFLOAD_WORKERS,
+    QDRANT_REQUIRED_OFFLOAD_WORKERS,
+    run_optional_qdrant_offload,
+    run_qdrant_offload,
+)
 from musubi.retrieve.scoring import ScoreComponents, ScoredHit
 
 
@@ -52,7 +57,7 @@ async def test_qdrant_offload_caps_simultaneous_blocking_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lock = threading.Lock()
-    all_workers_started = threading.Barrier(QDRANT_OFFLOAD_WORKERS)
+    all_workers_started = threading.Barrier(QDRANT_REQUIRED_OFFLOAD_WORKERS)
     active = 0
     peak = 0
 
@@ -70,11 +75,11 @@ async def test_qdrant_offload_caps_simultaneous_blocking_calls(
     await asyncio.gather(
         *(
             hybrid._resolve_hits_async(object(), client=None, collection=None)
-            for _ in range(QDRANT_OFFLOAD_WORKERS * 3)
+            for _ in range(QDRANT_REQUIRED_OFFLOAD_WORKERS * 3)
         )
     )
 
-    assert peak == QDRANT_OFFLOAD_WORKERS
+    assert peak == QDRANT_REQUIRED_OFFLOAD_WORKERS
 
 
 @pytest.mark.asyncio
@@ -82,7 +87,7 @@ async def test_query_points_calls_share_the_configured_qdrant_ceiling() -> None:
     class BlockingClient:
         def __init__(self) -> None:
             self.lock = threading.Lock()
-            self.all_workers_started = threading.Barrier(QDRANT_OFFLOAD_WORKERS)
+            self.all_workers_started = threading.Barrier(QDRANT_REQUIRED_OFFLOAD_WORKERS)
             self.active = 0
             self.peak = 0
 
@@ -106,11 +111,11 @@ async def test_query_points_calls_share_the_configured_qdrant_ceiling() -> None:
                 limit=1,
                 timeout_s=1.0,
             )
-            for _ in range(QDRANT_OFFLOAD_WORKERS * 3)
+            for _ in range(QDRANT_REQUIRED_OFFLOAD_WORKERS * 3)
         )
     )
 
-    assert client.peak == QDRANT_OFFLOAD_WORKERS
+    assert client.peak == QDRANT_REQUIRED_OFFLOAD_WORKERS
 
 
 @pytest.mark.asyncio
@@ -150,7 +155,7 @@ def test_lineage_sync_seam_rejects_loop_bound_awaits() -> None:
 async def test_saturated_lineage_offload_degrades_in_place_without_request_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    hits = [_hit(str(index)) for index in range(QDRANT_OFFLOAD_WORKERS + 5)]
+    hits = [_hit(str(index)) for index in range(QDRANT_OPTIONAL_OFFLOAD_WORKERS + 5)]
     release_workers = threading.Event()
 
     def saturated_hydrate(item: ScoredHit, *_args: Any) -> ScoredHit:
@@ -168,7 +173,7 @@ async def test_saturated_lineage_offload_degrades_in_place_without_request_failu
         )
     finally:
         release_workers.set()
-        await run_qdrant_offload(lambda: None)
+        await run_optional_qdrant_offload(lambda: None)
 
     assert result == hits
 
@@ -199,4 +204,124 @@ async def test_twenty_concurrent_callers_complete_with_bounded_offload(
 
     assert all(
         hit.payload.get("offloaded") is True for caller_results in results for hit in caller_results
+    )
+
+
+@pytest.mark.asyncio
+async def test_saturated_optional_lineage_cannot_starve_required_queries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    all_optional_workers_started = threading.Event()
+    release_optional_workers = threading.Event()
+    lock = threading.Lock()
+    active = 0
+
+    def stalled_hydrate(item: ScoredHit, *_args: Any) -> ScoredHit:
+        nonlocal active
+        with lock:
+            active += 1
+            if active == QDRANT_OPTIONAL_OFFLOAD_WORKERS:
+                all_optional_workers_started.set()
+        release_optional_workers.wait(timeout=1.0)
+        return item
+
+    class ImmediateClient:
+        def query_points(self, **_kwargs: Any) -> object:
+            return object()
+
+    hits = [_hit(str(index)) for index in range(QDRANT_OPTIONAL_OFFLOAD_WORKERS)]
+    monkeypatch.setattr(deep, "_hydrate_one", stalled_hydrate)
+    hydration = asyncio.create_task(
+        deep._hydrate_lineage_async(
+            hits, cast(Any, object()), cast(Any, object()), timeout_s=0.02
+        )
+    )
+
+    try:
+        while not all_optional_workers_started.is_set():
+            await asyncio.sleep(0.001)
+        assert await hydration == hits
+        await asyncio.wait_for(
+            hybrid._query_points(
+                cast(Any, ImmediateClient()),
+                collection="musubi_episodic",
+                prefetch=[],
+                query_filter=models.Filter(),
+                limit=1,
+                timeout_s=0.05,
+            ),
+            timeout=0.1,
+        )
+    finally:
+        release_optional_workers.set()
+        await run_optional_qdrant_offload(lambda: None)
+
+
+@pytest.mark.asyncio
+async def test_twenty_callers_complete_through_the_production_deep_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ProductionShapedClient:
+        def query_points(self, *, collection_name: str, **_kwargs: Any) -> str:
+            time.sleep(0.003)
+            return collection_name
+
+    def resolve(response: str, **_kwargs: Any) -> list[hybrid.HybridHit]:
+        time.sleep(0.003)
+        plane = response.removeprefix("musubi_")
+        return [
+            hybrid.HybridHit(
+                object_id=f"{plane}-hit",
+                score=0.75,
+                payload={
+                    "namespace": f"fleet/agent/{plane}",
+                    "state": "matured",
+                    "content": plane,
+                },
+            )
+        ]
+
+    async def production_hybrid_leg(
+        *, client: Any, collection: str, limit: int, timeout_s: float, **_kwargs: Any
+    ) -> Any:
+        response = await hybrid._query_points(
+            client,
+            collection=collection,
+            prefetch=[],
+            query_filter=models.Filter(),
+            limit=limit,
+            timeout_s=timeout_s,
+        )
+        hits = await hybrid._resolve_hits_async(response, client=client, collection=collection)
+        return deep.Ok(value=hybrid.HybridSearchResult(hits=hits))
+
+    def hydrate(item: ScoredHit, *_args: Any) -> ScoredHit:
+        time.sleep(0.003)
+        return replace(item, payload={**item.payload, "hydrated": True})
+
+    monkeypatch.setattr(deep, "hybrid_search", production_hybrid_leg)
+    monkeypatch.setattr(hybrid, "_hits_from_response", resolve)
+    monkeypatch.setattr(deep, "_hydrate_one", hydrate)
+    query = deep.RetrievalQuery(namespace="fleet/agent", query_text="bounded", limit=5)
+
+    results = await asyncio.wait_for(
+        asyncio.gather(
+            *(
+                deep.run_deep_retrieve(
+                    cast(Any, ProductionShapedClient()),
+                    cast(Any, object()),
+                    cast(Any, object()),
+                    query,
+                )
+                for _ in range(20)
+            )
+        ),
+        timeout=1.0,
+    )
+
+    assert all(
+        isinstance(result, deep.Ok)
+        and len(result.value.hits) == 3
+        and all(hit.payload.get("hydrated") is True for hit in result.value.hits)
+        for result in results
     )
