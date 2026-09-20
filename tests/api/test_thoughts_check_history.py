@@ -110,7 +110,7 @@ def test_namespace_auth_enforced_before_read(client: TestClient, api_settings: A
     me = "eric/me"
 
     # Requesting a namespace without scope
-    token = mint_token(api_settings, scopes=["other/ns:r"])
+    token = mint_token(api_settings, scopes=["eric/other/thought:r"])
     r = client.post(
         "/v1/thoughts/check",
         headers={"Authorization": f"Bearer {token}"},

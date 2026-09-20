@@ -238,17 +238,19 @@ def mint_token(
     *,
     scopes: list[str] | None = None,
     presence: str = "eric/claude-code",
+    subject: str | None = None,
+    token_id: str = "test-token",
     expires_delta: timedelta = timedelta(hours=1),
 ) -> str:
     """Mint an HS256 JWT against ``settings.jwt_signing_key``."""
     now = datetime.now(UTC)
     payload = {
         "iss": _TEST_ISSUER,
-        "sub": "eric-claude-code",
+        "sub": subject or presence.replace("/", "-"),
         "aud": "musubi",
         "iat": int(now.timestamp()),
         "exp": int((now + expires_delta).timestamp()),
-        "jti": "test-token",
+        "jti": token_id,
         "scope": " ".join(scopes or ["eric/claude-code/episodic:r"]),
         "presence": presence,
     }
