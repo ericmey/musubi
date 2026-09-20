@@ -88,11 +88,18 @@ def obs_app(
         *,
         name: str,
         url: str,
+        auth: httpx.Auth | None = None,
         transport: object | None = None,
         timeout: float = 1.5,
     ) -> object:
         ok_transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"status": "ok"}))
-        return real_check(name=name, url=url, transport=ok_transport, timeout=timeout)
+        return real_check(
+            name=name,
+            url=url,
+            auth=auth,
+            transport=ok_transport,
+            timeout=timeout,
+        )
 
     monkeypatch.setattr(ops_router_mod, "check_component_health", _faked_check)
 

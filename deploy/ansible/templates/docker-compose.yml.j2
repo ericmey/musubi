@@ -11,6 +11,8 @@ services:
       TEI_DENSE_URL: ${TEI_DENSE_URL}
       TEI_SPARSE_URL: ${TEI_SPARSE_URL}
       TEI_RERANKER_URL: ${TEI_RERANKER_URL}
+      TEI_BASIC_AUTH_USERNAME: ${TEI_BASIC_AUTH_USERNAME}
+      TEI_BASIC_AUTH_PASSWORD: ${TEI_BASIC_AUTH_PASSWORD}
     ports:
       - "{{ musubi_core_port }}:{{ musubi_core_port }}"
     volumes:
@@ -43,6 +45,8 @@ services:
       TEI_DENSE_URL: ${TEI_DENSE_URL}
       TEI_SPARSE_URL: ${TEI_SPARSE_URL}
       TEI_RERANKER_URL: ${TEI_RERANKER_URL}
+      TEI_BASIC_AUTH_USERNAME: ${TEI_BASIC_AUTH_USERNAME}
+      TEI_BASIC_AUTH_PASSWORD: ${TEI_BASIC_AUTH_PASSWORD}
     command: ["python", "-m", "musubi.lifecycle.runner"]
     # `/metrics` exposition for Prometheus scrape — see
     # docs/Musubi/09-operations/observability.md § Lifecycle metrics.
@@ -122,6 +126,9 @@ services:
       - "--storage.tsdb.retention.time=30d"
       - "--web.listen-address=:9090"
       - "--web.enable-lifecycle"
+    # Prometheus is the only Musubi-stack service admitted to the raw
+    # inference network. Core and lifecycle remain ingress-only.
+    networks: [default, inference-monitoring]
     ports:
       - "127.0.0.1:9090:9090"
     depends_on:
@@ -204,4 +211,7 @@ volumes:
 networks:
   shared-inference:
     name: musubi-shared-inference
+    external: true
+  inference-monitoring:
+    name: musubi-inference-backend
     external: true

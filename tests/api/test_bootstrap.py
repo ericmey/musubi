@@ -17,6 +17,7 @@ from collections.abc import Iterator
 from typing import Any
 from unittest.mock import patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 
@@ -254,6 +255,21 @@ def test_bootstrap_fails_loudly_when_tei_unreachable(
         pytest.raises(BootstrapError, match="tei"),
     ):
         bootstrap_production_app(app, settings, retry_attempts=2, retry_backoff_s=0.0)
+
+
+def test_bootstrap_tei_health_probe_uses_basic_auth() -> None:
+    from musubi.api.bootstrap import _probe_tei
+
+    with patch("httpx.Client") as client_type:
+        response = client_type.return_value.__enter__.return_value.get.return_value
+        response.raise_for_status.return_value = None
+        _probe_tei("https://inference.example.test/dense", ("musubi-v2", "secret"))
+
+    auth = client_type.call_args.kwargs["auth"]
+    assert isinstance(auth, httpx.BasicAuth)
+    client_type.return_value.__enter__.return_value.get.assert_called_once_with(
+        "https://inference.example.test/dense/health"
+    )
 
 
 def test_bootstrap_retry_succeeds_on_second_attempt(
