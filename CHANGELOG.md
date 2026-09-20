@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.7](https://github.com/ericmey/musubi/compare/v1.26.6...v1.26.7) (2026-09-20)
+
+
+### Bug Fixes
+
+* **security:** keep shared inference credentials out of URLs ([#762](https://github.com/ericmey/musubi/issues/762)) ([300473d](https://github.com/ericmey/musubi/commit/300473d3406c7b55d3a638923c50305e7ac7abd0))
+
 ## [1.26.6](https://github.com/ericmey/musubi/compare/v1.26.5...v1.26.6) (2026-09-20)
 
 
