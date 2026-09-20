@@ -10,6 +10,11 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "integration.yml"
 MAKEFILE = ROOT / "Makefile"
+SCHEDULED_QUALITY_NODE = (
+    "tests/retrieve/test_hybrid.py::"
+    "test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_"
+    "hybrid_beats_dense_only_by_2_ndcg10_points"
+)
 
 
 def _workflow() -> dict[str, Any]:
@@ -27,7 +32,16 @@ def test_workflow_selects_every_integration_marked_test_by_default() -> None:
     command = _integration_run_command()
     assert "uv run pytest tests/" in command
     assert " -m integration " in command.replace("\n", " ")
-    assert ".py" not in command, "workflow must not maintain a per-file pytest inventory"
+    selection = command.split(" -m integration ", 1)[0]
+    assert ".py" not in selection, "workflow must not maintain a per-file pytest inventory"
+
+
+def test_workflow_has_one_named_scheduled_quality_exclusion() -> None:
+    command = _integration_run_command()
+    assert command.count("--deselect=") == 1
+    assert f"--deselect={SCHEDULED_QUALITY_NODE}" in command
+    workflow_text = WORKFLOW.read_text()
+    assert "dedicated scheduled x86 quality gate" in workflow_text
 
 
 def test_workflow_loads_live_stack_settings_before_marker_wide_suite() -> None:
@@ -51,7 +65,10 @@ def test_local_integration_target_uses_the_same_marker_wide_selection() -> None:
     target = makefile.split("test-integration:", 1)[1]
     target = target.split("\n\n", 1)[0]
     assert "tests/ -m integration" in target
-    assert ".py" not in target, "local target must not maintain a per-file pytest inventory"
+    selection = target.split(" -m integration", 1)[0]
+    assert ".py" not in selection, "local target must not maintain a per-file pytest inventory"
+    assert target.count("--deselect=") == 1
+    assert f"--deselect={SCHEDULED_QUALITY_NODE}" in target
 
 
 def test_local_integration_target_loads_settings_and_maps_custom_qdrant_port() -> None:
