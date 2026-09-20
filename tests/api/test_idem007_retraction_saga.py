@@ -675,8 +675,8 @@ def test_same_key_and_digest_under_different_principal_conflicts_never_adopts(
     landed = _layout(qdrant, memory.object_id)
     other = _mint(
         api_settings,
-        subject="other-principal",
-        presence="other/presence",
+        subject="eric-other-principal",
+        presence="eric/other-principal",
         scopes=[f"{_NS}:rw", f"{_ARTIFACT_NS}:rw"],
     )
     second = client.post(

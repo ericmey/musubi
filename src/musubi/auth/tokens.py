@@ -177,7 +177,7 @@ def _context_from_payload(
     if parsed_scopes is None:
         return Err(error=InvalidTokenError(detail="token scope claim must be a string list"))
 
-    consistency_error = _identity_consistency_error(presence, parsed_scopes)
+    consistency_error = _identity_consistency_error(subject, presence, parsed_scopes)
     if consistency_error is not None:
         return Err(error=InvalidTokenError(detail=consistency_error))
 
@@ -201,7 +201,11 @@ def _parse_scopes(scopes: object) -> tuple[str, ...] | None:
     return None
 
 
-def _identity_consistency_error(presence: str, scopes: tuple[str, ...]) -> str | None:
+def _identity_consistency_error(
+    subject: str,
+    presence: str,
+    scopes: tuple[str, ...],
+) -> str | None:
     """Return a bounded rejection reason when REQ-7 identity claims disagree."""
 
     presence_parts = presence.split("/")
@@ -211,6 +215,9 @@ def _identity_consistency_error(presence: str, scopes: tuple[str, ...]) -> str |
         or any(part in {"*", "**"} for part in presence_parts)
     ):
         return "token presence claim must be a concrete tenant/presence identity"
+
+    if subject != presence.replace("/", "-"):
+        return "token subject is inconsistent with presence identity"
 
     presence_tenant = presence_parts[0]
     for scope in scopes:

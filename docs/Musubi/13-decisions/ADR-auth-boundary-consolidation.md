@@ -25,8 +25,10 @@ claim. REQ-7 was implemented under Issue #412; the remaining work is listed unde
 ## Rev 6 — REQ-7 identity consistency
 
 Issue #412 closes the deferred D6 identity-consistency contract. Token validation now requires a
-concrete two-segment presence and rejects concrete namespace scopes from another tenant before an
-`AuthContext` is constructed. Same-tenant shared scopes and operator/global forms remain valid.
+concrete two-segment presence, requires the authority's canonical subject encoding
+(`tenant/presence` → `tenant-presence`), and rejects concrete namespace scopes from another tenant
+before an `AuthContext` is constructed. Same-tenant shared scopes and operator/global forms remain
+valid.
 
 ## Rev 5 — shipped-state reconciliation (PR #403 + replacement PR #414)
 
@@ -271,9 +273,10 @@ principal's idempotency slot.
 > **Rev 6 (REQ7 implemented by Issue #412):** the identity tuple `(issuer, subject, presence)` + method +
 > `operation_id` + authorized namespace + Idempotency-Key, with a byte-exact canonical digest
 > (domain-sep + content-type + exact bytes) persisted separately, remains the accepted PR #404
-> identity. Token validation now requires a concrete `tenant/presence` claim and rejects any
-> concrete namespace scope from a different tenant. Same-tenant shared scopes and operator/global
-> forms remain valid. The former strict-xfail is now the passing REQ7 contract in
+> identity. Token validation now requires a concrete `tenant/presence` claim, requires its subject
+> to use the canonical `tenant-presence` encoding, and rejects any concrete namespace scope from a
+> different tenant. Same-tenant shared scopes and operator/global forms remain valid. The former
+> strict-xfail is now the passing REQ7 contract in
 > `tests/api/test_req7_token_identity_invariant.py`. (Related: REQ8, public absent-vs-invalid
 > bearer, `test_req8_*` — **CLOSED** in #413.)
 

@@ -55,6 +55,8 @@ decision but does not carry a separate Test Contract.
   `nyla` presence.
 - `tests/api/test_thoughts_check_history.py` — keep the authorization control
   same-tenant but out of scope.
+- `tests/api/test_idem007_retraction_saga.py` — keep the different-principal
+  conflict fixture internally valid under REQ-7.
 - `docs/Musubi/13-decisions/ADR-auth-boundary-consolidation.md`
 - `docs/Musubi/_slices/slice-req7-token-identity-consistency.md`
 - `docs/Musubi/_inbox/locks/slice-req7-token-identity-consistency.lock`
