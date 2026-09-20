@@ -4,10 +4,10 @@ slice_id: slice-api-v1-ret012-retraction-quarantine
 issue: 731
 section: _slices
 type: slice
-status: in-progress
+status: done
 owner: codex-gpt5
 phase: "8-ops"
-tags: [section/slices, status/in-progress, type/slice, retraction, lifecycle, data-integrity, api]
+tags: [section/slices, status/done, type/slice, retraction, lifecycle, data-integrity, api]
 updated: 2026-08-17
 reviewed: false
 depends-on: [slice-api-v1-idem008-retraction-timestamps]
@@ -56,10 +56,17 @@ the escrow artifact remain available for correction and audit.
 1. `test_retraction_archives_legacy_and_v2_rows_from_any_active_state` proves
    provisional and matured originals become archived without vector or immutable
    generation changes.
-2. `test_retracted_provisional_row_cannot_reenter_maturation_after_one_hour`
+2. `test_evidence_adoption_repairs_pre_quarantine_state_without_rewriting_content`
+   proves a valid evidence-bearing pre-quarantine row is repaired during receipt-loss
+   adoption without rewriting vectors, immutable content, or committed timestamps.
+3. `test_retracted_provisional_row_cannot_reenter_maturation_after_one_hour`
    advances lifecycle time and proves zero selection, zero enrichment, archived
    state, and importance 1.
-3. Existing IDEM-007/008 replay, adoption, and failure tests remain green.
+4. `test_exact_private_receipt_replay_is_byte_identical_and_does_not_run_saga_twice`,
+   `test_committed_evidence_adoption_returns_the_committed_timestamp_without_restamping`,
+   `test_stale_version_preserves_original_timestamps_after_verified_escrow`, and
+   `test_existing_unparseable_evidence_fails_typed_without_falling_through_to_version`
+   keep the existing IDEM-007/008 replay, adoption, and failure contracts green.
 
 ## Work log
 

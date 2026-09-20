@@ -332,9 +332,37 @@ async def execute_retraction(
                     code="CONFLICT",
                     detail="committed retraction prefix is absent from episodic storage",
                 )
+        adopted = stored.logical
+        if adopted.state != "archived" or adopted.importance != 1:
+            try:
+                published = retract_non_embedding_payload(
+                    qdrant,
+                    "musubi_episodic",
+                    namespace=body.namespace,
+                    object_id=object_id,
+                    observed_payload=stored.raw,
+                    target_payload=stored.target,
+                    changes={"state": "archived", "importance": 1},
+                    evidence=evidence,
+                )
+            except NonEmbeddingPatchConflict as exc:
+                raise APIError(status_code=409, code="CONFLICT", detail=str(exc)) from exc
+            except ValueError as exc:
+                raise APIError(
+                    status_code=409,
+                    code="CONFLICT",
+                    detail=f"committed retraction quarantine repair refused: {exc}",
+                ) from exc
+            except OSError as exc:
+                raise APIError(
+                    status_code=503,
+                    code="BACKEND_UNAVAILABLE",
+                    detail="committed retraction quarantine repair did not commit",
+                ) from exc
+            adopted = EpisodicMemory.model_validate(strip_layout_fields(published))
         return RetractEpisodicResponse(
             object_id=object_id,
-            version=stored.logical.version,
+            version=adopted.version,
             artifact_ref=evidence.artifact_ref,
             retraction_evidence=evidence,
         )

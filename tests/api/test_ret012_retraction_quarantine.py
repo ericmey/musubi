@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
+from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Literal
 
 import pytest
 from fastapi.testclient import TestClient
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 
+from musubi.api.idempotency import _GLOBAL_LEASE_CACHE
+from musubi.api.idempotency_receipts import DurableReceiptStore
 from musubi.lifecycle import LifecycleEventSink
 from musubi.lifecycle.maturation import (
     MaturationConfig,
@@ -23,6 +27,16 @@ from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 
 _NS = "eric/claude-code/episodic"
+
+
+@pytest.fixture
+def receipt_store(app_factory: Any, tmp_path: Path) -> Iterator[DurableReceiptStore]:
+    store = DurableReceiptStore(tmp_path / "ret012-receipts.sqlite")
+    app_factory.state.idempotency_receipt_store = store
+    try:
+        yield store
+    finally:
+        store.close()
 
 
 def _body(version: int) -> dict[str, Any]:
@@ -62,6 +76,25 @@ def _seed(
     return memory
 
 
+def _layout(client: QdrantClient, object_id: str) -> list[dict[str, Any]]:
+    rows, _ = client.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id))]
+        ),
+        limit=8,
+        with_payload=True,
+        with_vectors=True,
+    )
+    return sorted(
+        [
+            {"id": str(row.id), "payload": dict(row.payload or {}), "vector": row.vector}
+            for row in rows
+        ],
+        key=lambda row: row["payload"].get("point_kind", "legacy"),
+    )
+
+
 @pytest.mark.parametrize("layout", ["legacy", "v2"])
 @pytest.mark.parametrize("state", ["provisional", "matured"])
 def test_retraction_archives_legacy_and_v2_rows_from_any_active_state(
@@ -72,6 +105,7 @@ def test_retraction_archives_legacy_and_v2_rows_from_any_active_state(
     episodic: EpisodicPlane,
     coordinator: Any,
     _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
 ) -> None:
     publisher = _immutable_publishers[0]
     assert isinstance(publisher, ImmutableVectorPublisher)
@@ -82,6 +116,7 @@ def test_retraction_archives_legacy_and_v2_rows_from_any_active_state(
         publisher=publisher,
         coordinator=coordinator,
     )
+    before = _layout(qdrant, memory.object_id)
 
     response = client.post(
         f"/v1/episodic/{memory.object_id}/retract",
@@ -97,6 +132,85 @@ def test_retraction_archives_legacy_and_v2_rows_from_any_active_state(
     assert stored.state == "archived"
     assert stored.importance == 1
     assert stored.retraction_evidence is not None
+    after = _layout(qdrant, memory.object_id)
+    if layout == "v2":
+        assert after[1] == before[1], (
+            "write-once content generation and vectors must remain whole-row invariant"
+        )
+        assert after[0]["vector"] == before[0]["vector"]
+    else:
+        assert after[0]["vector"] == before[0]["vector"]
+
+
+@pytest.mark.parametrize("layout", ["legacy", "v2"])
+def test_evidence_adoption_repairs_pre_quarantine_state_without_rewriting_content(
+    layout: str,
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+    receipt_store: DurableReceiptStore,
+) -> None:
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout=layout,
+        state="matured",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+    headers = {
+        "Authorization": f"Bearer {valid_token}",
+        "Idempotency-Key": f"quarantine-adopt-{layout}",
+    }
+    body = _body(memory.version)
+    first = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert first.status_code == 200, first.text
+    committed = _layout(qdrant, memory.object_id)
+    committed_logical = asyncio.run(episodic.get(namespace=_NS, object_id=memory.object_id))
+    assert committed_logical is not None
+
+    # Model a retraction committed before RET-012: evidence and escrow are valid,
+    # but the identity row still carries lifecycle-visible state and importance.
+    identity = committed[0]
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"state": "matured", "importance": 6},
+        points=[identity["id"]],
+        wait=True,
+    )
+    with sqlite3.connect(receipt_store.path) as connection:
+        connection.execute("DELETE FROM idempotency_receipts")
+    _GLOBAL_LEASE_CACHE._entries.clear()
+
+    adopted = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert adopted.status_code == 200, adopted.text
+    repaired = _layout(qdrant, memory.object_id)
+    repaired_logical = asyncio.run(episodic.get(namespace=_NS, object_id=memory.object_id))
+    assert repaired_logical is not None
+    assert adopted.json()["version"] == committed_logical.version + 1
+    assert repaired_logical.state == "archived"
+    assert repaired_logical.importance == 1
+    assert repaired_logical.updated_at == committed_logical.updated_at
+    assert repaired_logical.updated_epoch == committed_logical.updated_epoch
+    if layout == "v2":
+        assert repaired[1] == committed[1], (
+            "adoption repair must not rewrite the immutable content generation or vector"
+        )
+        assert repaired[0]["vector"] == committed[0]["vector"]
+    else:
+        assert repaired[0]["vector"] == committed[0]["vector"]
 
 
 class _NoEnrichment:
