@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from functools import partial
 
 QDRANT_REQUIRED_OFFLOAD_WORKERS = 8
@@ -32,7 +33,8 @@ async def run_qdrant_offload[T](
     """Run blocking retrieval I/O on the dedicated, deliberately sized executor."""
     loop = asyncio.get_running_loop()
     call = partial(function, *args, **kwargs)
-    return await loop.run_in_executor(_QDRANT_REQUIRED_EXECUTOR, call)
+    context = copy_context()
+    return await loop.run_in_executor(_QDRANT_REQUIRED_EXECUTOR, context.run, call)
 
 
 async def run_optional_qdrant_offload[T](
@@ -41,7 +43,8 @@ async def run_optional_qdrant_offload[T](
     """Run optional lineage I/O without consuming capacity required for base retrieval."""
     loop = asyncio.get_running_loop()
     call = partial(function, *args, **kwargs)
-    return await loop.run_in_executor(_QDRANT_OPTIONAL_EXECUTOR, call)
+    context = copy_context()
+    return await loop.run_in_executor(_QDRANT_OPTIONAL_EXECUTOR, context.run, call)
 
 
 __all__ = [

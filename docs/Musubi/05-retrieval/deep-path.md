@@ -138,14 +138,15 @@ Operationally, rerank and lineage are bounded optional stages. The defaults are
 `retrieval_lineage_timeout_s=0.5`; both are validated positive settings. A
 rerank timeout returns the pre-rerank hybrid order with the structured
 `reranker_failed` warning. A lineage timeout returns the unhydrated hit and logs
-the object id plus budget. Qdrant-backed authoritative resolution and lineage
-reads run outside the event-loop thread so concurrent blended callers do not
-starve one another before the five-second whole-call deadline. All blocking
-Qdrant retrieval work uses two dedicated executors capped at 16 total active
-calls per API process: eight slots reserved for required query and
-authoritative-resolution work, and eight isolated slots for optional lineage
-hydration. Excess work queues behind its stage ceiling instead of consuming the
-asyncio default executor. The production-shaped regression covers 20 concurrent
+the object id plus budget. Qdrant-backed hybrid queries, authoritative
+resolution, and deep-path lineage reads run outside the event-loop thread so
+concurrent blended callers do not starve one another before the five-second
+whole-call deadline. These hybrid/deep operations use two dedicated executors
+capped at 16 total active calls per API process: eight slots reserved for
+required query and authoritative-resolution work, and eight isolated slots for
+optional lineage hydration. Excess work queues behind its stage ceiling instead of consuming the
+asyncio default executor, with the submitting request and trace context copied
+into each worker call. The production-shaped regression covers 20 concurrent
 callers through the public deep path, including query, authoritative resolution,
 rerank, scoring, and lineage stages. When the optional executor is saturated,
 the per-hit lineage deadline still returns the original unhydrated hit without
@@ -155,6 +156,8 @@ Lineage hydration has no per-hit event-loop adapter. Its worker-thread seam may
 only call plane reads that complete synchronously without suspending; if a plane
 read later awaits a loop-bound resource, hydration fails loudly and must gain a
 genuine synchronous read seam before use here.
+
+The separate recent/context retrieval path is outside this executor contract.
 
 The rerank budget is production-derived rather than inherited from the earlier
 800 ms spec: a ten-caller burst on 2026-08-12 measured reranker duration at
