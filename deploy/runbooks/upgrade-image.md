@@ -96,34 +96,58 @@ has changed yet.
 
 ---
 
-## 4. Merge + deploy
+## 4. Preflight, merge + deploy
 
 **Command:**
 
 ```bash
-# After the PR is approved and merged, from the operator workstation:
-gh pr merge <number> --squash
+# Before merging the pin PR, from the credential-bearing Ansible controller:
 cd ~/musubi
+git pull --ff-only origin main
+export CANDIDATE_IMAGE=ghcr.io/ericmey/musubi-core@sha256:<paste digest here>
+export MUSUBI_CREDENTIAL_DIR=~/.musubi
+export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
+
+cosign verify \
+  --certificate-identity-regexp 'https://github.com/ericmey/musubi/.github/workflows/publish-core-image.yml@refs/tags/v.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  "${CANDIDATE_IMAGE}"
+docker pull "${CANDIDATE_IMAGE}"
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --entrypoint python \
+  --env-file "${MUSUBI_PREFLIGHT_AUTHORITY_ENV}" \
+  --mount "type=bind,src=${MUSUBI_CREDENTIAL_DIR},dst=/credentials,readonly" \
+  --mount "type=bind,src=${PWD}/deploy/credential-preflight.json,dst=/preflight/manifest.json,readonly" \
+  "${CANDIDATE_IMAGE}" \
+  -m musubi.auth.credential_preflight \
+  --manifest /preflight/manifest.json \
+  --credential-dir /credentials
+
+# Merge only after the command above reports every live credential and control PASS.
+gh pr merge <number> --squash
 git pull --ff-only
 ANSIBLE_VAULT_PASSWORD_FILE=~/.ansible/.vault_pass \
   MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
   scripts/musubi-deploy --apply core,lifecycle-worker
 ```
 
-`update.yml` itself pulls the exact pinned candidate image on the Ansible
-controller and runs that image's validator against the complete live-credential
-manifest. Missing or rejected live credentials and a non-discriminating
-negative control abort before Ansible can recreate Core. This is intrinsic to
-the playbook rather than a caller-provided attestation, so direct Core updates
-run the same gate. `MUSUBI_PREFLIGHT_AUTHORITY_ENV` is required and must name an
-explicit minimal preflight env containing only `JWT_SIGNING_KEY` and
-`OAUTH_AUTHORITY`; the candidate command does not construct the full server
-`Settings` model and has no client-credential default. `MUSUBI_CREDENTIAL_DIR`
-may override the default `~/.musubi` directory.
-The `musubi-mcp.env` mint-path template is reported separately and is not part
-of the eligible live set.
+The pin workflow never arms auto-merge. Before the digest lands, the operator
+verifies its keyless signature and runs the exact candidate image as the
+controller UID/GID so it can read controller-owned `0600` credentials. The
+preflight inventories every discovered `musubi-mcp*.env`: an unclassified file,
+missing or rejected live credential, or non-discriminating negative control
+fails closed. The `musubi-mcp.env` mint-path template is classified separately
+and is not part of the eligible live set.
 
-**Expected output:** `deploy.yml` reports one changed task (the
+`update.yml` repeats signature verification and the candidate preflight before
+it can recreate Core. This defense is intrinsic to the playbook rather than a
+caller-provided attestation, so direct Core updates run the same gate.
+`MUSUBI_PREFLIGHT_AUTHORITY_ENV` must name a minimal env containing only
+`JWT_SIGNING_KEY` and `OAUTH_AUTHORITY`; `MUSUBI_CREDENTIAL_DIR` may override
+the default `~/.musubi` directory.
+
+**Expected output:** `update.yml` reports one changed task (the
 `docker_compose_v2` task that recreates `core`). Everything else
 unchanged. `/v1/ops/health` returns `{"status":"ok"}`.
 

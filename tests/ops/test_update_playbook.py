@@ -232,9 +232,7 @@ def test_core_update_runs_candidate_image_credential_preflight_intrinsically() -
     assert "musubi.auth.credential_preflight" in argv
     assert "--user" in argv
     user_index = argv.index("--user")
-    assert argv[user_index + 1] == (
-        "{{ lookup('pipe', 'id -u') }}:{{ lookup('pipe', 'id -g') }}"
-    )
+    assert argv[user_index + 1] == ("{{ lookup('pipe', 'id -u') }}:{{ lookup('pipe', 'id -g') }}")
     assert pre_tasks[preflight_index]["delegate_to"] == "localhost"
     assert pre_tasks[preflight_index]["become"] is False
     assert pre_tasks[preflight_index].get("no_log") is not True
@@ -255,6 +253,7 @@ def test_core_update_verifies_candidate_signature_before_exposing_secrets() -> N
     assert "{{ musubi_core_image }}" in verify_argv
     assert "--env-file" not in verify_argv
     assert "/credentials" not in str(verify_argv)
+    assert "musubi_core_image is match(" in UPDATE_PLAYBOOK.read_text()
 
 
 def test_auto_digest_pin_requires_human_preflight_before_merge() -> None:

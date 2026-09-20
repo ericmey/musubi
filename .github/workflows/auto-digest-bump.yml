@@ -6,11 +6,10 @@ name: Auto digest bump
 # that edits `deploy/ansible/group_vars/all.yml::musubi_core_image` to
 # the new `@sha256:<digest>`.
 #
-# The pin PR auto-merges once required checks pass (auto-merge is
-# enabled by this workflow on PR creation). The operator is only in
-# the loop for the deploy itself — `ansible-playbook update.yml` is
-# invoked manually from the control host after the pin has landed on
-# `main`. Deploys are a human decision; pinning the config is not.
+# The pin PR deliberately requires a human merge. Its generated body
+# carries the exact candidate-image preflight command, which must pass
+# on the credential-bearing controller before the digest may land on
+# `main`. Deployment remains a separate human decision after merge.
 #
 # ## Triggers
 #
@@ -74,7 +73,7 @@ jobs:
           RELEASE_PLEASE_PAT: ${{ secrets.RELEASE_PLEASE_PAT }}
         if: ${{ env.RELEASE_PLEASE_PAT == '' }}
         run: |
-          echo "::warning::RELEASE_PLEASE_PAT is unset — falling back to GITHUB_TOKEN. The auto-pin PR this run creates will NOT trigger branch CI (anti-recursion guard), so the required 'check' context never runs and the PR stays BLOCKED. Set the secret to restore auto-mergeable pin PRs."
+          echo "::warning::RELEASE_PLEASE_PAT is unset — falling back to GITHUB_TOKEN. The pin PR this run creates will NOT trigger branch CI (anti-recursion guard), so the required 'check' context never runs and the PR stays BLOCKED. Set the secret to restore reviewable pin PRs."
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -222,10 +221,11 @@ jobs:
           Automated by .github/workflows/auto-digest-bump.yml in response
           to the ${TAG} release. The image has been cosign-signed,
           SBOM-attested, and Trivy-scanned by publish-core-image.yml —
-          verify before deploy:
+          verify its signature before merging. The PR body carries the
+          required live-credential preflight command:
 
               cosign verify \\
-                --certificate-identity-regexp 'https://github.com/ericmey/musubi/.*' \\
+                --certificate-identity-regexp 'https://github.com/ericmey/musubi/.github/workflows/publish-core-image.yml@refs/tags/v.*' \\
                 --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
                 ghcr.io/ericmey/musubi-core@${DIGEST}
 
@@ -249,13 +249,33 @@ jobs:
           - CycloneDX SBOM attached as a cosign attestation
           - Trivy vulnerability scan — 0 CRITICAL (gate in \`publish-core-image.yml\`)
 
-          ## Verify before deploy
+          ## Before merge — required candidate credential gate
+
+          Run this on the credential-bearing Ansible controller. Do not merge
+          until both signature verification and the candidate-image preflight pass.
 
           \`\`\`bash
+          cd ~/musubi
+          git pull --ff-only origin main
+          export CANDIDATE_IMAGE=ghcr.io/ericmey/musubi-core@${DIGEST}
+          export MUSUBI_CREDENTIAL_DIR=~/.musubi
+          export MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env
+
           cosign verify \\
-            --certificate-identity-regexp 'https://github.com/ericmey/musubi/.*' \\
+            --certificate-identity-regexp 'https://github.com/ericmey/musubi/.github/workflows/publish-core-image.yml@refs/tags/v.*' \\
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \\
-            ghcr.io/ericmey/musubi-core@${DIGEST}
+            \${CANDIDATE_IMAGE}
+          docker pull \${CANDIDATE_IMAGE}
+          docker run --rm \\
+            --user "\$(id -u):\$(id -g)" \\
+            --entrypoint python \\
+            --env-file "\${MUSUBI_PREFLIGHT_AUTHORITY_ENV}" \\
+            --mount "type=bind,src=\${MUSUBI_CREDENTIAL_DIR},dst=/credentials,readonly" \\
+            --mount "type=bind,src=\${PWD}/deploy/credential-preflight.json,dst=/preflight/manifest.json,readonly" \\
+            \${CANDIDATE_IMAGE} \\
+            -m musubi.auth.credential_preflight \\
+            --manifest /preflight/manifest.json \\
+            --credential-dir /credentials
           \`\`\`
 
           ## After merge
@@ -280,24 +300,7 @@ jobs:
           if [[ -n "${EXISTING}" ]]; then
             echo "Updating existing PR #${EXISTING}"
             gh pr edit "${EXISTING}" --title "${TITLE}" --body "${BODY}"
-            PR_NUMBER="${EXISTING}"
           else
             echo "Opening new PR"
-            # `gh pr create` prints the PR URL on stdout; the trailing
-            # path component is the number. More reliable than
-            # re-listing immediately after create (GitHub's API can
-            # briefly return an empty list while the PR is indexing).
-            PR_URL=$(gh pr create --base main --head "${BRANCH}" --title "${TITLE}" --body "${BODY}")
-            PR_NUMBER="${PR_URL##*/}"
-          fi
-
-          # Flip on auto-merge so the pin lands the moment required
-          # checks go green. Same "no human gate" policy as
-          # release-please.yml. Idempotent — calling --auto on a PR
-          # that already has auto-merge is a no-op.
-          if [[ -n "${PR_NUMBER}" && "${PR_NUMBER}" != "null" ]]; then
-            echo "Enabling auto-merge on PR #${PR_NUMBER}"
-            gh pr merge "${PR_NUMBER}" --auto --squash
-          else
-            echo "::warning::could not resolve PR number; skipping auto-merge enable."
+            gh pr create --base main --head "${BRANCH}" --title "${TITLE}" --body "${BODY}"
           fi

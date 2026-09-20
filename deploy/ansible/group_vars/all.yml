@@ -31,9 +31,10 @@ musubi_core_port: 8100
 # when the tag-triggered publish run executes.
 #
 # Bumped automatically by `.github/workflows/auto-digest-bump.yml` on
-# every successful publish — a pin PR opens, CI runs, auto-merge
-# lands it. Deploy with `ansible-playbook deploy/ansible/update.yml`
-# from the control host (see `deploy/runbooks/upgrade-image.md`).
+# every successful publish — a pin PR opens, CI runs, and a human merges
+# only after the candidate credential preflight passes on the controller.
+# Deploy with `ansible-playbook deploy/ansible/update.yml` from the control
+# host (see `deploy/runbooks/upgrade-image.md`).
 #
 # For what's in a given version, see CHANGELOG.md (authoritative)
 # rather than a comment here — version-specific notes rot; the

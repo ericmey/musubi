@@ -77,7 +77,24 @@ def _load_manifest(path: Path) -> tuple[list[dict[str, str]], list[dict[str, str
     names = [row["file"] for row in live_rows + template_rows]
     if len(names) != len(set(names)):
         raise ValueError("credential files cannot appear in more than one class")
+    if any(
+        Path(name).name != name or not name.startswith("musubi-mcp") or not name.endswith(".env")
+        for name in names
+    ):
+        raise ValueError("credential files must be musubi-mcp*.env basenames")
     return live_rows, template_rows
+
+
+def _unclassified_credentials(
+    credential_dir: Path, *, classified_names: set[str]
+) -> list[str] | None:
+    """Return discovered credential files absent from the manifest."""
+
+    try:
+        discovered = {path.name for path in credential_dir.glob("musubi-mcp*.env")}
+    except OSError:
+        return None
+    return sorted(discovered - classified_names)
 
 
 def _inconsistent_control_is_rejected(settings: TokenValidationSettings) -> bool:
@@ -114,12 +131,22 @@ def run_preflight(
     settings: TokenValidationSettings,
     emit: Emit,
 ) -> bool:
-    """Validate the complete declared live set and a signed negative control."""
+    """Validate the exhaustive credential inventory and a signed negative control."""
 
     try:
         live, templates = _load_manifest(manifest_path)
     except (OSError, json.JSONDecodeError, ValueError):
         emit("FAIL manifest invalid")
+        return False
+
+    classified_names = {row["file"] for row in live + templates}
+    unclassified = _unclassified_credentials(credential_dir, classified_names=classified_names)
+    if unclassified is None:
+        emit("FAIL credential inventory unreadable")
+        return False
+    if unclassified:
+        for filename in unclassified:
+            emit(f"FAIL credential inventory unclassified {filename}")
         return False
 
     passed = 0

@@ -86,8 +86,10 @@ MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
 ```
 
 That root-readable env contains only `JWT_SIGNING_KEY` and
-`OAUTH_AUTHORITY`. The playbook uses it inside the exact candidate image and
-fails before touching the workload host if either setting is absent.
+`OAUTH_AUTHORITY`. Before mounting that env or the credential directory, the
+playbook verifies the exact digest's cosign identity. It then runs the candidate
+as the controller UID/GID, inventories every `musubi-mcp*.env`, and fails before
+touching the workload host if any file is unclassified, missing, or rejected.
 
 Dry-run first whenever possible:
 

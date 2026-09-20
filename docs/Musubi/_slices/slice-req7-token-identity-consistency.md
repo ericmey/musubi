@@ -132,6 +132,9 @@ validator; the behavior each historical test proves is unchanged.
 - Corrected only the subject-format predicate. Concrete two-segment presence,
   cross-tenant scope rejection, issuer/signature/audience/expiry enforcement,
   and the stable D6 identity tuple remain intact.
-- Added a fail-closed candidate-image preflight for the explicitly declared 12
-  live credentials, one separately classified non-consumed template, and a
-  signed inconsistent-identity control.
+- Added a fail-closed candidate-image preflight for the exhaustive discovered
+  `musubi-mcp*.env` inventory: 12 live credentials, one separately classified
+  non-consumed template, and a signed inconsistent-identity control.
+- Review closeout made signature verification intrinsic before any secret
+  mount, runs the candidate container as the controller UID/GID for `0600`
+  files, and removed digest-pin auto-merge so the live preflight is pre-pin.

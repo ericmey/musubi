@@ -106,9 +106,11 @@
           - candidate_preflight_inputs.results[0].stat.isdir | default(false)
           - candidate_preflight_inputs.results[1].stat.isreg | default(false)
           - candidate_preflight_inputs.results[2].stat.isreg | default(false)
+          - musubi_core_image is match('^ghcr[.]io/ericmey/musubi-core@sha256:[0-9a-f]{64}$')
         fail_msg: >-
           Core update is not armed: set MUSUBI_PREFLIGHT_AUTHORITY_ENV to an
-          explicit server/preflight env and provide every configured credential.
+          explicit server/preflight env, provide every configured credential,
+          and select an exact musubi-core sha256 digest.
         quiet: true
       delegate_to: localhost
       become: false
@@ -129,12 +131,31 @@
         - not ansible_check_mode
         - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
 
+    - name: Verify the exact Core candidate image signature
+      ansible.builtin.command:
+        argv:
+          - cosign
+          - verify
+          - --certificate-identity-regexp
+          - "https://github.com/ericmey/musubi/.github/workflows/publish-core-image.yml@refs/tags/v.*"
+          - --certificate-oidc-issuer
+          - https://token.actions.githubusercontent.com
+          - "{{ musubi_core_image }}"
+      delegate_to: localhost
+      become: false
+      changed_when: false
+      when:
+        - not ansible_check_mode
+        - changed_services_list | intersect(['core', 'lifecycle-worker']) | length > 0
+
     - name: Validate every live credential inside the exact candidate image
       ansible.builtin.command:
         argv:
           - docker
           - run
           - --rm
+          - --user
+          - "{{ lookup('pipe', 'id -u') }}:{{ lookup('pipe', 'id -g') }}"
           - --entrypoint
           - python
           - --env-file
