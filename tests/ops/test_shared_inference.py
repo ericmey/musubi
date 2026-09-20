@@ -254,6 +254,10 @@ def test_credential_rotation_rolls_back_every_coupled_artifact() -> None:
     )
     restore_command = restore_runtime["ansible.builtin.shell"]["cmd"]
     assert "> /run/shared-inference-secrets/shared-inference.htpasswd" not in restore_command
+    assert (
+        'cat "{{ auth_rotation_backup.path }}/shared-inference.htpasswd" > "$candidate"'
+        in restore_command
+    )
     assert 'chown 101:101 "$candidate"' in restore_command
     assert 'chmod 0400 "$candidate"' in restore_command
     assert (

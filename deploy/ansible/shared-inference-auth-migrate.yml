@@ -325,7 +325,7 @@
             cmd: >-
               candidate=$(mktemp /run/shared-inference-secrets/htpasswd.XXXXXX) &&
               trap 'rm -f "$candidate"' EXIT &&
-              cat {{ auth_rotation_backup.path }}/shared-inference.htpasswd > "$candidate" &&
+              cat "{{ auth_rotation_backup.path }}/shared-inference.htpasswd" > "$candidate" &&
               chown 101:101 "$candidate" &&
               chmod 0400 "$candidate" &&
               mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd
