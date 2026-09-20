@@ -1,9 +1,13 @@
 const INCIDENT_MARKER = "<!-- scheduled-evals-incident -->";
 const RUN_MARKER = /<!-- scheduled-evals-run:(\d+):(\d+):([^ ]+) -->/;
+const ALLOWED_RESULTS = new Set(["success", "failure", "cancelled", "skipped"]);
 
-function parseRunMarker(body) {
-  const match = body?.match(RUN_MARKER);
-  if (!match) return null;
+function parseRunMarker(comment) {
+  if (comment.user?.login !== "github-actions[bot]" || comment.user?.type !== "Bot") {
+    return null;
+  }
+  const match = comment.body?.match(RUN_MARKER);
+  if (!match || !ALLOWED_RESULTS.has(match[3])) return null;
   return {
     runId: BigInt(match[1]),
     runAttempt: BigInt(match[2]),
@@ -57,7 +61,7 @@ async function reconcileScheduledEvals({
       per_page: 100,
     });
     return comments
-      .map((comment) => parseRunMarker(comment.body))
+      .map((comment) => parseRunMarker(comment))
       .filter((run) => run !== null)
       .sort(compareRuns)
       .at(-1);

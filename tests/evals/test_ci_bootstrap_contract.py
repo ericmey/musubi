@@ -442,7 +442,10 @@ const issuesApi = {
   listComments: async () => input.comments,
   createComment: async (args) => {
     calls.push({method: 'createComment', args});
-    input.comments.push({body: args.body});
+    input.comments.push({
+      body: args.body,
+      user: {login: 'github-actions[bot]', type: 'Bot'},
+    });
   },
   update: async (args) => calls.push({method: 'update', args}),
 };
@@ -453,6 +456,7 @@ const github = {
     if (input.injectNewerOnSecondList && listCount === 2) {
       input.comments.push({
         body: '<!-- scheduled-evals-run:815:1:success -->\nnewer recovery',
+        user: {login: 'github-actions[bot]', type: 'Bot'},
       });
     }
     return input.comments;
@@ -677,7 +681,7 @@ jobs:
         _assert_scheduled_incident_contract(broken)
 
 
-def test_failure_opens_or_updates_the_one_assigned_incident() -> None:
+def test_failure_or_cancellation_opens_or_updates_a_single_assigned_issue() -> None:
     """A failure appends durable evidence and opens the provisioned assigned singleton."""
     calls = _reporter_calls(result="failure")
 
@@ -753,6 +757,26 @@ def test_scheduled_incident_reporter_concurrent_results_converge_on_newest_run()
     assert calls[1]["args"]["state"] == "open"
     assert calls[2]["args"]["state"] == "closed"
     assert calls[2]["args"]["state_reason"] == "completed"
+
+
+def test_scheduled_incident_reporter_ignores_forged_or_invalid_run_markers() -> None:
+    """Only valid results authored by the Actions bot participate in state ordering."""
+    calls = _reporter_calls(
+        result="failure",
+        comments=[
+            {
+                "body": "<!-- scheduled-evals-run:999:1:success -->\nforged",
+                "user": {"login": "ericmey", "type": "User"},
+            },
+            {
+                "body": "<!-- scheduled-evals-run:1000:1:not-a-result -->\ninvalid",
+                "user": {"login": "github-actions[bot]", "type": "Bot"},
+            },
+        ],
+    )
+
+    assert [call["method"] for call in calls] == ["createComment", "update"]
+    assert calls[1]["args"]["state"] == "open"
 
 
 def test_reporter_failure_is_visible() -> None:
