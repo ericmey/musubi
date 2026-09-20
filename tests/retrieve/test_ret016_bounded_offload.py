@@ -11,11 +11,13 @@ from typing import Any, cast
 import pytest
 from qdrant_client import models
 
+from musubi.observability import request_id_var
 from musubi.retrieve import deep, hybrid
 from musubi.retrieve.offload import (
     QDRANT_OPTIONAL_OFFLOAD_WORKERS,
     QDRANT_REQUIRED_OFFLOAD_WORKERS,
     run_optional_qdrant_offload,
+    run_qdrant_offload,
 )
 from musubi.retrieve.scoring import ScoreComponents, ScoredHit
 from musubi.types.common import Ok
@@ -50,6 +52,21 @@ async def test_qdrant_offload_never_uses_the_shared_default_executor(
     monkeypatch.setattr(hybrid, "_hits_from_response", lambda *_args, **_kwargs: [])
 
     assert await hybrid._resolve_hits_async(object(), client=None, collection=None) == []
+
+
+@pytest.mark.asyncio
+async def test_both_qdrant_offload_pools_preserve_request_context() -> None:
+    token = request_id_var.set("req-798-proof")
+    try:
+        required, optional = await asyncio.gather(
+            run_qdrant_offload(request_id_var.get),
+            run_optional_qdrant_offload(request_id_var.get),
+        )
+    finally:
+        request_id_var.reset(token)
+
+    assert required == "req-798-proof"
+    assert optional == "req-798-proof"
 
 
 @pytest.mark.asyncio
@@ -281,14 +298,15 @@ async def test_twenty_callers_complete_through_the_production_deep_path(
         plane = response.removeprefix("musubi_")
         return [
             hybrid.HybridHit(
-                object_id=f"{plane}-hit",
-                score=0.75,
+                object_id=f"{plane}-hit-{index}",
+                score=0.75 - index / 100,
                 payload={
                     "namespace": f"fleet/agent/{plane}",
                     "state": "matured",
-                    "content": plane,
+                    "content": f"{plane}-{index}",
                 },
             )
+            for index in range(2)
         ]
 
     async def production_hybrid_leg(
@@ -309,10 +327,21 @@ async def test_twenty_callers_complete_through_the_production_deep_path(
         time.sleep(0.003)
         return replace(item, payload={**item.payload, "hydrated": True})
 
+    class InstrumentedReranker:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def rerank(self, query_text: str, texts: list[str]) -> list[float]:
+            assert query_text == "bounded"
+            assert len(texts) == 6
+            self.calls += 1
+            return [float(index) for index in range(len(texts))]
+
     monkeypatch.setattr(deep, "hybrid_search", production_hybrid_leg)
     monkeypatch.setattr(hybrid, "_hits_from_response", resolve)
     monkeypatch.setattr(deep, "_hydrate_one", hydrate)
     query = deep.RetrievalQuery(namespace="fleet/agent", query_text="bounded", limit=5)
+    reranker = InstrumentedReranker()
 
     results = await asyncio.wait_for(
         asyncio.gather(
@@ -320,7 +349,7 @@ async def test_twenty_callers_complete_through_the_production_deep_path(
                 deep.run_deep_retrieve(
                     cast(Any, ProductionShapedClient()),
                     cast(Any, object()),
-                    cast(Any, object()),
+                    cast(Any, reranker),
                     query,
                 )
                 for _ in range(20)
@@ -331,7 +360,8 @@ async def test_twenty_callers_complete_through_the_production_deep_path(
 
     assert all(
         isinstance(result, Ok)
-        and len(result.value.hits) == 3
+        and len(result.value.hits) == 5
         and all(hit.payload.get("hydrated") is True for hit in result.value.hits)
         for result in results
     )
+    assert reranker.calls == 20
