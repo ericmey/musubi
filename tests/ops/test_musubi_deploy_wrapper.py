@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -48,5 +49,10 @@ def test_multi_service_deploy_passes_structured_json_extra_vars(tmp_path: Path) 
     argv = [
         line.removeprefix("ARG=") for line in result.stdout.splitlines() if line.startswith("ARG=")
     ]
-    assert '{"changed_services":["core","lifecycle-worker"]}' in argv
+    structured_extra_vars = [
+        json.loads(argv[index + 1])
+        for index, argument in enumerate(argv[:-1])
+        if argument == "-e" and argv[index + 1].startswith("{")
+    ]
+    assert {"changed_services": ["core", "lifecycle-worker"]} in structured_extra_vars
     assert not any(arg.startswith("changed_services=") for arg in argv)
