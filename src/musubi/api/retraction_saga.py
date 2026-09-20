@@ -30,6 +30,7 @@ from musubi.store.immutable_vectors import (
     retract_non_embedding_payload,
 )
 from musubi.store.mutation_lease import is_expired_done_token
+from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import retrieve_by_point_id
 from musubi.store.retraction_evidence import retraction_evidence_binding_errors
 from musubi.store.specs import strip_layout_fields
@@ -291,7 +292,13 @@ async def _release_adopted_done_token(
 
     release_version = int(stored.raw.get("version", 0))
     qdrant.delete_payload(
-        collection_name="musubi_episodic",
+        # `names.py` is explicit that the rest of the codebase must never stringify a
+        # collection name inline, because a rename needs a dual-write migration and an
+        # inlined name silently survives it. This line is branch-introduced (7d5c932b),
+        # so it is the whole of that violation within this slice -- the other three
+        # `collection_name=` inlines live in `lifecycle/reflection.py`, which #732 does
+        # not own, and route to their own issue (Copilot round 30 on musubi#732).
+        collection_name=collection_for_plane("episodic"),
         keys=["update_lease_token"],
         points=token_filter(release_version),
         wait=True,
