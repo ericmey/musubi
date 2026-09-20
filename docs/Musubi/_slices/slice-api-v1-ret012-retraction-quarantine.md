@@ -35,7 +35,14 @@ the escrow artifact remain available for correction and audit.
 - Exact replay and evidence adoption retain the already committed archived row.
 - Receipt-loss repair extends the existing evidence-gated immutable-vector CAS only to adopt the
   exact validated `done:<issued_us>:<nonce>` token already present on that committed write. It does
-  not change ordinary PATCH behavior or any other store primitive.
+  not change ordinary PATCH behavior **for rows that carry no retraction evidence**, and it changes
+  no other store primitive.
+- **Ordinary PATCH behavior DOES change for an evidence-bearing row, and that is the point of the
+  slice.** `patch_non_embedding_payload` refuses outright when `retraction_evidence` is present, and
+  the publisher's fenced writes carry the same predicate server-side. Without it, line 19's promise
+  is false: `importance` is a legal patch field, so "regain importance" stays reachable through the
+  ordinary path. Corrected 2026-09-20 — the sentence above was accurate when written and this slice
+  made it false (Copilot round 26, low).
 
 ## Owned paths
 

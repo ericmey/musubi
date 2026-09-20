@@ -150,12 +150,30 @@ def _legacy_fence_not_retracted(namespace: str, object_id: str, obs_version: int
 
     The v1/legacy branches of both publisher write paths fall through to
     `_legacy_conversion_filter`, so fencing only the v2 anchor branches would have left
-    the legacy layout -- the one most of RET-012's own cells exercise -- wide open. Same
-    defect shape as the guard this whole thread is about: correct at the site I was
-    looking at, absent at its sibling.
+    the legacy layout -- the one most of RET-012's own cells exercise -- wide open.
+
+    EVERY arm of the base filter is carried, not just `must`. The first cut rebuilt the
+    filter as `Filter(must=[*base.must, _not_retracted()])` and silently dropped
+    `must_not`, which costs different things on the two branches:
+
+      obs_version != 0   loses the point_kind exclusion. An orphan content snapshot or a
+                         stray anchor becomes writable, and can be converted into an
+                         anchor.
+      obs_version == 0   loses that AND THE ENTIRE VERSION FENCE -- at that branch the
+                         version constraint is the `must_not` clause `version > 0`;
+                         nothing is appended to `must`. The filter degrades to
+                         object_id + namespace, so a concurrent Phase-1 bump matches
+                         where it used to match zero and force a retry.
+
+    The second is strictly worse than having no evidence predicate at all, which is why
+    the base filter is COPIED and one field overridden rather than reconstructed here (Copilot round 26 on musubi#732;
+    branch split measured by Aoi).
     """
     base = _legacy_conversion_filter(namespace, object_id, obs_version)
-    return models.Filter(must=[*(base.must or []), _not_retracted()])
+    # COPY the filter and override one field. Enumerating arms to rebuild it is how the
+    # first cut lost `must_not`, and enumerating them correctly would still drop any arm
+    # added to the base later -- the failure would be silent and in this same function.
+    return base.model_copy(update={"must": [*(base.must or []), _not_retracted()]})
 
 
 def _not_retracted() -> models.Condition:
