@@ -1174,6 +1174,74 @@ async def test_episodic_demotion_sweep_no_op_when_empty(
     assert report.selected == 0
 
 
+async def test_episodic_demotion_refuses_candidate_touched_after_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+) -> None:
+    """A newer activity snapshot must not be demoted from a stale scroll result."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import episodic_demotion_sweep
+
+    saved = await _seed_provisional(plane, ns, content="demotion-race", age_seconds=40 * 86400)
+    await plane.transition(
+        namespace=ns,
+        object_id=saved.object_id,
+        to_state="matured",
+        actor="seed",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    backdate = datetime.now(UTC) - timedelta(days=40)
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"updated_at": backdate.isoformat(), "updated_epoch": backdate.timestamp()},
+        points=qmodels.PointIdsList(points=[episodic_point_id(saved.object_id)]),
+        wait=True,
+    )
+    selected = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert selected is not None
+
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    touched_at = datetime.now(UTC)
+    raced = False
+
+    def touch_candidate_then_transition(*args: Any, **kwargs: Any) -> Any:
+        nonlocal raced
+        if not raced:
+            raced = True
+            qdrant.set_payload(
+                collection_name="musubi_episodic",
+                payload={
+                    "updated_at": touched_at.isoformat(),
+                    "updated_epoch": touched_at.timestamp(),
+                    "version": selected.version + 1,
+                },
+                points=qmodels.PointIdsList(points=[episodic_point_id(saved.object_id)]),
+                wait=True,
+            )
+        return real_transition(*args, **kwargs)
+
+    monkeypatch.setattr(maturation, "transition", touch_candidate_then_transition)
+    report = await episodic_demotion_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        config=_config(demotion_inactivity_sec=30 * 86400),
+    )
+
+    assert raced, "the activity update did not land between selection and transition"
+    assert report.transitioned == 0
+    after = await plane.get(namespace=ns, object_id=saved.object_id)
+    assert after is not None
+    assert after.state == "matured"
+    assert after.version == selected.version + 1
+    assert after.updated_at == touched_at
+
+
 async def test_concept_maturation_sweep_promotes_eligible(
     qdrant: QdrantClient, sink: LifecycleEventSink
 ) -> None:
@@ -1237,6 +1305,90 @@ async def test_concept_maturation_sweep_promotes_eligible(
     assert refreshed_not_yet is not None and refreshed_not_yet.state == "synthesized"
 
 
+async def test_concept_maturation_refuses_contradiction_added_after_eligibility_check(
+    monkeypatch: pytest.MonkeyPatch,
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+) -> None:
+    """A contradiction added after the post-scroll check invalidates that snapshot."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import concept_maturation_sweep
+    from musubi.planes.concept import ConceptPlane
+    from musubi.types.common import generate_ksuid
+    from musubi.types.concept import SynthesizedConcept
+
+    namespace = "eric/claude-code/concept"
+    plane = ConceptPlane(client=qdrant, embedder=FakeEmbedder())
+    saved = await plane.create(
+        SynthesizedConcept(
+            namespace=namespace,
+            title="Race candidate",
+            content="Initially eligible for maturation.",
+            synthesis_rationale="Three matching memories.",
+            merged_from=[generate_ksuid() for _ in range(3)],
+        )
+    )
+    for _ in range(3):
+        await plane.reinforce(namespace=namespace, object_id=saved.object_id)
+    backdate = datetime.now(UTC) - timedelta(days=2)
+    qdrant.set_payload(
+        collection_name="musubi_concept",
+        payload={"created_at": backdate.isoformat(), "created_epoch": backdate.timestamp()},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=saved.object_id)
+                )
+            ]
+        ),
+        wait=True,
+    )
+    selected = await plane.get(namespace=namespace, object_id=saved.object_id)
+    assert selected is not None and selected.contradicts == []
+    contradiction = generate_ksuid()
+
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    raced = False
+
+    def contradict_candidate_then_transition(*args: Any, **kwargs: Any) -> Any:
+        nonlocal raced
+        if not raced:
+            raced = True
+            qdrant.set_payload(
+                collection_name="musubi_concept",
+                payload={
+                    "contradicts": [contradiction],
+                    "version": selected.version + 1,
+                },
+                points=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="object_id", match=qmodels.MatchValue(value=saved.object_id)
+                        )
+                    ]
+                ),
+                wait=True,
+            )
+        return real_transition(*args, **kwargs)
+
+    monkeypatch.setattr(maturation, "transition", contradict_candidate_then_transition)
+    report = await concept_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        config=_config(concept_min_age_sec=24 * 3600, concept_reinforcement_threshold=3),
+    )
+
+    assert raced, "the contradiction did not land after the eligibility check"
+    assert report.transitioned == 0
+    after = await plane.get(namespace=namespace, object_id=saved.object_id)
+    assert after is not None
+    assert after.state == "synthesized"
+    assert after.version == selected.version + 1
+    assert after.contradicts == [contradiction]
+
+
 async def test_concept_demotion_sweep_demotes_inactive(
     qdrant: QdrantClient, sink: LifecycleEventSink
 ) -> None:
@@ -1289,6 +1441,97 @@ async def test_concept_demotion_sweep_demotes_inactive(
     assert report.transitioned == 1
     refreshed = await plane.get(namespace="eric/claude-code/concept", object_id=saved.object_id)
     assert refreshed is not None and refreshed.state == "demoted"
+
+
+async def test_concept_demotion_refuses_candidate_touched_after_selection(
+    monkeypatch: pytest.MonkeyPatch,
+    qdrant: QdrantClient,
+    sink: LifecycleEventSink,
+) -> None:
+    """A newer concept activity snapshot must not be demoted from a stale scroll result."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import concept_demotion_sweep
+    from musubi.planes.concept import ConceptPlane
+    from musubi.types.common import generate_ksuid
+    from musubi.types.concept import SynthesizedConcept
+
+    namespace = "eric/claude-code/concept"
+    plane = ConceptPlane(client=qdrant, embedder=FakeEmbedder())
+    saved = await plane.create(
+        SynthesizedConcept(
+            namespace=namespace,
+            title="Demotion race",
+            content="An inactive concept becomes active again.",
+            synthesis_rationale="Initial cluster of three.",
+            merged_from=[generate_ksuid() for _ in range(3)],
+        )
+    )
+    await plane.transition(
+        namespace=namespace,
+        object_id=saved.object_id,
+        to_state="matured",
+        actor="seed",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    selected = await plane.get(namespace=namespace, object_id=saved.object_id)
+    assert selected is not None
+    backdate = datetime.now(UTC) - timedelta(days=40)
+    qdrant.set_payload(
+        collection_name="musubi_concept",
+        payload={"updated_at": backdate.isoformat(), "updated_epoch": backdate.timestamp()},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=saved.object_id)
+                )
+            ]
+        ),
+        wait=True,
+    )
+
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    touched_at = datetime.now(UTC)
+    raced = False
+
+    def touch_candidate_then_transition(*args: Any, **kwargs: Any) -> Any:
+        nonlocal raced
+        if not raced:
+            raced = True
+            qdrant.set_payload(
+                collection_name="musubi_concept",
+                payload={
+                    "updated_at": touched_at.isoformat(),
+                    "updated_epoch": touched_at.timestamp(),
+                    "version": selected.version + 1,
+                },
+                points=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="object_id", match=qmodels.MatchValue(value=saved.object_id)
+                        )
+                    ]
+                ),
+                wait=True,
+            )
+        return real_transition(*args, **kwargs)
+
+    monkeypatch.setattr(maturation, "transition", touch_candidate_then_transition)
+    report = await concept_demotion_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        config=_config(demotion_inactivity_sec=30 * 86400),
+    )
+
+    assert raced, "the activity update did not land between selection and transition"
+    assert report.transitioned == 0
+    after = await plane.get(namespace=namespace, object_id=saved.object_id)
+    assert after is not None
+    assert after.state == "matured"
+    assert after.version == selected.version + 1
+    assert after.updated_at == touched_at
 
 
 async def test_concept_maturation_sweep_no_op_when_empty(
