@@ -61,8 +61,61 @@ the escrow artifact remain available for correction and audit.
 - `tests/api/test_idem007_retraction_saga.py`
 - `tests/api/test_idem008_retraction_timestamps.py`
 - `tests/store/test_data001_layout_field_leak.py`
-- `tests/store/test_identity_seed_equivalence.py` (**added** — asserts the helper's end
-  state against the pre-change seed rather than inferring equivalence from green)
+- `tests/store/test_data001_phase2_identity_consumers.py` (**integration-marked**)
+- `tests/store/test_data001_phase2_immutable_vectors.py` (**integration-marked**)
+- `tests/retrieve/test_data001_phase2_hybrid.py` (**integration-marked**)
+
+### GATE BLIND SPOT — `make check` cannot see this class. Recorded 2026-09-20.
+
+```
+pytestmark = pytest.mark.integration
+addopts    = "-ra --strict-markers --strict-config -m 'not integration'"
+```
+
+The standard gate EXCLUDES integration-marked tests by construction. Three of the eight
+files this slice touches are integration-marked, so they appeared as `69 deselected` in
+every gate run today — including the ones that certified the round-29 removal as green.
+Run explicitly they were **15 failed, 9 passed**.
+
+**A green `make check` is therefore not evidence about this surface, and no amount of
+re-running it ever will be.** The class requires an explicit command:
+
+```
+pytest -m integration tests/store/test_data001_phase2_identity_consumers.py \
+                      tests/store/test_data001_phase2_immutable_vectors.py \
+                      tests/retrieve/test_data001_phase2_hybrid.py
+```
+
+This is the same shape as the round-29 defect itself: an audit of *filtered* writes could
+never see an upsert, because the mechanism it enumerated did not apply there. An
+instrument whose SCOPE excludes the evidence reports clean forever. Anyone removing a
+code path in this repo should run the integration marker explicitly before believing a
+green gate (Copilot round 30; ruling by Yua).
+
+### The seeding equivalence — what is permanently asserted, and what was a one-time probe
+
+**Standing guarantee, in the tree:** each seeding helper asserts its own topology BEFORE
+returning (`kinds == ["anchor", "content"]`). A silent non-conversion fails in the
+fixture's own voice rather than as an unrelated anchor assertion inside a caller. That is
+a live check on every run.
+
+**One-time evidence, NOT a cell, and deliberately not written as one.** Before the round-29
+removal, the pre-change seed was captured on `05a67a0f` — the last head that still had the
+create path — and compared field-by-field against the helper's output:
+
+```
+                 before (bare publish)     after (helper + publish)
+rows             2                         1
+point kinds      anchor, content           legacy (point_kind absent)
+```
+
+That difference is why the helpers reach v2 through the real migration path instead of
+seeding v1 and adjusting assertions. **It cannot be re-run as a regression cell: one side
+of the comparison no longer exists.** An equivalence claim about a state that has been
+deleted has to be captured before the change or not at all, and pinning a test to
+`05a67a0f` would rot the moment that commit is unreachable. Recorded here as evidence with
+its head and its result rather than asserted as a running test (Copilot round 30; framing
+by Aoi).
 
 ### Why five unrelated test files enter this slice — recorded 2026-09-20
 

@@ -15,9 +15,11 @@ which the publisher then converts on its first write -- the migration path that 
 
 **The seeded state is deliberately NOT the old one.** `publish()` produced a v2 anchor
 directly; this produces a v1 row that becomes a v2 anchor through the publisher's own
-conversion. `tests/store/test_identity_seed_equivalence.py` asserts where the two
-converge and names where they do not, so the difference is a recorded decision rather
-than fifteen tests that happen to pass (Aoi's condition, 2026-09-20).
+conversion. Each helper asserts its own topology before returning, which is the standing
+guarantee. The one-time before/after comparison that justified this design was a PROBE
+against `05a67a0f` — the last head carrying the old create path — and is recorded in the
+slice doc rather than kept as a cell: one side of that comparison no longer exists, so it
+is not re-runnable (Aoi's condition, 2026-09-20).
 """
 
 from __future__ import annotations
@@ -34,6 +36,30 @@ from musubi.types.episodic import EpisodicMemory
 #: `EpisodicMemory` rejects anything else, so literals like ``"payload-only"`` name an
 #: object production could never create -- unreal state of the same family as the
 #: unshipped create path, and fixed in the same pass (musubi#732 round 29).
+_B62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+
+
+def ksuid_for(label: str) -> str:
+    """A DETERMINISTIC valid 27-char base62 KSUID derived from a readable label.
+
+    These fixtures name objects things like ``"del-ns2"`` and ``"payload-only"``, which
+    `EpisodicMemory` rejects -- production can never produce such an id. They survived
+    only because the removed create path wrote raw payloads without model validation, so
+    the ids were never checked against the model that owns them.
+
+    Rewriting every call site to `generate_ksuid()` would cost the readability the labels
+    exist for, and random ids would make failures non-reproducible. This keeps the label
+    at the call site and derives a stable, valid id from it -- same label, same id, every
+    run (musubi#732 round 30).
+    """
+    digest = int.from_bytes(hashlib.sha256(label.encode("utf-8")).digest(), "big")
+    out = []
+    for _ in range(27):
+        digest, rem = divmod(digest, 62)
+        out.append(_B62[rem])
+    return "".join(out)
+
+
 FIXTURE_KSUIDS = {
     "payload-only": "2ZrFhTgQJmVqKxLnBdWcYpSvE4t",
     "vector-change": "2ZrFhTgQJmVqKxLnBdWcYpSvE5u",
