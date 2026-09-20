@@ -106,6 +106,10 @@ class MutationLeaseConflict(RuntimeError):
     """A full-object update could not acquire/publish within the bounded round budget — fail loud."""
 
 
+class MutationIdentityAmbiguous(MutationLeaseConflict):
+    """More than one authoritative row matched one logical mutation identity."""
+
+
 class MutationRowVanished(LookupError):
     """The row disappeared before the update could publish. Subclasses ``LookupError`` so callers
     that already raise ``LookupError`` on not-found keep their plane semantics without translation."""
@@ -201,21 +205,72 @@ def is_expired_done_token(token: object, *, now_us: int | None = None) -> bool:
     return observed_now - issued_us > _LEASE_TTL_US
 
 
-def _read(client: QdrantClient, collection: str, namespace: str, object_id: str) -> dict[str, Any]:
+@dataclass(frozen=True)
+class _IdentityRow:
+    point_id: models.ExtendedPointId
+    payload: dict[str, Any]
+
+
+def _read_unique_identity(
+    client: QdrantClient, collection: str, namespace: str, object_id: str
+) -> _IdentityRow | None:
+    """Resolve exactly one authoritative row before any filtered mutation.
+
+    Requesting two rows is the cardinality proof: ``limit=1`` would silently
+    choose one duplicate while a payload-filtered write mutated both.  The
+    selected physical ID is carried into every later fence to close a duplicate
+    insertion between this count and the write.
+    """
     records, _ = client.scroll(
         collection_name=collection,
         scroll_filter=models.Filter(
             must=_conditions(namespace, object_id), must_not=_EXCLUDE_CONTENT
         ),
+        limit=2,
+        with_payload=True,
+        with_vectors=False,
+    )
+    if len(records) > 1:
+        raise MutationIdentityAmbiguous(
+            f"mutation identity ({namespace!r}, {object_id!r}) in {collection} matched "
+            f"{len(records)} authoritative rows"
+        )
+    if not records:
+        return None
+    return _IdentityRow(point_id=records[0].id, payload=dict(records[0].payload or {}))
+
+
+def _read_point(
+    client: QdrantClient,
+    collection: str,
+    namespace: str,
+    object_id: str,
+    point_id: models.ExtendedPointId,
+) -> dict[str, Any]:
+    """Read back the exact physical row selected by the cardinality proof."""
+    records, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=[models.HasIdCondition(has_id=[point_id]), *_conditions(namespace, object_id)],
+            must_not=_EXCLUDE_CONTENT,
+        ),
         limit=1,
         with_payload=True,
         with_vectors=False,
     )
-    return dict(records[0].payload or {}) if records else {}
+    if not records or not records[0].payload:
+        return {}
+    payload = dict(records[0].payload)
+    return payload
 
 
 def _clear_token(
-    client: QdrantClient, collection: str, namespace: str, object_id: str, token: str
+    client: QdrantClient,
+    collection: str,
+    namespace: str,
+    object_id: str,
+    point_id: models.ExtendedPointId,
+    token: str,
 ) -> None:
     """Release the EXACT ``token`` (fenced). Best-effort cleanup — a taken-over token matches zero,
     which is fine (it is no longer ours to release)."""
@@ -224,6 +279,7 @@ def _clear_token(
         keys=["update_lease_token"],
         points=models.Filter(
             must=[
+                models.HasIdCondition(has_id=[point_id]),
                 *_conditions(namespace, object_id),
                 models.FieldCondition(
                     key="update_lease_token", match=models.MatchValue(value=token)
@@ -239,6 +295,7 @@ def _release_token_confirmed(
     collection: str,
     namespace: str,
     object_id: str,
+    point_id: models.ExtendedPointId,
     token: str,
     *,
     failure_context: str,
@@ -250,8 +307,8 @@ def _release_token_confirmed(
     operational state as though release completed.
     """
     for _ in range(_SKIP_CLEAR_ATTEMPTS):
-        _clear_token(client, collection, namespace, object_id, token)
-        after = _read(client, collection, namespace, object_id)
+        _clear_token(client, collection, namespace, object_id, point_id, token)
+        after = _read_point(client, collection, namespace, object_id, point_id)
         if not after:
             raise MutationRowVanished(
                 f"row ({namespace!r}, {object_id!r}) vanished during skip-release"
@@ -292,13 +349,15 @@ async def owned_update(
         if round_index:
             await asyncio.sleep(secrets.randbelow(_MAX_BACKOFF_US) / 1_000_000)
 
-        current = _read(client, collection, namespace, object_id)
-        if not current:
+        identity = _read_unique_identity(client, collection, namespace, object_id)
+        if identity is None or not identity.payload:
             # Preserve each plane's not-found semantics: a LookupError, never a model_validate({}).
             raise MutationRowVanished(
                 f"row ({namespace!r}, {object_id!r}) vanished before the update could publish"
             )
 
+        current = identity.payload
+        held_point_id = identity.point_id
         read_version = int(current.get("version", 1))
         stored_token = current.get("update_lease_token")
         now_us = int(time.time() * 1_000_000)
@@ -333,6 +392,7 @@ async def owned_update(
             payload={"update_lease_token": token},
             points=models.Filter(
                 must=[
+                    models.HasIdCondition(has_id=[held_point_id]),
                     *_conditions(namespace, object_id),
                     models.FieldCondition(
                         key="version", match=models.MatchValue(value=read_version)
@@ -344,7 +404,7 @@ async def owned_update(
         )
 
         # ---- phase 2: attribute the acquire — our EXACT token is the only win signal ----
-        held = _read(client, collection, namespace, object_id)
+        held = _read_point(client, collection, namespace, object_id, held_point_id)
         if held.get("update_lease_token") != token:
             continue  # lost the acquire (foreign winner, or the version moved) — retry.
 
@@ -371,6 +431,7 @@ async def owned_update(
                     collection,
                     namespace,
                     object_id,
+                    held_point_id,
                     token,
                     failure_context="skip-release",
                 )
@@ -405,6 +466,7 @@ async def owned_update(
                 payload=publish,
                 points=models.Filter(
                     must=[
+                        models.HasIdCondition(has_id=[held_point_id]),
                         *_conditions(namespace, object_id),
                         models.FieldCondition(
                             key="update_lease_token", match=models.MatchValue(value=token)
@@ -420,7 +482,7 @@ async def owned_update(
             # context (a note on the original + a log line — never a silent claim that cleanup
             # succeeded), then re-raise the ORIGINAL with its traceback intact.
             try:
-                _clear_token(client, collection, namespace, object_id, token)
+                _clear_token(client, collection, namespace, object_id, held_point_id, token)
             except Exception as cleanup_error:  # the original must still propagate below
                 _log.warning(
                     "mutation-lease own-token cleanup failed after a pre-commit error for "
@@ -438,7 +500,7 @@ async def owned_update(
             raise
 
         # ---- phase 5: ATTRIBUTE — our change landed IFF our EXACT done token is stored ----
-        committed = _read(client, collection, namespace, object_id)
+        committed = _read_point(client, collection, namespace, object_id, held_point_id)
         if committed.get("update_lease_token") != done:
             continue  # a stall/takeover raced the commit — retry, never falsely attribute.
 
@@ -448,6 +510,7 @@ async def owned_update(
             collection,
             namespace,
             object_id,
+            held_point_id,
             done,
             failure_context="commit-release",
         )

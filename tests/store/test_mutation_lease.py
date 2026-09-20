@@ -163,16 +163,16 @@ def test_owned_update_recovers_a_present_empty_string_token(qdrant: QdrantClient
     assert "update_lease_token" not in published
 
 
-@pytest.mark.integration
 def test_owned_update_refuses_duplicate_identity_before_acquisition(
-    real_qdrant: QdrantClient,
+    qdrant: QdrantClient,
 ) -> None:
     """Two authoritative rows must remain wholly untouched when identity is ambiguous."""
-    ns, oid = _seed(real_qdrant, importance=5)
-    canonical = _row(real_qdrant, oid, with_vectors=True)
+    bootstrap(qdrant)
+    ns, oid = _seed(qdrant, importance=5)
+    canonical = _row(qdrant, oid, with_vectors=True)
     assert canonical is not None and canonical.payload is not None
     duplicate_id = str(uuid.uuid4())
-    real_qdrant.upsert(
+    qdrant.upsert(
         collection_name=_COLL,
         points=[
             models.PointStruct(
@@ -183,7 +183,7 @@ def test_owned_update_refuses_duplicate_identity_before_acquisition(
         ],
         wait=True,
     )
-    before, _ = real_qdrant.scroll(
+    before, _ = qdrant.scroll(
         collection_name=_COLL,
         scroll_filter=models.Filter(
             must=[
@@ -199,7 +199,7 @@ def test_owned_update_refuses_duplicate_identity_before_acquisition(
 
     with pytest.raises(MutationIdentityAmbiguous):
         _run_owned(
-            real_qdrant,
+            qdrant,
             _COLL,
             namespace=ns,
             object_id=oid,
@@ -207,7 +207,7 @@ def test_owned_update_refuses_duplicate_identity_before_acquisition(
             plan=lambda cur: MutationPlan(changes={"importance": 9}),
         )
 
-    after, _ = real_qdrant.scroll(
+    after, _ = qdrant.scroll(
         collection_name=_COLL,
         scroll_filter=models.Filter(
             must=[
@@ -220,6 +220,75 @@ def test_owned_update_refuses_duplicate_identity_before_acquisition(
     )
     assert {str(row.id): dict(row.payload or {}) for row in after} == before_payloads
     assert all("update_lease_token" not in payload for payload in before_payloads.values())
+
+
+@pytest.mark.integration
+def test_real_qdrant_refuses_duplicate_identity_before_acquisition(
+    real_qdrant: QdrantClient,
+) -> None:
+    """Run the same cardinality proof against the deployed Qdrant filter semantics."""
+    test_owned_update_refuses_duplicate_identity_before_acquisition(real_qdrant)
+
+
+def test_duplicate_inserted_after_count_cannot_join_fenced_write(qdrant: QdrantClient) -> None:
+    """The captured physical ID closes the insertion-after-count race."""
+    bootstrap(qdrant)
+    ns, oid = _seed(qdrant, importance=5)
+    canonical = _row(qdrant, oid)
+    assert canonical is not None and canonical.payload is not None
+    duplicate_id = str(uuid.uuid4())
+    duplicate_payload = dict(canonical.payload)
+
+    class AcquireRacer:
+        def __init__(self, inner: QdrantClient) -> None:
+            self._inner = inner
+            self.raced = False
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+        def set_payload(
+            self, *, collection_name: str, payload: dict[str, Any], points: Any, **kwargs: Any
+        ) -> Any:
+            token = payload.get("update_lease_token")
+            if not self.raced and isinstance(token, str) and token.startswith("own:"):
+                self.raced = True
+                self._inner.upsert(
+                    collection_name=_COLL,
+                    points=[
+                        models.PointStruct(
+                            id=duplicate_id,
+                            payload=dict(duplicate_payload),
+                            vector={},
+                        )
+                    ],
+                    wait=True,
+                )
+            return self._inner.set_payload(
+                collection_name=collection_name,
+                payload=payload,
+                points=points,
+                **kwargs,
+            )
+
+    racer = AcquireRacer(qdrant)
+    published = _run_owned(
+        cast(Any, racer),
+        _COLL,
+        namespace=ns,
+        object_id=oid,
+        point_id=episodic_point_id(oid),
+        plan=lambda cur: MutationPlan(changes={"importance": 9}),
+    )
+
+    assert racer.raced
+    assert published["importance"] == 9
+    [duplicate] = qdrant.retrieve(
+        collection_name=_COLL,
+        ids=[duplicate_id],
+        with_payload=True,
+    )
+    assert duplicate.payload == duplicate_payload
 
 
 @pytest.mark.integration
