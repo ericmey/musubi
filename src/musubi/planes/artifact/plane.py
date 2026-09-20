@@ -50,6 +50,63 @@ def _artifact_from_payload(payload: dict[str, Any]) -> SourceArtifact:
     return SourceArtifact.model_validate(payload)
 
 
+class ArtifactHeadAmbiguous(RuntimeError):
+    """More than one artifact head matched one logical identity."""
+
+    terminal = True
+
+
+def _artifact_head_with_id(
+    client: QdrantClient,
+    collection: str,
+    *,
+    namespace: str,
+    object_id: str,
+) -> tuple[SourceArtifact | None, models.ExtendedPointId | None]:
+    """Resolve exactly one artifact head and its physical Qdrant ID."""
+    records, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+            ]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    if len(records) > 1:
+        raise ArtifactHeadAmbiguous(
+            f"artifact head ({namespace!r}, {object_id!r}) matched {len(records)} rows"
+        )
+    if not records or not records[0].payload:
+        return None, None
+    return _artifact_from_payload(records[0].payload), records[0].id
+
+
+def _artifact_head_at_id(
+    client: QdrantClient,
+    collection: str,
+    *,
+    point_id: models.ExtendedPointId,
+    namespace: str,
+    object_id: str,
+) -> SourceArtifact | None:
+    """Read one previously selected physical head, rejecting identity replacement."""
+    records = client.retrieve(
+        collection_name=collection,
+        ids=[point_id],
+        with_payload=True,
+        with_vectors=False,
+    )
+    if not records or not records[0].payload:
+        return None
+    payload = records[0].payload
+    if payload.get("namespace") != namespace or payload.get("object_id") != object_id:
+        return None
+    return _artifact_from_payload(payload)
+
+
 def _chunk_from_payload(payload: dict[str, Any]) -> ArtifactChunk:
     # Strip fields added for Qdrant filtering that aren't in ArtifactChunk model
     filtered = {
@@ -94,7 +151,7 @@ class ArtifactPlane:
         hides the prior tail — the orphaned-chunk bug is gone on the direct-call path too. The async,
         durably-retried, concurrency-safe path is :class:`ArtifactIndexer` via the lifecycle worker;
         this method is the single-writer synchronous equivalent."""
-        live_at_entry = self._get_sync(
+        live_at_entry, _ = self._get_sync_with_id(
             namespace=artifact.namespace,
             object_id=artifact.object_id,
         )
@@ -156,8 +213,10 @@ class ArtifactPlane:
             # Reread the CURRENT head (never trust a possibly-stale caller) and publish
             # publication_version-FENCED + exact readback — a stale caller / concurrent winner matches
             # ZERO points and loses, instead of a blind by-point-id overwrite that could clobber a winner.
-            current = self._get_sync(namespace=artifact.namespace, object_id=artifact.object_id)
-            if current is None:
+            current, head_point_id = self._get_sync_with_id(
+                namespace=artifact.namespace, object_id=artifact.object_id
+            )
+            if current is None or head_point_id is None:
                 raise ValueError("artifact head vanished during index")
             expected_pv = current.publication_version
             now = utc_now()
@@ -177,6 +236,7 @@ class ArtifactPlane:
                 },
                 points=models.Filter(
                     must=[
+                        models.HasIdCondition(has_id=[head_point_id]),
                         models.FieldCondition(
                             key="object_id", match=models.MatchValue(value=artifact.object_id)
                         ),
@@ -189,7 +249,16 @@ class ArtifactPlane:
                     ]
                 ),
             )
-            published = self._get_sync(namespace=artifact.namespace, object_id=artifact.object_id)
+            # Read back the exact physical row selected above. Cardinality may have become corrupt
+            # after the preflight, but this write was ID-fenced and a landed publish must not be
+            # mistaken for failure (which would delete the chunks it now names).
+            published = _artifact_head_at_id(
+                self._client,
+                self._collection,
+                point_id=head_point_id,
+                namespace=artifact.namespace,
+                object_id=artifact.object_id,
+            )
             if (
                 published is not None
                 and published.committed_generation == generation
@@ -211,8 +280,10 @@ class ArtifactPlane:
                 self._delete_generation(artifact.object_id, staged_generation)
             # Reread the LIVE head (never trust a stale caller) and FENCE the failure write too, so a
             # concurrent winner is never clobbered and publication_version never regresses.
-            live = self._get_sync(namespace=artifact.namespace, object_id=artifact.object_id)
-            if live is None:
+            live, head_point_id = self._get_sync_with_id(
+                namespace=artifact.namespace, object_id=artifact.object_id
+            )
+            if live is None or head_point_id is None:
                 # The head vanished concurrently — nothing to publish. Return a best-effort (unpersisted)
                 # failed view of the caller. NOTE: this is the one return-semantics choice on this path.
                 data = artifact.model_dump()
@@ -253,6 +324,7 @@ class ArtifactPlane:
                 payload=failure_payload,
                 points=models.Filter(
                     must=[
+                        models.HasIdCondition(has_id=[head_point_id]),
                         models.FieldCondition(
                             key="object_id", match=models.MatchValue(value=artifact.object_id)
                         ),
@@ -265,8 +337,15 @@ class ArtifactPlane:
                     ]
                 ),
             )
-            # Readback — on fence loss (a concurrent winner advanced pv) this returns the winner's head.
-            result = self._get_sync(namespace=artifact.namespace, object_id=artifact.object_id)
+            # Exact-ID readback avoids turning a duplicate inserted after the preflight into an
+            # exception after this single-row failure publication has already landed.
+            result = _artifact_head_at_id(
+                self._client,
+                self._collection,
+                point_id=head_point_id,
+                namespace=artifact.namespace,
+                object_id=artifact.object_id,
+            )
             return result if result is not None else live
 
     async def mark_index_unadmitted(self, artifact: SourceArtifact) -> SourceArtifact:
@@ -334,49 +413,29 @@ class ArtifactPlane:
         return raw_payload(self._client, self._collection, namespace=namespace, object_id=object_id)
 
     async def get(self, *, namespace: Namespace, object_id: KSUID) -> SourceArtifact | None:
-        records, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                ]
-            ),
-            limit=1,
-            with_payload=True,
+        head, _ = _artifact_head_with_id(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
         )
-        if not records:
-            return None
-        payload = records[0].payload
-        if not payload:
-            return None
-        return _artifact_from_payload(payload)
+        return head
 
     def _get_sync(self, *, namespace: Namespace, object_id: KSUID) -> SourceArtifact | None:
         """Synchronous head read (``get`` has an async signature but a fully synchronous body); used
         inside the fail-closed read filter."""
-        records, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                ]
-            ),
-            limit=1,
-            with_payload=True,
+        head, _ = self._get_sync_with_id(namespace=namespace, object_id=object_id)
+        return head
+
+    def _get_sync_with_id(
+        self, *, namespace: Namespace, object_id: KSUID
+    ) -> tuple[SourceArtifact | None, models.ExtendedPointId | None]:
+        return _artifact_head_with_id(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
         )
-        if not records or not records[0].payload:
-            return None
-        return _artifact_from_payload(records[0].payload)
 
     def _committed_pair(
         self,
