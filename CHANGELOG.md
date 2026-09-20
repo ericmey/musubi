@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.16](https://github.com/ericmey/musubi/compare/v1.26.15...v1.26.16) (2026-09-20)
+
+
+### Bug Fixes
+
+* **ops:** surface scheduled Evals failures ([#815](https://github.com/ericmey/musubi/issues/815)) ([682e531](https://github.com/ericmey/musubi/commit/682e531bcbdcaaa342632ae16a1d86100f9cf727))
+
 ## [1.26.15](https://github.com/ericmey/musubi/compare/v1.26.14...v1.26.15) (2026-09-20)
 
 
