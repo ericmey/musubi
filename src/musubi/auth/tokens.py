@@ -212,7 +212,7 @@ def _identity_consistency_error(
     if (
         len(presence_parts) != 2
         or any(not part for part in presence_parts)
-        or any(part in {"*", "**"} for part in presence_parts)
+        or any("*" in part for part in presence_parts)
     ):
         return "token presence claim must be a concrete tenant/presence identity"
 
