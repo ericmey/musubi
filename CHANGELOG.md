@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.11](https://github.com/ericmey/musubi/compare/v1.26.10...v1.26.11) (2026-09-20)
+
+
+### Bug Fixes
+
+* **deploy:** make shared-inference auth migration production-safe ([#776](https://github.com/ericmey/musubi/issues/776)) ([0570ae9](https://github.com/ericmey/musubi/commit/0570ae9736cf3127ce8440cdf6532b550f0e4cf8))
+
 ## [1.26.10](https://github.com/ericmey/musubi/compare/v1.26.9...v1.26.10) (2026-09-20)
 
 
