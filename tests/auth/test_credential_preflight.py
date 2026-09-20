@@ -12,7 +12,6 @@ from pydantic import AnyHttpUrl, SecretStr
 
 from musubi.auth import credential_preflight
 from musubi.auth.credential_preflight import run_preflight
-from musubi.config import CredentialPreflightSettings, get_credential_preflight_settings
 from musubi.settings import Settings
 
 
@@ -43,6 +42,16 @@ def _token(settings: Settings, presence: str, *, subject: str | None = None) -> 
 
 def _write_env(path: Path, token: str) -> None:
     path.write_text(f"MUSUBI_TOKEN={token}\n")
+
+
+def _authority_env(path: Path, settings: Settings) -> Path:
+    authority = path / "authority.env"
+    authority.write_text(
+        "JWT_SIGNING_KEY="
+        f"{settings.jwt_signing_key.get_secret_value()}\n"
+        f"OAUTH_AUTHORITY={settings.oauth_authority}\n"
+    )
+    return authority
 
 
 def _manifest(path: Path) -> Path:
@@ -212,6 +221,44 @@ def test_candidate_preflight_reads_mode_0600_live_credentials(
     )
 
 
+def test_candidate_preflight_rejects_duplicate_token_assignments(
+    tmp_path: Path, api_settings: Settings
+) -> None:
+    first = _token(api_settings, "aoi/command-chair")
+    second = _token(api_settings, "different/command-chair")
+    (tmp_path / "musubi-mcp-aoi.env").write_text(
+        f"MUSUBI_TOKEN={first}\nMUSUBI_TOKEN={second}\n"
+    )
+    _write_env(
+        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
+    )
+    lines: list[str] = []
+
+    assert not run_preflight(
+        manifest_path=_manifest(tmp_path),
+        credential_dir=tmp_path,
+        settings=api_settings,
+        emit=lines.append,
+    )
+    assert "FAIL live aoi/command-chair missing" in lines
+
+
+def test_candidate_preflight_rejects_invalid_utf8_credential(
+    tmp_path: Path, api_settings: Settings
+) -> None:
+    (tmp_path / "musubi-mcp-aoi.env").write_bytes(b"MUSUBI_TOKEN=\xff\n")
+    _write_env(
+        tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair")
+    )
+
+    assert not run_preflight(
+        manifest_path=_manifest(tmp_path),
+        credential_dir=tmp_path,
+        settings=api_settings,
+        emit=lambda _line: None,
+    )
+
+
 @pytest.mark.parametrize(
     "manifest_body",
     [
@@ -243,23 +290,18 @@ def test_candidate_preflight_rejects_invalid_manifest(
 def test_candidate_preflight_cli_uses_runtime_settings_and_emits_summary(
     tmp_path: Path,
     api_settings: Settings,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _write_env(tmp_path / "musubi-mcp-aoi.env", _token(api_settings, "aoi/command-chair"))
     _write_env(tmp_path / "musubi-mcp-yua.env", _token(api_settings, "yua/command-chair"))
-    monkeypatch.setattr(
-        credential_preflight,
-        "get_credential_preflight_settings",
-        lambda: api_settings,
-    )
-
     exit_code = credential_preflight.main(
         [
             "--manifest",
             str(_manifest(tmp_path)),
             "--credential-dir",
             str(tmp_path),
+            "--authority-env",
+            str(_authority_env(tmp_path, api_settings)),
         ]
     )
 
@@ -269,33 +311,72 @@ def test_candidate_preflight_cli_uses_runtime_settings_and_emits_summary(
 
 def test_candidate_preflight_cli_fails_with_bounded_invalid_settings_message(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    def invalid_settings() -> CredentialPreflightSettings:
-        return CredentialPreflightSettings.model_validate({})
-
-    monkeypatch.setattr(
-        credential_preflight,
-        "get_credential_preflight_settings",
-        invalid_settings,
-    )
+    authority = tmp_path / "authority.env"
+    authority.write_text("JWT_SIGNING_KEY=only-one-required-key\n")
 
     exit_code = credential_preflight.main(
-        ["--manifest", str(tmp_path / "missing"), "--credential-dir", str(tmp_path)]
+        [
+            "--manifest",
+            str(tmp_path / "missing"),
+            "--credential-dir",
+            str(tmp_path),
+            "--authority-env",
+            str(authority),
+        ]
     )
 
     assert exit_code == 1
     assert capsys.readouterr().out == "FAIL preflight settings invalid\n"
 
 
-def test_candidate_preflight_settings_require_only_auth_inputs(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "authority_body",
+    [
+        "JWT_SIGNING_KEY=key\nOAUTH_AUTHORITY=https://auth.test\nMUSUBI_TOKEN=nope\n",
+        "JWT_SIGNING_KEY=first\nJWT_SIGNING_KEY=second\nOAUTH_AUTHORITY=https://auth.test\n",
+    ],
+)
+def test_candidate_preflight_cli_rejects_unknown_or_duplicate_authority_keys(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    authority_body: str,
 ) -> None:
-    monkeypatch.setenv("JWT_SIGNING_KEY", "preflight-only-signing-key")
-    monkeypatch.setenv("OAUTH_AUTHORITY", "https://auth.example.test")
+    authority = tmp_path / "authority.env"
+    authority.write_text(authority_body)
 
-    settings = get_credential_preflight_settings()
+    exit_code = credential_preflight.main(
+        [
+            "--manifest",
+            str(tmp_path / "missing"),
+            "--credential-dir",
+            str(tmp_path),
+            "--authority-env",
+            str(authority),
+        ]
+    )
 
-    assert settings.jwt_signing_key.get_secret_value() == "preflight-only-signing-key"
-    assert str(settings.oauth_authority) == "https://auth.example.test/"
+    assert exit_code == 1
+    assert capsys.readouterr().out == "FAIL preflight settings invalid\n"
+
+
+def test_candidate_preflight_cli_rejects_invalid_utf8_authority_env(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    authority = tmp_path / "authority.env"
+    authority.write_bytes(b"JWT_SIGNING_KEY=\xff\n")
+
+    exit_code = credential_preflight.main(
+        [
+            "--manifest",
+            str(tmp_path / "missing"),
+            "--credential-dir",
+            str(tmp_path),
+            "--authority-env",
+            str(authority),
+        ]
+    )
+
+    assert exit_code == 1
+    assert capsys.readouterr().out == "FAIL preflight settings invalid\n"

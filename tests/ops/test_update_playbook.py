@@ -236,6 +236,9 @@ def test_core_update_runs_candidate_image_credential_preflight_intrinsically() -
     assert pre_tasks[preflight_index]["delegate_to"] == "localhost"
     assert pre_tasks[preflight_index]["become"] is False
     assert pre_tasks[preflight_index].get("no_log") is not True
+    assert "--env-file" not in argv
+    assert "--authority-env" in argv
+    assert any("dst=/preflight/authority.env" in item for item in argv)
 
     assert any("--policy always" in str(task) for task in _tasks(play))
 
@@ -265,6 +268,8 @@ def test_auto_digest_pin_requires_human_preflight_before_merge() -> None:
     assert cosign < candidate_run
     assert "--user" in text[candidate_run - 1000 : candidate_run]
     assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text[before_merge:candidate_run]
+    assert "--env-file" not in text[before_merge:candidate_run]
+    assert "--authority-env" in text[candidate_run : candidate_run + 300]
 
 
 def test_core_update_preflight_cannot_be_satisfied_by_caller_attestation_vars() -> None:
