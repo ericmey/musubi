@@ -88,6 +88,16 @@ def test_presence_must_be_a_two_segment_identity(
     assert not _is_ok(validate_token(token, settings=api_settings))
 
 
+def test_subject_must_match_declared_presence(api_settings: Settings) -> None:
+    token = mint_token(
+        api_settings,
+        scopes=["eric/claude-code/episodic:r"],
+        presence="eric/claude-code",
+        subject="mallory-evil",
+    )
+    assert not _is_ok(validate_token(token, settings=api_settings))
+
+
 def test_consistent_presence_and_scope_is_accepted(api_settings: Settings) -> None:
     """Feature preservation: a token whose presence matches its scope prefix must validate. Green
     before and after the fix — the fix must reject only the INCONSISTENT case."""
