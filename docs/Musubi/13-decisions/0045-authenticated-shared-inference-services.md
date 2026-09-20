@@ -4,7 +4,7 @@ section: 13-decisions
 type: adr
 status: accepted
 date: 2026-09-19
-updated: 2026-09-19
+updated: 2026-09-20
 deciders: [Eric]
 tags: [architecture, inference, security, deployment, type/adr, status/accepted]
 supersedes: ""
@@ -54,6 +54,12 @@ independent revocation, independent rotation, caller attribution, and bounded
 per-consumer accounting; TEI is stateless and the separation is not described
 as corpus isolation.
 
+Consumer credentials are carried in the HTTP `Authorization` header, never in
+endpoint URL userinfo. Request libraries routinely include URLs in access logs,
+exceptions, retry diagnostics, and request representations; a secret embedded
+in a URL therefore becomes log data even when the ingress itself is correctly
+configured not to log payloads.
+
 External consumers reach the authenticated ingress through the fleet TLS
 boundary. Musubi may use the same ingress over the host-private Docker network.
 No consumer calls a raw TEI container, and Chord does not route embeddings
@@ -84,6 +90,15 @@ whose contracts match their output; they are not coerced into
    a failed migration must not leave an unauthenticated or half-managed endpoint.
 6. Preserve the existing model volume. Model extraction changes lifecycle
    ownership, not model identity or downloaded bytes.
+7. Rotate an exposed consumer credential transactionally: install old and new
+   ingress identities together, prove both, restart the real consumer on the
+   new header credential, remove the old identity, and prove the old identity
+   returns `401`. Any failure restores the previous client references, ingress
+   password file, and running consumer before refusing the migration.
+8. Prometheus remains attached to the raw inference network solely for service
+   monitoring. Application consumers remain ingress-only. The network sets are
+   asserted exactly so restoring TEI monitoring cannot accidentally give Core
+   or lifecycle direct backend access.
 
 ## Consequences
 
@@ -118,3 +133,5 @@ whose contracts match their output; they are not coerced into
 4. `test_consumers_receive_distinct_runtime_credentials`
 5. `test_failed_cutover_keeps_the_old_authenticated_endpoint_protected`
 6. `test_live_values_do_not_enter_public_sources`
+7. `test_auth_rotation_rolls_back_every_coupled_artifact`
+8. `test_prometheus_is_the_only_musubi_service_on_the_backend_network`

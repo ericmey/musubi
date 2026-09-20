@@ -168,6 +168,75 @@ async def test_tei_dense_client_posts_correct_payload_shape(
     assert '"a"' in body and '"b"' in body
 
 
+async def test_tei_basic_auth_is_a_header_and_never_part_of_the_url(
+    httpx_mock: HTTPXMock,
+) -> None:
+    httpx_mock.add_response(
+        url="https://inference.example.test/dense/embed",
+        method="POST",
+        json=[[0.0] * DENSE_SIZE],
+    )
+    client = TEIDenseClient(
+        base_url="https://inference.example.test/dense",
+        auth=httpx.BasicAuth("musubi", "do-not-log-this"),
+    )
+    await client.embed_dense(["hello"])
+    request = httpx_mock.get_request()
+    assert request is not None
+    assert request.headers["authorization"].startswith("Basic ")
+    assert "musubi" not in str(request.url)
+    assert "do-not-log-this" not in str(request.url)
+
+
+async def test_tei_basic_auth_covers_info_dense_sparse_and_reranker(
+    httpx_mock: HTTPXMock,
+) -> None:
+    for service in ("dense", "sparse", "reranker"):
+        httpx_mock.add_response(
+            url=f"https://inference.example.test/{service}/info",
+            method="GET",
+            json={"max_client_batch_size": 32},
+        )
+    httpx_mock.add_response(
+        url="https://inference.example.test/dense/embed",
+        method="POST",
+        json=[[0.0] * DENSE_SIZE],
+    )
+    httpx_mock.add_response(
+        url="https://inference.example.test/sparse/embed_sparse",
+        method="POST",
+        json=[[{"index": 3, "value": 0.8}]],
+    )
+    httpx_mock.add_response(
+        url="https://inference.example.test/reranker/rerank",
+        method="POST",
+        json=[{"index": 0, "score": 0.9}],
+    )
+    clients = build_tei_clients(
+        dense_url="https://inference.example.test/dense",
+        sparse_url="https://inference.example.test/sparse",
+        reranker_url="https://inference.example.test/reranker",
+        basic_auth=("musubi-v2", "do-not-log-this"),
+    )
+    await clients.dense.embed_dense(["hello"])
+    await clients.sparse.embed_sparse(["hello"])
+    await clients.reranker.rerank("query", ["candidate"])
+
+    requests = httpx_mock.get_requests()
+    assert len(requests) == 6
+    assert {request.url.path for request in requests} == {
+        "/dense/info",
+        "/sparse/info",
+        "/reranker/info",
+        "/dense/embed",
+        "/sparse/embed_sparse",
+        "/reranker/rerank",
+    }
+    for request in requests:
+        assert request.headers["authorization"].startswith("Basic ")
+        assert "do-not-log-this" not in str(request.url)
+
+
 async def test_tei_sparse_client_posts_correct_payload_shape(
     httpx_mock: HTTPXMock,
 ) -> None:

@@ -1073,6 +1073,7 @@ def test_runtime_factory_produces_watcher_construction_inputs(
         tei_dense_url="http://localhost:8080",
         tei_sparse_url="http://localhost:8081",
         tei_reranker_url="http://localhost:8082",
+        tei_basic_auth=None,
         lifecycle_sqlite_path=lifecycle_sqlite_path,
         lifecycle_pending_cap=1000,
         lifecycle_lease_ttl_s=300.0,
@@ -1186,6 +1187,7 @@ def test_runtime_factory_wires_curated_plane_with_immutable_publisher(
         tei_dense_url="http://localhost:8080",
         tei_sparse_url="http://localhost:8081",
         tei_reranker_url="http://localhost:8082",
+        tei_basic_auth=None,
         lifecycle_sqlite_path=str(tmp_path / "lifecycle.sqlite"),
         lifecycle_pending_cap=1000,
         lifecycle_lease_ttl_s=300.0,
@@ -1556,6 +1558,7 @@ def test_runtime_factory_does_not_import_watcher(tmp_path: Path) -> None:
         "  qdrant_api_key=SimpleNamespace(get_secret_value=lambda: 'k'), "
         "  musubi_allow_plaintext=True, "
         "  tei_dense_url='http://a', tei_sparse_url='http://b', tei_reranker_url='http://c', "
+        "  tei_basic_auth=None, "
         f"  lifecycle_sqlite_path={lifecycle_sqlite_path!r}, "
         "  lifecycle_pending_cap=1, lifecycle_lease_ttl_s=1.0, "
         "  lifecycle_backoff_base_s=1.0, lifecycle_backoff_max_s=1.0, "

@@ -90,6 +90,7 @@ volumes:
 
 networks:
   inference-backend:
+    name: musubi-inference-backend
     # Separate from the consumer network so Musubi and Chord cannot resolve raw
     # TEI services. Ordinary bridge egress remains available for model pulls.
   shared-inference:

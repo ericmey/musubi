@@ -16,6 +16,7 @@ lifecycle worker in the API.
 
 from __future__ import annotations
 
+import httpx
 from fastapi import APIRouter, Depends, Response
 from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
@@ -72,6 +73,9 @@ async def status(
         return StatusResponse(status=overall, components=components)
 
     version = settings.musubi_service_version or None
+    tei_auth = (
+        httpx.BasicAuth(*settings.tei_basic_auth) if settings.tei_basic_auth is not None else None
+    )
 
     # Per-service liveness paths. TEI exposes `/health`; Ollama doesn't —
     # it returns 404 on `/health` and 200 on `/api/tags` (empty model list
@@ -85,6 +89,7 @@ async def status(
         components[name] = check_component_health(
             name=name,
             url=base_url.rstrip("/") + probe_path,
+            auth=tei_auth if name.startswith("tei-") else None,
         )
 
     overall = "ok" if all(c.healthy for c in components.values()) else "degraded"

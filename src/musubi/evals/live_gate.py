@@ -183,6 +183,7 @@ def build_settings_backends() -> LiveBackends:
         dense_url=str(settings.tei_dense_url),
         sparse_url=str(settings.tei_sparse_url),
         reranker_url=str(settings.tei_reranker_url),
+        basic_auth=settings.tei_basic_auth,
     )
     dense = tei_clients.dense
     sparse = tei_clients.sparse
