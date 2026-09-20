@@ -10,6 +10,7 @@ import asyncio
 import os
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -19,7 +20,9 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding import FakeEmbedder
 from musubi.planes.episodic.plane import EpisodicPlane, episodic_point_id
 from musubi.store import bootstrap
+from musubi.store.immutable_vectors import anchor_point_id
 from musubi.store.mutation_lease import (
+    MutationIdentityAmbiguous,
     MutationLeaseConflict,
     MutationPlan,
     is_expired_done_token,
@@ -159,6 +162,191 @@ def test_owned_update_recovers_a_present_empty_string_token(qdrant: QdrantClient
     assert published["importance"] == 9
     assert published["version"] == 2
     assert "update_lease_token" not in published
+
+
+def test_owned_update_refuses_duplicate_identity_before_acquisition(
+    qdrant: QdrantClient,
+) -> None:
+    """Two authoritative rows must remain wholly untouched when identity is ambiguous."""
+    bootstrap(qdrant)
+    ns, oid = _seed(qdrant, importance=5)
+    canonical = _row(qdrant, oid, with_vectors=True)
+    assert canonical is not None and canonical.payload is not None
+    duplicate_id = str(uuid.uuid4())
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=duplicate_id,
+                payload=dict(canonical.payload),
+                vector=canonical.vector or {},
+            )
+        ],
+        wait=True,
+    )
+    before, _ = qdrant.scroll(
+        collection_name=_COLL,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=ns)),
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=oid)),
+            ]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    before_payloads = {str(row.id): dict(row.payload or {}) for row in before}
+    assert len(before_payloads) == 2, "the duplicate identity plant did not land"
+
+    with pytest.raises(MutationIdentityAmbiguous):
+        _run_owned(
+            qdrant,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=lambda cur: MutationPlan(changes={"importance": 9}),
+        )
+
+    after, _ = qdrant.scroll(
+        collection_name=_COLL,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=ns)),
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=oid)),
+            ]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert {str(row.id): dict(row.payload or {}) for row in after} == before_payloads
+    assert all("update_lease_token" not in payload for payload in before_payloads.values())
+
+
+@pytest.mark.integration
+def test_real_qdrant_refuses_duplicate_identity_before_acquisition(
+    real_qdrant: QdrantClient,
+) -> None:
+    """Run the same cardinality proof against the deployed Qdrant filter semantics."""
+    test_owned_update_refuses_duplicate_identity_before_acquisition(real_qdrant)
+
+
+def test_duplicate_inserted_after_count_cannot_join_fenced_write(qdrant: QdrantClient) -> None:
+    """The captured physical ID closes the insertion-after-count race."""
+    bootstrap(qdrant)
+    ns, oid = _seed(qdrant, importance=5)
+    canonical = _row(qdrant, oid)
+    assert canonical is not None and canonical.payload is not None
+    duplicate_id = str(uuid.uuid4())
+    duplicate_payload = dict(canonical.payload)
+
+    class AcquireRacer:
+        def __init__(self, inner: QdrantClient) -> None:
+            self._inner = inner
+            self.raced = False
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._inner, name)
+
+        def set_payload(
+            self, *, collection_name: str, payload: dict[str, Any], points: Any, **kwargs: Any
+        ) -> Any:
+            token = payload.get("update_lease_token")
+            if not self.raced and isinstance(token, str) and token.startswith("own:"):
+                self.raced = True
+                self._inner.upsert(
+                    collection_name=_COLL,
+                    points=[
+                        models.PointStruct(
+                            id=duplicate_id,
+                            payload=dict(duplicate_payload),
+                            vector={},
+                        )
+                    ],
+                    wait=True,
+                )
+            return self._inner.set_payload(
+                collection_name=collection_name,
+                payload=payload,
+                points=points,
+                **kwargs,
+            )
+
+    racer = AcquireRacer(qdrant)
+    published = _run_owned(
+        cast(Any, racer),
+        _COLL,
+        namespace=ns,
+        object_id=oid,
+        point_id=episodic_point_id(oid),
+        plan=lambda cur: MutationPlan(changes={"importance": 9}),
+    )
+
+    assert racer.raced
+    assert published["importance"] == 9
+    [duplicate] = qdrant.retrieve(
+        collection_name=_COLL,
+        ids=[duplicate_id],
+        with_payload=True,
+    )
+    assert duplicate.payload == duplicate_payload
+
+
+def test_vector_update_uses_resolved_v2_anchor_id(qdrant: QdrantClient) -> None:
+    """A v2 anchor's physical ID, not the caller's legacy ID, receives vectors."""
+    bootstrap(qdrant)
+    ns, oid = _seed(qdrant, importance=5)
+    legacy = _row(qdrant, oid, with_vectors=True)
+    assert legacy is not None and legacy.payload is not None and legacy.vector is not None
+    anchor_id = anchor_point_id(ns, oid)
+    anchor_payload = {
+        **dict(legacy.payload),
+        "point_kind": "anchor",
+        "vector_layout_version": 2,
+        "live_point": str(uuid.uuid4()),
+    }
+    qdrant.delete(
+        collection_name=_COLL,
+        points_selector=[episodic_point_id(oid)],
+        wait=True,
+    )
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=anchor_id,
+                payload=anchor_payload,
+                vector=legacy.vector,
+            )
+        ],
+        wait=True,
+    )
+    replacement = [0.25] * 1024
+
+    published = _run_owned(
+        qdrant,
+        _COLL,
+        namespace=ns,
+        object_id=oid,
+        # Deliberately the absent legacy ID: the resolved anchor ID is authoritative.
+        point_id=episodic_point_id(oid),
+        plan=lambda cur: MutationPlan(
+            changes={"importance": 9},
+            vectors={DENSE_VECTOR_NAME: replacement},
+        ),
+    )
+
+    assert published["importance"] == 9
+    [anchor] = qdrant.retrieve(
+        collection_name=_COLL,
+        ids=[anchor_id],
+        with_payload=True,
+        with_vectors=True,
+    )
+    assert isinstance(anchor.vector, dict)
+    # The collection uses cosine distance, so Qdrant stores the normalized vector.
+    assert anchor.vector[DENSE_VECTOR_NAME] == pytest.approx([0.03125] * 1024)
+    assert qdrant.retrieve(collection_name=_COLL, ids=[episodic_point_id(oid)]) == []
 
 
 @pytest.mark.integration
