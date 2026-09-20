@@ -196,6 +196,21 @@ def test_exposed_credential_rotation_overlaps_old_and_new_before_cutover() -> No
         "Prove the exposed credential is rejected"
     )
 
+    by_name = {task["name"]: task for task in rotation["block"]}
+    for name in (
+        "Install the overlapping credential set",
+        "Remove the exposed credential from the ingress",
+    ):
+        command = by_name[name]["ansible.builtin.shell"]["cmd"]
+        assert (
+            "/usr/bin/timeout --signal=TERM --kill-after=5s 60s /usr/bin/op inject --force"
+            in command
+        )
+        assert 'cat "$candidate" >' not in command
+        assert (
+            'mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd' in command
+        )
+
 
 def test_old_credential_probes_support_url_or_header_auth() -> None:
     playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
@@ -232,6 +247,23 @@ def test_credential_rotation_rolls_back_every_coupled_artifact() -> None:
         assert artifact in rescue
     assert "Reload the restored ingress credential" in rescue
     assert "Restart Musubi with the restored credential" in rescue
+    restore_runtime = next(
+        task
+        for task in rotation["rescue"]
+        if task["name"] == "Restore the previous runtime shared-inference.htpasswd"
+    )
+    restore_command = restore_runtime["ansible.builtin.shell"]["cmd"]
+    assert "> /run/shared-inference-secrets/shared-inference.htpasswd" not in restore_command
+    assert (
+        'cat "{{ auth_rotation_backup.path }}/shared-inference.htpasswd" > "$candidate"'
+        in restore_command
+    )
+    assert 'chown 101:101 "$candidate"' in restore_command
+    assert 'chmod 0400 "$candidate"' in restore_command
+    assert (
+        'mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd'
+        in restore_command
+    )
 
 
 def test_auth_migration_deploys_and_verifies_the_pinned_consumer_image() -> None:

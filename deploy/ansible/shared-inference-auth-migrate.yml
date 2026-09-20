@@ -65,12 +65,12 @@
               set -a && . /etc/musubi/connect.env && set +a &&
               candidate=$(mktemp /run/shared-inference-secrets/htpasswd.XXXXXX) &&
               trap 'rm -f "$candidate"' EXIT &&
-              /usr/bin/op inject
+              /usr/bin/timeout --signal=TERM --kill-after=5s 60s /usr/bin/op inject --force
               -i {{ musubi_config_dir }}/shared-inference.htpasswd.rotation.tpl
               -o "$candidate" &&
-              cat "$candidate" > /run/shared-inference-secrets/shared-inference.htpasswd &&
-              chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd &&
-              chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd &&
+              chown 101:101 "$candidate" &&
+              chmod 0400 "$candidate" &&
+              mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd &&
               docker compose -p shared-inference
               -f {{ musubi_config_dir }}/shared-inference-compose.yml
               exec -T inference-ingress nginx -s reload
@@ -238,12 +238,12 @@
               set -a && . /etc/musubi/connect.env && set +a &&
               candidate=$(mktemp /run/shared-inference-secrets/htpasswd.XXXXXX) &&
               trap 'rm -f "$candidate"' EXIT &&
-              /usr/bin/op inject
+              /usr/bin/timeout --signal=TERM --kill-after=5s 60s /usr/bin/op inject --force
               -i {{ musubi_config_dir }}/shared-inference.htpasswd.tpl
               -o "$candidate" &&
-              cat "$candidate" > /run/shared-inference-secrets/shared-inference.htpasswd &&
-              chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd &&
-              chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd &&
+              chown 101:101 "$candidate" &&
+              chmod 0400 "$candidate" &&
+              mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd &&
               docker compose -p shared-inference
               -f {{ musubi_config_dir }}/shared-inference-compose.yml
               exec -T inference-ingress nginx -s reload
@@ -323,10 +323,12 @@
         - name: Restore the previous runtime shared-inference.htpasswd
           ansible.builtin.shell:
             cmd: >-
-              cat {{ auth_rotation_backup.path }}/shared-inference.htpasswd >
-              /run/shared-inference-secrets/shared-inference.htpasswd &&
-              chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd &&
-              chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd
+              candidate=$(mktemp /run/shared-inference-secrets/htpasswd.XXXXXX) &&
+              trap 'rm -f "$candidate"' EXIT &&
+              cat "{{ auth_rotation_backup.path }}/shared-inference.htpasswd" > "$candidate" &&
+              chown 101:101 "$candidate" &&
+              chmod 0400 "$candidate" &&
+              mv -f "$candidate" /run/shared-inference-secrets/shared-inference.htpasswd
             executable: /bin/bash
           changed_when: true
           no_log: true
