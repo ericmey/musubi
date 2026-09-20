@@ -54,6 +54,11 @@ jobs:
     if: github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release-please--')
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      MUSUBI_TEST_PROJECT: musubi-integration
+      # Job scope is load-bearing: Compose publishes this host port and the
+      # pytest/uvicorn paths resolve the same value.
+      MUSUBI_TEST_QDRANT_PORT: '6333'
     strategy:
       fail-fast: false
       matrix:
@@ -97,11 +102,6 @@ jobs:
 
       - name: Run integration suite
         env:
-          MUSUBI_TEST_PROJECT: musubi-integration
-          # The compose stack exposes Qdrant on 6333 by default. Store-level
-          # integration tests default to the collision-avoiding local-dev port
-          # 6339, so bind them explicitly to this job's real service.
-          MUSUBI_TEST_QDRANT_PORT: '6333'
           # musubi-core boots in-process via uvicorn here (see compose
           # header — core is NOT in the test-env stack). At boot it
           # loads the SPLADE-v3 tokenizer for the ChunkedEmbedder
