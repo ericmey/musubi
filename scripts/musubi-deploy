@@ -69,10 +69,10 @@ done
 
 [[ -n "$services" ]] || { usage 1 ; }
 
-# Build the JSON list ansible expects: ["a", "b", ...]
+# Build the JSON list used in the structured Ansible extra-vars object.
 services_json="[$(echo "$services" | awk -F, '{
   for (i = 1; i <= NF; i++) {
-    printf "%s\"%s\"", (i > 1 ? ", " : ""), $i
+    printf "%s\"%s\"", (i > 1 ? "," : ""), $i
   }
 }')]"
 
@@ -94,7 +94,7 @@ cmd=(
   -e "@$inv_vars"
   -e "@$vault"
   "$playbook"
-  -e "changed_services=$services_json"
+  -e "{\"changed_services\":$services_json}"
 )
 
 # Vault password: prefer file over interactive prompt when available.
