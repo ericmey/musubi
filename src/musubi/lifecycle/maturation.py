@@ -78,7 +78,7 @@ from musubi.lifecycle.transitions import (
     TransitionResult,
     transition,
 )
-from musubi.types.common import KSUID, Ok, epoch_of, utc_now
+from musubi.types.common import KSUID, Ok, epoch_of, generate_ksuid, utc_now
 
 log = logging.getLogger(__name__)
 
@@ -1118,12 +1118,20 @@ def _apply_enrichment(
     the ``importance_last_scored_epoch`` float index in store/specs.py).
     """
     now = utc_now()
+    # An UNGUESSABLE per-attempt marker, written inside the same fenced `set_payload`
+    # and read back to attribute the write. `updated_epoch` could not do this job: the
+    # transition immediately before also writes it, and two `utc_now()` calls can land
+    # in the same microsecond -- so the readback could match the TRANSITION's write and
+    # report an enrichment that never landed (Copilot, musubi#771). A timestamp is a
+    # measurement of when, never proof of who. This marker is unique by construction.
+    attempt = generate_ksuid()
     payload: dict[str, Any] = {
         "tags": tags,
         "importance": importance,
         "linked_to_topics": topics,
         "updated_at": now.isoformat(),
         "updated_epoch": epoch_of(now),
+        "enrichment_attempt": attempt,
     }
     if importance_scored:
         payload["importance_last_scored_at"] = now.isoformat()
@@ -1184,19 +1192,65 @@ def _apply_enrichment(
     # operation status, not how many points it matched, so the only honest signal is
     # to look afterwards.
     #
-    # `updated_epoch` is the discriminator because this call just set it: a row
-    # carrying exactly that value is one this write landed on. Range with equal
-    # bounds because the field is a float index.
+    # The discriminator is the per-attempt marker, which only THIS call could have
+    # written. It rides in the same fenced payload, so a row carrying it is a row this
+    # write landed on -- no clock, no coincidence.
     applied = models.Filter(
         must=[
             *conditions,
-            models.FieldCondition(
-                key="updated_epoch",
-                range=models.Range(gte=payload["updated_epoch"], lte=payload["updated_epoch"]),
-            ),
+            models.FieldCondition(key="enrichment_attempt", match=models.MatchValue(value=attempt)),
         ]
     )
-    return client.count(collection_name=collection, count_filter=applied, exact=True).count == 1
+    landed = client.count(collection_name=collection, count_filter=applied, exact=True).count == 1
+
+    # Remove the marker behind its own exact value, so the payload does not accumulate
+    # a field that means nothing after the answer is read. Fenced on the marker rather
+    # than on identity: if the row moved on between the readback and here, the delete
+    # must not touch it.
+    #
+    # CRASH RESIDUE IS SAFE BY DESIGN, and that is a claim with a cell. A process that
+    # dies between the write and this cleanup leaves a stale `enrichment_attempt`
+    # behind. Nothing reads the field except a count fenced on a freshly generated
+    # value, so a residual marker can never be mistaken for a later attempt's -- and
+    # the next enrichment overwrites it in the same `set_payload`.
+    # BEST-EFFORT, and skipped entirely when nothing landed. The authoritative answer is
+    # already determined above; cleanup is hygiene. Letting it raise would turn a
+    # DURABLE SUCCESS into a reported failure -- the caller would count `failed += 1`
+    # and log a refusal for enrichment that is sitting in the collection (Yua,
+    # musubi#771).
+    #
+    # Yes, this is the broad catch I just deleted from `_scroll_by_object_id`. The
+    # difference is what the result is used for, and it is worth stating rather than
+    # relying on: there, an exception was converted into an ANSWER ("no rows"), so
+    # failing open changed a decision. Here the decision is already made and recorded;
+    # suppressing this one cannot make `landed` wrong. It is logged rather than
+    # silenced, because repeated failures mean something systemic even though each one
+    # is harmless.
+    if landed:
+        try:
+            client.delete_payload(
+                collection_name=collection,
+                keys=["enrichment_attempt"],
+                points=models.Filter(
+                    must=[
+                        *conditions,
+                        models.FieldCondition(
+                            key="enrichment_attempt", match=models.MatchValue(value=attempt)
+                        ),
+                    ]
+                ),
+            )
+        except Exception:
+            log.warning(
+                "maturation-enrichment-marker-cleanup-failed object_id=%s namespace=%s "
+                "attempt=%s (enrichment DID apply; a residual marker is inert because "
+                "every readback is fenced on a freshly generated value)",
+                object_id,
+                namespace,
+                attempt,
+                exc_info=True,
+            )
+    return landed
 
 
 # ---------------------------------------------------------------------------

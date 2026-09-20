@@ -121,14 +121,24 @@ class TransitionError:
     - ``invariant_violation``  — model validation failed on the updated payload.
     - ``lifecycle_event_write_failed`` — mutation committed, audit persistence refused.
     - ``version_fence_violation``     — expected_version did not match current_version.
-    - ``ambiguous_object_id``  — the id exists under more than one namespace (or in more
-      than one plane) and the caller did not qualify it. Distinct from ``not_found``:
-      the object EXISTS, and refusing is the safe answer because picking one would
-      transition a stranger's row. Callers map this to a 4xx.
+    - ``ambiguous_object_id``  — the lookup could not identify ONE row, **even after any
+      namespace the caller supplied**. That covers an unqualified id spanning
+      namespaces, duplicate anchors within a single namespace, and the same id present
+      in more than one plane — qualifying does not resolve the last two. Distinct from
+      ``not_found``: the object EXISTS, and refusing is the safe answer because picking
+      one would transition a stranger's row. Callers map this to a 4xx.
 
-    This list is exhaustive and is part of the contract -- a new code that does not
-    appear here is invisible to every caller switching on ``code``
-    (Copilot, musubi#771).
+    **This list is not exhaustive.** ``transition()`` delegates to the coordinator,
+    which owns its own admission codes — ``cap_exceeded``, ``active_intent_exists``,
+    ``durable_begin_failed``, ``operation_key_conflict``, ``terminal_apply_failure``,
+    ``maintenance_active`` — and that set belongs to the coordinator's contract, not
+    this one. An earlier revision of this docstring claimed exhaustiveness while
+    omitting all six: a completeness promise nothing checks is worse than no promise,
+    because a caller can rely on it (Copilot, musubi#771).
+
+    ``test_every_locally_constructed_error_code_is_documented`` derives the codes THIS module
+    constructs from the source and requires each to appear above, so the list cannot
+    silently fall behind the code again.
     """
 
     code: str
@@ -346,14 +356,41 @@ def transition(
 # ---------------------------------------------------------------------------
 
 
+_IDENTITY_PROBE_LIMIT = 2
+"""Rows an identity lookup needs to decide. Two disproves uniqueness; no third helps."""
+
+
+def _existing_collections(client: QdrantClient) -> set[str]:
+    """The authoritative set of collection names this client actually has.
+
+    Asking once is what removes the exception guessing. Keying "does this exist?" off an
+    exception's type or text is a guess about a client library -- the local client raises
+    `ValueError`, the remote raises a 404 -- and any guess that is wrong silently
+    converts a real fault into a miss. Discovery failures propagate like any other
+    (Yua, musubi#771)."""
+    return {c.name for c in client.get_collections().collections}
+
+
 class AmbiguousObjectId(Exception):
-    """Two namespaces carry this object_id and the caller did not say which it meant.
+    """The lookup could not identify exactly ONE authoritative row.
+
+    Not "two namespaces and no qualifier" -- that was the original, narrower reading and
+    it is what let the other shapes through. Any non-singleton result raises, whatever
+    the cause:
+
+    - an unqualified id present under several namespaces
+    - DUPLICATE ANCHORS within a single namespace, which a supplied qualifier does not
+      resolve
+    - the same id present in more than one plane, which no qualifier can resolve because
+      both rows may carry the same namespace
 
     `object_id` is NOT globally unique (`tests/api/test_data001_episodic_patch_fence.py`
     relies on that). The lookup used `limit=1`, so a duplicate resolved to whichever row
     the scroll returned first -- silently transitioning a stranger's row and counting it
-    as this caller's (Copilot/Yua, musubi#771). Refusing is the only safe answer when
-    the caller has not qualified the id."""
+    as this caller's. A later revision counted DISTINCT NAMESPACES, which let two rows in
+    one namespace collapse to a set of size one and pass. Identity is a count of rows,
+    not a count of the values one of their fields happens to take
+    (Copilot/Yua, musubi#771)."""
 
 
 def _locate_object(
@@ -375,16 +412,34 @@ def _locate_object(
     # case matches exactly one. That is a handful of scrolls against an indexed field,
     # paid on a lifecycle transition; the alternative is a wrong object.
     found: list[tuple[str, dict[str, Any]]] = []
+    # Ask the server which collections exist, ONCE, instead of inferring it from whether
+    # a scroll threw. That inference was the fail-open: `except Exception: return []`
+    # turned a timeout into a confirmed miss, so a transient fault on one plane made its
+    # duplicate invisible and the lookup resolved to another plane. Discovery failures
+    # propagate like any other fault (Yua, musubi#771). It also keeps test clients that
+    # hold only some collections working, without a broad catch to excuse them.
+    present = _existing_collections(client)
     for collection in _COLLECTION_TO_OBJECT_TYPE:
+        if collection not in present:
+            continue
         records = _scroll_by_object_id(
             client, collection=collection, object_id=object_id, namespace=namespace
         )
         if not records:
             continue
-        if namespace is None and len({str(r.get("namespace")) for r in records}) > 1:
+        # EXACTLY ONE authoritative row, or refuse. This subsumes both failures and is
+        # why the distinct-namespace comparison is gone: counting DISTINCT NAMESPACES
+        # let two rows in the SAME namespace collapse to a set of size one and pass, so
+        # the qualifier was doing the deciding instead of the identity. Whatever the
+        # cause -- an unqualified id spanning namespaces, or two anchors within one --
+        # the lookup cannot name the row, and `records[0]` is a guess either way
+        # (Copilot/Yua, musubi#771).
+        if len(records) > 1:
+            spaces = sorted({str(r.get("namespace")) for r in records})
             raise AmbiguousObjectId(
-                f"object_id={object_id!r} exists in "
-                f"{sorted({str(r.get('namespace')) for r in records})}; qualify the namespace"
+                f"object_id={object_id!r} matched at least {len(records)} authoritative "
+                f"rows in {collection}, namespaces {spaces}"
+                + ("; qualify the namespace" if namespace is None else " (duplicate anchors)")
             )
         found.append((collection, records[0]))
 
@@ -402,49 +457,54 @@ def _locate_object(
 def _scroll_by_object_id(
     client: QdrantClient, *, collection: str, object_id: KSUID, namespace: str | None
 ) -> list[dict[str, Any]]:
-    """Return the AUTHORITATIVE identity payload dict(s) for ``object_id`` in ``collection``, if any.
+    """Return EVERY authoritative identity payload for ``object_id`` in ``collection``.
 
-    DATA-001 P2: excludes write-once CONTENT snapshots (``point_kind == "content"``) so a v2 object
-    resolves to its anchor (full mutable state), never an arbitrary content shell. No-op for v1 rows
-    and concept/thought/artifact (no content points)."""
-    try:
-        records, _ = client.scroll(
-            collection_name=collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                    *(
-                        [
-                            models.FieldCondition(
-                                key="namespace", match=models.MatchValue(value=namespace)
-                            )
-                        ]
-                        if namespace is not None
-                        else []
-                    ),
-                ],
-                must_not=[
-                    models.FieldCondition(
-                        key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
-                    )
-                ],
+    DATA-001 P2: excludes write-once CONTENT snapshots (``point_kind == "content"``) so a
+    v2 object resolves to its anchor (full mutable state), never an arbitrary content
+    shell. No-op for v1 rows and concept/thought/artifact (no content points).
+
+    **At most two rows, because the caller's question needs no more.** The invariant is
+    EXACTLY ONE authoritative row: nought or one proves at most one exists, and two
+    disproves uniqueness whatever their namespaces. Nothing a third row could tell us
+    changes the answer.
+
+    An earlier revision of this paginated to exhaustion and called that load-bearing.
+    It was not -- and worse, no test could distinguish it from `limit=2`, so it was an
+    untestable stronger claim dressed as rigour (Tama, musubi#771). The reason `limit=2`
+    was insufficient BEFORE is that the caller counted DISTINCT NAMESPACES, so two rows
+    from one namespace collapsed to a set of size one and a third namespace stayed
+    invisible. Fixing the invariant is what made the scan cheap; the limit was never
+    the defect.
+
+    **No exception handling.** Callers confirm the collection exists first, so every
+    remaining failure -- timeout, unavailable node, transport fault -- PROPAGATES. This
+    used to `except Exception: return []`, which made an error indistinguishable from a
+    confirmed miss: the cross-plane refusal could be skipped on a transient fault and a
+    hit from another plane transitioned instead. A lookup that FAILS OPEN on error is
+    worse than the ambiguity it exists to prevent.
+    """
+    scroll_filter = models.Filter(
+        must=[
+            models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+            *(
+                [models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace))]
+                if namespace is not None
+                else []
             ),
-            # 2, not 1: an unqualified lookup has to observe a second namespace to
-            # refuse it. With limit=1 a duplicate id is invisible and resolves to
-            # whichever row the scroll happens to return first.
-            limit=1 if namespace is not None else 2,
-            with_payload=True,
-        )
-    except Exception:
-        # Collection may not exist in this client instance — treat as miss.
-        return []
-    payloads: list[dict[str, Any]] = []
-    for rec in records:
-        if rec.payload:
-            payloads.append(dict(rec.payload))
-    return payloads
+        ],
+        must_not=[
+            models.FieldCondition(
+                key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+            )
+        ],
+    )
+    records, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=scroll_filter,
+        limit=_IDENTITY_PROBE_LIMIT,
+        with_payload=True,
+    )
+    return [dict(rec.payload) for rec in records if rec.payload]
 
 
 def _lookup_point_id(client: QdrantClient, *, collection: str, object_id: KSUID) -> str | int:
@@ -513,10 +573,12 @@ def _would_cause_supersession_cycle(
         # miss a cycle, or attach lineage, based on whichever row scrolled first
         # (Copilot, musubi#771). Same defect as the entry lookup, one level down, which
         # is why fixing only the cited line would have been the wrong repair.
-        if namespace is None and len({str(r.get("namespace")) for r in records}) > 1:
+        if len(records) > 1:
+            spaces = sorted({str(r.get("namespace")) for r in records})
             raise AmbiguousObjectId(
-                f"supersession chain id {cursor!r} exists in "
-                f"{sorted({str(r.get('namespace')) for r in records})}; qualify the namespace"
+                f"supersession chain id {cursor!r} matched at least {len(records)} "
+                f"authoritative rows, namespaces {spaces}"
+                + ("; qualify the namespace" if namespace is None else " (duplicate anchors)")
             )
         cursor = records[0].get("superseded_by")
     return False

@@ -24,6 +24,7 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -1317,3 +1318,186 @@ def test_an_ambiguous_supersession_target_refuses_with_the_typed_error(tmp_path:
         with_payload=True,
     )
     assert (rows[0].payload or {})["state"] == "provisional", "the subject transitioned anyway"
+
+
+def test_every_locally_constructed_error_code_is_documented() -> None:
+    """Codes THIS MODULE constructs are derived from source, not hand-maintained.
+
+    SCOPE, stated in the name because a test name is a claim: this walks literal
+    `TransitionError(code=...)` constructions in `transitions.py`. It cannot see codes
+    the coordinator returns and `transition()` forwards -- those belong to the
+    coordinator's contract. Calling it "every error code" would reintroduce, as a test
+    name, exactly the exhaustiveness promise just removed from the docstring
+    (Yua, musubi#771).
+
+    The previous revision asserted "this list is exhaustive" while omitting six
+    coordinator codes — a completeness promise nothing checked, which is worse than no
+    promise because a caller can rely on it. Removing the false claim is necessary but
+    not sufficient: the list can still fall behind silently.
+
+    So walk the module's own AST for `TransitionError(code="...")` literals and require
+    each to be documented. A new code added to this module without a docstring line
+    fails here rather than in someone's exhaustive `match` statement
+    (Copilot/Yua, musubi#771)."""
+    import ast
+    import inspect
+
+    from musubi.lifecycle import transitions as mod
+
+    tree = ast.parse(inspect.getsource(mod))
+    constructed: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name != "TransitionError":
+            continue
+        for kw in node.keywords:
+            if kw.arg == "code" and isinstance(kw.value, ast.Constant):
+                constructed.add(str(kw.value.value))
+
+    assert constructed, "found no TransitionError(code=...) literals — the walk is inert"
+    doc = mod.TransitionError.__doc__ or ""
+    undocumented = sorted(c for c in constructed if c not in doc)
+    assert not undocumented, (
+        f"{mod.__name__} returns these codes with no line in TransitionError's "
+        f"documented contract: {undocumented}"
+    )
+
+
+def test_a_scroll_failure_on_one_plane_never_resolves_to_another(tmp_path: Path) -> None:
+    """THE FAIL-OPEN CELL, and the sharpest defect of the night.
+
+    `_scroll_by_object_id` was `except Exception: return []`. The comment named one
+    cause -- a missing collection -- and the handler caught every cause: timeout, reset,
+    auth failure, transport error. All of them became "no rows here", and the all-plane
+    ambiguity check read that empty list as a CONFIRMED MISS.
+
+    So a transient fault on the plane holding the duplicate made the duplicate
+    invisible, and the unqualified lookup resolved to the other plane and transitioned a
+    stranger's row -- precisely the outcome the identity fix exists to prevent. The
+    guard failed open on error, at the bottom of the stack, inside the change fixing
+    that same class four layers up (Copilot/Aoi, musubi#771).
+
+    Injection is a REAL fault from the client, not a missing collection: both
+    collections exist and are discoverable, and one raises on scroll."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.lifecycle.transitions import transition
+    from musubi.types.common import generate_ksuid
+
+    oid = generate_ksuid()
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [{"object_id": oid, "namespace": "ns/a", "state": "provisional", "version": 1}],
+    )
+    _collection_with(
+        client,
+        "musubi_curated",
+        [{"object_id": oid, "namespace": "ns/b", "state": "provisional", "version": 1}],
+    )
+
+    real_scroll = client.scroll
+
+    def scroll_failing_on_curated(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("collection_name") == "musubi_curated":
+            raise TimeoutError("qdrant timed out")  # a transport fault, not an absence
+        return real_scroll(*args, **kwargs)
+
+    client.scroll = scroll_failing_on_curated  # type: ignore[method-assign]
+    coordinator = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "wk.db")
+
+    with pytest.raises(TimeoutError):
+        transition(
+            client,
+            coordinator=coordinator,
+            object_id=oid,
+            target_state="matured",
+            actor="operator",
+            reason="fault-must-not-be-a-miss",
+            namespace=None,
+        )
+
+    client.scroll = real_scroll  # type: ignore[method-assign]
+    rows, _ = real_scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=oid))]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert (rows[0].payload or {})["state"] == "provisional", (
+        "the episodic row was transitioned while the plane holding its duplicate was "
+        "unreachable -- the error was read as a confirmed miss"
+    )
+
+
+def test_duplicate_anchors_in_one_namespace_refuse(tmp_path: Path) -> None:
+    """Counting DISTINCT NAMESPACES let this pass, which is why that rule is gone.
+
+    Two authoritative rows in the SAME namespace collapse to a namespace-set of size
+    one, so the old check saw no ambiguity and `records[0]` decided. A third namespace
+    could then hide behind them entirely under a `limit=2` scan. The rule is now
+    exactly-one-authoritative-row, which does not care what the cause was -- and note
+    the lookup here is QUALIFIED, so supplying a namespace does not rescue it
+    (Copilot/Yua, musubi#771)."""
+    from musubi.lifecycle.transitions import AmbiguousObjectId, _locate_object
+    from musubi.types.common import generate_ksuid
+
+    oid = generate_ksuid()
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [
+            {"object_id": oid, "namespace": "ns/a", "state": "provisional", "version": 1},
+            {"object_id": oid, "namespace": "ns/a", "state": "provisional", "version": 2},
+        ],
+    )
+
+    with pytest.raises(AmbiguousObjectId) as excinfo:
+        _locate_object(client, object_id=oid, namespace="ns/a")
+    assert "at least 2 authoritative" in str(excinfo.value)
+
+
+def test_the_error_contract_does_not_claim_completeness_it_does_not_have() -> None:
+    """A completeness PROMISE is testable even when the prose around it is not.
+
+    The previous revision said "this list is exhaustive" while omitting all six
+    coordinator codes that `transition()` can forward. A caller can rely on that
+    sentence — it is worse than no promise. Removing it was the fix; this is what stops
+    it coming back, because the next person to add a tidy "exhaustive" will be told.
+
+    The rule is conditional, so it stays true either way: claim completeness only if the
+    list is actually complete (Copilot/Yua, musubi#771)."""
+    from musubi.lifecycle.transitions import TransitionError
+
+    doc = TransitionError.__doc__ or ""
+    forwarded = [
+        "cap_exceeded",
+        "active_intent_exists",
+        "durable_begin_failed",
+        "operation_key_conflict",
+        "terminal_apply_failure",
+        "maintenance_active",
+    ]
+    # DOCUMENTED means a contract BULLET, not a mention. The first version of this cell
+    # checked `code in doc` and passed under the plant, because the six codes are named
+    # in the prose explaining that they belong elsewhere -- so it could not tell
+    # "exhaustive" from "not exhaustive" at all. Caught by its own red-proof, which is
+    # the tenth inert check tonight and the third of mine.
+    claims_complete = "not exhaustive" not in doc and "exhaustive" in doc
+    if claims_complete:
+        missing = [c for c in forwarded if f"- ``{c}``" not in doc]
+        assert not missing, (
+            f"the contract claims to be exhaustive but does not document these codes "
+            f"`transition()` can return: {missing}"
+        )
+    else:
+        assert "not exhaustive" in doc, (
+            "the contract neither claims completeness nor says it is incomplete; a "
+            "caller cannot tell whether to expect other codes"
+        )

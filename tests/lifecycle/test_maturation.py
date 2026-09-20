@@ -2123,3 +2123,198 @@ async def test_the_enrichment_refusal_log_does_not_assert_a_cause_it_cannot_know
     assert str(row.object_id) in message and ns in message, (
         f"the refusal does not identify which row it is about: {message!r}"
     )
+
+
+async def test_enrichment_attribution_survives_a_colliding_timestamp(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """THE ATTRIBUTION CELL. A timestamp says WHEN, never WHO.
+
+    `updated_epoch` was the readback discriminator, and the transition immediately
+    before this call writes it too. Two `utc_now()` calls can land in the same
+    microsecond, so the readback could match the TRANSITION's write and report an
+    enrichment that never landed (Copilot, musubi#771).
+
+    This freezes the clock so every write shares one epoch -- the coincidence made
+    certain instead of waited for -- and takes the lease so enrichment must refuse.
+    With epoch attribution, the transition's own write satisfies the readback and the
+    refusal is reported as a success. With a per-attempt marker it cannot, because only
+    this call could have written that value."""
+    from qdrant_client import models as qmodels
+
+    # BOTH module clocks. Patching only `maturation.utc_now` left the transition
+    # stamping its own epoch from `transitions.utc_now`, so no collision was created and
+    # this cell could pass against the OLD discriminator -- claiming a property it never
+    # produced. Caught pre-push by Tama; the inert shape again (musubi#771).
+    from musubi.lifecycle import transitions as transitions_mod
+
+    frozen = utc_now()
+    monkeypatch.setattr(maturation, "utc_now", lambda: frozen)
+    monkeypatch.setattr(transitions_mod, "utc_now", lambda: frozen)
+
+    row = await _seed_provisional(plane, ns, content="attribute me", age_seconds=7200)
+    seed_importance = _payload(qdrant, str(row.object_id))[0]["importance"]
+    enriched_importance = seed_importance + 3
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+
+    def transition_then_take_the_lease(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        qdrant.set_payload(
+            collection_name="musubi_episodic",
+            payload={"update_lease_token": f"done:{int(frozen.timestamp() * 1_000_000)}:racer"},
+            points=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    )
+                ]
+            ),
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_take_the_lease)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=enriched_importance),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    live = [p for p in _payload(qdrant, str(row.object_id)) if p.get("state") == "matured"]
+    assert len(live) == 1
+    # THE COLLISION, asserted rather than assumed. If the transition's epoch is not the
+    # frozen one, no collision exists and everything below passes vacuously.
+    assert live[0].get("updated_epoch") == epoch_of(frozen), (
+        f"the transition stamped {live[0].get('updated_epoch')}, not the frozen "
+        f"{epoch_of(frozen)} -- the collision this cell depends on was never created"
+    )
+    assert live[0].get("importance") == seed_importance, "enrichment landed despite the lease"
+    assert report.enriched == 0, (
+        f"the refusal was counted as {report.enriched} enrichment(s): the readback "
+        f"attributed the TRANSITION's write to this call because their epochs collide"
+    )
+
+
+async def test_a_crashed_enrichment_leaves_no_marker_that_can_be_mistaken(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """CRASH RESIDUE. The marker is cleaned up, and residue is harmless if it is not.
+
+    A process dying between the fenced write and the cleanup leaves a stale
+    `enrichment_attempt` on the row. That is safe by construction -- every readback is
+    fenced on a freshly generated value, so no later attempt can match an older marker
+    -- but "safe by construction" is a claim, and claims get cells.
+
+    Normal path first: after a successful sweep the marker is gone, so the payload does
+    not accumulate a field that means nothing once the answer has been read."""
+    row = await _seed_provisional(plane, ns, content="clean up after yourself", age_seconds=7200)
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=7),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+    live = [p for p in _payload(qdrant, str(row.object_id)) if p.get("state") == "matured"]
+    assert len(live) == 1
+    assert live[0].get("importance") == 7, "the control did not enrich; the cell proves nothing"
+    assert "enrichment_attempt" not in live[0], (
+        f"the per-attempt marker outlived the answer it existed to give: {live[0]}"
+    )
+
+    # Now the residue: plant a stale marker as a crash would, and require the NEXT
+    # enrichment to be unaffected by it.
+    from qdrant_client import models as qmodels
+
+    second = await _seed_provisional(plane, ns, content="after a crash", age_seconds=7200)
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"enrichment_attempt": "stale-marker-from-a-dead-process"},
+        points=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(second.object_id))
+                )
+            ]
+        ),
+        wait=True,
+    )
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(importance=4),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+    after = [p for p in _payload(qdrant, str(second.object_id)) if p.get("state") == "matured"]
+    assert len(after) == 1
+    assert after[0].get("importance") == 4, (
+        "a residual marker from a crashed attempt blocked a later enrichment"
+    )
+    assert after[0].get("enrichment_attempt") != "stale-marker-from-a-dead-process", (
+        "the stale marker survived a successful later attempt"
+    )
+
+
+async def test_a_cleanup_failure_does_not_turn_a_durable_success_into_a_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """The failure surface the marker INTRODUCED, and it had to be decided explicitly.
+
+    Cleanup runs after the authoritative answer is already determined. If it raises, an
+    enrichment that durably applied gets counted as failed and logged as a refusal --
+    the marker would have made reporting worse than the bug it fixed (Yua, musubi#771).
+
+    So cleanup is best-effort. The row must still show the enrichment, and the sweep
+    must still count it."""
+    row = await _seed_provisional(plane, ns, content="cleanup explodes", age_seconds=7200)
+    real_delete = qdrant.delete_payload
+
+    def delete_payload_that_fails(*args: Any, **kwargs: Any) -> Any:
+        if "enrichment_attempt" in (kwargs.get("keys") or []):
+            raise RuntimeError("qdrant unavailable during cleanup")
+        return real_delete(*args, **kwargs)
+
+    qdrant.delete_payload = delete_payload_that_fails  # type: ignore[method-assign]
+    try:
+        report = await episodic_maturation_sweep(
+            client=qdrant,
+            sink=sink,
+            coordinator=_coordinator(qdrant, sink),
+            ollama=FakeOllama(importance=6),
+            cursor=cursor,
+            config=_config(min_age_sec=3600),
+        )
+    finally:
+        qdrant.delete_payload = real_delete  # type: ignore[method-assign]
+
+    live = [p for p in _payload(qdrant, str(row.object_id)) if p.get("state") == "matured"]
+    assert len(live) == 1
+    assert live[0].get("importance") == 6, "the enrichment did not apply; cell proves nothing"
+    assert report.enriched == 1, (
+        f"a durable enrichment was reported as {report.enriched}; a cleanup fault was "
+        f"allowed to change the answer"
+    )
+    # ...and the residue it left behind is inert: a later attempt generates its own
+    # marker and cannot match this one.
+    assert live[0].get("enrichment_attempt") is not None, "expected residue for this cell"
