@@ -182,11 +182,7 @@ def test_critical_gate_runs_before_any_registry_push() -> None:
         for i, step in enumerate(steps)
         if step.get("name") == "Trivy vulnerability scan (SARIF — CRITICAL gate)"
     )
-    push_index = next(
-        i
-        for i, step in enumerate(steps)
-        if step.get("name") == "Build and push"
-    )
+    push_index = next(i for i, step in enumerate(steps) if step.get("name") == "Build and push")
     assert gate_index < push_index, "registry push occurs before the CRITICAL gate"
 
     candidate = next(step for step in steps if step.get("name") == "Build local scan candidate")
