@@ -15,9 +15,8 @@ Reds run against the REAL validator `musubi.auth.tokens.validate_token` (a pure 
     presence="eric/claude-code" + scope=["mallory/evil/episodic:rw"]  -> Ok (ACCEPTED)  [the hole]
     wrong issuer                                                        -> Err (rejected)  [holds]
 
-`xfail(strict=True)` on the hole; plain controls for the invariants that already hold (issuer
-enforced, presence/sub required) and for the D6 identity tuple. Synthetic tokens only, no live
-secrets beyond the test signing key. Tests/docs only, no src.
+The rejection cases are the executable contract for Issue #412. Synthetic tokens only, no live
+secrets beyond the test signing key.
 
     uv run pytest tests/api/test_req7_token_identity_invariant.py -v
 """
@@ -40,10 +39,6 @@ def _is_ok(result: object) -> TypeGuard[Ok[Any]]:
     return isinstance(result, Ok)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="REQ-7: presence/scope consistency not enforced yet — deferred; future REQ-7 slice (Issue #412)",
-)
 def test_inconsistent_presence_vs_scope_must_be_rejected(api_settings: Settings) -> None:
     """The hole: presence claims one tenant, the only scope grants another. Today ACCEPTED.
 
@@ -62,6 +57,37 @@ def test_inconsistent_presence_vs_scope_must_be_rejected(api_settings: Settings)
     )
 
 
+def test_cross_tenant_scope_among_matching_scopes_must_be_rejected(
+    api_settings: Settings,
+) -> None:
+    """One matching scope must not hide a second concrete cross-tenant grant."""
+    token = mint_token(
+        api_settings,
+        scopes=[
+            "eric/claude-code/episodic:rw",
+            "mallory/evil/curated:r",
+        ],
+        presence="eric/claude-code",
+    )
+    assert not _is_ok(validate_token(token, settings=api_settings))
+
+
+@pytest.mark.parametrize(
+    "presence",
+    ["eric", "eric/", "/claude-code", "eric/claude-code/extra", "*/claude-code"],
+)
+def test_presence_must_be_a_two_segment_identity(
+    api_settings: Settings,
+    presence: str,
+) -> None:
+    token = mint_token(
+        api_settings,
+        scopes=["eric/claude-code/episodic:r"],
+        presence=presence,
+    )
+    assert not _is_ok(validate_token(token, settings=api_settings))
+
+
 def test_consistent_presence_and_scope_is_accepted(api_settings: Settings) -> None:
     """Feature preservation: a token whose presence matches its scope prefix must validate. Green
     before and after the fix — the fix must reject only the INCONSISTENT case."""
@@ -73,6 +99,24 @@ def test_consistent_presence_and_scope_is_accepted(api_settings: Settings) -> No
     result = validate_token(token, settings=api_settings)
     assert _is_ok(result), f"a consistent token must validate, got {result}"
     assert result.value.presence == "eric/claude-code"
+
+
+def test_same_tenant_shared_scope_is_accepted(api_settings: Settings) -> None:
+    token = mint_token(
+        api_settings,
+        scopes=["eric/_shared/curated:r"],
+        presence="eric/claude-code",
+    )
+    assert _is_ok(validate_token(token, settings=api_settings))
+
+
+def test_operator_and_global_scopes_remain_valid(api_settings: Settings) -> None:
+    token = mint_token(
+        api_settings,
+        scopes=["operator", "**:r", "*/*/episodic:r"],
+        presence="eric/claude-code",
+    )
+    assert _is_ok(validate_token(token, settings=api_settings))
 
 
 def test_wrong_issuer_is_rejected(api_settings: Settings) -> None:
