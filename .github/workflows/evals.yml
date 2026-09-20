@@ -74,3 +74,43 @@ jobs:
         if: always()
         run: |
           docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-evals down -v --remove-orphans
+
+  # A failed scheduled run is otherwise visible only to someone who inspects Actions history.
+  # Reconcile one owner-assigned Issue so the failure becomes durable operator work, while a
+  # subsequent green run records recovery and closes it. This job is deliberately outside the
+  # pull_request path: PR smoke results must never create or close the production-quality incident.
+  report_scheduled_result:
+    needs: scheduled
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconcile scheduled Evals incident
+        uses: actions/github-script@v7
+        env:
+          INCIDENT_ISSUE_NUMBER: '817'
+          RESULT: ${{ needs.scheduled.result }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            try {
+              const { reconcileScheduledEvals } = require(
+                './.github/scripts/report-scheduled-evals.js'
+              );
+              await reconcileScheduledEvals({
+                github,
+                context,
+                incidentNumber: Number(process.env.INCIDENT_ISSUE_NUMBER),
+                result: process.env.RESULT,
+                runAttempt: process.env.RUN_ATTEMPT,
+                runId: process.env.RUN_ID,
+                runUrl: process.env.RUN_URL,
+              });
+            } catch (error) {
+              core.setFailed(`failed to reconcile scheduled Evals incident: ${error.message}`);
+            }

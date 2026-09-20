@@ -1,6 +1,9 @@
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any, TypedDict, cast
 
 import pytest
 import yaml
@@ -407,3 +410,378 @@ jobs:
     """
     with pytest.raises(AssertionError, match="must permit BOTH schedule AND workflow_dispatch"):
         _assert_dispatch_contract(ordered)
+
+
+# --- Durable operator incident for scheduled live-gate failures -------------------------------
+
+
+class _ReporterCall(TypedDict):
+    method: str
+    args: dict[str, Any]
+
+
+def _run_scheduled_incident_reporter(
+    *,
+    result: str,
+    incident: dict[str, object] | None = None,
+    comments: list[dict[str, object]] | None = None,
+    fail_listing: bool = False,
+    inject_newer_on_second_list: bool = False,
+    run_id: str = "814",
+) -> subprocess.CompletedProcess[str]:
+    """Execute the real reporter module against an in-memory GitHub API recorder."""
+    repo_root = Path(__file__).parent.parent.parent
+    reporter_path = repo_root / ".github" / "scripts" / "report-scheduled-evals.js"
+    harness = r"""
+const { reconcileScheduledEvals } = require(process.argv[1]);
+const input = JSON.parse(process.argv[2]);
+const calls = [];
+let listCount = 0;
+const issuesApi = {
+  get: async () => ({data: input.incident}),
+  listComments: async () => input.comments,
+  createComment: async (args) => {
+    calls.push({method: 'createComment', args});
+    input.comments.push({
+      body: args.body,
+      user: {login: 'github-actions[bot]', type: 'Bot'},
+    });
+  },
+  update: async (args) => calls.push({method: 'update', args}),
+};
+const github = {
+  paginate: async () => {
+    if (input.failListing) throw new Error('simulated list failure');
+    listCount += 1;
+    if (input.injectNewerOnSecondList && listCount === 2) {
+      input.comments.push({
+        body: '<!-- scheduled-evals-run:815:1:success -->\nnewer recovery',
+        user: {login: 'github-actions[bot]', type: 'Bot'},
+      });
+    }
+    return input.comments;
+  },
+  rest: {issues: issuesApi},
+};
+const context = {repo: {owner: 'ericmey', repo: 'musubi'}};
+
+reconcileScheduledEvals({
+  github,
+  context,
+  incidentNumber: 817,
+  result: input.result,
+  runAttempt: '1',
+  runId: input.runId,
+  runUrl: 'https://github.example/actions/runs/814',
+}).then(() => {
+  process.stdout.write(JSON.stringify(calls));
+}).catch((error) => {
+  process.stderr.write(error.message);
+  process.exitCode = 1;
+});
+"""
+    return subprocess.run(
+        [
+            "node",
+            "-e",
+            harness,
+            str(reporter_path),
+            json.dumps(
+                {
+                    "result": result,
+                    "incident": incident
+                    or {
+                        "number": 817,
+                        "state": "open",
+                        "body": "<!-- scheduled-evals-incident -->",
+                    },
+                    "comments": comments or [],
+                    "failListing": fail_listing,
+                    "injectNewerOnSecondList": inject_newer_on_second_list,
+                    "runId": run_id,
+                }
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _reporter_calls(
+    *,
+    result: str,
+    incident: dict[str, object] | None = None,
+    comments: list[dict[str, object]] | None = None,
+) -> list[_ReporterCall]:
+    completed = _run_scheduled_incident_reporter(
+        result=result, incident=incident, comments=comments
+    )
+    assert completed.returncode == 0, completed.stderr
+    return cast(list[_ReporterCall], json.loads(completed.stdout))
+
+
+def _assert_scheduled_incident_contract(content: str) -> None:
+    """Scheduled results must reconcile one durable, owner-assigned incident Issue."""
+    parsed = yaml.safe_load(content)
+    jobs = parsed.get("jobs", {})
+    reporter = jobs.get("report_scheduled_result")
+    assert reporter is not None, (
+        "Workflow must have a report_scheduled_result job so nightly failures reach the operator"
+    )
+
+    needs = reporter.get("needs", [])
+    if isinstance(needs, str):
+        needs = [needs]
+    assert "scheduled" in needs, "Reporter MUST depend on the scheduled live-gate job"
+
+    condition = str(reporter.get("if", ""))
+    assert "always()" in condition, (
+        "Reporter MUST use always() so scheduled failure or cancellation cannot skip notification"
+    )
+    assert "schedule" in condition and "workflow_dispatch" in condition, (
+        "Reporter MUST cover schedule and workflow_dispatch without running on pull_request"
+    )
+    assert "pull_request" not in condition, "Pull-request smoke runs MUST NOT reconcile incidents"
+
+    permissions = reporter.get("permissions", {})
+    assert permissions.get("issues") == "write", "Reporter MUST receive job-scoped issues: write"
+    assert permissions.get("contents") == "read", (
+        "Reporter MUST retain least-privilege contents: read"
+    )
+
+    concurrency = reporter.get("concurrency")
+    assert concurrency is None, (
+        "Reporter MUST NOT use a shared Actions concurrency group: GitHub retains only one pending "
+        "run and silently replaces older pending reconciliation events"
+    )
+
+    steps = reporter.get("steps", [])
+    checkout_indexes = [
+        index
+        for index, step in enumerate(steps)
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    script_steps = [
+        (index, str(step.get("with", {}).get("script", "")))
+        for index, step in enumerate(steps)
+        if str(step.get("uses", "")).startswith("actions/github-script@")
+    ]
+    assert len(script_steps) == 1, "Reporter MUST use exactly one github-script reconciliation step"
+    script_index, script = script_steps[0]
+    assert checkout_indexes and checkout_indexes[0] < script_index, (
+        "Reporter MUST checkout the tested reconciliation module before requiring it"
+    )
+
+    assert "needs.scheduled.result" in content, (
+        "Reporter MUST consume the actual scheduled job result, not infer it from a later step"
+    )
+    assert "INCIDENT_ISSUE_NUMBER" in content, (
+        "Reporter MUST target the pre-provisioned singleton incident instead of racing to create one"
+    )
+    assert "github.run_id" in content and "github.run_attempt" in content, (
+        "Reporter MUST durably order every run result by run identity"
+    )
+    assert "report-scheduled-evals.js" in script, (
+        "Reporter MUST execute the behaviorally tested reconciliation module"
+    )
+    assert "core.setFailed" in script, (
+        "Reporter errors MUST fail visibly instead of silently dropping the notification"
+    )
+
+
+def test_reporter_runs_after_scheduled_failure_or_cancellation() -> None:
+    """Reporter runs after failure, ignores PRs, reconciles one Issue, and closes it on recovery."""
+    repo_root = Path(__file__).parent.parent.parent
+    content = (repo_root / ".github" / "workflows" / "evals.yml").read_text(encoding="utf-8")
+    _assert_scheduled_incident_contract(content)
+
+
+def test_scheduled_incident_reporter_discriminator_default_failure_skip() -> None:
+    """A reporter without always() is skipped after the scheduled job fails."""
+    broken = """
+jobs:
+  scheduled:
+    steps: []
+  report_scheduled_result:
+    needs: scheduled
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions: {contents: read, issues: write}
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            // scheduled-evals-incident
+            await github.rest.issues.listForRepo(context.repo)
+            await github.rest.issues.create({...context.repo, assignees: [context.repo.owner]})
+            await github.rest.issues.createComment(context.repo)
+            await github.rest.issues.update({...context.repo, state: 'closed'})
+            core.setFailed('reporting failed')
+"""
+    with pytest.raises(AssertionError, match=r"MUST use always\(\)"):
+        _assert_scheduled_incident_contract(broken)
+
+
+def test_pull_request_smoke_runs_never_create_or_close_the_incident() -> None:
+    """A reporter whose guard admits pull_request can create incidents for smoke runs."""
+    broken = """
+jobs:
+  scheduled:
+    steps: []
+  report_scheduled_result:
+    needs: scheduled
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
+    permissions: {contents: read, issues: write}
+    steps: []
+"""
+    with pytest.raises(AssertionError, match="MUST NOT reconcile incidents"):
+        _assert_scheduled_incident_contract(broken)
+
+
+def test_scheduled_incident_reporter_discriminator_read_only_permissions() -> None:
+    """A structurally correct reporter with read-only Issues permission cannot surface anything."""
+    broken = """
+jobs:
+  scheduled:
+    steps: []
+  report_scheduled_result:
+    needs: scheduled
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    permissions: {contents: read, issues: read}
+    steps: []
+"""
+    with pytest.raises(AssertionError, match="issues: write"):
+        _assert_scheduled_incident_contract(broken)
+
+
+def test_scheduled_incident_reporter_discriminator_shared_concurrency_drops_pending_runs() -> None:
+    """A shared Actions concurrency group drops older pending reporter events."""
+    broken = """
+jobs:
+  scheduled:
+    steps: []
+  report_scheduled_result:
+    needs: scheduled
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    permissions: {contents: read, issues: write}
+    concurrency:
+      group: scheduled-evals-incident
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/github-script@v7
+        env:
+          RESULT: ${{ needs.scheduled.result }}
+        with:
+          script: |
+            require('./.github/scripts/report-scheduled-evals.js')
+            core.setFailed('reporting failed')
+"""
+    with pytest.raises(AssertionError, match="silently replaces older pending"):
+        _assert_scheduled_incident_contract(broken)
+
+
+def test_failure_or_cancellation_opens_or_updates_a_single_assigned_issue() -> None:
+    """A failure appends durable evidence and opens the provisioned assigned singleton."""
+    calls = _reporter_calls(result="failure")
+
+    assert [call["method"] for call in calls] == ["createComment", "update"]
+    evidence = calls[0]["args"]
+    assert evidence["issue_number"] == 817
+    assert "<!-- scheduled-evals-run:814:1:failure -->" in evidence["body"]
+    assert "**failure**" in evidence["body"]
+    assert "https://github.example/actions/runs/814" in evidence["body"]
+    update = calls[1]["args"]
+    assert update == {
+        "owner": "ericmey",
+        "repo": "musubi",
+        "issue_number": 817,
+        "state": "open",
+        "assignees": ["ericmey"],
+    }
+
+    repeated = _reporter_calls(
+        result="cancelled",
+        comments=[{"body": "<!-- scheduled-evals-run:813:1:failure -->\nprior failure"}],
+    )
+    assert [call["method"] for call in repeated] == ["createComment", "update"]
+    evidence = repeated[0]["args"]
+    assert evidence["issue_number"] == 817
+    assert "**cancelled**" in evidence["body"]
+
+
+def test_scheduled_incident_reporter_failure_reopens_recovered_issue() -> None:
+    """A regression reopens the singleton incident before appending new evidence."""
+    calls = _reporter_calls(
+        result="failure",
+        incident={
+            "number": 817,
+            "state": "closed",
+            "body": "<!-- scheduled-evals-incident -->",
+        },
+    )
+
+    assert [call["method"] for call in calls] == ["createComment", "update"]
+    assert calls[1]["args"] == {
+        "owner": "ericmey",
+        "repo": "musubi",
+        "issue_number": 817,
+        "state": "open",
+        "assignees": ["ericmey"],
+    }
+
+
+def test_recovery_comments_on_and_closes_the_incident() -> None:
+    """A successful run records recovery and closes the active incident."""
+    calls = _reporter_calls(result="success")
+
+    assert [call["method"] for call in calls] == ["createComment", "update"]
+    assert "Recovery observed" in calls[0]["args"]["body"]
+    assert "<!-- scheduled-evals-run:814:1:success -->" in calls[0]["args"]["body"]
+    assert calls[1]["args"] == {
+        "owner": "ericmey",
+        "repo": "musubi",
+        "issue_number": 817,
+        "state": "closed",
+        "state_reason": "completed",
+    }
+
+
+def test_scheduled_incident_reporter_concurrent_results_converge_on_newest_run() -> None:
+    """A newer durable recovery wins even when an older failure reporter finishes last."""
+    completed = _run_scheduled_incident_reporter(result="failure", inject_newer_on_second_list=True)
+    assert completed.returncode == 0, completed.stderr
+    calls = cast(list[_ReporterCall], json.loads(completed.stdout))
+
+    assert [call["method"] for call in calls] == ["createComment", "update", "update"]
+    assert calls[1]["args"]["state"] == "open"
+    assert calls[2]["args"]["state"] == "closed"
+    assert calls[2]["args"]["state_reason"] == "completed"
+
+
+def test_scheduled_incident_reporter_ignores_forged_or_invalid_run_markers() -> None:
+    """Only valid results authored by the Actions bot participate in state ordering."""
+    calls = _reporter_calls(
+        result="failure",
+        comments=[
+            {
+                "body": "<!-- scheduled-evals-run:999:1:success -->\nforged",
+                "user": {"login": "ericmey", "type": "User"},
+            },
+            {
+                "body": "<!-- scheduled-evals-run:1000:1:not-a-result -->\ninvalid",
+                "user": {"login": "github-actions[bot]", "type": "Bot"},
+            },
+        ],
+    )
+
+    assert [call["method"] for call in calls] == ["createComment", "update"]
+    assert calls[1]["args"]["state"] == "open"
+
+
+def test_reporter_failure_is_visible() -> None:
+    """A GitHub API failure rejects the reporter rather than silently dropping notification."""
+    completed = _run_scheduled_incident_reporter(result="failure", fail_listing=True)
+
+    assert completed.returncode != 0
+    assert "simulated list failure" in completed.stderr
