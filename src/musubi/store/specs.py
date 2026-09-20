@@ -53,15 +53,13 @@ LAYOUT_ONLY_FIELDS: Final[frozenset[str]] = frozenset(
 # short-lived lifecycle marker shared by both storage layouts. A crash or best-effort
 # cleanup failure may leave it behind; an ``extra="forbid"`` model must still be able to
 # read the row (Copilot, musubi#771).
-_READ_INTERNAL_FIELDS: Final[frozenset[str]] = LAYOUT_ONLY_FIELDS | frozenset(
-    {"enrichment_attempt"}
-)
+READ_INTERNAL_FIELDS: Final[frozenset[str]] = LAYOUT_ONLY_FIELDS | frozenset({"enrichment_attempt"})
 
 
 def strip_layout_fields(payload: dict[str, Any]) -> dict[str, Any]:
     """Return ``payload`` without the Phase-2 layout-only keys, so an ``extra="forbid"`` memory model
     can validate the resolved authoritative payload."""
-    return {k: v for k, v in payload.items() if k not in _READ_INTERNAL_FIELDS}
+    return {k: v for k, v in payload.items() if k not in READ_INTERNAL_FIELDS}
 
 
 PayloadSchema = Literal["keyword", "integer", "float", "bool", "text", "datetime"]
