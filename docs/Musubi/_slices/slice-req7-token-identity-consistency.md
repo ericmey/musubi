@@ -116,7 +116,7 @@ validator; the behavior each historical test proves is unchanged.
 - Test Contract closure: all ten bullets pass in
   `tests/api/test_req7_token_identity_invariant.py` (lines 42, 60, 79, 91, 101,
   114, 123, 132, 153, and 173); no skips or out-of-scope declarations.
-- Verification: `make check` passed with 2,840 passed, 195 skipped, 146
+- Verification: `make check` passed with 2,842 passed, 195 skipped, 146
   deselected, one expected xfail, and 88.91% total coverage;
   `make tc-coverage SLICE=slice-req7-token-identity-consistency` passed 10/10;
   `make agent-check` passed with warnings only.
