@@ -80,7 +80,7 @@ async def test_lineage_hydration_does_not_block_the_event_loop(
 ) -> None:
     hits = [_scored_hit("one"), _scored_hit("two")]
 
-    async def blocking_hydrate(hit: ScoredHit, *_args: Any) -> ScoredHit:
+    def blocking_hydrate(hit: ScoredHit, *_args: Any) -> ScoredHit:
         time.sleep(0.15)
         return hit
 
@@ -139,9 +139,9 @@ async def test_lineage_timeout_returns_unhydrated_hit_instead_of_failing_the_req
 ) -> None:
     hit = _scored_hit()
 
-    async def stalled_hydrate(*_args: Any) -> ScoredHit:
-        await asyncio.sleep(1.0)
-        raise AssertionError("cancelled hydration should not complete")
+    def stalled_hydrate(*_args: Any) -> ScoredHit:
+        time.sleep(1.0)
+        raise AssertionError("timed-out hydration should not affect the response")
 
     monkeypatch.setattr(deep, "_hydrate_one", stalled_hydrate)
     hydrate = getattr(deep, "_hydrate_lineage_async", None)
@@ -161,7 +161,7 @@ async def test_default_blended_shape_finishes_concurrently_before_the_whole_call
 ) -> None:
     hits = [_scored_hit(str(index)) for index in range(5)]
 
-    async def production_shaped_hydrate(hit: ScoredHit, *_args: Any) -> ScoredHit:
+    def production_shaped_hydrate(hit: ScoredHit, *_args: Any) -> ScoredHit:
         time.sleep(0.02)
         return hit
 
