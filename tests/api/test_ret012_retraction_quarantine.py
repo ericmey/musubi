@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sqlite3
 import time
@@ -961,21 +962,31 @@ def test_retraction_committing_after_the_preflight_still_cannot_be_overwritten(
                 json=_body(memory.version),
             )
             assert resp.status_code == 200, resp.text
+            # ASSERT THE PLANT LANDED, before the handler reads. Without this a no-op
+            # injection passes silently and the cell measures the version fence again --
+            # which is exactly how its first version went inert (Aoi, 2026-09-20).
+            planted = _raw_authoritative(qdrant, memory.object_id)
+            assert planted.get("retraction_evidence") is not None, (
+                "the retraction did not commit inside the window; the cell would prove nothing"
+            )
+            assert planted["version"] > memory.version, (
+                f"version did not advance: {planted['version']} vs {memory.version}"
+            )
         # The real handler now reads FRESH -- already retracted, version bumped -- and
         # rebases onto it, so its version fence will pass.
         return str(inner(ctx))
 
     coordinator.register_intent_handler("immutable_vector_publish", retract_then_handle)
     try:
-        try:
+        # Losing the fence is the CORRECT outcome here; the assertions below are the
+        # proof, not the call's return.
+        with contextlib.suppress(Exception):
             publisher.publish(
                 coordinator,
                 object_id=memory.object_id,
                 namespace=memory.namespace,
                 content_payload={"content": "OVERWRITTEN AFTER PREFLIGHT"},
             )
-        except Exception:
-            pass  # losing the fence is the CORRECT outcome; the assertions are the proof
     finally:
         coordinator.register_intent_handler("immutable_vector_publish", inner)
 

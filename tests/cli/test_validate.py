@@ -353,6 +353,61 @@ def test_clean_run_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "INTEGRITY — CLEAN" in result.stdout
 
 
+def test_residual_enrichment_attempt_is_reported_without_failing_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    row = {**GOOD_EPISODIC, "enrichment_attempt": "stale-attempt"}
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(row)]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert doc["verdict"] == "clean"
+    assert doc["broken_total"] == 0
+    assert doc["internal_residue_total"] == 1
+    assert doc["internal_residue"] == [
+        {
+            "collection": "musubi_episodic",
+            "namespace": GOOD_EPISODIC["namespace"],
+            "object_id": GOOD_EPISODIC["object_id"],
+            "point_id": "p1",
+            "fields": ["enrichment_attempt"],
+        }
+    ]
+    episodic = next(plane for plane in doc["planes"] if plane["plane"] == "episodic")
+    assert episodic["internal_residue"] == 1
+
+    human = _run(monkeypatch, behaviour)
+    assert human.exit_code == 0
+    assert "INTERNAL RESIDUE — 1 row(s)" in human.stdout
+    assert "enrichment_attempt" in human.stdout
+
+
+def test_future_read_internal_field_is_reported_as_unaccounted_residue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from musubi.store import specs as store_specs
+
+    monkeypatch.setattr(
+        store_specs,
+        "READ_INTERNAL_FIELDS",
+        store_specs.READ_INTERNAL_FIELDS | frozenset({"future_internal_marker"}),
+    )
+    row = {**GOOD_EPISODIC, "future_internal_marker": "left behind"}
+    behaviour = dict(ALL_EMPTY)
+    behaviour["musubi_episodic"] = [[_Rec(row)]]
+
+    result = _run(monkeypatch, behaviour, "--json")
+    doc = json.loads(result.stdout)
+
+    assert result.exit_code == 0
+    assert doc["broken_total"] == 0
+    assert doc["internal_residue_total"] == 1
+    assert doc["internal_residue"][0]["fields"] == ["future_internal_marker"]
+
+
 def test_broken_row_is_reported_with_the_offending_key(monkeypatch: pytest.MonkeyPatch) -> None:
     bad = dict(GOOD_EPISODIC, retracted_original="the key that bricks the row")
     behaviour = dict(ALL_EMPTY)
