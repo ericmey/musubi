@@ -23,7 +23,7 @@ import threading
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import QdrantClient, models
@@ -586,3 +586,68 @@ def test_a_leased_row_stays_pending_and_retries(env: tuple[QdrantClient, _Seed, 
     replay = coordinator.drive_intent(leased.value.operation_key)
     assert replay.finalized == 1 and replay.abandoned == 0
     assert _qdrant_state(client, seed) == (seed.version + 1, "matured")
+
+
+def test_duplicate_anchors_are_refused_before_any_conditional_mutation(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    """A duplicate discovered after event persistence must remain wholly untouched."""
+    client, seed, db = env
+    coordinator = _coord(client, db)
+    real_persist = coordinator._persist_event
+
+    def persist_then_duplicate(*args: Any, **kwargs: Any) -> None:
+        real_persist(*args, **kwargs)
+        points, _ = client.scroll(
+            collection_name=seed.collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=seed.object_id)
+                    ),
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=seed.namespace)
+                    ),
+                ]
+            ),
+            limit=1,
+            with_payload=True,
+            with_vectors=True,
+        )
+        assert len(points) == 1, "the duplicate plant did not start from one anchor"
+        client.upsert(
+            collection_name=seed.collection,
+            points=[
+                models.PointStruct(
+                    id="00000000-0000-4000-8000-00000000d00d",
+                    vector=cast(Any, points[0].vector or {}),
+                    payload=dict(points[0].payload or {}),
+                )
+            ],
+            wait=True,
+        )
+
+    coordinator._persist_event = persist_then_duplicate  # type: ignore[method-assign]
+    result = coordinator.transition(_intent(seed, "matured", opk="duplicate-after-persist"))
+
+    assert isinstance(result, Err)
+    rows, _ = client.scroll(
+        collection_name=seed.collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=seed.object_id)
+                ),
+                models.FieldCondition(
+                    key="namespace", match=models.MatchValue(value=seed.namespace)
+                ),
+            ]
+        ),
+        limit=3,
+        with_payload=True,
+    )
+    assert len(rows) == 2, "the duplicate plant did not land"
+    assert all((point.payload or {}).get("state") == "provisional" for point in rows), (
+        "a duplicate authoritative anchor was mutated before ambiguity was refused"
+    )
+    assert all((point.payload or {}).get("version") == seed.version for point in rows)

@@ -1071,7 +1071,12 @@ class LifecycleTransitionCoordinator:
         # So: clear an EXPIRED ORDINARY token first, behind its own exact fence, and
         # then let IsEmpty do the real gating. A writer that acquires in between makes
         # IsEmpty fail, so the cleanup cannot open a window.
-        held, _ = self._read_object(collection, object_id, namespace)
+        held, held_count = self._read_object(collection, object_id, namespace)
+        if held_count != 1:
+            # Refuse before lease cleanup OR the lifecycle write. Both mutations use
+            # identity filters, so duplicate authoritative anchors would otherwise all
+            # be changed before the readback noticed the ambiguity (Copilot, musubi#771).
+            return "fence"
         token = held.get("update_lease_token")
         if token is not None:
             if held.get("retraction_evidence") is not None:

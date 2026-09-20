@@ -493,6 +493,10 @@ async def episodic_maturation_sweep(
             # Qualify the canonical lookup: `object_id` is not globally unique, and an
             # unqualified transition could mature a stranger's row and count it here.
             namespace=row["namespace"],
+            # The candidate payload is the snapshot every enrichment value above was
+            # computed from. Refuse if another writer moved it after selection instead
+            # of maturing a newer row with stale derived data (Copilot, musubi#771).
+            expected_version=int(row["version"]),
         )
         if not isinstance(result, Ok):
             failed += 1

@@ -312,6 +312,17 @@ def _normalise_sql(sql: str) -> str:
 
 
 _EXPECTED_ACTIVE_INTENT_KEY = "(collection,coalesce(namespace,''),object_id)"
+_EXPECTED_ACTIVE_INTENT_PREDICATE = "wherestatein('pending','applied')"
+_EXPECTED_ACTIVE_INTENT_DEFINITIONS = frozenset(
+    {
+        "createuniqueindexux_active_intentonlifecycle_outbox"
+        + _EXPECTED_ACTIVE_INTENT_KEY
+        + _EXPECTED_ACTIVE_INTENT_PREDICATE,
+        "createuniqueindexifnotexistsux_active_intentonlifecycle_outbox"
+        + _EXPECTED_ACTIVE_INTENT_KEY
+        + _EXPECTED_ACTIVE_INTENT_PREDICATE,
+    }
+)
 """The exact ordered key expression ``ux_active_intent`` must have.
 
 Checking for the WORD `coalesce` was not enough: an index that coalesces the wrong
@@ -319,6 +330,33 @@ field -- `COALESCE(collection,'')` -- contains it and would be accepted as curre
 leaving the NULL hazard exactly where it was. Testing for the presence of a mechanism
 instead of the mechanism being applied TO THE RIGHT OBJECT is the defect this whole
 change is about, and it reappeared inside the guard against it (Tama, musubi#771)."""
+
+
+def _active_intent_index_is_current(conn: sqlite3.Connection) -> bool:
+    """Return whether ``ux_active_intent`` has the complete required semantics.
+
+    SQLite exposes uniqueness and partiality as index metadata; neither property should
+    be inferred from a convenient substring in stored DDL. The expression key and exact
+    partial predicate still come from the normalized definition because SQLite's index
+    pragmas identify an expression column but do not reconstruct that expression.
+    """
+    metadata = next(
+        (
+            row
+            for row in conn.execute("PRAGMA index_list(lifecycle_outbox)").fetchall()
+            if str(row[1]) == "ux_active_intent"
+        ),
+        None,
+    )
+    if metadata is None or int(metadata[2]) != 1 or int(metadata[4]) != 1:
+        return False
+    definition = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
+    ).fetchone()
+    if definition is None or definition[0] is None:
+        return False
+    normalized = _normalise_sql(str(definition[0]))
+    return normalized in _EXPECTED_ACTIVE_INTENT_DEFINITIONS
 
 
 def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
@@ -353,14 +391,7 @@ def _migrate_active_intent_index(conn: sqlite3.Connection) -> None:
         )
     conn.execute("BEGIN IMMEDIATE")
     try:
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
-        ).fetchone()
-        if (
-            row is not None
-            and row[0] is not None
-            and _EXPECTED_ACTIVE_INTENT_KEY not in _normalise_sql(str(row[0]))
-        ):
+        if not _active_intent_index_is_current(conn):
             conn.execute("DROP INDEX ux_active_intent")
             conn.execute(
                 "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "

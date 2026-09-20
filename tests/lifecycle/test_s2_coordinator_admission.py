@@ -524,12 +524,69 @@ def test_the_migration_guard_recognises_its_own_index_as_current(tmp_path: Path)
     finally:
         con.close()
 
-    assert store._EXPECTED_ACTIVE_INTENT_KEY in store._normalise_sql(sql), (
-        f"the migration guard's expected key expression no longer matches the index the "
-        f"schema creates, so it will re-create on every open and never recognise a "
-        f"correct index:\n  expected {store._EXPECTED_ACTIVE_INTENT_KEY!r}\n  actual   "
-        f"{store._normalise_sql(sql)!r}"
-    )
+    con = store.connect(db)
+    try:
+        assert store._active_intent_index_is_current(con), (
+            "the migration guard does not recognise the index the schema creates: "
+            f"{store._normalise_sql(sql)!r}"
+        )
+    finally:
+        con.close()
+
+
+@pytest.mark.parametrize(
+    "index_sql",
+    [
+        "CREATE INDEX ux_active_intent ON lifecycle_outbox "
+        "(collection, COALESCE(namespace, ''), object_id) "
+        "WHERE state IN ('PENDING','APPLIED')",
+        "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "
+        "(collection, COALESCE(namespace, ''), object_id)",
+        "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "
+        "(collection, COALESCE(namespace, ''), object_id) "
+        "WHERE state = 'PENDING'",
+        "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "
+        "(collection, COALESCE(namespace, ''), object_id) "
+        "WHERE state IN ('PENDING','APPLIED') AND namespace = 'only-this'",
+        "CREATE UNIQUE INDEX ux_active_intent ON lifecycle_outbox "
+        "(collection, COALESCE(namespace, ''), object_id) "
+        "WHERE state IN ('PENDING','APPLIED') OR 1 = 1",
+    ],
+    ids=["not-unique", "not-partial", "wrong-predicate", "too-narrow", "too-broad"],
+)
+def test_the_migration_repairs_an_index_with_the_right_key_but_wrong_semantics(
+    tmp_path: Path, index_sql: str
+) -> None:
+    """The key expression alone does not prove uniqueness or the active-row predicate."""
+    db = tmp_path / "wrong-semantics.db"
+    con = sqlite3.connect(db)
+    try:
+        con.execute(
+            "CREATE TABLE lifecycle_outbox (operation_key TEXT PRIMARY KEY, object_id TEXT, "
+            "collection TEXT, namespace TEXT, state TEXT)"
+        )
+        con.execute(index_sql)
+        con.commit()
+    finally:
+        con.close()
+
+    con = store.connect(db)
+    try:
+        store.ensure_schema(con)
+        assert store._active_intent_index_is_current(con)
+        metadata = next(
+            row
+            for row in con.execute("PRAGMA index_list(lifecycle_outbox)").fetchall()
+            if row[1] == "ux_active_intent"
+        )
+        assert int(metadata[2]) == 1, "the repaired index is not unique"
+        assert int(metadata[4]) == 1, "the repaired index is not partial"
+        sql = con.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='ux_active_intent'"
+        ).fetchone()[0]
+        assert store._EXPECTED_ACTIVE_INTENT_PREDICATE in store._normalise_sql(sql)
+    finally:
+        con.close()
 
 
 def test_a_failed_index_replacement_rolls_back_and_leaves_the_old_index(tmp_path: Path) -> None:

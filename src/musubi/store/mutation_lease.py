@@ -304,9 +304,17 @@ async def owned_update(
         now_us = int(time.time() * 1_000_000)
 
         # ---- phase 1: acquire (empty at the exact read version, or takeover of an EXACT expired) --
-        if not stored_token:
+        if stored_token is None:
             token_fence: models.Condition = models.IsEmptyCondition(
                 is_empty=models.PayloadField(key="update_lease_token")
+            )
+        elif stored_token == "":
+            # An empty string is a present field, so Qdrant's IsEmptyCondition does
+            # not match it. Fence the exact residue and let this writer replace it;
+            # treating it as absent makes every acquisition lose forever (Copilot,
+            # musubi#771).
+            token_fence = models.FieldCondition(
+                key="update_lease_token", match=models.MatchValue(value="")
             )
         # The PRODUCTION consumer of the shared rule. Leaving an inline TTL expression
         # here beside a helper documented as "the shared rule, in one place" is how the

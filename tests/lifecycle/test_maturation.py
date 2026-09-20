@@ -1329,9 +1329,10 @@ def _importance_items_for_batch_test(n: int) -> list[OllamaImportance]:
 # a point that lacks the key. `test_v2_content_point_is_never_enriched` pins that, so if
 # `state` is ever added to content payloads the exclusion stops being accidental.
 #
-# Version was considered and deliberately not used: the sweep does not hold the
-# post-transition version without an extra read, and state is the property that actually
-# matters — an archived row must never be enriched at ANY version.
+# The canonical transition is fenced on the selected candidate's version, and the
+# enrichment write is fenced on the exact post-transition version returned by it. A
+# concurrent writer therefore cannot turn stale derived data into a valid write merely
+# by leaving the row in (or restoring it to) the same state.
 #
 # Shiori, 2026-09-20.
 
@@ -1416,6 +1417,65 @@ async def test_a_row_archived_mid_sweep_is_not_enriched(
         f"the retraction timestamp must remain the retraction's "
         f"({archived_at['updated_at']})"
     )
+
+
+async def test_a_candidate_changed_after_selection_is_not_transitioned(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """The canonical transition must identify the snapshot selected by the sweep.
+
+    Move the row after candidate selection but before ``transition``. Without the
+    candidate's ``expected_version``, the transition reads the newer row and legally
+    matures it, allowing enrichment computed from the stale snapshot to follow.
+    """
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="old candidate", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    raced = False
+
+    def change_candidate_then_transition(*args: Any, **kwargs: Any) -> Any:
+        nonlocal raced
+        if not raced:
+            raced = True
+            qdrant.set_payload(
+                collection_name="musubi_episodic",
+                payload={"content": "newer writer", "version": row.version + 1},
+                points=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                        ),
+                        qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+                    ]
+                ),
+                wait=True,
+            )
+        return real_transition(*args, **kwargs)
+
+    monkeypatch.setattr(maturation, "transition", change_candidate_then_transition)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"old candidate": ["stale/topic"]}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert raced, "the race plant never reached the canonical transition"
+    assert report.transitioned == 0 and report.enriched == 0
+    after = await plane.get(namespace=ns, object_id=row.object_id)
+    assert after is not None
+    assert after.state == "provisional"
+    assert after.version == row.version + 1
+    assert after.content == "newer writer"
+    assert "stale/topic" not in after.linked_to_topics
 
 
 async def test_an_ordinary_row_is_still_enriched(
