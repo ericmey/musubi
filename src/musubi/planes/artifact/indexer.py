@@ -32,7 +32,12 @@ from qdrant_client import models
 
 from musubi.embedding.base import Embedder
 from musubi.planes.artifact.chunking import KNOWN_CHUNKERS, get_chunker
-from musubi.planes.artifact.plane import _artifact_from_payload, _point_id, _sparse_to_model
+from musubi.planes.artifact.plane import (
+    _artifact_head_at_id,
+    _artifact_head_with_id,
+    _point_id,
+    _sparse_to_model,
+)
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
 from musubi.types.common import epoch_of, generate_ksuid, utc_now
@@ -78,24 +83,32 @@ class ArtifactIndexer:
     # -- head read / write ----------------------------------------------------------------------- #
 
     def _read_head(self, object_id: str, namespace: str) -> SourceArtifact | None:
-        records, _ = self._client.scroll(
-            collection_name=self._collection,
-            scroll_filter=models.Filter(
-                must=[
-                    models.FieldCondition(
-                        key="object_id", match=models.MatchValue(value=object_id)
-                    ),
-                    models.FieldCondition(
-                        key="namespace", match=models.MatchValue(value=namespace)
-                    ),
-                ]
-            ),
-            limit=1,
-            with_payload=True,
+        head, _ = self._read_head_with_id(object_id, namespace)
+        return head
+
+    def _read_head_with_id(
+        self, object_id: str, namespace: str
+    ) -> tuple[SourceArtifact | None, models.ExtendedPointId | None]:
+        return _artifact_head_with_id(
+            self._client,
+            self._collection,
+            namespace=namespace,
+            object_id=object_id,
         )
-        if not records or not records[0].payload:
-            return None
-        return _artifact_from_payload(records[0].payload)
+
+    def _read_head_at_id(
+        self,
+        point_id: models.ExtendedPointId,
+        object_id: str,
+        namespace: str,
+    ) -> SourceArtifact | None:
+        return _artifact_head_at_id(
+            self._client,
+            self._collection,
+            point_id=point_id,
+            namespace=namespace,
+            object_id=object_id,
+        )
 
     def _delete_generation_chunks(self, object_id: str, generation: str, owner: str) -> None:
         """Remove ONLY the chunks bearing this exact (generation, owner) — ABA-safe loser/GC cleanup."""
@@ -122,8 +135,8 @@ class ArtifactIndexer:
 
     async def _apply_async(self, ctx: CustomIntentContext) -> str:
         object_id, namespace, owner = ctx.object_id, ctx.namespace, ctx.owner_token
-        head = self._read_head(object_id, namespace)
-        if head is None:
+        head, head_point_id = self._read_head_with_id(object_id, namespace)
+        if head is None or head_point_id is None:
             return "fence"  # the head vanished — nothing to index; terminal.
 
         # Capture the EXACT superseded pair from the old head, so a confirmed publish reclaims only it.
@@ -210,6 +223,7 @@ class ArtifactIndexer:
             },
             points=models.Filter(
                 must=[
+                    models.HasIdCondition(has_id=[head_point_id]),
                     models.FieldCondition(
                         key="object_id", match=models.MatchValue(value=object_id)
                     ),
@@ -223,8 +237,10 @@ class ArtifactIndexer:
             ),
         )
 
-        # Exact head readback is the ONLY success signal (PR #453).
-        published = self._read_head(object_id, namespace)
+        # Exact physical-head readback is the ONLY success signal (PR #453). A duplicate can be
+        # inserted after the cardinality preflight; it must not make a landed single-row publish look
+        # like failure and leak (or incorrectly delete) this attempt's staged chunks.
+        published = self._read_head_at_id(head_point_id, object_id, namespace)
         if (
             published is not None
             and published.committed_generation == generation
@@ -252,6 +268,9 @@ class ArtifactIndexer:
         attempt is recorded. Returns ``'confirmed'`` ONLY after reading the head back and proving THIS
         attempt's terminal write landed at its fence; a matched-zero (lost) fence returns
         ``'fence'``/``'retry'`` so a loser is never finalized."""
+        current, head_point_id = self._read_head_with_id(ctx.object_id, ctx.namespace)
+        if current is None or head_point_id is None:
+            return "fence"
         expected_pv = head.publication_version
         now = utc_now()
         payload: dict[str, Any] = {
@@ -269,6 +288,7 @@ class ArtifactIndexer:
             payload=payload,
             points=models.Filter(
                 must=[
+                    models.HasIdCondition(has_id=[head_point_id]),
                     models.FieldCondition(
                         key="object_id", match=models.MatchValue(value=ctx.object_id)
                     ),
@@ -282,7 +302,7 @@ class ArtifactIndexer:
             ),
         )
         # Readback: confirm ONLY if this attempt's own terminal write landed at its fence.
-        published = self._read_head(ctx.object_id, ctx.namespace)
+        published = self._read_head_at_id(head_point_id, ctx.object_id, ctx.namespace)
         if published is None:
             return "fence"
         if (
