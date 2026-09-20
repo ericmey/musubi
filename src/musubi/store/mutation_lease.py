@@ -160,10 +160,10 @@ def is_expired_done_token(token: object, *, now_us: int | None = None) -> bool:
     parts = token.split(":")
     if len(parts) != 3 or parts[0] != "done" or not parts[2]:
         return False
-    try:
-        issued_us = int(parts[1])
-    except ValueError:
+    issued_text = parts[1]
+    if not issued_text.isascii() or not issued_text.isdigit():
         return False
+    issued_us = int(issued_text)
     if issued_us <= 0:
         return False
     observed_now = int(time.time() * 1_000_000) if now_us is None else now_us
@@ -424,4 +424,4 @@ def _reject_seam_fields(changes: dict[str, Any]) -> None:
         )
 
 
-__all__ = ["MutationLeaseConflict", "MutationPlan", "owned_update"]
+__all__ = ["MutationLeaseConflict", "MutationPlan", "is_expired_done_token", "owned_update"]
