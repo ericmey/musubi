@@ -11,6 +11,7 @@ because the production upload path never indexes and reads are unfenced.
 from __future__ import annotations
 
 import warnings
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -22,7 +23,7 @@ from musubi.embedding import FakeEmbedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.planes.artifact import ArtifactPlane
 from musubi.planes.artifact.indexer import ArtifactIndexer
-from musubi.planes.artifact.plane import _point_id, _sparse_to_model
+from musubi.planes.artifact.plane import ArtifactHeadAmbiguous, _point_id, _sparse_to_model
 from musubi.store import bootstrap
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
@@ -70,6 +71,119 @@ def _write_blob(blob_root: Path, art: SourceArtifact, content: str) -> None:
     p = blob_root / art.namespace / art.object_id
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(content.encode())
+
+
+def _plant_duplicate_head(qdrant: QdrantClient, art: SourceArtifact) -> dict[str, Any]:
+    payload = art.model_dump(mode="json")
+    qdrant.upsert(
+        collection_name="musubi_artifact",
+        points=[
+            models.PointStruct(
+                id=str(uuid.uuid4()),
+                payload=dict(payload),
+                vector={},
+            )
+        ],
+        wait=True,
+    )
+    return payload
+
+
+def _head_payloads(qdrant: QdrantClient, art: SourceArtifact) -> list[dict[str, Any]]:
+    rows, _ = qdrant.scroll(
+        collection_name="musubi_artifact",
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="namespace", match=models.MatchValue(value=art.namespace)
+                ),
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=art.object_id)
+                ),
+            ]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    return [dict(row.payload or {}) for row in rows]
+
+
+@pytest.mark.asyncio
+async def test_sync_success_publish_refuses_duplicate_artifact_heads(
+    qdrant: QdrantClient, plane: ArtifactPlane
+) -> None:
+    art = await plane.create(_artifact())
+    _plant_duplicate_head(qdrant, art)
+    before = _head_payloads(qdrant, art)
+    assert len(before) == 2
+
+    with pytest.raises(ArtifactHeadAmbiguous):
+        await plane.index(art, _CONTENT)
+
+    assert _head_payloads(qdrant, art) == before
+
+
+@pytest.mark.asyncio
+async def test_sync_failure_publish_refuses_duplicate_artifact_heads(
+    qdrant: QdrantClient, plane: ArtifactPlane
+) -> None:
+    art = await plane.create(_artifact())
+    _plant_duplicate_head(qdrant, art)
+    before = _head_payloads(qdrant, art)
+
+    with pytest.raises(ArtifactHeadAmbiguous):
+        await plane.index(art, "")
+
+    assert _head_payloads(qdrant, art) == before
+
+
+@pytest.mark.asyncio
+async def test_async_success_publish_refuses_duplicate_artifact_heads(
+    qdrant: QdrantClient, plane: ArtifactPlane, tmp_path: Path
+) -> None:
+    from musubi.lifecycle.coordinator import CustomIntentContext
+
+    art = await plane.create(_artifact())
+    _plant_duplicate_head(qdrant, art)
+    before = _head_payloads(qdrant, art)
+    _write_blob(tmp_path, art, _CONTENT)
+    indexer = ArtifactIndexer(client=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path)
+    ctx = CustomIntentContext(
+        operation_key="duplicate-success",
+        object_id=art.object_id,
+        collection="musubi_artifact",
+        namespace=art.namespace,
+        owner_token="duplicate-owner",
+    )
+
+    with pytest.raises(ArtifactHeadAmbiguous):
+        await indexer._apply_async(ctx)
+
+    assert _head_payloads(qdrant, art) == before
+
+
+@pytest.mark.asyncio
+async def test_async_failure_publish_refuses_duplicate_artifact_heads(
+    qdrant: QdrantClient, plane: ArtifactPlane, tmp_path: Path
+) -> None:
+    from musubi.lifecycle.coordinator import CustomIntentContext
+
+    art = await plane.create(_artifact())
+    _plant_duplicate_head(qdrant, art)
+    before = _head_payloads(qdrant, art)
+    indexer = ArtifactIndexer(client=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path)
+    ctx = CustomIntentContext(
+        operation_key="duplicate-failure",
+        object_id=art.object_id,
+        collection="musubi_artifact",
+        namespace=art.namespace,
+        owner_token="duplicate-owner",
+    )
+
+    with pytest.raises(ArtifactHeadAmbiguous):
+        await indexer._publish_failed(art, ctx, "deterministic failure")
+
+    assert _head_payloads(qdrant, art) == before
 
 
 @pytest.mark.asyncio
