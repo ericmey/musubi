@@ -10,6 +10,7 @@ from functools import partial
 QDRANT_OFFLOAD_WORKERS = 16
 """Maximum blocking Qdrant retrieval calls active in one API process."""
 
+
 _QDRANT_EXECUTOR = ThreadPoolExecutor(
     max_workers=QDRANT_OFFLOAD_WORKERS,
     thread_name_prefix="musubi-qdrant-retrieve",
