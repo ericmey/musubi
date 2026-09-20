@@ -108,6 +108,25 @@ def _head_payloads(qdrant: QdrantClient, art: SourceArtifact) -> list[dict[str, 
     return [dict(row.payload or {}) for row in rows]
 
 
+def _duplicate_after_filtered_head_write(qdrant: QdrantClient, art: SourceArtifact) -> object:
+    """Insert a duplicate after the selected physical head is conditionally updated."""
+    real = qdrant.set_payload
+    state = {"inserted": False}
+
+    def racing(*args: Any, **kwargs: Any) -> Any:
+        result = real(*args, **kwargs)
+        if (
+            kwargs.get("collection_name") == "musubi_artifact"
+            and isinstance(kwargs.get("points"), models.Filter)
+            and not state["inserted"]
+        ):
+            state["inserted"] = True
+            _plant_duplicate_head(qdrant, art)
+        return result
+
+    return racing
+
+
 @pytest.mark.asyncio
 async def test_sync_success_publish_refuses_duplicate_artifact_heads(
     qdrant: QdrantClient, plane: ArtifactPlane
@@ -184,6 +203,84 @@ async def test_async_failure_publish_refuses_duplicate_artifact_heads(
         await indexer._publish_failed(art, ctx, "deterministic failure")
 
     assert _head_payloads(qdrant, art) == before
+
+
+@pytest.mark.asyncio
+async def test_sync_success_readback_survives_duplicate_inserted_after_cardinality_check(
+    qdrant: QdrantClient, plane: ArtifactPlane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    art = await plane.create(_artifact())
+    monkeypatch.setattr(qdrant, "set_payload", _duplicate_after_filtered_head_write(qdrant, art))
+
+    published = await plane.index(art, _CONTENT)
+
+    assert published.committed_generation is not None
+    rows, _ = qdrant.scroll(
+        collection_name="musubi_artifact_chunks",
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="generation",
+                    match=models.MatchValue(value=published.committed_generation),
+                )
+            ]
+        ),
+        limit=100,
+    )
+    assert rows  # a landed publish never points at chunks that failure cleanup deleted
+
+
+@pytest.mark.asyncio
+async def test_async_success_readback_survives_duplicate_inserted_after_cardinality_check(
+    qdrant: QdrantClient,
+    plane: ArtifactPlane,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from musubi.lifecycle.coordinator import CustomIntentContext
+
+    art = await plane.create(_artifact())
+    _write_blob(tmp_path, art, _CONTENT)
+    indexer = ArtifactIndexer(client=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path)
+    ctx = CustomIntentContext(
+        operation_key="post-check-duplicate",
+        object_id=art.object_id,
+        collection="musubi_artifact",
+        namespace=art.namespace,
+        owner_token="post-check-owner",
+    )
+    monkeypatch.setattr(qdrant, "set_payload", _duplicate_after_filtered_head_write(qdrant, art))
+
+    assert await indexer._apply_async(ctx) == "confirmed"
+    rows, _ = qdrant.scroll(
+        collection_name="musubi_artifact_chunks",
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="owner_token", match=models.MatchValue(value=ctx.owner_token)
+                )
+            ]
+        ),
+        limit=100,
+    )
+    assert rows  # exact-ID readback proved this staged generation became committed
+
+
+@pytest.mark.asyncio
+async def test_duplicate_artifact_head_abandons_async_intent_as_terminal(
+    qdrant: QdrantClient, plane: ArtifactPlane, tmp_path: Path
+) -> None:
+    coord = LifecycleTransitionCoordinator(client=qdrant, db_path=tmp_path / "coord.db")
+    ArtifactIndexer(client=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path).register(coord)
+    art = await plane.create(_artifact())
+    _plant_duplicate_head(qdrant, art)
+    _write_blob(tmp_path, art, _CONTENT)
+    coord.enqueue_index_intent(object_id=art.object_id, namespace=art.namespace)
+
+    report = coord.reconcile_once()
+
+    assert report.abandoned == 1
+    assert report.pending == 0
 
 
 @pytest.mark.asyncio
