@@ -1682,17 +1682,14 @@ async def test_v2_content_point_is_never_enriched(
     ns: str,
     sink: Any,
 ) -> None:
-    """The immutable content point must never take an enrichment write.
+    """The selected anchor's write must not reach its immutable content sibling.
 
-    The fence's `state` term is what excludes it -- content points carry no `state`
-    key, and a FieldCondition cannot match a point missing the field.
-
-    THE FIXTURE IS THE POINT. My first version gave the content sibling no `version`
-    either, so it stayed excluded by the VERSION term even with the state term deleted:
-    the cell passed for a reason it was not testing and could not fail for the reason it
-    existed (Copilot via Aoi, musubi#771). It now carries the matching post-transition
-    version, which isolates `state` as the only thing keeping it out -- remove that term
-    and this cell reds."""
+    This cell pins the physical-point and content-kind exclusions. It deliberately
+    does not claim to prove the logical `state` fence: the write's HasId condition
+    already excludes the sibling even if that term is removed. The state term is
+    instead falsified by `test_a_row_archived_between_the_fence_and_the_write_is_not_reported`,
+    where the same physical point changes state in the read/write window (Copilot,
+    musubi#771)."""
     from qdrant_client import models as qmodels
 
     from musubi.lifecycle.maturation import _apply_enrichment
@@ -1812,15 +1809,18 @@ async def test_a_row_archived_between_the_fence_and_the_write_is_not_reported(
     ns: str,
     sink: Any,
 ) -> None:
-    """The window a pre-write count cannot see (Yua, musubi#771).
+    """The state-fence window a pre-write count cannot see (Yua, musubi#771).
 
     The first version counted under the fence BEFORE writing and returned True on a
     non-zero count. That proves the row was eligible a moment ago, not that the write
     landed: count sees `matured`, a retraction archives the row, the fenced write then
     matches zero points, and the caller is told an enrichment happened.
 
-    Here the archive lands between the fence being built and `set_payload` running, so
-    only a post-write readback can get the answer right."""
+    Here the archive lands on the same physical point, without changing its version,
+    between the fence being built and `set_payload` running. Removing the `state`
+    condition makes this cell red while the content-sibling cell stays green: HasId,
+    identity and version still match, so only state can refuse the write. A post-write
+    readback is then what reports that refusal honestly."""
     from qdrant_client import models as qmodels
 
     from musubi.lifecycle.maturation import _apply_enrichment

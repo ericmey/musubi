@@ -1153,10 +1153,10 @@ def _apply_enrichment(
     # was previously overwritten here, giving a retracted row a rescored
     # importance and a post-retraction `updated_at` (musubi#732, 2026-09-20).
     #
-    # This also excludes v2 immutable content points, which carry no `state` key
-    # at all: a FieldCondition cannot match a point that lacks the field. That
-    # exclusion is load-bearing rather than incidental, so
-    # `test_v2_content_point_is_never_enriched` pins it.
+    # The state term protects the selected anchor from a concurrent archive; the
+    # between-read-and-write interleaving cell below pins that responsibility.
+    # Immutable v2 content siblings are excluded independently by the preflight's
+    # `point_kind` condition and by the selected anchor's physical point id.
     logical_conditions: list[models.Condition] = [
         # `object_id` is NOT globally unique -- the same id can exist under a
         # different namespace, and an unqualified filter would enrich a
