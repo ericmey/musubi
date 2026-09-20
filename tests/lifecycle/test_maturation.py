@@ -1353,6 +1353,7 @@ def _payload(client: QdrantClient, object_id: str) -> list[dict[str, Any]]:
 
 
 async def test_a_row_archived_mid_sweep_is_not_enriched(
+    monkeypatch: pytest.MonkeyPatch,
     plane: EpisodicPlane,
     qdrant: QdrantClient,
     ns: str,
@@ -1365,7 +1366,7 @@ async def test_a_row_archived_mid_sweep_is_not_enriched(
 
     row = await _seed_provisional(plane, ns, content="retract me", age_seconds=7200)
 
-    real_transition = maturation.transition
+    real_transition = maturation.transition  # type: ignore[attr-defined]
     archived_at: dict[str, Any] = {}
 
     def transition_then_archive(*args: Any, **kwargs: Any) -> Any:
@@ -1393,18 +1394,15 @@ async def test_a_row_archived_mid_sweep_is_not_enriched(
         )
         return result
 
-    maturation.transition = transition_then_archive  # type: ignore[assignment]
-    try:
-        await episodic_maturation_sweep(
-            client=qdrant,
-            sink=sink,
-            coordinator=_coordinator(qdrant, sink),
-            ollama=FakeOllama(topic_map={}),
-            cursor=cursor,
-            config=_config(min_age_sec=3600),
-        )
-    finally:
-        maturation.transition = real_transition  # type: ignore[assignment]
+    monkeypatch.setattr(maturation, "transition", transition_then_archive)
+    await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
 
     after = await plane.get(namespace=ns, object_id=row.object_id)
     assert after is not None
@@ -1529,6 +1527,7 @@ def test_the_enrichment_fence_qualifies_on_namespace() -> None:
 
 
 async def test_a_refused_enrichment_is_not_counted_as_enriched(
+    monkeypatch: pytest.MonkeyPatch,
     plane: EpisodicPlane,
     qdrant: QdrantClient,
     ns: str,
@@ -1543,7 +1542,7 @@ async def test_a_refused_enrichment_is_not_counted_as_enriched(
     from qdrant_client import models as qmodels
 
     row = await _seed_provisional(plane, ns, content="retract me", age_seconds=7200)
-    real_transition = maturation.transition
+    real_transition = maturation.transition  # type: ignore[attr-defined]
 
     def transition_then_archive(*args: Any, **kwargs: Any) -> Any:
         result = real_transition(*args, **kwargs)
@@ -1567,18 +1566,15 @@ async def test_a_refused_enrichment_is_not_counted_as_enriched(
         )
         return result
 
-    maturation.transition = transition_then_archive  # type: ignore[assignment]
-    try:
-        report = await episodic_maturation_sweep(
-            client=qdrant,
-            sink=sink,
-            coordinator=_coordinator(qdrant, sink),
-            ollama=FakeOllama(topic_map={}),
-            cursor=cursor,
-            config=_config(min_age_sec=3600),
-        )
-    finally:
-        maturation.transition = real_transition  # type: ignore[assignment]
+    monkeypatch.setattr(maturation, "transition", transition_then_archive)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
 
     assert report.enriched == 0, (
         f"the sweep reported {report.enriched} enrichment(s) for a write the fence refused"
