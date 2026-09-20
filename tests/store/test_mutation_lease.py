@@ -22,6 +22,7 @@ from musubi.store import bootstrap
 from musubi.store.mutation_lease import (
     MutationLeaseConflict,
     MutationPlan,
+    is_expired_done_token,
     owned_update,
 )
 from musubi.store.names import collection_for_plane
@@ -30,6 +31,32 @@ from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory
 
 _COLL = collection_for_plane("episodic")
+
+
+def test_only_expired_complete_done_tokens_are_recovery_eligible() -> None:
+    now_us = 20_000_000
+
+    assert is_expired_done_token("done:14999999:crashed-writer", now_us=now_us)
+    assert not is_expired_done_token("done:15000000:boundary-writer", now_us=now_us)
+    assert not is_expired_done_token("done:19999999:live-writer", now_us=now_us)
+
+    for unattributable in (
+        None,
+        123,
+        "done:",
+        "done:not-a-timestamp:writer",
+        "done:+1:writer",
+        "done: 1:writer",
+        "done:1_0:writer",
+        "done:\u0661:writer",
+        f"done:{'1' * 4301}:writer",
+        "done:1:",
+        "done:0:writer",
+        "done:1:writer:extra",
+        "own:1:writer",
+        "active:1:writer",
+    ):
+        assert not is_expired_done_token(unattributable, now_us=now_us)
 
 
 def _run_owned(*args: Any, **kwargs: Any) -> dict[str, Any]:
