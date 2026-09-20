@@ -147,6 +147,34 @@ def _issued_us(token: str) -> int:
         return 0  # unparseable → ancient → always takeover-eligible
 
 
+def is_takeover_eligible_token(token: object, *, now_us: int | None = None) -> bool:
+    """Is ``token`` old enough that a new writer may take the row over?
+
+    THE SHARED RULE, in one place, because two copies of it disagreed. `owned_update`'s
+    own acquire treats any STRING token past the TTL as takeover-eligible -- `own:*`,
+    `done:*` or unparseable, which `_issued_us` maps to 0 and therefore to ancient. The
+    lifecycle recovery path used :func:`is_expired_done_token`, which requires the
+    `done:` prefix, so an `own:*` token left by a writer that crashed BEFORE committing
+    fenced that row forever unless some unrelated mutation happened to recover it
+    (Copilot, musubi#771).
+
+    `is_expired_done_token` is still the right question for "did a committed write
+    finish?" -- it is not the right question for "may I take this row?", and the two were
+    being asked interchangeably.
+    """
+    # Writers produce string lease tokens, and both takeover consumers must apply the
+    # same exact string-fence contract. A corrupt mapping cannot be represented by
+    # Qdrant's MatchValue and made the coordinator raise while constructing its fence;
+    # an integer is scalar-matchable but is still outside the lease-token schema. Fail
+    # closed on every non-string rather than classify one object and ask Qdrant to act
+    # on another. A malformed STRING remains takeover-eligible because its exact value
+    # can be fenced consistently by both consumers (Copilot, musubi#771).
+    if not isinstance(token, str) or not token:
+        return False
+    now = int(time.time() * 1_000_000) if now_us is None else now_us
+    return now - _issued_us(str(token)) > _LEASE_TTL_US
+
+
 def is_expired_done_token(token: object, *, now_us: int | None = None) -> bool:
     """Return whether ``token`` is a complete, expired committed-write token.
 
@@ -276,11 +304,23 @@ async def owned_update(
         now_us = int(time.time() * 1_000_000)
 
         # ---- phase 1: acquire (empty at the exact read version, or takeover of an EXACT expired) --
-        if not stored_token:
+        if stored_token is None:
             token_fence: models.Condition = models.IsEmptyCondition(
                 is_empty=models.PayloadField(key="update_lease_token")
             )
-        elif now_us - _issued_us(str(stored_token)) > _LEASE_TTL_US:
+        elif stored_token == "":
+            # An empty string is a present field, so Qdrant's IsEmptyCondition does
+            # not match it. Fence the exact residue and let this writer replace it;
+            # treating it as absent makes every acquisition lose forever (Copilot,
+            # musubi#771).
+            token_fence = models.FieldCondition(
+                key="update_lease_token", match=models.MatchValue(value="")
+            )
+        # The PRODUCTION consumer of the shared rule. Leaving an inline TTL expression
+        # here beside a helper documented as "the shared rule, in one place" is how the
+        # two drift apart again -- and it would make the helper's tests unable to say
+        # anything about real acquisition semantics (Yua, musubi#771).
+        elif is_takeover_eligible_token(stored_token, now_us=now_us):
             token_fence = models.FieldCondition(
                 key="update_lease_token", match=models.MatchValue(value=str(stored_token))
             )
@@ -427,4 +467,10 @@ def _reject_seam_fields(changes: dict[str, Any]) -> None:
         )
 
 
-__all__ = ["MutationLeaseConflict", "MutationPlan", "is_expired_done_token", "owned_update"]
+__all__ = [
+    "MutationLeaseConflict",
+    "MutationPlan",
+    "is_expired_done_token",
+    "is_takeover_eligible_token",
+    "owned_update",
+]

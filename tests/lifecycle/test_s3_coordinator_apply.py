@@ -23,7 +23,7 @@ import threading
 import warnings
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from qdrant_client import QdrantClient, models
@@ -537,3 +537,167 @@ def test_conflicting_key_full_cap_toctou_returns_conflict(
     assert loser.error.code == "operation_key_conflict"
     assert _counts(db) == (1, 1)
     assert _qdrant_state(client, seed) == (seed.version + 1, "matured")
+
+
+def test_a_leased_row_stays_pending_and_retries(env: tuple[QdrantClient, _Seed, Path]) -> None:
+    # A row carrying `update_lease_token` belongs to another writer mid-saga. The retraction
+    # adoption path fences its repair CAS on that token; without the matching condition HERE
+    # the lifecycle writer ignores it, matures the row, and the version-fenced repair then
+    # loses -- leaving a retracted row active with evidence already written (musubi#732/#771).
+    #
+    # This drives the REAL coordinator path, not a raw set_payload. An earlier version of this
+    # proof bumped the version with `client.set_payload` directly, which never traverses
+    # `_apply_conditional` and therefore could not go green for the right reason (Tama caught
+    # it before it was added).
+    client, seed, db = env
+    client.set_payload(
+        collection_name=seed.collection,
+        payload={"update_lease_token": f"done:{int(__import__('time').time() * 1_000_000)}:live"},
+        points=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=seed.object_id)
+                )
+            ]
+        ),
+        wait=True,
+    )
+    before = _qdrant_state(client, seed)
+
+    coordinator = _coord(client, db)
+    leased = coordinator.transition(_intent(seed, "matured", opk="leased"))
+
+    assert isinstance(leased, Ok) and leased.value.kind == "pending", (
+        f"transient lease contention was terminalized: {leased}"
+    )
+    assert _qdrant_state(client, seed) == before  # the fence must not mutate
+    client.delete_payload(
+        collection_name=seed.collection,
+        keys=["update_lease_token"],
+        points=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=seed.object_id)
+                )
+            ]
+        ),
+        wait=True,
+    )
+    replay = coordinator.drive_intent(leased.value.operation_key)
+    assert replay.finalized == 1 and replay.abandoned == 0
+    assert _qdrant_state(client, seed) == (seed.version + 1, "matured")
+
+
+def test_duplicate_anchors_are_refused_before_any_conditional_mutation(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    """A duplicate discovered after event persistence must remain wholly untouched."""
+    client, seed, db = env
+    coordinator = _coord(client, db)
+    real_persist = coordinator._persist_event
+
+    def persist_then_duplicate(*args: Any, **kwargs: Any) -> None:
+        real_persist(*args, **kwargs)
+        points, _ = client.scroll(
+            collection_name=seed.collection,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="object_id", match=models.MatchValue(value=seed.object_id)
+                    ),
+                    models.FieldCondition(
+                        key="namespace", match=models.MatchValue(value=seed.namespace)
+                    ),
+                ]
+            ),
+            limit=1,
+            with_payload=True,
+            with_vectors=True,
+        )
+        assert len(points) == 1, "the duplicate plant did not start from one anchor"
+        client.upsert(
+            collection_name=seed.collection,
+            points=[
+                models.PointStruct(
+                    id="00000000-0000-4000-8000-00000000d00d",
+                    vector=cast(Any, points[0].vector or {}),
+                    payload=dict(points[0].payload or {}),
+                )
+            ],
+            wait=True,
+        )
+
+    coordinator._persist_event = persist_then_duplicate  # type: ignore[method-assign]
+    result = coordinator.transition(_intent(seed, "matured", opk="duplicate-after-persist"))
+
+    assert isinstance(result, Err)
+    rows, _ = client.scroll(
+        collection_name=seed.collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=seed.object_id)
+                ),
+                models.FieldCondition(
+                    key="namespace", match=models.MatchValue(value=seed.namespace)
+                ),
+            ]
+        ),
+        limit=3,
+        with_payload=True,
+    )
+    assert len(rows) == 2, "the duplicate plant did not land"
+    assert all((point.payload or {}).get("state") == "provisional" for point in rows), (
+        "a duplicate authoritative anchor was mutated before ambiguity was refused"
+    )
+    assert all((point.payload or {}).get("version") == seed.version for point in rows)
+
+
+def test_an_anchor_inserted_after_the_count_cannot_widen_the_conditional_write(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    """The captured physical point id closes the post-count insertion window."""
+    client, seed, db = env
+    coordinator = _coord(client, db)
+    real_read = coordinator._read_object_with_id
+    calls = 0
+    duplicate_id = "00000000-0000-4000-8000-00000000d00e"
+
+    def read_then_duplicate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        result = real_read(*args, **kwargs)
+        calls += 1
+        if calls == 2:
+            payload, count, _ = result
+            assert count == 1, "the post-count plant did not start from one anchor"
+            client.upsert(
+                collection_name=seed.collection,
+                points=[models.PointStruct(id=duplicate_id, vector={}, payload=dict(payload))],
+                wait=True,
+            )
+        return result
+
+    coordinator._read_object_with_id = read_then_duplicate  # type: ignore[method-assign]
+    result = coordinator.transition(_intent(seed, "matured", opk="duplicate-after-count"))
+
+    assert isinstance(result, Err), "readback must still report the duplicate identity"
+    rows, _ = client.scroll(
+        collection_name=seed.collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=seed.object_id)
+                ),
+                models.FieldCondition(
+                    key="namespace", match=models.MatchValue(value=seed.namespace)
+                ),
+            ]
+        ),
+        limit=3,
+        with_payload=True,
+    )
+    assert len(rows) == 2, "the post-count duplicate plant did not land"
+    states = {(point.id, (point.payload or {}).get("state")) for point in rows}
+    assert (duplicate_id, "provisional") in states, (
+        "the identity filter widened the write to an anchor inserted after the count"
+    )

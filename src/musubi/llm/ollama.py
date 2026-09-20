@@ -50,7 +50,6 @@ from musubi.lifecycle.synthesis import (
     SynthesisOutput,
 )
 from musubi.llm.prompt_boundary import ChatMessage, build_untrusted_data_messages
-from musubi.types.common import KSUID, validate_ksuid
 
 log = logging.getLogger(__name__)
 
@@ -176,8 +175,8 @@ class HttpxOllamaClient:
     # Public API — matches OllamaClient Protocol.
     # ------------------------------------------------------------------
 
-    async def score_importance(self, items: list[OllamaImportance]) -> dict[KSUID, int] | None:
-        """Return ``{object_id: importance}`` for items the LLM scored.
+    async def score_importance(self, items: list[OllamaImportance]) -> dict[str, int] | None:
+        """Return ``{correlation_id: importance}`` for items the LLM scored.
 
         Returns ``None`` on outage or total failure. A partial response
         (fewer IDs than input) returns only the IDs that came back —
@@ -189,7 +188,7 @@ class HttpxOllamaClient:
         payload = {
             "items": [
                 {
-                    "id": str(it.object_id),
+                    "id": it.correlation_id,
                     "captured": it.captured_importance,
                     "content": _one_line(it.content),
                 }
@@ -209,27 +208,23 @@ class HttpxOllamaClient:
             log.warning("ollama-importance-validate-failed err=%s", exc)
             return None
 
-        wanted = {str(it.object_id) for it in items}
-        out: dict[KSUID, int] = {}
+        wanted = {it.correlation_id for it in items}
+        out: dict[str, int] = {}
         for row in parsed.items:
             if row.id not in wanted:
                 continue
-            try:
-                key = validate_ksuid(row.id)
-            except ValueError:
-                continue
-            out[key] = row.importance
+            out[row.id] = row.importance
         return out
 
-    async def infer_topics(self, items: list[OllamaTopic]) -> dict[KSUID, list[str]] | None:
-        """Return ``{object_id: [topic, ...]}`` for items the LLM classified."""
+    async def infer_topics(self, items: list[OllamaTopic]) -> dict[str, list[str]] | None:
+        """Return ``{correlation_id: [topic, ...]}`` for classified items."""
         if not items:
             return {}
 
         payload = {
             "items": [
                 {
-                    "id": str(it.object_id),
+                    "id": it.correlation_id,
                     "existing": it.existing_tags,
                     "content": _one_line(it.content),
                 }
@@ -249,16 +244,12 @@ class HttpxOllamaClient:
             log.warning("ollama-topics-validate-failed err=%s", exc)
             return None
 
-        wanted = {str(it.object_id) for it in items}
-        out: dict[KSUID, list[str]] = {}
+        wanted = {it.correlation_id for it in items}
+        out: dict[str, list[str]] = {}
         for row in parsed.items:
             if row.id not in wanted:
                 continue
-            try:
-                key = validate_ksuid(row.id)
-            except ValueError:
-                continue
-            out[key] = list(row.topics)
+            out[row.id] = list(row.topics)
         return out
 
     # ------------------------------------------------------------------

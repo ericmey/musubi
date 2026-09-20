@@ -230,6 +230,7 @@ async def delete_curated(
         qdrant,
         coordinator=coordinator,
         object_id=object_id,
+        namespace=namespace,
         target_state="archived",
         actor="api-delete",
         reason="api-soft-delete",

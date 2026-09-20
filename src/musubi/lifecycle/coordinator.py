@@ -6,7 +6,8 @@
    to its recorded outcome with a stable event_id; the same key with a DIFFERENT intent digest
    is an ``operation_key_conflict``. A concurrent same-key insert race re-resolves on the PK.
 2. **Durable admission** (S2): write a ``PENDING`` row inside ONE ``BEGIN IMMEDIATE`` that
-   enforces a global non-terminal **cap** and **one active intent per ``(collection, object_id)``**
+   enforces a global non-terminal **cap** and **one active intent per
+   ``(collection, namespace, object_id)``**
    (the partial unique index ``ux_active_intent``). A bounded ``Err`` here leaves Qdrant untouched.
 3. **Persisted event before mutation** (S3): from an exact pre-apply read, build a canonical
    :class:`~musubi.types.lifecycle_event.LifecycleEvent` and persist its JSON on the outbox row
@@ -51,6 +52,7 @@ from qdrant_client import models
 
 from musubi.lifecycle import store
 from musubi.observability.registry import Counter, Gauge, default_registry
+from musubi.store.mutation_lease import is_takeover_eligible_token
 from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
 from musubi.types.common import Err, Ok, generate_ksuid
 from musubi.types.lifecycle_event import LifecycleEvent
@@ -646,6 +648,23 @@ class LifecycleTransitionCoordinator:
             replay = self._replay(opk, digest)
             if replay is not None:
                 return replay
+            # (1b) COMPATIBILITY, not a rename. An outbox row admitted before namespace
+            # entered the canonical key is still in flight under its legacy key, and a
+            # retry of that same intent must REPLAY it rather than admit a second row for
+            # the same work. Stored keys are never rewritten -- a migration that renames
+            # in-flight rows would race the reconciler holding them.
+            #
+            # `intent_digest` is what makes the probe safe: it already binds namespace, so
+            # a legacy row belonging to a DIFFERENT namespace cannot match our digest. A
+            # non-matching legacy row is simply not ours -- ignore it and admit under the
+            # new key, never return a conflict (Tama, musubi#771).
+            legacy_opk = self._legacy_key(intent)
+            if legacy_opk is not None:
+                legacy_row = self._row_for_key(legacy_opk)
+                if legacy_row is not None and legacy_row[2] == digest:
+                    return self._resolve_existing(
+                        legacy_opk, legacy_row[0], legacy_row[1], legacy_row[2], digest
+                    )
             # (2) durable admission: cap gate + single-active + PENDING row, atomically. No Qdrant.
             self._write_pending(intent, opk, event_id)
         except _AlreadyExists as exc:
@@ -656,7 +675,8 @@ class LifecycleTransitionCoordinator:
             return Err(error=TransitionError(code="cap_exceeded"))
         except sqlite3.IntegrityError as exc:
             errorcode = getattr(exc, "sqlite_errorcode", None)
-            # ONLY the ux_active_intent partial-unique (collection, object_id) violation is
+            # ONLY the ux_active_intent partial-unique (collection, namespace, object_id)
+            # violation is
             # active_intent_exists (SQLITE_CONSTRAINT_UNIQUE).
             if errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE:
                 return Err(error=TransitionError(code="active_intent_exists"))
@@ -702,6 +722,15 @@ class LifecycleTransitionCoordinator:
                 return Err(error=TransitionError(code="terminal_apply_failure"))
             # transport/unknown failure -> keep PENDING for the S4 reconciler (correction 6).
             return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
+        if status == "retracted":
+            self._mark_terminal(opk)
+            return Err(error=TransitionError(code="terminal_apply_failure"))
+        if status == "contended":
+            # A mutation lease is transient ownership, not evidence that this intent's
+            # version is stale. Keep the canonical intent pending so the reconciler can
+            # retry after the owner releases; abandoning it would permanently poison
+            # this (version, target_state) key (Shiori/Tama, musubi#771).
+            return Ok(value=TransitionPending(operation_key=opk, event_id=event_id))
         if status == "fence":
             # a known version fence is terminal (the intent is stale) — abandon, never retry.
             self._mark_terminal(opk)
@@ -730,10 +759,31 @@ class LifecycleTransitionCoordinator:
     # -- internals ------------------------------------------------------------------ #
 
     def _key(self, intent: TransitionIntent) -> str:
-        """The stable canonical operation key when the intent supplies none."""
+        """The stable canonical operation key when the intent supplies none.
+
+        NAMESPACE IS PART OF THE IDENTITY. Without it, two legitimate rows sharing an
+        object_id in different namespaces derive the same key, and the second is refused
+        as `operation_key_conflict` -- it can never transition (Copilot, musubi#771).
+
+        The `canon2:` prefix is deliberate. A bare field insertion could, in principle,
+        produce a v2 key byte-identical to some v1 key (a namespace whose value reads
+        like an object_id), which would silently conflate two different intents. A
+        distinct prefix makes the two key spaces provably disjoint, which is what lets
+        `_legacy_key` probe the old space without ambiguity."""
         return (
             intent.operation_key
-            or f"canon:{intent.collection}:{intent.object_id}:"
+            or f"canon2:{intent.collection}:{intent.namespace}:{intent.object_id}:"
+            f"{intent.expected_version}:{intent.target_state}"
+        )
+
+    def _legacy_key(self, intent: TransitionIntent) -> str | None:
+        """The pre-namespace canonical key, or ``None`` when the caller supplied one.
+
+        An explicit `operation_key` was never derived, so it has no legacy form."""
+        if intent.operation_key is not None:
+            return None
+        return (
+            f"canon:{intent.collection}:{intent.object_id}:"
             f"{intent.expected_version}:{intent.target_state}"
         )
 
@@ -769,8 +819,9 @@ class LifecycleTransitionCoordinator:
         gate → ``INSERT`` → ``COMMIT`` in one write transaction so concurrent admissions
         serialize on the write lock. At/over the cap: raise ``_CapExceeded`` and write no
         row. The ``INSERT`` is not ``OR IGNORE`` — a partial-unique-index violation (a
-        second active intent for the object) raises ``IntegrityError`` so the loser is
-        rejected."""
+        second active intent for the same ``(collection, namespace, object_id)``; an
+        object_id alone does NOT identify a row) raises ``IntegrityError`` so the loser
+        is rejected."""
         self._checkpoint("before_pending_commit")
         patch = _intended_patch(intent)
         patch_sha = _canonical_patch_sha(patch)
@@ -883,6 +934,13 @@ class LifecycleTransitionCoordinator:
         concept/thought/artifact row (no content points) are unaffected: the exclusion is a no-op there.
         Without this, every durable lifecycle transition on a reinforced/updated episodic or curated
         object would fence/abandon on the count check."""
+        payload, count, _ = self._read_object_with_id(collection, object_id, namespace)
+        return payload, count
+
+    def _read_object_with_id(
+        self, collection: str, object_id: str, namespace: str
+    ) -> tuple[dict[str, Any], int, models.ExtendedPointId | None]:
+        """Return the authoritative payload, match count, and selected physical point id."""
         points, _ = self._require_client().scroll(
             collection_name=collection,
             scroll_filter=models.Filter(
@@ -904,7 +962,8 @@ class LifecycleTransitionCoordinator:
             with_payload=True,
         )
         payload = dict(points[0].payload or {}) if points else {}
-        return payload, len(points)
+        point_id = points[0].id if points else None
+        return payload, len(points), point_id
 
     def _persist_event(self, intent: TransitionIntent, opk: str, event_id: str) -> None:
         """Build the canonical :class:`LifecycleEvent` from an exact pre-apply read and persist its
@@ -993,17 +1052,88 @@ class LifecycleTransitionCoordinator:
         """Send the EXACT patch fenced server-side (collection + object_id + namespace +
         expected_version), then FULL-readback and confirm (S3 correction 4). ``namespace`` is
         resolved from the stored admission truth (Option A) so this works for a live transition AND a
-        reconcile with no live intent. Returns ``'confirmed'`` | ``'fence'`` | ``'corrupt'``; the
-        fenced ``set_payload`` matches zero points when the object is not at ``expected_version`` (a
-        stale intent) -> the readback proves a fence."""
+        reconcile with no live intent. Returns ``'confirmed'`` | ``'retracted'`` |
+        ``'contended'`` | ``'fence'`` | ``'corrupt'``. ``'retracted'`` protects a
+        saga-owned row terminally; ``'contended'`` means an ordinary mutation lease owns
+        the row temporarily; ``'fence'`` means the write/readback proves this intent stale."""
         namespace = self._namespace_for(opk)
         expected_version = int(str(patch["version"])) - 1
         client = self._require_client()
+
+        # LEASE HANDLING. A row under a live mutation lease belongs to another writer:
+        # without this, the lease the retraction saga fences its CAS with is honoured by
+        # the retraction path and ignored here, so a lifecycle transition could mature a
+        # row mid-retraction and the version-fenced repair would lose (found by Aoi).
+        #
+        # The server-side `IsEmpty` condition below is what actually closes the race. A
+        # python-only pre-check would be TOCTOU: a writer could acquire a token between
+        # the read and the write, and the lifecycle write would land through a live
+        # lease (Tama).
+        #
+        # But `IsEmpty` alone is too strict, because `update_lease_token` is the GENERIC
+        # lease every `owned_update` takes -- not a retraction-specific one. A crashed
+        # ORDINARY patch leaves a `done:*` token with no saga coming to clear it, and a
+        # bare IsEmpty would block lifecycle writes on that row permanently. Aoi raised
+        # exactly that; I argued it away with a premise that was checkable and false.
+        #
+        # So: clear an EXPIRED ORDINARY token first, behind its own exact fence, and
+        # then let IsEmpty do the real gating. A writer that acquires in between makes
+        # IsEmpty fail, so the cleanup cannot open a window.
+        held, held_count, held_point_id = self._read_object_with_id(
+            collection, object_id, namespace
+        )
+        if held_count != 1 or held_point_id is None:
+            # Refuse before lease cleanup OR the lifecycle write. Both mutations use
+            # identity filters, so duplicate authoritative anchors would otherwise all
+            # be changed before the readback noticed the ambiguity (Copilot, musubi#771).
+            return "fence"
+        token = held.get("update_lease_token")
+        if token is not None:
+            if held.get("retraction_evidence") is not None:
+                # A retraction owns this row's recovery while its saga lease is present.
+                # This is not a complete completed-retraction guard: the saga eventually
+                # clears its token, and legitimate archived -> matured restore must remain
+                # distinguishable from reactivation of a retracted row (pre-existing #781).
+                return "retracted"
+            if token == "":
+                # The mutation seam treats a falsy token as absent, but Qdrant's
+                # IsEmpty condition does not: remove the exact empty-string residue so
+                # both consumers act on the same ownership state (Copilot, musubi#771).
+                pass
+            # The SHARED takeover rule, not the narrower "did a done-write finish?"
+            # question. `is_expired_done_token` requires the `done:` prefix, so an
+            # `own:*` token from a writer that crashed BEFORE committing fenced this row
+            # permanently -- the lifecycle path was stricter than `owned_update`'s own
+            # acquire, which takes over any token past the TTL (Copilot, musubi#771).
+            elif not is_takeover_eligible_token(token):
+                return "contended"  # a live or unfenceable owner holds this row
+            client.delete_payload(
+                collection_name=collection,
+                keys=["update_lease_token"],
+                points=models.Filter(
+                    must=[
+                        models.HasIdCondition(has_id=[held_point_id]),
+                        models.FieldCondition(
+                            key="object_id", match=models.MatchValue(value=object_id)
+                        ),
+                        models.FieldCondition(
+                            key="namespace", match=models.MatchValue(value=namespace)
+                        ),
+                        models.FieldCondition(
+                            key="version", match=models.MatchValue(value=expected_version)
+                        ),
+                        models.FieldCondition(
+                            key="update_lease_token", match=models.MatchValue(value=token)
+                        ),
+                    ]
+                ),
+            )
         client.set_payload(
             collection_name=collection,
             payload=dict(patch),
             points=models.Filter(
                 must=[
+                    models.HasIdCondition(has_id=[held_point_id]),
                     models.FieldCondition(
                         key="object_id", match=models.MatchValue(value=object_id)
                     ),
@@ -1013,6 +1143,7 @@ class LifecycleTransitionCoordinator:
                     models.FieldCondition(
                         key="version", match=models.MatchValue(value=expected_version)
                     ),
+                    models.IsEmptyCondition(is_empty=models.PayloadField(key="update_lease_token")),
                 ]
             ),
         )
@@ -1596,7 +1727,7 @@ class LifecycleTransitionCoordinator:
     ) -> str:
         """Durably admit ONE custom (non-transition) intent of ``kind`` — the generalization of
         :meth:`enqueue_index_intent`. Same cap gate + ``ux_active_intent`` idempotency (one active
-        intent per ``(collection, object_id)``); backpressure NEVER raises. ``patch_json`` is the
+        intent per ``(collection, namespace, object_id)``); backpressure NEVER raises. ``patch_json`` is the
         durable intent payload the handler replays from with no caller memory (DATA-001 P2); it is
         validated as JSON and size-bounded HERE, so a malformed/oversized payload fails truthfully at
         admission rather than silently mid-apply. ``operation_key`` may be supplied by a caller that
@@ -1634,7 +1765,8 @@ class LifecycleTransitionCoordinator:
                 con.execute("COMMIT")
                 return "admitted"
             except sqlite3.IntegrityError:
-                # ux_active_intent: an intent is already active for this (collection, object_id).
+                # ux_active_intent: an intent is already active for this
+                # (collection, namespace, object_id).
                 con.execute("ROLLBACK")
                 return "already_active"
         finally:
@@ -1888,6 +2020,23 @@ class LifecycleTransitionCoordinator:
                     opk, reschedule=True, failure_class=cls, owner=token, release=True
                 )
                 counts["pending"] += 1
+            return
+        if status == "retracted":
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
+            return
+        if status == "contended":
+            self._persist_attempt(
+                opk, reschedule=True, failure_class="transient", owner=token, release=True
+            )
+            counts["pending"] += 1
             return
         if status == "fence":
             self._persist_attempt(

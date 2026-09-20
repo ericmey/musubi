@@ -24,11 +24,14 @@ import warnings
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from qdrant_client import QdrantClient
+from qdrant_client import models as qmodels
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore")
@@ -148,6 +151,7 @@ async def test_valid_transition_succeeds_and_emits_event(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
+        namespace=ns,
         target_state="matured",
         actor="test-suite",
         reason="unit",
@@ -179,6 +183,7 @@ async def test_invalid_transition_returns_typed_error(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
+        namespace=ns,
         target_state="demoted",
         actor="test-suite",
         reason="unit",
@@ -210,6 +215,7 @@ async def test_transition_bumps_version_and_updated_epoch(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
+        namespace=ns,
         target_state="matured",
         actor="t",
         reason="u",
@@ -239,6 +245,7 @@ async def test_transition_preserves_lineage_through_supersession(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=old.object_id,
+        namespace=ns,
         target_state="superseded",
         actor="rewrite",
         reason="new version written",
@@ -270,6 +277,7 @@ async def test_circular_supersession_rejected(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=a.object_id,
+        namespace=ns,
         target_state="superseded",
         actor="t",
         reason="first",
@@ -282,6 +290,7 @@ async def test_circular_supersession_rejected(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=b.object_id,
+        namespace=ns,
         target_state="superseded",
         actor="t",
         reason="cycle",
@@ -304,6 +313,7 @@ async def test_demotion_requires_reason(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=matured.object_id,
+        namespace=ns,
         target_state="demoted",
         actor="t",
         reason="",  # empty reason
@@ -367,6 +377,7 @@ async def test_event_written_for_every_transition(
             qdrant,
             coordinator=_coordinator(qdrant, sink),
             object_id=saved.object_id,
+            namespace=ns,
             target_state=target,
             actor="t",
             reason="step",
@@ -395,6 +406,7 @@ async def test_concurrent_transitions_stale_expected_version_fence_violation(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=saved.object_id,
+        namespace=ns,
         target_state="demoted",
         actor="worker-a",
         reason="a-demote",
@@ -415,6 +427,7 @@ async def test_concurrent_transitions_stale_expected_version_fence_violation(
             qdrant,
             coordinator=coordinator,
             object_id=saved.object_id,
+            namespace=ns,
             target_state="superseded",
             actor="worker-b",
             reason="b-supersede",
@@ -460,6 +473,7 @@ async def test_event_batch_flushed_within_5s_under_load(
             qdrant,
             coordinator=_coordinator(qdrant, short_sink),
             object_id=seeded.object_id,
+            namespace=ns,
             target_state="demoted",
             actor="t",
             reason="flush-test",
@@ -499,6 +513,7 @@ async def test_sqlite_event_db_survives_worker_restart(
             qdrant,
             coordinator=_coordinator(qdrant, first),
             object_id=seeded.object_id,
+            namespace=ns,
             target_state="demoted",
             actor="worker-1",
             reason="before-restart",
@@ -825,6 +840,7 @@ async def test_lifecycle_events_batched_and_flushed(
                 qdrant,
                 coordinator=_coordinator(qdrant, batch_sink),
                 object_id=saved.object_id,
+                namespace=ns,
                 target_state="matured",
                 actor="t",
                 reason="batch",
@@ -862,6 +878,7 @@ async def test_events_survive_worker_restart(
             qdrant,
             coordinator=_coordinator(qdrant, s1),
             object_id=seeded.object_id,
+            namespace=ns,
             target_state="demoted",
             actor="worker-1",
             reason="restart",
@@ -1083,6 +1100,8 @@ def test_transition_not_found_returns_typed_error(qdrant: QdrantClient, tmp_path
             client=qdrant, db_path=tmp_path / "not-found.db"
         ),
         object_id="z" * 27,
+        # No such row anywhere, so there is no namespace to qualify with.
+        namespace=None,
         target_state="matured",
         actor="t",
         reason="r",
@@ -1139,6 +1158,7 @@ async def test_transition_records_supersession_lineage(
             qdrant,
             coordinator=_coordinator(qdrant, sink),
             object_id=a.object_id,
+            namespace=ns,
             target_state="matured",
             actor="t",
             reason="warm",
@@ -1149,6 +1169,7 @@ async def test_transition_records_supersession_lineage(
         qdrant,
         coordinator=_coordinator(qdrant, sink),
         object_id=a.object_id,
+        namespace=ns,
         target_state="superseded",
         actor="t",
         reason="dup",
@@ -1158,3 +1179,426 @@ async def test_transition_records_supersession_lineage(
     assert isinstance(r, Ok)
     assert isinstance(r.value, TransitionResult)
     assert r.value.event.lineage_changes["superseded_by"] == b.object_id
+
+
+# ---------------------------------------------------------------------------
+# _locate_object refuses rather than guessing (Copilot, musubi#771)
+# ---------------------------------------------------------------------------
+
+
+def _collection_with(client: QdrantClient, name: str, payloads: list[dict[str, object]]) -> None:
+    from qdrant_client import models as qmodels
+
+    client.create_collection(
+        name, vectors_config=qmodels.VectorParams(size=2, distance=qmodels.Distance.COSINE)
+    )
+    client.upsert(
+        name,
+        points=[
+            qmodels.PointStruct(id=i + 1, vector=[0.1, 0.2], payload=p)
+            for i, p in enumerate(payloads)
+        ],
+    )
+
+
+def test_the_same_object_id_in_two_planes_refuses_instead_of_picking_one() -> None:
+    """THE CELL THE CROSS-PLANE FIX EXISTS FOR.
+
+    `_locate_object` scanned collections in dict order and returned on the first hit,
+    so an object_id present in two planes resolved by ITERATION ORDER -- a transition
+    landing on whichever collection happens to be declared first. Qualifying the
+    namespace cannot fix it: both rows can carry the same namespace in different
+    planes, so there is no argument the caller could pass. The only safe answer is to
+    look at every collection and refuse.
+
+    Note the namespace here is IDENTICAL on both rows. A cell that varied it would pass
+    against the old early-return code, because the within-collection check would never
+    see the second plane at all."""
+    from musubi.lifecycle.transitions import AmbiguousObjectId, _locate_object
+
+    client = QdrantClient(":memory:")
+    shared = {"object_id": "obj-in-two-planes", "namespace": "ns/a", "state": "provisional"}
+    _collection_with(client, "musubi_episodic", [dict(shared)])
+    _collection_with(client, "musubi_curated", [dict(shared)])
+
+    with pytest.raises(AmbiguousObjectId) as excinfo:
+        _locate_object(client, object_id="obj-in-two-planes", namespace="ns/a")
+
+    message = str(excinfo.value)
+    assert "musubi_episodic" in message and "musubi_curated" in message, (
+        f"the refusal must name both planes so an operator can act on it; got {message!r}"
+    )
+
+
+def test_an_unqualified_object_id_in_two_namespaces_refuses() -> None:
+    """The within-collection sibling, which had no cell either.
+
+    `object_id` is not globally unique. With `namespace=None` the scroll must be able to
+    SEE a second row in order to refuse it -- a `limit=1` lookup cannot, which is how
+    this resolved silently to whichever row came back first."""
+    from musubi.lifecycle.transitions import AmbiguousObjectId, _locate_object
+
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [
+            {"object_id": "dup", "namespace": "ns/a", "state": "provisional"},
+            {"object_id": "dup", "namespace": "ns/b", "state": "provisional"},
+        ],
+    )
+
+    with pytest.raises(AmbiguousObjectId):
+        _locate_object(client, object_id="dup", namespace=None)
+
+    # ...and qualifying it resolves cleanly, so the refusal is not just "always raise".
+    collection, payload = _locate_object(client, object_id="dup", namespace="ns/b")  # type: ignore[misc]
+    assert collection == "musubi_episodic"
+    assert payload["namespace"] == "ns/b"
+
+
+def test_an_ambiguous_supersession_target_refuses_with_the_typed_error(tmp_path: Path) -> None:
+    """THE LINEAGE-WALK CELL. The refusal has to travel the whole walk, not one step.
+
+    `_locate_object` refuses an unqualified duplicate at the ENTRY lookup. The
+    supersession cycle walk then followed the chain with its own
+    `_scroll_by_object_id(...)[0]` at every hop, so an ambiguous chain id was resolved by
+    scroll order -- a cycle could be missed, or lineage attached, based on whichever row
+    came back first (Copilot, musubi#771).
+
+    Two things are required and they are different: the walk must REFUSE, and the refusal
+    must arrive as a typed `Err`. `AmbiguousObjectId` is an exception, so an unmapped
+    raise escaping `transition()` is a 500 rather than the caller-error it is."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.lifecycle.transitions import transition
+    from musubi.types.common import generate_ksuid
+
+    subject = generate_ksuid()
+    target = generate_ksuid()
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [
+            # The row being transitioned -- unambiguous, so the ENTRY lookup succeeds and
+            # the cell cannot pass for the wrong reason.
+            {"object_id": subject, "namespace": "ns/a", "state": "provisional", "version": 1},
+            # The supersession TARGET, duplicated across namespaces: the ambiguity lives
+            # one hop into the walk, where the entry check never looks.
+            {"object_id": target, "namespace": "ns/a", "state": "matured", "version": 1},
+            {"object_id": target, "namespace": "ns/b", "state": "matured", "version": 1},
+        ],
+    )
+    coordinator = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "wk.db")
+
+    result = transition(
+        client,
+        coordinator=coordinator,
+        object_id=subject,
+        target_state="matured",
+        actor="operator",
+        reason="ambiguous-lineage",
+        namespace=None,
+        lineage_updates=LineageUpdates(superseded_by=target),
+    )
+
+    assert isinstance(result, Err), f"the ambiguous chain id was resolved, not refused: {result!r}"
+    assert result.error.code == "ambiguous_object_id", (
+        f"refused with {result.error.code!r}; an unmapped AmbiguousObjectId is a 500, and "
+        f"`circular_supersession` would name the wrong cause"
+    )
+
+    # ...and nothing moved. A refusal that still mutated would be the worse failure.
+    rows, _ = client.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=subject))]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert (rows[0].payload or {})["state"] == "provisional", "the subject transitioned anyway"
+
+
+def test_every_locally_constructed_error_code_is_documented() -> None:
+    """Codes THIS MODULE constructs are derived from source, not hand-maintained.
+
+    SCOPE, stated in the name because a test name is a claim: this walks literal
+    `TransitionError(code=...)` constructions in `transitions.py`. It cannot see codes
+    the coordinator returns and `transition()` forwards -- those belong to the
+    coordinator's contract. Calling it "every error code" would reintroduce, as a test
+    name, exactly the exhaustiveness promise just removed from the docstring
+    (Yua, musubi#771).
+
+    The previous revision asserted "this list is exhaustive" while omitting six
+    coordinator codes — a completeness promise nothing checked, which is worse than no
+    promise because a caller can rely on it. Removing the false claim is necessary but
+    not sufficient: the list can still fall behind silently.
+
+    So walk the module's own AST for `TransitionError(code="...")` literals and require
+    each to be documented. A new code added to this module without a docstring line
+    fails here rather than in someone's exhaustive `match` statement
+    (Copilot/Yua, musubi#771)."""
+    import ast
+    import inspect
+
+    from musubi.lifecycle import transitions as mod
+
+    tree = ast.parse(inspect.getsource(mod))
+    constructed: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+        if name != "TransitionError":
+            continue
+        for kw in node.keywords:
+            if kw.arg == "code" and isinstance(kw.value, ast.Constant):
+                constructed.add(str(kw.value.value))
+
+    assert constructed, "found no TransitionError(code=...) literals — the walk is inert"
+    doc = mod.TransitionError.__doc__ or ""
+    undocumented = sorted(c for c in constructed if c not in doc)
+    assert not undocumented, (
+        f"{mod.__name__} returns these codes with no line in TransitionError's "
+        f"documented contract: {undocumented}"
+    )
+
+
+def test_a_scroll_failure_on_one_plane_never_resolves_to_another(tmp_path: Path) -> None:
+    """THE FAIL-OPEN CELL, and the sharpest defect of the night.
+
+    `_scroll_by_object_id` was `except Exception: return []`. The comment named one
+    cause -- a missing collection -- and the handler caught every cause: timeout, reset,
+    auth failure, transport error. All of them became "no rows here", and the all-plane
+    ambiguity check read that empty list as a CONFIRMED MISS.
+
+    So a transient fault on the plane holding the duplicate made the duplicate
+    invisible, and the unqualified lookup resolved to the other plane and transitioned a
+    stranger's row -- precisely the outcome the identity fix exists to prevent. The
+    guard failed open on error, at the bottom of the stack, inside the change fixing
+    that same class four layers up (Copilot/Aoi, musubi#771).
+
+    Injection is a REAL fault from the client, not a missing collection: both
+    collections exist and are discoverable, and one raises on scroll."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.lifecycle.transitions import transition
+    from musubi.types.common import generate_ksuid
+
+    oid = generate_ksuid()
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [{"object_id": oid, "namespace": "ns/a", "state": "provisional", "version": 1}],
+    )
+    _collection_with(
+        client,
+        "musubi_curated",
+        [{"object_id": oid, "namespace": "ns/b", "state": "provisional", "version": 1}],
+    )
+
+    real_scroll = client.scroll
+
+    def scroll_failing_on_curated(*args: Any, **kwargs: Any) -> Any:
+        if kwargs.get("collection_name") == "musubi_curated":
+            raise TimeoutError("qdrant timed out")  # a transport fault, not an absence
+        return real_scroll(*args, **kwargs)
+
+    client.scroll = scroll_failing_on_curated  # type: ignore[method-assign]
+    coordinator = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "wk.db")
+
+    with pytest.raises(TimeoutError):
+        transition(
+            client,
+            coordinator=coordinator,
+            object_id=oid,
+            target_state="matured",
+            actor="operator",
+            reason="fault-must-not-be-a-miss",
+            namespace=None,
+        )
+
+    client.scroll = real_scroll  # type: ignore[method-assign]
+    rows, _ = real_scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=oid))]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert (rows[0].payload or {})["state"] == "provisional", (
+        "the episodic row was transitioned while the plane holding its duplicate was "
+        "unreachable -- the error was read as a confirmed miss"
+    )
+
+
+def test_duplicate_anchors_in_one_namespace_refuse(tmp_path: Path) -> None:
+    """Counting DISTINCT NAMESPACES let this pass, which is why that rule is gone.
+
+    Two authoritative rows in the SAME namespace collapse to a namespace-set of size
+    one, so the old check saw no ambiguity and `records[0]` decided. A third namespace
+    could then hide behind them entirely under a `limit=2` scan. The rule is now
+    exactly-one-authoritative-row, which does not care what the cause was -- and note
+    the lookup here is QUALIFIED, so supplying a namespace does not rescue it
+    (Copilot/Yua, musubi#771)."""
+    from musubi.lifecycle.transitions import AmbiguousObjectId, _locate_object
+    from musubi.types.common import generate_ksuid
+
+    oid = generate_ksuid()
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [
+            {"object_id": oid, "namespace": "ns/a", "state": "provisional", "version": 1},
+            {"object_id": oid, "namespace": "ns/a", "state": "provisional", "version": 2},
+        ],
+    )
+
+    with pytest.raises(AmbiguousObjectId) as excinfo:
+        _locate_object(client, object_id=oid, namespace="ns/a")
+    assert "at least 2 authoritative" in str(excinfo.value)
+
+    # THE REMEDIATION MUST FIT THE CAUSE. On the UNQUALIFIED path with both anchors in
+    # one namespace, the old message said "qualify the namespace" -- advice that cannot
+    # work, sending an operator to do something futile while hiding that the data needs
+    # repair (Copilot, musubi#771).
+    with pytest.raises(AmbiguousObjectId) as unqualified:
+        _locate_object(client, object_id=oid, namespace=None)
+    message = str(unqualified.value)
+    assert "qualify the namespace" not in message, (
+        f"both anchors are in ONE namespace; qualifying cannot resolve this: {message!r}"
+    )
+    assert "duplicate anchors" in message and "repair" in message, (
+        f"the refusal does not say what would actually fix it: {message!r}"
+    )
+
+
+def test_the_error_contract_does_not_claim_completeness_it_does_not_have() -> None:
+    """A completeness PROMISE is testable even when the prose around it is not.
+
+    The previous revision said "this list is exhaustive" while omitting all six
+    coordinator codes that `transition()` can forward. A caller can rely on that
+    sentence — it is worse than no promise. Removing it was the fix; this is what stops
+    it coming back, because the next person to add a tidy "exhaustive" will be told.
+
+    The rule is conditional, so it stays true either way: claim completeness only if the
+    list is actually complete (Copilot/Yua, musubi#771)."""
+    from musubi.lifecycle.transitions import TransitionError
+
+    doc = TransitionError.__doc__ or ""
+    forwarded = [
+        "cap_exceeded",
+        "active_intent_exists",
+        "durable_begin_failed",
+        "operation_key_conflict",
+        "terminal_apply_failure",
+        "maintenance_active",
+    ]
+    # DOCUMENTED means a contract BULLET, not a mention. The first version of this cell
+    # checked `code in doc` and passed under the plant, because the six codes are named
+    # in the prose explaining that they belong elsewhere -- so it could not tell
+    # "exhaustive" from "not exhaustive" at all. Caught by its own red-proof, which is
+    # the tenth inert check tonight and the third of mine.
+    claims_complete = "not exhaustive" not in doc and "exhaustive" in doc
+    if claims_complete:
+        missing = [c for c in forwarded if f"- ``{c}``" not in doc]
+        assert not missing, (
+            f"the contract claims to be exhaustive but does not document these codes "
+            f"`transition()` can return: {missing}"
+        )
+    else:
+        assert "not exhaustive" in doc, (
+            "the contract neither claims completeness nor says it is incomplete; a "
+            "caller cannot tell whether to expect other codes"
+        )
+
+
+@pytest.mark.parametrize("field", ["superseded_by", "supersedes"])
+@pytest.mark.parametrize("where", ["other-namespace", "other-plane"])
+def test_a_supersession_target_outside_the_subjects_identity_is_refused(
+    tmp_path: Path, field: str, where: str
+) -> None:
+    """THE LINEAGE IDENTITY CELL. A unique id is not a valid lineage target.
+
+    The walk used `namespace` only to chase a cycle; it never checked that the id it was
+    handed identifies a row in the subject's collection AND namespace. So on the
+    unqualified path any unique KSUID from another namespace -- or another plane --
+    was accepted as `superseded_by`, against the same-type/same-namespace contract
+    (Copilot, musubi#771).
+
+    The target here is UNIQUE and RESOLVABLE, just not the subject's. That is what makes
+    the cell specific: it cannot pass because of the ambiguity refusal."""
+    from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
+    from musubi.lifecycle.transitions import transition
+    from musubi.types.common import generate_ksuid
+
+    subject, foreign = generate_ksuid(), generate_ksuid()
+    client = QdrantClient(":memory:")
+    _collection_with(
+        client,
+        "musubi_episodic",
+        [{"object_id": subject, "namespace": "ns/a", "state": "provisional", "version": 1}],
+    )
+    # Both violations of the SAME contract, and neither is caught by the other's check:
+    # a right-plane/wrong-namespace target, and a right-namespace/wrong-PLANE one.
+    if where == "other-namespace":
+        client.upsert(
+            "musubi_episodic",
+            points=[
+                qmodels.PointStruct(
+                    id=99,
+                    vector=[0.1, 0.2],
+                    payload={
+                        "object_id": foreign,
+                        "namespace": "ns/b",
+                        "state": "matured",
+                        "version": 1,
+                    },
+                )
+            ],
+        )
+    else:
+        _collection_with(
+            client,
+            "musubi_curated",
+            [{"object_id": foreign, "namespace": "ns/a", "state": "matured", "version": 1}],
+        )
+    coordinator = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "wk.db")
+
+    result = transition(
+        client,
+        coordinator=coordinator,
+        object_id=subject,
+        target_state="matured",
+        actor="operator",
+        reason="foreign-lineage",
+        namespace="ns/a",
+        lineage_updates=(
+            LineageUpdates(superseded_by=foreign)
+            if field == "superseded_by"
+            else LineageUpdates(supersedes=[foreign])
+        ),
+    )
+
+    assert isinstance(result, Err), (
+        f"a {where} lineage target was accepted via {field}: {result!r} -- `supersedes` "
+        f"was never inspected at all, so one direction cannot certify both"
+    )
+    assert result.error.code == "invariant_violation", (
+        f"refused with {result.error.code!r}; the target is unique and resolvable, so "
+        f"this must not be the ambiguity refusal wearing a different hat"
+    )
+
+    rows, _ = client.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[qmodels.FieldCondition(key="object_id", match=qmodels.MatchValue(value=subject))]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert (rows[0].payload or {})["state"] == "provisional", "the subject moved anyway"
