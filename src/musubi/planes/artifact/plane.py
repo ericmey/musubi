@@ -288,6 +288,8 @@ class ArtifactPlane:
         self._client.set_payload(
             collection_name=self._collection,
             payload=failed.model_dump(mode="json"),
+            # Cardinality-audit exemption (#783): an explicit deterministic point-id selector
+            # addresses at most one Qdrant point; this is not a payload-filter fan-out.
             points=[_point_id(artifact.object_id)],
         )
         return failed
