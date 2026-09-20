@@ -51,6 +51,10 @@ the escrow artifact remain available for correction and audit.
 - `src/musubi/lifecycle/coordinator.py` (**narrow amendment, recorded 2026-09-20** — the
   completed-retraction guard in `_apply_conditional` only; see below)
 - `tests/api/test_ret012_retraction_quarantine.py`
+- `tests/api/test_ret012_adoption_release_race.py` (adoption-release receipt race)
+- `tests/store/test_immutable_vectors_legacy_fence.py` (legacy fence arm preservation)
+- `tests/lifecycle/test_custom_intent_seam.py` (custom-intent preflight: classification
+  and cardinality — **pre-existing file, extended by this slice**)
 - `docs/Musubi/_slices/slice-api-v1-ret012-retraction-quarantine.md`
 - `docs/Musubi/_inbox/locks/slice-api-v1-ret012-retraction-quarantine.lock`
 

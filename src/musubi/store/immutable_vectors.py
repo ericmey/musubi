@@ -310,6 +310,27 @@ def _publish_non_embedding_payload(
             f"PATCH for ({namespace!r}, {object_id!r}) lost its observed-version fence"
         )
 
+    # Capture the committed state BEFORE the token release, and answer from it.
+    #
+    # The release below deletes `update_lease_token` and then re-reads to confirm the
+    # deletion. Returning that post-release read makes a concurrent PATCH landing in the
+    # gap between the delete and the read into THIS request's receipt -- the caller is
+    # handed another writer's version as the result of its own write, and a replay then
+    # reports a row this operation never produced.
+    #
+    # `resolve_committed_content` here rather than `committed` alone: for a v2 anchor the
+    # receipt must be the anchor merged over its live content point, which the identity
+    # payload does not carry. Read at this instant it is the state this CAS produced.
+    #
+    # Fixed at the PRIMITIVE, not at a caller. This function is shared by
+    # `patch_non_embedding_payload` and `retract_non_embedding_payload`, so ordinary
+    # PATCH had the same defect as the retraction repair path the review named. A finding
+    # names a site; the contract has a set (Copilot round 28 on musubi#732; the fast-path
+    # sibling was fixed in `_release_adopted_done_token` at round 26).
+    committed_before_release = resolve_committed_content(
+        client, collection, namespace=namespace, object_id=object_id
+    )
+
     release_filter = models.Filter(
         must=[
             models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
@@ -352,12 +373,11 @@ def _publish_non_embedding_payload(
             is_anchor=is_anchor,
         )
         if released is not None and "update_lease_token" not in released:
-            resolved = resolve_committed_content(
-                client, collection, namespace=namespace, object_id=object_id
-            )
-            if resolved is None:
+            # Answer from the pre-release snapshot. The read above is the deletion
+            # CONFIRMATION and nothing else; it is not the state this request committed.
+            if committed_before_release is None:
                 break
-            return resolved
+            return {k: v for k, v in committed_before_release.items() if k != "update_lease_token"}
         if released is None or released.get("update_lease_token") != done:
             break
     raise NonEmbeddingPatchConflict(

@@ -7,13 +7,25 @@ branches lose different things, so they need different cells -- one cannot cover
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+from qdrant_client import QdrantClient, models
+
+from musubi.embedding import FakeEmbedder
+from musubi.planes.episodic import EpisodicPlane
+from musubi.store import bootstrap
 from musubi.store.immutable_vectors import (
     _legacy_conversion_filter,
     _legacy_fence_not_retracted,
+    patch_non_embedding_payload,
 )
+from musubi.store.names import collection_for_plane
+from musubi.store.specs import POINT_KIND_CONTENT, POINT_KIND_FIELD
+from musubi.types.common import generate_ksuid
+from musubi.types.episodic import EpisodicMemory
 
+_COLL = collection_for_plane("episodic")
 _NS = "eric/claude-code/episodic"
 _OID = "3JbLEGACYFENCEOBJECTID0000"
 
@@ -82,3 +94,106 @@ def test_every_base_arm_survives_on_both_branches() -> None:
             assert getattr(fenced, arm) == getattr(base, arm), (
                 f"arm {arm!r} diverged at obs_version={obs_version}"
             )
+
+
+def _seed_row(client: Any) -> tuple[str, str]:
+    ns = f"prim-{generate_ksuid()[:8].lower()}/dev/episodic"
+    row = asyncio.run(
+        EpisodicPlane(client=client, embedder=FakeEmbedder()).create(
+            EpisodicMemory(namespace=ns, content="pre-release receipt invariant", state="matured")
+        )
+    )
+    return ns, row.object_id
+
+
+def _identity(client: Any, oid: str) -> dict[str, Any]:
+    recs, _ = client.scroll(
+        collection_name=_COLL,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                )
+            ],
+        ),
+        limit=1,
+        with_payload=True,
+    )
+    return dict(recs[0].payload or {}) if recs else {}
+
+
+def _identity_point_id(client: Any, oid: str) -> Any:
+    recs, _ = client.scroll(
+        collection_name=_COLL,
+        scroll_filter=models.Filter(
+            must=[models.FieldCondition(key="object_id", match=models.MatchValue(value=oid))],
+            must_not=[
+                models.FieldCondition(
+                    key=POINT_KIND_FIELD, match=models.MatchValue(value=POINT_KIND_CONTENT)
+                )
+            ],
+        ),
+        limit=1,
+    )
+    return recs[0].id
+
+
+def test_publish_primitive_answers_from_the_pre_release_snapshot() -> None:
+    """The receipt must be the state this CAS produced, not a post-release reread.
+
+    `_publish_non_embedding_payload` releases its token and then re-reads to confirm the
+    deletion. Returning that read makes a concurrent PATCH landing in the gap into THIS
+    request's receipt. Round 28 named the retraction repair path; the defect is in the
+    primitive, so `patch_non_embedding_payload` had it too -- this cell drives the
+    ORDINARY patch caller on purpose, because a cell aimed only at the retraction path
+    would pass against a fix aimed only at the retraction path.
+    """
+    client = QdrantClient(":memory:")
+    try:
+        bootstrap(client)
+        ns, oid = _seed_row(client)
+        observed = _identity(client, oid)
+        base_version = int(observed["version"])
+        intruder_version = base_version + 9
+        point_id = _identity_point_id(client, oid)
+        real_delete = client.delete_payload
+        fired: list[bool] = []
+
+        def delete_then_intrude(*args: Any, **kwargs: Any) -> Any:
+            outcome = real_delete(*args, **kwargs)
+            if not fired:
+                fired.append(True)
+                client.set_payload(
+                    collection_name=_COLL,
+                    payload={"version": intruder_version},
+                    points=[point_id],
+                    wait=True,
+                )
+            return outcome
+
+        client.delete_payload = delete_then_intrude  # type: ignore[method-assign]
+        try:
+            published = patch_non_embedding_payload(
+                client,
+                _COLL,
+                namespace=ns,
+                object_id=oid,
+                observed_payload=observed,
+                changes={"tags": ["patched"]},
+                tag_mode="replace",
+            )
+        finally:
+            client.delete_payload = real_delete  # type: ignore[method-assign]
+
+        assert fired, "the intruder never landed; this cell proves nothing"
+        assert _identity(client, oid)["version"] == intruder_version, (
+            "setup broken: the intruder write did not stick"
+        )
+        assert published["version"] != intruder_version, (
+            "the receipt carried a concurrent writer's version instead of this CAS's"
+        )
+        assert published["version"] == base_version + 1
+        assert "update_lease_token" not in published
+    finally:
+        client.close()

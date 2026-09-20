@@ -454,14 +454,29 @@ async def execute_retraction(
                 ) from exc
             adopted = EpisodicMemory.model_validate(strip_layout_fields(published))
         elif adopted_done_token is not None:
-            stored = await _release_adopted_done_token(
-                qdrant=qdrant,
-                episodic=episodic,
-                namespace=body.namespace,
-                object_id=object_id,
-                stored=stored,
-                token=adopted_done_token,
-            )
+            # Same failure translation as the repair branch above. Without it a backend
+            # failure in the token release escapes as 500 INTERNAL, and the client cannot
+            # tell a retryable backend outage from a genuine server fault -- the whole
+            # point of the 503 contract is that BACKEND_UNAVAILABLE means try again.
+            # The sibling branch has had this translation since #658; this one never did
+            # (Copilot round 28 on musubi#732; same class as round 23, different site).
+            try:
+                stored = await _release_adopted_done_token(
+                    qdrant=qdrant,
+                    episodic=episodic,
+                    namespace=body.namespace,
+                    object_id=object_id,
+                    stored=stored,
+                    token=adopted_done_token,
+                )
+            except NonEmbeddingPatchConflict as exc:
+                raise APIError(status_code=409, code="CONFLICT", detail=str(exc)) from exc
+            except OSError as exc:
+                raise APIError(
+                    status_code=503,
+                    code="BACKEND_UNAVAILABLE",
+                    detail="committed retraction token release did not commit",
+                ) from exc
             adopted = stored.logical
         return RetractEpisodicResponse(
             object_id=object_id,
