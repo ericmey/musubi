@@ -265,6 +265,7 @@ jobs:
           cd ~/musubi
           git pull origin main
           ANSIBLE_VAULT_PASSWORD_FILE=~/ansible/.vault_pass \\
+            MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \\
             ansible-playbook \\
               -i deploy/ansible/inventory.yml \\
               -e @~/.musubi-secrets/inventory-vars.yml \\

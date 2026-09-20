@@ -13,8 +13,8 @@ from typing import Any
 import jwt
 from pydantic import ValidationError
 
-from musubi.config import get_settings
-from musubi.settings import Settings
+from musubi.auth.tokens import TokenValidationSettings
+from musubi.config import get_credential_preflight_settings
 from musubi.types.common import Err, Ok
 
 from .tokens import InvalidTokenError, validate_token
@@ -80,7 +80,7 @@ def _load_manifest(path: Path) -> tuple[list[dict[str, str]], list[dict[str, str
     return live_rows, template_rows
 
 
-def _inconsistent_control_is_rejected(settings: Settings) -> bool:
+def _inconsistent_control_is_rejected(settings: TokenValidationSettings) -> bool:
     """Prove the candidate validator executes and retains the REQ-7 rejection."""
 
     now = datetime.now(UTC)
@@ -111,7 +111,7 @@ def run_preflight(
     *,
     manifest_path: Path,
     credential_dir: Path,
-    settings: Settings,
+    settings: TokenValidationSettings,
     emit: Emit,
 ) -> bool:
     """Validate the complete declared live set and a signed negative control."""
@@ -168,7 +168,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--credential-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        settings = get_settings()
+        settings = get_credential_preflight_settings()
     except ValidationError:
         _stdout("FAIL preflight settings invalid")
         return 1

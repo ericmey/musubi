@@ -12,6 +12,7 @@ from pydantic import AnyHttpUrl, SecretStr
 
 from musubi.auth import credential_preflight
 from musubi.auth.credential_preflight import run_preflight
+from musubi.config import CredentialPreflightSettings, get_credential_preflight_settings
 from musubi.settings import Settings
 
 
@@ -208,7 +209,11 @@ def test_candidate_preflight_cli_uses_runtime_settings_and_emits_summary(
 ) -> None:
     _write_env(tmp_path / "aoi.env", _token(api_settings, "aoi/command-chair"))
     _write_env(tmp_path / "yua.env", _token(api_settings, "yua/command-chair"))
-    monkeypatch.setattr(credential_preflight, "get_settings", lambda: api_settings)
+    monkeypatch.setattr(
+        credential_preflight,
+        "get_credential_preflight_settings",
+        lambda: api_settings,
+    )
 
     exit_code = credential_preflight.main(
         [
@@ -228,10 +233,14 @@ def test_candidate_preflight_cli_fails_with_bounded_invalid_settings_message(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    def invalid_settings() -> Settings:
-        return Settings.model_validate({})
+    def invalid_settings() -> CredentialPreflightSettings:
+        return CredentialPreflightSettings.model_validate({})
 
-    monkeypatch.setattr(credential_preflight, "get_settings", invalid_settings)
+    monkeypatch.setattr(
+        credential_preflight,
+        "get_credential_preflight_settings",
+        invalid_settings,
+    )
 
     exit_code = credential_preflight.main(
         ["--manifest", str(tmp_path / "missing"), "--credential-dir", str(tmp_path)]
@@ -239,3 +248,15 @@ def test_candidate_preflight_cli_fails_with_bounded_invalid_settings_message(
 
     assert exit_code == 1
     assert capsys.readouterr().out == "FAIL preflight settings invalid\n"
+
+
+def test_candidate_preflight_settings_require_only_auth_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JWT_SIGNING_KEY", "preflight-only-signing-key")
+    monkeypatch.setenv("OAUTH_AUTHORITY", "https://auth.example.test")
+
+    settings = get_credential_preflight_settings()
+
+    assert settings.jwt_signing_key.get_secret_value() == "preflight-only-signing-key"
+    assert str(settings.oauth_authority) == "https://auth.example.test/"

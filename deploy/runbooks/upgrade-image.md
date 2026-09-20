@@ -116,8 +116,9 @@ manifest. Missing or rejected live credentials and a non-discriminating
 negative control abort before Ansible can recreate Core. This is intrinsic to
 the playbook rather than a caller-provided attestation, so direct Core updates
 run the same gate. `MUSUBI_PREFLIGHT_AUTHORITY_ENV` is required and must name an
-explicit server/preflight env containing `JWT_SIGNING_KEY` and
-`OAUTH_AUTHORITY`; it has no client-credential default. `MUSUBI_CREDENTIAL_DIR`
+explicit minimal preflight env containing only `JWT_SIGNING_KEY` and
+`OAUTH_AUTHORITY`; the candidate command does not construct the full server
+`Settings` model and has no client-credential default. `MUSUBI_CREDENTIAL_DIR`
 may override the default `~/.musubi` directory.
 The `musubi-mcp.env` mint-path template is reported separately and is not part
 of the eligible live set.

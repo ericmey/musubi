@@ -4,20 +4,26 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import httpx
 import jwt
 from jwt import PyJWK
 from jwt.algorithms import AllowedPublicKeys
-from pydantic import BaseModel, ConfigDict
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, SecretStr
 
 from musubi.config import get_settings
-from musubi.settings import Settings
 from musubi.types.common import Err, Ok, Result
 
 _AUDIENCE = "musubi"
 _SUPPORTED_ALGORITHMS = ("HS256", "RS256")
+
+
+class TokenValidationSettings(Protocol):
+    """Configuration surface consumed by token validation."""
+
+    jwt_signing_key: SecretStr
+    oauth_authority: AnyHttpUrl
 
 
 @dataclass(frozen=True)
@@ -57,7 +63,7 @@ type TokenValidationError = InvalidTokenError | ExpiredTokenError
 def validate_token(
     token: str,
     *,
-    settings: Settings | None = None,
+    settings: TokenValidationSettings | None = None,
 ) -> Result[AuthContext, TokenValidationError]:
     """Validate a JWT bearer token against configured issuer, audience, and keys."""
 
@@ -103,7 +109,7 @@ def _token_header(token: str) -> Result[dict[str, Any], InvalidTokenError]:
 def _verification_key(
     token: str,
     header: dict[str, Any],
-    settings: Settings,
+    settings: TokenValidationSettings,
 ) -> Result[str | AllowedPublicKeys | PyJWK, InvalidTokenError]:
     algorithm = header.get("alg")
     if algorithm == "HS256":
@@ -119,7 +125,7 @@ def _verification_key(
 def _rs256_key(
     _token: str,
     header: dict[str, Any],
-    settings: Settings,
+    settings: TokenValidationSettings,
 ) -> Result[AllowedPublicKeys, InvalidTokenError]:
     kid = header.get("kid")
     if not isinstance(kid, str) or not kid:
@@ -139,7 +145,7 @@ def _rs256_key(
     return Err(error=InvalidTokenError(detail="no matching jwk for token kid"))
 
 
-def _fetch_jwks(settings: Settings) -> Result[dict[str, Any], InvalidTokenError]:
+def _fetch_jwks(settings: TokenValidationSettings) -> Result[dict[str, Any], InvalidTokenError]:
     try:
         response = httpx.get(_jwks_url(settings), timeout=5.0)
         response.raise_for_status()
@@ -239,11 +245,11 @@ def _concrete_scope_tenant(scope: str) -> str | None:
     return tenant or None
 
 
-def _issuer(settings: Settings) -> str:
+def _issuer(settings: TokenValidationSettings) -> str:
     return str(settings.oauth_authority).rstrip("/")
 
 
-def _jwks_url(settings: Settings) -> str:
+def _jwks_url(settings: TokenValidationSettings) -> str:
     return f"{_issuer(settings)}/.well-known/jwks.json"
 
 
@@ -251,6 +257,7 @@ __all__ = [
     "AuthContext",
     "ExpiredTokenError",
     "InvalidTokenError",
+    "TokenValidationSettings",
     "TokenValidationError",
     "validate_token",
 ]

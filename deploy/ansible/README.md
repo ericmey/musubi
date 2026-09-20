@@ -77,6 +77,18 @@ ANSIBLE_VAULT_PASSWORD_FILE=~/ansible/.vault_pass \
 Where `<playbook>` is one of `bootstrap`, `config`, `deploy`, `update`, or
 `health`.
 
+`update.yml` Core/lifecycle-worker applies additionally require an explicit
+minimal validator environment on the control host:
+
+```bash
+MUSUBI_PREFLIGHT_AUTHORITY_ENV=~/.musubi/preflight-authority.env \
+  scripts/musubi-deploy --apply core,lifecycle-worker
+```
+
+That root-readable env contains only `JWT_SIGNING_KEY` and
+`OAUTH_AUTHORITY`. The playbook uses it inside the exact candidate image and
+fails before touching the workload host if either setting is absent.
+
 Dry-run first whenever possible:
 
 ```bash

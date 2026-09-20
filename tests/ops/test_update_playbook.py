@@ -32,6 +32,8 @@ RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade.md"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
 DEPLOY_WRAPPER = ROOT / "scripts" / "musubi-deploy"
 PREFLIGHT_MANIFEST = ROOT / "deploy" / "credential-preflight.json"
+ANSIBLE_README = ROOT / "deploy" / "ansible" / "README.md"
+AUTO_DIGEST_WORKFLOW = ROOT / ".github" / "workflows" / "auto-digest-bump.yml"
 
 
 def _load(path: Path) -> list[dict[str, Any]]:
@@ -251,6 +253,14 @@ def test_apply_wrapper_requires_explicit_preflight_authority_env() -> None:
     assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text
     assert "musubi-mcp-aoi.env" not in text
     assert 'exec "${cmd[@]}"' in text
+
+
+def test_every_documented_core_update_entrypoint_names_preflight_authority_env() -> None:
+    for path in (RUNBOOK, ANSIBLE_README, AUTO_DIGEST_WORKFLOW):
+        text = path.read_text()
+        assert "MUSUBI_PREFLIGHT_AUTHORITY_ENV" in text, (
+            f"{path} documents Core updates without the required preflight authority env"
+        )
 
 
 def test_candidate_preflight_manifest_declares_twelve_live_and_one_template() -> None:
