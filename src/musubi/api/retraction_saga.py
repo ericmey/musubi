@@ -242,7 +242,18 @@ def _adopted_done_token(stored: _StoredOriginal) -> str | None:
     token = stored.raw.get("update_lease_token")
     if token is None:
         return None
-    if not isinstance(token, str) or not token.startswith("done:"):
+    if not isinstance(token, str):
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail="committed retraction row has an active or malformed mutation lease",
+        )
+    parts = token.split(":")
+    try:
+        issued_us = int(parts[1])
+    except (IndexError, ValueError):
+        issued_us = 0
+    if len(parts) != 3 or parts[0] != "done" or issued_us <= 0 or not parts[2]:
         raise APIError(
             status_code=409,
             code="CONFLICT",

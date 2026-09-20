@@ -33,10 +33,14 @@ the escrow artifact remain available for correction and audit.
   ranked settled recall and the provisional maturation selector.
 - State, importance, timestamps, evidence, and tombstone change in one CAS.
 - Exact replay and evidence adoption retain the already committed archived row.
+- Receipt-loss repair extends the existing evidence-gated immutable-vector CAS only to adopt the
+  exact validated `done:<issued_us>:<nonce>` token already present on that committed write. It does
+  not change ordinary PATCH behavior or any other store primitive.
 
 ## Owned paths
 
 - `src/musubi/api/retraction_saga.py`
+- `src/musubi/store/immutable_vectors.py` (exact-token adoption in the retraction CAS only)
 - `tests/api/test_ret012_retraction_quarantine.py`
 - `docs/Musubi/_slices/slice-api-v1-ret012-retraction-quarantine.md`
 - `docs/Musubi/_inbox/locks/slice-api-v1-ret012-retraction-quarantine.lock`
@@ -47,7 +51,7 @@ the escrow artifact remain available for correction and audit.
 - `src/musubi/planes/`
 - `src/musubi/retrieve/`
 - `src/musubi/lifecycle/`
-- `src/musubi/store/`
+- every `src/musubi/store/` path except the exact `immutable_vectors.py` seam named above
 - `openapi.yaml`
 - `proto/`
 
@@ -61,6 +65,8 @@ the escrow artifact remain available for correction and audit.
    adoption without rewriting vectors, immutable content, or committed timestamps;
    `test_evidence_adoption_releases_committed_done_token_without_reapplying_retraction`
    proves the same path finishes exact post-commit token release without reapplying the mutation;
+   `test_evidence_adoption_refuses_malformed_or_active_committed_tokens` proves only the complete
+   `done:<issued_us>:<nonce>` shape is attributable and every refused token remains stored;
    `test_evidence_adoption_repairs_quarantine_before_releasing_committed_token`
    proves an old active row is repaired while the exact token still fences lifecycle writers.
 3. `test_retracted_provisional_row_cannot_reenter_maturation_after_one_hour`
@@ -91,14 +97,21 @@ the escrow artifact remain available for correction and audit.
   lifecycle window. Physical-layout assertions preserve legacy/v2 vectors, v2 immutable content,
   committed timestamps, and exact replay behavior.
 - 2026-09-20 — Test Contract coverage: four layout/state new-write cells; two legacy/v2 historical
-  repair cells; two committed-token release cells; two atomic repair-before-release cells; one
+  repair cells; two committed-token release cells; four malformed/active-token refusal cells; two
+  atomic repair-before-release cells; one
   time-advanced maturation exclusion cell; and the named IDEM-007/008 replay, timestamp, stale
   version, and malformed-evidence regressions. The combined recovery cell was observed red on both
   layouts before the atomic repair and green afterward.
 - 2026-09-20 — Production census found eleven escrow-backed historical rows still requiring the
   separately controlled backfill before issue #731 can close. This slice stops new violations and
   does not claim that deployment alone repairs rows that are never replayed.
-- 2026-09-20 — Frozen-candidate verification: `make check` completed with 2745 passed, 195 skipped,
+- 2026-09-20 — Frozen-candidate verification: `make check` completed with 2749 passed, 195 skipped,
   140 deselected, and 2 documented xfails. Removing the adopted-token handoff made both legacy and
   v2 atomic repair-before-release cells fail; restoring it returned them and the lifecycle
   state-mutation closure gate to green.
+- 2026-09-20 — Scope amendment: the atomic repair cannot release and reacquire the lease without
+  recreating the race, so this slice owns one narrow extension to
+  `src/musubi/store/immutable_vectors.py`: reuse an exact validated committed token inside the
+  evidence-gated retraction CAS. Every other store path and ordinary writer behavior remains
+  forbidden. The amendment is explicit here so the shared-boundary change is reviewable rather
+  than hidden behind a green gate.

@@ -283,6 +283,62 @@ def test_evidence_adoption_releases_committed_done_token_without_reapplying_retr
     )
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    ["done:", "done:not-a-timestamp", "done:1:", "active:1:foreign-writer"],
+)
+def test_evidence_adoption_refuses_malformed_or_active_committed_tokens(
+    malformed: str,
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+    receipt_store: DurableReceiptStore,
+) -> None:
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout="legacy",
+        state="matured",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+    headers = {
+        "Authorization": f"Bearer {valid_token}",
+        "Idempotency-Key": f"quarantine-malformed-token-{malformed}",
+    }
+    body = _body(memory.version)
+    first = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert first.status_code == 200, first.text
+    committed = _layout(qdrant, memory.object_id)
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": malformed},
+        points=[committed[0]["id"]],
+        wait=True,
+    )
+    with sqlite3.connect(receipt_store.path) as connection:
+        connection.execute("DELETE FROM idempotency_receipts")
+    _GLOBAL_LEASE_CACHE._entries.clear()
+
+    refused = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert refused.status_code == 409, refused.text
+    assert "active or malformed mutation lease" in refused.text
+    after = _layout(qdrant, memory.object_id)
+    assert after[0]["payload"]["update_lease_token"] == malformed
+
+
 @pytest.mark.parametrize("layout", ["legacy", "v2"])
 def test_evidence_adoption_repairs_quarantine_before_releasing_committed_token(
     layout: str,
