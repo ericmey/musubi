@@ -578,3 +578,131 @@ def test_retracted_provisional_row_cannot_reenter_maturation_after_one_hour(
     assert stored is not None
     assert stored.state == "archived"
     assert stored.importance == 1
+
+
+def _raw_authoritative(client: QdrantClient, object_id: str) -> dict[str, Any]:
+    """The single non-content payload, read raw. Refuses on anything but exactly one."""
+    rows = [r for r in _layout(client, object_id) if r["payload"].get("point_kind") != "content"]
+    assert len(rows) == 1, f"expected one authoritative row, got {len(rows)}"
+    payload: dict[str, Any] = rows[0]["payload"]
+    return payload
+
+
+def test_completed_retraction_refuses_archived_to_matured_restore(
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+) -> None:
+    """RET-012's headline: a retracted row cannot later mature.
+
+    `archived -> matured` is a LEGAL episodic edge (operator restore,
+    `types/lifecycle_event.py:39`), so nothing in the state machine stops a retracted
+    row from taking it. The only refusal is the coordinator's completed-retraction
+    guard, and it used to be nested under `if token is not None` -- unreachable once
+    the saga released its lease (Copilot round 21 on musubi#732, hole musubi#781).
+    """
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout="legacy",
+        state="provisional",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+    response = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers={
+            "Authorization": f"Bearer {valid_token}",
+            "Idempotency-Key": "quarantine-restore-refused",
+        },
+        json=_body(memory.version),
+    )
+    assert response.status_code == 200, response.text
+
+    # PRECONDITION, asserted rather than assumed -- this cell is worthless if the row
+    # still carries a lease, because then the OLD guard would refuse and the cell would
+    # pass without exercising the fix at all.
+    payload = _raw_authoritative(qdrant, memory.object_id)
+    assert payload["state"] == "archived"
+    assert payload.get("retraction_evidence") is not None
+    assert "update_lease_token" not in payload, (
+        "the saga must have released its lease for this cell to mean anything; "
+        f"payload still holds {payload.get('update_lease_token')!r}"
+    )
+
+    retracted = asyncio.run(episodic.get(namespace=_NS, object_id=memory.object_id))
+    assert retracted is not None
+    result = asyncio.run(
+        episodic.transition(
+            namespace=_NS,
+            object_id=memory.object_id,
+            to_state="matured",
+            actor="operator-restore",
+            reason="attempt to restore a retracted row",
+            coordinator=coordinator,
+        )
+    )
+    assert not isinstance(result, Ok), f"retracted row was restored: {result}"
+    assert result.error.code == "terminal_apply_failure", result.error
+
+    after = _raw_authoritative(qdrant, memory.object_id)
+    assert after["state"] == "archived"
+    assert after["importance"] == 1
+
+
+def test_ordinary_archived_row_without_retraction_evidence_still_restores(
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+) -> None:
+    """The other half, and it is not established by reading the guard.
+
+    The terminal check keys on `retraction_evidence`, so an ordinary archived row --
+    archived by lifecycle, never retracted -- must still take the operator-restore
+    edge. Without this cell the fix above is indistinguishable from freezing every
+    archived row permanently.
+    """
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout="legacy",
+        state="provisional",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+    archived = asyncio.run(
+        episodic.transition(
+            namespace=_NS,
+            object_id=memory.object_id,
+            to_state="archived",
+            actor="lifecycle",
+            reason="ordinary archival, no retraction",
+            coordinator=coordinator,
+        )
+    )
+    assert isinstance(archived, Ok), archived
+
+    payload = _raw_authoritative(qdrant, memory.object_id)
+    assert payload["state"] == "archived"
+    assert payload.get("retraction_evidence") is None, (
+        "this row must NOT be retracted, or the cell proves nothing about ordinary restore"
+    )
+
+    restored = asyncio.run(
+        episodic.transition(
+            namespace=_NS,
+            object_id=memory.object_id,
+            to_state="matured",
+            actor="operator-restore",
+            reason="ordinary archived restore must remain legal",
+            coordinator=coordinator,
+        )
+    )
+    assert isinstance(restored, Ok), f"ordinary archived restore was refused: {restored}"
+    assert _raw_authoritative(qdrant, memory.object_id)["state"] == "matured"

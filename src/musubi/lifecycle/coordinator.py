@@ -1088,13 +1088,32 @@ class LifecycleTransitionCoordinator:
             # be changed before the readback noticed the ambiguity (Copilot, musubi#771).
             return "fence"
         token = held.get("update_lease_token")
+        if held.get("retraction_evidence") is not None:
+            # TERMINAL, and deliberately NOT gated on the saga lease still being held.
+            #
+            # This guard used to sit under `if token is not None`, which made it
+            # unreachable for exactly the case it exists to protect: a COMPLETED
+            # retraction. Both release paths clear the token on commit -- the ordinary
+            # one at `immutable_vectors.py:260` (pre-existing on main) and the
+            # adopted-token one added by RET-012 (`_release_adopted_done_token`). So the
+            # row kept its `retraction_evidence`, lost its token, and `archived ->
+            # matured` became legal again through the ordinary admin path: a retracted
+            # false row could be restored and ranked.
+            #
+            # RET-012's own contract is that a retracted row "cannot later mature, regain
+            # importance, synthesize, or promote"
+            # (docs/Musubi/_slices/slice-api-v1-ret012-retraction-quarantine.md:19). The
+            # presence of the EVIDENCE is what makes the row terminal, not the presence
+            # of the lease -- the lease says a writer is busy, the evidence says this row
+            # was retracted. Checking the lease to answer a question about the evidence
+            # is the wrong object for the question.
+            #
+            # Ordinary archived rows carry no `retraction_evidence`, so ordinary
+            # `archived -> matured` restore stays legal. Both halves have their own cell;
+            # neither is established by reading this comment
+            # (Copilot round 21 on musubi#732, pre-existing hole musubi#781).
+            return "retracted"
         if token is not None:
-            if held.get("retraction_evidence") is not None:
-                # A retraction owns this row's recovery while its saga lease is present.
-                # This is not a complete completed-retraction guard: the saga eventually
-                # clears its token, and legitimate archived -> matured restore must remain
-                # distinguishable from reactivation of a retracted row (pre-existing #781).
-                return "retracted"
             if token == "":
                 # The mutation seam treats a falsy token as absent, but Qdrant's
                 # IsEmpty condition does not: remove the exact empty-string residue so

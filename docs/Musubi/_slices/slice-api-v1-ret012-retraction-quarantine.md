@@ -41,16 +41,54 @@ the escrow artifact remain available for correction and audit.
 
 - `src/musubi/api/retraction_saga.py`
 - `src/musubi/store/immutable_vectors.py` (exact-token adoption in the retraction CAS only)
+- `src/musubi/lifecycle/coordinator.py` (**narrow amendment, recorded 2026-09-20** — the
+  completed-retraction guard in `_apply_conditional` only; see below)
 - `tests/api/test_ret012_retraction_quarantine.py`
 - `docs/Musubi/_slices/slice-api-v1-ret012-retraction-quarantine.md`
 - `docs/Musubi/_inbox/locks/slice-api-v1-ret012-retraction-quarantine.lock`
+
+### Scope amendment 2026-09-20 — `lifecycle/coordinator.py`, completed-retraction guard
+
+Recorded **before** the edit, because a forbidden-path change made quietly is worse than
+the scope being wrong.
+
+**Why the slice cannot deliver its own headline without it.** Line 19 above promises a
+retracted row "cannot later mature, regain importance, synthesize, or promote." That is
+false at `02dcd226`. `_apply_conditional` holds the only guard that refuses a
+saga-owned row, and it is nested under `if token is not None:` — so it protects a
+retraction **only while the saga lease is still held.** Both the ordinary release
+(`immutable_vectors.py:260`, pre-existing on `main`) and this branch's adopted-token
+release (`_release_adopted_done_token`) clear that token on commit, so the guard is
+unreachable for exactly the *completed* retractions it exists to protect. `archived ->
+matured` then remains legal through the ordinary admin path and an evidence-bearing
+retracted row can be restored and ranked.
+
+**Why a retraction-side fix cannot close it.** The saga writes through the
+immutable-vector CAS; every *other* lifecycle caller reaches the row through the
+coordinator. A check added on the retraction side protects the rows this saga touches
+and nothing a future lifecycle caller does. The guard has to live where the transition
+is adjudicated.
+
+**Provenance, stated plainly, because it is asymmetric and was measured rather than
+assumed.** The underlying lifecycle hole predates this branch and is tracked as #781;
+`main`'s normal retraction path already cleared the token. This branch adds the
+*adopted/recovered* release path. So reachability is part pre-existing, part
+branch-added — and the disposition does not rest on that split. **It rests on the
+contract: this slice asserts terminal quarantine, and at `02dcd226` that assertion is
+false.** A PR is blocked by its own unmet claim regardless of who made the hole
+reachable.
+
+**Bounded to:** the completed-retraction guard in `_apply_conditional`. No change to
+transition legality for rows without `retraction_evidence` — ordinary `archived ->
+matured` restore stays legal, and that is asserted by its own cell, not by inspection.
 
 ## Forbidden paths
 
 - `src/musubi/types/`
 - `src/musubi/planes/`
 - `src/musubi/retrieve/`
-- `src/musubi/lifecycle/`
+- `src/musubi/lifecycle/` — **except** the `_apply_conditional` completed-retraction
+  guard in `coordinator.py`, per the recorded amendment above
 - every `src/musubi/store/` path except the exact `immutable_vectors.py` seam named above
 - `openapi.yaml`
 - `proto/`
