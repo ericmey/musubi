@@ -15,18 +15,27 @@ supersedes: []
 # ADR: consolidated auth boundary — SEC-002/003/004 + IDEM-001
 
 **Discoverer of all four defects: Eric.** Source-confirmed and routed by Yua. Design: Aoi.
-**Status: ACCEPTED AND SHIPPED (rev 6).** Phase A merged in PR #403 (`0def0df`); the original
+**Status: ACCEPTED AND SHIPPED (rev 7).** Phase A merged in PR #403 (`0def0df`); the original
 stacked Phase B PR #404 was superseded and closed, and its production implementation merged in
 replacement PR #414 (`8167202`). Both are on `main` and have been included in deployed releases
 since v1.11.7; the production pin verified during the 2026-07-15 remediation closeout was v1.17.2.
 SEC-002/003/004 and IDEM-001 Phase 0 are therefore shipped, not an open production-vulnerability
 claim. REQ-7 was implemented under Issue #412; the remaining work is listed under **Deferred**.
 
+## Rev 7 — REQ-7 issuer-contract correction
+
+Issue #806 corrects the subject/presence predicate to the contract used by the
+deployed mint path: `subject == presence`, preserving the slash-form
+`tenant/presence` identity exactly. Rev 6's slash-to-hyphen statement described
+a hypothetical authority format that no configured authority produced. The
+two-segment concrete-presence and concrete scope-tenant checks remain unchanged.
+There is no dual-format grace period.
+
 ## Rev 6 — REQ-7 identity consistency
 
 Issue #412 closes the deferred D6 identity-consistency contract. Token validation now requires a
-concrete two-segment presence, requires the authority's canonical subject encoding
-(`tenant/presence` → `tenant-presence`), and rejects concrete namespace scopes from another tenant
+concrete two-segment presence, requires exact subject/presence equality
+(`tenant/presence` == `tenant/presence`), and rejects concrete namespace scopes from another tenant
 before an `AuthContext` is constructed. Same-tenant shared scopes and operator/global forms remain
 valid.
 
@@ -274,7 +283,7 @@ principal's idempotency slot.
 > `operation_id` + authorized namespace + Idempotency-Key, with a byte-exact canonical digest
 > (domain-sep + content-type + exact bytes) persisted separately, remains the accepted PR #404
 > identity. Token validation now requires a concrete `tenant/presence` claim, requires its subject
-> to use the canonical `tenant-presence` encoding, and rejects any concrete namespace scope from a
+> to equal that slash-form identity exactly, and rejects any concrete namespace scope from a
 > different tenant. Same-tenant shared scopes and operator/global forms remain valid. The former
 > strict-xfail is now the passing REQ7 contract in
 > `tests/api/test_req7_token_identity_invariant.py`. (Related: REQ8, public absent-vs-invalid
@@ -429,7 +438,8 @@ projection/summary; LIFE-007/008 / DATA-001 atomicity.
 
 ---
 
-**Status: ACCEPTED AND SHIPPED (rev 6).** PR #403 and replacement Phase B PR #414 are on `main` and
-deployed; rev 6 adds shipped REQ7 identity consistency. True deferrals are D4 Phase 1 (#558) and
-D5 Phase C. REQ7 (#412) is implemented and passing in rev 6; REQ8 (#413) has been implemented and
-passing since 2026-08-04. The rev-5 shipped claims about PR #403 / #414 at their heads are unchanged.
+**Status: ACCEPTED AND SHIPPED (rev 7).** PR #403 and replacement Phase B PR #414 are on `main` and
+deployed; rev 6 added REQ7 identity consistency, and rev 7 corrects its subject format to the
+deployed issuer contract under #806. True deferrals are D4 Phase 1 (#558) and D5 Phase C. REQ7
+(#412) remains implemented; REQ8 (#413) has been implemented and passing since 2026-08-04. The
+rev-5 shipped claims about PR #403 / #414 at their heads are unchanged.
