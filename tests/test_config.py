@@ -42,6 +42,8 @@ _ENV_KEYS: tuple[str, ...] = (
     "TEI_DENSE_URL",
     "TEI_SPARSE_URL",
     "TEI_RERANKER_URL",
+    "TEI_BASIC_AUTH_USERNAME",
+    "TEI_BASIC_AUTH_PASSWORD",
     "OLLAMA_URL",
     "EMBEDDING_MODEL",
     "SPARSE_MODEL",
@@ -192,6 +194,53 @@ def test_secret_values_masked_in_repr(minimal_env: Path, _reset_cache: None) -> 
     assert "test-qdrant-key" not in rendered
     # ``SecretStr`` displays as ``**********`` in repr — assert the marker shows up.
     assert "**********" in rendered
+
+
+def test_tei_basic_auth_is_complete_and_masked(
+    monkeypatch: pytest.MonkeyPatch, minimal_env: Path, _reset_cache: None
+) -> None:
+    monkeypatch.setenv("TEI_BASIC_AUTH_USERNAME", "musubi")
+    monkeypatch.setenv("TEI_BASIC_AUTH_PASSWORD", "do-not-log-this")
+    settings = get_settings()
+    assert settings.tei_basic_auth == ("musubi", "do-not-log-this")
+    assert "do-not-log-this" not in repr(settings)
+
+
+@pytest.mark.parametrize("only", ["username", "password"])
+def test_tei_basic_auth_refuses_partial_credentials(
+    only: str,
+    monkeypatch: pytest.MonkeyPatch,
+    minimal_env: Path,
+    _reset_cache: None,
+) -> None:
+    if only == "username":
+        monkeypatch.setenv("TEI_BASIC_AUTH_USERNAME", "musubi")
+    else:
+        monkeypatch.setenv("TEI_BASIC_AUTH_PASSWORD", "orphaned")
+    with pytest.raises(ValidationError, match="must be set together"):
+        get_settings()
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("TEI_BASIC_AUTH_USERNAME", "   ", "username must be nonblank"),
+        ("TEI_BASIC_AUTH_PASSWORD", "   ", "password must be nonblank"),
+    ],
+)
+def test_tei_basic_auth_refuses_whitespace_only_credentials(
+    name: str,
+    value: str,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+    minimal_env: Path,
+    _reset_cache: None,
+) -> None:
+    monkeypatch.setenv("TEI_BASIC_AUTH_USERNAME", "musubi")
+    monkeypatch.setenv("TEI_BASIC_AUTH_PASSWORD", "secret")
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=message):
+        get_settings()
 
 
 # ---------------------------------------------------------------------------

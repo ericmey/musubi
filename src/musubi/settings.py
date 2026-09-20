@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     tei_dense_url: AnyHttpUrl = Field(description="TEI dense-embeddings endpoint.")
     tei_sparse_url: AnyHttpUrl = Field(description="TEI sparse-embeddings endpoint.")
     tei_reranker_url: AnyHttpUrl = Field(description="TEI reranker endpoint.")
+    tei_basic_auth_username: str | None = Field(
+        default=None,
+        description="Optional Basic-auth identity for all three TEI endpoints.",
+    )
+    tei_basic_auth_password: SecretStr | None = Field(
+        default=None,
+        description="Optional Basic-auth password for all three TEI endpoints.",
+    )
     ollama_url: AnyHttpUrl = Field(description="Ollama LLM endpoint.")
 
     embedding_model: str = Field(description="Dense embedding model id (HF).")
@@ -409,6 +417,35 @@ class Settings(BaseSettings):
                 "lifecycle_llm_api='openai' requires explicit nonblank " + " and ".join(missing)
             )
         return self
+
+    @model_validator(mode="after")
+    def _validate_tei_basic_auth_pair(self) -> Settings:
+        """TEI Basic auth is either complete or absent.
+
+        Keeping the credential out of endpoint URLs prevents httpx request
+        logging, exceptions, and request reprs from disclosing it.
+        """
+        username = self.tei_basic_auth_username
+        password = self.tei_basic_auth_password
+        if (username is None) != (password is None):
+            raise ValueError(
+                "tei_basic_auth_username and tei_basic_auth_password must be set together"
+            )
+        if username is not None and not username.strip():
+            raise ValueError("tei_basic_auth_username must be nonblank")
+        if password is not None and not password.get_secret_value().strip():
+            raise ValueError("tei_basic_auth_password must be nonblank")
+        return self
+
+    @property
+    def tei_basic_auth(self) -> tuple[str, str] | None:
+        """Return the complete TEI credential without placing it in a URL."""
+        if self.tei_basic_auth_username is None or self.tei_basic_auth_password is None:
+            return None
+        return (
+            self.tei_basic_auth_username,
+            self.tei_basic_auth_password.get_secret_value(),
+        )
 
     # ------------------------------------------------------------------
     # repr: pydantic-settings already masks SecretStr as ``**********``;

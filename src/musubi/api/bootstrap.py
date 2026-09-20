@@ -129,7 +129,7 @@ def _probe_qdrant(client: QdrantClient) -> None:
     client.get_collections()
 
 
-def _probe_tei(dense_url: str) -> None:
+def _probe_tei(dense_url: str, basic_auth: tuple[str, str] | None = None) -> None:
     """Cheap synchronous probe: GET ``{dense_url}/health``. Bootstrap
     runs from sync context inside ``create_app()``; the TEI clients
     are async (uvicorn loop), so we can't call them with
@@ -138,7 +138,8 @@ def _probe_tei(dense_url: str) -> None:
     docker healthcheck uses."""
     import httpx
 
-    with httpx.Client(timeout=5.0) as client:
+    auth = httpx.BasicAuth(*basic_auth) if basic_auth is not None else None
+    with httpx.Client(timeout=5.0, auth=auth) as client:
         resp = client.get(f"{dense_url.rstrip('/')}/health")
         resp.raise_for_status()
 
@@ -209,12 +210,13 @@ def bootstrap_production_app(
         dense_url=str(settings.tei_dense_url),
         sparse_url=str(settings.tei_sparse_url),
         reranker_url=str(settings.tei_reranker_url),
+        basic_auth=settings.tei_basic_auth,
     )
     dense = tei_clients.dense
     sparse = tei_clients.sparse
     reranker = tei_clients.reranker
     _retry(
-        lambda: _probe_tei(str(settings.tei_dense_url)),
+        lambda: _probe_tei(str(settings.tei_dense_url), settings.tei_basic_auth),
         dep="tei",
         attempts=retry_attempts,
         backoff_s=retry_backoff_s,

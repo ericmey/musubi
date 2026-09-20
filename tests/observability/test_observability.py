@@ -369,6 +369,26 @@ def test_check_component_health_marks_reachable_service_healthy() -> None:
         transport=transport,
     )
     assert component.healthy is True
+
+
+def test_check_component_health_sends_basic_auth_as_a_header() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"status": "ok"})
+
+    component = check_component_health(
+        name="tei-dense",
+        url="https://inference.example.test/dense/health",
+        auth=httpx.BasicAuth("musubi-v2", "do-not-log-this"),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert component.healthy is True
+    assert len(seen) == 1
+    assert seen[0].headers["authorization"].startswith("Basic ")
+    assert "do-not-log-this" not in str(seen[0].url)
     assert component.name == "tei-dense"
 
 
@@ -453,11 +473,18 @@ def _ops_status_client_for_settings(
         *,
         name: str,
         url: str,
+        auth: httpx.Auth | None = None,
         transport: object | None = None,
         timeout: float = 1.5,
     ) -> object:
         ok_transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"status": "ok"}))
-        return real_check(name=name, url=url, transport=ok_transport, timeout=timeout)
+        return real_check(
+            name=name,
+            url=url,
+            auth=auth,
+            transport=ok_transport,
+            timeout=timeout,
+        )
 
     monkeypatch.setattr(ops_router_mod, "check_component_health", _faked_check)
 

@@ -171,14 +171,18 @@ def _truncate(text: str, max_input_chars: int) -> str:
     return text[:max_input_chars]
 
 
-def _build_client(timeout: float, limits: httpx.Limits) -> httpx.AsyncClient:
+def _build_client(
+    timeout: float,
+    limits: httpx.Limits,
+    auth: httpx.Auth | None,
+) -> httpx.AsyncClient:
     """Factory for the per-instance pooled HTTP client.
 
     Constructing ``AsyncClient`` does no I/O — the pool is lazy until the
     first request. So building it in ``__init__`` is safe even when the
     event loop hasn't started yet (e.g. during FastAPI app bootstrap).
     """
-    return httpx.AsyncClient(timeout=timeout, limits=limits)
+    return httpx.AsyncClient(timeout=timeout, limits=limits, auth=auth)
 
 
 class _LoopBoundAsyncClient:
@@ -209,11 +213,18 @@ class _LoopBoundAsyncClient:
     tick so HTTP/1.1 keepalive + connection pooling are still in play.
     """
 
-    __slots__ = ("_clients", "_closed", "_limits", "_lock", "_timeout")
+    __slots__ = ("_auth", "_clients", "_closed", "_limits", "_lock", "_timeout")
 
-    def __init__(self, *, timeout: float, limits: httpx.Limits) -> None:
+    def __init__(
+        self,
+        *,
+        timeout: float,
+        limits: httpx.Limits,
+        auth: httpx.Auth | None = None,
+    ) -> None:
         self._timeout = timeout
         self._limits = limits
+        self._auth = auth
         self._lock = threading.Lock()
         self._clients: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, httpx.AsyncClient] = (
             weakref.WeakKeyDictionary()
@@ -247,7 +258,7 @@ class _LoopBoundAsyncClient:
         with self._lock:
             cached = self._clients.get(loop)
             if cached is None or loop.is_closed():
-                cached = _build_client(self._timeout, self._limits)
+                cached = _build_client(self._timeout, self._limits, self._auth)
                 self._clients[loop] = cached
             return cached
 
@@ -287,13 +298,14 @@ class TEIDenseClient:
         max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS_DENSE,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
         limits: httpx.Limits = _DEFAULT_LIMITS,
+        auth: httpx.Auth | None = None,
     ) -> None:
         self._base_url = base_url
         self._timeout = timeout
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits, auth=auth)
 
     @property
     def max_batch_size(self) -> int:
@@ -352,13 +364,14 @@ class TEISparseClient:
         max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS_SPARSE,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
         limits: httpx.Limits = _DEFAULT_LIMITS,
+        auth: httpx.Auth | None = None,
     ) -> None:
         self._base_url = base_url
         self._timeout = timeout
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits, auth=auth)
 
     @property
     def max_batch_size(self) -> int:
@@ -407,13 +420,14 @@ class TEIRerankerClient:
         max_input_chars: int = _DEFAULT_MAX_INPUT_CHARS_RERANKER,
         retry_backoff: float = _DEFAULT_RETRY_BACKOFF,
         limits: httpx.Limits = _DEFAULT_LIMITS,
+        auth: httpx.Auth | None = None,
     ) -> None:
         self._base_url = base_url
         self._timeout = timeout
         self._max_batch_size = max_batch_size
         self._max_input_chars = max_input_chars
         self._retry_backoff = retry_backoff
-        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits)
+        self._client = _LoopBoundAsyncClient(timeout=timeout, limits=limits, auth=auth)
 
     @property
     def max_batch_size(self) -> int:
@@ -519,6 +533,7 @@ def build_tei_clients(
     dense_url: str,
     sparse_url: str,
     reranker_url: str,
+    basic_auth: tuple[str, str] | None = None,
     info_timeout: float = _DEFAULT_INFO_TIMEOUT,
 ) -> TEIClients:
     """Construct production clients from each deployed TEI ``/info`` contract.
@@ -527,7 +542,8 @@ def build_tei_clients(
     deliberately pinned callers. Production surfaces use this factory so the
     deployed service, rather than a duplicated constant, sets each ceiling.
     """
-    with httpx.Client(timeout=info_timeout) as info_client:
+    auth = httpx.BasicAuth(*basic_auth) if basic_auth is not None else None
+    with httpx.Client(timeout=info_timeout, auth=auth) as info_client:
         dense_batch_size = _discover_max_client_batch_size(
             info_client,
             base_url=dense_url,
@@ -544,9 +560,13 @@ def build_tei_clients(
             fallback=_DEFAULT_MAX_RERANK_BATCH_SIZE,
         )
     return TEIClients(
-        dense=TEIDenseClient(base_url=dense_url, max_batch_size=dense_batch_size),
-        sparse=TEISparseClient(base_url=sparse_url, max_batch_size=sparse_batch_size),
-        reranker=TEIRerankerClient(base_url=reranker_url, max_batch_size=reranker_batch_size),
+        dense=TEIDenseClient(base_url=dense_url, max_batch_size=dense_batch_size, auth=auth),
+        sparse=TEISparseClient(base_url=sparse_url, max_batch_size=sparse_batch_size, auth=auth),
+        reranker=TEIRerankerClient(
+            base_url=reranker_url,
+            max_batch_size=reranker_batch_size,
+            auth=auth,
+        ),
     )
 
 

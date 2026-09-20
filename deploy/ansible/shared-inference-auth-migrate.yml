@@ -1,0 +1,238 @@
+---
+- name: Rotate Musubi shared-inference authentication without a mismatch window
+  hosts: musubi
+  become: true
+  force_handlers: true
+  handlers:
+    - name: Remove auth rollback material after an early failure
+      ansible.builtin.file:
+        path: "{{ auth_rotation_backup.path }}"
+        state: absent
+      check_mode: false
+  tasks:
+    - name: Allocate auth rollback material
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: musubi-shared-inference-auth-rollback.
+      register: auth_rotation_backup
+      check_mode: false
+      notify: Remove auth rollback material after an early failure
+
+    - name: Preserve every coupled authentication artifact
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ auth_rotation_backup.path }}/{{ item.dest }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      loop:
+        - src: "{{ musubi_config_dir }}/secrets.tpl"
+          dest: secrets.tpl
+        - src: "{{ musubi_config_dir }}/shared-inference.htpasswd.tpl"
+          dest: shared-inference.htpasswd.tpl
+        - src: /run/shared-inference-secrets/shared-inference.htpasswd
+          dest: shared-inference.htpasswd
+      no_log: true
+
+    - name: Stage overlapping ingress credential references
+      ansible.builtin.template:
+        src: templates/shared-inference.htpasswd.transition.tpl.j2
+        dest: "{{ musubi_config_dir }}/shared-inference.htpasswd.rotation.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      no_log: true
+
+    - name: Stage replacement Musubi credential references
+      ansible.builtin.template:
+        src: templates/secrets.tpl.j2
+        dest: "{{ musubi_config_dir }}/secrets.shared-inference-v2.tpl"
+        owner: root
+        group: "{{ musubi_service_group }}"
+        mode: "0640"
+      no_log: true
+
+    - name: Rotate the exposed Musubi credential transactionally
+      block:
+        - name: Install the overlapping credential set
+          ansible.builtin.shell:
+            cmd: >-
+              set -a && . /etc/musubi/connect.env && set +a &&
+              candidate=$(mktemp /run/shared-inference-secrets/htpasswd.XXXXXX) &&
+              trap 'rm -f "$candidate"' EXIT &&
+              /usr/bin/op inject
+              -i {{ musubi_config_dir }}/shared-inference.htpasswd.rotation.tpl
+              -o "$candidate" &&
+              cat "$candidate" > /run/shared-inference-secrets/shared-inference.htpasswd &&
+              chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd &&
+              chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd &&
+              docker compose -p shared-inference
+              -f {{ musubi_config_dir }}/shared-inference-compose.yml
+              exec -T inference-ingress nginx -s reload
+            executable: /bin/bash
+          changed_when: true
+          no_log: true
+
+        - name: Prove both old and replacement credentials during overlap
+          ansible.builtin.shell:
+            cmd: >-
+              set -a && . /etc/musubi/connect.env && set +a &&
+              /usr/bin/op run
+              --env-file={{ auth_rotation_backup.path }}/secrets.tpl --
+              /bin/bash -ec '
+              printf "url = \"%s/health\"\n" "$TEI_DENSE_URL" |
+              docker run --rm -i --network musubi-shared-inference
+              {{ musubi_curl_image }} --config - --fail --silent --show-error >/dev/null' &&
+              /usr/bin/op run
+              --env-file={{ musubi_config_dir }}/secrets.shared-inference-v2.tpl --
+              /bin/bash -ec '
+              printf "user = \"%s:%s\"\nurl = \"%s/health\"\n"
+              "$TEI_BASIC_AUTH_USERNAME" "$TEI_BASIC_AUTH_PASSWORD" "$TEI_DENSE_URL" |
+              docker run --rm -i --network musubi-shared-inference
+              {{ musubi_curl_image }} --config - --fail --silent --show-error >/dev/null'
+            executable: /bin/bash
+          changed_when: false
+          no_log: true
+
+        - name: Commit replacement Musubi credential references
+          ansible.builtin.copy:
+            src: "{{ musubi_config_dir }}/secrets.shared-inference-v2.tpl"
+            dest: "{{ musubi_config_dir }}/secrets.tpl"
+            remote_src: true
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          no_log: true
+
+        - name: Restart Musubi with the replacement credential
+          ansible.builtin.systemd_service:
+            name: musubi
+            state: restarted
+
+        - name: Prove the real Musubi consumer uses the replacement credential
+          ansible.builtin.shell:
+            cmd: >-
+              /usr/bin/docker compose -f {{ musubi_config_dir }}/docker-compose.yml
+              exec -T core python -c 'import httpx,os;
+              auth=httpx.BasicAuth(os.environ["TEI_BASIC_AUTH_USERNAME"],os.environ["TEI_BASIC_AUTH_PASSWORD"]);
+              urls=[os.environ[k] for k in ("TEI_DENSE_URL","TEI_SPARSE_URL","TEI_RERANKER_URL")];
+              [httpx.get(u+"/health",auth=auth,timeout=20).raise_for_status() for u in urls]'
+            executable: /bin/bash
+          changed_when: false
+          no_log: true
+
+        - name: Render the replacement-only ingress credential references
+          ansible.builtin.template:
+            src: templates/shared-inference.htpasswd.tpl.j2
+            dest: "{{ musubi_config_dir }}/shared-inference.htpasswd.tpl"
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          no_log: true
+
+        - name: Remove the exposed credential from the ingress
+          ansible.builtin.shell:
+            cmd: >-
+              set -a && . /etc/musubi/connect.env && set +a &&
+              candidate=$(mktemp /run/shared-inference-secrets/htpasswd.XXXXXX) &&
+              trap 'rm -f "$candidate"' EXIT &&
+              /usr/bin/op inject
+              -i {{ musubi_config_dir }}/shared-inference.htpasswd.tpl
+              -o "$candidate" &&
+              cat "$candidate" > /run/shared-inference-secrets/shared-inference.htpasswd &&
+              chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd &&
+              chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd &&
+              docker compose -p shared-inference
+              -f {{ musubi_config_dir }}/shared-inference-compose.yml
+              exec -T inference-ingress nginx -s reload
+            executable: /bin/bash
+          changed_when: true
+          no_log: true
+
+        - name: Prove the exposed credential is rejected
+          ansible.builtin.shell:
+            cmd: >-
+              set -a && . /etc/musubi/connect.env && set +a &&
+              exec /usr/bin/op run
+              --env-file={{ auth_rotation_backup.path }}/secrets.tpl --
+              /bin/bash -ec '
+              status=$(printf "url = \"%s/health\"\n" "$TEI_DENSE_URL" |
+              docker run --rm -i --network musubi-shared-inference
+              {{ musubi_curl_image }} --config - --silent --output /dev/null --write-out "%{http_code}");
+              test "$status" = 401'
+            executable: /bin/bash
+          changed_when: false
+          no_log: true
+
+        - name: Record completed authentication migration
+          ansible.builtin.copy:
+            content: "musubi shared-inference credential v2 active\n"
+            dest: "{{ musubi_config_dir }}/shared-inference-auth-v2"
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+
+      rescue:
+        - name: Restore the previous Musubi credential references
+          ansible.builtin.copy:
+            src: "{{ auth_rotation_backup.path }}/secrets.tpl"
+            dest: "{{ musubi_config_dir }}/secrets.tpl"
+            remote_src: true
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          no_log: true
+
+        - name: Restore the previous ingress credential references
+          ansible.builtin.copy:
+            src: "{{ auth_rotation_backup.path }}/shared-inference.htpasswd.tpl"
+            dest: "{{ musubi_config_dir }}/shared-inference.htpasswd.tpl"
+            remote_src: true
+            owner: root
+            group: "{{ musubi_service_group }}"
+            mode: "0640"
+          no_log: true
+
+        - name: Restore the previous runtime shared-inference.htpasswd
+          ansible.builtin.shell:
+            cmd: >-
+              cat {{ auth_rotation_backup.path }}/shared-inference.htpasswd >
+              /run/shared-inference-secrets/shared-inference.htpasswd &&
+              chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd &&
+              chmod 0400 /run/shared-inference-secrets/shared-inference.htpasswd
+            executable: /bin/bash
+          changed_when: true
+          no_log: true
+
+        - name: Reload the restored ingress credential
+          ansible.builtin.command:
+            cmd: >-
+              docker compose -p shared-inference
+              -f {{ musubi_config_dir }}/shared-inference-compose.yml
+              exec -T inference-ingress nginx -s reload
+          changed_when: true
+
+        - name: Restart Musubi with the restored credential
+          ansible.builtin.systemd_service:
+            name: musubi
+            state: restarted
+
+        - name: Refuse a failed authentication migration after rollback
+          ansible.builtin.fail:
+            msg: Shared-inference authentication migration failed and the previous credential was restored
+
+      always:
+        - name: Remove staged auth templates
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ musubi_config_dir }}/shared-inference.htpasswd.rotation.tpl"
+            - "{{ musubi_config_dir }}/secrets.shared-inference-v2.tpl"
+
+        - name: Remove auth rollback material
+          ansible.builtin.file:
+            path: "{{ auth_rotation_backup.path }}"
+            state: absent
+          check_mode: false

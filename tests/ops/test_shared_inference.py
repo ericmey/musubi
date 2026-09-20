@@ -20,6 +20,8 @@ INFERENCE_UNIT = ANSIBLE / "templates" / "shared-inference.service.j2"
 INGRESS = ANSIBLE / "templates" / "shared-inference-ingress.nginx.conf.j2"
 SECRETS = ANSIBLE / "templates" / "shared-inference.htpasswd.tpl.j2"
 APP_SECRETS = ANSIBLE / "templates" / "secrets.tpl.j2"
+TRANSITION_HTPASSWD = ANSIBLE / "templates" / "shared-inference.htpasswd.transition.tpl.j2"
+AUTH_MIGRATION = ANSIBLE / "shared-inference-auth-migrate.yml"
 ENV = ANSIBLE / "templates" / "env.production.j2"
 ADR = ROOT / "docs" / "Musubi" / "13-decisions" / "0045-authenticated-shared-inference-services.md"
 SLICE = ROOT / "docs" / "Musubi" / "_slices" / "slice-ops-shared-inference.md"
@@ -97,6 +99,33 @@ def test_every_shared_endpoint_requires_authentication() -> None:
     assert 'case "$logs" in *"$sentinel"*|*"$digest"*) exit 96' in migration
 
 
+def test_only_prometheus_joins_the_raw_inference_network() -> None:
+    app = _compose(APP_COMPOSE)
+    shared = _compose(INFERENCE_COMPOSE)
+    assert shared["networks"]["inference-backend"]["name"] == "musubi-inference-backend"
+    assert app["networks"]["inference-monitoring"] == {
+        "name": "musubi-inference-backend",
+        "external": True,
+    }
+    app_members = {
+        name
+        for name, service in app["services"].items()
+        if "inference-monitoring" in service.get("networks", [])
+    }
+    raw_members = {
+        name
+        for name, service in shared["services"].items()
+        if "inference-backend" in service.get("networks", [])
+    }
+    assert app_members == {"prometheus"}
+    assert raw_members == {
+        "tei-dense",
+        "tei-sparse",
+        "tei-reranker",
+        "inference-ingress",
+    }
+
+
 def test_nginx_workers_can_read_only_the_ephemeral_password_hash() -> None:
     unit = INFERENCE_UNIT.read_text()
     assert "chown 101:101 /run/shared-inference-secrets/shared-inference.htpasswd" in unit
@@ -119,7 +148,7 @@ def test_log_privacy_probe_uses_the_curl_image_entrypoint_once() -> None:
 
 def test_consumers_receive_distinct_runtime_credentials() -> None:
     secrets = SECRETS.read_text()
-    assert "musubi:op://" in secrets
+    assert "musubi-v2:op://" in secrets
     assert "chord:op://" in secrets
     assert "op://" in secrets
     assert not secrets.startswith("#")
@@ -128,6 +157,55 @@ def test_consumers_receive_distinct_runtime_credentials() -> None:
     app_secrets = APP_SECRETS.read_text()
     for key in ("TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"):
         assert re.search(rf"^{key}=op://", app_secrets, re.M)
+    assert "musubi_v2_username" in app_secrets
+    assert "musubi_v2_password" in app_secrets
+
+
+def test_exposed_credential_rotation_overlaps_old_and_new_before_cutover() -> None:
+    transition = TRANSITION_HTPASSWD.read_text()
+    assert "musubi:op://" in transition
+    assert "musubi-v2:op://" in transition
+    assert "chord:op://" in transition
+
+    playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
+    tasks = playbook[0]["tasks"]
+    rotation = next(task for task in tasks if "block" in task)
+    names = [task["name"] for task in rotation["block"]]
+    assert names.index("Install the overlapping credential set") < names.index(
+        "Prove both old and replacement credentials during overlap"
+    )
+    assert names.index("Prove both old and replacement credentials during overlap") < names.index(
+        "Restart Musubi with the replacement credential"
+    )
+    assert names.index("Restart Musubi with the replacement credential") < names.index(
+        "Remove the exposed credential from the ingress"
+    )
+    assert names.index("Remove the exposed credential from the ingress") < names.index(
+        "Prove the exposed credential is rejected"
+    )
+
+
+def test_credential_rotation_rolls_back_every_coupled_artifact() -> None:
+    playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
+    rotation = next(task for task in playbook[0]["tasks"] if "block" in task)
+    rescue = "\n".join(str(task) for task in rotation["rescue"])
+    for artifact in (
+        "secrets.tpl",
+        "shared-inference.htpasswd.tpl",
+        "shared-inference.htpasswd",
+    ):
+        assert artifact in rescue
+    assert "Reload the restored ingress credential" in rescue
+    assert "Restart Musubi with the restored credential" in rescue
+
+
+def test_credential_rotation_keeps_secret_material_out_of_host_argv() -> None:
+    migration = AUTH_MIGRATION.read_text()
+    assert "--user $" not in migration
+    assert "-u $" not in migration
+    assert 'printf "user = ' in migration
+    assert "--config -" in migration
+    assert "no_log: true" in migration
 
 
 def test_failed_cutover_keeps_the_old_authenticated_endpoint_protected() -> None:

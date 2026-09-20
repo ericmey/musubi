@@ -28,6 +28,7 @@ def check_component_health(
     *,
     name: str,
     url: str,
+    auth: httpx.Auth | None = None,
     transport: httpx.BaseTransport | None = None,
     timeout: float = _PROBE_TIMEOUT_S,
 ) -> ComponentStatus:
@@ -38,7 +39,7 @@ def check_component_health(
     from musubi.api.responses import ComponentStatus
 
     try:
-        with httpx.Client(transport=transport, timeout=timeout) as client:
+        with httpx.Client(transport=transport, timeout=timeout, auth=auth) as client:
             resp = client.get(url)
     except httpx.HTTPError as exc:
         return ComponentStatus(name=name, healthy=False, detail=repr(exc))
