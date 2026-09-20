@@ -62,6 +62,7 @@ from musubi.lifecycle.maturation import (
     provisional_ttl_sweep,
 )
 from musubi.planes.episodic import EpisodicPlane
+from musubi.planes.episodic.plane import episodic_point_id
 from musubi.store import bootstrap
 from musubi.types.common import KSUID, Err, Ok, epoch_of, utc_now
 from musubi.types.episodic import EpisodicMemory
@@ -1478,6 +1479,176 @@ async def test_a_candidate_changed_after_selection_is_not_transitioned(
     assert "stale/topic" not in after.linked_to_topics
 
 
+async def test_enrichment_addresses_only_the_selected_anchor_point(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+    cursor: Any,
+) -> None:
+    """A duplicate inserted after transition must not share the enrichment write."""
+    from qdrant_client import models as qmodels
+
+    row = await _seed_provisional(plane, ns, content="selected anchor", age_seconds=7200)
+    real_transition = maturation.transition  # type: ignore[attr-defined]
+    duplicate_id = "00000000-0000-4000-8000-00000000e11e"
+    duplicate_before: dict[str, Any] = {}
+
+    def transition_then_duplicate(*args: Any, **kwargs: Any) -> Any:
+        result = real_transition(*args, **kwargs)
+        points, _ = qdrant.scroll(
+            collection_name="musubi_episodic",
+            scroll_filter=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                    ),
+                    qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+                ],
+                must_not=[
+                    qmodels.FieldCondition(
+                        key="point_kind", match=qmodels.MatchValue(value="content")
+                    )
+                ],
+            ),
+            limit=2,
+            with_payload=True,
+        )
+        assert len(points) == 1, "the duplicate plant did not start from one anchor"
+        duplicate_before.update(dict(points[0].payload or {}))
+        qdrant.upsert(
+            collection_name="musubi_episodic",
+            points=[
+                qmodels.PointStruct(
+                    id=duplicate_id,
+                    vector={},
+                    payload=dict(duplicate_before),
+                )
+            ],
+            wait=True,
+        )
+        return result
+
+    monkeypatch.setattr(maturation, "transition", transition_then_duplicate)
+    report = await episodic_maturation_sweep(
+        client=qdrant,
+        sink=sink,
+        coordinator=_coordinator(qdrant, sink),
+        ollama=FakeOllama(topic_map={"selected anchor": ["selected/topic"]}),
+        cursor=cursor,
+        config=_config(min_age_sec=3600),
+    )
+
+    assert duplicate_before, "the duplicate plant never reached the post-transition gap"
+    assert report.transitioned == 1 and report.enriched == 0 and report.failed == 1
+    anchors, _ = qdrant.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                ),
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+            ],
+            must_not=[
+                qmodels.FieldCondition(key="point_kind", match=qmodels.MatchValue(value="content"))
+            ],
+        ),
+        limit=3,
+        with_payload=True,
+    )
+    assert len(anchors) == 2, "the duplicate plant did not land"
+    assert all(dict(anchor.payload or {}) == duplicate_before for anchor in anchors), (
+        "enrichment mutated an ambiguous anchor before refusing the duplicate identity"
+    )
+
+
+async def test_enrichment_point_id_closes_the_post_count_insertion_window(
+    monkeypatch: pytest.MonkeyPatch,
+    plane: EpisodicPlane,
+    qdrant: QdrantClient,
+    ns: str,
+    sink: Any,
+) -> None:
+    """Insert a duplicate after the authoritative count but before the fenced write."""
+    from qdrant_client import models as qmodels
+
+    from musubi.lifecycle.maturation import _apply_enrichment
+
+    row = await plane.create(EpisodicMemory(namespace=ns, content="post-count duplicate"))
+    await plane.transition(
+        namespace=ns,
+        object_id=row.object_id,
+        to_state="matured",
+        actor="test",
+        reason="seed",
+        coordinator=_coordinator(qdrant, sink),
+    )
+    live = await plane.get(namespace=ns, object_id=row.object_id)
+    assert live is not None
+    anchors, _ = qdrant.scroll(
+        collection_name="musubi_episodic",
+        scroll_filter=qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="object_id", match=qmodels.MatchValue(value=str(row.object_id))
+                ),
+                qmodels.FieldCondition(key="namespace", match=qmodels.MatchValue(value=ns)),
+            ],
+            must_not=[
+                qmodels.FieldCondition(key="point_kind", match=qmodels.MatchValue(value="content"))
+            ],
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert len(anchors) == 1
+    anchor_before = dict(anchors[0].payload or {})
+    anchor_id = anchors[0].id
+    duplicate_id = "00000000-0000-4000-8000-00000000e11f"
+    real_scroll = qdrant.scroll
+    planted = False
+
+    def count_then_duplicate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal planted
+        result = real_scroll(*args, **kwargs)
+        if kwargs.get("with_payload") is False and not planted:
+            assert len(result[0]) == 1, "the TOCTOU plant did not observe one anchor"
+            planted = True
+            qdrant.upsert(
+                collection_name="musubi_episodic",
+                points=[
+                    qmodels.PointStruct(id=duplicate_id, vector={}, payload=dict(anchor_before))
+                ],
+                wait=True,
+            )
+        return result
+
+    monkeypatch.setattr(qdrant, "scroll", count_then_duplicate)
+    applied = _apply_enrichment(
+        qdrant,
+        collection="musubi_episodic",
+        point_id=anchor_id,
+        namespace=ns,
+        object_id=row.object_id,
+        expected_version=live.version,
+        tags=["selected"],
+        importance=3,
+        topics=["selected/topic"],
+    )
+
+    assert planted, "the duplicate was not inserted after the authoritative count"
+    assert applied, "the exact selected anchor was not enriched"
+    duplicate = qdrant.retrieve(
+        collection_name="musubi_episodic", ids=[duplicate_id], with_payload=True
+    )
+    assert len(duplicate) == 1
+    assert dict(duplicate[0].payload or {}) == anchor_before, (
+        "a duplicate inserted after the count shared the selected anchor's write"
+    )
+
+
 async def test_an_ordinary_row_is_still_enriched(
     plane: EpisodicPlane,
     qdrant: QdrantClient,
@@ -1563,6 +1734,7 @@ async def test_v2_content_point_is_never_enriched(
     applied = _apply_enrichment(
         qdrant,
         collection="musubi_episodic",
+        point_id=episodic_point_id(row.object_id),
         namespace=ns,
         object_id=row.object_id,
         expected_version=live.version,
@@ -1689,6 +1861,7 @@ async def test_a_row_archived_between_the_fence_and_the_write_is_not_reported(
     applied = _apply_enrichment(
         qdrant,
         collection="musubi_episodic",
+        point_id=episodic_point_id(row.object_id),
         namespace=ns,
         object_id=row.object_id,
         expected_version=live.version,
@@ -1789,6 +1962,7 @@ async def test_enrichment_does_not_cross_namespaces_at_runtime(
     applied = _apply_enrichment(
         qdrant,
         collection="musubi_episodic",
+        point_id=episodic_point_id(row.object_id),
         namespace=ns,
         object_id=row.object_id,
         expected_version=live.version,
@@ -1862,6 +2036,7 @@ async def test_a_row_restored_to_matured_does_not_accept_stale_enrichment(
     applied = _apply_enrichment(
         qdrant,
         collection="musubi_episodic",
+        point_id=episodic_point_id(row.object_id),
         namespace=ns,
         object_id=row.object_id,
         expected_version=stale_version,

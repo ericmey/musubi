@@ -556,6 +556,7 @@ async def episodic_maturation_sweep(
             applied = _apply_enrichment(
                 client,
                 collection=_EPISODIC_COLLECTION,
+                point_id=row["_qdrant_point_id"],
                 namespace=row["namespace"],
                 object_id=object_id,
                 expected_version=matured_version,
@@ -924,7 +925,12 @@ def _scroll_eligible(
     out: list[dict[str, Any]] = []
     for rec in records:
         if rec.payload:
-            out.append(dict(rec.payload))
+            row = dict(rec.payload)
+            # Preserve the exact physical row selected by the sweep. Identity payload
+            # fields are not unique under corruption, so the later enrichment write
+            # must address this point as well as re-checking its logical fences.
+            row["_qdrant_point_id"] = rec.id
+            out.append(row)
     return out
 
 
@@ -1104,6 +1110,7 @@ def _apply_enrichment(
     client: QdrantClient,
     *,
     collection: str,
+    point_id: models.ExtendedPointId,
     namespace: str,
     object_id: KSUID,
     expected_version: int,
@@ -1150,7 +1157,7 @@ def _apply_enrichment(
     # at all: a FieldCondition cannot match a point that lacks the field. That
     # exclusion is load-bearing rather than incidental, so
     # `test_v2_content_point_is_never_enriched` pins it.
-    conditions: list[models.Condition] = [
+    logical_conditions: list[models.Condition] = [
         # `object_id` is NOT globally unique -- the same id can exist under a
         # different namespace, and an unqualified filter would enrich a
         # stranger's row (Copilot, musubi#771).
@@ -1164,6 +1171,28 @@ def _apply_enrichment(
         # this condition refuses anything that is not the exact row this sweep
         # transitioned.
         models.FieldCondition(key="version", match=models.MatchValue(value=expected_version)),
+    ]
+
+    # Refuse ambiguity BEFORE writing, matching the coordinator's canonical policy.
+    # The physical id captured at candidate selection is then included in the server
+    # fence to close the insertion-after-count race without deriving an id (converted
+    # legacy anchors do not necessarily use the current deterministic id scheme).
+    authoritative, _ = client.scroll(
+        collection_name=collection,
+        scroll_filter=models.Filter(
+            must=logical_conditions,
+            must_not=[
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value="content"))
+            ],
+        ),
+        limit=2,
+        with_payload=False,
+    )
+    if len(authoritative) != 1 or authoritative[0].id != point_id:
+        return False
+    conditions: list[models.Condition] = [
+        models.HasIdCondition(has_id=[point_id]),
+        *logical_conditions,
     ]
 
     # THE LEASE CHECK IS THE WRITE'S OWN CONDITION, not a preceding read.

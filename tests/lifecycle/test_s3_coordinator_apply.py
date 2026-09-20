@@ -651,3 +651,53 @@ def test_duplicate_anchors_are_refused_before_any_conditional_mutation(
         "a duplicate authoritative anchor was mutated before ambiguity was refused"
     )
     assert all((point.payload or {}).get("version") == seed.version for point in rows)
+
+
+def test_an_anchor_inserted_after_the_count_cannot_widen_the_conditional_write(
+    env: tuple[QdrantClient, _Seed, Path],
+) -> None:
+    """The captured physical point id closes the post-count insertion window."""
+    client, seed, db = env
+    coordinator = _coord(client, db)
+    real_read = coordinator._read_object_with_id
+    calls = 0
+    duplicate_id = "00000000-0000-4000-8000-00000000d00e"
+
+    def read_then_duplicate(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        result = real_read(*args, **kwargs)
+        calls += 1
+        if calls == 2:
+            payload, count, _ = result
+            assert count == 1, "the post-count plant did not start from one anchor"
+            client.upsert(
+                collection_name=seed.collection,
+                points=[models.PointStruct(id=duplicate_id, vector={}, payload=dict(payload))],
+                wait=True,
+            )
+        return result
+
+    coordinator._read_object_with_id = read_then_duplicate  # type: ignore[method-assign]
+    result = coordinator.transition(_intent(seed, "matured", opk="duplicate-after-count"))
+
+    assert isinstance(result, Err), "readback must still report the duplicate identity"
+    rows, _ = client.scroll(
+        collection_name=seed.collection,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="object_id", match=models.MatchValue(value=seed.object_id)
+                ),
+                models.FieldCondition(
+                    key="namespace", match=models.MatchValue(value=seed.namespace)
+                ),
+            ]
+        ),
+        limit=3,
+        with_payload=True,
+    )
+    assert len(rows) == 2, "the post-count duplicate plant did not land"
+    states = {(point.id, (point.payload or {}).get("state")) for point in rows}
+    assert (duplicate_id, "provisional") in states, (
+        "the identity filter widened the write to an anchor inserted after the count"
+    )

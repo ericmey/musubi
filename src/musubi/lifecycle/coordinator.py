@@ -934,6 +934,13 @@ class LifecycleTransitionCoordinator:
         concept/thought/artifact row (no content points) are unaffected: the exclusion is a no-op there.
         Without this, every durable lifecycle transition on a reinforced/updated episodic or curated
         object would fence/abandon on the count check."""
+        payload, count, _ = self._read_object_with_id(collection, object_id, namespace)
+        return payload, count
+
+    def _read_object_with_id(
+        self, collection: str, object_id: str, namespace: str
+    ) -> tuple[dict[str, Any], int, models.ExtendedPointId | None]:
+        """Return the authoritative payload, match count, and selected physical point id."""
         points, _ = self._require_client().scroll(
             collection_name=collection,
             scroll_filter=models.Filter(
@@ -955,7 +962,8 @@ class LifecycleTransitionCoordinator:
             with_payload=True,
         )
         payload = dict(points[0].payload or {}) if points else {}
-        return payload, len(points)
+        point_id = points[0].id if points else None
+        return payload, len(points), point_id
 
     def _persist_event(self, intent: TransitionIntent, opk: str, event_id: str) -> None:
         """Build the canonical :class:`LifecycleEvent` from an exact pre-apply read and persist its
@@ -1071,8 +1079,10 @@ class LifecycleTransitionCoordinator:
         # So: clear an EXPIRED ORDINARY token first, behind its own exact fence, and
         # then let IsEmpty do the real gating. A writer that acquires in between makes
         # IsEmpty fail, so the cleanup cannot open a window.
-        held, held_count = self._read_object(collection, object_id, namespace)
-        if held_count != 1:
+        held, held_count, held_point_id = self._read_object_with_id(
+            collection, object_id, namespace
+        )
+        if held_count != 1 or held_point_id is None:
             # Refuse before lease cleanup OR the lifecycle write. Both mutations use
             # identity filters, so duplicate authoritative anchors would otherwise all
             # be changed before the readback noticed the ambiguity (Copilot, musubi#771).
@@ -1102,6 +1112,7 @@ class LifecycleTransitionCoordinator:
                 keys=["update_lease_token"],
                 points=models.Filter(
                     must=[
+                        models.HasIdCondition(has_id=[held_point_id]),
                         models.FieldCondition(
                             key="object_id", match=models.MatchValue(value=object_id)
                         ),
@@ -1122,6 +1133,7 @@ class LifecycleTransitionCoordinator:
             payload=dict(patch),
             points=models.Filter(
                 must=[
+                    models.HasIdCondition(has_id=[held_point_id]),
                     models.FieldCondition(
                         key="object_id", match=models.MatchValue(value=object_id)
                     ),
