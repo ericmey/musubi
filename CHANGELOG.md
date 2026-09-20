@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.13](https://github.com/ericmey/musubi/compare/v1.26.12...v1.26.13) (2026-09-20)
+
+
+### Bug Fixes
+
+* **ci:** cover all integration-marked tests ([#801](https://github.com/ericmey/musubi/issues/801)) ([dc3e5e3](https://github.com/ericmey/musubi/commit/dc3e5e33607eb7ed0192a176b84cccd708b3b3c8))
+
 ## [1.26.12](https://github.com/ericmey/musubi/compare/v1.26.11...v1.26.12) (2026-09-20)
 
 
