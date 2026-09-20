@@ -57,6 +57,8 @@ decision but does not carry a separate Test Contract.
   same-tenant but out of scope.
 - `tests/api/test_idem007_retraction_saga.py` — keep the different-principal
   conflict fixture internally valid under REQ-7.
+- `tests/api/test_idem006_receipt_audit.py` — normalize observer and target
+  identities to the canonical subject encoding.
 - `docs/Musubi/13-decisions/ADR-auth-boundary-consolidation.md`
 - `docs/Musubi/_slices/slice-req7-token-identity-consistency.md`
 - `docs/Musubi/_inbox/locks/slice-req7-token-identity-consistency.lock`

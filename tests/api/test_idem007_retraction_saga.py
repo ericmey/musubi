@@ -288,7 +288,7 @@ def test_both_namespace_authorizations_finish_before_first_stored_state_read(
     memory = _seed(episodic)
     token = _mint(
         api_settings,
-        subject="episodic-only",
+        subject="eric-claude-code",
         presence="eric/claude-code",
         scopes=[f"{_NS}:rw"],
     )
