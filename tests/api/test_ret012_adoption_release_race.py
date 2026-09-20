@@ -32,11 +32,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from qdrant_client import QdrantClient, models
+from qdrant_client import QdrantClient
 
 from musubi.planes.episodic import EpisodicPlane
 from musubi.store.mutation_lease import is_expired_done_token
-
 from tests.api.test_idem007_retraction_saga import _body, _headers, _layout, _seed
 
 
@@ -68,7 +67,7 @@ def _crash_committed_retraction(
     real_delete = qdrant.delete_payload
     crashed: list[bool] = []
 
-    def crash_the_release(*args: object, **kwargs: object) -> object:
+    def crash_the_release(*args: Any, **kwargs: Any) -> Any:
         if not crashed:
             crashed.append(True)
             raise OSError("injected crash in committed-token release")
@@ -129,7 +128,7 @@ def test_adopted_release_answers_with_saga_version_not_concurrent_writers(
     landed: list[int] = []
     real_delete = qdrant.delete_payload
 
-    def delete_then_intrude(*args: object, **kwargs: object) -> object:
+    def delete_then_intrude(*args: Any, **kwargs: Any) -> Any:
         outcome = real_delete(*args, **kwargs)
         if not landed:
             row = _anchor_row(qdrant, object_id)

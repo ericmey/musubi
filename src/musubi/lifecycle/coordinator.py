@@ -1442,7 +1442,15 @@ class LifecycleTransitionCoordinator:
         # retry forever against a row that will never accept the write
         # (Copilot round 22 on musubi#732; same contract as the guard in
         # `_apply_conditional`, which this deliberately mirrors).
-        held, held_count, _ = self._read_object_with_id(coll, oid, ns)
+        # Existence is asked POSITIVELY, never by catching the read's failure. Custom
+        # intents span kinds that never touch a retractable row at all, and a collection
+        # that does not exist provably holds no retracted row -- but an exception
+        # swallowed here would also hide a real read failure, which is the fail-open
+        # shape this file already paid for once (musubi#40).
+        if self._require_client().collection_exists(collection_name=coll):
+            held, held_count, _ = self._read_object_with_id(coll, oid, ns)
+        else:
+            held, held_count = {}, 0
         if held_count == 1 and held.get("retraction_evidence") is not None:
             self._persist_attempt(
                 opk,
