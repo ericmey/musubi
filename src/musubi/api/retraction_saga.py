@@ -294,10 +294,17 @@ async def _release_adopted_done_token(
     qdrant.delete_payload(
         # `names.py` is explicit that the rest of the codebase must never stringify a
         # collection name inline, because a rename needs a dual-write migration and an
-        # inlined name silently survives it. This line is branch-introduced (7d5c932b),
-        # so it is the whole of that violation within this slice -- the other three
-        # `collection_name=` inlines live in `lifecycle/reflection.py`, which #732 does
-        # not own, and route to their own issue (Copilot round 30 on musubi#732).
+        # inlined name silently survives it. This line is branch-introduced (7d5c932b).
+        #
+        # The branch-introduced set in this file is TWO sites, not one: this and the
+        # `retract_non_embedding_payload` call in the committed-repair branch (4befc383e).
+        # The first enumeration found only this one because it was keyed on the spelling
+        # `collection_name=`, and the other site passes the collection POSITIONALLY --
+        # a search keyed on syntax cannot enumerate a set defined by meaning.
+        #
+        # The remaining literals in this file, lines ~127 and ~593, are pre-existing on
+        # main (a72ba70b0, 2026-08-03) and route to the separate names.py issue with the
+        # `lifecycle/reflection.py` sites; #732 does not own them (Copilot round 30).
         collection_name=collection_for_plane("episodic"),
         keys=["update_lease_token"],
         points=token_filter(release_version),
@@ -436,7 +443,9 @@ async def execute_retraction(
             try:
                 published = retract_non_embedding_payload(
                     qdrant,
-                    "musubi_episodic",
+                    # Branch-introduced (4befc383e), so this slice owns it. Positional,
+                    # which is exactly why the `collection_name=` sweep missed it.
+                    collection_for_plane("episodic"),
                     namespace=body.namespace,
                     object_id=object_id,
                     observed_payload=stored.raw,

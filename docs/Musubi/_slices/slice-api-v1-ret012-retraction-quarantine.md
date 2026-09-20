@@ -53,6 +53,9 @@ the escrow artifact remain available for correction and audit.
 - `tests/api/test_ret012_retraction_quarantine.py`
 - `tests/api/test_ret012_adoption_release_race.py` (adoption-release receipt race)
 - `tests/store/test_immutable_vectors_legacy_fence.py` (legacy fence arm preservation)
+- `tests/api/test_retraction_saga_collection_names.py` (**added by this slice** — the
+  inline-collection-name set in `retraction_saga.py`, enumerated by AST rather than by
+  grep, plus a red-proof that the walker sees a POSITIONAL literal)
 - `tests/lifecycle/test_custom_intent_seam.py` (custom-intent preflight: classification
   and cardinality — **pre-existing file, extended by this slice**)
 - `tests/support/identity_seed.py` (**shared seeding helper, added by this slice** — see
