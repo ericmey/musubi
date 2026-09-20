@@ -147,6 +147,32 @@ def _issued_us(token: str) -> int:
         return 0  # unparseable → ancient → always takeover-eligible
 
 
+def is_expired_done_token(token: object, *, now_us: int | None = None) -> bool:
+    """Return whether ``token`` is a complete, expired committed-write token.
+
+    This is the shared boundary for recovery paths that need to distinguish a
+    crashed post-commit writer from a live writer or an unattributable token.
+    Shape alone is not ownership: a valid ``done`` token remains exclusive
+    until the ordinary mutation-lease TTL has elapsed.
+    """
+    if not isinstance(token, str):
+        return False
+    parts = token.split(":")
+    if len(parts) != 3 or parts[0] != "done" or not parts[2]:
+        return False
+    issued_text = parts[1]
+    if not issued_text.isascii() or not issued_text.isdigit():
+        return False
+    try:
+        issued_us = int(issued_text)
+    except ValueError:
+        return False
+    if issued_us <= 0:
+        return False
+    observed_now = int(time.time() * 1_000_000) if now_us is None else now_us
+    return observed_now - issued_us > _LEASE_TTL_US
+
+
 def _read(client: QdrantClient, collection: str, namespace: str, object_id: str) -> dict[str, Any]:
     records, _ = client.scroll(
         collection_name=collection,
@@ -401,4 +427,4 @@ def _reject_seam_fields(changes: dict[str, Any]) -> None:
         )
 
 
-__all__ = ["MutationLeaseConflict", "MutationPlan", "owned_update"]
+__all__ = ["MutationLeaseConflict", "MutationPlan", "is_expired_done_token", "owned_update"]

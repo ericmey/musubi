@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.26.10](https://github.com/ericmey/musubi/compare/v1.26.9...v1.26.10) (2026-09-20)
+
+
+### Bug Fixes
+
+* **store:** expose strict expired done-token recovery check ([#772](https://github.com/ericmey/musubi/issues/772)) ([9bd5971](https://github.com/ericmey/musubi/commit/9bd5971ab5b77a52aa4c48e3a7b506ed6b0e2db6))
+
+## [1.26.9](https://github.com/ericmey/musubi/compare/v1.26.8...v1.26.9) (2026-09-20)
+
+
+### Bug Fixes
+
+* **deploy:** bound noninteractive auth rendering ([#769](https://github.com/ericmey/musubi/issues/769)) ([a8e33ce](https://github.com/ericmey/musubi/commit/a8e33ce138f991f866cc9a5b5afe06cda1018909))
+
 ## [1.26.8](https://github.com/ericmey/musubi/compare/v1.26.7...v1.26.8) (2026-09-20)
 
 
