@@ -81,7 +81,13 @@
               /usr/bin/op run
               --env-file={{ auth_rotation_backup.path }}/secrets.tpl --
               /bin/bash -ec '
-              printf "url = \"%s/health\"\n" "$TEI_DENSE_URL" |
+              {
+              if [[ -n "${TEI_BASIC_AUTH_USERNAME:-}" || -n "${TEI_BASIC_AUTH_PASSWORD:-}" ]]; then
+                [[ -n "${TEI_BASIC_AUTH_USERNAME:-}" && -n "${TEI_BASIC_AUTH_PASSWORD:-}" ]] || exit 2;
+                printf "user = \"%s:%s\"\n" "$TEI_BASIC_AUTH_USERNAME" "$TEI_BASIC_AUTH_PASSWORD";
+              fi;
+              printf "url = \"%s/health\"\n" "$TEI_DENSE_URL";
+              } |
               docker run --rm -i --network musubi-shared-inference
               {{ musubi_curl_image }} --config - --fail --silent --show-error >/dev/null' &&
               /usr/bin/op run
@@ -157,7 +163,13 @@
               exec /usr/bin/op run
               --env-file={{ auth_rotation_backup.path }}/secrets.tpl --
               /bin/bash -ec '
-              status=$(printf "url = \"%s/health\"\n" "$TEI_DENSE_URL" |
+              status=$({
+              if [[ -n "${TEI_BASIC_AUTH_USERNAME:-}" || -n "${TEI_BASIC_AUTH_PASSWORD:-}" ]]; then
+                [[ -n "${TEI_BASIC_AUTH_USERNAME:-}" && -n "${TEI_BASIC_AUTH_PASSWORD:-}" ]] || exit 2;
+                printf "user = \"%s:%s\"\n" "$TEI_BASIC_AUTH_USERNAME" "$TEI_BASIC_AUTH_PASSWORD";
+              fi;
+              printf "url = \"%s/health\"\n" "$TEI_DENSE_URL";
+              } |
               docker run --rm -i --network musubi-shared-inference
               {{ musubi_curl_image }} --config - --silent --output /dev/null --write-out "%{http_code}");
               test "$status" = 401'

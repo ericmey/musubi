@@ -185,6 +185,21 @@ def test_exposed_credential_rotation_overlaps_old_and_new_before_cutover() -> No
     )
 
 
+def test_old_credential_probes_support_url_or_header_auth() -> None:
+    playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
+    rotation = next(task for task in playbook[0]["tasks"] if "block" in task)
+    by_name = {task["name"]: task for task in rotation["block"]}
+    for name in (
+        "Prove both old and replacement credentials during overlap",
+        "Prove the exposed credential is rejected",
+    ):
+        command = by_name[name]["ansible.builtin.shell"]["cmd"]
+        assert "${TEI_BASIC_AUTH_USERNAME:-}" in command
+        assert "${TEI_BASIC_AUTH_PASSWORD:-}" in command
+        assert 'printf "user = \\"%s:%s\\"\\n"' in command
+        assert 'printf "url = \\"%s/health\\"\\n"' in command
+
+
 def test_credential_rotation_rolls_back_every_coupled_artifact() -> None:
     playbook = yaml.safe_load(AUTH_MIGRATION.read_text())
     rotation = next(task for task in playbook[0]["tasks"] if "block" in task)
