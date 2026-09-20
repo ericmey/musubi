@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import time
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -190,7 +190,7 @@ async def test_deep_mode_invokes_rerank(monkeypatch: pytest.MonkeyPatch) -> None
     monkeypatch.setattr("musubi.retrieve.deep.rerank", tracking_rerank)
     monkeypatch.setattr(
         "musubi.retrieve.deep._hydrate_one",
-        AsyncMock(side_effect=lambda hit, *a, **k: hit),
+        MagicMock(side_effect=lambda hit, *a, **k: hit),
     )
 
     result = await _retrieve(mode="deep", reranker=_TrackingReranker(), limit=10)
@@ -236,7 +236,7 @@ async def test_deep_mode_hydrates_when_flag_true(monkeypatch: pytest.MonkeyPatch
     async def fake_hybrid(*args: Any, **kwargs: Any) -> Any:
         return Ok(value=HybridSearchResult(hits=_hybrid_hits(3), warnings=()))
 
-    async def tracking_hydrate(hit: Any, *args: Any, **kwargs: Any) -> Any:
+    def tracking_hydrate(hit: Any, *args: Any, **kwargs: Any) -> Any:
         hydrate_calls["n"] += 1
         return hit
 
@@ -299,7 +299,7 @@ async def test_steps_run_in_documented_order(monkeypatch: pytest.MonkeyPatch) ->
         assert candidates is not None
         return RerankResult(hits=list(candidates), warnings=())
 
-    async def fake_hydrate(hit: Any, *args: Any, **kwargs: Any) -> Any:
+    def fake_hydrate(hit: Any, *args: Any, **kwargs: Any) -> Any:
         order.append("hydrate")
         return hit
 
@@ -376,9 +376,9 @@ async def test_hydrate_fetches_run_in_parallel(monkeypatch: pytest.MonkeyPatch) 
     async def fake_hybrid(*args: Any, **kwargs: Any) -> Any:
         return Ok(value=HybridSearchResult(hits=_hybrid_hits(3), warnings=()))
 
-    async def slow_hydrate(hit: Any, *args: Any, **kwargs: Any) -> Any:
+    def slow_hydrate(hit: Any, *args: Any, **kwargs: Any) -> Any:
         started.append(time.monotonic())
-        await asyncio.sleep(0.05)
+        time.sleep(0.05)
         return hit
 
     # Skip rerank for tiny sets (<=5) — deep still hydrates after rank.
@@ -451,7 +451,7 @@ async def test_rerank_timeout_returns_with_warning(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("musubi.retrieve.deep.hybrid_search", fake_hybrid)
     monkeypatch.setattr(
         "musubi.retrieve.deep._hydrate_one",
-        AsyncMock(side_effect=lambda hit, *a, **k: hit),
+        MagicMock(side_effect=lambda hit, *a, **k: hit),
     )
 
     result = await _retrieve(
