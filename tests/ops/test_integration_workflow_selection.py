@@ -52,6 +52,13 @@ def test_workflow_loads_live_stack_settings_before_marker_wide_suite() -> None:
     assert source_index < port_index < pytest_index
 
 
+def test_workflow_qdrant_port_is_job_scoped_for_compose_and_pytest() -> None:
+    job = _workflow()["jobs"]["integration"]
+    assert job["env"]["MUSUBI_TEST_QDRANT_PORT"] == "6333"
+    run_step = next(step for step in job["steps"] if step.get("name") == "Run integration suite")
+    assert "MUSUBI_TEST_QDRANT_PORT" not in run_step.get("env", {})
+
+
 def test_pull_request_trigger_covers_new_test_files_by_default() -> None:
     paths = _workflow()["on"]["pull_request"]["paths"]
     assert "tests/**" in paths
@@ -79,3 +86,15 @@ def test_local_integration_target_loads_settings_and_maps_custom_qdrant_port() -
     port_index = target.index("export QDRANT_PORT=$$MUSUBI_TEST_QDRANT_PORT")
     pytest_index = target.index("uv run pytest")
     assert source_index < port_index < pytest_index
+
+
+def test_local_integration_target_manages_stack_lifecycle() -> None:
+    makefile = MAKEFILE.read_text()
+    target = makefile.split("test-integration:", 1)[1]
+    target = target.split("\n\n", 1)[0]
+    trap_index = target.index("trap cleanup EXIT")
+    boot_index = target.index("up -d --wait")
+    pull_index = target.index("--profile pull run --rm ollama-pull")
+    pytest_index = target.index("uv run pytest")
+    assert "down -v --remove-orphans" in target
+    assert trap_index < boot_index < pull_index < pytest_index
