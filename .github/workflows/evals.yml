@@ -86,9 +86,6 @@ jobs:
     permissions:
       contents: read
       issues: write
-    concurrency:
-      group: scheduled-evals-incident
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - name: Reconcile scheduled Evals incident
