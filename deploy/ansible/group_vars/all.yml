@@ -38,7 +38,7 @@ musubi_core_port: 8100
 # For what's in a given version, see CHANGELOG.md (authoritative)
 # rather than a comment here — version-specific notes rot; the
 # changelog is the source of truth.
-musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:3866bb852fb8811b7b38a5ef53acedb92f560ad6c1d8afebf1601c244997d175"
+musubi_core_image: "ghcr.io/ericmey/musubi-core@sha256:0ce3d8ca9c632587f454cd7c733861d8deee028340f16fdb2e75bcb585acbded"
 # Human-readable version paired with `musubi_core_image`. Rendered into
 # `.env.production` as `MUSUBI_SERVICE_VERSION` so spans + dashboards carry
 # the tag, not just the digest. Bumped in lockstep with the image pin by
