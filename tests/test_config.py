@@ -243,6 +243,21 @@ def test_tei_basic_auth_refuses_whitespace_only_credentials(
         get_settings()
 
 
+@pytest.mark.parametrize(
+    "name",
+    ["TEI_DENSE_URL", "TEI_SPARSE_URL", "TEI_RERANKER_URL"],
+)
+def test_tei_urls_refuse_embedded_credentials(
+    name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    minimal_env: Path,
+    _reset_cache: None,
+) -> None:
+    monkeypatch.setenv(name, "http://legacy-user:legacy-password@tei")
+    with pytest.raises(ValidationError, match="must not contain embedded credentials"):
+        get_settings()
+
+
 # ---------------------------------------------------------------------------
 # 5. Type coercion from strings
 # ---------------------------------------------------------------------------

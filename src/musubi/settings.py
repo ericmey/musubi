@@ -425,6 +425,14 @@ class Settings(BaseSettings):
         Keeping the credential out of endpoint URLs prevents httpx request
         logging, exceptions, and request reprs from disclosing it.
         """
+        for field_name in ("tei_dense_url", "tei_sparse_url", "tei_reranker_url"):
+            endpoint = getattr(self, field_name)
+            if endpoint.username is not None or endpoint.password is not None:
+                raise ValueError(
+                    f"{field_name} must not contain embedded credentials; "
+                    "use tei_basic_auth_username and tei_basic_auth_password"
+                )
+
         username = self.tei_basic_auth_username
         password = self.tei_basic_auth_password
         if (username is None) != (password is None):
