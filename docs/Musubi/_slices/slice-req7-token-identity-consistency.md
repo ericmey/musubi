@@ -138,3 +138,12 @@ validator; the behavior each historical test proves is unchanged.
 - Review closeout made signature verification intrinsic before any secret
   mount, runs the candidate container as the controller UID/GID for `0600`
   files, and removed digest-pin auto-merge so the live preflight is pre-pin.
+- Review regressions prove an unlisted discovered credential fails, `0600`
+  credentials are readable under the controller identity, the exact signed
+  digest is verified before secrets, auto-merge is absent, and the pre-pin
+  command is present. Shiori's cross-list arithmetic assertion was replaced by
+  structural membership checks.
+- Verification: `make check` passed with 2,916 passed, 195 skipped, 145
+  deselected, one expected xfail, and 89% total coverage; the focused auth,
+  deployment, and release-contract set passed 114/114. Test Contract remains
+  10/10 with no deferrals.
