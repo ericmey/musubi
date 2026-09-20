@@ -30,6 +30,8 @@ ROOT = Path(__file__).resolve().parents[2]
 UPDATE_PLAYBOOK = ROOT / "deploy" / "ansible" / "update.yml"
 RUNBOOK = ROOT / "deploy" / "runbooks" / "upgrade.md"
 DEPLOY_PLAYBOOK = ROOT / "deploy" / "ansible" / "deploy.yml"
+DEPLOY_WRAPPER = ROOT / "scripts" / "musubi-deploy"
+PREFLIGHT_MANIFEST = ROOT / "deploy" / "credential-preflight.json"
 
 
 def _load(path: Path) -> list[dict[str, Any]]:
@@ -214,6 +216,24 @@ def test_update_asserts_recreated_core_services_match_the_pinned_digest() -> Non
     )
     missing = [fragment for fragment in required if fragment not in text]
     assert not missing, f"post-recreate digest guard missing: {missing!r}"
+
+
+def test_apply_wrapper_runs_candidate_image_credential_preflight_before_ansible() -> None:
+    text = DEPLOY_WRAPPER.read_text()
+    preflight = text.index("musubi.auth.credential_preflight")
+    deploy = text.index('exec "${cmd[@]}"')
+    assert preflight < deploy
+    assert '"$candidate_image"' in text
+    assert "--entrypoint python" in text
+    assert "--credential-dir /credentials" in text
+
+
+def test_candidate_preflight_manifest_declares_twelve_live_and_one_template() -> None:
+    manifest = yaml.safe_load(PREFLIGHT_MANIFEST.read_text())
+    assert len(manifest["live"]) == 12
+    assert len(manifest["templates"]) == 1
+    assert manifest["templates"][0]["file"] == "musubi-mcp.env"
+    assert manifest["templates"][0]["classification"] == "non-consumed-template"
 
 
 def test_update_writes_upgrade_history() -> None:

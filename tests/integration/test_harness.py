@@ -277,7 +277,7 @@ def test_mint_operator_token_returns_valid_hs256(monkeypatch: pytest.MonkeyPatch
     # Scope is a space-separated set: operator + per-namespace :rw entries.
     assert "operator" in decoded["scope"].split()
     assert decoded["aud"] == "musubi"
-    assert decoded["sub"] == decoded["presence"].replace("/", "-")
+    assert decoded["sub"] == decoded["presence"]
     presence_tenant = decoded["presence"].split("/", 1)[0]
     concrete_scope_tenants = {
         scope.rsplit(":", 1)[0].split("/", 1)[0]

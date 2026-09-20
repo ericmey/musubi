@@ -235,7 +235,7 @@ def _mint_operator_token(jwt_signing_key: str) -> str:
     scopes = ["operator", *(f"{ns}:rw" for ns in namespaces)]
     payload = {
         "iss": "https://auth.test.local",
-        "sub": "eric-integration-test",
+        "sub": "eric/integration-test",
         "aud": "musubi",
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(hours=2)).timestamp()),
