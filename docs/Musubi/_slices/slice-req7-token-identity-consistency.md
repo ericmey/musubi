@@ -68,6 +68,8 @@ validator; the behavior each historical test proves is unchanged.
   different-principal fixtures internally valid under REQ-7.
 - `tests/api/test_idem006_receipt_audit.py` — normalize observer and target
   identities to the canonical subject encoding.
+- `tests/integration/conftest.py` and `tests/integration/test_harness.py` — make
+  the live harness token satisfy REQ-7 and lock that identity relationship.
 
 ## Forbidden paths
 
@@ -108,7 +110,9 @@ validator; the behavior each historical test proves is unchanged.
   so their intended authorization and idempotency assertions execute after the
   stricter validation boundary.
 - Resolved the Copilot subject/presence review thread with a regression test and
-  exact-head implementation evidence.
+  exact-head implementation evidence. Follow-up review also tightened concrete
+  presence validation against embedded wildcards, corrected the live integration
+  token producer, and made the D6 `jti` exclusion test use distinct token IDs.
 - Test Contract closure: all ten bullets pass in
   `tests/api/test_req7_token_identity_invariant.py` (lines 42, 60, 79, 91, 101,
   114, 123, 132, 153, and 173); no skips or out-of-scope declarations.
