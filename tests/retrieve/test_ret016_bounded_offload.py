@@ -9,6 +9,7 @@ from dataclasses import replace
 from typing import Any
 
 import pytest
+from qdrant_client import models
 
 from musubi.retrieve import deep, hybrid
 from musubi.retrieve.scoring import ScoreComponents, ScoredHit
@@ -74,6 +75,43 @@ async def test_qdrant_offload_caps_simultaneous_blocking_calls(
     )
 
     assert peak == QDRANT_OFFLOAD_WORKERS
+
+
+@pytest.mark.asyncio
+async def test_query_points_calls_share_the_configured_qdrant_ceiling() -> None:
+    from musubi.retrieve.offload import QDRANT_OFFLOAD_WORKERS
+
+    class BlockingClient:
+        def __init__(self) -> None:
+            self.lock = threading.Lock()
+            self.active = 0
+            self.peak = 0
+
+        def query_points(self, **_kwargs: Any) -> object:
+            with self.lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+            time.sleep(0.03)
+            with self.lock:
+                self.active -= 1
+            return object()
+
+    client = BlockingClient()
+    await asyncio.gather(
+        *(
+            hybrid._query_points(
+                client,  # type: ignore[arg-type]
+                collection="musubi_episodic",
+                prefetch=[],
+                query_filter=models.Filter(),
+                limit=1,
+                timeout_s=1.0,
+            )
+            for _ in range(QDRANT_OFFLOAD_WORKERS * 3)
+        )
+    )
+
+    assert client.peak == QDRANT_OFFLOAD_WORKERS
 
 
 @pytest.mark.asyncio
