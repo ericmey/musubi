@@ -1447,10 +1447,61 @@ class LifecycleTransitionCoordinator:
         # that does not exist provably holds no retracted row -- but an exception
         # swallowed here would also hide a real read failure, which is the fail-open
         # shape this file already paid for once (musubi#40).
-        if self._require_client().collection_exists(collection_name=coll):
-            held, held_count, _ = self._read_object_with_id(coll, oid, ns)
-        else:
-            held, held_count = {}, 0
+        # The preflight gets the SAME failure classification as the handler below, and
+        # for the same reason. It was originally written outside any try, so a transient
+        # Qdrant failure here escaped `_drive_custom_intent`, propagated out of
+        # `reconcile_once`, and took down the whole loop -- one unreachable backend
+        # aborting every other claimable intent in the batch, with this row left claimed
+        # and no attempt persisted. A read this guard performs must fail exactly the way
+        # a read the handler performs fails: transient -> pending + backoff, terminal ->
+        # abandoned (Copilot round 23 on musubi#732).
+        try:
+            if self._require_client().collection_exists(collection_name=coll):
+                held, held_count, _ = self._read_object_with_id(coll, oid, ns)
+            else:
+                held, held_count = {}, 0
+        except Exception as exc:
+            cls = self._classify(exc)
+            self._observe_failure(cls)
+            if cls == "terminal":
+                self._persist_attempt(
+                    opk,
+                    reschedule=False,
+                    state="ABANDONED",
+                    failure_class="terminal",
+                    owner=token,
+                    release=True,
+                )
+                counts["abandoned"] += 1
+            else:
+                self._persist_attempt(
+                    opk, reschedule=True, failure_class=cls, owner=token, release=True
+                )
+                counts["pending"] += 1
+            return
+        # Cardinality fails CLOSED, matching every sibling in this file:
+        # `_apply_conditional` returns "fence" on `held_count != 1` (1085) and
+        # `_persist_event` raises `_TerminalValidation` on `count != 1` (976). This guard
+        # originally tested only `held_count == 1`, which quietly gave 0 and 2 the SAME
+        # branch -- and they are not the same claim. Zero means "no retractable row
+        # here", which is true and deliberate. Two means "I could not tell which row is
+        # authoritative", which is not a licence to mutate either of them.
+        #
+        # `_read_object_with_id` caps at limit=2, so 2 reads as "at least 2". Duplicate
+        # authoritative anchors are treated as reachable everywhere else in this file
+        # (musubi#771 added 1085 for exactly that), so this is not hypothetical
+        # (Aoi, 2026-09-20).
+        if held_count > 1:
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
+            return
         if held_count == 1 and held.get("retraction_evidence") is not None:
             self._persist_attempt(
                 opk,
