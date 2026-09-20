@@ -1088,13 +1088,32 @@ class LifecycleTransitionCoordinator:
             # be changed before the readback noticed the ambiguity (Copilot, musubi#771).
             return "fence"
         token = held.get("update_lease_token")
+        if held.get("retraction_evidence") is not None:
+            # TERMINAL, and deliberately NOT gated on the saga lease still being held.
+            #
+            # This guard used to sit under `if token is not None`, which made it
+            # unreachable for exactly the case it exists to protect: a COMPLETED
+            # retraction. Both release paths clear the token on commit -- the ordinary
+            # one at `immutable_vectors.py:260` (pre-existing on main) and the
+            # adopted-token one added by RET-012 (`_release_adopted_done_token`). So the
+            # row kept its `retraction_evidence`, lost its token, and `archived ->
+            # matured` became legal again through the ordinary admin path: a retracted
+            # false row could be restored and ranked.
+            #
+            # RET-012's own contract is that a retracted row "cannot later mature, regain
+            # importance, synthesize, or promote"
+            # (docs/Musubi/_slices/slice-api-v1-ret012-retraction-quarantine.md:19). The
+            # presence of the EVIDENCE is what makes the row terminal, not the presence
+            # of the lease -- the lease says a writer is busy, the evidence says this row
+            # was retracted. Checking the lease to answer a question about the evidence
+            # is the wrong object for the question.
+            #
+            # Ordinary archived rows carry no `retraction_evidence`, so ordinary
+            # `archived -> matured` restore stays legal. Both halves have their own cell;
+            # neither is established by reading this comment
+            # (Copilot round 21 on musubi#732, pre-existing hole musubi#781).
+            return "retracted"
         if token is not None:
-            if held.get("retraction_evidence") is not None:
-                # A retraction owns this row's recovery while its saga lease is present.
-                # This is not a complete completed-retraction guard: the saga eventually
-                # clears its token, and legitimate archived -> matured restore must remain
-                # distinguishable from reactivation of a retracted row (pre-existing #781).
-                return "retracted"
             if token == "":
                 # The mutation seam treats a falsy token as absent, but Qdrant's
                 # IsEmpty condition does not: remove the exact empty-string residue so
@@ -1411,6 +1430,88 @@ class LifecycleTransitionCoordinator:
                 opk, reschedule=True, failure_class="transient", owner=token, release=True
             )
             counts["pending"] += 1
+            return
+        # A custom intent NEVER reaches `_apply_conditional`, so the completed-retraction
+        # guard there does not cover this path. An intent admitted BEFORE a retraction is
+        # already durable in the outbox; without this check it replays afterwards and
+        # mutates the vectors and content of a quarantined row. Admission-time refusal
+        # cannot close that -- the admission legitimately predates the retraction -- so
+        # the refusal has to be here, at the apply, on every drive.
+        #
+        # Terminal rather than pending: a retraction does not clear, so rescheduling would
+        # retry forever against a row that will never accept the write
+        # (Copilot round 22 on musubi#732; same contract as the guard in
+        # `_apply_conditional`, which this deliberately mirrors).
+        # Existence is asked POSITIVELY, never by catching the read's failure. Custom
+        # intents span kinds that never touch a retractable row at all, and a collection
+        # that does not exist provably holds no retracted row -- but an exception
+        # swallowed here would also hide a real read failure, which is the fail-open
+        # shape this file already paid for once (musubi#40).
+        # The preflight gets the SAME failure classification as the handler below, and
+        # for the same reason. It was originally written outside any try, so a transient
+        # Qdrant failure here escaped `_drive_custom_intent`, propagated out of
+        # `reconcile_once`, and took down the whole loop -- one unreachable backend
+        # aborting every other claimable intent in the batch, with this row left claimed
+        # and no attempt persisted. A read this guard performs must fail exactly the way
+        # a read the handler performs fails: transient -> pending + backoff, terminal ->
+        # abandoned (Copilot round 23 on musubi#732).
+        try:
+            if self._require_client().collection_exists(collection_name=coll):
+                held, held_count, _ = self._read_object_with_id(coll, oid, ns)
+            else:
+                held, held_count = {}, 0
+        except Exception as exc:
+            cls = self._classify(exc)
+            self._observe_failure(cls)
+            if cls == "terminal":
+                self._persist_attempt(
+                    opk,
+                    reschedule=False,
+                    state="ABANDONED",
+                    failure_class="terminal",
+                    owner=token,
+                    release=True,
+                )
+                counts["abandoned"] += 1
+            else:
+                self._persist_attempt(
+                    opk, reschedule=True, failure_class=cls, owner=token, release=True
+                )
+                counts["pending"] += 1
+            return
+        # Cardinality fails CLOSED, matching every sibling in this file:
+        # `_apply_conditional` returns "fence" on `held_count != 1` (1085) and
+        # `_persist_event` raises `_TerminalValidation` on `count != 1` (976). This guard
+        # originally tested only `held_count == 1`, which quietly gave 0 and 2 the SAME
+        # branch -- and they are not the same claim. Zero means "no retractable row
+        # here", which is true and deliberate. Two means "I could not tell which row is
+        # authoritative", which is not a licence to mutate either of them.
+        #
+        # `_read_object_with_id` caps at limit=2, so 2 reads as "at least 2". Duplicate
+        # authoritative anchors are treated as reachable everywhere else in this file
+        # (musubi#771 added 1085 for exactly that), so this is not hypothetical
+        # (Aoi, 2026-09-20).
+        if held_count > 1:
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
+            return
+        if held_count == 1 and held.get("retraction_evidence") is not None:
+            self._persist_attempt(
+                opk,
+                reschedule=False,
+                state="ABANDONED",
+                failure_class="terminal",
+                owner=token,
+                release=True,
+            )
+            counts["abandoned"] += 1
             return
         ctx = CustomIntentContext(
             operation_key=opk,

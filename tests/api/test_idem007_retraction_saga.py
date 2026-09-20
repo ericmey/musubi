@@ -23,6 +23,7 @@ from musubi.settings import Settings
 from musubi.store.immutable_vectors import ImmutableVectorPublisher
 from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory, RetractionEvidence
+from tests.support.identity_seed import seed_v2_identity_via_migration
 
 _NS = "eric/claude-code/episodic"
 _ARTIFACT_NS = "eric/claude-code/artifact"
@@ -93,13 +94,25 @@ def _seed_v2(publisher: ImmutableVectorPublisher, coordinator: Any) -> EpisodicM
         state="matured",
         importance=8,
     )
-    publisher.publish(
+    # LAYOUT: v2 anchor + content via the production migration path. The helper name
+    # says which topology this cell needs; the absent-publish create it used to rely on
+    # was removed at round 29 (musubi#732).
+    seed_v2_identity_via_migration(
+        publisher._client,
         coordinator,
-        object_id=memory.object_id,
+        publisher,
         namespace=memory.namespace,
-        content_payload=memory.model_dump(mode="json"),
+        object_id=memory.object_id,
+        content=memory.content,
+        tags=list(memory.tags),
     )
-    return memory
+    # Return the STORED state, not the pre-seed model. The migration path bumps the
+    # version (create -> reinforce), so a caller passing `memory.version` as
+    # `expected_version` would fence against a version that no longer exists.
+    stored = _layout(publisher._client, memory.object_id)
+    authoritative = [r for r in stored if r["payload"].get("point_kind") != "content"]
+    assert len(authoritative) == 1, f"expected one authoritative row, got {len(authoritative)}"
+    return memory.model_copy(update={"version": int(authoritative[0]["payload"]["version"])})
 
 
 def _layout(client: QdrantClient, object_id: str) -> list[dict[str, Any]]:

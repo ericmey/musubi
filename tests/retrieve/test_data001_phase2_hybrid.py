@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 from qdrant_client import QdrantClient, models
+from tests.support.identity_seed import seed_v2_identity_via_migration
 
 from musubi.embedding import FakeEmbedder
 from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
@@ -123,9 +124,13 @@ def _ep_v2(
 
     mem = EpisodicMemory(namespace=_NS_EP, content=content, **extra)
     oid = str(mem.object_id)
-    _publisher(qdrant, coord, _EP).publish(
-        coord, object_id=oid, namespace=_NS_EP, content_payload=mem.model_dump(mode="json")
+    pub = _publisher(qdrant, coord, _EP)
+    # Reach v2 the way production does, then stamp the complete payload. The publisher no
+    # longer creates an anchor for an absent object (round 29, musubi#732).
+    seed_v2_identity_via_migration(
+        qdrant, coord, pub, namespace=_NS_EP, object_id=oid, content=content
     )
+    pub.publish(coord, object_id=oid, namespace=_NS_EP, content_payload=mem.model_dump(mode="json"))
     return oid
 
 
@@ -262,15 +267,30 @@ def test_hybrid_anchor_never_ranks_on_either_leg(
     """Force the anchor's dense AND sparse vectors to the exact query (= the live content's text) so it
     would top BOTH fusion legs if it were not excluded. The object MUST still be present (via its live
     content — so empty output cannot vacuously pass), and NO hit may be anchor-derived."""
-    from musubi.store.immutable_vectors import anchor_point_id
 
     probe = "anchor probe committed body"
     v2 = _ep_v2(qdrant, coord, probe, state="matured")
+    # RESOLVE the anchor's physical id rather than computing it. An anchor sits at
+    # `anchor_point_id(ns, oid)` only when it was CREATED there; one converted in place
+    # by the migration path keeps the original legacy id. This seed migrates (round 29
+    # removed the create path), so the computed id names nothing.
+    _anchor_recs, _ = qdrant.scroll(
+        collection_name=_EP,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=v2)),
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value="anchor")),
+            ]
+        ),
+        limit=2,
+    )
+    assert len(_anchor_recs) == 1, f"expected one anchor for {v2}, found {len(_anchor_recs)}"
+    _anchor_id = _anchor_recs[0].id
     qdrant.update_vectors(
         collection_name=_EP,
         points=[
             models.PointVectors(
-                id=anchor_point_id(_NS_EP, v2),
+                id=_anchor_id,
                 vector={
                     DENSE_VECTOR_NAME: _dense(
                         probe

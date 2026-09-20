@@ -196,3 +196,90 @@ def test_drive_intent_bypasses_retry_backoff(client: QdrantClient, tmp_path: Pat
     assert second.finalized == 1, (
         "drive_intent must bypass the retry backoff and finalize immediately"
     )
+
+
+def test_preflight_transient_failure_reschedules_and_releases_the_lease(
+    client: QdrantClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient backend failure in the guard's preflight must not escape.
+
+    The preflight was originally outside any try, so a blip in `collection_exists`
+    propagated out of `_reconcile_locked`. The claim has already committed and
+    `_persist_attempt` is what releases the lease, so the raise stranded the intent
+    leased until TTL AND left every remaining custom intent in the pass undriven
+    (Copilot round 23 on musubi#732; lease consequence measured by Aoi).
+    """
+    coordinator = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "pf.db")
+    coordinator.register_intent_handler("k", lambda ctx: "confirmed")
+    assert (
+        coordinator.enqueue_custom_intent(
+            kind="k", object_id="o", namespace="n", collection="c", operation_key="opk"
+        )
+        == "admitted"
+    )
+
+    def blip(**kwargs: object) -> bool:
+        raise ConnectionError("transient qdrant failure in preflight")
+
+    monkeypatch.setattr(client, "collection_exists", blip)
+    # Must NOT raise: the pass survives and the intent is rescheduled.
+    report = coordinator.drive_intent("opk")
+    assert report.pending == 1, report
+    assert report.abandoned == 0, report
+
+    monkeypatch.undo()
+    # The lease was handed back, so the very next drive can claim it again. If
+    # _persist_attempt had been skipped the row would stay leased until TTL and this
+    # second drive would claim nothing.
+    again = coordinator.drive_intent("opk")
+    assert again.claimed == 1, f"lease was not released by the preflight failure: {again}"
+
+
+def test_ambiguous_cardinality_refuses_instead_of_driving_the_handler(
+    client: QdrantClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two authoritative rows is "I cannot tell", not "no retractable row here".
+
+    The guard originally tested `held_count == 1`, which gave 0 and 2 the same branch.
+    Every sibling in the coordinator already fails closed on that question --
+    `_apply_conditional` fences on `held_count != 1`, `_persist_event` raises on
+    `count != 1` -- and this guard was the only one that did not (Aoi, 2026-09-20).
+    """
+    coordinator = LifecycleTransitionCoordinator(client=client, db_path=tmp_path / "amb.db")
+    ran: list[str] = []
+
+    def _record(ctx: CustomIntentContext) -> str:
+        ran.append(ctx.operation_key)
+        return "confirmed"
+
+    coordinator.register_intent_handler("k", _record)
+
+    # CONTROL: exactly one row -> the handler runs. Without this the refusal below
+    # would pass against a guard that refuses everything.
+    monkeypatch.setattr(client, "collection_exists", lambda **kw: True)
+    monkeypatch.setattr(
+        coordinator, "_read_object_with_id", lambda c, o, n: ({"object_id": o}, 1, "pt")
+    )
+    assert (
+        coordinator.enqueue_custom_intent(
+            kind="k", object_id="o1", namespace="n", collection="c", operation_key="ok1"
+        )
+        == "admitted"
+    )
+    assert coordinator.drive_intent("ok1").finalized == 1
+    assert ran == ["ok1"], ran
+
+    # AMBIGUOUS: two authoritative rows -> refuse terminally, handler never runs.
+    monkeypatch.setattr(
+        coordinator, "_read_object_with_id", lambda c, o, n: ({"object_id": o}, 2, "pt")
+    )
+    assert (
+        coordinator.enqueue_custom_intent(
+            kind="k", object_id="o2", namespace="n", collection="c", operation_key="ok2"
+        )
+        == "admitted"
+    )
+    report = coordinator.drive_intent("ok2")
+    assert report.abandoned == 1, report
+    assert report.finalized == 0, report
+    assert ran == ["ok1"], f"the handler ran against an ambiguous row: {ran}"

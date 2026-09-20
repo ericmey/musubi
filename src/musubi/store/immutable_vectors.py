@@ -74,6 +74,22 @@ class ImmutableVectorIdentityAmbiguous(NonEmbeddingPatchConflict):
     terminal = True
 
 
+class ImmutableVectorIdentityAbsent(NonEmbeddingPatchConflict):
+    """No authoritative identity exists, and this path does not create one.
+
+    TERMINAL on purpose. The coordinator's `_classify` treats an unmarked exception as
+    ``unknown``, which is never abandoned -- it reschedules forever. A publish with no
+    identity to update will never acquire one by waiting, so retrying is not caution, it
+    is an intent that can never finalize occupying the outbox until the cap evicts it.
+
+    `terminal = True` is the same marking `ImmutableVectorIdentityAmbiguous` carries, and
+    for the same reason: the condition is proven, not transient
+    (Copilot round 29 on musubi#732; correction by Yua).
+    """
+
+    terminal = True
+
+
 def content_point_id_for(operation_key: str, generation: int = 0) -> str:
     """Deterministic content-point id from the STABLE operation_key (+ generation) — a reconcile
     re-drive of the same operation reuses the SAME id (never the per-claim owner_token)."""
@@ -252,6 +268,71 @@ _PATCH_SEAM_FIELDS = LAYOUT_ONLY_FIELDS | {
 }
 
 
+def _legacy_fence_not_retracted(
+    namespace: str,
+    object_id: str,
+    obs_version: int,
+    identity_point_id: models.ExtendedPointId | None = None,
+) -> models.Filter:
+    """`_legacy_conversion_filter` plus the evidence predicate.
+
+    The v1/legacy branches of both publisher write paths fall through to
+    `_legacy_conversion_filter`, so fencing only the v2 anchor branches would have left
+    the legacy layout -- the one most of RET-012's own cells exercise -- wide open.
+
+    EVERY arm of the base filter is carried, not just `must`. The first cut rebuilt the
+    filter as `Filter(must=[*base.must, _not_retracted()])` and silently dropped
+    `must_not`, which costs different things on the two branches:
+
+      obs_version != 0   loses the point_kind exclusion. An orphan content snapshot or a
+                         stray anchor becomes writable, and can be converted into an
+                         anchor.
+      obs_version == 0   loses that AND THE ENTIRE VERSION FENCE -- at that branch the
+                         version constraint is the `must_not` clause `version > 0`;
+                         nothing is appended to `must`. The filter degrades to
+                         object_id + namespace, so a concurrent Phase-1 bump matches
+                         where it used to match zero and force a retry.
+
+    The second is strictly worse than having no evidence predicate at all, which is why
+    the base filter is COPIED and one field overridden rather than reconstructed here (Copilot round 26 on musubi#732;
+    branch split measured by Aoi).
+    """
+    base = _legacy_conversion_filter(namespace, object_id, obs_version)
+    # COPY the filter and override one field. Enumerating arms to rebuild it is how the
+    # first cut lost `must_not`, and enumerating them correctly would still drop any arm
+    # added to the base later -- the failure would be silent and in this same function.
+    # BOTH obligations, built once and spread, rather than reconstructed per call site:
+    #   `_not_retracted()`  -- this is not a RETRACTED row        (evidence, musubi#732)
+    #   `HasIdCondition`    -- this is EXACTLY ONE physical row    (cardinality, musubi#794/#797)
+    # They are different guarantees and neither implies the other: a filter can satisfy
+    # the evidence predicate and still address two points. Two call sites previously
+    # assembled this themselves, which is how the `must_not` arm got dropped at round 26.
+    extra: list[models.Condition] = [_not_retracted()]
+    if identity_point_id is not None:
+        extra.insert(0, models.HasIdCondition(has_id=[identity_point_id]))
+    return base.model_copy(update={"must": [*(base.must or []), *extra]})
+
+
+def _not_retracted() -> models.Condition:
+    """The evidence predicate, as a condition ON THE WRITE rather than ahead of it.
+
+    A preflight that reads the row and then calls a handler which does its OWN read and
+    write closes nothing: a retraction committing in that gap is rebased onto by the
+    handler, so the version fence passes and the write lands on a quarantined row. The
+    coordinator's preflight still refuses the common case early and cheaply, but it
+    cannot be what the contract rests on.
+
+    `IsEmpty` is correct here and `retraction_evidence` is genuinely absent rather than
+    empty on a live row: the saga sets it as a populated object in the same CAS that sets
+    `state=archived`. Contrast `update_lease_token`, where a present empty string is a
+    real stored value and `IsEmpty` does NOT match it (musubi#771/#782).
+
+    A pre-read is not a fence. The server-side condition on the write is what gates
+    (Copilot round 25 on musubi#732 -- against a rule I wrote on #771 and then broke).
+    """
+    return models.IsEmptyCondition(is_empty=models.PayloadField(key="retraction_evidence"))
+
+
 def _non_embedding_patch_filter(
     *, namespace: str, object_id: str, observed_payload: dict[str, Any]
 ) -> tuple[models.Filter, int, bool]:
@@ -287,8 +368,15 @@ def _publish_non_embedding_payload(
     observed_payload: dict[str, Any],
     changes: dict[str, Any],
     tag_mode: Literal["replace", "merge"],
+    adopted_done_token: str | None = None,
 ) -> dict[str, Any]:
-    """Shared private one-shot CAS/readback/exact-token-release machinery."""
+    """Shared private one-shot CAS/readback/exact-token-release machinery.
+
+    Retraction recovery may adopt the exact ``done:*`` token left by the
+    committed write it is repairing.  In that mode the repair remains fenced
+    by the existing token through readback and releases it only after the
+    corrected payload is confirmed.
+    """
     if tag_mode not in {"replace", "merge"}:
         raise ValueError(f"unsupported tag_mode {tag_mode!r}")
     overlap = _PATCH_SEAM_FIELDS & changes.keys()
@@ -315,6 +403,27 @@ def _publish_non_embedding_payload(
         must=[models.HasIdCondition(has_id=[identity_point_id]), *(fence.must or [])],
         must_not=cast(list[models.Condition], fence.must_not or []),
     )
+    if adopted_done_token is not None:
+        if (
+            not adopted_done_token.startswith("done:")
+            or observed_payload.get("update_lease_token") != adopted_done_token
+        ):
+            raise ValueError("adopted mutation token is not the exact committed done token")
+        must = cast(
+            list[models.Condition],
+            [
+                condition
+                for condition in (fence.must or [])
+                if not isinstance(condition, models.IsEmptyCondition)
+            ],
+        )
+        must.append(
+            models.FieldCondition(
+                key="update_lease_token",
+                match=models.MatchValue(value=adopted_done_token),
+            )
+        )
+        fence = models.Filter(must=must, must_not=fence.must_not)
     narrow = dict(changes)
     if "tags" in narrow:
         requested = list(narrow["tags"])
@@ -324,7 +433,9 @@ def _publish_non_embedding_payload(
             else requested
         )
     next_version = observed_version + 1
-    done = f"done:{int(utc_now().timestamp() * 1_000_000)}:{secrets.token_hex(12)}"
+    done = adopted_done_token or (
+        f"done:{int(utc_now().timestamp() * 1_000_000)}:{secrets.token_hex(12)}"
+    )
     client.set_payload(
         collection_name=collection,
         payload={**narrow, "version": next_version, "update_lease_token": done},
@@ -343,6 +454,29 @@ def _publish_non_embedding_payload(
         raise NonEmbeddingPatchConflict(
             f"PATCH for ({namespace!r}, {object_id!r}) lost its observed-version fence"
         )
+
+    # Capture the committed state BEFORE the token release, and answer from it.
+    #
+    # The release below deletes `update_lease_token` and then re-reads to confirm the
+    # deletion. Returning that post-release read makes a concurrent PATCH landing in the
+    # gap between the delete and the read into THIS request's receipt -- the caller is
+    # handed another writer's version as the result of its own write, and a replay then
+    # reports a row this operation never produced.
+    #
+    # `resolve_committed_content` here rather than `committed` alone: for a v2 anchor the
+    # receipt must be the anchor merged over its live content point, which the identity
+    # payload does not carry. Read at this instant it is the state this CAS produced.
+    #
+    # Fixed at the PRIMITIVE, not at a caller. This function is shared by
+    # `patch_non_embedding_payload` and `retract_non_embedding_payload`, so ordinary
+    # PATCH had the same defect as the retraction repair path the review named. A finding
+    # names a site; the contract has a set (Copilot round 28 on musubi#732; the fast-path
+    # sibling was fixed in `_release_adopted_done_token` at round 26).
+    # Hydrated from the identity row ALREADY resolved above, via #797's
+    # `_resolve_identity_payload`, rather than a second `resolve_committed_content`
+    # scroll -- a re-query here would reintroduce exactly the cardinality ambiguity
+    # #797 closed, on the value this function returns as its receipt.
+    committed_before_release = _resolve_identity_payload(client, collection, committed)
 
     release_filter = models.Filter(
         must=[
@@ -387,10 +521,11 @@ def _publish_non_embedding_payload(
             object_id=object_id,
         )
         if released is not None and "update_lease_token" not in released:
-            resolved = _resolve_identity_payload(client, collection, released)
-            if resolved is None:
+            # Answer from the pre-release snapshot. The read above is the deletion
+            # CONFIRMATION and nothing else; it is not the state this request committed.
+            if committed_before_release is None:
                 break
-            return resolved
+            return {k: v for k, v in committed_before_release.items() if k != "update_lease_token"}
         if released is None or released.get("update_lease_token") != done:
             break
     raise NonEmbeddingPatchConflict(
@@ -413,7 +548,25 @@ def patch_non_embedding_payload(
     This public entry point never accepts embedding-projection changes on a v2
     anchor. Retraction is a sibling entry point with a required storage-bound
     evidence precondition; there is deliberately no boolean escape hatch here.
+
+    It also refuses outright on a row that already carries retraction evidence. RET-012
+    promises a retracted row "cannot later mature, regain importance, synthesize, or
+    promote" -- and `content` being blocked above is not enough, because `importance` is
+    a legal patch field and raising it is one of the four things the contract names.
+    Measured before it was fixed: a retracted row went from importance 1 to 9 through
+    `EpisodicPlane.patch`, with `state` still `archived` and evidence intact.
+
+    The guard belongs HERE rather than in each caller. The same contract was already
+    enforced at `_apply_conditional` (transitions) and `_drive_custom_intent` (custom
+    intents); this is the third write path to the same row, and it reaches every caller
+    of this primitive at once -- the episodic plane, the episodic write router and the
+    curated write router. The saga's own write uses `retract_non_embedding_payload`, the
+    sibling above, so quarantine and repair are unaffected.
     """
+    if observed_payload.get("retraction_evidence") is not None:
+        raise NonEmbeddingPatchConflict(
+            "this row is retracted; RET-012 quarantine is terminal for ordinary patches"
+        )
     if (
         observed_payload.get("point_kind") == ANCHOR_KIND
         and {
@@ -446,6 +599,7 @@ def retract_non_embedding_payload(
     target_payload: dict[str, Any],
     changes: dict[str, Any],
     evidence: RetractionEvidence,
+    adopted_done_token: str | None = None,
 ) -> dict[str, Any]:
     """Commit one evidence-gated projection divergence without re-embedding.
 
@@ -478,6 +632,7 @@ def retract_non_embedding_payload(
         observed_payload=observed_payload,
         changes={**changes, "retraction_evidence": evidence.model_dump(mode="json")},
         tag_mode="replace",
+        adopted_done_token=adopted_done_token,
     )
 
 
@@ -1106,32 +1261,83 @@ class ImmutableVectorPublisher:
                 # The converted row keeps its legacy vector; anchor-aware reads exclude it by point_kind
                 # (the universal anchor-never-ranks mechanism), so a real vector here cannot leak.
                 base_access = int(identity_payload.get("access_count", 0))
-                legacy_fence = _legacy_conversion_filter(ctx.namespace, ctx.object_id, obs_version)
                 self._client.set_payload(
                     collection_name=self._collection,
                     payload={**publish, "access_count": base_access},
-                    points=models.Filter(
-                        must=[
-                            models.HasIdCondition(has_id=[identity_point_id]),
-                            *(legacy_fence.must or []),
-                        ],
-                        must_not=cast(list[models.Condition], legacy_fence.must_not or []),
+                    points=_legacy_fence_not_retracted(
+                        ctx.namespace, ctx.object_id, obs_version, identity_point_id
                     ),
                 )
             else:
-                # Brand-new object (no legacy row): create the anchor separately with a zero vector.
-                self._client.upsert(
-                    collection_name=self._collection,
-                    points=[
-                        models.PointStruct(
-                            id=anchor_point_id(ctx.namespace, ctx.object_id),
-                            payload={**publish, "access_count": 0},
-                            vector={
-                                DENSE_VECTOR_NAME: [0.0] * len(dense),
-                                SPARSE_VECTOR_NAME: models.SparseVector(indices=[], values=[]),
-                            },
-                        )
-                    ],
+                # NO ANCHOR CREATION HERE. This publisher is an UPDATE/REINFORCE path, and
+                # an anchor it creates is an anchor it can resurrect.
+                #
+                # This branch used to upsert the deterministic anchor id unconditionally.
+                # An intent admitted while the object was absent could be driven after
+                # another writer had created AND retracted that object, and the upsert
+                # would overwrite the evidence-bearing anchor -- bringing a retracted row
+                # back (Copilot round 29 on musubi#732).
+                #
+                # It cannot be fixed by fencing the write. An upsert takes no payload
+                # filter, and the `update_filter` parameter that does exist is not
+                # dependable here: `mutation_lease.py:52-55` carries a verified receipt
+                # that the deployed server SILENTLY IGNORES it on a sibling method -- a
+                # guard that would pass every test and be inert in production. The
+                # measured behaviour is from server 1.15 and production is pinned 1.17.1,
+                # so the honest status is UNMEASURED rather than broken; either way,
+                # terminal quarantine must not rest on a version-sensitive vendor
+                # parameter.
+                #
+                # So the write is removed instead of guarded. An anchor that is never
+                # created cannot be resurrected, and that guarantee depends on no client
+                # parameter, no server version, and no vendor behaviour to re-verify on
+                # upgrade (ruling: Yua, 2026-09-20).
+                #
+                # CLEANUP FIRST, THEN ROUTE. Neither exit from here commits this
+                # generation, so the staged content is dead either way and nothing below
+                # needs it. Doing it in this order is what makes "no orphan" hold on
+                # EVERY post-staging exit rather than on the two we thought about: the
+                # re-read can itself raise -- two rows appearing concurrently gives
+                # `ImmutableVectorIdentityAmbiguous`, and a backend failure gives an
+                # OSError -- and with the delete after it, that snapshot was orphaned
+                # while the intent abandoned. Invisible to every anchor-aware read, and
+                # nothing ever collects it (Copilot round 32 on musubi#732).
+                #
+                # NOT a `try/finally` around the read, which was the obvious shape and is
+                # worse: a raise from the cleanup inside `finally` REPLACES the in-flight
+                # exception, so an `ImmutableVectorIdentityAmbiguous` (terminal, abandons)
+                # would surface as a bare backend error (`unknown`, reschedules forever).
+                # Ordering cannot mask a classification; a finally can.
+                #
+                # WHY ONLY THIS EXIT, having enumerated the others rather than assumed.
+                # Every other post-staging exit either cleans up immediately before it, or
+                # retries -- and a retry's orphan is collected, because the next successful
+                # publish runs `_cleanup_and_confirm(keep=live_point)`, which sweeps every
+                # content generation for the object but the live one. THIS branch is the
+                # only one that is TERMINAL for an object that has no identity, so no later
+                # publish ever runs for it and nothing ever comes back. Transient orphan
+                # everywhere else; permanent orphan here. That asymmetry is the whole
+                # reason the ordering matters at this site and not at the others.
+                self._delete_content_generation(ctx.object_id, ctx.namespace, generation)
+                # Re-read to tell the two cases apart. The read is NOT a fence -- it only
+                # routes; neither branch writes to the identity.
+                appeared = _read_unique_identity_record(
+                    self._client,
+                    self._collection,
+                    namespace=ctx.namespace,
+                    object_id=ctx.object_id,
+                )
+                if appeared is not None:
+                    # An identity exists now that did not when this intent read fresh.
+                    # Retry drives it back through the FILTERABLE conversion path above,
+                    # where the evidence predicate applies.
+                    return "retry"
+                # Genuine absence: there is nothing to update and this path must not
+                # create. Staged content for this operation was removed before the route,
+                # so the failure leaves nothing behind.
+                raise ImmutableVectorIdentityAbsent(
+                    f"publish for ({ctx.namespace!r}, {ctx.object_id!r}) found no identity to "
+                    "update; this path does not create anchors"
                 )
         else:
             # Fenced pointer swap on BOTH observed pointer_version AND version (Yua dual fence): a
@@ -1160,6 +1366,7 @@ class ImmutableVectorPublisher:
                         models.FieldCondition(
                             key="version", match=models.MatchValue(value=obs_version)
                         ),
+                        _not_retracted(),
                     ]
                 ),
             )
@@ -1224,13 +1431,8 @@ class ImmutableVectorPublisher:
             "committed_operation_id": ctx.operation_key,
         }
         if anchor is None:
-            base_fence = _legacy_conversion_filter(ctx.namespace, ctx.object_id, obs_version)
-            fence = models.Filter(
-                must=[
-                    models.HasIdCondition(has_id=[identity_point_id]),
-                    *(base_fence.must or []),
-                ],
-                must_not=cast(list[models.Condition], base_fence.must_not or []),
+            fence = _legacy_fence_not_retracted(
+                ctx.namespace, ctx.object_id, obs_version, identity_point_id
             )
         else:
             # v2: fence on the EXACT anchor identity (point_kind==anchor), not merely must_not content —
@@ -1250,6 +1452,7 @@ class ImmutableVectorPublisher:
                     models.FieldCondition(
                         key="version", match=models.MatchValue(value=obs_version)
                     ),
+                    _not_retracted(),
                 ]
             )
         self._client.set_payload(collection_name=self._collection, payload=narrow, points=fence)

@@ -23,6 +23,7 @@ from musubi.lifecycle.coordinator import LifecycleTransitionCoordinator
 from musubi.store import bootstrap
 from musubi.store.names import collection_for_plane
 from musubi.store.specs import DENSE_VECTOR_NAME, POINT_KIND_FIELD
+from tests.support.identity_seed import seed_v2_identity_via_migration
 
 pytestmark = pytest.mark.integration
 
@@ -66,11 +67,29 @@ def coord(qdrant: QdrantClient, tmp_path: Path) -> LifecycleTransitionCoordinato
 def _make_v2(
     qdrant: QdrantClient, coord: LifecycleTransitionCoordinator, oid: str, **fields: Any
 ) -> None:
-    """Publish a v2 object (anchor + content) via the immutable-vector seam."""
+    """Seed a v2 object (anchor + content) the way PRODUCTION reaches that layout.
+
+    This used to call `publish()` on an absent object and rely on the publisher creating
+    the anchor. That branch was removed at round 29 (musubi#732) -- the publisher is an
+    update/reinforce path, and an anchor it creates is an anchor it can resurrect after a
+    retraction. Seeds a v1 identity through the plane, then drives the real migration.
+    """
     from musubi.store.immutable_vectors import ImmutableVectorPublisher
 
     pub = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=_COLL)
     pub.register(coord)
+    # Seed a v1 identity, then let a VECTOR-CHANGING publish convert it in place -- the
+    # same pattern `_convert_to_v2` in this file already uses, and the real production
+    # migration path. Deliberately reuses this file's own `_upsert_v1` rather than the
+    # shared plane-based seeder: these fixtures name objects with readable labels like
+    # "del-ns2", which `EpisodicMemory` rejects, and the file is internally consistent
+    # about raw ids. Forcing model validation here would mean renaming eleven call sites
+    # for no gain in what is being tested (musubi#732 round 30).
+    # The seed content must DIFFER from what the publish writes, or the embedding
+    # projection (`summary or content`) is identical, the publish takes the payload-only
+    # branch, and no conversion happens. Third time this exact trap has cost a diagnosis
+    # today -- it is in `_projection`'s own docstring.
+    _upsert_v1(qdrant, oid, content=f"{oid}-pre-migration")
     pub.publish(coord, object_id=oid, namespace=_NS, content_payload={"content": oid, **fields})
 
 
@@ -90,14 +109,23 @@ def test_transition_identity_lookup_excludes_content(
     qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
 ) -> None:
     from musubi.lifecycle.transitions import _lookup_point_id, _scroll_by_object_id
-    from musubi.store.immutable_vectors import ANCHOR_KIND, anchor_point_id
+    from musubi.store.immutable_vectors import ANCHOR_KIND
 
     _make_v2(qdrant, coord, "tr-1")
     payloads = _scroll_by_object_id(qdrant, collection=_COLL, object_id="tr-1", namespace=None)
     assert len(payloads) == 1 and payloads[0].get("point_kind") == ANCHOR_KIND
-    assert str(_lookup_point_id(qdrant, collection=_COLL, object_id="tr-1")) == anchor_point_id(
-        _NS, "tr-1"
-    ), "the identity point id must be the anchor, never a content point"
+    # Assert the INVARIANT this test names, not a proxy for it. An anchor lives in two id
+    # spaces: `anchor_point_id(ns, oid)` when created fresh, and the ORIGINAL LEGACY ID
+    # when converted in place. This seed now migrates a v1 row (round 29 removed the
+    # create path), so comparing against `anchor_point_id` tests how the anchor was BORN
+    # rather than that the lookup found an anchor. Production never looks anchors up by
+    # that id either -- `read_anchor` uses a filter, and `immutable_vectors.py:772`
+    # retrieves BOTH id spaces precisely because either is legitimate.
+    found = _lookup_point_id(qdrant, collection=_COLL, object_id="tr-1")
+    recs = qdrant.retrieve(collection_name=_COLL, ids=[found], with_payload=True)
+    assert len(recs) == 1 and (recs[0].payload or {}).get("point_kind") == ANCHOR_KIND, (
+        "the identity point id must be the anchor, never a content point"
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -379,18 +407,21 @@ def test_delete_removes_converted_v2_layout(
     assert qdrant.retrieve(collection_name=_COLL, ids=[episodic_point_id("del-cv2")]) == []
 
 
-def test_delete_removes_brand_new_v2_layout(
+def test_delete_removes_migrated_v2_layout(
     qdrant: QdrantClient, coord: LifecycleTransitionCoordinator
 ) -> None:
-    from musubi.store.immutable_vectors import anchor_point_id, read_anchor
+    from musubi.store.immutable_vectors import read_anchor
 
     _make_v2(qdrant, coord, "del-bn2")
     assert read_anchor(qdrant, _COLL, namespace=_NS, object_id="del-bn2") is not None
     asyncio.run(_delete(qdrant, "del-bn2"))
-    assert _points_for(qdrant, "del-bn2") == [], (
-        "brand-new-v2 anchor (anchor_point_id) + content removed"
-    )
-    assert qdrant.retrieve(collection_name=_COLL, ids=[anchor_point_id(_NS, "del-bn2")]) == []
+    assert _points_for(qdrant, "del-bn2") == [], "migrated-v2 anchor + content removed"
+    # The `retrieve([anchor_point_id(_NS, "del-bn2")]) == []` assertion that stood here
+    # was REMOVED, not weakened. A migrated anchor keeps its legacy point id, so that
+    # retrieve returns [] whether or not deletion happened -- it passed vacuously and
+    # read as coverage. The scan above proves the real claim by object_id, non-vacuously.
+    # Renamed too: "brand-new-v2" is not the layout this constructs any more, and a test
+    # name that lies is the same defect one level up (musubi#732 round 30).
 
 
 def test_delete_removes_all_content_generations(
@@ -580,6 +611,12 @@ def _full_v2(
     oid = str(mem.object_id)
     pub = ImmutableVectorPublisher(client=qdrant, embedder=FakeEmbedder(), collection=_COLL)
     pub.register(coord)
+    # Reach the v2 layout the way production does, then stamp the COMPLETE payload.
+    # The publisher no longer creates an anchor for an absent object (round 29,
+    # musubi#732), so the identity has to exist before the full payload is published.
+    seed_v2_identity_via_migration(
+        qdrant, coord, pub, namespace=_NS, object_id=oid, content=content
+    )
     pub.publish(coord, object_id=oid, namespace=_NS, content_payload=mem.model_dump(mode="json"))
     return oid
 

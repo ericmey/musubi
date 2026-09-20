@@ -17,6 +17,7 @@ from musubi.store.immutable_vectors import ImmutableVectorPublisher
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.common import generate_ksuid
 from musubi.types.episodic import EpisodicMemory
+from tests.support.identity_seed import seed_v2_identity_via_migration
 
 _NS = "eric/claude-code/episodic"
 _OTHER_NS = "other-agent/other-presence/episodic"
@@ -99,11 +100,18 @@ def _seed_v2(
         importance=3,
         tags=["existing", "remove-me"],
     )
-    publisher.publish(
+    # LAYOUT: v2 anchor + content, reached through the production migration path. The
+    # absent-publish create this used to rely on was removed at round 29 (musubi#732) --
+    # the publisher is an update/reinforce path and an anchor it creates is an anchor it
+    # can resurrect after a retraction.
+    seed_v2_identity_via_migration(
+        publisher._client,
         coordinator,
-        object_id=object_id,
+        publisher,
         namespace=namespace,
-        content_payload=memory.model_dump(mode="json"),
+        object_id=object_id,
+        content=memory.content,
+        tags=list(memory.tags),
     )
     rows = _object_rows(publisher._client, object_id)
     assert [row["point_kind"] for row in rows] == ["anchor", "content"]

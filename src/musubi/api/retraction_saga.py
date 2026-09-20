@@ -7,13 +7,13 @@ artifact before one evidence-gated, non-reembedding episodic CAS is attempted.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import regex
 from fastapi import Body, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 
 from musubi.api.auth import authorize_namespace
 from musubi.api.dependencies import get_settings_dep
@@ -29,6 +29,8 @@ from musubi.store.immutable_vectors import (
     NonEmbeddingPatchConflict,
     retract_non_embedding_payload,
 )
+from musubi.store.mutation_lease import is_expired_done_token
+from musubi.store.names import collection_for_plane
 from musubi.store.raw_lookup import retrieve_by_point_id
 from musubi.store.retraction_evidence import retraction_evidence_binding_errors
 from musubi.store.specs import strip_layout_fields
@@ -237,6 +239,109 @@ def _validate_adopted_artifact(
         )
 
 
+def _adopted_done_token(stored: _StoredOriginal) -> str | None:
+    """Return an expired committed token, refusing live or malformed leases."""
+    token = stored.raw.get("update_lease_token")
+    if token is None:
+        return None
+    if not isinstance(token, str) or not is_expired_done_token(token):
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail="committed retraction row has an active or malformed mutation lease",
+        )
+    return token
+
+
+async def _release_adopted_done_token(
+    *,
+    qdrant: QdrantClient,
+    episodic: EpisodicPlane,
+    namespace: str,
+    object_id: str,
+    stored: _StoredOriginal,
+    token: str,
+) -> _StoredOriginal:
+    """Release only an attributable post-commit token during evidence adoption.
+
+    A ``done:*`` token means the fenced payload commit already landed; deleting
+    that exact token is the idempotent final phase the crashed committer did not
+    finish.  Any other token may belong to a live writer and is never cleared by
+    adoption.
+    """
+
+    def token_filter(version: int) -> models.Filter:
+        must: list[models.Condition] = [
+            models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+            models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+            models.FieldCondition(key="version", match=models.MatchValue(value=version)),
+            models.FieldCondition(key="update_lease_token", match=models.MatchValue(value=token)),
+        ]
+        must_not: list[models.Condition] = []
+        if stored.is_v2:
+            must.append(
+                models.FieldCondition(key="point_kind", match=models.MatchValue(value="anchor"))
+            )
+        else:
+            must_not.append(
+                models.FieldCondition(
+                    key="point_kind", match=models.MatchAny(any=["anchor", "content"])
+                )
+            )
+        return models.Filter(must=must, must_not=must_not)
+
+    release_version = int(stored.raw.get("version", 0))
+    qdrant.delete_payload(
+        # `names.py` is explicit that the rest of the codebase must never stringify a
+        # collection name inline, because a rename needs a dual-write migration and an
+        # inlined name silently survives it. This line is branch-introduced (7d5c932b).
+        #
+        # The branch-introduced set in this file is TWO sites, not one: this and the
+        # `retract_non_embedding_payload` call in the committed-repair branch (4befc383e).
+        # The first enumeration found only this one because it was keyed on the spelling
+        # `collection_name=`, and the other site passes the collection POSITIONALLY --
+        # a search keyed on syntax cannot enumerate a set defined by meaning.
+        #
+        # The remaining literals in this file, lines ~127 and ~593, are pre-existing on
+        # main (a72ba70b0, 2026-08-03) and route to the separate names.py issue with the
+        # `lifecycle/reflection.py` sites; #732 does not own them (Copilot round 30).
+        collection_name=collection_for_plane("episodic"),
+        keys=["update_lease_token"],
+        points=token_filter(release_version),
+        wait=True,
+    )
+    refreshed = await _read_original(
+        plane=episodic,
+        qdrant=qdrant,
+        namespace=namespace,
+        object_id=object_id,
+    )
+    remaining = refreshed.raw.get("update_lease_token")
+    if remaining == token:
+        raise APIError(
+            status_code=503,
+            code="BACKEND_UNAVAILABLE",
+            detail="committed retraction token release was not confirmed",
+        )
+    if remaining is not None:
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail="committed retraction token changed during adoption",
+        )
+    # Answer from the PRE-RELEASE committed snapshot, never from this reread.
+    #
+    # The reread exists for exactly one purpose: confirming the token is gone. It is NOT
+    # the state this request committed. A concurrent PATCH landing between the
+    # `delete_payload` above and `_read_original` bumps the version, and returning
+    # `refreshed` would hand the caller that other writer's version as the receipt for
+    # THIS retraction -- a replay would then report a row the saga never wrote.
+    #
+    # `stored` is the row the committed CAS produced, minus the token this function just
+    # released, which the checks above prove is gone (Copilot round 22 on musubi#732).
+    return replace(stored, raw={k: v for k, v in stored.raw.items() if k != "update_lease_token"})
+
+
 async def execute_retraction(
     *,
     request: Request,
@@ -332,9 +437,66 @@ async def execute_retraction(
                     code="CONFLICT",
                     detail="committed retraction prefix is absent from episodic storage",
                 )
+        adopted_done_token = _adopted_done_token(stored)
+        adopted = stored.logical
+        if adopted.state != "archived" or adopted.importance != 1:
+            try:
+                published = retract_non_embedding_payload(
+                    qdrant,
+                    # Branch-introduced (4befc383e), so this slice owns it. Positional,
+                    # which is exactly why the `collection_name=` sweep missed it.
+                    collection_for_plane("episodic"),
+                    namespace=body.namespace,
+                    object_id=object_id,
+                    observed_payload=stored.raw,
+                    target_payload=stored.target,
+                    changes={"state": "archived", "importance": 1},
+                    evidence=evidence,
+                    adopted_done_token=adopted_done_token,
+                )
+            except NonEmbeddingPatchConflict as exc:
+                raise APIError(status_code=409, code="CONFLICT", detail=str(exc)) from exc
+            except ValueError as exc:
+                raise APIError(
+                    status_code=409,
+                    code="CONFLICT",
+                    detail=f"committed retraction quarantine repair refused: {exc}",
+                ) from exc
+            except OSError as exc:
+                raise APIError(
+                    status_code=503,
+                    code="BACKEND_UNAVAILABLE",
+                    detail="committed retraction quarantine repair did not commit",
+                ) from exc
+            adopted = EpisodicMemory.model_validate(strip_layout_fields(published))
+        elif adopted_done_token is not None:
+            # Same failure translation as the repair branch above. Without it a backend
+            # failure in the token release escapes as 500 INTERNAL, and the client cannot
+            # tell a retryable backend outage from a genuine server fault -- the whole
+            # point of the 503 contract is that BACKEND_UNAVAILABLE means try again.
+            # The sibling branch has had this translation since #658; this one never did
+            # (Copilot round 28 on musubi#732; same class as round 23, different site).
+            try:
+                stored = await _release_adopted_done_token(
+                    qdrant=qdrant,
+                    episodic=episodic,
+                    namespace=body.namespace,
+                    object_id=object_id,
+                    stored=stored,
+                    token=adopted_done_token,
+                )
+            except NonEmbeddingPatchConflict as exc:
+                raise APIError(status_code=409, code="CONFLICT", detail=str(exc)) from exc
+            except OSError as exc:
+                raise APIError(
+                    status_code=503,
+                    code="BACKEND_UNAVAILABLE",
+                    detail="committed retraction token release did not commit",
+                ) from exc
+            adopted = stored.logical
         return RetractEpisodicResponse(
             object_id=object_id,
-            version=stored.logical.version,
+            version=adopted.version,
             artifact_ref=evidence.artifact_ref,
             retraction_evidence=evidence,
         )
@@ -380,6 +542,7 @@ async def execute_retraction(
         "content": tombstone,
         "summary": body.summary or "Retracted false memory",
         "tags": sorted(set(body.tags) | {"retracted"}),
+        "state": "archived",
         "importance": 1,
         "updated_at": retracted_at.isoformat(),
         "updated_epoch": epoch_of(retracted_at),
