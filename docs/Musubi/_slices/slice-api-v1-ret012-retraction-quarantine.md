@@ -58,7 +58,9 @@ the escrow artifact remain available for correction and audit.
    generation changes.
 2. `test_evidence_adoption_repairs_pre_quarantine_state_without_rewriting_content`
    proves a valid evidence-bearing pre-quarantine row is repaired during receipt-loss
-   adoption without rewriting vectors, immutable content, or committed timestamps.
+   adoption without rewriting vectors, immutable content, or committed timestamps;
+   `test_evidence_adoption_releases_committed_done_token_without_reapplying_retraction`
+   proves the same path finishes exact post-commit token release without reapplying the mutation.
 3. `test_retracted_provisional_row_cannot_reenter_maturation_after_one_hour`
    advances lifecycle time and proves zero selection, zero enrichment, archived
    state, and importance 1.
@@ -67,6 +69,14 @@ the escrow artifact remain available for correction and audit.
    `test_stale_version_preserves_original_timestamps_after_verified_escrow`, and
    `test_existing_unparseable_evidence_fails_typed_without_falling_through_to_version`
    keep the existing IDEM-007/008 replay, adoption, and failure contracts green.
+
+## Definition of Done
+
+- Every Test Contract function passes on both supported episodic layouts where parametrized.
+- Receipt-loss adoption repairs quarantine state and releases an attributable committed token
+  without rewriting immutable content, vectors, timestamps, or version.
+- The focused IDEM-007/008 and RET-012 suite and full `make check` pass.
+- Independent review certifies the exact merge tree before merge.
 
 ## Work log
 

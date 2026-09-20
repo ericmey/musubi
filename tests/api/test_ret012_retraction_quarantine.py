@@ -213,6 +213,76 @@ def test_evidence_adoption_repairs_pre_quarantine_state_without_rewriting_conten
         assert repaired[0]["vector"] == committed[0]["vector"]
 
 
+@pytest.mark.parametrize("layout", ["legacy", "v2"])
+def test_evidence_adoption_releases_committed_done_token_without_reapplying_retraction(
+    layout: str,
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+    receipt_store: DurableReceiptStore,
+) -> None:
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout=layout,
+        state="matured",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+    headers = {
+        "Authorization": f"Bearer {valid_token}",
+        "Idempotency-Key": f"quarantine-done-token-{layout}",
+    }
+    body = _body(memory.version)
+    first = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert first.status_code == 200, first.text
+    committed_logical = asyncio.run(episodic.get(namespace=_NS, object_id=memory.object_id))
+    assert committed_logical is not None
+    committed = _layout(qdrant, memory.object_id)
+
+    # Model a crash after the attributable commit but before exact-token release.
+    done = "done:1:crashed-committer"
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": done},
+        points=[committed[0]["id"]],
+        wait=True,
+    )
+    with sqlite3.connect(receipt_store.path) as connection:
+        connection.execute("DELETE FROM idempotency_receipts")
+    _GLOBAL_LEASE_CACHE._entries.clear()
+
+    adopted = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert adopted.status_code == 200, adopted.text
+    assert adopted.json()["version"] == committed_logical.version
+    after = _layout(qdrant, memory.object_id)
+    changed = [
+        sorted(
+            key
+            for key in set(before["payload"]) | set(current["payload"])
+            if before["payload"].get(key) != current["payload"].get(key)
+        )
+        for before, current in zip(committed, after, strict=True)
+    ]
+    assert after == committed, (
+        "adoption must release only the committed done token; it must not reapply "
+        "the retraction or rewrite payload, vectors, content, timestamps, or version; "
+        f"changed top-level fields: {changed}"
+    )
+
+
 class _NoEnrichment:
     async def score_importance(self, _items: list[Any]) -> None:
         raise AssertionError("an archived retraction must never reach importance enrichment")

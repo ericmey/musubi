@@ -13,7 +13,7 @@ from typing import Any
 import regex
 from fastapi import Body, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 
 from musubi.api.auth import authorize_namespace
 from musubi.api.dependencies import get_settings_dep
@@ -237,6 +237,78 @@ def _validate_adopted_artifact(
         )
 
 
+async def _release_adopted_done_token(
+    *,
+    qdrant: QdrantClient,
+    episodic: EpisodicPlane,
+    namespace: str,
+    object_id: str,
+    stored: _StoredOriginal,
+) -> _StoredOriginal:
+    """Release only an attributable post-commit token during evidence adoption.
+
+    A ``done:*`` token means the fenced payload commit already landed; deleting
+    that exact token is the idempotent final phase the crashed committer did not
+    finish.  Any other token may belong to a live writer and is never cleared by
+    adoption.
+    """
+    token = stored.raw.get("update_lease_token")
+    if token is None:
+        return stored
+    if not isinstance(token, str) or not token.startswith("done:"):
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail="committed retraction row has an active or malformed mutation lease",
+        )
+
+    must: list[models.Condition] = [
+        models.FieldCondition(key="namespace", match=models.MatchValue(value=namespace)),
+        models.FieldCondition(key="object_id", match=models.MatchValue(value=object_id)),
+        models.FieldCondition(
+            key="version", match=models.MatchValue(value=int(stored.raw.get("version", 0)))
+        ),
+        models.FieldCondition(key="update_lease_token", match=models.MatchValue(value=token)),
+    ]
+    must_not: list[models.Condition] = []
+    if stored.is_v2:
+        must.append(
+            models.FieldCondition(key="point_kind", match=models.MatchValue(value="anchor"))
+        )
+    else:
+        must_not.append(
+            models.FieldCondition(
+                key="point_kind", match=models.MatchAny(any=["anchor", "content"])
+            )
+        )
+    qdrant.delete_payload(
+        collection_name="musubi_episodic",
+        keys=["update_lease_token"],
+        points=models.Filter(must=must, must_not=must_not),
+        wait=True,
+    )
+    refreshed = await _read_original(
+        plane=episodic,
+        qdrant=qdrant,
+        namespace=namespace,
+        object_id=object_id,
+    )
+    remaining = refreshed.raw.get("update_lease_token")
+    if remaining == token:
+        raise APIError(
+            status_code=503,
+            code="BACKEND_UNAVAILABLE",
+            detail="committed retraction token release was not confirmed",
+        )
+    if remaining is not None:
+        raise APIError(
+            status_code=409,
+            code="CONFLICT",
+            detail="committed retraction token changed during adoption",
+        )
+    return refreshed
+
+
 async def execute_retraction(
     *,
     request: Request,
@@ -332,6 +404,13 @@ async def execute_retraction(
                     code="CONFLICT",
                     detail="committed retraction prefix is absent from episodic storage",
                 )
+        stored = await _release_adopted_done_token(
+            qdrant=qdrant,
+            episodic=episodic,
+            namespace=body.namespace,
+            object_id=object_id,
+            stored=stored,
+        )
         adopted = stored.logical
         if adopted.state != "archived" or adopted.importance != 1:
             try:
