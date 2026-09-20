@@ -141,6 +141,23 @@ def test_expired_lease_exact_token_takeover_recovers(real_qdrant: QdrantClient) 
     assert row.get("access_lease_token") is None  # released
 
 
+def test_access_lease_acquisition_recovers_present_empty_string_token() -> None:
+    """A present empty token is an exact stored value, not an absent Qdrant field."""
+    client = QdrantClient(":memory:")
+    bootstrap(client)
+    try:
+        ns, oid = _seed(client)
+        _set_token(client, ns, oid, "")
+
+        asyncio.run(lease_increment_access(client, _COLL, {(ns, oid)}))
+
+        row = _row(client, oid)
+        assert row.get("access_count") == 1
+        assert row.get("access_lease_token") is None
+    finally:
+        client.close()
+
+
 @pytest.mark.integration
 def test_old_holder_fenced_after_takeover(real_qdrant: QdrantClient) -> None:
     """After an expired token is taken over, the OLD holder's fenced write (on its old token) must
