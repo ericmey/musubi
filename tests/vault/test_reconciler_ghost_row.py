@@ -171,30 +171,33 @@ async def test_reconciler_failure_visibility(
 
 
 @pytest.mark.anyio
-async def test_reconciler_ignores_namespace_mismatch(
+async def test_reconciler_archives_ghost_with_frontmatter_namespace_that_differs_from_path(
     vault_root: Path,
     mock_curated_plane: MagicMock,
     mock_coordinator: MagicMock,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     reconciler = VaultReconciler(vault_root, mock_curated_plane, mock_coordinator)
 
     row = MagicMock()
-    row.vault_path = "eric/ghosts/fail.md"
+    row.vault_path = "vault/reflections/2026-09/2026-09-08.md"
     row.state = "matured"
-    row.namespace = "some/other/namespace"
-    row.object_id = "id"
+    row.namespace = "lifecycle-worker/ops/curated"
+    row.object_id = "reflection-id"
     row.version = 1
     mock_curated_plane.scan_vault_rows = AsyncMock(return_value=[row])
 
-    import logging
+    await reconciler.reconcile()
 
-    with caplog.at_level(logging.DEBUG):
-        await reconciler.reconcile()
-    assert mock_curated_plane.transition.call_count == 0
-    assert (
-        "Ghost row candidate eric/ghosts/fail.md namespace some/other/namespace does not match expected eric/ghosts/curated"
-        in caplog.text
+    mock_curated_plane.transition.assert_awaited_once_with(
+        namespace="lifecycle-worker/ops/curated",
+        object_id="reflection-id",
+        to_state="archived",
+        actor="system/vault-reconciler",
+        reason=(
+            "Ghost row reconciliation (deleted from disk): "
+            "vault/reflections/2026-09/2026-09-08.md"
+        ),
+        coordinator=mock_coordinator,
     )
 
 
