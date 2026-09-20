@@ -29,6 +29,7 @@ from musubi.store.immutable_vectors import (
     NonEmbeddingPatchConflict,
     retract_non_embedding_payload,
 )
+from musubi.store.mutation_lease import is_expired_done_token
 from musubi.store.raw_lookup import retrieve_by_point_id
 from musubi.store.retraction_evidence import retraction_evidence_binding_errors
 from musubi.store.specs import strip_layout_fields
@@ -238,22 +239,11 @@ def _validate_adopted_artifact(
 
 
 def _adopted_done_token(stored: _StoredOriginal) -> str | None:
-    """Return an attributable committed token, refusing active or malformed leases."""
+    """Return an expired committed token, refusing live or malformed leases."""
     token = stored.raw.get("update_lease_token")
     if token is None:
         return None
-    if not isinstance(token, str):
-        raise APIError(
-            status_code=409,
-            code="CONFLICT",
-            detail="committed retraction row has an active or malformed mutation lease",
-        )
-    parts = token.split(":")
-    try:
-        issued_us = int(parts[1])
-    except (IndexError, ValueError):
-        issued_us = 0
-    if len(parts) != 3 or parts[0] != "done" or issued_us <= 0 or not parts[2]:
+    if not isinstance(token, str) or not is_expired_done_token(token):
         raise APIError(
             status_code=409,
             code="CONFLICT",

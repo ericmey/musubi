@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import sqlite3
+import time
 from collections.abc import Iterator
 from datetime import timedelta
 from pathlib import Path
@@ -285,7 +286,13 @@ def test_evidence_adoption_releases_committed_done_token_without_reapplying_retr
 
 @pytest.mark.parametrize(
     "malformed",
-    ["done:", "done:not-a-timestamp", "done:1:", "active:1:foreign-writer"],
+    [
+        "done:",
+        "done:not-a-timestamp:writer",
+        "done:1:",
+        "done:+1:writer",
+        "active:1:foreign-writer",
+    ],
 )
 def test_evidence_adoption_refuses_malformed_or_active_committed_tokens(
     malformed: str,
@@ -337,6 +344,72 @@ def test_evidence_adoption_refuses_malformed_or_active_committed_tokens(
     assert "active or malformed mutation lease" in refused.text
     after = _layout(qdrant, memory.object_id)
     assert after[0]["payload"]["update_lease_token"] == malformed
+
+
+@pytest.mark.parametrize(
+    ("issued_us", "expected_status"),
+    [
+        (15_000_000, 409),  # exactly the five-second boundary is still owned
+        (19_999_999, 409),  # a fresh committed token belongs to its live writer
+        (14_999_999, 200),  # only a strictly expired token is adoptable
+    ],
+)
+def test_evidence_adoption_obeys_shared_done_token_ttl(
+    issued_us: int,
+    expected_status: int,
+    client: TestClient,
+    valid_token: str,
+    episodic: EpisodicPlane,
+    coordinator: Any,
+    _immutable_publishers: tuple[Any, Any],
+    qdrant: QdrantClient,
+    receipt_store: DurableReceiptStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publisher = _immutable_publishers[0]
+    assert isinstance(publisher, ImmutableVectorPublisher)
+    memory = _seed(
+        layout="legacy",
+        state="matured",
+        plane=episodic,
+        publisher=publisher,
+        coordinator=coordinator,
+    )
+    headers = {
+        "Authorization": f"Bearer {valid_token}",
+        "Idempotency-Key": f"quarantine-done-token-ttl-{issued_us}",
+    }
+    body = _body(memory.version)
+    first = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert first.status_code == 200, first.text
+    committed = _layout(qdrant, memory.object_id)
+    token = f"done:{issued_us}:writer"
+    qdrant.set_payload(
+        collection_name="musubi_episodic",
+        payload={"update_lease_token": token},
+        points=[committed[0]["id"]],
+        wait=True,
+    )
+    with sqlite3.connect(receipt_store.path) as connection:
+        connection.execute("DELETE FROM idempotency_receipts")
+    _GLOBAL_LEASE_CACHE._entries.clear()
+    monkeypatch.setattr(time, "time", lambda: 20.0)
+
+    adopted = client.post(
+        f"/v1/episodic/{memory.object_id}/retract",
+        headers=headers,
+        json=body,
+    )
+    assert adopted.status_code == expected_status, adopted.text
+    after = _layout(qdrant, memory.object_id)
+    if expected_status == 409:
+        assert after[0]["payload"]["update_lease_token"] == token
+    else:
+        assert "update_lease_token" not in after[0]["payload"]
 
 
 @pytest.mark.parametrize("layout", ["legacy", "v2"])
