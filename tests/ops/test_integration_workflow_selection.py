@@ -7,7 +7,6 @@ from typing import Any, cast
 
 import yaml
 
-
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "integration.yml"
 MAKEFILE = ROOT / "Makefile"
@@ -43,5 +42,5 @@ def test_local_integration_target_uses_the_same_marker_wide_selection() -> None:
     makefile = MAKEFILE.read_text()
     target = makefile.split("test-integration:", 1)[1]
     target = target.split("\n\n", 1)[0]
-    assert "uv run pytest tests/" in target
+    assert "tests/ -m integration" in target
     assert ".py" not in target, "local target must not maintain a per-file pytest inventory"

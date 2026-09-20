@@ -1,12 +1,15 @@
-# Integration suite — boots the test-env compose stack and runs the
-# real-services smoke scenarios from tests/integration/test_smoke.py plus
-# focused real-Qdrant regression modules outside tests/integration/.
+# Integration suite — boots the test-env compose stack and runs every test
+# carrying the `integration` marker, regardless of its file location.
+#
+# Selection is marker-wide by design (Issue #800). There is no exclusion list:
+# the stack provides Qdrant, TEI, and Ollama, so every integration-marked test
+# is expected to run here. Any future exclusion must be named and justified.
 #
 # Triggers:
 #   - PR-trigger PATH FILTER: runs ONCE on PRs that touch the harness
 #     itself (so this PR — and any followup that edits the harness —
-#     verify before merge). Unrelated PRs don't pay the docker-in-docker
-#     cost.
+#     verify before merge). Any test-file change triggers the marker-wide
+#     selector, so a newly added integration-marked file is covered by default.
 #   - SCHEDULE: nightly at 07:00 UTC, with a 3-run matrix so flakes
 #     surface over time. The "no flakes on 3 consecutive runs" DoD
 #     bullet is evidenced by the first ~week of nightly runs after
@@ -22,9 +25,7 @@ name: Integration suite
 on:
   pull_request:
     paths:
-      - 'tests/integration/**'
-      - 'tests/store/test_mutation_lease.py'
-      - 'tests/store/test_non_embedding_patch.py'
+      - 'tests/**'
       - 'deploy/test-env/**'
       - '.github/workflows/integration.yml'
       - 'Makefile'
@@ -110,9 +111,8 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           set -o pipefail
-          uv run pytest tests/integration/ tests/store/test_mutation_lease.py \
-            tests/store/test_non_embedding_patch.py \
-            -m integration -ra --strict-markers --no-cov -v 2>&1 | tee integration.log
+          uv run pytest tests/ -m integration -ra --strict-markers --no-cov -v \
+            2>&1 | tee integration.log
         timeout-minutes: 12
 
       - name: Show compose logs on failure
