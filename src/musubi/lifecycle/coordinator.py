@@ -1022,7 +1022,25 @@ class LifecycleTransitionCoordinator:
                     #
                     # Fail-closed by design. A stale `done:*` token blocks lifecycle
                     # writes until the saga's recovery path clears it, which is what
-                    # that recovery path exists for.
+                    # that recovery path exists for: a row carrying a crashed
+                    # retraction's token is retracted-but-unquarantined, and it SHOULD
+                    # be unmaturable until the saga finishes it.
+                    #
+                    # Deliberately NOT expiry-aware. `mutation_lease.is_expired_done_token`
+                    # exists and treats expired `done` tokens as takeover-eligible; using
+                    # it here would let a lifecycle writer mature exactly the row a
+                    # crashed retraction left behind, which is the case this condition is
+                    # for.
+                    #
+                    # KNOWN CONSEQUENCE, recorded so the next reader finds a decision
+                    # rather than a surprise: nothing sweeps orphaned tokens. Nothing in
+                    # `src/musubi/` schedules `is_expired_done_token`; the only clear is
+                    # the saga's own fenced release. So a row whose retraction crashed and
+                    # which no later retraction revisits stays unmaturable indefinitely.
+                    # That is the safe direction -- it withholds lifecycle progress rather
+                    # than losing a retraction -- but if orphan volume ever matters, the
+                    # fix is a reaper that clears EXPIRED tokens, not loosening this
+                    # condition. (Raised by Aoi, musubi#771.)
                     models.IsEmptyCondition(is_empty=models.PayloadField(key="update_lease_token")),
                 ]
             ),
