@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.6](https://github.com/ericmey/musubi/compare/v1.26.5...v1.26.6) (2026-09-20)
+
+
+### Bug Fixes
+
+* **api:** stamp escrow retraction mutation time ([#730](https://github.com/ericmey/musubi/issues/730)) ([1e7b3fe](https://github.com/ericmey/musubi/commit/1e7b3fea11446dbc593def43c3d2ff6d79e9318b))
+
 ## [1.26.5](https://github.com/ericmey/musubi/compare/v1.26.4...v1.26.5) (2026-09-20)
 
 
