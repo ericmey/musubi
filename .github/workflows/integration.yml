@@ -1,9 +1,12 @@
 # Integration suite — boots the test-env compose stack and runs every test
 # carrying the `integration` marker, regardless of its file location.
 #
-# Selection is marker-wide by design (Issue #800). There is no exclusion list:
-# the stack provides Qdrant, TEI, and Ollama, so every integration-marked test
-# is expected to run here. Any future exclusion must be named and justified.
+# Selection is marker-wide by design (Issue #800): the stack provides Qdrant,
+# TEI, and Ollama, so integration-marked tests run here by default. The one
+# named exclusion is owned by the dedicated scheduled x86 quality gate in
+# evals.yml: the BEIR hybrid-vs-dense threshold measurement.
+# It is a model-quality release signal rather than an integration contract and
+# can legitimately fail while every service boundary is healthy.
 #
 # Triggers:
 #   - PR-trigger PATH FILTER: runs ONCE on PRs that touch the harness
@@ -119,6 +122,7 @@ jobs:
           # the compose service selected by this job.
           export QDRANT_PORT="$MUSUBI_TEST_QDRANT_PORT"
           uv run pytest tests/ -m integration -ra --strict-markers --no-cov -v \
+            --deselect=tests/retrieve/test_hybrid.py::test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points \
             2>&1 | tee integration.log
         timeout-minutes: 12
 

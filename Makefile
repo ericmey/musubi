@@ -91,6 +91,8 @@ test-integration-up:
 test-integration-down:
 	docker compose -f deploy/test-env/docker-compose.test.yml -p musubi-integration down -v --remove-orphans
 
+# The BEIR hybrid-vs-dense threshold is owned by the dedicated scheduled x86
+# quality gate in evals.yml; all other integration-marked tests run here.
 test-integration:
 	@if ! command -v docker >/dev/null 2>&1; then \
 	  echo "make test-integration requires docker; install Docker Desktop or skip"; \
@@ -101,7 +103,8 @@ test-integration:
 	  export MUSUBI_TEST_QDRANT_PORT; \
 	  export QDRANT_PORT=$$MUSUBI_TEST_QDRANT_PORT; \
 	  uv run pytest \
-	  tests/ -m integration -ra --strict-markers --no-cov
+	  tests/ -m integration -ra --strict-markers --no-cov \
+	  --deselect=tests/retrieve/test_hybrid.py::test_integration_beir_style_eval_on_1000_doc_synthetic_corpus_hybrid_beats_dense_only_by_2_ndcg10_points
 
 # --------------------------------------------------------------------------
 # Perf harness — scripts/perf/. Every perf target expects these env vars:
