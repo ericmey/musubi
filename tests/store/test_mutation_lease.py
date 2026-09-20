@@ -10,6 +10,7 @@ import asyncio
 import os
 import threading
 import time
+import uuid
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -20,6 +21,7 @@ from musubi.embedding import FakeEmbedder
 from musubi.planes.episodic.plane import EpisodicPlane, episodic_point_id
 from musubi.store import bootstrap
 from musubi.store.mutation_lease import (
+    MutationIdentityAmbiguous,
     MutationLeaseConflict,
     MutationPlan,
     is_expired_done_token,
@@ -159,6 +161,65 @@ def test_owned_update_recovers_a_present_empty_string_token(qdrant: QdrantClient
     assert published["importance"] == 9
     assert published["version"] == 2
     assert "update_lease_token" not in published
+
+
+@pytest.mark.integration
+def test_owned_update_refuses_duplicate_identity_before_acquisition(
+    real_qdrant: QdrantClient,
+) -> None:
+    """Two authoritative rows must remain wholly untouched when identity is ambiguous."""
+    ns, oid = _seed(real_qdrant, importance=5)
+    canonical = _row(real_qdrant, oid, with_vectors=True)
+    assert canonical is not None and canonical.payload is not None
+    duplicate_id = str(uuid.uuid4())
+    real_qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=duplicate_id,
+                payload=dict(canonical.payload),
+                vector=canonical.vector or {},
+            )
+        ],
+        wait=True,
+    )
+    before, _ = real_qdrant.scroll(
+        collection_name=_COLL,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=ns)),
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=oid)),
+            ]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    before_payloads = {str(row.id): dict(row.payload or {}) for row in before}
+    assert len(before_payloads) == 2, "the duplicate identity plant did not land"
+
+    with pytest.raises(MutationIdentityAmbiguous):
+        _run_owned(
+            real_qdrant,
+            _COLL,
+            namespace=ns,
+            object_id=oid,
+            point_id=episodic_point_id(oid),
+            plan=lambda cur: MutationPlan(changes={"importance": 9}),
+        )
+
+    after, _ = real_qdrant.scroll(
+        collection_name=_COLL,
+        scroll_filter=models.Filter(
+            must=[
+                models.FieldCondition(key="namespace", match=models.MatchValue(value=ns)),
+                models.FieldCondition(key="object_id", match=models.MatchValue(value=oid)),
+            ]
+        ),
+        limit=2,
+        with_payload=True,
+    )
+    assert {str(row.id): dict(row.payload or {}) for row in after} == before_payloads
+    assert all("update_lease_token" not in payload for payload in before_payloads.values())
 
 
 @pytest.mark.integration
