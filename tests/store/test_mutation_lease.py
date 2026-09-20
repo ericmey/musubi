@@ -20,6 +20,7 @@ from qdrant_client import QdrantClient, models
 from musubi.embedding import FakeEmbedder
 from musubi.planes.episodic.plane import EpisodicPlane, episodic_point_id
 from musubi.store import bootstrap
+from musubi.store.immutable_vectors import anchor_point_id
 from musubi.store.mutation_lease import (
     MutationIdentityAmbiguous,
     MutationLeaseConflict,
@@ -289,6 +290,62 @@ def test_duplicate_inserted_after_count_cannot_join_fenced_write(qdrant: QdrantC
         with_payload=True,
     )
     assert duplicate.payload == duplicate_payload
+
+
+def test_vector_update_uses_resolved_v2_anchor_id(qdrant: QdrantClient) -> None:
+    """A v2 anchor's physical ID, not the caller's legacy ID, receives vectors."""
+    bootstrap(qdrant)
+    ns, oid = _seed(qdrant, importance=5)
+    legacy = _row(qdrant, oid, with_vectors=True)
+    assert legacy is not None and legacy.payload is not None and legacy.vector is not None
+    anchor_id = anchor_point_id(ns, oid)
+    anchor_payload = {
+        **dict(legacy.payload),
+        "point_kind": "anchor",
+        "vector_layout_version": 2,
+        "live_point": str(uuid.uuid4()),
+    }
+    qdrant.delete(
+        collection_name=_COLL,
+        points_selector=[episodic_point_id(oid)],
+        wait=True,
+    )
+    qdrant.upsert(
+        collection_name=_COLL,
+        points=[
+            models.PointStruct(
+                id=anchor_id,
+                payload=anchor_payload,
+                vector=legacy.vector,
+            )
+        ],
+        wait=True,
+    )
+    replacement = [0.25] * 1024
+
+    published = _run_owned(
+        qdrant,
+        _COLL,
+        namespace=ns,
+        object_id=oid,
+        # Deliberately the absent legacy ID: the resolved anchor ID is authoritative.
+        point_id=episodic_point_id(oid),
+        plan=lambda cur: MutationPlan(
+            changes={"importance": 9},
+            vectors={DENSE_VECTOR_NAME: replacement},
+        ),
+    )
+
+    assert published["importance"] == 9
+    [anchor] = qdrant.retrieve(
+        collection_name=_COLL,
+        ids=[anchor_id],
+        with_payload=True,
+        with_vectors=True,
+    )
+    assert isinstance(anchor.vector, dict)
+    assert anchor.vector[DENSE_VECTOR_NAME] == replacement
+    assert qdrant.retrieve(collection_name=_COLL, ids=[episodic_point_id(oid)]) == []
 
 
 @pytest.mark.integration
