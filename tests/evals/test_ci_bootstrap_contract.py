@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -412,6 +414,63 @@ jobs:
 # --- Durable operator incident for scheduled live-gate failures -------------------------------
 
 
+def _run_scheduled_incident_reporter(
+    *, result: str, issues: list[dict[str, object]], fail_listing: bool = False
+) -> subprocess.CompletedProcess[str]:
+    """Execute the real reporter module against an in-memory GitHub API recorder."""
+    repo_root = Path(__file__).parent.parent.parent
+    reporter_path = repo_root / ".github" / "scripts" / "report-scheduled-evals.js"
+    harness = r"""
+const { reconcileScheduledEvals } = require(process.argv[1]);
+const input = JSON.parse(process.argv[2]);
+const calls = [];
+const issuesApi = {
+  listForRepo: async () => input.issues,
+  create: async (args) => calls.push({method: 'create', args}),
+  createComment: async (args) => calls.push({method: 'createComment', args}),
+  update: async (args) => calls.push({method: 'update', args}),
+};
+const github = {
+  paginate: async () => {
+    if (input.failListing) throw new Error('simulated list failure');
+    return input.issues;
+  },
+  rest: {issues: issuesApi},
+};
+const context = {repo: {owner: 'ericmey', repo: 'musubi'}};
+
+reconcileScheduledEvals({
+  github,
+  context,
+  result: input.result,
+  runUrl: 'https://github.example/actions/runs/814',
+}).then(() => {
+  process.stdout.write(JSON.stringify(calls));
+}).catch((error) => {
+  process.stderr.write(error.message);
+  process.exitCode = 1;
+});
+"""
+    return subprocess.run(
+        [
+            "node",
+            "-e",
+            harness,
+            str(reporter_path),
+            json.dumps({"result": result, "issues": issues, "failListing": fail_listing}),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _reporter_calls(*, result: str, issues: list[dict[str, object]]) -> list[dict[str, object]]:
+    completed = _run_scheduled_incident_reporter(result=result, issues=issues)
+    assert completed.returncode == 0, completed.stderr
+    return json.loads(completed.stdout)
+
+
 def _assert_scheduled_incident_contract(content: str) -> None:
     """Scheduled results must reconcile one durable, owner-assigned incident Issue."""
     parsed = yaml.safe_load(content)
@@ -568,3 +627,101 @@ jobs:
 """
     with pytest.raises(AssertionError, match="Recovery path MUST close"):
         _assert_scheduled_incident_contract(broken)
+
+
+def test_scheduled_incident_reporter_failure_creates_one_assigned_issue() -> None:
+    """A first failure creates the marked, owner-assigned incident with run evidence."""
+    calls = _reporter_calls(result="failure", issues=[])
+
+    assert [call["method"] for call in calls] == ["create"]
+    create = calls[0]["args"]
+    assert create["assignees"] == ["ericmey"]
+    assert "<!-- scheduled-evals-incident -->" in create["body"]
+    assert "**failure**" in create["body"]
+    assert "https://github.example/actions/runs/814" in create["body"]
+
+
+def test_scheduled_incident_reporter_repeated_failure_updates_existing_issue() -> None:
+    """A repeated failure appends evidence instead of creating a duplicate incident."""
+    calls = _reporter_calls(
+        result="cancelled",
+        issues=[
+            {
+                "number": 900,
+                "state": "open",
+                "body": "<!-- scheduled-evals-incident -->",
+            }
+        ],
+    )
+
+    assert [call["method"] for call in calls] == ["createComment"]
+    comment = calls[0]["args"]
+    assert comment["issue_number"] == 900
+    assert "**cancelled**" in comment["body"]
+    assert "https://github.example/actions/runs/814" in comment["body"]
+
+
+def test_scheduled_incident_reporter_failure_reopens_recovered_issue() -> None:
+    """A regression reopens the singleton incident before appending new evidence."""
+    calls = _reporter_calls(
+        result="failure",
+        issues=[
+            {
+                "number": 900,
+                "state": "closed",
+                "body": "<!-- scheduled-evals-incident -->",
+            }
+        ],
+    )
+
+    assert [call["method"] for call in calls] == ["update", "createComment"]
+    assert calls[0]["args"] == {
+        "owner": "ericmey",
+        "repo": "musubi",
+        "issue_number": 900,
+        "state": "open",
+    }
+
+
+def test_scheduled_incident_reporter_recovery_comments_and_closes_issue() -> None:
+    """A successful run records recovery and closes the active incident."""
+    calls = _reporter_calls(
+        result="success",
+        issues=[
+            {
+                "number": 900,
+                "state": "open",
+                "body": "<!-- scheduled-evals-incident -->",
+            }
+        ],
+    )
+
+    assert [call["method"] for call in calls] == ["createComment", "update"]
+    assert "Recovery observed" in calls[0]["args"]["body"]
+    assert calls[1]["args"] == {
+        "owner": "ericmey",
+        "repo": "musubi",
+        "issue_number": 900,
+        "state": "closed",
+        "state_reason": "completed",
+    }
+
+
+def test_scheduled_incident_reporter_rejects_duplicate_marked_issues() -> None:
+    """The singleton invariant fails visibly instead of updating an arbitrary incident."""
+    issues = [
+        {"number": number, "state": "open", "body": "<!-- scheduled-evals-incident -->"}
+        for number in (900, 901)
+    ]
+    completed = _run_scheduled_incident_reporter(result="failure", issues=issues)
+
+    assert completed.returncode != 0
+    assert "expected at most one scheduled Evals incident, found 2" in completed.stderr
+
+
+def test_scheduled_incident_reporter_api_failure_is_visible() -> None:
+    """A GitHub API failure rejects the reporter rather than silently dropping notification."""
+    completed = _run_scheduled_incident_reporter(result="failure", issues=[], fail_listing=True)
+
+    assert completed.returncode != 0
+    assert "simulated list failure" in completed.stderr
