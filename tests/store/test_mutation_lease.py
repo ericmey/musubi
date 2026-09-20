@@ -49,6 +49,7 @@ def test_only_expired_complete_done_tokens_are_recovery_eligible() -> None:
         "done: 1:writer",
         "done:1_0:writer",
         "done:\u0661:writer",
+        f"done:{'1' * 4301}:writer",
         "done:1:",
         "done:0:writer",
         "done:1:writer:extra",

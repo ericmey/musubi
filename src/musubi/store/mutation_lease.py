@@ -163,7 +163,10 @@ def is_expired_done_token(token: object, *, now_us: int | None = None) -> bool:
     issued_text = parts[1]
     if not issued_text.isascii() or not issued_text.isdigit():
         return False
-    issued_us = int(issued_text)
+    try:
+        issued_us = int(issued_text)
+    except ValueError:
+        return False
     if issued_us <= 0:
         return False
     observed_now = int(time.time() * 1_000_000) if now_us is None else now_us
