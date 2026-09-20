@@ -112,11 +112,16 @@ def test_streaming_retrieval_wildcard_auth_forbids(
 ) -> None:
     from tests.api.conftest import mint_token
 
-    token = mint_token(api_settings, scopes=["nyla/streaming-wildcard/episodic:r"])
+    token = mint_token(
+        api_settings,
+        scopes=["nyla/streaming-wildcard/episodic:r"],
+        presence="nyla/streaming-wildcard",
+    )
 
     write_token = mint_token(
         api_settings,
         scopes=["nyla/streaming-wildcard/episodic:rw", "nyla/streaming-other/episodic:rw"],
+        presence="nyla/streaming-wildcard",
     )
 
     r1 = client.post(
