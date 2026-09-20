@@ -32,7 +32,12 @@ from qdrant_client import models
 
 from musubi.embedding.base import Embedder
 from musubi.planes.artifact.chunking import KNOWN_CHUNKERS, get_chunker
-from musubi.planes.artifact.plane import _artifact_head_with_id, _point_id, _sparse_to_model
+from musubi.planes.artifact.plane import (
+    _artifact_head_at_id,
+    _artifact_head_with_id,
+    _point_id,
+    _sparse_to_model,
+)
 from musubi.store.specs import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from musubi.types.artifact import ArtifactChunk, SourceArtifact
 from musubi.types.common import epoch_of, generate_ksuid, utc_now
@@ -87,6 +92,20 @@ class ArtifactIndexer:
         return _artifact_head_with_id(
             self._client,
             self._collection,
+            namespace=namespace,
+            object_id=object_id,
+        )
+
+    def _read_head_at_id(
+        self,
+        point_id: models.ExtendedPointId,
+        object_id: str,
+        namespace: str,
+    ) -> SourceArtifact | None:
+        return _artifact_head_at_id(
+            self._client,
+            self._collection,
+            point_id=point_id,
             namespace=namespace,
             object_id=object_id,
         )
@@ -218,8 +237,10 @@ class ArtifactIndexer:
             ),
         )
 
-        # Exact head readback is the ONLY success signal (PR #453).
-        published = self._read_head(object_id, namespace)
+        # Exact physical-head readback is the ONLY success signal (PR #453). A duplicate can be
+        # inserted after the cardinality preflight; it must not make a landed single-row publish look
+        # like failure and leak (or incorrectly delete) this attempt's staged chunks.
+        published = self._read_head_at_id(head_point_id, object_id, namespace)
         if (
             published is not None
             and published.committed_generation == generation
@@ -281,7 +302,7 @@ class ArtifactIndexer:
             ),
         )
         # Readback: confirm ONLY if this attempt's own terminal write landed at its fence.
-        published = self._read_head(ctx.object_id, ctx.namespace)
+        published = self._read_head_at_id(head_point_id, ctx.object_id, ctx.namespace)
         if published is None:
             return "fence"
         if (

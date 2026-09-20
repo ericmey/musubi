@@ -267,6 +267,42 @@ async def test_async_success_readback_survives_duplicate_inserted_after_cardinal
 
 
 @pytest.mark.asyncio
+async def test_sync_failure_readback_survives_duplicate_inserted_after_cardinality_check(
+    qdrant: QdrantClient, plane: ArtifactPlane, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    art = await plane.create(_artifact())
+    monkeypatch.setattr(qdrant, "set_payload", _duplicate_after_filtered_head_write(qdrant, art))
+
+    published = await plane.index(art, "")
+
+    assert published.artifact_state == "failed"
+    assert published.failure_reason == "chunking produced no chunks"
+
+
+@pytest.mark.asyncio
+async def test_async_failure_readback_survives_duplicate_inserted_after_cardinality_check(
+    qdrant: QdrantClient,
+    plane: ArtifactPlane,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from musubi.lifecycle.coordinator import CustomIntentContext
+
+    art = await plane.create(_artifact())
+    indexer = ArtifactIndexer(client=qdrant, embedder=FakeEmbedder(), blob_root=tmp_path)
+    ctx = CustomIntentContext(
+        operation_key="post-check-failure-duplicate",
+        object_id=art.object_id,
+        collection="musubi_artifact",
+        namespace=art.namespace,
+        owner_token="post-check-failure-owner",
+    )
+    monkeypatch.setattr(qdrant, "set_payload", _duplicate_after_filtered_head_write(qdrant, art))
+
+    assert await indexer._publish_failed(art, ctx, "deterministic failure") == "confirmed"
+
+
+@pytest.mark.asyncio
 async def test_duplicate_artifact_head_abandons_async_intent_as_terminal(
     qdrant: QdrantClient, plane: ArtifactPlane, tmp_path: Path
 ) -> None:
