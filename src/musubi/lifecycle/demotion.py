@@ -418,7 +418,7 @@ async def reinstate(deps: DemotionDeps, namespace: str, object_id: str, reason: 
                     "last_reinforced_epoch": now_epoch,
                 },
                 # Cardinality-audit exemption (#783): this is a physical point-id selector, not a
-                # payload filter.  The deterministic concept id addresses at most one Qdrant point.
+                # payload filter. The deterministic concept ID addresses at most one Qdrant point.
                 points=[_point_id(object_id)],
             )
             return
