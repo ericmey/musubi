@@ -10,6 +10,7 @@ import jwt
 import pytest
 from pydantic import AnyHttpUrl, SecretStr
 
+from musubi.auth import credential_preflight
 from musubi.auth.credential_preflight import run_preflight
 from musubi.settings import Settings
 
@@ -150,3 +151,73 @@ def test_candidate_preflight_does_not_validate_declared_templates(
 
     assert result is True
     assert "INFO template musubi-mcp.env non-consumed-template" in lines
+
+
+def test_candidate_preflight_reads_quoted_token_without_expanding_other_env(
+    tmp_path: Path, api_settings: Settings
+) -> None:
+    token = _token(api_settings, "aoi/command-chair")
+    (tmp_path / "aoi.env").write_text(
+        f'# ignored\nOTHER=value=with=equals\nMUSUBI_TOKEN="{token}"\n'
+    )
+    _write_env(tmp_path / "yua.env", _token(api_settings, "yua/command-chair"))
+    lines: list[str] = []
+
+    assert run_preflight(
+        manifest_path=_manifest(tmp_path),
+        credential_dir=tmp_path,
+        settings=api_settings,
+        emit=lines.append,
+    )
+    assert "PASS live aoi/command-chair" in lines
+
+
+@pytest.mark.parametrize(
+    "manifest_body",
+    [
+        "not-json",
+        "[]",
+        '{"live": [], "templates": []}',
+        '{"live": [{}], "templates": []}',
+        '{"live": [{"file": "aoi.env", "presence": "aoi/command-chair"}]}',
+    ],
+)
+def test_candidate_preflight_rejects_invalid_manifest(
+    tmp_path: Path,
+    api_settings: Settings,
+    manifest_body: str,
+) -> None:
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(manifest_body)
+    lines: list[str] = []
+
+    assert not run_preflight(
+        manifest_path=manifest,
+        credential_dir=tmp_path,
+        settings=api_settings,
+        emit=lines.append,
+    )
+    assert lines == ["FAIL manifest invalid"]
+
+
+def test_candidate_preflight_cli_uses_runtime_settings_and_emits_summary(
+    tmp_path: Path,
+    api_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _write_env(tmp_path / "aoi.env", _token(api_settings, "aoi/command-chair"))
+    _write_env(tmp_path / "yua.env", _token(api_settings, "yua/command-chair"))
+    monkeypatch.setattr(credential_preflight, "get_settings", lambda: api_settings)
+
+    exit_code = credential_preflight.main(
+        [
+            "--manifest",
+            str(_manifest(tmp_path)),
+            "--credential-dir",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    assert "PASS summary live=2/2 control=1/1 templates=1" in capsys.readouterr().out
