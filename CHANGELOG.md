@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.4](https://github.com/ericmey/musubi/compare/v1.26.3...v1.26.4) (2026-09-19)
+
+
+### Bug Fixes
+
+* **deploy:** execute the privacy probe through curl entrypoint ([#752](https://github.com/ericmey/musubi/issues/752)) ([f1ccbfc](https://github.com/ericmey/musubi/commit/f1ccbfc9b64726c43d3b65280e554437d3927dee))
+
 ## [1.26.3](https://github.com/ericmey/musubi/compare/v1.26.2...v1.26.3) (2026-09-19)
 
 

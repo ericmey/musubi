@@ -167,10 +167,10 @@
               digest="$(printf %s "$sentinel" | sha256sum | cut -d" " -f1)";
               payload="{\"inputs\":\"$sentinel\"}";
               docker run --rm --network musubi-shared-inference {{ musubi_curl_image }}
-                curl --fail --silent --show-error -H "content-type: application/json"
+                --fail --silent --show-error -H "content-type: application/json"
                 -d "$payload" "$TEI_DENSE_URL/embed" >/dev/null;
               docker run --rm --network musubi-shared-inference {{ musubi_curl_image }}
-                curl --silent --show-error -u invalid:invalid -H "content-type: application/json"
+                --silent --show-error -u invalid:invalid -H "content-type: application/json"
                 -d "$payload" "$TEI_DENSE_URL/embed" >/dev/null;
               logs="$(docker compose -p shared-inference
                 -f {{ musubi_config_dir }}/shared-inference-compose.yml logs --no-color inference-ingress)";
