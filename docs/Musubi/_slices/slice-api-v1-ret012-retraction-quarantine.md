@@ -56,6 +56,9 @@ the escrow artifact remain available for correction and audit.
 - `tests/api/test_retraction_saga_collection_names.py` (**added by this slice** — the
   inline-collection-name set in `retraction_saga.py`, enumerated by AST rather than by
   grep, plus a red-proof that the walker sees a POSITIONAL literal)
+- `tests/store/test_immutable_vectors_no_create.py` (**added by this slice** — the round-29
+  no-create guarantee: nothing created, nothing orphaned, intent ABANDONED not PENDING,
+  for BOTH terminal identity exceptions)
 - `tests/lifecycle/test_custom_intent_seam.py` (custom-intent preflight: classification
   and cardinality — **pre-existing file, extended by this slice**)
 - `tests/support/identity_seed.py` (**shared seeding helper, added by this slice** — see
@@ -78,10 +81,23 @@ addopts    = "-ra --strict-markers --strict-config -m 'not integration'"
 The standard gate EXCLUDES integration-marked tests by construction. Three of the eight
 files this slice touches are integration-marked, so they appeared as `69 deselected` in
 every gate run today — including the ones that certified the round-29 removal as green.
-Run explicitly they were **15 failed, 9 passed**.
 
-**A green `make check` is therefore not evidence about this surface, and no amount of
-re-running it ever will be.** The class requires an explicit command:
+**Current result, and it is PASSING.** Read the two figures below as a before/after, not
+as the slice's shipping state — Copilot round 31 read the `15 failed` as current, which
+it was not, and that misreading is the document's fault rather than the reader's.
+
+| when | command | result |
+|---|---|---|
+| at discovery, head `05a67a0f` | explicit integration run | **15 failed, 9 passed** |
+| now, head under gate | same explicit run | **68 passed, 0 failed** |
+
+The 43 → 0 repair was re-derived independently by Aoi from a separate worktree against a
+baseline captured before these files were touched, so the passing figure rests on two
+instruments rather than on one run of mine.
+
+**A green `make check` is still not evidence about this surface, and no amount of
+re-running it ever will be** — that is the durable lesson and it does not expire when the
+failures do. The class requires an explicit command:
 
 ```
 pytest -m integration tests/store/test_data001_phase2_identity_consumers.py \

@@ -167,6 +167,16 @@ def test_publish_on_ambiguous_identity_writes_nothing_and_abandons(
     a ``limit=1`` read returns byte-identical results for one row and for two. Both rows
     here are legacy-shaped (no `point_kind`), which is what the authoritative filter
     selects once content snapshots are excluded.
+
+    **WHAT THIS CELL CANNOT TELL YOU, measured rather than assumed.** TWO independent
+    guards make this path terminal: `ImmutableVectorIdentityAmbiguous.terminal` in the
+    publisher, and the ``held_count > 1`` cardinality preflight in
+    `coordinator._drive_custom_intent`. Removing EITHER one alone leaves this cell green;
+    it went red only with both removed. So it asserts the production property -- the
+    disjunction -- and it is not a falsifier for either guard on its own. The marking is
+    isolated by `test_ambiguous_exception_is_marked_terminal_for_the_classifier`, and the
+    preflight by `tests/lifecycle/test_custom_intent_seam.py`. Do not read a pass here as
+    evidence that either mechanism survives a refactor.
     """
     client, coordinator, publisher = wired
     oid = "3JbNOCREATEAMBIGUOUSOBJ001"
