@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.8](https://github.com/ericmey/musubi/compare/v1.26.7...v1.26.8) (2026-09-20)
+
+
+### Bug Fixes
+
+* **deploy:** migrate auth with pinned core image ([#767](https://github.com/ericmey/musubi/issues/767)) ([b0c1368](https://github.com/ericmey/musubi/commit/b0c13686c6b12ce7c5684d4d164b4c402bcbf60b))
+
 ## [1.26.7](https://github.com/ericmey/musubi/compare/v1.26.6...v1.26.7) (2026-09-20)
 
 
