@@ -420,7 +420,6 @@ Exact deferrals carried forward from the accepted stack:
 - **D4 Phase 1** — durable cross-process idempotency, tracked by #558. Reopen before any
   multi-worker or horizontally replicated API deployment.
 - **D5 Phase C** — multipart ingress-cap + streamed digest; design PROVEN @239029a, impl not started.
-- **REQ7** — identity tuple internal-consistency validation, implemented under #412.
 - **REQ8** — public route absent-vs-invalid bearer. **Implemented and closed under #413**
   ([[_slices/slice-req8-presented-invalid-bearer]]); a presented-invalid bearer is a typed 401 on
   every route, absent stays public. Kong re-enable precondition recorded in that slice.
@@ -430,7 +429,7 @@ projection/summary; LIFE-007/008 / DATA-001 atomicity.
 
 ---
 
-**Status: ACCEPTED AND SHIPPED (rev 5).** PR #403 and replacement Phase B PR #414 are on `main` and
-deployed. True deferrals are D4 Phase 1 (#558) and D5 Phase C. REQ7 (#412) and REQ8 (#413) are implemented
-and passing as of 2026-08-04; the rev-5 shipped claims about PR #403 / #414 at their heads are
-unchanged.
+**Status: ACCEPTED AND SHIPPED (rev 6).** PR #403 and replacement Phase B PR #414 are on `main` and
+deployed; rev 6 adds shipped REQ7 identity consistency. True deferrals are D4 Phase 1 (#558) and
+D5 Phase C. REQ7 (#412) and REQ8 (#413) are implemented and passing as of 2026-08-04; the rev-5
+shipped claims about PR #403 / #414 at their heads are unchanged.
