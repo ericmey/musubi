@@ -167,11 +167,32 @@ def test_workflow_trivy_scans_for_critical_cves_and_fails_on_finding() -> None:
     assert gate is not None, (
         "no Trivy step with exit-code: 1 — at least one step must gate the build"
     )
-    assert "@${{ steps.build.outputs.digest }}" in str(gate.get("image-ref", "")), (
-        "Trivy gate must scan the image by digest"
+    assert gate.get("image-ref") == "musubi-core:scan-${{ github.sha }}", (
+        "Trivy gate must scan the local pre-publish candidate"
     )
     severity = str(gate.get("severity", "")).upper()
     assert "CRITICAL" in severity, "Trivy gate severity must include CRITICAL"
+
+
+def test_critical_gate_runs_before_any_registry_push() -> None:
+    """A vulnerable image must never acquire a GHCR tag before refusal."""
+    steps = _job_steps()
+    gate_index = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("name") == "Trivy vulnerability scan (SARIF — CRITICAL gate)"
+    )
+    push_index = next(
+        i
+        for i, step in enumerate(steps)
+        if step.get("name") == "Build and push"
+    )
+    assert gate_index < push_index, "registry push occurs before the CRITICAL gate"
+
+    candidate = next(step for step in steps if step.get("name") == "Build local scan candidate")
+    run = str(candidate.get("run", ""))
+    assert "--load" in run
+    assert "--push" not in run
 
 
 def test_workflow_grants_security_events_write_for_sarif_upload() -> None:
