@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.26.14](https://github.com/ericmey/musubi/compare/v1.26.13...v1.26.14) (2026-09-20)
+
+
+### Bug Fixes
+
+* **auth:** accept issued slash-form fleet identities ([#808](https://github.com/ericmey/musubi/issues/808)) ([bf84993](https://github.com/ericmey/musubi/commit/bf849937e8c87f6f5a7c0569b5d4233fa1450e49))
+
 ## [1.26.13](https://github.com/ericmey/musubi/compare/v1.26.12...v1.26.13) (2026-09-20)
 
 
