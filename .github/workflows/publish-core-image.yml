@@ -56,6 +56,7 @@ jobs:
       contents: write
       packages: write
       id-token: write
+      attestations: write
       security-events: write
       actions: read
     outputs:
@@ -203,6 +204,13 @@ jobs:
         uses: sigstore/cosign-installer@v3
         with:
           cosign-release: "v2.4.1"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-name: ghcr.io/ericmey/musubi-core
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
 
       - name: Sign the published image (keyless, via GitHub OIDC)
         # Signs by digest — tags are mutable, digests aren't. This step

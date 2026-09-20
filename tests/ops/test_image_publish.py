@@ -101,6 +101,9 @@ def test_workflow_requests_packages_write_permission() -> None:
     assert perms.get("id-token") == "write", (
         "missing id-token:write — cosign keyless signing needs GitHub OIDC"
     )
+    assert perms.get("attestations") == "write", (
+        "missing attestations:write — build provenance cannot be published"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -137,6 +140,15 @@ def test_workflow_generates_sbom() -> None:
     assert "cyclonedx" in str(with_block.get("format", "")).lower(), (
         "SBOM format should be CycloneDX (the cross-tool standard)"
     )
+
+
+def test_workflow_attests_published_digest_provenance() -> None:
+    steps = _job_steps()
+    attest = [s for s in steps if "actions/attest-build-provenance" in str(s.get("uses", ""))]
+    assert len(attest) == 1, "published image needs one provenance attestation"
+    with_block = attest[0].get("with") or {}
+    assert with_block.get("subject-digest") == "${{ steps.build.outputs.digest }}"
+    assert with_block.get("push-to-registry") is True
 
 
 def test_workflow_attaches_sbom_as_cosign_attestation() -> None:
