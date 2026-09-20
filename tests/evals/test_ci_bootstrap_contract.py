@@ -407,3 +407,153 @@ jobs:
     """
     with pytest.raises(AssertionError, match="must permit BOTH schedule AND workflow_dispatch"):
         _assert_dispatch_contract(ordered)
+
+
+# --- Durable operator incident for scheduled live-gate failures -------------------------------
+
+
+def _assert_scheduled_incident_contract(content: str) -> None:
+    """Scheduled results must reconcile one durable, owner-assigned incident Issue."""
+    parsed = yaml.safe_load(content)
+    jobs = parsed.get("jobs", {})
+    reporter = jobs.get("report_scheduled_result")
+    assert reporter is not None, (
+        "Workflow must have a report_scheduled_result job so nightly failures reach the operator"
+    )
+
+    needs = reporter.get("needs", [])
+    if isinstance(needs, str):
+        needs = [needs]
+    assert "scheduled" in needs, "Reporter MUST depend on the scheduled live-gate job"
+
+    condition = str(reporter.get("if", ""))
+    assert "always()" in condition, (
+        "Reporter MUST use always() so scheduled failure or cancellation cannot skip notification"
+    )
+    assert "schedule" in condition and "workflow_dispatch" in condition, (
+        "Reporter MUST cover schedule and workflow_dispatch without running on pull_request"
+    )
+    assert "pull_request" not in condition, "Pull-request smoke runs MUST NOT reconcile incidents"
+
+    permissions = reporter.get("permissions", {})
+    assert permissions.get("issues") == "write", "Reporter MUST receive job-scoped issues: write"
+    assert permissions.get("contents") == "read", "Reporter MUST retain least-privilege contents: read"
+
+    steps = reporter.get("steps", [])
+    scripts = [
+        str(step.get("with", {}).get("script", ""))
+        for step in steps
+        if str(step.get("uses", "")).startswith("actions/github-script@")
+    ]
+    assert len(scripts) == 1, "Reporter MUST use exactly one github-script reconciliation step"
+    script = scripts[0]
+
+    assert "needs.scheduled.result" in content, (
+        "Reporter MUST consume the actual scheduled job result, not infer it from a later step"
+    )
+    assert "scheduled-evals-incident" in script, (
+        "Reporter MUST use a stable marker so repeated failures update one incident"
+    )
+    assert "listForRepo" in script and "issues.create" in script, (
+        "Failure path MUST find the existing marked incident before creating one"
+    )
+    assert "assignees: [context.repo.owner]" in script, (
+        "A newly created incident MUST be assigned to the repository owner so it surfaces"
+    )
+    assert "issues.createComment" in script, (
+        "Repeated failure and recovery MUST append durable run evidence to the incident"
+    )
+    assert "state: 'closed'" in script, "Recovery path MUST close the active incident"
+    assert "core.setFailed" in script, (
+        "Reporter errors MUST fail visibly instead of silently dropping the notification"
+    )
+
+
+def test_scheduled_incident_reporter_contract() -> None:
+    """Reporter runs after failure, ignores PRs, reconciles one Issue, and closes it on recovery."""
+    repo_root = Path(__file__).parent.parent.parent
+    content = (repo_root / ".github" / "workflows" / "evals.yml").read_text(encoding="utf-8")
+    _assert_scheduled_incident_contract(content)
+
+
+def test_scheduled_incident_reporter_discriminator_default_failure_skip() -> None:
+    """A reporter without always() is skipped after the scheduled job fails."""
+    broken = """
+jobs:
+  scheduled:
+    steps: []
+  report_scheduled_result:
+    needs: scheduled
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    permissions: {contents: read, issues: write}
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            // scheduled-evals-incident
+            await github.rest.issues.listForRepo(context.repo)
+            await github.rest.issues.create({...context.repo, assignees: [context.repo.owner]})
+            await github.rest.issues.createComment(context.repo)
+            await github.rest.issues.update({...context.repo, state: 'closed'})
+            core.setFailed('reporting failed')
+"""
+    with pytest.raises(AssertionError, match=r"MUST use always\(\)"):
+        _assert_scheduled_incident_contract(broken)
+
+
+def test_scheduled_incident_reporter_discriminator_pull_request_scope() -> None:
+    """A reporter whose guard admits pull_request can create incidents for smoke runs."""
+    broken = """
+jobs:
+  scheduled:
+    steps: []
+  report_scheduled_result:
+    needs: scheduled
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request')
+    permissions: {contents: read, issues: write}
+    steps: []
+"""
+    with pytest.raises(AssertionError, match="MUST NOT reconcile incidents"):
+        _assert_scheduled_incident_contract(broken)
+
+
+def test_scheduled_incident_reporter_discriminator_read_only_permissions() -> None:
+    """A structurally correct reporter with read-only Issues permission cannot surface anything."""
+    broken = """
+jobs:
+  scheduled:
+    steps: []
+  report_scheduled_result:
+    needs: scheduled
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    permissions: {contents: read, issues: read}
+    steps: []
+"""
+    with pytest.raises(AssertionError, match="issues: write"):
+        _assert_scheduled_incident_contract(broken)
+
+
+def test_scheduled_incident_reporter_discriminator_no_recovery_close() -> None:
+    """A failure-only notifier leaves a stale incident open after the gate recovers."""
+    broken = """
+jobs:
+  scheduled:
+    steps: []
+  report_scheduled_result:
+    needs: scheduled
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    permissions: {contents: read, issues: write}
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          RESULT: ${{ needs.scheduled.result }}
+        with:
+          script: |
+            // scheduled-evals-incident
+            await github.rest.issues.listForRepo(context.repo)
+            await github.rest.issues.create({...context.repo, assignees: [context.repo.owner]})
+            await github.rest.issues.createComment(context.repo)
+            core.setFailed('reporting failed')
+"""
+    with pytest.raises(AssertionError, match="Recovery path MUST close"):
+        _assert_scheduled_incident_contract(broken)
