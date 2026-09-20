@@ -344,7 +344,8 @@ def test_vector_update_uses_resolved_v2_anchor_id(qdrant: QdrantClient) -> None:
         with_vectors=True,
     )
     assert isinstance(anchor.vector, dict)
-    assert anchor.vector[DENSE_VECTOR_NAME] == replacement
+    # The collection uses cosine distance, so Qdrant stores the normalized vector.
+    assert anchor.vector[DENSE_VECTOR_NAME] == pytest.approx([0.03125] * 1024)
     assert qdrant.retrieve(collection_name=_COLL, ids=[episodic_point_id(oid)]) == []
 
 

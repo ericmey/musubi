@@ -233,7 +233,7 @@ def _read_unique_identity(
     if len(records) > 1:
         raise MutationIdentityAmbiguous(
             f"mutation identity ({namespace!r}, {object_id!r}) in {collection} matched "
-            f"{len(records)} authoritative rows"
+            "at least 2 authoritative rows"
         )
     if not records:
         return None
@@ -339,11 +339,12 @@ async def owned_update(
 
     ``plan(current_payload)`` is invoked under a FRESH snapshot each round and returns the
     :class:`MutationPlan` (intended-change fields + optional new vectors) for that snapshot — so a
-    retry always recomputes against the current state. ``point_id`` is the row's deterministic Qdrant
-    point id (each plane derives it from ``object_id``); it addresses the ``update_vectors`` write.
-    Async so the retry backoff does not block the event loop. Returns the published payload (or the
-    current payload if the plan is ``skip``). Raises :class:`MutationLeaseConflict` on bounded-retry
-    exhaustion and :class:`MutationRowVanished` (a ``LookupError``) if the row disappears.
+    retry always recomputes against the current state. ``point_id`` is retained as a caller hint for
+    compatibility, but the cardinality proof's captured physical ID is authoritative for every write;
+    this matters when a v2 anchor no longer occupies the caller's legacy deterministic ID. Async so the
+    retry backoff does not block the event loop. Returns the published payload (or the current payload
+    if the plan is ``skip``). Raises :class:`MutationLeaseConflict` on bounded-retry exhaustion and
+    :class:`MutationRowVanished` (a ``LookupError``) if the row disappears.
     """
     for round_index in range(_MAX_ROUNDS):
         if round_index:
@@ -445,7 +446,7 @@ async def owned_update(
             if mutation.vectors is not None:
                 client.update_vectors(
                     collection_name=collection,
-                    points=[models.PointVectors(id=point_id, vector=mutation.vectors)],
+                    points=[models.PointVectors(id=held_point_id, vector=mutation.vectors)],
                 )
 
             # ---- phase 4: COMMIT — narrow changes + version+1 + token=done, fenced on OUR own ----
