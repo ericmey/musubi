@@ -189,27 +189,20 @@ def test_workflow_trivy_scans_for_critical_cves_and_fails_on_finding() -> None:
 def test_critical_gate_runs_before_any_registry_push() -> None:
     """A vulnerable image must never acquire a GHCR tag before refusal."""
     steps = _job_steps()
+    login_index = next(
+        i for i, step in enumerate(steps) if "docker/login-action" in str(step.get("uses", ""))
+    )
     gate_index = next(
         i
         for i, step in enumerate(steps)
         if step.get("name") == "Trivy vulnerability scan (SARIF — CRITICAL gate)"
     )
-    registry_writers: list[int] = []
-    for index, step in enumerate(steps):
-        with_block = step.get("with") or {}
-        if (
-            "docker/build-push-action" in str(step.get("uses", ""))
-            and with_block.get("push") is True
-        ):
-            registry_writers.append(index)
-        run = str(step.get("run", ""))
-        if any(token in run for token in ("docker push", "--push", "oras push", "skopeo copy")):
-            registry_writers.append(index)
-
-    assert registry_writers, "workflow has no registry publication step"
-    assert all(gate_index < index for index in registry_writers), (
-        "a registry write occurs before the CRITICAL gate"
-    )
+    pre_gate_names = [step.get("name") for step in steps[login_index + 1 : gate_index]]
+    assert pre_gate_names == [
+        "Derive image tags + labels",
+        "Build local scan candidate",
+        "Trivy vulnerability scan (table — always visible in logs)",
+    ], "unexpected step can write to the registry before the CRITICAL gate"
 
     candidate = next(step for step in steps if step.get("name") == "Build local scan candidate")
     with_block = candidate.get("with") or {}

@@ -195,8 +195,13 @@ jobs:
             docker push "$tag"
           done <<< "$PUBLISH_TAGS"
           [[ -n "$first_tag" ]]
-          published_ref=$(docker image inspect --format '{{index .RepoDigests 0}}' "$first_tag")
-          digest=${published_ref##*@}
+          repository=${first_tag%:*}
+          matching_digests=()
+          while IFS= read -r ref; do
+            [[ "$ref" == "$repository@"* ]] && matching_digests+=("$ref")
+          done < <(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$first_tag")
+          [[ ${#matching_digests[@]} -eq 1 ]]
+          digest=${matching_digests[0]##*@}
           [[ "$digest" == sha256:* ]]
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
