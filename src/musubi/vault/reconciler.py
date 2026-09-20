@@ -36,7 +36,6 @@ from musubi.vault.frontmatter import (
     curated_knowledge_from_frontmatter,
     parse_frontmatter,
 )
-from musubi.vault.namespacing import infer_namespace
 
 logger = logging.getLogger(__name__)
 
@@ -135,16 +134,9 @@ class VaultReconciler:
             if not vp or row.state in ("archived", "superseded"):
                 continue
             if vp not in seen_paths:
-                expected_ns = infer_namespace(vp)
-                if row.namespace != expected_ns:
-                    logger.debug(
-                        "Ghost row candidate %s namespace %s does not match expected %s, skipping",
-                        vp,
-                        row.namespace,
-                        expected_ns,
-                    )
-                    continue
-
+                # scan_vault_rows returns validated curated inventory. Its stored namespace came
+                # from frontmatter on the write path and remains authoritative when the path no
+                # longer exists; directory layout is not required to encode that namespace.
                 try:
                     res = await self.curated_plane.transition(
                         namespace=row.namespace,
