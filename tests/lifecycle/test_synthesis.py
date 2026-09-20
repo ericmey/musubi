@@ -728,6 +728,56 @@ async def test_contradictory_concepts_link_both_sides(
     assert c1 is not None and c2 is not None
     assert c2.object_id in c1.contradicts
     assert c1.object_id in c2.contradicts
+    assert c1.version == 2
+    assert c2.version == 2
+
+
+async def test_contradiction_updates_are_isolated_by_namespace(
+    qdrant: QdrantClient,
+    ns: str,
+    sink: LifecycleEventSink,
+    cursor: SynthesisCursor,
+    embedder: FakeEmbedder,
+) -> None:
+    """A same-object-id concept in another namespace remains byte-for-byte unchanged."""
+    eps_ns = _ns(ns, "episodic")
+    for _ in range(3):
+        await _inject_episodic(qdrant, embedder, eps_ns, "content a", tags=["tag_a"])
+    for _ in range(3):
+        await _inject_episodic(qdrant, embedder, eps_ns, "content b", tags=["tag_b"])
+
+    ollama = FakeSynthesisOllama()
+    foreign_point_id = "00000000-0000-4000-8000-000000000791"
+    foreign_before: dict[str, Any] = {}
+
+    async def plant_foreign_twin(pair: ContradictionInput) -> ContradictionOutput:
+        if not foreign_before:
+            foreign_before.update(pair.concept_a.model_dump(mode="json"))
+            foreign_before["namespace"] = "someone/else/concept"
+            qdrant.upsert(
+                collection_name="musubi_concept",
+                points=[
+                    models.PointStruct(
+                        id=foreign_point_id,
+                        payload=dict(foreign_before),
+                        vector={},
+                    )
+                ],
+                wait=True,
+            )
+        return ContradictionOutput(verdict="contradictory", reason="clash")
+
+    ollama.check_contradiction = plant_foreign_twin  # type: ignore[method-assign]
+    config = SynthesisConfig(contradiction_min_similarity=0.0, contradiction_max_similarity=1.1)
+
+    await synthesis_run(qdrant, sink, ollama, embedder, cursor, ns, config=config)
+
+    [foreign_after] = qdrant.retrieve(
+        collection_name="musubi_concept",
+        ids=[foreign_point_id],
+        with_payload=True,
+    )
+    assert foreign_after.payload == foreign_before
 
 
 @pytest.mark.skip(

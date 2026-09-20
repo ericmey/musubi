@@ -371,6 +371,48 @@ class ConceptPlane:
         )
         return SynthesizedConcept.model_validate(published)
 
+    async def add_contradiction(
+        self,
+        *,
+        namespace: Namespace,
+        object_id: KSUID,
+        contradicted_id: KSUID,
+    ) -> SynthesizedConcept:
+        """Add one contradiction link through the versioned mutation seam.
+
+        Contradiction eligibility participates in concept maturation, so the
+        write must advance ``version``.  That lets a maturation transition
+        selected from an older snapshot lose its expected-version fence.
+        """
+        current = await self.get(namespace=namespace, object_id=object_id)
+        if current is None:
+            raise LookupError(f"concept {object_id!r} not found in namespace {namespace!r}")
+
+        def plan(cur: dict[str, Any]) -> MutationPlan:
+            fresh = SynthesizedConcept.model_validate(cur)
+            if contradicted_id in fresh.contradicts:
+                return MutationPlan(changes={}, skip=True)
+            now2 = utc_now()
+            data = {
+                **cur,
+                "contradicts": [*fresh.contradicts, contradicted_id],
+                "updated_at": now2,
+                "updated_epoch": epoch_of(now2),
+            }
+            dumped = SynthesizedConcept.model_validate(data).model_dump(mode="json")
+            keys = ("contradicts", "updated_at", "updated_epoch")
+            return MutationPlan(changes={key: dumped[key] for key in keys})
+
+        published = await owned_update(
+            self._client,
+            self._collection,
+            namespace=str(namespace),
+            object_id=str(object_id),
+            point_id=_point_id(object_id),
+            plan=plan,
+        )
+        return SynthesizedConcept.model_validate(published)
+
     async def mark_accessed(self, *, namespace: Namespace, object_id: KSUID) -> SynthesizedConcept:
         """Bump ``access_count`` + ``last_accessed_at`` only.
 

@@ -7,6 +7,8 @@ branches lose different things, so they need different cells -- one cannot cover
 
 from __future__ import annotations
 
+from typing import Any
+
 from musubi.store.immutable_vectors import (
     _legacy_conversion_filter,
     _legacy_fence_not_retracted,
@@ -16,8 +18,17 @@ _NS = "eric/claude-code/episodic"
 _OID = "3JbLEGACYFENCEOBJECTID0000"
 
 
-def _keys(conditions: object) -> list[str]:
-    return [getattr(c, "key", type(c).__name__) for c in (conditions or [])]  # type: ignore[union-attr]
+def _keys(arm: Any) -> list[str]:
+    """Condition keys on one Filter arm, normalised.
+
+    A qdrant Filter arm is `list[Condition] | Condition | None` -- a BARE condition is
+    legal, not only a list. Iterating it directly would walk the wrong object for that
+    case, which is the error mypy actually caught here rather than a typing nuisance.
+    """
+    if arm is None:
+        return []
+    conditions = arm if isinstance(arm, list) else [arm]
+    return [str(getattr(c, "key", type(c).__name__)) for c in conditions]
 
 
 def test_nonzero_version_branch_keeps_the_point_kind_exclusion() -> None:
@@ -34,7 +45,7 @@ def test_nonzero_version_branch_keeps_the_point_kind_exclusion() -> None:
         "the point_kind exclusion was dropped; an orphan content/anchor row becomes writable"
     )
     # and the predicate really was added
-    assert len(fenced.must or []) == len(base.must or []) + 1
+    assert len(_keys(fenced.must)) == len(_keys(base.must)) + 1
 
 
 def test_zero_version_branch_keeps_the_version_fence_which_lives_in_must_not() -> None:
